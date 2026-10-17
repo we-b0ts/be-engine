@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ mod counts;
 mod policy;
 mod runner;
 
-pub(crate) use runner::aggregate_runner_replay_report;
+pub(crate) use runner::{aggregate_runner_replay_report, aggregate_runner_replay_report_value};
 
 const AGGREGATE_VERSION: u8 = 1;
 const REPLAY_REPORT_VERSION: u64 = 6;
@@ -174,28 +175,43 @@ fn aggregate_canonical_reports(
     canonical_reports: Vec<PathBuf>,
     options: &ReplayAggregateOptions,
 ) -> Result<ReplayAggregateReport> {
+    let reports = canonical_reports.into_iter().map(|report_path| {
+        let payload = fs::read(&report_path)
+            .with_context(|| format!("failed to read replay report {}", report_path.display()))?;
+        let report: Value = serde_json::from_slice(&payload)
+            .with_context(|| format!("invalid replay report JSON {}", report_path.display()))?;
+        Ok((report_path, report))
+    });
+    aggregate_report_values(case_source, reports, options)
+}
+
+/// Both file discovery and the runner use this validation pipeline. Owned
+/// reports stream one at a time; a prepared runner report is borrowed directly.
+fn aggregate_report_values<V: Borrow<Value>>(
+    case_source: PathBuf,
+    reports: impl IntoIterator<Item = Result<(PathBuf, V)>>,
+    options: &ReplayAggregateOptions,
+) -> Result<ReplayAggregateReport> {
     let mut published_cases = discover_published_cases(&case_source)?;
     validate_case_selection(&case_source, &published_cases, &options.case_ids)?;
     if !options.case_ids.is_empty() {
         published_cases.retain(|case_id, _| options.case_ids.contains(case_id));
     }
 
-    let mut summaries = Vec::with_capacity(canonical_reports.len());
+    let mut summaries = Vec::new();
     let mut cases = Vec::new();
     let mut case_ids = BTreeSet::new();
     let mut session_ids = BTreeSet::new();
     let mut aggregate_counts = ReplayAggregateCounts::default();
 
-    for report_path in canonical_reports {
-        let payload = fs::read(&report_path)
-            .with_context(|| format!("failed to read replay report {}", report_path.display()))?;
-        let report: Value = serde_json::from_slice(&payload)
-            .with_context(|| format!("invalid replay report JSON {}", report_path.display()))?;
-        if !report_matches_selection(&report, &report_path, options, &mut session_ids)? {
+    for item in reports {
+        let (report_path, report) = item?;
+        let report = report.borrow();
+        if !report_matches_selection(report, &report_path, options, &mut session_ids)? {
             continue;
         }
-        let summary = summarize_report(&case_source, &report_path, &report, &mut case_ids)?;
-        for case in required_array(&report, "cases", &report_path)? {
+        let summary = summarize_report(&case_source, &report_path, report, &mut case_ids)?;
+        for case in required_array(report, "cases", &report_path)? {
             cases.push(ReplayAggregateCase {
                 case_id: required_string(case, "case_id", &report_path)?.to_owned(),
                 status: required_case_status(case, &report_path)?.to_owned(),

@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 use super::aggregate::{
     ReplayAggregateOptions, aggregate_replay_reports, aggregate_replay_reports_with_options,
-    aggregate_runner_replay_report,
+    aggregate_runner_replay_report, aggregate_runner_replay_report_value,
 };
 
 #[test]
@@ -434,6 +434,83 @@ fn runner_report_path_must_stay_in_recording_or_selected_snapshot() {
     let discovered = source.join("replay-report.json");
     std::os::unix::fs::symlink(&outside, &discovered).unwrap();
     assert!(aggregate_replay_reports(&source).is_err());
+}
+
+#[test]
+fn loaded_runner_report_preserves_shared_session_evidence_without_reading_another_copy() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let snapshot = temp.path().join("snapshot");
+    fs::create_dir(&snapshot).unwrap();
+    write_case(&source.join("case-a"), true);
+    write_case(&source.join("case-b"), true);
+    let mut report = report_value_v6(
+        &source,
+        &[("case-a", "ended"), ("case-b", "ended")],
+        "session",
+        true,
+    );
+    report["unused_case_http_exchanges"] = json!([{"case_id":"case-b"}]);
+    let path = snapshot.join("replay-report.json");
+    fs::write(&path, report.to_string()).unwrap();
+    let options = ReplayAggregateOptions {
+        case_ids: BTreeSet::from(["case-a".into()]),
+        session_ids: BTreeSet::from(["session".into()]),
+    };
+    let from_file = aggregate_runner_replay_report(&source, &path, &snapshot, &options).unwrap();
+    // The caller owns the already loaded snapshot. Reading the file a second
+    // time would fail; confinement and membership checks must still run.
+    fs::write(&path, b"not JSON").unwrap();
+    let from_value =
+        aggregate_runner_replay_report_value(&source, &path, &snapshot, &report, &options).unwrap();
+    assert_eq!(
+        serde_json::to_value(from_value).unwrap(),
+        serde_json::to_value(from_file).unwrap()
+    );
+    assert!(aggregate_runner_replay_report(&source, &path, &snapshot, &options).is_err());
+
+    for field in ["version", "case_dir", "finalized_at", "selected_case_ids"] {
+        let mut invalid = report.clone();
+        invalid[field] = Value::Null;
+        assert!(
+            aggregate_runner_replay_report_value(&source, &path, &snapshot, &invalid, &options)
+                .is_err(),
+            "{field}"
+        );
+    }
+    let mut foreign_case = report.clone();
+    foreign_case["cases"][1]["case_id"] = json!("foreign");
+    foreign_case["selected_case_ids"] = json!(["case-a", "foreign"]);
+    assert!(
+        aggregate_runner_replay_report_value(&source, &path, &snapshot, &foreign_case, &options)
+            .is_err()
+    );
+    let mut stale = options.clone();
+    stale.session_ids = BTreeSet::from(["other-session".into()]);
+    assert!(
+        aggregate_runner_replay_report_value(&source, &path, &snapshot, &report, &stale).is_err()
+    );
+    let mut missing = options.clone();
+    missing.case_ids.insert("missing".into());
+    assert!(
+        aggregate_runner_replay_report_value(&source, &path, &snapshot, &report, &missing).is_err()
+    );
+    let outside = temp.path().join("outside.json");
+    fs::write(&outside, "{}").unwrap();
+    assert!(
+        aggregate_runner_replay_report_value(&source, &outside, &snapshot, &report, &options)
+            .is_err()
+    );
+    let linked = snapshot.join("linked-report.json");
+    std::os::unix::fs::symlink(&outside, &linked).unwrap();
+    assert!(
+        aggregate_runner_replay_report_value(&source, &linked, &snapshot, &report, &options)
+            .is_err()
+    );
+    fs::remove_file(&path).unwrap();
+    assert!(
+        aggregate_runner_replay_report_value(&source, &path, &snapshot, &report, &options).is_err()
+    );
 }
 
 #[test]

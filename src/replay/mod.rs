@@ -98,7 +98,9 @@ use model::*;
 use mysql::*;
 use policy::*;
 use report::*;
-pub(crate) use report::{BackgroundReclassification, reclassify_background_dependencies};
+pub(crate) use report::{
+    BackgroundReclassification, reclassify_background_dependencies, reclassify_background_report,
+};
 #[cfg(test)]
 use test_support::write_test_recording_network_manifest;
 
@@ -207,7 +209,9 @@ pub use policy::{
     plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
-pub(crate) use report::aggregate::aggregate_runner_replay_report;
+pub(crate) use report::aggregate::{
+    aggregate_runner_replay_report, aggregate_runner_replay_report_value,
+};
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,

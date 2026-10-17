@@ -104,6 +104,53 @@ fn reclassification_is_reversible_when_current_rules_no_longer_match() {
 }
 
 #[test]
+fn loaded_reclassification_publishes_the_same_complete_reversible_report_and_sidecar() {
+    let fixture = Fixture::new();
+    fixture.write_config(true);
+    let original_dependencies = fs::read(&fixture.dependencies).unwrap();
+    let mut report = fixture.report();
+    let expected = fixture.reclassify();
+    let expected_report = fixture.report();
+    let expected_evidence = fs::read(dependency_evidence_path(&fixture.report)).unwrap();
+    fs::write(&fixture.report, b"no second report read").unwrap();
+    let actual = reclassify_background_report(
+        &fixture.config,
+        &fixture.report,
+        &mut report,
+        &BTreeMap::from([(CASE_ID.into(), fixture.case_dir.clone())]),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(actual).unwrap(),
+        serde_json::to_value(expected).unwrap()
+    );
+    assert_eq!(report, expected_report);
+    assert_eq!(fixture.report(), expected_report);
+    assert_eq!(
+        fs::read(dependency_evidence_path(&fixture.report)).unwrap(),
+        expected_evidence
+    );
+    fixture.write_config(false);
+    let restored = reclassify_background_report(
+        &fixture.config,
+        &fixture.report,
+        &mut report,
+        &BTreeMap::from([(CASE_ID.into(), fixture.case_dir.clone())]),
+    )
+    .unwrap();
+    assert_eq!(restored.matched_unused_case, 0);
+    assert_eq!(
+        restored.remaining_dirty_case_ids,
+        BTreeSet::from([CASE_ID.into()])
+    );
+    assert_eq!(report, fixture.report());
+    assert_eq!(
+        fs::read(&fixture.dependencies).unwrap(),
+        original_dependencies
+    );
+}
+
+#[test]
 fn redis_hash_key_patterns_reclassify_case_window_exchanges() {
     for (command, fields) in [
         ("HGET", &["version"][..]),

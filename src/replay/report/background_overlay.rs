@@ -44,6 +44,21 @@ pub(crate) fn reclassify_background_dependencies(
     report_path: &Path,
     case_dirs: &BTreeMap<String, PathBuf>,
 ) -> Result<BackgroundReclassification> {
+    let payload = fs::read(report_path)
+        .with_context(|| format!("failed to read replay report {}", report_path.display()))?;
+    let mut report: Value = serde_json::from_slice(&payload)
+        .with_context(|| format!("invalid replay report JSON {}", report_path.display()))?;
+    reclassify_background_report(source_traffic_policy, report_path, &mut report, case_dirs)
+}
+
+/// Classify and persist the caller's current report without loading another
+/// copy. The same value remains available for session-wide aggregation.
+pub(crate) fn reclassify_background_report(
+    source_traffic_policy: &Path,
+    report_path: &Path,
+    report: &mut Value,
+    case_dirs: &BTreeMap<String, PathBuf>,
+) -> Result<BackgroundReclassification> {
     let (config, fingerprints) =
         SourceTrafficPolicyConfig::load_with_fingerprints(source_traffic_policy)?;
     let rules = &config.process_owned_dependencies;
@@ -59,36 +74,32 @@ pub(crate) fn reclassify_background_dependencies(
         crate::api_trigger::OriginIndex::default()
     };
     let mut matched = matched_recorded_exchanges(case_dirs, rules, &memcached_ports, &origins)?;
-    let payload = fs::read(report_path)
-        .with_context(|| format!("failed to read replay report {}", report_path.display()))?;
-    let mut report: Value = serde_json::from_slice(&payload)
-        .with_context(|| format!("invalid replay report JSON {}", report_path.display()))?;
-    restore_previous_reclassification(&mut report);
+    restore_previous_reclassification(report);
 
     let mut by_protocol = BTreeMap::new();
     mysql::reclassify(
-        &mut report,
+        report,
         rules,
         &mut matched.mysql,
         &mut by_protocol,
         &origins,
     );
-    reclassify_http(&mut report, rules, &mut by_protocol);
+    reclassify_http(report, rules, &mut by_protocol);
     for protocol in ["redis", "memcached", "motan"] {
-        reclassify_command_protocol(&mut report, protocol, &matched.commands, &mut by_protocol);
+        reclassify_command_protocol(report, protocol, &matched.commands, &mut by_protocol);
     }
-    annotate_api_origins(&mut report, &origins);
+    annotate_api_origins(report, &origins);
     by_protocol.retain(|_, count| *count > 0);
     let matched_unused_case = by_protocol.values().sum();
     let rules_fingerprint = fingerprints.classification;
-    let remaining_dirty_case_ids = dirty_case_ids(&report);
+    let remaining_dirty_case_ids = dirty_case_ids(report);
     report["background_reclassification"] = json!({
         "rules_fingerprint": rules_fingerprint,
         "matched_unused_case": matched_unused_case,
         "by_protocol": by_protocol,
     });
-    write_json_atomic(report_path, &report)?;
-    let evidence = build_dependency_evidence(&report);
+    write_json_atomic(report_path, report)?;
+    let evidence = build_dependency_evidence(report);
     write_json_atomic(&dependency_evidence_path(report_path), &evidence)?;
     Ok(BackgroundReclassification {
         rules_fingerprint,
@@ -437,14 +448,8 @@ fn move_matching_events<'a>(
     let Some(object) = report.as_object_mut() else {
         return;
     };
-    let mut case = object
-        .remove(case_field)
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
-    let mut global = object
-        .remove(global_field)
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
+    let mut case = take_array(object, case_field);
+    let mut global = take_array(object, global_field);
     let original_global_len = global.len();
     let mut retained = Vec::with_capacity(case.len());
     for mut event in case.drain(..) {
@@ -456,12 +461,12 @@ fn move_matching_events<'a>(
             .get("case_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        if let (Some(original_case), Some(event)) = (original_case, event.as_object_mut()) {
-            event.insert("case_id".to_string(), Value::Null);
-            event.insert("source".to_string(), Value::String("global".to_string()));
-            event.insert(ORIGINAL_CASE_ID.to_string(), Value::String(original_case));
-            event.insert(MATCHED_RULE.to_string(), Value::String(rule));
-            global.push(Value::Object(event.clone()));
+        if let (Some(original_case), Some(fields)) = (original_case, event.as_object_mut()) {
+            fields.insert("case_id".to_string(), Value::Null);
+            fields.insert("source".to_string(), Value::String("global".to_string()));
+            fields.insert(ORIGINAL_CASE_ID.to_string(), Value::String(original_case));
+            fields.insert(MATCHED_RULE.to_string(), Value::String(rule));
+            global.push(event);
             *count += 1;
         } else {
             retained.push(event);
@@ -470,6 +475,13 @@ fn move_matching_events<'a>(
     object.insert(case_field.to_string(), Value::Array(retained));
     original_evidence::update_global_count(object, global_field, original_global_len, global.len());
     object.insert(global_field.to_string(), Value::Array(global));
+}
+
+fn take_array(object: &mut serde_json::Map<String, Value>, field: &str) -> Vec<Value> {
+    match object.remove(field) {
+        Some(Value::Array(values)) => values,
+        _ => Vec::new(),
+    }
 }
 
 fn dirty_case_ids(report: &Value) -> BTreeSet<String> {

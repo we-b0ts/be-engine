@@ -9,6 +9,65 @@ use std::{
 use crate::e2e_run::test_session::{config, session};
 
 #[test]
+fn final_pipeline_classifies_once_and_keeps_shared_session_evidence_complete() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = config(temp.path());
+    let (layout, inventory, session) = session(temp.path());
+    let mut selected = crate::e2e_run::focused_batch::project(&session, "OPTIONS /api");
+    let mut method_inventory = inventory.clone();
+    method_inventory
+        .groups
+        .retain(|group| group.method == "OPTIONS");
+    let recorded = fs::read(layout.case_source.join("get-case/dependencies.jsonl")).unwrap();
+    write_process_policy(
+        &config.source_traffic_policy,
+        json!({"protocol":"http","authorities":["stream.test"],"methods":["GET"],"path_prefixes":["/connect"]}),
+    );
+    // Classification requires the complete session inventory, while final
+    // method evidence keeps the selected slice and all shared-session gates.
+    let mut report = read_replay_report(&selected).unwrap();
+    let classified =
+        refresh_background_report(&config, &selected, &inventory, &mut report).unwrap();
+    apply_reclassified_case_outcomes(&mut selected, &classified);
+    fs::write(&selected.replay_report, b"the loaded report must be reused").unwrap();
+    build_final_evidence_with_report(
+        &config,
+        &layout,
+        &method_inventory,
+        &mut selected,
+        Some(&report),
+    )
+    .unwrap();
+    assert!(selected.aggregate_complete && selected.aggregate_clean);
+    assert!(selected.apis[0].complete_pass);
+    let aggregate: Value =
+        serde_json::from_slice(&fs::read(&selected.aggregate_report).unwrap()).unwrap();
+    assert_eq!(
+        aggregate["selected_case_ids"],
+        json!(["get-case", "options-case"])
+    );
+    assert_eq!(
+        aggregate["counts"]["events"]["http"]["unused_global_exchanges"],
+        14
+    );
+    assert_eq!(report["unused_case_http_exchanges"], json!([]));
+    store::write_json(&selected.replay_report, &report).unwrap();
+    let before = fs::read(&selected.replay_report).unwrap();
+    assert!(build_final_evidence(&config, &layout, &method_inventory, &mut selected).is_err());
+    assert_eq!(fs::read(&selected.replay_report).unwrap(), before);
+    let mut complete_session = session;
+    build_final_evidence(&config, &layout, &inventory, &mut complete_session).unwrap();
+    assert!(complete_session.aggregate_complete && complete_session.aggregate_clean);
+    assert!(complete_session.apis.iter().all(|api| api.complete_pass));
+    let persisted = read_replay_report(&complete_session).unwrap();
+    assert_eq!(persisted, report);
+    assert_eq!(
+        fs::read(layout.case_source.join("get-case/dependencies.jsonl")).unwrap(),
+        recorded
+    );
+}
+
+#[test]
 fn interrupted_reclassification_retries_and_rebuilds_published_method_evidence() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

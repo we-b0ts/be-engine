@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, ensure};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::model::{
@@ -9,7 +10,8 @@ use super::store;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{
     BackgroundReclassification, ReplayAggregateCounts, ReplayAggregateOptions,
-    ReplayAggregateReport, aggregate_runner_replay_report, reclassify_background_dependencies,
+    ReplayAggregateReport, aggregate_runner_replay_report, aggregate_runner_replay_report_value,
+    reclassify_background_report,
 };
 
 pub(super) fn build_final_evidence(
@@ -18,9 +20,10 @@ pub(super) fn build_final_evidence(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
 ) -> Result<()> {
-    let reclassified = refresh_background_evidence(config, state, inventory)?;
+    let mut report = read_replay_report(state)?;
+    let reclassified = refresh_background_report(config, state, inventory, &mut report)?;
     apply_reclassified_case_outcomes(state, &reclassified);
-    build_final_evidence_from_current_report(config, layout, inventory, state)?;
+    build_final_evidence_with_report(config, layout, inventory, state, Some(&report))?;
     clear_resolved_dependency_errors(state);
     Ok(())
 }
@@ -30,7 +33,21 @@ pub(super) fn refresh_background_evidence(
     state: &ActiveRunState,
     inventory: &CaseGroupInventory,
 ) -> Result<BackgroundReclassification> {
-    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&state.replay_report)?)?;
+    let mut report = read_replay_report(state)?;
+    refresh_background_report(config, state, inventory, &mut report)
+}
+
+fn read_replay_report(state: &ActiveRunState) -> Result<Value> {
+    serde_json::from_slice(&std::fs::read(&state.replay_report)?)
+        .context("invalid runner Replay report")
+}
+
+fn refresh_background_report(
+    config: &ResolvedProjectConfig,
+    state: &ActiveRunState,
+    inventory: &CaseGroupInventory,
+    report: &mut Value,
+) -> Result<BackgroundReclassification> {
     let session_cases = report["cases"]
         .as_array()
         .context("replay report has no session cases")?
@@ -52,9 +69,10 @@ pub(super) fn refresh_background_evidence(
         case_dirs.len() == session_cases.len(),
         "replay session references cases outside the prepared recording inventory"
     );
-    reclassify_background_dependencies(
+    reclassify_background_report(
         &config.source_traffic_policy,
         &state.replay_report,
+        report,
         &case_dirs,
     )
 }
@@ -143,6 +161,16 @@ pub(super) fn build_final_evidence_from_current_report(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
 ) -> Result<()> {
+    build_final_evidence_with_report(config, layout, inventory, state, None)
+}
+
+fn build_final_evidence_with_report(
+    config: &ResolvedProjectConfig,
+    layout: &RunLayout,
+    inventory: &CaseGroupInventory,
+    state: &mut ActiveRunState,
+    report: Option<&Value>,
+) -> Result<()> {
     let session_id = state
         .session_id
         .as_ref()
@@ -152,15 +180,25 @@ pub(super) fn build_final_evidence_from_current_report(
         .iter()
         .flat_map(|group| group.cases.iter().map(|case| case.case_id.clone()))
         .collect::<BTreeSet<_>>();
-    let aggregate = aggregate_runner_replay_report(
-        &layout.case_source,
-        &state.replay_report,
-        &layout.active_dir,
-        &ReplayAggregateOptions {
-            case_ids: all_case_ids,
-            session_ids: BTreeSet::from([session_id.clone()]),
-        },
-    )?;
+    let options = ReplayAggregateOptions {
+        case_ids: all_case_ids,
+        session_ids: BTreeSet::from([session_id.clone()]),
+    };
+    let aggregate = match report {
+        Some(report) => aggregate_runner_replay_report_value(
+            &layout.case_source,
+            &state.replay_report,
+            &layout.active_dir,
+            report,
+            &options,
+        ),
+        None => aggregate_runner_replay_report(
+            &layout.case_source,
+            &state.replay_report,
+            &layout.active_dir,
+            &options,
+        ),
+    }?;
     state.aggregate_complete = aggregate.is_complete();
     state.aggregate_clean = !aggregate.is_dirty();
     store::write_json(&state.aggregate_report, &aggregate)?;
