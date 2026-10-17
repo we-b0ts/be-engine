@@ -213,7 +213,10 @@ impl RecordOptions {
             config.udp_gateway.forward = true;
             config.dns_mock.upstream_dns = system_dns();
             if let Some(path) = &self.policy {
-                SourceTrafficPolicyConfig::load(path)?.apply_to(&mut config)?;
+                let (rules, fingerprints) =
+                    SourceTrafficPolicyConfig::load_with_fingerprints(path)?;
+                rules.apply_to(&mut config)?;
+                config.global_projection_policy = Some(fingerprints.full);
             }
             config
         };

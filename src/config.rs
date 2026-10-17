@@ -126,6 +126,9 @@ pub struct AppConfig {
     pub tls: TlsConfig,
     #[serde(skip)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
+    /// Already admitted policy identity, used only for optional recording-time indexes.
+    #[serde(skip)]
+    pub global_projection_policy: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -262,8 +265,9 @@ impl AppConfig {
             .with_context(|| format!("failed to read config {}", path.display()))?;
         let mut config = Self::parse_static(path, &raw)?;
         let rules_path = resolve_unified_policy_path(path)?;
-        let rules = SourceTrafficPolicyConfig::load(rules_path)?;
+        let (rules, fingerprints) = SourceTrafficPolicyConfig::load_with_fingerprints(&rules_path)?;
         rules.apply_to(&mut config)?;
+        config.global_projection_policy = Some(fingerprints.full);
         config
             .validate()
             .with_context(|| format!("invalid config {}", path.display()))?;

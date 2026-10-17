@@ -38,6 +38,21 @@ fn key(source: &SourceIdentity, lanes: &[SharedLane]) -> Result<String> {
     digest(&("global-pubsub-notifications", VERSION, source, layout))
 }
 impl SharedReference {
+    pub(super) fn key(&self) -> &str {
+        self.0.key()
+    }
+    pub(super) fn validate_pages(&self, report: &Path) -> Result<()> {
+        let (inventory, root) = self.load(report)?;
+        for lane in inventory.lanes {
+            let pages = crate::dependency_index::Paged::<
+                crate::dependency_index::global::NotificationEntry,
+            >::restore(lane.pages.resolve(&root)?)?;
+            for page in 0..pages.pages() {
+                pages.read_page(page)?;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn load(&self, report: &Path) -> Result<(SharedInventory, PathBuf)> {
         let (inventory, directory) = self.0.load::<SharedInventory>(report)?;
         inventory.validate()?;
@@ -98,6 +113,19 @@ impl SharedInventory {
     }
 }
 pub(super) fn retain(report: &Path, lanes: &[NotificationLaneEvidence]) -> Result<SharedReference> {
+    retain_at(report, lanes, false)
+}
+pub(super) fn retain_portable(
+    report: &Path,
+    lanes: &[NotificationLaneEvidence],
+) -> Result<SharedReference> {
+    retain_at(report, lanes, true)
+}
+fn retain_at(
+    report: &Path,
+    lanes: &[NotificationLaneEvidence],
+    portable: bool,
+) -> Result<SharedReference> {
     let first = lanes
         .first()
         .context("empty shared notification inventory")?;
@@ -125,23 +153,39 @@ pub(super) fn retain(report: &Path, lanes: &[NotificationLaneEvidence]) -> Resul
         })
         .collect();
     let key = key(&source, &projected)?;
-    let reference = SharedReference(ArtifactReference::retain(report, key, |staging| {
-        let mut retained = Vec::new();
-        for (index, lane) in projected.into_iter().enumerate() {
-            retained.push(SharedLane {
-                identity: lane.identity,
-                pages: lane
-                    .pages
-                    .retain_into(&staging.join(format!("lane-{index}")))?
-                    .relative_to(staging)?,
-            });
-        }
-        Ok(SharedInventory {
-            version: VERSION,
-            source,
-            lanes: retained,
+    let imported = if portable {
+        None
+    } else if let Some(reference) = ArtifactReference::existing::<SharedInventory>(report, &key)? {
+        Some(SharedReference(reference))
+    } else {
+        super::preparation::import_notifications(first.source.path(), report, &key)?
+    };
+    let reference = if let Some(reference) = imported {
+        reference
+    } else {
+        let build = |staging: &Path| {
+            let mut retained = Vec::new();
+            for (index, lane) in projected.into_iter().enumerate() {
+                retained.push(SharedLane {
+                    identity: lane.identity,
+                    pages: lane
+                        .pages
+                        .retain_into(&staging.join(format!("lane-{index}")))?
+                        .relative_to(staging)?,
+                });
+            }
+            Ok(SharedInventory {
+                version: VERSION,
+                source,
+                lanes: retained,
+            })
+        };
+        SharedReference(if portable {
+            ArtifactReference::retain_portable(report, key, build)?
+        } else {
+            ArtifactReference::retain(report, key, build)?
         })
-    })?);
+    };
     let (inventory, _) = reference.load(report)?;
     ensure!(
         inventory.lanes.len() == lanes.len()

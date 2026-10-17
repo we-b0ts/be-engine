@@ -370,7 +370,8 @@ impl AppState {
             artifact_owner,
         )
         .await
-        .context("failed to initialize JSONL recorder")?;
+        .context("failed to initialize JSONL recorder")?
+        .with_global_preparation(&config);
         let dns_registry = FakeDnsRegistry::load_or_new(
             &config.dns_mock.fake_cidr,
             Some(&config.dns_mock.registry_path),

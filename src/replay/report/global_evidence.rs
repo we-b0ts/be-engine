@@ -14,6 +14,7 @@ mod artifact;
 #[cfg(test)]
 mod compact_tests;
 mod notifications;
+pub(crate) mod preparation;
 mod protocol;
 pub(in crate::replay) mod regular;
 mod regular_store;

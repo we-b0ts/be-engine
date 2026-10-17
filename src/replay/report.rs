@@ -16,6 +16,7 @@ mod writer_tests;
 #[cfg(test)]
 pub(super) use dependency_evidence::report_has_case_dirty_events;
 pub(crate) use dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
+pub(crate) use global_evidence::preparation::prewarm as prewarm_global_report;
 pub(crate) use global_evidence::stage_global_evidence;
 
 #[cfg(test)]

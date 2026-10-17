@@ -42,16 +42,21 @@ pub(super) struct RegularEvidence {
 }
 
 impl RegularBaseline {
+    #[cfg(test)]
     fn retain(
         report: &Path,
         identity: Identity,
         visit: impl FnOnce(&mut dyn FnMut(Row) -> Result<()>) -> Result<()>,
     ) -> Result<Self> {
-        let reference = ArtifactReference::retain(report, identity.key()?, |staging| {
-            let mut builder = Builder::new(staging, identity.clone());
-            visit(&mut |row| builder.push(row))?;
-            builder.finish()
-        })?;
+        Self::retain_from_source(report, identity, None, visit)
+    }
+    fn retain_from_source(
+        report: &Path,
+        identity: Identity,
+        source: Option<&Path>,
+        visit: impl FnOnce(&mut dyn FnMut(Row) -> Result<()>) -> Result<()>,
+    ) -> Result<Self> {
+        let reference = retain_reference(report, identity.clone(), false, source, visit)?;
         let (inventory, _) = reference.load::<Inventory>(report)?;
         inventory.validate(&reference)?;
         ensure!(
@@ -64,6 +69,43 @@ impl RegularBaseline {
             visible: inventory.visible,
             extras: vec![],
         })
+    }
+}
+
+pub(super) fn retain_reference(
+    report: &Path,
+    identity: Identity,
+    portable: bool,
+    source: Option<&Path>,
+    visit: impl FnOnce(&mut dyn FnMut(Row) -> Result<()>) -> Result<()>,
+) -> Result<ArtifactReference> {
+    if !portable
+        && let Some(reference) = ArtifactReference::existing::<Inventory>(report, &identity.key()?)?
+    {
+        let (inventory, _) = reference.load::<Inventory>(report)?;
+        inventory.validate(&reference)?;
+        ensure!(
+            inventory.identity == identity,
+            "Global projection Source or policy identity changed"
+        );
+        return Ok(reference);
+    }
+    if !portable
+        && let Some(source) = source
+        && let Some(reference) = super::preparation::import(source, report, &identity)?
+    {
+        return Ok(reference);
+    }
+    let key = identity.key()?;
+    let build = |staging: &Path| {
+        let mut builder = Builder::new(staging, identity);
+        visit(&mut |row| builder.push(row))?;
+        builder.finish()
+    };
+    if portable {
+        ArtifactReference::retain_portable(report, key, build)
+    } else {
+        ArtifactReference::retain(report, key, build)
     }
 }
 
@@ -307,11 +349,12 @@ pub(in crate::replay) fn initialize(
             source_bytes: index.stamp.size,
             policy: policy.into(),
             protocol: protocol.into(),
-            layout: state.regular_report_layout(protocol)?,
+            layout: crate::replay::global_source::ProjectionView::from(&*state).layout(protocol)?,
         };
-        let baseline = RegularBaseline::retain(report, identity, |visitor| {
-            state.visit_regular_report_rows(protocol, visitor)
-        })?;
+        let baseline =
+            RegularBaseline::retain_from_source(report, identity, Some(&source), |visitor| {
+                crate::replay::global_source::ProjectionView::from(&*state).visit(protocol, visitor)
+            })?;
         state.initialize_regular_report_usage(protocol, baseline.visible)?;
         state.regular_global.insert(protocol.into(), baseline);
     }
@@ -319,37 +362,6 @@ pub(in crate::replay) fn initialize(
 }
 
 impl ReplayState {
-    fn regular_report_layout(&self, protocol: &str) -> Result<Vec<usize>> {
-        Ok(match protocol {
-            "mysql" => self.mysql.global_report_usage().layout().to_vec(),
-            "http" => self.http_global_report_usage().layout().to_vec(),
-            "redis" => self.redis.global_report_layout(),
-            "memcached" => self.memcached.global_report_usage().layout().to_vec(),
-            "motan" => self.motan.global_report_usage().layout().to_vec(),
-            "kafka" => self.kafka.global_report_usage().layout().to_vec(),
-            _ => anyhow::bail!("unknown Global projection protocol"),
-        })
-    }
-    fn visit_regular_report_rows(
-        &self,
-        protocol: &str,
-        visitor: &mut dyn FnMut(Row) -> Result<()>,
-    ) -> Result<()> {
-        match protocol {
-            "mysql" => self.mysql.visit_global_report_range(false, visitor),
-            "http" => crate::replay::http::visit_global_report_rows(
-                &self.http_exchanges,
-                &self.http_events.global_report,
-                false,
-                visitor,
-            ),
-            "redis" => self.redis.visit_global_report_rows(visitor),
-            "memcached" => self.memcached.visit_global_report_rows(visitor),
-            "motan" => self.motan.visit_global_report_rows(visitor),
-            "kafka" => self.kafka.visit_global_report_rows(visitor),
-            _ => anyhow::bail!("unknown Global projection protocol"),
-        }
-    }
     fn visit_regular_report_extras(
         &self,
         protocol: &str,

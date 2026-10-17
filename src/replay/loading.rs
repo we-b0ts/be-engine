@@ -95,14 +95,15 @@ impl ReplayRuntime {
         }
         // Source-owned Global slots are stable across selected APIs. Later
         // Case-derived Global aliases remain small session-specific evidence.
-        mysql.freeze_global_report_layout();
-        http_events
-            .global_report
-            .freeze_layout(vec![http_exchanges.len()]);
-        redis.freeze_global_report_layout();
-        memcached.freeze_global_report_layout();
-        kafka.freeze_global_report_layout();
-        motan.freeze_global_report_layout();
+        global_source::freeze(
+            &mut mysql,
+            &mut http_events,
+            http_exchanges.len(),
+            &mut redis,
+            &mut memcached,
+            &mut kafka,
+            &mut motan,
+        );
         if let Some(path) = global_debug_path {
             load_motan_debug_file(&path, &mut motan, &mut targets).await?;
         }
@@ -317,12 +318,13 @@ impl ReplayRuntime {
                 known_targets,
             ))
         });
-        let regular_policy_identity = crate::policy_evidence::digest(&serde_json::to_vec(&(
+        let regular_policy_identity = report::global_evidence::preparation::policy_identity(
             process_owned_dependencies,
             replay_policy
                 .as_ref()
-                .map(|policy| policy.report().fingerprint),
-        ))?);
+                .map(|policy| policy.report().fingerprint)
+                .as_deref(),
+        )?;
         let regular_report = config
             .report_path
             .clone()
