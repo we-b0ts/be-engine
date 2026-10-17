@@ -123,6 +123,81 @@ new modules and any touched file approaching 1000 lines.
 
 ## New configuration core
 
+### Optional authoring conveniences
+
+The typed rule/codec/contract/effect design and its full explicit spelling remain
+available. Human authoring can omit repeated information within the same rule:
+
+- A root `source_revision` supplies the shared Source identity. Source capture
+  and process effects inherit it; resolved proof references include it. Explicit
+  conflicting revisions reject. Documents requiring independent Source identities
+  can retain the complete explicit form without a shared declaration.
+- A rule's proof is required. A nested contract inherits its nearest enclosing
+  proof within that rule. A local `proof` can override `source`, `fact`, or both;
+  blank source/fact values and null proofs reject. Nothing inherits from another
+  rule.
+- Nested contracts may retain the full `contract`/`proof` wrapper or use the
+  direct contract spelling. `relative_time: FORMAT` expands to typed time with
+  `preserve_offset`; `request_time: FORMAT` expands to `request_window`. Both
+  default to `case.request_start` and accept an explicit `anchor`, `utc_offset`
+  and `clock_group`. Formats/units are always explicit. The renderer keeps the
+  effective anchor visible. `unordered` abbreviates `{kind: unordered}`.
+
+For example, a native SQL rule can preserve its original abstraction and scope
+without repeating the same Source paragraph for every time field:
+
+```yaml
+format: traffic-policy/v1
+source_revision: sha256:1111111111111111111111111111111111111111111111111111111111111111
+rules:
+  - id: task-update-times
+    match:
+      api: POST /tasks
+      resource:
+        protocol: mysql
+        endpoint: db.internal:3306
+        database: app
+        username: worker
+      operation: COM_QUERY
+      sql: UPDATE tasks SET json=?, updated_at=? WHERE id=7
+    effect:
+      kind: mysql_values
+      values:
+        0:
+          kind: json
+          fields:
+            /updatedAt:
+              relative_time: iso8601_naive
+              anchor: case.request_start
+              utc_offset: '+08:00'
+              clock_group: payload
+        1:
+          relative_time: sql_datetime
+          anchor: case.request_start
+          utc_offset: '+08:00'
+          clock_group: audit
+    proof:
+      source: app/task.py:update
+      fact: Source reads payload and audit clocks independently; all other values stay exact.
+```
+
+The example revision is a placeholder fixture identity; projects declare their
+actual frozen Source identity. The equivalent value-rule spelling is
+`/expires_at: {relative_time: unix_microseconds, anchor: case.request_start}`;
+JSON and typed PB reuse it on each supported surface. No resource registry,
+business default, new effect, dynamic macro or expression language is introduced.
+
+`policy/authoring` performs closed schema traversal, expands inherited proofs
+and named time abbreviations, and renders human-readable YAML. It never traverses
+business literals, request conditions or arbitrary decoded data. The existing
+typed compiler still validates capabilities, ownership and complete contracts.
+Plans and effective evidence serialize fully expanded rules/proofs; only the
+source-controlled authoring document is compact. Equivalent authoring forms
+produce identical full/runtime/capture/classification fingerprints. Rendering
+verifies the compiled identity after a parse round trip before returning output.
+Writers preserve shared revision context; unchanged apply keeps original bytes
+and does not manufacture a new verification obligation.
+
 The document discriminator is `format: traffic-policy/v1`; `rules` is the
 authoring list; ordinary comparison permissions are combined by explicit field
 ownership. Every rule has an ID,
@@ -616,3 +691,24 @@ uncommitted progress remains untouched. This delivery does not execute its
 Target, start recording, install an engine, or renew execution evidence.
 Adoption still requires the engine-issued genuine Replay obligations and fresh
 Recording when capture, snapshot or missing Source evidence requires it.
+
+The human-authoring follow-up retains the original typed abstractions and full
+explicit syntax, adding only local proof inheritance, shared Source identity and
+named time conveniences. Final regression after this change reports 2391 passing
+tests (2282 library), zero failures and the same four pre-existing ignored tests;
+strict Clippy, formatting and code organization checks pass. Public plan/apply
+tests verify complete expanded proof and unchanged stale/evidence/Replay gates.
+
+Reference-project commit `cc5d94b49` on `replay/20261017-1` retains 113 rules and
+all 65 original dependency IDs. Readable rendering reduces 4988 lines / 257081
+bytes to 3448 lines / 147524 bytes, keeping blocks and folded human-readable
+paragraphs.
+All expanded contracts, complete proofs and the four effective fingerprints are
+identical; the full fingerprint remains
+`sha256:9644af296ab3508ef8ad39220f3c4538bcd06a756ef1ddf3f466a9298d197b04`.
+The recording Dockerfile, build/start scripts and bilingual project instructions
+also adopt the unified file/env names and a container `.traffic-e2e/` layout
+consistent with `project.policy`. Script syntax, an isolated deployment dry run
+and actual project recorder projection pass without starting Docker or Target.
+The recording image must use an engine that includes this MR; the build checks
+that capability, and no image publication or running-binary update is performed.

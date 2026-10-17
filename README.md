@@ -91,6 +91,10 @@ reclassification, or recording. Process-owned classification preserves the
 immutable recording; selectors that change bootstrap snapshots require fresh
 recording. See [unified rules](docs/unified-rule-contracts.md).
 
+Authoring may inherit proof inside a rule, declare a shared `source_revision`,
+and use optional named time abbreviations. Complete explicit contracts remain
+supported; plan/evidence always contain fully expanded effective rules.
+
 `backend-rewrite` emits one compact JSON object per command by default; use
 global `--pretty` for interactive inspection. Normal `next` and `status`
 responses contain only the bounded API-inventory summary. Query the full

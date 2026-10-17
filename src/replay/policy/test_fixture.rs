@@ -83,6 +83,7 @@ fn convert_document(
     }
     Ok(p::TrafficPolicy {
         format: p::POLICY_FORMAT.into(),
+        source_revision: None,
         rules,
     })
 }

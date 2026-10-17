@@ -14,6 +14,48 @@ mod native_transaction;
 #[path = "transaction_recovery.rs"]
 mod recovery_transaction;
 
+#[test]
+fn compact_proposals_expand_source_proof_in_public_plan_apply_and_keep_stale_guards() {
+    for stale in [false, true] {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.policy(),
+            "format: traffic-policy/v1\nsource_revision: source\nrules: []\n",
+        )
+        .unwrap();
+        let mut rule = super::rule();
+        let source = rule["proof"]["source"].as_str().unwrap().to_owned();
+        rule["contract"]["/members"] = json!("unordered");
+        write(&fixture.proposal, rule);
+        fixture.confirm();
+        let plan = fixture.plan().unwrap();
+        let expanded = &plan.traffic_e2e_report["expanded_rules"][0];
+        assert_eq!(expanded["proof"]["source"], format!("{source} @ source"));
+        assert_eq!(expanded["contract"]["/members"]["kind"], "unordered");
+        assert_eq!(plan.traffic_e2e_report["verified"], false);
+        if stale {
+            let bytes = "format: traffic-policy/v1\nsource_revision: changed-source\nrules: []\n";
+            fs::write(fixture.policy(), bytes).unwrap();
+            assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
+            assert_eq!(fs::read_to_string(fixture.policy()).unwrap(), bytes);
+        } else {
+            let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+            assert_eq!(
+                applied.traffic_e2e_report["expanded_rules"],
+                plan.traffic_e2e_report["expanded_rules"]
+            );
+            assert_eq!(
+                applied.traffic_e2e_report["status"],
+                "applied_pending_replay"
+            );
+            let text = fs::read_to_string(fixture.policy()).unwrap();
+            assert!(text.contains("source_revision: source"));
+            assert!(!text.contains(" @ source"));
+            assert!(fixture.state().rule_replay_pending);
+        }
+    }
+}
+
 struct Fixture {
     target: tempfile::TempDir,
     proposal: PathBuf,

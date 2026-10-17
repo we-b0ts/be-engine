@@ -802,6 +802,11 @@ explicit repository-wide audit.
 - `policy/{schema,native,native_compile,strict_map,capability}` owns closed typed
   contracts, Source scope and pure validation. Unknown combinations reject before
   replay; adapter admission and runtime construction share typed projections.
+- `policy/authoring` owns document revision context, rule-local proof inheritance,
+  named contract abbreviations and readable YAML rendering. Its closed traversal
+  expands only typed contract locations, preserving business literals and the
+  complete rule/proof IR used by compilation, plans and evidence. Rendering
+  verifies compiled equality after a parse round trip.
 - `value_contract/{json,encoded,time,generated,delivery}` owns pure values, whole
   element pairing, microsecond relationships, conditional fields and staged
   nonces/templates. Keys are borrowed immutable inputs; bytes and plaintext do

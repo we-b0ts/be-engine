@@ -49,6 +49,11 @@ pub fn parse_policy(yaml: &str) -> Result<TrafficPolicy> {
 }
 
 pub fn compile_policy(document: &TrafficPolicy) -> Result<CompiledPolicy> {
+    let document = super::authoring::expanded(document)?;
+    compile_expanded(&document)
+}
+
+fn compile_expanded(document: &TrafficPolicy) -> Result<CompiledPolicy> {
     ensure!(
         document.format == POLICY_FORMAT,
         "policy format must be {POLICY_FORMAT:?}"

@@ -47,6 +47,7 @@ fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
         };
         TrafficPolicy {
             format: crate::policy::POLICY_FORMAT.into(),
+            source_revision: None,
             rules,
         }
     };
@@ -156,6 +157,17 @@ fn plan(
     let mut document = parse_policy(&original).context(
         "unified authoring requires a traffic-policy/v1 policy; no legacy fallback is used",
     )?;
+    if let Some(revision) = &document.source_revision {
+        ensure!(
+            proposed
+                .source_revision
+                .as_ref()
+                .is_none_or(|r| r == revision),
+            "proposal Source revision conflicts with the active policy"
+        );
+        proposed.source_revision = Some(revision.clone());
+        proposed = crate::policy::expand_policy(&proposed)?;
+    }
     let rule_ids = proposed
         .rules
         .iter()
@@ -188,7 +200,7 @@ fn plan(
     let preflight = preflight::verify(root, state, &mut bundle, &compiled, &rule_ids)?;
     bundle.artifacts.insert(proposal.path.clone(), proposal);
     let updated = if changed {
-        serde_yaml::to_string(&document)?
+        crate::policy::render_policy(&document)?
     } else {
         original.clone()
     };

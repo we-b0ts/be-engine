@@ -91,6 +91,19 @@ Every rule carries its own inline `proof: {source, fact}`. Default to inline
 resources, codec bindings and contracts. The current format keeps these definitions inline; plans expose their complete
 content without requiring an AI to traverse configuration references.
 
+For human authoring, a document-level `source_revision` can bind the common
+Source identity. Nested contracts inherit the nearest proof inside their own
+rule; supply a local proof only for different facts or Source references. Partial
+local proof overrides are allowed; blank source/fact values and null proofs
+reject. Proof never inherits across rules. Complete `contract`/`proof` pairs
+remain supported.
+`relative_time: unix_microseconds` abbreviates typed `preserve_offset` time;
+`request_time: rfc3339` abbreviates `request_window`. Both default to
+`case.request_start`; declare another anchor, offset or clock group explicitly.
+`unordered` abbreviates `{kind: unordered}`. Keep complex constraints explicit.
+The engine expands all these forms into complete typed rules, proofs and Source
+identities in plan/evidence, with the same effective fingerprints and gates.
+
 Unselected fields and native protocol envelope stay strict. Unordered arrays
 preserve elements, types and duplicate counts. JSON null is a present value;
 a protocol miss, null bulk response or quiet no-response is an unavailable slot
@@ -124,7 +137,8 @@ Use the typed native owner when a contract involves more than one value:
   and `finite_sharing`: acquisition, classification and finite sharing.
 
 Follow discovered capability metadata for the exact effect schema. Nested
-bindings, fields and selectors carry their own Source proof where required.
+bindings, fields and selectors retain their own resolved Source proof, whether
+locally inherited or explicitly supplied by the author.
 Source self-validation exercises complete traces in isolated state. It cannot
 replace independent Target evidence; successful planning can still require
 fresh Replay. Startup signing inputs are frozen by actual resolved file hash,

@@ -33,10 +33,11 @@ pub(crate) fn render_initial(config: &SourceTrafficPolicyConfig) -> Result<Strin
     let rules = reverse::rules(config, &proof)?;
     let document = crate::policy::TrafficPolicy {
         format: crate::policy::POLICY_FORMAT.into(),
+        source_revision: None,
         rules: rules.into_iter().map(Into::into).collect(),
     };
     crate::policy::compile_policy(&document)?;
-    Ok(serde_yaml::to_string(&document)?)
+    crate::policy::render_policy(&document)
 }
 
 use super::process_owned_dependencies::{

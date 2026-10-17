@@ -4,10 +4,11 @@ use crate::policy::{NativeDomain, PolicyRule, Proof, TrafficPolicy};
 mod order;
 
 pub(crate) fn empty_policy() -> Result<String> {
-    Ok(serde_yaml::to_string(&TrafficPolicy {
+    crate::policy::render_policy(&TrafficPolicy {
         format: crate::policy::POLICY_FORMAT.into(),
+        source_revision: None,
         rules: Vec::new(),
-    })?)
+    })
 }
 
 pub(crate) fn render_updated(
@@ -94,7 +95,7 @@ pub(crate) fn render_updated(
     document.rules = retained;
     crate::policy::compile_policy(&document)
         .context("updated Source effects violate unified policy capabilities or ownership")?;
-    Ok(serde_yaml::to_string(&document)?)
+    crate::policy::render_policy(&document)
 }
 
 fn unchanged(rule: &n::NativeRule, proposed: &SourceTrafficPolicyConfig) -> Result<bool> {

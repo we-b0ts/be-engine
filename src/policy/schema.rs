@@ -1,4 +1,4 @@
-//! Public traffic-policy/v1 input. Every rule carries its complete contract and proof.
+//! Typed traffic-policy/v1 rules. Authoring defaults expand before compilation.
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -7,10 +7,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const POLICY_FORMAT: &str = "traffic-policy/v1";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrafficPolicy {
     pub format: String,
+    pub source_revision: Option<String>,
     pub rules: Vec<super::PolicyRule>,
 }
 

@@ -59,6 +59,47 @@ rules:
 }
 
 #[test]
+fn source_writer_preserves_shared_revision_and_expanded_nested_proofs() {
+    let mut document = base();
+    document.source_revision = Some(revision());
+    let original = crate::policy::render_policy(&document).unwrap();
+    let baseline = crate::policy::parse_policy(&original).unwrap();
+    let compiled = crate::policy::compile_policy(&baseline).unwrap();
+    let mut proposed = project_source_policy(&compiled.native).unwrap();
+    proposed.http.case_path_patterns.push("/added/*".into());
+    let rendered = render_updated(&original, &proposed, &proof("new-observation")).unwrap();
+    let after = crate::policy::parse_policy(&rendered).unwrap();
+    assert_eq!(after.source_revision, baseline.source_revision);
+    for rule in &baseline.rules {
+        assert_eq!(
+            after.rules.iter().find(|other| other.id() == rule.id()),
+            Some(rule)
+        );
+    }
+    assert!(
+        after
+            .rules
+            .iter()
+            .all(|rule| rule.proof().source.ends_with(&format!(" @ {}", revision())))
+    );
+    assert!(!rendered.contains(" @ sha256:"));
+    let after_compiled = crate::policy::compile_policy(&after).unwrap();
+    assert_eq!(
+        compiled.fingerprints.runtime,
+        after_compiled.fingerprints.runtime
+    );
+    assert_eq!(
+        render_updated(
+            &rendered,
+            &project_source_policy(&after_compiled.native).unwrap(),
+            &proof("unused")
+        )
+        .unwrap(),
+        rendered
+    );
+}
+
+#[test]
 fn source_scope_update_preserves_other_effects_complete_rules_and_original_proofs() {
     let document = base();
     let original = serde_yaml::to_string(&document).unwrap();

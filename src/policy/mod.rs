@@ -3,6 +3,8 @@
 //! their callers, and protocol adapters retain lane/session/consumption ownership.
 mod authoring;
 mod capability;
+pub(crate) use authoring::expanded as expand_policy;
+pub use authoring::render_policy;
 pub(crate) use authoring::retired_authoring;
 mod compiler;
 pub mod native;

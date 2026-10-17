@@ -25,12 +25,14 @@ pub enum PolicyRule {
 // decoder, so worker errors name the malformed field in the selected rule.
 impl<'de> Deserialize<'de> for PolicyRule {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_yaml::Value::deserialize(deserializer)?;
+        let mut value = serde_yaml::Value::deserialize(deserializer)?;
         let id = value
             .get("id")
             .and_then(serde_yaml::Value::as_str)
             .unwrap_or("<missing-id>")
             .to_owned();
+        crate::policy::authoring::expand_rule(&mut value, None)
+            .map_err(|error| serde::de::Error::custom(format!("rule {id:?}: {error:#}")))?;
         if value.get("effect").is_some() {
             serde_yaml::from_value::<NativeRule>(value).map(|rule| Self::Native(Box::new(rule)))
         } else {
@@ -142,7 +144,8 @@ pub enum NativeKeySelector {
     },
 }
 
-/// Every nested relaxation has its own proof, including bindings in a sequence.
+/// Every nested relaxation retains its resolved proof in the IR. Authoring may
+/// inherit that proof locally, including bindings in a sequence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Proven<T> {
