@@ -52,6 +52,17 @@ pub(super) fn verify(
         clocks,
     )?;
     let mut source_ids = checked;
+    for (id, _, result) in context.header_results(
+        source_payload.source_headers.as_ref(),
+        source_payload.source_headers.as_ref(),
+        clocks.case,
+    ) {
+        ensure!(
+            result.is_ok(),
+            "Source header JWT {id:?} failed: {result:?}"
+        );
+        source_ids.insert(id);
+    }
     for rule in native {
         if let NativeEffect::ResponseHeaderDate(effect) = &rule.rule.effect {
             let values = header(&source_payload.source_headers, &effect.header);
@@ -98,6 +109,16 @@ pub(super) fn verify(
         &pair.target_headers,
         pair.times,
     )?;
+    for (id, _, result) in context.header_results(
+        pair.source_headers.as_ref(),
+        pair.target_headers.as_ref(),
+        pair.times,
+    ) {
+        ensure!(
+            result.is_ok(),
+            "independent Target header JWT {id:?} failed: {result:?}"
+        );
+    }
     if !source_ids.is_empty() {
         result.independent_target_validations += 1;
     }

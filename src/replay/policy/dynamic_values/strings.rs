@@ -109,6 +109,12 @@ fn normalize_json(
 }
 
 fn translate(text: &str, pairs: &[IdentityPair]) -> Result<String> {
+    if !pairs
+        .iter()
+        .any(|pair| text.contains(&pair.target) || text.contains(&pair.source))
+    {
+        return Ok(text.to_owned());
+    }
     let mut out = String::new();
     let mut offset = 0;
     while offset < text.len() {

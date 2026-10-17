@@ -66,8 +66,10 @@ fn validate_body_codecs(value: &[CompiledRule], native: &[CompiledNativeRule]) -
     for compiled in native {
         let codec = match &compiled.rule.effect {
             crate::policy::NativeEffect::ResponseBody(effect) => effect.value_codec()?,
-            crate::policy::NativeEffect::ResponseGenerated(_)
-            | crate::policy::NativeEffect::ResponseJwt(_) => Some(Codec::Json),
+            crate::policy::NativeEffect::ResponseGenerated(_) => Some(Codec::Json),
+            crate::policy::NativeEffect::ResponseJwt(effect) if effect.location.is_none() => {
+                Some(Codec::Json)
+            }
             _ => None,
         };
         if let Some(codec) = codec {

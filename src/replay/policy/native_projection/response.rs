@@ -14,6 +14,9 @@ pub(super) fn project(output: &mut NativeRuntimeProjection, rule: &n::NativeRule
         n::NativeEffect::ResponseJwt(effect) => {
             let jwt = project_jwt(effect, &rule.proof)?;
             jwt.validate()?;
+            if jwt.header.is_some() {
+                return Ok(());
+            }
             output.response_aliases.insert(jwt.id(api), rule.id.clone());
             output
                 .document
@@ -331,12 +334,32 @@ pub(in crate::replay) fn project_jwt(
 ) -> Result<r::ResponseJwtRule> {
     let jwt = r::ResponseJwtRule {
         pointer: effect.pointer.clone(),
+        header: effect
+            .location
+            .as_ref()
+            .map(|location| location.header.to_ascii_lowercase()),
+        nonce_query_params: effect
+            .nonces
+            .iter()
+            .filter_map(|nonce| {
+                nonce
+                    .contract
+                    .echo_query_param
+                    .as_ref()
+                    .map(|name| (nonce.contract.pointer.clone(), name.clone()))
+            })
+            .collect(),
         algorithm: algorithm(effect.algorithm),
         signing_key_source: response_key(&effect.signing_key)?,
         dynamic_claims: effect
             .nonces
             .iter()
-            .map(|nonce| dynamic_claim(&nonce.contract))
+            .map(|nonce| {
+                dynamic_claim(&n::NonceClaim {
+                    pointer: nonce.contract.pointer.clone(),
+                    format: nonce.contract.format.clone(),
+                })
+            })
             .collect(),
         url_query_param: effect.url_query_param.clone(),
         expires_at: effect.expires_at.clone(),

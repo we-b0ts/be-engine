@@ -4,7 +4,7 @@ use serde_json::json;
 
 fn event() -> serde_json::Value {
     let capture = |text: &str| json!({"encoding":"utf8","data":text,"truncated":false,"original_len":text.len(),"stored_len":text.len()});
-    json!({"event_type":"redis_exchange","target_port":6379,"command":"SCARD","args":[capture("session")],
+    json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,"target_host":"cache.test","database":0,"target_port":6379,"command":"SCARD","args":[capture("session")],
         "replay_safe":true,"session_setup":false,"outcome":"response","response":capture(":1\r\n")})
 }
 fn case(root: &Path, name: &str, event: &serde_json::Value) -> PathBuf {

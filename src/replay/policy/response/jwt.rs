@@ -37,6 +37,10 @@ fn is_default_expiry_format(format: &ResponseTimestampFormat) -> bool {
 #[serde(deny_unknown_fields)]
 pub struct ResponseJwtRule {
     pub pointer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub nonce_query_params: BTreeMap<String, String>,
     pub algorithm: ResponseJwtAlgorithm,
     pub signing_key_source: ResponseJwtKeySource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -60,7 +64,9 @@ pub struct ResponseJwtRule {
 
 impl ResponseJwtRule {
     pub(crate) fn validate(&self) -> Result<()> {
-        validate_json_pointer(&self.pointer)?;
+        if self.header.is_none() {
+            validate_json_pointer(&self.pointer)?;
+        }
         self.signing_key_source.validate(self.algorithm)?;
         ensure!(
             matches!(
@@ -84,6 +90,27 @@ impl ResponseJwtRule {
             ensure!(
                 claims.insert(claim.pointer()),
                 "JWT nonce claim is selected twice"
+            );
+        }
+        let mut parameters = BTreeSet::new();
+        for (claim, parameter) in &self.nonce_query_params {
+            ensure!(
+                claims.contains(claim.as_str()) && self.url_query_param.is_some(),
+                "JWT query echo requires a declared nonce and URL query token"
+            );
+            ensure!(
+                Some(parameter) != self.url_query_param.as_ref() && parameters.insert(parameter),
+                "JWT query echoes must select distinct parameters"
+            );
+            crate::request_rules::jwt::url_query::validate_parameter(parameter)?;
+        }
+        if let Some(header) = &self.header {
+            header.parse::<hyper::header::HeaderName>()?;
+            ensure!(
+                self.pointer.is_empty()
+                    && self.companion_pointers().next().is_none()
+                    && self.ttl.is_none(),
+                "header JWT cannot own body pointers"
             );
         }
         if let Some(parameter) = &self.url_query_param {

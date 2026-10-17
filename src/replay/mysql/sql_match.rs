@@ -6,7 +6,7 @@ pub(super) mod cache;
 mod predicate;
 mod query_in;
 
-pub(in crate::replay) const MAX_SQL_TOKENS: usize = 16_384;
+pub(in crate::replay) const MAX_SQL_TOKENS: usize = crate::mysql::sql::bounds::MAX_TOKENS;
 
 pub(in crate::replay) fn materialize(
     sql: &str,

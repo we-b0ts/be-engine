@@ -77,6 +77,14 @@ pub(crate) struct FileIndex {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mysql: Option<Vec<IndexedMysqlRecord>>,
     pub redis_lanes: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_records: Option<Vec<ProofRecord>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProofRecord {
+    pub location: RecordLocation,
+    pub selector: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

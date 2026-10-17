@@ -68,6 +68,7 @@ pub(super) fn verify(
             recording_run_id: String::new(),
             digest: String::new(),
             artifact_paths: BTreeSet::new(),
+            snapshot: Default::default(),
         },
         rule_ids: rules.iter().map(|rule| rule.rule.id.clone()).collect(),
     };

@@ -80,7 +80,10 @@ boundary and actual-client acceptance tests.
 
 Generated MySQL write timestamps use the native `mysql_values` effect in the
 unified policy. Text and prepared requests share typed slots and complete SQL
-remainder checks. Native parameters, generated bindings, JSON/PB values and
+remainder checks. Scalar/JSON write times default to their own dependency request
+start, with independent Source/Target clocks and the unchanged five-second bound.
+Statements support up to 1 MiB/16,384 tokens; large literals do not enter the SQL
+cache, and identity bindings do not lower the parsing limit. Native parameters, generated bindings, JSON/PB values and
 result time columns compose through their explicit owners. Use the discovered
 schema and `rule plan --file ... --evidence ...`, then keep the returned Replay
 obligation. Database error propagation remains part of Target behavior.

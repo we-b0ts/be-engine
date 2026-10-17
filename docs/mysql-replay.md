@@ -1,5 +1,20 @@
 # MySQL driver interoperability
 
+SQL value matching supports one statement up to 1 MiB and 16,384 tokens,
+including recorded inline image/text values versus prepared parameters plus a
+bound identity. Configured templates retain their separate 64 KiB bound.
+Large statements are parsed without entering the SQL cache; cache retention
+accounts conservatively for keys, tokens, ASTs and bound constant metadata within
+16 MiB. BLOB/text bytes, predicates, status fields and finite consumption remain
+exact outside the explicitly authorized identity/time fields.
+
+For `mysql_values.values`, scalar and JSON time fields default to the individual
+dependency request start. Source uses its recorded start (or completion minus
+recorded duration); Target uses its independently observed request start. No
+configuration anchor is required. An explicit `case.request_start` remains
+available for values actually generated at API entry, and retains that behavior;
+it is not automatically migrated. PREPARE does not invent an execution clock.
+
 > Rule authoring now uses self-contained `traffic-policy/v1` records in
 > `project.policy` and `rule plan --file … --evidence …`. Legacy rule YAML and
 > commands below are historical semantic references; protocol/TLS/transaction

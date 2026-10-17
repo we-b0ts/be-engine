@@ -160,12 +160,20 @@ pub(super) fn convert(
                     },
                     n::NativeEffect::ResponseJwt(n::ResponseJwtEffect {
                         pointer: rule.pointer.clone(),
+                        location: rule.header.as_ref().map(|header| n::ResponseJwtLocation {
+                            header: header.clone(),
+                        }),
                         algorithm,
                         signing_key,
                         nonces: rule
                             .dynamic_claims
                             .iter()
-                            .map(|claim| Ok(proven(nonce(claim)?, &rule.source_evidence)))
+                            .map(|claim| {
+                                let mut value: n::ResponseNonceClaim = nonce(claim)?.into();
+                                value.echo_query_param =
+                                    rule.nonce_query_params.get(&value.pointer).cloned();
+                                Ok(proven(value, &rule.source_evidence))
+                            })
                             .collect::<Result<_>>()?,
                         url_query_param: rule.url_query_param.clone(),
                         expires_at: rule.expires_at.clone(),

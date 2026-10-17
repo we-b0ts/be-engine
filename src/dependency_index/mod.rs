@@ -1,12 +1,14 @@
 //! Disposable locations into immutable semantic dependency evidence.
 //! This module never authorizes matching, sharing, consumption or responses.
 mod build;
+pub(crate) mod evidence;
 pub(crate) mod global;
 #[cfg(test)]
 mod global_tests;
 mod model;
 mod mysql;
 mod pages;
+pub(crate) mod proof;
 mod reader;
 mod reference;
 pub(crate) mod store;

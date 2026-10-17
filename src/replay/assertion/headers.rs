@@ -7,6 +7,12 @@ use crate::http::response_headers::{STANDARD_RESPONSE_HEADERS, X_REQUEST_ID};
 use crate::recorder::HeaderMapSnapshot;
 pub(in crate::replay) mod date;
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HeaderJwtCandidate {
+    pub header: String,
+    pub jwt_candidate: bool,
+}
+
 pub(super) fn compare_with_rules(
     expected: Option<&HeaderMapSnapshot>,
     actual: Option<&HeaderMapSnapshot>,
@@ -104,6 +110,16 @@ pub(super) fn compare_standard_headers(
                 ensure_values_available(name, expected, "expected")?;
                 ensure_values_available(name, actual, "actual")?;
                 if canonical_values(name, expected) != canonical_values(name, actual) {
+                    if expected
+                        .iter()
+                        .chain(actual)
+                        .any(|value| crate::ResponseJwtRule::is_candidate(value))
+                    {
+                        report.header_jwt_candidates.push(HeaderJwtCandidate {
+                            header: name.into(),
+                            jwt_candidate: true,
+                        });
+                    }
                     report
                         .header_date_candidates
                         .extend(date::candidates(name, expected, actual));

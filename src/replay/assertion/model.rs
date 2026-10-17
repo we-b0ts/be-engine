@@ -315,6 +315,16 @@ impl ResponseDifference {
             ResponseDifferenceKind::HeaderMissingActual
                 | ResponseDifferenceKind::HeaderUnexpectedActual
                 | ResponseDifferenceKind::HeaderValueMismatch
+                | ResponseDifferenceKind::JwtInvalid
+                | ResponseDifferenceKind::JwtAlgorithmMismatch
+                | ResponseDifferenceKind::JwtSignatureInvalid
+                | ResponseDifferenceKind::JwtClaimsMismatch
+                | ResponseDifferenceKind::JwtTimeMismatch
+                | ResponseDifferenceKind::JwtNonceMismatch
+                | ResponseDifferenceKind::JwtUrlMismatch
+                | ResponseDifferenceKind::JwtExpiryMismatch
+                | ResponseDifferenceKind::JwtSigningKeyUnavailable
+                | ResponseDifferenceKind::TimeReferenceMissing
         ));
         Self {
             pointer: format!("$headers/{name}"),
@@ -368,6 +378,8 @@ pub struct ResponseAssertionCaseReport {
     pub unused_applicable_header_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub header_date_candidates: Vec<super::headers::date::ResponseHeaderDateCandidate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_jwt_candidates: Vec<super::headers::HeaderJwtCandidate>,
     pub version: u8,
     pub case_id: String,
     pub method: String,
@@ -429,6 +441,7 @@ impl ResponseAssertionCaseReport {
             applied_header_rule_ids: Vec::new(),
             unused_applicable_header_rule_ids: Vec::new(),
             header_date_candidates: Vec::new(),
+            header_jwt_candidates: Vec::new(),
             case_id,
             method,
             path,

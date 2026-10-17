@@ -27,6 +27,8 @@ pub(crate) struct NativeSourceInventory {
     pub recording_run_id: String,
     pub digest: String,
     pub artifact_paths: BTreeSet<PathBuf>,
+    #[serde(default)]
+    pub snapshot: crate::dependency_index::evidence::Snapshot,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,48 +117,30 @@ impl<'a> SourceEventRole<'a> {
 
 pub(super) fn each_event(
     files: &[PathBuf],
+    selected: impl Fn(SourceEventRole<'_>, &serde_json::Value) -> Result<bool>,
     mut visitor: impl FnMut(&Path, SourceEventRole<'_>, &serde_json::Value) -> Result<()>,
 ) -> Result<()> {
-    use std::io::{BufRead, BufReader};
-    let mut bytes = 0usize;
     for path in files {
         let case = path
             .parent()
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
             .context("Source dependency has no case identity")?;
-        for (index, line) in BufReader::new(std::fs::File::open(path)?)
-            .lines()
-            .enumerate()
-        {
-            let line = line?;
-            bytes = bytes
-                .checked_add(line.len())
-                .context("Source inventory byte count overflow")?;
-            ensure!(
-                bytes <= 256 * 1024 * 1024 && line.len() <= 8 * 1024 * 1024,
-                "Source rule proof exceeds bounded evidence size"
-            );
-            if line.trim().is_empty() {
-                continue;
-            }
-            let event = serde_json::from_str(&line).with_context(|| {
-                format!(
-                    "invalid Source dependency {} line {}",
-                    path.display(),
-                    index + 1
-                )
-            })?;
-            let role = if path
+        let role = || {
+            if path
                 .file_name()
                 .is_some_and(|name| name == "global-dependencies.jsonl")
             {
                 SourceEventRole::Global
             } else {
                 SourceEventRole::Case(case)
-            };
-            visitor(path, role, &event)?;
-        }
+            }
+        };
+        crate::dependency_index::proof::visit(
+            path,
+            |event| selected(role(), event),
+            |event| visitor(path, role(), event),
+        )?;
     }
     Ok(())
 }

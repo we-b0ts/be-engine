@@ -196,6 +196,15 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             add(S::DependencyRequest, L::Value, location, false);
         }
         NativeEffect::ResponseJwt(effect) => {
+            if let Some(location) = &effect.location {
+                add(
+                    S::ApiResponse,
+                    L::Header(location.header.to_ascii_lowercase()),
+                    OwnedLocation::Scalar,
+                    false,
+                );
+                return claims;
+            }
             for pointer in std::iter::once(&effect.pointer)
                 .chain(effect.expires_at.iter())
                 .chain(effect.issued_at.iter())

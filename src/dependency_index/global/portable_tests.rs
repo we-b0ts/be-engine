@@ -85,6 +85,29 @@ fn reject_rescan(_: &Value) -> Result<()> {
     anyhow::bail!("a copied sealed index must not rescan semantic records")
 }
 
+#[test]
+fn same_inode_same_size_edit_cannot_reuse_a_sealed_hash_after_mtime_is_restored() {
+    let fixture = fixture();
+    let source = fixture.original.join("global-dependencies.jsonl");
+    let previous = FileStamp::read(&source).unwrap();
+    let modified = fs::metadata(&source).unwrap().modified().unwrap();
+    let bytes = fs::read_to_string(&source).unwrap();
+    fs::write(&source, bytes.replacen("old", "new", 1)).unwrap();
+    File::options()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    let current = FileStamp::read(&source).unwrap();
+    assert_eq!(previous.inode, current.inode);
+    assert_eq!(previous.size, current.size);
+    assert_eq!(previous.modified, current.modified);
+    assert_ne!(previous.changed, current.changed);
+    let (index, _) = load_global_index(&source, |_| Ok(())).unwrap();
+    assert_ne!(index.sha256, fixture.sealed.sha256);
+}
+
 fn notifications(index: &GlobalIndex, root: &Path) -> Paged<NotificationEntry> {
     assert_eq!(index.notifications.len(), 1);
     Paged::restore(index.notifications[0].pages.clone().resolve(root).unwrap()).unwrap()

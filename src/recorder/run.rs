@@ -300,6 +300,24 @@ impl Recorder {
                 "assigned finalized recording artifact ownership"
             );
         }
+        if status == "completed" {
+            let root = self.run_dir.clone();
+            let catalog =
+                tokio::task::spawn_blocking(move || crate::dependency_index::evidence::seal(&root))
+                    .await
+                    .context("Source proof index task failed")
+                    .and_then(|result| result);
+            match catalog {
+                Ok(catalog) => {
+                    if let Some(owner) = self.artifact_owner {
+                        owner.assign_to(&catalog).await?;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error=%error,"Source proof index prewarm failed; first use will rebuild it")
+                }
+            }
+        }
         Ok(has_failed_cases)
     }
 

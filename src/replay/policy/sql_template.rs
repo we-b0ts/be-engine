@@ -11,7 +11,7 @@ pub(super) fn bounded_tokens(sql: &str) -> Option<Vec<Token>> {
 // Recorded SQL can contain large scalar/JSON literals even when the configured
 // template is small. Keep its byte budget separate from the template budget.
 pub(super) fn bounded_statement_tokens(sql: &str) -> Option<Vec<Token>> {
-    tokens_with_limit(sql, 1024 * 1024)
+    crate::mysql::sql::bounds::statement(sql)
 }
 
 fn tokens_with_limit(sql: &str, max_bytes: usize) -> Option<Vec<Token>> {

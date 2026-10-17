@@ -80,12 +80,18 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                         Ok((
                             name.clone(),
                             match &value.contract {
-                                n::GeneratedValue::Time(time) => c::DynamicValueRule {
-                                    bind: None,
-                                    reference: None,
-                                    validate: None,
-                                    time: Some(sql_time(time)?),
-                                },
+                                n::GeneratedValue::Time(time) => {
+                                    ensure!(
+                                        time.anchor == TimeAnchor::ApiRequestStart,
+                                        "HTTP query times require case.request_start"
+                                    );
+                                    c::DynamicValueRule {
+                                        bind: None,
+                                        reference: None,
+                                        validate: None,
+                                        time: Some(sql_time(time)?),
+                                    }
+                                }
                                 value => generated(value)?,
                             },
                         ))
@@ -100,10 +106,7 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                 .map(|(index, value)| {
                     let value = match &value.contract {
                         n::SqlValueContract::Time(time) => {
-                            c::MysqlTimeValueRule::Scalar(c::MysqlTimeFieldRule {
-                                source_evidence: proof(&value.proof),
-                                time: sql_time(time)?,
-                            })
+                            c::MysqlTimeValueRule::Scalar(mysql_time(time, &value.proof)?)
                         }
                         n::SqlValueContract::Json { fields } => c::MysqlTimeValueRule::Json(
                             fields
@@ -111,10 +114,7 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                                 .map(|(pointer, value)| {
                                     Ok((
                                         pointer.clone(),
-                                        c::MysqlTimeFieldRule {
-                                            source_evidence: proof(&value.proof),
-                                            time: sql_time(&value.contract)?,
-                                        },
+                                        mysql_time(&value.contract, &value.proof)?,
                                     ))
                                 })
                                 .collect::<Result<_>>()?,
@@ -271,11 +271,25 @@ pub(in crate::replay::policy) fn generated(
     Ok(result)
 }
 
+fn mysql_time(
+    value: &n::NativeTime,
+    source: &crate::policy::Proof,
+) -> Result<c::MysqlTimeFieldRule> {
+    ensure!(
+        value.anchor != TimeAnchor::DependencyDelivery,
+        "SQL request times cannot use a future response-delivery clock"
+    );
+    Ok(c::MysqlTimeFieldRule {
+        source_evidence: proof(source),
+        time: sql_time(value)?,
+        anchor: value.anchor,
+    })
+}
+
 fn sql_time(value: &n::NativeTime) -> Result<c::TimeRule> {
     ensure!(
-        value.anchor == TimeAnchor::ApiRequestStart
-            && value.relation == TimeRelation::PreserveOffset,
-        "SQL inventory projection requires preserve_offset and case.request_start"
+        value.relation == TimeRelation::PreserveOffset,
+        "SQL inventory projection requires preserve_offset"
     );
     let format = match value.format {
         TimestampFormat::UnixSeconds

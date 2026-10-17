@@ -34,14 +34,18 @@ fn token(nonce: &str, now: i64, role: &str) -> String {
 fn signed_native_tokens_compose_inside_unordered_items_without_speculative_nonce_leaks() {
     let effect = ResponseJwtEffect {
         pointer: "/items/*/auth".into(),
+        location: None,
         algorithm: SignatureAlgorithm::HS256,
         signing_key: ResponseSigningKey::Startup {
             source: StartupKey::TargetEnv { name: "KEY".into() },
         },
-        nonces: vec![proof(NonceClaim {
-            pointer: "/jti".into(),
-            format: NonceFormat::UuidV4,
-        })],
+        nonces: vec![proof(
+            NonceClaim {
+                pointer: "/jti".into(),
+                format: NonceFormat::UuidV4,
+            }
+            .into(),
+        )],
         url_query_param: None,
         expires_at: None,
         expires_at_format: TimestampFormat::Rfc3339,
@@ -49,6 +53,7 @@ fn signed_native_tokens_compose_inside_unordered_items_without_speculative_nonce
         ttl: None,
     };
     let context = NativeResponseContext {
+        header_jwt: vec![],
         generated: vec![],
         joined: vec![],
         fields: vec![("order".into(), "/items".into(), FieldContract::Unordered)],

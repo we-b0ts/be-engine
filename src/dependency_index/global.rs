@@ -302,6 +302,9 @@ fn load_sealed_index(
     if index.version != VERSION
         || index.stamp.size != stamp.size
         || index.stamp.modified != stamp.modified
+        || index.stamp.device == stamp.device
+            && index.stamp.inode == stamp.inode
+            && index.stamp != *stamp
     {
         return Ok(None);
     }

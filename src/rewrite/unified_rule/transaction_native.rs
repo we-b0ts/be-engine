@@ -50,7 +50,7 @@ fn native_response_and_value_rules_share_the_public_strict_payload_transaction()
 }
 
 fn source_event() -> serde_json::Value {
-    json!({"event_type":"redis_exchange","timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
+    json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,"timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
         "target_host":"cache.test","target_port":6379,"database":0,"command":"SCARD",
         "args":[raw_body(b"session")],"response":raw_body(b":2\r\n"),"replay_safe":true,
         "session_setup":false,"outcome":"response"})

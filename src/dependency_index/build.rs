@@ -92,6 +92,7 @@ impl Builder {
                 redis: Vec::new(),
                 mysql: None,
                 redis_lanes: Default::default(),
+                proof_records: Some(Vec::new()),
             },
             endpoints: BTreeSet::new(),
             hash: Sha256::new(),
@@ -109,6 +110,21 @@ impl Builder {
         };
         self.index.events += 1;
         let tag = value["event_type"].as_str().unwrap_or_default();
+        if tag.ends_with("_exchange") {
+            self.index
+                .proof_records
+                .as_mut()
+                .expect("proof inventory")
+                .push(ProofRecord {
+                    location: RecordLocation {
+                        line,
+                        offset,
+                        length: raw.len() as u64,
+                        sha256: digest(raw),
+                    },
+                    selector: super::proof::selector(value),
+                });
+        }
         let location = if matches!(
             tag,
             "http_exchange" | "redis_exchange" | "redis_pub_sub_push"

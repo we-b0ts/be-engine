@@ -1,5 +1,50 @@
 # Signed JWT response rules
 
+Current authoring uses one self-contained `response_jwt` effect in
+`traffic-policy/v1`. The same signature, stable-claim, nonce and time contract
+supports a JSON body pointer or one HTTP response header. For a signed OIDC
+authorization redirect with an echoed nonce:
+
+```yaml
+format: traffic-policy/v1
+rules:
+  - id: oidc-login-state
+    match: {api: GET /api/auth/oidc/login}
+    effect:
+      kind: response_jwt
+      location: {header: location}
+      url_query_param: state
+      algorithm: HS256
+      signing_key:
+        kind: startup
+        source: {kind: target_file, path: /app/.env, field: OIDC_STATE_SECRET_KEY}
+      nonces:
+        - pointer: /nonce
+          format: {kind: base64url, decoded_bytes: 32}
+          echo_query_param: nonce
+    proof:
+      source: app/api/endpoints/oidc.py:login
+      fact: Source signs state with a fresh nonce and repeats it in the authorization query
+```
+
+For a JSON `auth_url`, replace `location` with `pointer: /auth_url`; keep the
+remaining contract unchanged. A header rule never requires a JSON body codec.
+Header and selected query values must be present exactly once. Each echoed
+value must equal its own verified signed nonce, and every other URL byte stays
+exact. If `iat` is present, signed `exp - iat` is preserved exactly as well as
+the individual request-relative time checks. Body companion selectors
+`expires_at`, `issued_at` and `ttl` are available only with a body pointer.
+
+Run `backend-rewrite rule plan --file rule.yaml --evidence <current-id>`, inspect
+the expanded rule and independent Source/Target/key witnesses, then execute the
+returned apply command and fresh Replay. Format-only JWT candidates appear in
+response evidence and hints without token/key values. Source self-validation
+never proves a Target pass. A changed startup key invalidates a saved plan.
+
+The examples below retain historical DTO spelling as semantic references.
+Use the self-contained effect above and the unified file planner for new rules;
+the retired `--response-jwt` planner is not an authoring entrypoint.
+
 An HTTP JSON response can contain a newly signed JWT such as `/access_token`.
 Recording and Replay occur at different times, so a correctly generated token
 can differ in its time claims and signature. An explicit `jwt` response rule

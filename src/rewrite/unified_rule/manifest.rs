@@ -206,8 +206,7 @@ impl Bundle {
             .find(|p| p.is_file())
             .context("runner evidence has no prepared inventory")?;
         output.freeze(&index)?;
-        let inventory =
-            crate::case_group::load_complete_case_group_inventory(&index, &case_source)?;
+        let inventory = crate::case_group::load_case_group_inventory(&index, &case_source)?;
         ensure!(
             Some(inventory.source_revision.as_str()) == state.source_revision.as_deref(),
             "Source revision changed after Replay"

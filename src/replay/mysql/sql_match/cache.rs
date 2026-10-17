@@ -1,11 +1,11 @@
 //! Replay-local SQL compilation cache. Only immutable parsing/normalization is
 //! cached; identity, policy, runtime parameters and exchange availability are not.
 use super::{
-    MAX_SQL_TOKENS, bound_value,
+    bound_value,
     predicate::{Key, Template},
     query_in,
 };
-use crate::mysql::sql::{Token, projection::DirectSelect, tokens};
+use crate::mysql::sql::{Token, projection::DirectSelect};
 use crate::replay::mysql::RecordedMysqlValue;
 use std::{
     collections::{HashMap, VecDeque},
@@ -13,7 +13,7 @@ use std::{
 };
 
 const MAX_ENTRIES: usize = 256;
-const MAX_SQL_BYTES: usize = 1024 * 1024;
+const MAX_SQL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SINGLE_SQL_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Default)]
@@ -60,17 +60,20 @@ impl SqlCache {
             self.compilations += 1;
         }
         let compiled = Arc::new(CompiledSql::parse(sql));
-        if sql.len() > MAX_SINGLE_SQL_BYTES {
+        // Account conservatively for the key, tokens, ASTs and lazily bound
+        // constant/metadata keys. Large statements still parse without caching.
+        let charge = compiled.cache_charge(sql.len());
+        if sql.len() > MAX_SINGLE_SQL_BYTES || charge > MAX_SQL_BYTES {
             return compiled;
         }
-        while self.entries.len() >= MAX_ENTRIES || self.bytes + sql.len() > MAX_SQL_BYTES {
+        while self.entries.len() >= MAX_ENTRIES || self.bytes + charge > MAX_SQL_BYTES {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
-            self.bytes -= oldest.len();
+            self.bytes -= self.entries[&oldest].cache_charge(oldest.len());
             self.entries.remove(&oldest);
         }
-        self.bytes += sql.len();
+        self.bytes += charge;
         self.order.push_back(sql.to_owned());
         self.entries.insert(sql.to_owned(), Arc::clone(&compiled));
         compiled
@@ -78,12 +81,16 @@ impl SqlCache {
 }
 
 impl CompiledSql {
+    fn cache_charge(&self, sql_bytes: usize) -> usize {
+        sql_bytes.saturating_mul(32)
+            + self
+                .tokens
+                .len()
+                .saturating_mul(std::mem::size_of::<Token>() * 32)
+    }
+
     fn parse(sql: &str) -> Self {
-        let tokens = (sql.len() <= MAX_SINGLE_SQL_BYTES)
-            .then(|| tokens(sql))
-            .flatten()
-            .filter(|tokens| tokens.len() <= MAX_SQL_TOKENS)
-            .unwrap_or_default();
+        let tokens = crate::mysql::sql::bounds::tokens(sql).unwrap_or_default();
         let mut predicate = Template::parse(&tokens, true);
         let query_in = predicate
             .is_none()

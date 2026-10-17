@@ -257,8 +257,29 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
         NativeEffect::ResponseJwt(effect) => {
             response_scope(rule)?;
             compiler::validate_pointer(&effect.pointer, true)?;
+            if let Some(location) = &effect.location {
+                ensure!(
+                    effect.pointer.is_empty(),
+                    "JWT selects either a body pointer or a response header"
+                );
+                ensure!(
+                    effect.expires_at.is_none()
+                        && effect.issued_at.is_none()
+                        && effect.ttl.is_none(),
+                    "header JWT cannot select body companion fields"
+                );
+                location
+                    .header
+                    .parse::<hyper::header::HeaderName>()
+                    .context("invalid JWT response header")?;
+            }
             for nonce in &effect.nonces {
-                proven(nonce, validate_nonce)?;
+                proven(nonce, |nonce| {
+                    validate_nonce(&NonceClaim {
+                        pointer: nonce.pointer.clone(),
+                        format: nonce.format.clone(),
+                    })
+                })?;
             }
             match &effect.signing_key {
                 ResponseSigningKey::Startup { source } => validate_startup_key(source)?,

@@ -2,6 +2,7 @@
 //! Values are decoded separately from SQL words: formatting never changes data.
 //! Uses MySQL's default quoting/escape modes; executable comments fail closed.
 
+pub(crate) mod bounds;
 pub(crate) mod insert;
 pub(crate) mod projection;
 
