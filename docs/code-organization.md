@@ -116,6 +116,15 @@ is unclear.
   result-transition cleanup. E2E state/result publication preserves the actual
   executor revision; `build_info` exposes its build-time constant without status I/O.
 
+- `rewrite/rule_plans` owns global pending-plan admission and busy Apply reports;
+  its `events` child owns independent atomic plan publication and merging into
+  coordinator snapshots. Validation stays with `rewrite/unified_rule`; policy
+  application keeps its existing coordinator transaction. Replay reservation
+  shares only the short publication lock, never a plan's expensive preflight.
+  `e2e_run/evidence_admission` permits completed focused evidence for unrelated
+  APIs while preserving active route/session isolation. See
+  [concurrent rule planning](concurrent-rule-planning.md).
+
 - `rewrite/review/batch` owns selected delivery export, private batch documents,
   exact workflow/recording/dispatch binding and generated review commands.
   It reuses `review/candidate` admission and the complete review pipeline;

@@ -84,6 +84,14 @@ where
 {
     loop {
         let result = execute_step(options.clone()).await?;
+        // Inspect newly published plans after every completed step, including
+        // failed comparisons. The replay transaction may have started before
+        // these independent plan events existed.
+        if let Some(state) = super::store::RewriteStore::new(&options.target_root)?.load()?
+            && let Some(plan) = super::rule_plans::idle_action(&options.target_root, &state)?
+        {
+            return Ok(super::action::envelope(&options.target_root, &state, plan));
+        }
         if mode != RewriteExecutionMode::AutoNext || !result.replay_can_continue {
             return Ok(result.envelope);
         }

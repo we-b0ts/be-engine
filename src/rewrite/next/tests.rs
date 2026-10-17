@@ -566,3 +566,45 @@ fn scope_selection_does_not_depend_on_public_command_arguments() {
             .any(|arg| arg == "--api")
     );
 }
+
+#[tokio::test]
+async fn a_plan_published_after_result_projection_stops_success_and_failure_continuation() {
+    for passed in [true, false] {
+        let target = configured_target();
+        pending(target.path(), &["GET /first", "GET /second"]);
+        let calls = RefCell::new(0);
+        let envelope = run_steps(options(target.path()), RewriteExecutionMode::AutoNext, |invocation| {
+            *calls.borrow_mut() += 1;
+            let result = replay(invocation.clone(), passed, |_| {});
+            // The coordinator already projected its result; an independent
+            // planner publishes before the post-step scheduling boundary.
+            let store = RewriteStore::new(&invocation.target_root).unwrap();
+            let mut state = store.load().unwrap().unwrap();
+            state.rule_plan = Some(serde_json::from_value(serde_json::json!({
+                "id":"pending-plan", "issue_id":"old-issue", "kind":"unified", "json_pointer":"", "evidence_id":"old-evidence"
+            })).unwrap());
+            store.save(&state).unwrap();
+            std::future::ready(Ok(result))
+        }).await.unwrap();
+        assert_eq!(*calls.borrow(), 1);
+        let RewriteAction::PlanApplyRequired { command, .. } = envelope.action else {
+            panic!("pending plan must be surfaced")
+        };
+        assert!(command.argv.contains(&"pending-plan".into()));
+        assert!(
+            command.argv.contains(&"recover".into()),
+            "an expired plan is surfaced without applying it"
+        );
+        let state = RewriteStore::new(target.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.phase == RewritePhase::ImplementationRequired, !passed);
+        if !passed {
+            assert!(state.active_issue.is_some());
+            assert!(!state.attempts.last().unwrap().passed);
+        }
+        assert!(!envelope.terminal_allowed);
+    }
+}

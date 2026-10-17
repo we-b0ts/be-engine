@@ -38,6 +38,19 @@ never overwrite another author's changes or delete state. Old serialized plans
 are retired by this same recovery path; the `dependency-rule` command and old
 flag-specific authoring APIs are unavailable.
 
+Planning may run while a different API is replaying; use its completed published
+evidence. The API route currently reserved/running cannot supply old-attempt
+planning evidence. Plans remain independent of unrelated API progress.
+
+If Apply returns `traffic_e2e_report.status: wait_required`, keep the reviewed
+plan: it has not been applied or queued for automatic application. Follow the
+returned status command. After the current complete Replay attempt finishes,
+the engine pauses `auto_next` and returns `plan_apply_required`, whether that
+attempt passed or now requires implementation. Review and execute the returned
+Apply command, then continue with `next` and its normal configuration commit and
+verification gates. Stale plans return recovery guidance. Preserve failed API
+issues; applying a rule does not establish a pass or replace implementation work.
+
 Use `case-pattern` for pre-inventory capture catalog bootstrap. The Source-gap
 `route`/`recorder-capture` workflows below remain explicit acquisition owners and
 write the same unified policy atomically. They are not value relaxations.

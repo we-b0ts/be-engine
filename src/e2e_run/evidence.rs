@@ -11,7 +11,7 @@ use super::result::{
     RESPONSE_AVAILABILITY_POINTER, response_observation, response_observation_with_status,
     response_pointer_pattern, response_pointer_scope,
 };
-use super::{E2eRunContext, config, model, store, support};
+use super::{E2eRunContext, config, model, store};
 use crate::replay::{
     ResponseAssertionCaseReport, ResponseBodyAssertionReport, ResponseBodyCodec,
     ResponseDifferenceKind, ResponseGatewayProtocol,
@@ -502,14 +502,7 @@ pub(super) fn finalized_focused_evidence(
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    let focused_root = layout
-        .run_root
-        .join("focused")
-        .join(support::api_directory(api));
-    ensure!(
-        !focused_root.join(".active").exists() && !layout.active_dir.exists(),
-        "bounded evidence is unavailable while an E2E attempt is active"
-    );
+    let focused_root = super::evidence_admission::focused_root(&layout, api)?;
     let state_path = focused_root.join("latest/state.yaml");
     ensure!(
         state_path.is_file(),

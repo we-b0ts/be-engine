@@ -128,6 +128,9 @@ async fn advance_atomic(
     let mut state = match store.load()? {
         Some(mut state) => {
             let migrated = inventory::initialize_legacy(&mut state);
+            if let Some(plan) = super::rule_plans::idle_action(&target_root, &state)? {
+                return Ok(action::envelope(&target_root, &state, plan));
+            }
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             let invalidated =
                 inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
@@ -377,11 +380,9 @@ async fn advance_atomic(
             if let Some(envelope) = configuration_commit::pending_locked(&target_root)? {
                 return Ok(envelope);
             }
-            let _traffic = claim_traffic_operation(
-                &target_root,
-                &state,
-                traffic_operation::TrafficOperationKind::Replay,
-            )?;
+            let Some(_traffic) = claim_replay_after_plans(&target_root, &mut state)? else {
+                return Ok(action::for_state(&target_root, &state));
+            };
             let route_batch = options.uses_route_batch(&state);
             *replay_can_continue =
                 run_and_transition(&target_root, &mut state, route_batch).await?;
@@ -418,11 +419,9 @@ async fn advance_atomic(
                 }
             }
             state.e2e_current = false;
-            let _traffic = claim_traffic_operation(
-                &target_root,
-                &state,
-                traffic_operation::TrafficOperationKind::Replay,
-            )?;
+            let Some(_traffic) = claim_replay_after_plans(&target_root, &mut state)? else {
+                return Ok(action::for_state(&target_root, &state));
+            };
             let route_batch = options.uses_route_batch(&state);
             *replay_can_continue =
                 run_and_transition(&target_root, &mut state, route_batch).await?;
@@ -462,6 +461,25 @@ async fn advance_atomic(
             Ok(action::for_state(&target_root, &state))
         }
     }
+}
+
+fn claim_replay_after_plans(
+    target_root: &Path,
+    state: &mut RewriteState,
+) -> Result<Option<traffic_operation::TrafficOperationGuard>> {
+    // Linearize plan publication against the next Replay reservation. Expensive
+    // plan validation stays outside this short lock.
+    let _plans = super::rule_plans::events::lock(target_root)?;
+    super::rule_plans::events::overlay(target_root, state)?;
+    if super::rule_plans::pending(state) {
+        return Ok(None);
+    }
+    claim_traffic_operation(
+        target_root,
+        state,
+        traffic_operation::TrafficOperationKind::Replay,
+    )
+    .map(Some)
 }
 
 fn claim_traffic_operation(

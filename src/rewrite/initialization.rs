@@ -28,6 +28,7 @@ pub(super) fn new_state(
         worker_bindings: std::collections::BTreeMap::new(),
         source_review_rework: std::collections::BTreeMap::new(),
         worker_event_revision: 0,
+        rule_plan_event_revision: 0,
         api_catalog_initialized: false,
         api_catalog: std::collections::BTreeSet::new(),
         case_pattern_identification: None,

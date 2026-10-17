@@ -430,6 +430,8 @@ pub(super) struct RewriteState {
     #[serde(default)]
     pub worker_event_revision: u64,
     #[serde(default)]
+    pub rule_plan_event_revision: u64,
+    #[serde(default)]
     pub api_catalog_initialized: bool,
     #[serde(default)]
     pub api_catalog: BTreeSet<String>,

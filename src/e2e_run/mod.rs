@@ -9,6 +9,7 @@ mod config;
 mod delivery;
 mod dirty_evidence;
 mod evidence;
+mod evidence_admission;
 mod execute;
 mod failure_limit;
 mod final_evidence;
@@ -394,6 +395,10 @@ pub fn resolve_e2e_response_rule_evidence(
     let state_path = if focused_state.is_file() {
         focused_state
     } else if full_state.is_file() {
+        ensure!(
+            !layout.active_dir.exists(),
+            "full-run evidence is unavailable while an E2E attempt is active"
+        );
         full_state
     } else {
         anyhow::bail!(
@@ -446,15 +451,7 @@ pub(crate) fn ensure_response_rule_evidence_inactive(
 }
 
 fn inactive_response_evidence_root(layout: &model::RunLayout, api: &str) -> Result<PathBuf> {
-    let focused_root = layout
-        .run_root
-        .join("focused")
-        .join(support::api_directory(api));
-    ensure!(
-        !focused_root.join(".active").exists() && !layout.active_dir.exists(),
-        "response-rule evidence is unavailable while an E2E attempt is active"
-    );
-    Ok(focused_root)
+    evidence_admission::focused_root(layout, api)
 }
 
 pub fn resolve_single_e2e_response_rule_evidence(

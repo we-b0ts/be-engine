@@ -7,6 +7,8 @@ use crate::rewrite::{
     recover_rewrite_rule_plan,
 };
 
+#[path = "transaction_concurrency.rs"]
+mod concurrency_transaction;
 #[path = "transaction_dependency.rs"]
 mod dependency_transaction;
 #[path = "transaction_header.rs"]
@@ -535,7 +537,7 @@ fn a_persisted_apply_intent_rolls_back_on_save_failure_and_retries_after_crash()
 }
 
 #[test]
-fn planning_and_recovery_require_the_current_worker_dispatch() {
+fn planning_and_current_issue_recovery_require_dispatch_but_superseded_retirement_does_not() {
     let fixture = Fixture::new();
     let state = fixture.state();
     let query = evidence::commands(fixture.root(), &state)
@@ -557,11 +559,22 @@ fn planning_and_recovery_require_the_current_worker_dispatch() {
     fixture.confirm();
     let plan = fixture.plan().unwrap();
     let mut state = fixture.state();
-    state.active_issue.as_mut().unwrap().id = "new-dispatch".into();
+    state.worker_bindings.clear();
     fixture.store().save(&state).unwrap();
     let error = recover_rewrite_rule_plan(fixture.context(), &plan.plan_id).unwrap_err();
     assert!(error.to_string().contains("confirmed dedicated subagent"));
     assert!(fixture.state().rule_plan.is_some());
+    let mut state = fixture.state();
+    state.active_issue.as_mut().unwrap().id = "new-dispatch".into();
+    state.rule_replay_pending = false;
+    fixture.store().save(&state).unwrap();
+    let report = recover_rewrite_rule_plan(fixture.context(), &plan.plan_id).unwrap();
+    assert_eq!(report["status"], "retired_stale_plan");
+    assert_eq!(
+        fixture.state().active_issue.as_ref().unwrap().id,
+        "new-dispatch"
+    );
+    assert!(!fixture.state().rule_replay_pending);
 }
 
 #[test]
