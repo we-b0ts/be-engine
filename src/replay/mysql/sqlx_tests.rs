@@ -16,6 +16,7 @@ mod dependency_time_tests;
 mod distinct_tests;
 mod dynamic_values_tests;
 mod foreign_cleanup_tests;
+mod large_identity_tests;
 mod large_predicate_tests;
 mod large_sql_values_tests;
 mod matching_benchmark;

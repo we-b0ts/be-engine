@@ -4,7 +4,7 @@ use crate::{
     mysql::sql::Token,
     replay::{RecordedMysqlValue, policy::matcher::MysqlPolicyContext},
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 pub(in crate::replay) struct MysqlNormalization {
@@ -108,9 +108,8 @@ fn normalize_sql(
     if pairs.is_empty() {
         return Ok(Some(sql.into()));
     }
-    ensure!(sql.len() <= 64 * 1024, "dynamic SQL exceeds 64 KiB");
-    let (tokens, spans) = crate::mysql::sql::tokens_with_spans(sql)
-        .context("dynamic SQL cannot be safely tokenized")?;
+    let (tokens, spans) = crate::mysql::sql::bounds::statement_with_spans(sql)
+        .context("dynamic SQL requires one valid statement within 1 MiB and 16384 tokens")?;
     let mut out = String::new();
     let mut offset = 0;
     for (token, span) in tokens.into_iter().zip(spans) {

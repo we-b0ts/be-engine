@@ -247,7 +247,21 @@ impl ReplayState {
                     });
                     let dynamic = match dynamic {
                         Some(Ok(normalized)) => Some(normalized),
-                        Some(Err(_)) => continue,
+                        Some(Err(error)) => {
+                            if error.to_string().starts_with("dynamic SQL requires") {
+                                let warning = "dynamic SQL capability limit: one statement, at most 1 MiB and 16384 tokens";
+                                if !self
+                                    .mysql
+                                    .events
+                                    .metadata_warnings
+                                    .iter()
+                                    .any(|w| w == warning)
+                                {
+                                    self.mysql.events.metadata_warnings.push(warning.into());
+                                }
+                            }
+                            continue;
+                        }
                         None => None,
                     };
                     let normalized_exchange = dynamic.as_ref().map(|normalized| {

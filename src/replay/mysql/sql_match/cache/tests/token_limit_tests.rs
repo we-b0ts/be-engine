@@ -1,5 +1,42 @@
 use super::*;
 
+#[test]
+fn large_sql_parses_without_cache_admission_and_keeps_literal_bytes_exact() {
+    let text = "x".repeat(580_000);
+    let sql = format!("SELECT id FROM tasks WHERE payload='{text}' AND id=7");
+    let mut cache = SqlCache::default();
+    let recorded = cache.get(&sql).bind("COM_QUERY", None).unwrap();
+    assert!(cache.entries.is_empty());
+    let params = [
+        mysql_json("string", json!(text)),
+        mysql_json("integer", json!(7)),
+    ];
+    let template = cache.get("SELECT id FROM tasks WHERE payload=? AND id=?");
+    assert!(
+        template
+            .bind("COM_STMT_EXECUTE", Some(&params))
+            .unwrap()
+            .matches(&recorded, false)
+    );
+    let mut changed = params.clone();
+    changed[0] = mysql_json("string", json!("x".repeat(579_999)));
+    assert!(
+        !template
+            .bind("COM_STMT_EXECUTE", Some(&changed))
+            .unwrap()
+            .matches(&recorded, false)
+    );
+    assert!(
+        cache
+            .get(&format!(
+                "SELECT id FROM tasks WHERE payload='{}'",
+                "x".repeat(1024 * 1024)
+            ))
+            .bind("COM_QUERY", None)
+            .is_none()
+    );
+}
+
 fn list(count: usize, reverse: bool) -> String {
     let mut values = (0..count).map(|v| v.to_string()).collect::<Vec<_>>();
     if reverse {

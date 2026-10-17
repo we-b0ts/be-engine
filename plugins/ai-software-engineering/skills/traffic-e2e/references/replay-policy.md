@@ -99,7 +99,9 @@ reject. Proof never inherits across rules. Complete `contract`/`proof` pairs
 remain supported.
 `relative_time: unix_microseconds` abbreviates typed `preserve_offset` time;
 `request_time: rfc3339` abbreviates `request_window`. Both default to
-`case.request_start`; declare another anchor, offset or clock group explicitly.
+`case.request_start`, except `mysql_values.values` scalar/JSON times default to
+`dependency.request_start`. Explicit anchors retain their meaning. Declare an
+offset or clock group when the Source contract requires it.
 `unordered` abbreviates `{kind: unordered}`. Keep complex constraints explicit.
 The engine expands all these forms into complete typed rules, proofs and Source
 identities in plan/evidence, with the same effective fingerprints and gates.
