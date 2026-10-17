@@ -7,6 +7,13 @@ use serde_json::{Value, json};
 use super::{RewriteContext, action, inventory, model::RewriteState, store::RewriteStore};
 
 pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Result<bool> {
+    if let Some(plan) = &state.rule_plan
+        && plan.unified.is_some()
+        && state.active_issue.as_ref().map(|issue| issue.id.as_str())
+            != Some(plan.issue_id.as_str())
+    {
+        return Ok(true);
+    }
     let retired_format = state
         .rule_plan
         .as_ref()
@@ -83,7 +90,19 @@ pub fn recover_rewrite_rule_plan(context: RewriteContext, plan_id: &str) -> Resu
     let api = inventory::api_for_rule_plan(&state, plan_id)
         .or_else(|| inventory::api_for_dependency_rule_plan(&state, plan_id))
         .context("rule plan is stale or belongs to no API work item")?;
-    super::worker::ensure_api_confirmed(&state, &api, "recovering a traffic rule")?;
+    let _scope = super::rule_plans::events::lock_api(&root, &api)?;
+    let scoped = inventory::scoped(&state, Some(&api.parse()?))?;
+    let superseded = scoped.rule_plan.as_ref().is_some_and(|plan| {
+        plan.unified.is_some()
+            && scoped.active_issue.as_ref().map(|issue| issue.id.as_str())
+                != Some(plan.issue_id.as_str())
+    });
+    // Retiring an already-proven, superseded plan grants no new rule or
+    // verification permit. Do not require dispatching a worker for a new issue
+    // merely to discard the old transaction.
+    if !superseded {
+        super::worker::ensure_api_confirmed(&state, &api, "recovering a traffic rule")?;
+    }
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         ensure!(
             evidence_unusable(&root, state)?,
@@ -96,13 +115,10 @@ pub fn recover_rewrite_rule_plan(context: RewriteContext, plan_id: &str) -> Resu
 }
 
 fn recover_slice(root: &Path, state: &mut RewriteState, plan_id: &str) -> Result<Value> {
-    let issue = state
-        .active_issue
-        .as_ref()
-        .context("rule plan has no active issue")?;
+    let issue_id = state.active_issue.as_ref().map(|issue| issue.id.clone());
     let plan = if let Some(plan) = state.rule_plan.as_ref().filter(|plan| plan.id == plan_id) {
         ensure!(
-            plan.issue_id == issue.id,
+            plan.unified.is_some() || Some(plan.issue_id.as_str()) == issue_id.as_deref(),
             "active issue changed after rule planning"
         );
         serde_json::to_value(plan)?
@@ -113,7 +129,7 @@ fn recover_slice(root: &Path, state: &mut RewriteState, plan_id: &str) -> Result
             .filter(|plan| plan.id == plan_id)
             .context("pending rule plan does not match the requested id")?;
         ensure!(
-            plan.issue_id == issue.id,
+            Some(plan.issue_id.as_str()) == issue_id.as_deref(),
             "active issue changed after dependency rule planning"
         );
         serde_json::to_value(plan)?
@@ -143,13 +159,21 @@ fn recover_slice(root: &Path, state: &mut RewriteState, plan_id: &str) -> Result
     {
         state.dependency_rule_plan = None;
     }
-    super::rule_replay::request(state);
+    let needs_replay = plan["issue_id"].as_str() == issue_id.as_deref()
+        && state.phase == super::model::RewritePhase::ImplementationRequired;
+    if needs_replay {
+        super::rule_replay::request(state);
+    }
     state.bump();
     Ok(json!({
-        "status": "fresh_replay_required", "applied": false,
+        "status": if needs_replay { "fresh_replay_required" } else { "retired_stale_plan" }, "applied": false,
         "retired_plan": plan,
         "next_command": action::next_command(root),
-        "required_change": "Run fresh Replay using the existing recordings, then query current evidence and replan the retained selector and source proof."
+        "required_change": if needs_replay {
+            "Run fresh Replay using the existing recordings, then query current evidence and replan the retained selector and source proof."
+        } else {
+            "The superseded plan is retired. Preserve the current API result and issue, continue the returned workflow, and use current evidence for any new proposal."
+        }
     }))
 }
 

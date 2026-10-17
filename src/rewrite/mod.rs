@@ -68,6 +68,7 @@ mod response_url_evidence;
 mod revalidation;
 mod route;
 mod rule;
+mod rule_plans;
 mod rule_replay;
 mod unified_rule;
 pub use jwt_rule::JwtRulePlanOptions;
@@ -226,12 +227,25 @@ pub fn plan_rewrite_rule(
 pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<RewriteRuleReport> {
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
+    let Some(_lock) = store.try_lock()? else {
+        let state = store
+            .load()?
+            .context("rewrite workflow has not been initialized")?;
+        return rule_plans::wait_report(&target_root, &state, plan_id);
+    };
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_rule_plan(&state, plan_id)
         .context("rule plan is stale or belongs to no concurrent API work item")?;
+    let _scope = rule_plans::events::lock_api(&target_root, &api)?;
+    if execution::status_action(&target_root)?.is_some() {
+        return rule_plans::wait_report(&target_root, &state, plan_id);
+    }
+    match traffic_operation::state(&target_root)? {
+        traffic_operation::TrafficOperationState::Absent => {}
+        _ => return rule_plans::wait_report(&target_root, &state, plan_id),
+    }
     let unified = inventory::scoped(&state, Some(&api.parse()?))?
         .rule_plan
         .as_ref()

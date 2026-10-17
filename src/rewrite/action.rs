@@ -47,6 +47,9 @@ pub(super) fn for_status(
 /// Native workflow gate, before choosing among worker actions. Counts consume this
 /// same gate regardless of which API's action the caller wants to inspect.
 pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<RewriteAction> {
+    if let Some(plan) = super::rule_plans::idle_action(target_root, state)? {
+        return Ok(plan);
+    }
     if state.revalidation_round.is_some() {
         let mut projected = state.clone();
         if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
@@ -90,6 +93,12 @@ pub(super) fn select_action(
     state: &RewriteState,
     base: RewriteAction,
 ) -> RewriteAction {
+    if let Ok(Some(plan)) = super::rule_plans::idle_action(target_root, state) {
+        return plan;
+    }
+    if matches!(base, RewriteAction::PlanApplyRequired { .. }) {
+        return base;
+    }
     if matches!(base, RewriteAction::PreRevalidationReviewRequired { .. }) {
         return base;
     }
@@ -190,6 +199,9 @@ pub(super) fn for_scoped_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
+    if let Some(plan) = super::rule_plans::idle_action(target_root, state)? {
+        return Ok(envelope(target_root, state, plan));
+    }
     if state.revalidation_round.is_some() {
         let mut projected = state.clone();
         if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
@@ -366,6 +378,7 @@ pub(super) fn envelope(
         api_inventory: Some(inventory::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: super::expert::counts(state).2 == 0
+            && !super::rule_plans::pending(state)
             && super::review::admission_current(target_root, state)
             && super::review::pre_revalidation::completion_current(target_root, state)
             && progress_publication::state(target_root, state)

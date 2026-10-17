@@ -445,7 +445,7 @@ async fn unmatched_requests_without_any_source_candidate_keep_distinct_target_ob
         let owner = &state.replay_policy.as_ref().unwrap().request_contracts;
         owner.seal_witnesses().unwrap();
         let manifest = owner.witness_manifest().unwrap();
-        let graph = manifest.observations.as_ref().unwrap();
+        let graph = manifest.graph().unwrap();
         assert!(manifest.complete && manifest.sealed);
         assert_eq!(graph.sources.len(), 2);
         assert!(graph.sources.iter().all(|source| {
@@ -522,7 +522,7 @@ async fn target_observation_io_failure_preserves_global_matching_and_rejects_cas
             .unwrap();
         assert!(!manifest.complete);
         assert!(manifest.omitted > 0);
-        assert!(manifest.observations.as_ref().unwrap().targets.is_empty());
+        assert!(manifest.graph().unwrap().targets.is_empty());
         assert_eq!(state.http_exchanges[0].status.is_consumed(), global);
         task.abort();
     }

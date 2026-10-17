@@ -49,6 +49,13 @@ is unclear.
   candidate references. Content sharing never merges physical request identities.
   Offline discovery and preflight expand these references through the evidence
   reader; runtime candidate search does not copy complete payload pairs.
+  `policy_evidence/source` owns authenticated original-record references and
+  delegates envelope reconstruction to native adapters. Its `storage` sibling
+  owns bounded encrypted chunks, sealed segments and portable segment copying.
+  Version-3 coverage groups authenticate the exact visited candidate membership;
+  the borrowed witness index selects original identities before proof expansion.
+  `policy_evidence/catalog` publishes the sealed directory separately from the
+  version-4 manifest and verifies its authenticated reference before expansion.
   `replay/assertion/native/header_jwt` owns unique header carrier selection;
   `assertion/jwt/url` owns strict URL remainder and signed nonce echoes. Body and
   header adapters reuse the same private key snapshots and JWT verifier. Header
@@ -74,6 +81,11 @@ is unclear.
   `replay/policy/request_contract/mysql_selection` owns immutable SQL selector
   preparation and bounded raw-token reuse; bound parameters and live applicability
   never belong in that cache.
+  `mysql/sql/lexical_cache` shares only bounded immutable lexer output, including
+  invalid-input results. `replay/mysql/candidates` indexes immutable Case/resource
+  scopes and compatible command families in original inventory order; live
+  availability, rule decisions, projection precedence and consumption remain in
+  the MySQL matcher.
 
 - `config/api_trigger` owns API-origin process-rule schema, SQL identity slots and bounded key-template
   validation; `api_trigger` owns immutable origin evidence and disposable index
@@ -115,6 +127,15 @@ is unclear.
   rule-application requests. `rewrite/verification` owns reservation, Replay and
   result-transition cleanup. E2E state/result publication preserves the actual
   executor revision; `build_info` exposes its build-time constant without status I/O.
+
+- `rewrite/rule_plans` owns global pending-plan admission and busy Apply reports;
+  its `events` child owns independent atomic plan publication and merging into
+  coordinator snapshots. Validation stays with `rewrite/unified_rule`; policy
+  application keeps its existing coordinator transaction. Replay reservation
+  shares only the short publication lock, never a plan's expensive preflight.
+  `e2e_run/evidence_admission` permits completed focused evidence for unrelated
+  APIs while preserving active route/session isolation. See
+  [concurrent rule planning](concurrent-rule-planning.md).
 
 - `rewrite/review/batch` owns selected delivery export, private batch documents,
   exact workflow/recording/dispatch binding and generated review commands.

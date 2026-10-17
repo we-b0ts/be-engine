@@ -4,6 +4,7 @@
 
 pub(crate) mod bounds;
 pub(crate) mod insert;
+mod lexical_cache;
 pub(crate) mod projection;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,7 +29,7 @@ impl Token {
 }
 
 pub(crate) fn tokens(sql: &str) -> Option<Vec<Token>> {
-    scan(sql, |_| {})
+    lexical_cache::tokens(sql)
 }
 
 pub(crate) fn tokens_with_spans(sql: &str) -> Option<(Vec<Token>, Vec<std::ops::Range<usize>>)> {

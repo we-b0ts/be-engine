@@ -129,6 +129,7 @@ async fn predicate_cache_preserves_identity_case_precedence_and_finite_consumpti
     // Global exact matching must not outrank Case semantic matching.
     state.mysql.exchanges[1].source = ReplaySource::Global;
     state.mysql.exchanges[1].case_id = None;
+    state.mysql.invalidate_scope_index();
     state.mysql.exchanges[1].status = ReplayExchangeStatus::Available;
     let matched = state
         .match_exchange(&identity, "COM_QUERY", Some(exact), None)

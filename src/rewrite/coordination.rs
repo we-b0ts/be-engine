@@ -291,7 +291,22 @@ pub(super) fn projected_details(
             }
         }
     }
-    if matches!(
+    if !busy && matches!(selected, RewriteAction::PlanApplyRequired { .. }) {
+        for key in [
+            "integrate_handoff",
+            "verify_handoff",
+            "verify_api",
+            "verify_system_repair",
+            "target_quality",
+            "pre_revalidation_review",
+            "advance_workflow",
+        ] {
+            if let Some(count) = result.ready.remove(key) {
+                add(&mut result.waiting, "rule_plan", count);
+            }
+        }
+        result.ready.insert("apply_plan".into(), 1);
+    } else if matches!(
         selected,
         RewriteAction::PreRevalidationReviewRequired { .. }
     ) {

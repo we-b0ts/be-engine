@@ -201,7 +201,8 @@ impl RequestContracts {
         );
         for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
             let rules = self.mysql_compiled_rules(surface, Some(case), &identity, &record);
-            let raw = crate::replay::mysql::contracts::source_witness(event, surface)?;
+            let raw =
+                crate::replay::mysql::contracts::source_witness_from_record(&record, surface)?;
             if rules.is_empty() {
                 // No configured permission is needed to retain immutable evidence.
                 let slot = if surface == Surface::DependencyRequest {

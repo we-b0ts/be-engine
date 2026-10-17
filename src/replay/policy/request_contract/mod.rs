@@ -16,6 +16,7 @@ mod unified_response;
 pub(in crate::replay) use unified_response::PreparedRedisDelivery;
 pub(crate) use unified_response::redis_bulk_payload;
 mod script;
+mod source_records;
 mod source_session;
 mod time;
 mod unified;
@@ -96,6 +97,20 @@ pub(in crate::replay) struct Decision {
     unified_time_validations: BTreeMap<String, usize>,
 }
 impl RequestContracts {
+    #[cfg(test)]
+    pub(in crate::replay) fn restore_request_clock_for_test(
+        &self,
+        case: &str,
+        actual: DateTime<Utc>,
+    ) {
+        self.state
+            .lock()
+            .unwrap()
+            .cases
+            .get_mut(case)
+            .unwrap()
+            .actual = Some(actual);
+    }
     pub(in crate::replay::policy) fn load(
         rules: &[ReplayDependencyRule],
         policy: &Path,
@@ -293,6 +308,7 @@ impl RequestContracts {
         if !self.enabled() {
             return Ok(());
         }
+        self.register_source_records(case, bytes)?;
         for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let event: Value = serde_json::from_slice(line)?;
             if event["global_dependency_reason"].is_string() {

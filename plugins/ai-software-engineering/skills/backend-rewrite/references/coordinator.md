@@ -216,6 +216,12 @@ is waiting for Replay, execute the returned bounded wait command. A stopped exec
 `execution_failed` operation requires its reported cause to be resolved before
 its returned retry, without a hot loop.
 
+Worker-proven rule proposals for other completed API attempts may also be
+planned during Replay; see [rule actions](coordinator-rule-actions.md). Busy
+Apply preserves the plan and returns waiting guidance. At the next idle
+boundary the engine prioritizes pending plans after either a pass or an
+implementation failure, before continuing verification or integration.
+
 Use `inventory` when a scheduling breakdown or binding recovery is needed.
 `details.ready` counts sum to `pending`; `details.waiting` describes outstanding
 work. Scoped status retains global `pending` while showing one item's action.

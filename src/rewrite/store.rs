@@ -69,6 +69,7 @@ impl RewriteStore {
             state.version
         );
         super::worker::events::overlay(&self.target_root, &mut state)?;
+        super::rule_plans::events::overlay(&self.target_root, &mut state)?;
         if state.api_inventory.is_empty()
             && state.phase != super::model::RewritePhase::RecordingRequired
         {
@@ -86,6 +87,9 @@ impl RewriteStore {
 
     /// Caller holds the feedback lock for an atomic workflow replacement.
     pub(super) fn save_snapshot(&self, state: &RewriteState, _feedback: &File) -> Result<()> {
+        let _plans = super::rule_plans::events::lock(&self.target_root)?;
+        let mut state = state.clone();
+        super::rule_plans::events::overlay(&self.target_root, &mut state)?;
         fs::create_dir_all(&self.root).with_context(|| {
             format!(
                 "failed to create rewrite state root {}",
@@ -115,6 +119,12 @@ impl RewriteStore {
                 )
             })?;
             File::open(&self.root)?.sync_all()?;
+            // The state is already committed. Cleanup failure cannot turn a
+            // successful policy transaction into a rollback; older events are
+            // harmless because the saved high-water mark prevents resurrection.
+            if let Err(error) = super::rule_plans::events::compact(&self.target_root, &state) {
+                tracing::warn!(%error, "could not compact incorporated rule plans");
+            }
             Ok(())
         })();
         if result.is_err() {
@@ -210,6 +220,14 @@ impl RewriteStore {
         } else {
             RewriteLockState::Stale
         })
+    }
+
+    pub(super) fn owns_lock(&self) -> Result<bool> {
+        match fs::read_to_string(self.root.join("lock")) {
+            Ok(raw) => Ok(raw.trim().parse::<u32>().ok() == Some(std::process::id())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error).context("failed to read rewrite lock owner"),
+        }
     }
 
     pub(super) fn recover_lock(&self) -> Result<bool> {

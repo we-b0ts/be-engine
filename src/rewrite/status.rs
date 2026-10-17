@@ -187,6 +187,9 @@ fn api_envelope_unannotated(
     state: &super::model::RewriteState,
     api: Option<&RecordingApi>,
 ) -> Result<super::model::RewriteActionEnvelope> {
+    if let Some(plan) = super::rule_plans::idle_action(target_root, state)? {
+        return Ok(action::envelope(target_root, state, plan));
+    }
     if let Some(api) = api
         && let Some(envelope) =
             super::regression_scope::skipped_envelope(target_root, state, &api.to_string())

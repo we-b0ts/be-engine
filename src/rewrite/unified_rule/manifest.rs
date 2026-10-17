@@ -205,7 +205,9 @@ impl Bundle {
             .map(|p| p.join("case-groups.json"))
             .find(|p| p.is_file())
             .context("runner evidence has no prepared inventory")?;
-        output.freeze(&index)?;
+        // The shared index grows as unrelated APIs are prepared. Exact selected
+        // membership is revalidated by ExecutionIdentity::current; do not bind
+        // this plan to unrelated index bytes.
         let inventory = crate::case_group::load_case_group_inventory(&index, &case_source)?;
         ensure!(
             Some(inventory.source_revision.as_str()) == state.source_revision.as_deref(),

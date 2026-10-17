@@ -1,9 +1,21 @@
 use super::*;
 
 impl WitnessStore {
+    pub(crate) fn segment_limit_for_test(&self, limit: u64) {
+        self.state
+            .lock()
+            .unwrap()
+            .segmented
+            .as_mut()
+            .unwrap()
+            .segment_limit(limit);
+    }
     pub(crate) fn fail_writes_for_test(&self) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         state.file = File::open(&state.path)?;
+        if let Some(writer) = &mut state.segmented {
+            writer.fail_writes()?;
+        }
         Ok(())
     }
 }

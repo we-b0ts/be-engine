@@ -24,6 +24,7 @@ mod or_tests;
 mod path_capture_tests;
 mod predicate_tests;
 mod projection_tests;
+mod recorded_performance;
 mod rollback_tests;
 mod select_time_tests;
 mod sql_values_tests;

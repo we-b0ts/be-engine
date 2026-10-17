@@ -10,7 +10,11 @@ use sha2::{Digest, Sha256};
 
 use crate::policy::{Resource, Slot, Surface};
 
+mod catalog;
+mod source;
+mod storage;
 mod store;
+pub(crate) use source::SourceRecord;
 pub(crate) use store::{AssociationOutcome, ObservationRetention, WitnessStore};
 mod publication;
 pub(crate) use publication::stage;
@@ -46,7 +50,7 @@ impl WitnessClocks {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct SourceIdentity {
     pub case_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -126,7 +130,7 @@ pub(crate) struct WitnessRef {
     proof: Option<Box<v2::PairProof>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct WitnessManifest {
     pub version: u32,
     /// A single filename relative to the published Replay report directory.
@@ -141,9 +145,35 @@ pub(crate) struct WitnessManifest {
     pub witnesses: Vec<WitnessRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observations: Option<ObservationGraph>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_artifact: Option<catalog::GraphArtifact>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub authentication: String,
+    #[serde(skip)]
+    graph_cache: std::sync::OnceLock<(String, std::sync::Arc<ObservationGraph>)>,
 }
 
 impl WitnessManifest {
+    pub(crate) fn source_index(&self) -> Result<witnesses::WitnessIndex<'_>> {
+        witnesses::WitnessIndex::new(self)
+    }
+    pub(crate) fn artifact_paths(&self, report: &Path) -> Result<Vec<PathBuf>> {
+        self.load_graph(report)?;
+        if let Some(graph) = self.graph()
+            && !graph.segments.is_empty()
+        {
+            let mut paths = graph
+                .segments
+                .iter()
+                .map(|segment| storage::named_path(report, &segment.artifact))
+                .collect::<Result<Vec<_>>>()?;
+            if let Some(reference) = &self.graph_artifact {
+                paths.push(storage::named_path(report, &reference.artifact)?);
+            }
+            return Ok(paths);
+        }
+        Ok(vec![artifact_path(report, self)?])
+    }
     /// Borrow inventory entries before expanding only the selected candidate.
     pub(crate) fn witness_entries(&self) -> Result<WitnessEntries<'_>> {
         WitnessEntries::new(self)
@@ -223,7 +253,7 @@ pub(crate) fn artifact_path(report: &Path, manifest: &WitnessManifest) -> Result
 }
 
 pub(crate) fn verify(report: &Path, manifest: &WitnessManifest) -> Result<PathBuf> {
-    if manifest.version == 2 {
+    if matches!(manifest.version, 2..=4) {
         return v2::verify(report, manifest);
     }
     ensure!(

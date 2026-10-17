@@ -35,7 +35,7 @@ impl FileStamp {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RecordLocation {
     pub line: usize,
     pub offset: u64,

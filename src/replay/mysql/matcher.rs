@@ -2,14 +2,21 @@ use super::*;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct MysqlReplayState {
+    #[cfg(test)]
+    pub(in crate::replay) observed_at_for_test: Option<DateTime<Utc>>,
     pub(in crate::replay) exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
     pub(in crate::replay) events: ReplayEvents,
     pub(super) sql_cache: sql_match::cache::SqlCache,
+    candidates: candidates::Candidates,
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
 }
 
 impl MysqlReplayState {
+    #[cfg(test)]
+    pub(in crate::replay) fn invalidate_scope_index(&mut self) {
+        self.candidates = candidates::Candidates::default();
+    }
     pub(in crate::replay) fn register_exchange(&mut self, exchange: ReplayExchange) {
         let index = self.exchanges.len();
         self.case_exchange_index
@@ -147,7 +154,10 @@ impl ReplayState {
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<MatchedExchange> {
+        #[cfg(not(test))]
         let request_observed_at = Utc::now();
+        #[cfg(test)]
+        let request_observed_at = self.mysql.observed_at_for_test.unwrap_or_else(Utc::now);
         let mut observation_id = Some(uuid::Uuid::new_v4());
         if let (Some(policy), Some(case)) = (&self.replay_policy, self.active_case_id.as_deref()) {
             match contracts::record_target(
@@ -198,11 +208,15 @@ impl ReplayState {
         for source in [ReplaySource::Case, ReplaySource::Global] {
             // Preserve existing candidate precedence before trying compatible
             // projections, without allowing Global to outrank the active Case.
+            let candidates = self.mysql.candidates.select(
+                &self.mysql.exchanges,
+                source,
+                active_case_id.as_deref(),
+                identity,
+                Some(command),
+            );
             for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
-                for index in preferred_end
-                    .into_iter()
-                    .chain(0..self.mysql.exchanges.len())
-                {
+                for index in preferred_end.into_iter().chain(candidates.iter().copied()) {
                     let exchange = &self.mysql.exchanges[index];
                     if exchange.source != source
                         || !exchange.status.is_available()
@@ -499,16 +513,11 @@ impl ReplayState {
                         if let (Some(policy), Some(case)) =
                             (&self.replay_policy, active_case_id.as_deref())
                         {
-                            let mut original = self.mysql.exchanges[index].record.clone();
-                            original.response = match original.response.materialize() {
-                                Ok(response) => response,
-                                Err(_) => continue,
-                            };
                             match contracts::prepare_delivery(
                                 &policy.request_contracts,
                                 case,
                                 identity,
-                                &original,
+                                &self.mysql.exchanges[index].record,
                                 &exchange.record.response,
                                 contracts::ObservedRequest {
                                     observation_id,
@@ -622,8 +631,16 @@ impl ReplayState {
         let param_count = count_sql_placeholders(sql);
         let mut semantic_target = None;
         for source in [ReplaySource::Case, ReplaySource::Global] {
+            let candidates = self.mysql.candidates.select(
+                &self.mysql.exchanges,
+                source,
+                self.active_case_id.as_deref(),
+                identity,
+                None,
+            );
             for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
-                for exchange in &self.mysql.exchanges {
+                for index in candidates.iter().copied() {
+                    let exchange = &self.mysql.exchanges[index];
                     if exchange.source != source
                         || !self.active_case_matches(exchange)
                         || !identity_matches_exchange(identity, &exchange.identity)

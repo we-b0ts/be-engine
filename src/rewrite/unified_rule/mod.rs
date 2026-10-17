@@ -74,15 +74,23 @@ pub fn plan_rewrite_unified_rule(
 ) -> Result<RewriteRuleReport> {
     let (root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&root)?;
-    let _lock = store.lock()?;
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_id(&root, &state, &options.evidence_id)
         .context("rule evidence is stale or belongs to no concurrent API work item")?;
+    let _scope = super::rule_plans::events::lock_api(&root, &api)?;
+    super::rule_plans::events::ensure_not_replaying(&root, &api)?;
+    // Planning publishes an independent event, never a replacement of the
+    // coordinator's in-flight snapshot. Other APIs may keep replaying.
+    let expected = inventory::scoped(&state, Some(&api.parse()?))?;
     worker::ensure_api_confirmed(&state, &api, "planning a unified traffic rule")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| plan(&root, state, options))?;
-    store.save(&state)?;
+    let record = inventory::scoped(&state, Some(&api.parse()?))?
+        .rule_plan
+        .clone()
+        .context("planner did not produce a rule plan")?;
+    super::rule_plans::events::publish(&root, &expected, record)?;
     Ok(report)
 }
 
@@ -251,7 +259,7 @@ impl UnifiedRulePlanRecord {
         self.original != self.updated
     }
 
-    fn ensure_policy_current(&self) -> Result<()> {
+    pub(super) fn ensure_policy_current(&self) -> Result<()> {
         let current = fs::read_to_string(&self.policy)?;
         ensure!(
             current == self.original || self.apply_started && current == self.updated,
