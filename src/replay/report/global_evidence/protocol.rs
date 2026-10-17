@@ -134,10 +134,11 @@ impl NativeInventory {
                 if offset < regular {
                     evidence.regular.read(report, offset, limit, items)?;
                 }
-                if items.len() < limit && offset < evidence.count()? {
-                    if let Some(notifications) = &evidence.notifications {
-                        notifications.read(report, offset.saturating_sub(regular), limit, items)?;
-                    }
+                if items.len() < limit
+                    && offset < evidence.count()?
+                    && let Some(notifications) = &evidence.notifications
+                {
+                    notifications.read(report, offset.saturating_sub(regular), limit, items)?;
                 }
                 Ok(())
             }

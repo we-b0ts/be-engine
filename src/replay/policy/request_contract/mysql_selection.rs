@@ -34,6 +34,8 @@ struct Statement {
     bytes: usize,
 }
 
+type RetiredStatements = Vec<(Arc<str>, Statement)>;
+
 impl MysqlSelection {
     pub(super) fn new(compiled: Option<&CompiledPolicy>) -> Result<Self> {
         let mut selection = Self::default();
@@ -143,7 +145,7 @@ impl Statements {
         sql: Arc<str>,
         tokens: Option<Arc<Vec<Token>>>,
         bytes: usize,
-    ) -> (Option<Arc<Vec<Token>>>, Vec<(Arc<str>, Statement)>) {
+    ) -> (Option<Arc<Vec<Token>>>, RetiredStatements) {
         if let Some(previous) = self.entries.get(sql.as_ref()) {
             return (
                 previous.tokens.clone(),

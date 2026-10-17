@@ -402,7 +402,7 @@ fn cursor_composes_both_sections_extras_and_visibility_additions_without_reorder
     usage.observe(1, 1, true, false);
     usage.observe(1, 6, false, true);
     let evidence = RegularEvidence::from_usage(&report, &base, &usage).unwrap();
-    let expected = vec![
+    let expected = [
         values[0].value.clone(),
         values[1].value.clone(),
         base.extras[0].value.clone(),

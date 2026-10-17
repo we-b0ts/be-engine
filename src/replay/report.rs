@@ -22,8 +22,8 @@ pub(crate) use global_evidence::stage_global_evidence;
 #[cfg(test)]
 pub(crate) use background_overlay::reclassify_background_dependencies;
 pub(crate) use background_overlay::{
-    BackgroundReclassification, parse_background_dependency_evidence,
-    reclassify_background_report, source_owned_match,
+    BackgroundReclassification, parse_background_dependency_evidence, reclassify_background_report,
+    source_owned_match,
 };
 pub(crate) use dependency_evidence::{
     ReplayDependencyCluster, ReplayDependencyDifference, ReplayDependencyEndpoint,
