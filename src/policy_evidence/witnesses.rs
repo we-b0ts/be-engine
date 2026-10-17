@@ -1,5 +1,5 @@
 //! Borrow compact inventory metadata; expand proofs only after selection.
-use super::v2::{CandidateAssociation, SourceObservation};
+use super::v2::{CandidateAssociation, CandidateGroup, SourceObservation};
 use super::*;
 use std::borrow::Cow;
 
@@ -8,8 +8,11 @@ pub(crate) struct WitnessEntries<'a> {
     graph: Option<&'a ObservationGraph>,
     association: usize,
     source: usize,
+    group: usize,
+    member: usize,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum WitnessEntry<'a> {
     Legacy(&'a WitnessRef),
     Observation {
@@ -17,18 +20,45 @@ pub(crate) enum WitnessEntry<'a> {
         source_index: usize,
         source: &'a SourceObservation,
         association: Option<&'a CandidateAssociation>,
+        group: Option<&'a CandidateGroup>,
     },
+}
+
+pub(crate) struct WitnessIndex<'a> {
+    entries: std::collections::BTreeMap<(Surface, SourceIdentity), Vec<WitnessEntry<'a>>>,
+}
+impl<'a> WitnessIndex<'a> {
+    pub(super) fn new(manifest: &'a WitnessManifest) -> Result<Self> {
+        let mut entries = std::collections::BTreeMap::<_, Vec<_>>::new();
+        for entry in manifest.witness_entries()? {
+            let entry = entry?;
+            if entry.has_target() {
+                let metadata = entry.metadata();
+                entries
+                    .entry((metadata.surface, metadata.source.clone()))
+                    .or_default()
+                    .push(entry);
+            }
+        }
+        Ok(Self { entries })
+    }
+    pub(crate) fn for_source(
+        &self,
+        surface: Surface,
+        source: &SourceIdentity,
+    ) -> impl Iterator<Item = WitnessEntry<'a>> + '_ {
+        self.entries
+            .get(&(surface, source.clone()))
+            .into_iter()
+            .flatten()
+            .copied()
+    }
 }
 
 impl<'a> WitnessEntries<'a> {
     pub(super) fn new(manifest: &'a WitnessManifest) -> Result<Self> {
-        let graph = if manifest.version == 2 {
-            Some(
-                manifest
-                    .observations
-                    .as_ref()
-                    .context("missing observation graph")?,
-            )
+        let graph = if matches!(manifest.version, 2..=4) {
+            Some(manifest.graph().context("missing observation graph")?)
         } else {
             None
         };
@@ -41,6 +71,8 @@ impl<'a> WitnessEntries<'a> {
             graph,
             association: 0,
             source: 0,
+            group: 0,
+            member: 0,
         })
     }
 }
@@ -68,8 +100,29 @@ impl<'a> Iterator for WitnessEntries<'a> {
                         source_index: association.source,
                         source,
                         association: Some(association),
+                        group: None,
                     }),
             );
+        }
+        while let Some(group) = graph.groups.get(self.group) {
+            if let Some(index) = group.sources.get(self.member).copied() {
+                self.member += 1;
+                return Some(
+                    graph
+                        .sources
+                        .get(index)
+                        .context("candidate Source missing")
+                        .map(|source| WitnessEntry::Observation {
+                            graph,
+                            source_index: index,
+                            source,
+                            association: None,
+                            group: Some(group),
+                        }),
+                );
+            }
+            self.group += 1;
+            self.member = 0;
         }
         let source_index = self.source;
         let source = graph.sources.get(source_index)?;
@@ -79,6 +132,7 @@ impl<'a> Iterator for WitnessEntries<'a> {
             source_index,
             source,
             association: None,
+            group: None,
         }))
     }
 }
@@ -105,7 +159,9 @@ impl<'a> WitnessEntry<'a> {
     pub(crate) fn has_target(&self) -> bool {
         match self {
             Self::Legacy(witness) => witness.target_sha256.is_some(),
-            Self::Observation { association, .. } => association.is_some(),
+            Self::Observation {
+                association, group, ..
+            } => association.is_some() || group.is_some(),
         }
     }
 
@@ -116,8 +172,14 @@ impl<'a> WitnessEntry<'a> {
                 graph,
                 source_index,
                 association,
+                group,
                 ..
-            } => graph.pair(source_index, association).map(Cow::Owned),
+            } => if let Some(group) = group {
+                graph.pair_group(source_index, group)
+            } else {
+                graph.pair(source_index, association)
+            }
+            .map(Cow::Owned),
         }
     }
 }

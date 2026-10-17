@@ -70,6 +70,10 @@ pub(crate) struct BlobRef {
     pub length: u64,
     pub sha256: String,
     pub plaintext_bytes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) source: Option<super::source::SourcePayload>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) chunks: Vec<super::storage::Chunk>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SourceObservation {
@@ -91,6 +95,12 @@ pub(crate) struct CandidateAssociation {
     pub target: usize,
     pub authentication: String,
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CandidateGroup {
+    pub target: usize,
+    pub sources: Vec<usize>,
+    pub authentication: String,
+}
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ObservationGraph {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,6 +111,10 @@ pub(crate) struct ObservationGraph {
     pub sources: Vec<SourceObservation>,
     pub targets: Vec<TargetObservation>,
     pub associations: Vec<CandidateAssociation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<CandidateGroup>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) segments: Vec<super::storage::Segment>,
     pub payload_bytes: usize,
     pub association_attempts: usize,
     pub authentication: String,
@@ -119,7 +133,16 @@ pub(super) struct PairProof {
     source: SourceObservation,
     source_blob: BlobRef,
     target: Option<(TargetObservation, BlobRef)>,
-    association: Option<String>,
+    association: Option<AssociationProof>,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum AssociationProof {
+    Pair(String),
+    Group {
+        target: String,
+        sources: Vec<String>,
+        authentication: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -280,9 +303,49 @@ impl ObservationGraph {
                 source,
                 source_blob,
                 target,
-                association: association.map(|link| link.authentication.clone()),
+                association: association
+                    .map(|link| AssociationProof::Pair(link.authentication.clone())),
             })),
         })
+    }
+    pub(super) fn pair_group(&self, source: usize, group: &CandidateGroup) -> Result<WitnessRef> {
+        ensure!(
+            group.sources.contains(&source),
+            "Source is outside candidate coverage"
+        );
+        let mut witness = self.pair(
+            source,
+            Some(&CandidateAssociation {
+                source,
+                target: group.target,
+                authentication: String::new(),
+            }),
+        )?;
+        witness.proof.as_mut().unwrap().association = Some(AssociationProof::Group {
+            target: self
+                .targets
+                .get(group.target)
+                .context("candidate Target missing")?
+                .id
+                .clone(),
+            sources: self.group_sources(group)?,
+            authentication: group.authentication.clone(),
+        });
+        Ok(witness)
+    }
+    pub(super) fn group_sources(&self, group: &CandidateGroup) -> Result<Vec<String>> {
+        group
+            .sources
+            .iter()
+            .map(|index| {
+                Ok(self
+                    .sources
+                    .get(*index)
+                    .context("candidate Source missing")?
+                    .id
+                    .clone())
+            })
+            .collect()
     }
     pub(super) fn key(&self, context: &Path) -> Result<Vec<u8>> {
         let key = crate::request_headers::decrypt_evidence(
@@ -323,6 +386,10 @@ impl ObservationGraph {
                 .blobs
                 .get(target.blob)
                 .context("Target observation payload is missing")?;
+            ensure!(
+                blob.source.is_none(),
+                "Target observation cannot borrow a Source payload reference"
+            );
             authenticate(
                 key,
                 "target",
@@ -355,17 +422,45 @@ impl ObservationGraph {
                 &association.authentication,
             )?;
         }
+        for group in &self.groups {
+            let target = self
+                .targets
+                .get(group.target)
+                .context("candidate Target missing")?;
+            ensure!(!group.sources.is_empty(), "empty candidate coverage group");
+            for index in &group.sources {
+                let source = self
+                    .sources
+                    .get(*index)
+                    .context("candidate Source missing")?;
+                ensure!(
+                    associations.insert((*index, group.target))
+                        && compatible(&source.metadata, &target.metadata),
+                    "duplicate or incompatible candidate coverage"
+                );
+            }
+            authenticate(
+                key,
+                "candidate-group",
+                &(&self.session_id, &target.id, self.group_sources(group)?),
+                &group.authentication,
+            )?;
+        }
         Ok(())
     }
 }
 
 pub(super) fn manifest_signature(manifest: &WitnessManifest, key: &[u8]) -> Result<String> {
     let mut manifest = manifest.clone();
-    manifest
-        .observations
-        .as_mut()
-        .context("missing observation graph")?
-        .authentication
-        .clear();
+    if manifest.version == 4 {
+        manifest.authentication.clear();
+    } else {
+        manifest
+            .observations
+            .as_mut()
+            .context("missing observation graph")?
+            .authentication
+            .clear();
+    }
     sign(key, "manifest", &manifest)
 }

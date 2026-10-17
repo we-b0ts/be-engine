@@ -46,15 +46,43 @@ struct State {
     graph: ObservationGraph,
     key: Vec<u8>,
     sources: BTreeMap<String, usize>,
+    source_records: BTreeMap<String, SourceRecord>,
     unavailable_sources: BTreeSet<String>,
     source_tracking_exhausted: bool,
     targets: BTreeMap<String, usize>,
     associations: BTreeMap<(usize, usize), usize>,
     blobs: BTreeMap<String, usize>,
     sealed_manifest: Option<WitnessManifest>,
+    compact: bool,
+    segmented: Option<super::storage::Writer>,
 }
 
 impl WitnessStore {
+    pub(crate) fn register_source_record(
+        &self,
+        identity: &SourceIdentity,
+        protocol: crate::policy::Protocol,
+        record: SourceRecord,
+    ) -> Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        ensure!(
+            !state.sealed,
+            "policy witness store has already been sealed"
+        );
+        let key = super::source::identity(identity, protocol)?;
+        if let Some(previous) = state.source_records.get(&key) {
+            ensure!(
+                previous == &record,
+                "one immutable Source identity has conflicting record locations"
+            );
+        } else if state.source_records.len() < MAX_OBSERVATIONS {
+            state.source_records.insert(key, record);
+        }
+        Ok(())
+    }
     #[cfg(test)]
     pub(crate) fn new(artifact_dir: &Path) -> Result<Self> {
         Self::create(artifact_dir)
@@ -70,6 +98,14 @@ impl WitnessStore {
             "policy observations require Replay session and policy identities"
         );
         let store = Self::create(artifact_dir)?;
+        store.state.lock().expect("new observation store").compact = true;
+        {
+            let mut state = store.state.lock().expect("new observation store");
+            state.segmented = Some(super::storage::Writer::new(
+                state.path.clone(),
+                state.file.try_clone()?,
+            ));
+        }
         store
             .state
             .lock()
@@ -111,12 +147,15 @@ impl WitnessStore {
                 },
                 key,
                 sources: Default::default(),
+                source_records: Default::default(),
                 unavailable_sources: Default::default(),
                 source_tracking_exhausted: false,
                 targets: Default::default(),
                 associations: Default::default(),
                 blobs: Default::default(),
                 sealed_manifest: None,
+                compact: false,
+                segmented: None,
             })),
         })
     }
@@ -177,10 +216,17 @@ impl WitnessStore {
                 let Some(index) = state.associate(source_index, target_index)? else {
                     return Ok(None);
                 };
-                state
-                    .graph
-                    .pair(source_index, Some(&state.graph.associations[index]))
-                    .map(Some)
+                if state.compact {
+                    state
+                        .graph
+                        .pair_group(source_index, &state.graph.groups[index])
+                        .map(Some)
+                } else {
+                    state
+                        .graph
+                        .pair(source_index, Some(&state.graph.associations[index]))
+                        .map(Some)
+                }
             } else {
                 state.graph.pair(source_index, None).map(Some)
             }
@@ -305,18 +351,38 @@ impl WitnessStore {
         if let Some(manifest) = &state.sealed_manifest {
             return Ok(manifest.clone());
         }
-        state.file.sync_all()?;
-        ensure!(
-            digest(&std::fs::read(&state.path)?)
-                == format!("sha256:{:x}", state.hasher.clone().finalize()),
-            "policy observation artifact changed before sealing"
-        );
-        state.sealed = true;
+        if let Some(writer) = &mut state.segmented {
+            writer.seal()?;
+        } else {
+            state.file.sync_all()?;
+            ensure!(
+                digest(&std::fs::read(&state.path)?)
+                    == format!("sha256:{:x}", state.hasher.clone().finalize()),
+                "policy observation artifact changed before sealing"
+            );
+        }
+        for index in 0..state.graph.groups.len() {
+            let group = &state.graph.groups[index];
+            let signature = v2::sign(
+                &state.key,
+                "candidate-group",
+                &(
+                    &state.graph.session_id,
+                    &state.graph.targets[group.target].id,
+                    state.graph.group_sources(group)?,
+                ),
+            )?;
+            state.graph.groups[index].authentication = signature;
+        }
         let mut manifest = snapshot(&state);
-        if !state.graph.key_envelope.is_empty() {
+        manifest.sealed = true;
+        if state.compact {
+            manifest.externalize(&state.path, &state.key)?;
+        } else if !state.graph.key_envelope.is_empty() {
             manifest.observations.as_mut().unwrap().authentication =
                 v2::manifest_signature(&manifest, &state.key)?;
         }
+        state.sealed = true;
         state.sealed_manifest = Some(manifest.clone());
         Ok(manifest)
     }
@@ -334,6 +400,23 @@ impl State {
         Ok(())
     }
     fn blob(&mut self, context: &Path, payload: &[u8]) -> Result<Option<usize>> {
+        if self.segmented.is_some() {
+            let id = digest(payload);
+            if let Some(index) = self.blobs.get(&id) {
+                return Ok(Some(*index));
+            }
+            self.ensure_key(context)?;
+            let blob =
+                self.segmented
+                    .as_mut()
+                    .unwrap()
+                    .write(&self.graph.session_id, context, payload)?;
+            let index = self.graph.blobs.len();
+            self.graph.payload_bytes += payload.len();
+            self.graph.blobs.push(blob);
+            self.blobs.insert(id, index);
+            return Ok(Some(index));
+        }
         if payload.len() > MAX_PAYLOAD {
             return Ok(None);
         }
@@ -367,6 +450,8 @@ impl State {
             length,
             sha256: digest(&bytes),
             plaintext_bytes: payload.len(),
+            source: None,
+            chunks: vec![],
         };
         self.file.write_all(&bytes)?;
         self.hasher.update(&bytes);
@@ -409,7 +494,47 @@ impl State {
             self.mark_source_unavailable(key);
             return Ok(None);
         }
-        let Some(blob) = self.blob(context, payload)? else {
+        let external = metadata
+            .resource
+            .as_ref()
+            .map(|r| -> Result<_> {
+                Ok(self
+                    .source_records
+                    .get(&super::source::identity(&metadata.source, r.protocol)?)
+                    .cloned()
+                    .map(|record| (record, r.protocol)))
+            })
+            .transpose()?
+            .flatten();
+        let blob = if let Some((record, protocol)) = external {
+            self.ensure_key(context)?;
+            let id = digest(payload);
+            let key = format!("source:{id}");
+            Some(if let Some(index) = self.blobs.get(&key) {
+                *index
+            } else {
+                let index = self.graph.blobs.len();
+                self.graph.blobs.push(BlobRef {
+                    id,
+                    offset: 0,
+                    length: 0,
+                    sha256: record.location.sha256.clone(),
+                    plaintext_bytes: payload.len(),
+                    source: Some(super::source::SourcePayload {
+                        record,
+                        protocol,
+                        surface: metadata.surface,
+                    }),
+                    chunks: vec![],
+                });
+                self.graph.payload_bytes += payload.len();
+                self.blobs.insert(key, index);
+                index
+            })
+        } else {
+            self.blob(context, payload)?
+        };
+        let Some(blob) = blob else {
             self.mark_source_unavailable(key);
             return Ok(None);
         };
@@ -504,7 +629,7 @@ impl State {
         if let Some(index) = self.associations.get(&(source, target)) {
             return Ok(Some(*index));
         }
-        if self.graph.associations.len() >= MAX_ASSOCIATIONS {
+        if self.associations.len() >= MAX_ASSOCIATIONS {
             return Ok(None);
         }
         let left = &self.graph.sources[source];
@@ -513,6 +638,24 @@ impl State {
             v2::compatible(&left.metadata, &right.metadata),
             "candidate association crosses Case, surface, resource or operation"
         );
+        if self.compact {
+            if self
+                .graph
+                .groups
+                .last()
+                .is_none_or(|group| group.target != target)
+            {
+                self.graph.groups.push(v2::CandidateGroup {
+                    target,
+                    sources: vec![],
+                    authentication: String::new(),
+                });
+            }
+            let index = self.graph.groups.len() - 1;
+            self.graph.groups[index].sources.push(source);
+            self.associations.insert((source, target), index);
+            return Ok(Some(index));
+        }
         let authentication = v2::sign(
             &self.key,
             "association",
@@ -533,22 +676,45 @@ fn target_key(id: &str, surface: Surface, role: TargetRole) -> String {
 }
 fn snapshot(state: &State) -> WitnessManifest {
     let recorded = state.graph.sources.len() + state.graph.targets.len();
+    let mut graph = state.graph.clone();
+    for index in 0..graph.groups.len() {
+        if graph.groups[index].authentication.is_empty() {
+            let group = &graph.groups[index];
+            graph.groups[index].authentication = v2::sign(
+                &state.key,
+                "candidate-group",
+                &(
+                    &graph.session_id,
+                    &graph.targets[group.target].id,
+                    graph.group_sources(group).expect("valid Source coverage"),
+                ),
+            )
+            .expect("valid coverage signing key");
+        }
+    }
+    if let Some(writer) = &state.segmented {
+        graph.segments = writer.segments();
+    }
     WitnessManifest {
-        version: 2,
+        version: if state.compact { 3 } else { 2 },
         artifact: state
             .path
             .file_name()
             .expect("witness filename")
             .to_string_lossy()
             .into_owned(),
-        sha256: format!("sha256:{:x}", state.hasher.clone().finalize()),
+        sha256: graph.segments.first().map_or_else(
+            || format!("sha256:{:x}", state.hasher.clone().finalize()),
+            |s| s.sha256.clone(),
+        ),
         observed: state.observed,
         recorded,
         omitted: state.omitted,
         complete: state.omitted == 0 && state.observed == recorded,
         sealed: state.sealed,
         witnesses: Vec::new(),
-        observations: Some(state.graph.clone()),
+        observations: Some(graph),
+        ..Default::default()
     }
 }
 

@@ -6,9 +6,9 @@ pub(in crate::policy_evidence) fn verify(
     report: &Path,
     manifest: &WitnessManifest,
 ) -> Result<PathBuf> {
+    manifest.load_graph(report)?;
     let graph = manifest
-        .observations
-        .as_ref()
+        .graph()
         .context("policy observation graph is missing")?;
     let report_value = std::fs::read(report)
         .ok()
@@ -60,45 +60,65 @@ pub(in crate::policy_evidence) fn verify(
         "policy payload coverage is incomplete; run fresh genuine Replay before planning"
     );
     let path = artifact_path(report, manifest)?;
-    let metadata = std::fs::symlink_metadata(&path)?;
-    ensure!(
-        metadata.is_file()
-            && !metadata.file_type().is_symlink()
-            && metadata.len() <= 64 * 1024 * 1024,
-        "policy observation artifact must be a bounded regular file"
-    );
-    let bytes = std::fs::read(&path)?;
-    ensure!(
-        digest(&bytes) == manifest.sha256,
-        "policy observation artifact changed after publication"
-    );
-    let mut offset = 0_u64;
-    let mut ids = BTreeSet::new();
-    for blob in &graph.blobs {
+    if !graph.segments.is_empty() {
+        super::super::storage::verify(report, manifest, graph)?;
+    } else {
+        let metadata = std::fs::symlink_metadata(&path)?;
         ensure!(
-            blob.offset == offset
-                && blob.length <= 2 * 1024 * 1024
-                && blob.plaintext_bytes <= 1024 * 1024
-                && ids.insert(&blob.id),
-            "policy payload index is incomplete or duplicated"
+            metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() <= 64 * 1024 * 1024,
+            "policy observation artifact must be a bounded regular file"
         );
-        offset = offset
-            .checked_add(blob.length)
-            .context("policy payload index overflow")?;
+        let bytes = std::fs::read(&path)?;
+        ensure!(
+            digest(&bytes) == manifest.sha256,
+            "policy observation artifact changed after publication"
+        );
+        let mut offset = 0_u64;
+        let mut ids = BTreeSet::new();
+        for blob in &graph.blobs {
+            if let Some(source) = &blob.source {
+                ensure!(
+                    blob.length == 0 && blob.offset == 0 && ids.insert((blob.id.clone(), true)),
+                    "invalid or duplicate Source payload reference"
+                );
+                ensure!(
+                    crate::dependency_index::FileStamp::read(&source.record.path)?
+                        == source.record.stamp,
+                    "referenced Source evidence changed after Replay"
+                );
+                continue;
+            }
+            ensure!(
+                blob.offset == offset
+                    && blob.length <= 2 * 1024 * 1024
+                    && blob.plaintext_bytes <= 1024 * 1024
+                    && ids.insert((blob.id.clone(), false)),
+                "policy payload index is incomplete or duplicated"
+            );
+            offset = offset
+                .checked_add(blob.length)
+                .context("policy payload index overflow")?;
+        }
+        ensure!(
+            offset == u64::try_from(bytes.len())?
+                && graph.payload_bytes
+                    == graph
+                        .blobs
+                        .iter()
+                        .map(|blob| blob.plaintext_bytes)
+                        .sum::<usize>(),
+            "policy payload index does not cover the complete artifact"
+        );
     }
     ensure!(
-        offset == u64::try_from(bytes.len())?
-            && graph.payload_bytes
-                == graph
-                    .blobs
-                    .iter()
-                    .map(|blob| blob.plaintext_bytes)
-                    .sum::<usize>(),
-        "policy payload index does not cover the complete artifact"
+        graph.payload_bytes == graph.blobs.iter().map(|b| b.plaintext_bytes).sum::<usize>(),
+        "policy payload accounting differs"
     );
     if graph.sources.is_empty() && graph.targets.is_empty() && graph.key_envelope.is_empty() {
         ensure!(
-            graph.blobs.is_empty() && graph.associations.is_empty(),
+            graph.blobs.is_empty() && graph.associations.is_empty() && graph.groups.is_empty(),
             "empty policy inventory has references"
         );
         return Ok(path);
@@ -115,13 +135,19 @@ pub(in crate::policy_evidence) fn verify(
         .unwrap_or_else(|| report.to_path_buf());
     let key = graph.key(&context)?;
     let mut unsigned = manifest.clone();
-    unsigned
-        .observations
-        .as_mut()
-        .unwrap()
-        .authentication
-        .clear();
-    authenticate(&key, "manifest", &unsigned, &graph.authentication)?;
+    let authentication = if manifest.version == 4 {
+        unsigned.authentication.clear();
+        &manifest.authentication
+    } else {
+        unsigned
+            .observations
+            .as_mut()
+            .unwrap()
+            .authentication
+            .clear();
+        &graph.authentication
+    };
+    authenticate(&key, "manifest", &unsigned, authentication)?;
     graph.validate(&key)?;
     let used = graph
         .sources
@@ -172,15 +198,34 @@ pub(in crate::policy_evidence) fn read(
             &(&proof.session_id, &target.id, &target.metadata, blob),
             &target.authentication,
         )?;
-        authenticate(
-            &key,
-            "association",
-            &(&proof.session_id, &proof.source.id, &target.id),
-            proof
-                .association
-                .as_deref()
-                .context("candidate association authentication is missing")?,
-        )?;
+        match proof
+            .association
+            .as_ref()
+            .context("candidate association authentication is missing")?
+        {
+            AssociationProof::Pair(authentication) => authenticate(
+                &key,
+                "association",
+                &(&proof.session_id, &proof.source.id, &target.id),
+                authentication,
+            )?,
+            AssociationProof::Group {
+                target: id,
+                sources,
+                authentication,
+            } => {
+                ensure!(
+                    id == &target.id && sources.contains(&proof.source.id),
+                    "observation is outside candidate coverage"
+                );
+                authenticate(
+                    &key,
+                    "candidate-group",
+                    &(&proof.session_id, id, sources),
+                    authentication,
+                )?;
+            }
+        }
         expected.target_role = target.metadata.role;
         expected.clocks.case.target = target.metadata.clocks.case.target;
         expected.clocks.dependency.target = target.metadata.clocks.dependency.target;
@@ -216,6 +261,17 @@ pub(in crate::policy_evidence) fn read(
     ))
 }
 fn read_blob(path: &Path, session_id: &str, blob: &BlobRef, context: &Path) -> Result<Vec<u8>> {
+    if let Some(source) = &blob.source {
+        let payload = source.read(context)?;
+        ensure!(
+            payload.len() == blob.plaintext_bytes && digest(&payload) == blob.id,
+            "referenced Source envelope differs from authenticated Replay evidence"
+        );
+        return Ok(payload);
+    }
+    if !blob.chunks.is_empty() {
+        return super::super::storage::read(path, session_id, blob, context);
+    }
     ensure!(
         blob.length <= 2 * 1024 * 1024 && blob.plaintext_bytes <= 1024 * 1024,
         "policy payload exceeds supported bound"

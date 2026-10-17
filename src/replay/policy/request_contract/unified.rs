@@ -96,7 +96,9 @@ impl RequestContracts {
         for (id, dir) in cases {
             let path = dir.join("dependencies.jsonl");
             if path.is_file() {
-                for line in std::fs::read(path)?
+                let bytes = std::fs::read(path)?;
+                self.register_source_records(&id, &bytes)?;
+                for line in bytes
                     .split(|byte| *byte == b'\n')
                     .filter(|line| !line.is_empty())
                 {

@@ -342,6 +342,7 @@ fn legacy_v1_encrypted_pairs_remain_readable_and_expand_identically() {
         sealed: true,
         witnesses: vec![witness.clone()],
         observations: None,
+        ..Default::default()
     };
     let verified = verify(&artifacts.join("replay.json"), &manifest).unwrap();
     assert_eq!(manifest.witnesses().unwrap(), vec![witness.clone()]);

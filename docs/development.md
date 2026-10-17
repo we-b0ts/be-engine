@@ -18,6 +18,8 @@ strict matching and fresh verification.
 Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
 Rule planning reuses [recording indexes and sealed Source content identities](rule-evidence-index.md)
 while retaining complete active-API coverage and fresh plan/apply checks.
+Replay [candidate and witness storage](replay-candidate-performance.md) reuses
+immutable Source references and preserves complete visited-candidate coverage.
 Coordinators can [plan against unrelated completed APIs during Replay](concurrent-rule-planning.md),
 then explicitly apply reviewed plans at the next idle boundary.
 

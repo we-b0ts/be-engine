@@ -258,18 +258,32 @@ pub(in crate::replay) fn record_target(
 
 pub(crate) fn source_witness(event: &Value, surface: Surface) -> Result<Vec<u8>> {
     let record: RecordedMysqlExchange = serde_json::from_value(event.clone())?;
+    source_witness_from_record(&record, surface)
+}
+
+pub(in crate::replay) fn source_witness_from_record(
+    record: &RecordedMysqlExchange,
+    surface: Surface,
+) -> Result<Vec<u8>> {
     if surface == Surface::DependencyRequest {
-        return Ok(serde_json::to_vec(&RequestEnvelope::recorded(&record))?);
+        return Ok(serde_json::to_vec(&RequestEnvelope::recorded(record))?);
     }
     ensure!(
         surface == Surface::DependencyResponse,
         "invalid SQL witness surface"
     );
-    Ok(serde_json::to_vec(&ResponseEnvelope {
+    #[derive(Serialize)]
+    struct OriginalResponse<'a> {
+        response_delivered_at: Option<chrono::DateTime<Utc>>,
+        request: RequestEnvelope,
+        outcome: crate::DependencyExchangeOutcome,
+        response: &'a RecordedMysqlResponse,
+    }
+    Ok(serde_json::to_vec(&OriginalResponse {
         response_delivered_at: record.timestamp,
-        request: RequestEnvelope::recorded(&record),
+        request: RequestEnvelope::recorded(record),
         outcome: record.outcome,
-        response: record.response,
+        response: &record.response,
     })?)
 }
 

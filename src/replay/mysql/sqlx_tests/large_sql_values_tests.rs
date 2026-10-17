@@ -62,7 +62,7 @@ async fn target_observation_io_failure_preserves_global_matching_and_rejects_cas
             .unwrap();
         assert!(!manifest.complete);
         assert!(manifest.omitted > 0);
-        assert!(manifest.observations.as_ref().unwrap().targets.is_empty());
+        assert!(manifest.graph().unwrap().targets.is_empty());
         assert_eq!(
             state.mysql.exchanges[0].status,
             if global {
@@ -218,10 +218,26 @@ async fn payload_evidence_budget_does_not_reject_a_valid_large_native_sql_match(
         let owner = &state.replay_policy.as_ref().unwrap().request_contracts;
         owner.seal_witnesses().unwrap();
         let manifest = owner.witness_manifest().unwrap();
-        assert!(!manifest.complete && manifest.omitted > 0);
-        assert!(
-            crate::policy_evidence::verify(&temp.path().join("replay.json"), &manifest).is_err()
-        );
+        assert!(manifest.complete && manifest.omitted == 0);
+        let case = temp.path().join(".traffic-e2e/local/recordings/case-id");
+        let report = case.join(".replay/replay.json");
+        std::fs::write(
+            &report,
+            serde_json::to_vec(&state.snapshot_report()).unwrap(),
+        )
+        .unwrap();
+        let private = crate::policy_evidence::verify(&report, &manifest).unwrap();
+        let retained = manifest
+            .witnesses()
+            .unwrap()
+            .into_iter()
+            .filter(|w| w.target_sha256.is_some())
+            .any(|witness| {
+                let (_, target) = crate::policy_evidence::read(&private, &witness, &case).unwrap();
+                let target: Value = serde_json::from_slice(&target.unwrap()).unwrap();
+                target["sql"].as_str() == Some(sql.as_str())
+            });
+        assert!(retained, "large genuine SQL request must remain readable");
         task.abort();
     })
     .await

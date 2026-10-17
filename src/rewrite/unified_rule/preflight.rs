@@ -86,7 +86,9 @@ pub(super) fn verify(
     let private = if let Some(manifest) = &manifest {
         if manifest.complete && manifest.sealed {
             let path = crate::policy_evidence::verify(&bundle.replay_path, manifest)?;
-            bundle.freeze(&path)?;
+            for artifact in manifest.artifact_paths(&bundle.replay_path)? {
+                bundle.freeze(&artifact)?;
+            }
             Some(path)
         } else {
             None
@@ -94,6 +96,11 @@ pub(super) fn verify(
     } else {
         None
     };
+    let witness_index = manifest
+        .as_ref()
+        .filter(|_| private.is_some())
+        .map(WitnessManifest::source_index)
+        .transpose()?;
     for (case_id, directory) in bundle.cases.clone() {
         let request = bundle.json(&directory.join("request.json"))?;
         let method = request["method"]
@@ -243,15 +250,42 @@ pub(super) fn verify(
                 for id in checked {
                     *result.rules.entry(id).or_default() += 1;
                 }
-                let Some(manifest) = manifest.as_ref().filter(|_| private.is_some()) else {
+                let Some(_manifest) = manifest.as_ref().filter(|_| private.is_some()) else {
                     result.missing_target_witnesses += 1;
                     continue;
                 };
                 let source_sha256 = crate::policy_evidence::digest(&raw);
                 let mut found = false;
                 let mut observations = BTreeSet::new();
-                for entry in manifest.witness_entries()? {
-                    let entry = entry?;
+                let http = dependency::protocol(&event) == Some(Protocol::Http);
+                let identity = crate::policy_evidence::SourceIdentity {
+                    case_id: case_id.clone(),
+                    exchange_id: if http {
+                        event["id"].as_str().map(str::to_owned)
+                    } else {
+                        None
+                    },
+                    connection_id: if http {
+                        None
+                    } else {
+                        event["connection_id"].as_str().map(str::to_owned)
+                    },
+                    sequence: if http {
+                        None
+                    } else {
+                        event[if dependency::protocol(&event) == Some(Protocol::Mysql) {
+                            "query_sequence"
+                        } else {
+                            "sequence"
+                        }]
+                        .as_u64()
+                    },
+                };
+                for entry in witness_index
+                    .as_ref()
+                    .unwrap()
+                    .for_source(surface, &identity)
+                {
                     let metadata = entry.metadata();
                     let matches = metadata.surface == surface
                         && metadata.source.case_id == case_id

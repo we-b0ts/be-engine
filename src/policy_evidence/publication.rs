@@ -12,6 +12,14 @@ pub(crate) fn stage(source_report: &Path, destination_report: &Path) -> Result<(
         return Ok(());
     };
     let manifest: WitnessManifest = serde_json::from_value(value.clone())?;
+    if manifest.version == 4 {
+        return super::catalog::stage(source_report, destination_report, &manifest);
+    }
+    if let Some(graph) = &manifest.observations
+        && !graph.segments.is_empty()
+    {
+        return super::storage::stage(source_report, destination_report, graph);
+    }
     let source = artifact_path(source_report, &manifest)?;
     let destination = artifact_path(destination_report, &manifest)?;
     let metadata = fs::symlink_metadata(&source)?;

@@ -1,4 +1,5 @@
 use super::*;
+mod indexed_storage;
 mod observations;
 
 fn setup() -> (tempfile::TempDir, PathBuf, WitnessStore, WitnessMetadata) {
