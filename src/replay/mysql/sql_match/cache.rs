@@ -90,7 +90,7 @@ impl CompiledSql {
     }
 
     fn parse(sql: &str) -> Self {
-        let tokens = crate::mysql::sql::bounds::statement(sql).unwrap_or_default();
+        let tokens = crate::mysql::sql::bounds::tokens(sql).unwrap_or_default();
         let mut predicate = Template::parse(&tokens, true);
         let query_in = predicate
             .is_none()
