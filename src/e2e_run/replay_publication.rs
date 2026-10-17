@@ -29,9 +29,14 @@ pub(super) fn prepare(
     let destination = staging.join("reports/replay-report.json");
     fs::create_dir_all(destination.parent().expect("report directory"))?;
     if source != destination {
-        crate::replay::report::stage_global_evidence(&source, &destination)?;
+        let rebound = crate::replay::report::stage_global_evidence(&source, &destination)?;
         crate::policy_evidence::stage(&source, &destination)?;
-        fs::copy(&source, &destination).context("failed to stage runner-owned Replay evidence")?;
+        if let Some(report) = rebound {
+            store::write_json(&destination, &report)?;
+        } else {
+            fs::copy(&source, &destination)
+                .context("failed to stage runner-owned Replay evidence")?;
+        }
     }
     let sidecar = dependency_evidence_path(&destination);
     let source_sidecar = dependency_evidence_path(&source);

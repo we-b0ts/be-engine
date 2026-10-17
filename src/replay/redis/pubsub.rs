@@ -5,6 +5,9 @@ use std::path::Path;
 use tokio::sync::mpsc;
 mod adapter;
 mod inventory;
+pub(in crate::replay) use inventory::{
+    NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
+};
 mod notifications;
 pub(in crate::replay) mod subscription_evidence;
 pub(super) use notifications::{NotificationJob, schedule_notifications};
@@ -348,7 +351,7 @@ impl PubSubState {
             - self.indexed.delivered
     }
 
-    pub(super) fn visit_global_unused(
+    pub(super) fn visit_global_inline_unused(
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
@@ -371,7 +374,15 @@ impl PubSubState {
                 command: "PUBSUB_PUSH".into(),
             })?)?;
         }
-        self.indexed.visit_unused(visitor)
+        Ok(())
+    }
+
+    pub(in crate::replay::redis) fn notification_evidence(
+        &self,
+        exchanges: &[ReplayExchange],
+    ) -> Result<NotificationSessionEvidence> {
+        self.indexed
+            .evidence(&subscription_evidence::loaded_subscriptions(exchanges)?)
     }
 }
 

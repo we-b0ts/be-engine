@@ -111,6 +111,32 @@ pub(crate) struct PageManifest {
 }
 
 impl PageManifest {
+    /// Retain existing immutable pages without decoding or projecting their records.
+    /// The destination must belong to the caller's unpublished staging directory.
+    pub(crate) fn retain_into(&self, directory: &Path) -> Result<Self> {
+        let inventory = Paged::<serde_json::Value>::restore(self.clone())?;
+        store::private_directory(directory)?;
+        for page in 0..inventory.pages() {
+            let source = inventory.directory.path.join(format!("{page}.json"));
+            super::FileStamp::read(&source)?;
+            let destination = directory.join(format!("{page}.json"));
+            match std::fs::hard_link(&source, &destination) {
+                Ok(()) => {}
+                Err(error) if error.raw_os_error() == Some(libc::EXDEV) => {
+                    std::fs::copy(&source, &destination)?;
+                    std::fs::File::open(&destination)?.sync_all()?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(Self {
+            directory: directory.to_owned(),
+            count: self.count,
+            lengths: self.lengths.clone(),
+        })
+    }
+
     pub(crate) fn stage_into(&self, source: &Path, destination: &Path) -> Result<()> {
         let resolved = self.clone().resolve(source)?;
         let target = self.clone().resolve(destination)?.directory;

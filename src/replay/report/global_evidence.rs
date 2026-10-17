@@ -1,4 +1,4 @@
-//! Exact Global counts and disk-backed, paginated unused-evidence details.
+//! Exact Global counts, immutable inventories and lazy unused-evidence details.
 use std::path::Path;
 use std::sync::Arc;
 
@@ -9,6 +9,13 @@ use tokio::sync::Mutex;
 
 use crate::dependency_index::{PageManifest, PageWriter, Paged};
 use crate::replay::ReplayState;
+
+mod artifact;
+#[cfg(test)]
+mod compact_tests;
+mod notifications;
+mod shared;
+use notifications::RedisEvidence;
 
 const PROTOCOLS: [&str; 6] = ["mysql", "redis", "memcached", "http", "kafka", "motan"];
 
@@ -46,7 +53,7 @@ pub(in crate::replay) async fn prepare(
             let mut visit = |item| writer.push(item);
             match protocol {
                 "mysql" => state.visit_global_mysql_unused(&mut visit)?,
-                "redis" => state.redis.visit_global_unused(&mut visit)?,
+                "redis" => state.redis.visit_global_regular_unused(&mut visit)?,
                 "memcached" => state.memcached.visit_global_unused(&mut visit)?,
                 "http" => state.visit_global_http_unused(&mut visit)?,
                 "kafka" => state.kafka.visit_global_unused(&mut visit)?,
@@ -54,10 +61,20 @@ pub(in crate::replay) async fn prepare(
                 _ => unreachable!(),
             }
             let inventory = writer.finish()?;
-            manifests.insert(
-                protocol.into(),
-                serde_json::to_value(inventory.manifest().relative_to(root)?)?,
-            );
+            let manifest = inventory.manifest().relative_to(root)?;
+            let value = if protocol == "redis" {
+                match RedisEvidence::prepare(
+                    &report_path,
+                    manifest.clone(),
+                    state.redis.global_notification_evidence()?,
+                )? {
+                    Some(compact) => serde_json::to_value(compact)?,
+                    None => serde_json::to_value(manifest)?,
+                }
+            } else {
+                serde_json::to_value(manifest)?
+            };
+            manifests.insert(protocol.into(), value);
             pages.push(inventory);
         }
         Ok(GlobalDetails {
@@ -97,15 +114,31 @@ pub fn read_global_dependency_page(
     let root = report
         .parent()
         .context("Global report has no parent directory")?;
-    let report: Value = serde_json::from_slice(&std::fs::read(report)?)?;
+    let report_path = report;
+    let report: Value = serde_json::from_slice(&std::fs::read(report_path)?)?;
     ensure!(
         report["finalized"] == true,
         "Global dependency details require a finalized report"
     );
-    let manifest: PageManifest =
-        serde_json::from_value(report["global_evidence"][protocol].clone())
-            .context("report lacks paginated Global evidence; use a fresh Replay on this engine")?;
+    let value = &report["global_evidence"][protocol];
+    let compact = RedisEvidence::parse(value)?;
+    ensure!(
+        compact.is_none() || protocol == "redis",
+        "compact Redis evidence used for another protocol"
+    );
+    let manifest = match &compact {
+        Some(compact) => {
+            compact.load(report_path)?;
+            compact.pages.clone()
+        }
+        None => serde_json::from_value::<PageManifest>(value.clone())
+            .context("report lacks paginated Global evidence; use a fresh Replay on this engine")?,
+    };
     let inventory = Paged::<Value>::restore(manifest.resolve(root)?)?;
+    let native_count = match &compact {
+        Some(compact) => compact.count()?,
+        None => inventory.count,
+    };
     // Reclassification is reversible and updates the report, while native pages
     // remain immutable. Project its Case witnesses after the native inventory.
     let events = match protocol {
@@ -121,8 +154,7 @@ pub fn read_global_dependency_page(
             event["background_original_case_id"].is_string() && event["background_rule"].is_string()
         })
         .collect();
-    let total = inventory
-        .count
+    let total = native_count
         .checked_add(overlay.len())
         .context("Global detail count overflow")?;
     ensure!(offset <= total, "Global dependency offset exceeds count");
@@ -144,11 +176,21 @@ pub fn read_global_dependency_page(
             }
         }
     }
+    if items.len() < limit && offset < native_count {
+        if let Some(compact) = &compact {
+            compact.read_notifications(
+                report_path,
+                offset.saturating_sub(inventory.count),
+                limit,
+                &mut items,
+            )?;
+        }
+    }
     if items.len() < limit {
         items.extend(
             overlay
                 .into_iter()
-                .skip(offset.saturating_sub(inventory.count))
+                .skip(offset.saturating_sub(native_count))
                 .take(limit - items.len())
                 .cloned(),
         );
@@ -164,10 +206,13 @@ pub fn read_global_dependency_page(
     })
 }
 
-pub(crate) fn stage_global_evidence(source: &Path, destination: &Path) -> Result<()> {
-    let report: Value = serde_json::from_slice(&std::fs::read(source)?)?;
-    let Some(manifests) = report.get("global_evidence").and_then(Value::as_object) else {
-        return Ok(());
+pub(crate) fn stage_global_evidence(source: &Path, destination: &Path) -> Result<Option<Value>> {
+    let mut report: Value = serde_json::from_slice(&std::fs::read(source)?)?;
+    let Some(manifests) = report
+        .get_mut("global_evidence")
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(None);
     };
     let from = source
         .parent()
@@ -176,12 +221,24 @@ pub(crate) fn stage_global_evidence(source: &Path, destination: &Path) -> Result
         .parent()
         .context("staged Global report has no parent")?;
     if from == to {
-        return Ok(());
+        return Ok(None);
     }
-    for manifest in manifests.values() {
-        serde_json::from_value::<PageManifest>(manifest.clone())?.stage_into(from, to)?;
+    let mut rebound = false;
+    for (protocol, value) in manifests.iter_mut() {
+        if let Some(mut compact) = RedisEvidence::parse(value)? {
+            ensure!(
+                protocol == "redis",
+                "compact Redis evidence used for another protocol"
+            );
+            compact.stage(source, destination)?;
+            let updated = serde_json::to_value(compact)?;
+            rebound |= *value != updated;
+            *value = updated;
+        } else {
+            serde_json::from_value::<PageManifest>(value.clone())?.stage_into(from, to)?;
+        }
     }
-    Ok(())
+    Ok(rebound.then_some(report))
 }
 
 #[cfg(test)]
