@@ -174,7 +174,7 @@ pub(crate) fn verify_candidate(
     selector: &HttpCrossCaseSelector,
 ) -> Result<Value> {
     selector.validate()?;
-    let evidence = discover_selected(source, report, false, Some(selector))?;
+    let mut evidence = discover_selected(source, report, false, Some(selector))?;
     ensure!(
         evidence["candidates"]
             .as_array()
@@ -194,13 +194,17 @@ pub(crate) fn verify_candidate(
         &selector.path,
     )]);
     let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
+    let mut checked = 0usize;
     for file in files {
         recording::visit_matching(&file, &keys, &mut reader, |_, record| {
             if selector.matches(&record) {
                 require_replayable(&record)?;
+                checked += 1;
             }
             Ok(())
         })?;
     }
+    evidence["matching_exchanges"] = json!(checked);
+    evidence["complete"] = json!(true);
     Ok(evidence)
 }

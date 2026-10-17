@@ -1,5 +1,6 @@
 use super::tests::{send_request, spawn_http_replay_with_policy, write_http_case};
 use super::*;
+use crate::HttpCrossCaseSelector;
 use crate::replay::policy::test_fixture::ManagedFixtureDirectory as TempDir;
 use serde_json::json;
 use std::{
@@ -9,6 +10,61 @@ use std::{
 
 const HOST: &str = "erp.example.test";
 const BODY: &str = "client_id=client&client_secret=private";
+
+#[tokio::test]
+async fn sharing_proof_checks_records_beyond_the_bounded_candidate_preview() {
+    let (temp, origin, consumer) = fixture().await;
+    let path = origin.join("dependencies.jsonl");
+    let line = fs::read_to_string(&path).unwrap();
+    let record: serde_json::Value = serde_json::from_str(
+        line.lines()
+            .find(|line| line.contains("http_exchange"))
+            .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        (0..65)
+            .map(|_| record.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    let (addr, runtime, task) = spawn_http_replay_with_policy(&consumer, vec![], None, None).await;
+    assert_eq!(
+        call(addr, "/token?audience=erp", BODY).await.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    let report = temp.path().join("proof.json");
+    finalized_report(&runtime, &report).await;
+    task.abort();
+    let selector = HttpCrossCaseSelector {
+        host: HOST.into(),
+        port: 80,
+        method: "POST".into(),
+        path: "/token".into(),
+    };
+    let verified = cross_case::verify_candidate(&consumer, &report, &selector).unwrap();
+    assert_eq!(verified["matching_exchanges"], 65);
+    assert_eq!(verified["complete"], true);
+    let mut invalid = record.clone();
+    invalid["response_body"]["truncated"] = json!(true);
+    fs::write(
+        path,
+        (0..65)
+            .map(|index| {
+                if index == 64 {
+                    invalid.to_string()
+                } else {
+                    record.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    assert!(cross_case::verify_candidate(&consumer, &report, &selector).is_err());
+}
 
 async fn fixture() -> (TempDir, PathBuf, PathBuf) {
     let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();

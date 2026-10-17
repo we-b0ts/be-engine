@@ -261,6 +261,10 @@ user. The reserved Source UID cannot own recording artifacts.
 Finalization builds Case fragments and a paged Global index before publishing
 the completed run. See [large Global dependencies](global-dependencies.md) for
 legacy preparation, source checks, Replay memory and paginated report details.
+After final manifest/ownership publication, it also prewarms the complete Source
+file catalog for [indexed rule proof](rule-evidence-index.md). Later rule plans
+reuse recording hashes and read only applicable original evidence; skipped APIs
+remain part of that immutable catalog.
 
 Expose the finalized recording tree under the target's conventional
 `.traffic-e2e/local/artifacts/recordings/<run-id>/`, with its key accessible

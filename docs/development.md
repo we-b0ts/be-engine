@@ -16,6 +16,8 @@ Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 [HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
 strict matching and fresh verification.
 Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
+Rule planning reuses [recording indexes and sealed Source content identities](rule-evidence-index.md)
+while retaining complete active-API coverage and fresh plan/apply checks.
 
 Redis JSON/Protobuf values and source-proven collection ordering use
 [Redis value rules](redis-value-rules.md), with the same discovery and plan/apply lifecycle.

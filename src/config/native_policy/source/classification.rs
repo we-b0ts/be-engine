@@ -40,56 +40,75 @@ pub(super) fn validate(
         }
     }
     let mut count = 0;
-    each_event(files, |path, role, event| {
-        if !crate::replay::source_owned_match(event, role.case_id(), rule, &ports, &origins)? {
-            return Ok(());
-        }
-        match event["event_type"].as_str() {
-            Some("http_exchange") => {
-                crate::replay::http_source_witness(event, Surface::DependencyRequest, path)?;
-                // Ownership cannot hide an incomplete or failed dependency.
-                ensure!(
-                    event["error"].is_null() && event["response_status"].is_u64(),
-                    "Source-owned HTTP response is failed or incomplete"
-                );
-                crate::replay::http_source_witness(event, Surface::DependencyResponse, path)?;
+    let event_kind = match rule {
+        BackgroundDependencyRuleConfig::Mysql { .. } => "mysql_exchange",
+        BackgroundDependencyRuleConfig::Redis { .. } => "redis_exchange",
+        BackgroundDependencyRuleConfig::Http { .. } => "http_exchange",
+        BackgroundDependencyRuleConfig::Memcached { .. } => "memcached_exchange",
+        BackgroundDependencyRuleConfig::Motan { .. } => "motan_exchange",
+    };
+    each_event(
+        files,
+        |role, event| {
+            if event["_source_proof_requires_original"] == true {
+                // Oversized selector fields require a conservative original
+                // read. Complete metadata retains origin wire identity and
+                // SQL fingerprints; the original event still decides ownership.
+                return Ok(event["event_type"] == event_kind);
             }
-            Some("mysql_exchange") => {
-                crate::replay::mysql_source_witness(event, Surface::DependencyResponse)?;
-                ensure!(
-                    event["outcome"] == "response"
-                        && event["parse_warnings"]
-                            .as_array()
-                            .is_some_and(Vec::is_empty),
-                    "Source-owned MySQL exchange is failed or has parse warnings"
-                );
-                if event["response"]["status"] == "ok" {
+            crate::replay::source_owned_match(event, role.case_id(), rule, &ports, &origins)
+        },
+        |path, role, event| {
+            if !crate::replay::source_owned_match(event, role.case_id(), rule, &ports, &origins)? {
+                return Ok(());
+            }
+            match event["event_type"].as_str() {
+                Some("http_exchange") => {
+                    crate::replay::http_source_witness(event, Surface::DependencyRequest, path)?;
+                    // Ownership cannot hide an incomplete or failed dependency.
                     ensure!(
-                        rule.trigger_source().is_some(),
-                        "ordinary ownership only authorizes complete read results"
+                        event["error"].is_null() && event["response_status"].is_u64(),
+                        "Source-owned HTTP response is failed or incomplete"
                     );
-                } else {
+                    crate::replay::http_source_witness(event, Surface::DependencyResponse, path)?;
+                }
+                Some("mysql_exchange") => {
+                    crate::replay::mysql_source_witness(event, Surface::DependencyResponse)?;
                     ensure!(
+                        event["outcome"] == "response"
+                            && event["parse_warnings"]
+                                .as_array()
+                                .is_some_and(Vec::is_empty),
+                        "Source-owned MySQL exchange is failed or has parse warnings"
+                    );
+                    if event["response"]["status"] == "ok" {
+                        ensure!(
+                            rule.trigger_source().is_some(),
+                            "ordinary ownership only authorizes complete read results"
+                        );
+                    } else {
+                        ensure!(
                     crate::config::process_owned_dependencies::mysql::evidence::complete_response(
                         event
                     ),
                     "Source-owned MySQL read requires complete immutable row metadata"
                 );
+                    }
                 }
+                Some("redis_exchange" | "memcached_exchange" | "motan_exchange") => {
+                    ensure!(
+                        event["replay_safe"] == true && event["outcome"] == "response",
+                        "Source-owned exchange is unsafe or incomplete"
+                    );
+                    complete_captures(event)?;
+                    validate_native_frames(event)?;
+                }
+                _ => (),
             }
-            Some("redis_exchange" | "memcached_exchange" | "motan_exchange") => {
-                ensure!(
-                    event["replay_safe"] == true && event["outcome"] == "response",
-                    "Source-owned exchange is unsafe or incomplete"
-                );
-                complete_captures(event)?;
-                validate_native_frames(event)?;
-            }
-            _ => (),
-        }
-        count += 1;
-        Ok(())
-    })?;
+            count += 1;
+            Ok(())
+        },
+    )?;
     ensure!(
         count > 0,
         "Source ownership selector has no complete immutable dependency evidence"

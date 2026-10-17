@@ -49,6 +49,10 @@ is unclear.
   candidate references. Content sharing never merges physical request identities.
   Offline discovery and preflight expand these references through the evidence
   reader; runtime candidate search does not copy complete payload pairs.
+  `replay/assertion/native/header_jwt` owns unique header carrier selection;
+  `assertion/jwt/url` owns strict URL remainder and signed nonce echoes. Body and
+  header adapters reuse the same private key snapshots and JWT verifier. Header
+  ownership never implies a JSON body codec or a response-status exemption.
 
 - `replay/report/global_evidence` owns durable, source-bound shared Global report
   inventories and lazy detail projection. Its artifact child owns atomic private
@@ -155,6 +159,13 @@ is unclear.
   startup inventories; `replay/deferred` owns case preparation and immutable reads;
   `replay/snapshot` projects session state into reports. E2E execution owns the
   separate index preparation deadline and phase publication.
+  `dependency_index/evidence` owns complete Source file membership and reusable
+  content identities; Recorder seals its catalog after finalization.
+  `dependency_index/proof` owns compact exchange selectors and checksum-verified
+  original-record reads. The native Source policy owner decides applicability
+  and validates every matching record. The rewrite manifest and focused attempt
+  summary require exact active-group coverage without requiring unrelated APIs
+  to have reached preparation. Full-run completeness remains with execution.
 
   `dependency_index/global` projects portable Global metadata and groups generic
   notification locations. Sealed fragments from trusted immutable completed

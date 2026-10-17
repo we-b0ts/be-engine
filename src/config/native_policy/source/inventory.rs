@@ -18,9 +18,9 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
         files.len() <= 100_000,
         "Source proof case inventory exceeds bounds"
     );
-    let mut artifacts = BTreeSet::from([root.join("recording-run.json")]);
+    let snapshot = crate::dependency_index::evidence::prepare(&root)?;
+    let artifacts = BTreeSet::from([root.join("recording-run.json"), snapshot.path.clone()]);
     for path in &files {
-        artifacts.insert(path.clone());
         for name in ["request.json", "expected-response.json"] {
             let file = path.with_file_name(name);
             ensure!(
@@ -29,7 +29,6 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
                 name,
                 path.display()
             );
-            artifacts.insert(file);
         }
     }
     for (case, directory) in scope.prepared_cases {
@@ -43,7 +42,6 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
     let mut all = files;
     let global = root.join("global-dependencies.jsonl");
     if global.exists() {
-        artifacts.insert(global.clone());
         all.push(global);
     }
     Ok((
@@ -52,6 +50,7 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
             recording_run_id: scope.recording_run_id.into(),
             digest: String::new(),
             artifact_paths: artifacts,
+            snapshot,
         },
         all,
     ))
@@ -62,20 +61,13 @@ pub(super) fn digest(inventory: &NativeSourceInventory) -> Result<String> {
     hash.update(b"traffic-policy/source-inventory/v1\0");
     hash.update(inventory.recording_root.as_os_str().as_encoded_bytes());
     hash.update(inventory.recording_run_id.as_bytes());
-    let mut total = 0u64;
+    hash.update(inventory.snapshot.digest.as_bytes());
     for path in &inventory.artifact_paths {
         let metadata = fs::symlink_metadata(path)?;
         ensure!(
             metadata.is_file() && !metadata.file_type().is_symlink(),
             "Source proof artifact must be a regular file: {}",
             path.display()
-        );
-        total = total
-            .checked_add(metadata.len())
-            .context("Source proof inventory size overflow")?;
-        ensure!(
-            total <= 512 * 1024 * 1024,
-            "Source proof inventory exceeds bounded size"
         );
         let name = path.as_os_str().as_encoded_bytes();
         hash.update((name.len() as u64).to_be_bytes());

@@ -31,7 +31,7 @@ pub(crate) fn finalized_focused_attempt_summary(
         context.run_key.as_deref(),
     )?;
     let (state, _) = finalized_focused_evidence(context, api)?;
-    let inventory = crate::case_group::load_complete_case_group_inventory(
+    let inventory = crate::case_group::load_case_group_inventory(
         &layout.group_index_path,
         &layout.case_source,
     )?;
