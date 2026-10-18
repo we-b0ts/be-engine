@@ -122,9 +122,7 @@ pub(super) fn details(
     busy: bool,
 ) -> RewriteCoordinationDetails {
     let mut result = RewriteCoordinationDetails::default();
-    let first_pass_ready = state.implementers.is_none()
-        && super::inventory::can_switch_api(state)
-        && super::inventory::has_unattempted_api(state);
+    let first_pass_ready = super::scheduling::first_pass_api(state).is_some();
     let (dispatch, reports, close) = super::expert::counts(state);
     add(&mut result.ready, "dispatch_expert", dispatch);
     add(&mut result.waiting, "expert_report", reports);
@@ -175,6 +173,17 @@ pub(super) fn details(
             })
             .map(|slice| super::api_selector::public_api(&slice.api)),
     );
+    if first_pass_ready {
+        let first_pass = super::inventory::unattempted_apis(state)
+            .map(super::api_selector::public_api)
+            .collect();
+        add(
+            &mut result.waiting,
+            "replay_resource",
+            unverified.difference(&first_pass).count(),
+        );
+        unverified = first_pass;
+    }
     let unverified = unverified.len();
     if !busy && super::inventory::can_switch_api(state) {
         add(&mut result.ready, "verify_api", unverified);

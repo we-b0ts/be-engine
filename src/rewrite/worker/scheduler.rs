@@ -40,8 +40,8 @@ pub(in crate::rewrite) fn inventory(
 }
 
 /// Reconcile every unresolved scope, including parked APIs, before idle waiting.
-/// Runtime dispatch and status checks stay immediate. Ready handoffs wait until
-/// every API has had a first verification attempt so implementation can fan out.
+/// Runtime dispatch and status checks stay immediate. Between group rounds,
+/// ready handoffs wait for eligible first attempts so implementation can fan out.
 pub(in crate::rewrite) fn global_action(
     target_root: &Path,
     state: &RewriteState,
@@ -50,9 +50,7 @@ pub(in crate::rewrite) fn global_action(
     if state.case_pattern_identification.is_some() || state.revalidation_round.is_some() {
         return None;
     }
-    let first_pass_ready = state.implementers.is_none()
-        && inventory::can_switch_api(state)
-        && inventory::has_unattempted_api(state);
+    let first_pass_ready = super::super::scheduling::first_pass_api(state).is_some();
     let integration_busy = busy || state.group_replay.is_some();
     let scope = runtime::scopes(state)
         .into_iter()

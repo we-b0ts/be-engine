@@ -5,6 +5,22 @@ use std::path::Path;
 use super::model::{RewriteAction, RewriteApiStatus, RewritePhase, RewriteState};
 use super::{action, inventory, repair, worker};
 
+/// A running round drains and its failures are dispatched before this priority
+/// applies. Inventory facts are shared with the public ready/waiting projection.
+pub(super) fn first_pass_api(state: &RewriteState) -> Option<&str> {
+    if !inventory::can_switch_api(state)
+        || state.group_replay.is_some()
+        || state.revalidation_round.is_some()
+    {
+        return None;
+    }
+    inventory::unattempted_apis(state).next()
+}
+
+pub(super) fn first_pass_action(target_root: &Path, state: &RewriteState) -> Option<RewriteAction> {
+    first_pass_api(state).map(|api| advance(target_root, api, "verify API for the first time"))
+}
+
 pub(super) fn repair_action(target_root: &Path, state: &RewriteState) -> Option<RewriteAction> {
     if !inventory::can_switch_api(state) {
         return None;
@@ -61,6 +77,9 @@ pub(super) fn idle_action(target_root: &Path, state: &RewriteState) -> Option<Re
         return None;
     }
     if let Some(action) = repair_action(target_root, state) {
+        return Some(action);
+    }
+    if let Some(action) = first_pass_action(target_root, state) {
         return Some(action);
     }
     let accepted = state
