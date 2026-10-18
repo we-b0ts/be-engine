@@ -1,6 +1,6 @@
 # MySQL driver interoperability
 
-SQL value matching supports one statement up to 1 MiB and 16,384 tokens,
+SQL value matching supports one statement up to 8 MiB and 32,768 tokens,
 including recorded inline image/text values versus prepared parameters plus a
 bound identity. Configured templates retain their separate 64 KiB bound.
 Large statements are parsed without entering the SQL cache; cache retention
@@ -423,10 +423,10 @@ actual value equivalence, without inferring dynamic bindings.
 
 The Replay-local FIFO cache retains compiled SQL templates, negative parsing
 results, parameter-independent metadata shapes and normalized constant queries.
-It holds at most 256 SQL strings and 1 MiB of original SQL text (the associated
-compiled representations consume additional bounded memory). A single SQL is
-limited to 64 KiB and 16384 tokens for this compatibility path, with bounded
-parenthesis/parser depth. Flat AND/OR groups are traversed iteratively; their
+It holds at most 256 SQL strings within a 16 MiB retained-memory budget, including
+compiled representations. Statements up to 8 MiB and 32,768 tokens are supported;
+statements over the separate 64 KiB cache-entry limit parse without retention.
+Parenthesis/parser depth remains bounded. Flat AND/OR groups are traversed iteratively; their
 term count does not consume the predicate nesting budget. PREPARE uses a linear
 path when every branch has the same parameter template, including common fixed
 literals. Each recorded branch must satisfy that template and the branch counts

@@ -1,7 +1,7 @@
 //! Policy-local SQL templates and bounded immutable statement parsing.
 //! Bound parameters and case applicability are evaluated on every call.
 use super::*;
-use crate::mysql::sql::Token;
+use crate::mysql::sql::{Token, bounds::MAX_STATEMENT_BYTES};
 use crate::policy::{CompiledPolicy, NativeEffect, Protocol};
 use crate::replay::RecordedMysqlExchange;
 use crate::replay::policy::sql_template::{SqlValueTemplate, bounded_statement_tokens};
@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 const MAX_ENTRIES: usize = 256;
 const MAX_BYTES: usize = 8 * 1024 * 1024;
-const MAX_STATEMENT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub(super) struct MysqlSelection {

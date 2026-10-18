@@ -674,8 +674,10 @@ Before an MR, set `CODE_ORG_BASE` to the target branch. Use `--all` only for an
 explicit repository-wide audit.
 
 - `mysql/sql.rs` owns conservative SQL token/value identity shared by replay and
-  narrow MySQL ownership selectors. Its `projection` child resolves bounded
-  single-table SELECT fields, aliases and row-selection clauses without owning
+  narrow MySQL ownership selectors. Its `bounds` child owns statement byte/token
+  capability limits, shared by value policies, identity normalization and
+  statement parsing; cache admission remains a separate responsibility. Its
+  `projection` child resolves bounded single-table SELECT fields, aliases and row-selection clauses without owning
   recorded evidence. `replay/mysql/projection.rs` validates evidence and maps
   result columns and cells onto the target projection; the matcher retains
   identity, policy and exchange-consumption decisions.

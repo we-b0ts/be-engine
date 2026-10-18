@@ -1,7 +1,7 @@
 //! Capture one SQL value, then normalize automatic references in all SQL values.
 use super::{DynamicDecision, DynamicValueCapture, DynamicValues, IdentityPair, strings};
 use crate::{
-    mysql::sql::Token,
+    mysql::sql::{Token, bounds},
     replay::{RecordedMysqlValue, policy::matcher::MysqlPolicyContext},
 };
 use anyhow::{Context, Result};
@@ -94,7 +94,7 @@ pub(super) fn capture(token: &Token, pointer: Option<&str>) -> Result<String> {
     let Token::Bytes(bytes) = token else {
         anyhow::bail!("dynamic capture must select a string SQL value");
     };
-    strings::capture(bytes, pointer)
+    strings::capture_with_limit(bytes, pointer, bounds::MAX_STATEMENT_BYTES)
 }
 
 fn normalize_sql(
@@ -108,15 +108,21 @@ fn normalize_sql(
     if pairs.is_empty() {
         return Ok(Some(sql.into()));
     }
-    let (tokens, spans) = crate::mysql::sql::bounds::statement_with_spans(sql)
-        .context("dynamic SQL requires one valid statement within 1 MiB and 16384 tokens")?;
+    let (tokens, spans) = bounds::statement_with_spans(sql).with_context(|| {
+        format!(
+            "dynamic SQL requires one valid statement within {} MiB and {} tokens",
+            bounds::MAX_STATEMENT_BYTES / (1024 * 1024),
+            bounds::MAX_TOKENS
+        )
+    })?;
     let mut out = String::new();
     let mut offset = 0;
     for (token, span) in tokens.into_iter().zip(spans) {
         let Token::Bytes(bytes) = token else {
             continue;
         };
-        let normalized = strings::normalize(&bytes, pairs, actual)?;
+        let normalized =
+            strings::normalize_with_limit(&bytes, pairs, actual, bounds::MAX_STATEMENT_BYTES)?;
         if normalized == bytes {
             continue;
         }
@@ -151,8 +157,12 @@ fn normalize_params(
                 .map(|parameter| {
                     let mut parameter = parameter.clone();
                     if let Some(Value::String(text)) = &mut parameter.value {
-                        *text =
-                            String::from_utf8(strings::normalize(text.as_bytes(), pairs, actual)?)?;
+                        *text = String::from_utf8(strings::normalize_with_limit(
+                            text.as_bytes(),
+                            pairs,
+                            actual,
+                            bounds::MAX_STATEMENT_BYTES,
+                        )?)?;
                     }
                     Ok(parameter)
                 })
@@ -160,3 +170,6 @@ fn normalize_params(
         })
         .transpose()
 }
+
+#[cfg(test)]
+mod tests;
