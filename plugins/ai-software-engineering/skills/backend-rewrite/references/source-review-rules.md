@@ -8,12 +8,12 @@ Use your role's entrypoint for report execution and handoff.
 rules to worker, integration and final pre-revalidation candidates. Worker and
 ordinary integration review do not execute mandatory fmt, workspace tests or
 Clippy. Implementers build/debug and run relevant tests as needed; they do not
-need Clippy. The integrator executes the engine-issued `review check
---pre-revalidation --worktree ...` before final full revalidation. This command
-runs the full quality suite and the source/isolation checks, and records their
-real results in a final-stage receipt. The skill does not require running the
-same Cargo suite separately. Do not substitute an ordinary integration report,
-an untracked shell check or prose assertion for that receipt.
+need Clippy. Before final full revalidation the integrator executes the
+engine-required `quality_check` on the final committed candidate, then reports
+success through `review check --pre-revalidation --quality-check TOOL
+--worktree ...`. That command performs Source/isolation checks and binds the
+agent's successful check to the candidate; it never executes repository quality
+commands. An ordinary integration report cannot replace that final receipt.
 
 - Changed production Rust files must have at most 1000 complete physical lines,
   including comments, blank lines and a final line without a trailing newline.
@@ -27,7 +27,8 @@ not prove a call graph or discover every macro/wrapper. When changing callers of
 an existing task launcher, inspect its ownership even if no new spawn is found.
 
 All review stages also check Replay isolation. The final pre-revalidation
-command runs repository quality checks for the target and managed Rust projects.
+command records the integrator's successful quality check for the target and
+managed projects without running that tool.
 Source-sensitive
 `demo.test` and `sample.test` values are checked in test code too. `.trp.test`
 is prohibited in all added Rust lines; other private Replay hostnames, fake

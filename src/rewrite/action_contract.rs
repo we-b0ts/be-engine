@@ -213,9 +213,9 @@ impl Serialize for RewriteAction {
                 details: serde_json::json!({"check_owner": "code-integrator", "coordinator_action": "accept_receipt"}),
                 commands: serde_json::json!({"check": check, "show": show, "rework": rework, "accept": accept}),
             }.serialize(serializer),
-            Self::PreRevalidationReviewRequired { summary, check, accept } => RewriteActionView {
+            Self::PreRevalidationReviewRequired { summary, quality_check, quality_paths, check, accept } => RewriteActionView {
                 kind: "pre_revalidation_review_required", summary,
-                details: serde_json::json!({"check_owner": "code-integrator", "coordinator_action": "publish_candidate_and_accept_receipt", "stage": "pre_revalidation"}),
+                details: serde_json::json!({"check_owner": "code-integrator", "coordinator_action": "publish_candidate_and_accept_receipt", "stage": "pre_revalidation", "quality_check": quality_check, "quality_paths": quality_paths}),
                 commands: serde_json::json!({"check": check, "accept": accept}),
             }.serialize(serializer),
             Self::TargetQualityRequired {

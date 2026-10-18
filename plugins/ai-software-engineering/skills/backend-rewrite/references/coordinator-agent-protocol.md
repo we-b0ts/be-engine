@@ -167,8 +167,8 @@ report. Retain workflow/recording, API/group, issue, binding, dispatch and lease
 proven cause, Source evidence, changed files/shared impact, exact commit, focused
 test results, original absolute report path, required inputs and remaining risks.
 The engine freezes accepted commits and reports before reusing the checkout.
-Implementers need no mandatory Clippy run; final pre-revalidation review owns the
-full suite. See [review](coordinator-review.md).
+Implementers need no mandatory Clippy run; the integrator executes the configured
+quality_check and reports success at the existing final pre-revalidation stage. See [review](coordinator-review.md).
 
 After a handoff, keep unlisted tasks queued/running according to real activity.
 After a bounded wait returns `worker_events_required`, query all outstanding

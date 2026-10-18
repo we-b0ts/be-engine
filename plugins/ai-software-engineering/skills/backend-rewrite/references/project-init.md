@@ -101,14 +101,17 @@ scope only and is not a Docker build input. Do not use `COPY ../...`, change the
 default context to the outer Git repository, or infer sibling paths that the
 project configuration does not declare.
 
-Do not add project-configured quality commands. Worker and ordinary integration
-`review check` own Source, Replay-isolation and identity checks. Before final
-full revalidation, the engine requires `review check --pre-revalidation` in the
-assigned integration worktree. That command runs format, workspace tests and
-Clippy for the target and managed Rust projects and creates a version-bound final
-receipt. The skill requires this command, not a duplicate manual Cargo suite.
-Additional repository-specific development requirements belong in `AGENTS.md`
-or `CLAUDE.md`; they do not replace or disable the engine standard.
+Configure `project.delivery.quality_check` with the final quality tool identifier
+(default `cargo-clippy`; other languages use their project tool). All
+`review check` stages own Source, Replay-isolation and identity checks without
+executing repository quality commands. At the existing final pre-revalidation
+stage, the integrator executes the configured tool on the final committed
+candidate, then reports success through `review check --pre-revalidation
+--quality-check TOOL` in its assigned worktree. The engine records a
+version-bound final receipt. Publication, acceptance and full revalidation keep
+their existing sequence. Formatting, unit tests and additional development
+requirements belong in `AGENTS.md` or `CLAUDE.md`; they do not replace or disable
+the engine Source/Replay-isolation standard.
 
 The generated target uses `http-server` with its `macros` feature and exports
 the readiness GET route with `#[api(auth = none)]` and

@@ -110,7 +110,7 @@ listed protocol before handling that action.
 | `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
 | `integration_required` | Retain identity, publish only the reviewed candidate, then report integration | Code integrator | [integration](coordinator-integration.md) |
 | `source_review_required`, `target_quality_required` | Delegate ordinary candidate review or rework and admit only a matching report | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
-| `pre_revalidation_review_required` | Delegate the engine's final full-check command, publish the exact candidate, and accept its final-stage receipt | Code integrator | [final review](coordinator-review.md#final-review-before-full-revalidation) |
+| `pre_revalidation_review_required` | Delegate the configured quality requirement and final reporting command, publish the exact candidate, and accept its final-stage receipt | Code integrator | [final review](coordinator-review.md#final-review-before-full-revalidation) |
 | `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer worker | [rule actions](coordinator-rule-actions.md) |
 | `input_required` | Resolve only the named input and resume the retained invocation | Delegate semantic/source questions to the owning API implementer or code integrator | [input handling](#input_required) and, for startup inputs, [startup inputs](coordinator-startup-inputs.md) |
 | `system_repair_required`, `recovery_required`, `blocked` | Execute only the returned acceptance/recovery action or stop with retained context | External system owner may install the named repair | [recovery and system repair](coordinator-recovery.md) |
@@ -246,7 +246,7 @@ adopt completed external traffic -> identify patterns for new uncovered APIs
     -> reviewed partial handoff (one/many APIs, possibly across assigned groups)
     -> integrate exact deliveries -> group acceptance Replay
     -> repeat failures or continue other groups
-    -> final full-check review -> final full revalidation -> final delivery
+    -> final quality-check review -> final full revalidation -> final delivery
 
 source-proven capture gap -> apply capture rule -> API waits
     -> drain other runnable work -> wait for one full-scope external batch
@@ -447,12 +447,13 @@ continues exposing each worker's own handoff commands.
 ### `pre_revalidation_review_required`
 
 This is an engine state-machine prerequisite before final full revalidation,
-not a skill reminder. Delegate the returned `review check --pre-revalidation
---worktree ...` to the retained integrator. That command is the only required
-entrypoint for the full format/test/Clippy suite and source/isolation checks;
-do not require a second manual Cargo run. The integrator fixes routine
-formatting/lint issues directly and returns the exact candidate and final-stage
-receipt. Follow [final review](coordinator-review.md#final-review-before-full-revalidation).
+not a skill reminder. Delegate `details.quality_check`, `details.quality_paths`
+and the returned `review check --pre-revalidation --quality-check TOOL
+--worktree ...` to the retained integrator. It executes the required tool on the
+final committed candidate before reporting success. The engine command performs
+Source/isolation checks and records the attestation without executing repository
+commands. The integrator fixes routine findings and returns the exact candidate
+and final-stage receipt. The workflow stages and order remain unchanged. Follow [final review](coordinator-review.md#final-review-before-full-revalidation).
 
 Publish the exact candidate and submit `review accept`. The engine requires
 current code, relevant inputs, check policy, inventory and immutable recording

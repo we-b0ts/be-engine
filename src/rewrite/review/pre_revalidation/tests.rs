@@ -70,6 +70,7 @@ fn options(root: &Path, worktree: &Path) -> RewriteReviewOptions {
         target_root: root.into(),
         worktree: Some(worktree.into()),
         integration: false, // The explicit final entry point selects integration.
+        quality_check: Some("cargo-clippy".into()),
         scope: None,
         evidence: None,
         handoff_id: None,
@@ -177,6 +178,7 @@ fn ordinary_integration_receipt_does_not_authorize_final_revalidation() {
     let root = target.path();
     let mut ordinary_options = options(root, root);
     ordinary_options.integration = true;
+    ordinary_options.quality_check = None;
     let ordinary = check(ordinary_options).unwrap();
     assert_eq!(ordinary.status, ReviewStatus::Passed);
     assert!(ordinary.pre_revalidation.is_none());
@@ -553,43 +555,18 @@ fn repeated_final_commands_reuse_successful_receipts_before_and_after_publicatio
 }
 
 #[test]
-fn cached_final_report_retains_private_logs_after_the_integration_log_is_removed() {
-    use crate::rewrite::quality::{QualityCommandReport, QualityCommandStatus};
-    use std::os::unix::fs::PermissionsExt;
+fn final_report_retains_agent_quality_result_without_command_logs() {
     let target = target(false);
     let root = target.path();
-    let source = tempfile::tempdir().unwrap();
-    let log = source.path().join("check.log");
-    fs::write(&log, "final command output\n").unwrap();
-    let mut report = check_pre_revalidation(options(root, root)).unwrap();
-    // Isolate canonical artifact retention from command inference/execution.
-    report
-        .quality
-        .as_mut()
-        .unwrap()
-        .commands
-        .push(QualityCommandReport {
-            name: "log-retention".into(),
-            argv: vec!["check".into()],
-            working_directory: PathBuf::from("."),
-            status: QualityCommandStatus::Passed,
-            exit_code: Some(0),
-            log_path: log,
-            error: None,
-        });
-    remember(root, &mut report).unwrap();
-    drop(source);
+    let report = check_pre_revalidation(options(root, root)).unwrap();
     let stored: RewriteReviewReport = read_json(&checked_path(root)).unwrap();
-    let retained = &stored.quality.as_ref().unwrap().commands[0].log_path;
-    assert!(retained.starts_with(crate::internal_runtime::root(root)));
+    assert_eq!(stored.report_path, report.report_path);
     assert_eq!(
-        fs::read_to_string(retained).unwrap(),
-        "final command output\n"
+        stored.quality.as_ref().unwrap().quality_check.as_deref(),
+        Some("cargo-clippy")
     );
-    assert_eq!(
-        fs::metadata(retained).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
+    assert!(stored.quality.as_ref().unwrap().commands.is_empty());
+    assert!(!stored.report_path.with_extension("logs").exists());
 }
 
 #[test]
@@ -608,4 +585,76 @@ fn adopting_a_legacy_recorded_route_does_not_expire_the_final_scope() {
     assert_eq!(context(root, &state).unwrap(), unbound);
     state.api_inventory[0].source_route = Some("/different/*".into());
     assert_ne!(context(root, &state).unwrap(), unbound);
+}
+
+#[test]
+fn final_stage_requires_agent_success_for_the_configured_tool_without_running_cargo() {
+    let target = target(false);
+    let root = target.path();
+    // Any Cargo subprocess would fail, including fmt, test and Clippy.
+    fs::write(root.join("Cargo.toml"), "invalid Cargo manifest\n").unwrap();
+    git(root, &["add", "Cargo.toml"]);
+    git(root, &["commit", "-qm", "unusable Cargo manifest"]);
+    for tool in [None, Some("".into()), Some("eslint".into())] {
+        let mut opts = options(root, root);
+        opts.quality_check = tool;
+        let error = check_pre_revalidation(opts).unwrap_err();
+        assert!(error.to_string().contains("run delivery.quality_check"));
+        assert!(load(root).pre_revalidation_review.is_none());
+    }
+    let action = required_action(root, &load(root)).unwrap().unwrap();
+    let value = serde_json::to_value(&action).unwrap();
+    assert_eq!(value["kind"], "pre_revalidation_review_required");
+    assert_eq!(value["details"]["quality_check"], "cargo-clippy");
+    assert_eq!(value["details"]["quality_paths"], serde_json::json!(["."]));
+    assert!(
+        value["commands"]["check"]["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "--quality-check")
+    );
+    let report = accepted(root);
+    assert!(report.quality.as_ref().unwrap().commands.is_empty());
+    assert!(current(root, &load(root)));
+    assert!(!root.join("target").exists());
+    assert!(
+        !crate::internal_runtime::root(root)
+            .join("rewrite/quality")
+            .exists()
+    );
+}
+
+#[test]
+fn configured_language_tool_is_required_and_changes_expire_final_proof() {
+    let target = target(false);
+    let root = target.path();
+    let config_path = root.join(".traffic-e2e/project.yaml");
+    let original = fs::read_to_string(&config_path).unwrap();
+    let mut config: serde_yaml::Value = serde_yaml::from_str(&original).unwrap();
+    config["project"]["delivery"]["quality_check"] = "ruff".into();
+    fs::write(&config_path, serde_yaml::to_string(&config).unwrap()).unwrap();
+    git(root, &["add", ".traffic-e2e/project.yaml"]);
+    git(root, &["commit", "-qm", "configure Python quality tool"]);
+    let action =
+        serde_json::to_value(required_action(root, &load(root)).unwrap().unwrap()).unwrap();
+    assert_eq!(action["details"]["quality_check"], "ruff");
+    assert!(check_pre_revalidation(options(root, root)).is_err());
+    let mut opts = options(root, root);
+    opts.quality_check = Some("ruff".into());
+    let report = check_pre_revalidation(opts.clone()).unwrap();
+    candidate::accept(root.into(), report.report_path.clone()).unwrap();
+    let state = load(root);
+    assert!(current(root, &state));
+    assert_eq!(
+        check_pre_revalidation(opts).unwrap().report_path,
+        report.report_path
+    );
+    config["project"]["delivery"]["quality_check"] = "eslint".into();
+    fs::write(&config_path, serde_yaml::to_string(&config).unwrap()).unwrap();
+    assert!(!current(root, &state));
+    assert!(matches!(
+        required_action(root, &state).unwrap(),
+        Some(RewriteAction::PreRevalidationReviewRequired { .. })
+    ));
 }

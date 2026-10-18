@@ -34,11 +34,16 @@ they do not need to run Clippy. Worker and ordinary integration review check
 Source rules, Replay isolation and exact delivery identity without executing
 repository quality commands. Daily integration uses focused builds/tests as
 needed. After implementation and ordinary delivery drain, the engine requires
-`pre_revalidation_review_required`: the retained integrator executes the returned
-`review check --pre-revalidation --worktree ...` command. That single engine
-entrypoint runs the full quality suite, including Clippy, and source/isolation
-checks, producing a final-stage receipt. Do not manually run the same full suite
-before this command. The integrator fixes routine formatting/lint issues; API
+`pre_revalidation_review_required`: the retained integrator executes the tool
+named in `details.quality_check` across `details.quality_paths` on the final
+committed candidate. For `cargo-clippy`, run `cargo clippy --workspace
+--all-targets -- -D warnings` in each applicable Rust project; other tools follow
+the project's language and configuration. After success, execute the returned
+`review check --pre-revalidation --quality-check TOOL --worktree ...` command.
+This records the agent's successful check and runs Source/isolation checks; the
+engine never executes repository quality commands. Report the tool only after
+it passed on that candidate. Reuse a current passing result for the same code
+and inputs; do not repeat it for each API in the final sweep. The integrator fixes routine formatting/lint issues; API
 behavior decisions return to the responsible implementer. Only the coordinator
 publishes and admits the exact checked candidate. The state machine requires a
 current final-stage receipt before full revalidation and final delivery.

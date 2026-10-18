@@ -186,6 +186,8 @@ fn final_review_selects_global_integration_without_a_separate_integration_flag()
         "review",
         "check",
         "--pre-revalidation",
+        "--quality-check",
+        "cargo-clippy",
         "--worktree",
         "/integration",
     ])
@@ -223,6 +225,8 @@ fn final_review_rejects_scoped_or_batch_delivery_selectors() {
             "review",
             "check",
             "--pre-revalidation",
+            "--quality-check",
+            "cargo-clippy",
             "--integration",
             "--worktree",
             "/integration",
@@ -231,4 +235,47 @@ fn final_review_rejects_scoped_or_batch_delivery_selectors() {
         assert!(Cli::try_parse_from(&argv).is_err(), "accepted {argv:?}");
     }
     assert!(Cli::try_parse_from(["test", "review", "check", "--pre-revalidation"]).is_err());
+}
+
+#[test]
+fn quality_check_is_required_only_for_the_existing_final_stage() {
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "review",
+            "check",
+            "--pre-revalidation",
+            "--worktree",
+            "/integration"
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "review",
+            "check",
+            "--integration",
+            "--quality-check",
+            "cargo-clippy",
+            "--worktree",
+            "/integration"
+        ])
+        .is_err()
+    );
+    for tool in ["cargo-clippy", "eslint", "ruff"] {
+        assert!(
+            Cli::try_parse_from([
+                "test",
+                "review",
+                "check",
+                "--pre-revalidation",
+                "--quality-check",
+                tool,
+                "--worktree",
+                "/integration"
+            ])
+            .is_ok()
+        );
+    }
 }

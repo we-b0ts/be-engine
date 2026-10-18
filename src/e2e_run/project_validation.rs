@@ -58,6 +58,16 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "delivery.pr_base must not be empty"
     );
     ensure!(
+        !project.delivery.quality_check.is_empty()
+            && project.delivery.quality_check.len() <= 128
+            && project
+                .delivery
+                .quality_check
+                .bytes()
+                .all(|byte| { byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') }),
+        "delivery.quality_check must be a tool identifier of 1-128 ASCII letters, digits, dots, underscores or hyphens"
+    );
+    ensure!(
         project.delivery.managed_paths.len() <= 7,
         "delivery.managed_paths must contain at most 7 additional directories"
     );
@@ -106,6 +116,41 @@ mod tests {
             verification.max_failed_cases_per_api,
             DEFAULT_MAX_FAILED_CASES_PER_API
         );
+    }
+
+    #[test]
+    fn quality_tool_defaults_to_clippy_and_accepts_language_specific_identifiers() {
+        let delivery: super::super::model::DeliveryProjectConfig =
+            serde_yaml::from_str("pr_base: master\n").unwrap();
+        assert_eq!(delivery.quality_check, "cargo-clippy");
+        let mut config: ProjectConfig =
+            serde_yaml::from_str(include_str!("../../config/project.example.yaml")).unwrap();
+        for tool in [
+            "cargo-clippy",
+            "eslint",
+            "ruff",
+            "golangci-lint",
+            "project_quality.v2",
+        ] {
+            config.project.delivery.quality_check = tool.into();
+            validate_project_config(&config).unwrap();
+        }
+        for tool in [
+            "",
+            " cargo-clippy",
+            "cargo-clippy ",
+            "cargo clippy",
+            "tool;command",
+            &"x".repeat(129),
+        ] {
+            config.project.delivery.quality_check = tool.into();
+            assert!(
+                validate_project_config(&config)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("delivery.quality_check")
+            );
+        }
     }
 
     #[test]

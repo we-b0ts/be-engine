@@ -214,6 +214,7 @@ pub(super) fn config(root: &Path) -> ResolvedProjectConfig {
         replay_loading: Default::default(),
         replay_startup_timeout: Duration::from_secs(1),
         pr_base: "master".into(),
+        quality_check: "cargo-clippy".into(),
         managed_paths: Vec::new(),
         recorder_config: root.join("project.yaml"),
         source_traffic_policy: root.join("policy.yaml"),

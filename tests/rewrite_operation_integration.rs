@@ -190,6 +190,8 @@ fn assert_detached_idle_revalidation(auto_next: bool) {
             "review",
             "check",
             "--pre-revalidation",
+            "--quality-check",
+            "cargo-clippy",
             "--worktree",
             target.path().to_str().unwrap(),
         ],

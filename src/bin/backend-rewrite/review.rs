@@ -23,17 +23,25 @@ enum ReviewCommand {
         #[arg(long, required = true, value_parser = super::parse_api_scope)]
         api: Vec<String>,
     },
-    /// Check source and isolation before delivery, or final quality before full revalidation.
+    /// Check source/isolation and record agent-owned final quality before full revalidation.
     Check {
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_WORKTREE")]
         worktree: PathBuf,
         /// Check an integration candidate instead of a registered worker delivery.
         #[arg(long)]
         integration: bool,
-        /// Run the final candidate's full checks before full revalidation.
+        /// Bind final source/isolation review and agent-owned quality before full revalidation.
         /// This automatically selects global integration review.
         #[arg(long, conflicts_with_all = ["api", "handoff_id", "batch_handoffs"])]
         pre_revalidation: bool,
+        /// Report the configured tool only after it passed on the final committed
+        /// candidate. This command records the agent's result without running it.
+        #[arg(
+            long,
+            requires = "pre_revalidation",
+            required_if_eq("pre_revalidation", "true")
+        )]
+        quality_check: Option<String>,
         #[arg(
             long,
             required_unless_present_any = ["integration", "pre_revalidation"],
@@ -94,6 +102,7 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
             worktree,
             integration,
             pre_revalidation,
+            quality_check,
             api,
             handoff_id,
             batch_handoffs,
@@ -110,6 +119,7 @@ pub(super) fn run(root: PathBuf, args: ReviewArgs, pretty: bool) -> Result<()> {
                 target_root: root,
                 worktree: Some(worktree),
                 integration,
+                quality_check,
                 scope,
                 handoff_id,
                 evidence,

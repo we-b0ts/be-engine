@@ -637,6 +637,7 @@ mod tests {
             replay_loading: crate::replay::ReplayDependencyLoading::default(),
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "dev-migration".to_string(),
+            quality_check: "cargo-clippy".into(),
             managed_paths: Vec::new(),
             recorder_config: "project.yaml".into(),
             source_traffic_policy: "source-traffic-policy.yaml".into(),
