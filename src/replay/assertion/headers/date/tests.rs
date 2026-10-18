@@ -1,5 +1,5 @@
 use super::*;
-use chrono::TimeZone;
+use chrono::{TimeZone, Utc};
 
 fn rule() -> ResponseHeaderDateRule {
     ResponseHeaderDateRule {
@@ -21,7 +21,7 @@ fn header(day: &str) -> Vec<String> {
 }
 
 #[test]
-fn date_rule_validates_each_requests_day_and_preserves_the_filename_contract() {
+fn date_rule_preserves_relative_days_and_the_filename_contract() {
     assert!(
         compare(
             &header("2026-10-07"),
@@ -34,7 +34,7 @@ fn date_rule_validates_each_requests_day_and_preserves_the_filename_contract() {
     assert!(
         compare(
             &header("2026-10-07"),
-            &header("2026-10-09"),
+            &header("2026-10-10"),
             &[rule()],
             times()
         )
@@ -101,7 +101,7 @@ fn malformed_ambiguous_or_missing_dates_do_not_authorize_rules() {
 }
 
 #[test]
-fn timezone_and_midnight_window_use_captured_request_times() {
+fn relative_days_are_independent_of_legacy_timezone_configuration() {
     let mut selected = rule();
     selected.timezone = "+08:00".into();
     let refs = RequestTimes {
@@ -124,8 +124,36 @@ fn timezone_and_midnight_window_use_captured_request_times() {
             &[rule()],
             refs
         )
-        .is_err()
+        .unwrap()
     );
+}
+
+#[test]
+fn relative_dates_allow_short_midnight_crossings_but_reject_impossible_day_changes() {
+    let source = Utc.with_ymd_and_hms(2026, 10, 7, 15, 59, 0).unwrap();
+    for seconds in [120, -120] {
+        let refs = RequestTimes {
+            source: Some(source),
+            target: Some(source + chrono::TimeDelta::seconds(seconds)),
+        };
+        let possible = if seconds > 0 {
+            "2026-10-08"
+        } else {
+            "2026-10-06"
+        };
+        for day in ["2026-10-07", possible] {
+            assert!(compare(&header("2026-10-07"), &header(day), &[rule()], refs).unwrap());
+        }
+        assert!(
+            compare(
+                &header("2026-10-07"),
+                &header("2026-10-10"),
+                &[rule()],
+                refs
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

@@ -1,5 +1,5 @@
 //! Exact timestamp parsing and clock relations, independent of replay and configuration.
-use chrono::{DateTime, FixedOffset, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Utc};
 use serde_json::Value;
 
 pub(crate) const NANOS_PER_SECOND: i128 = 1_000_000_000;
@@ -109,6 +109,26 @@ pub(crate) fn compare_duration_nanos(
     let value_delta = target.checked_sub(source).ok_or(TimeError::InvalidValue)?;
     let anchor_delta = date_nanos(target_anchor) - date_nanos(source_anchor);
     if value_delta.abs_diff(anchor_delta) > TOLERANCE_NANOS {
+        return Err(TimeError::DeltaMismatch);
+    }
+    Ok(())
+}
+
+/// A calendar date is a day-wide interval. Compare only the day changes that
+/// can be proved from the independent request delta at that precision.
+pub(crate) fn compare_calendar_dates(
+    source: NaiveDate,
+    target: NaiveDate,
+    clocks: ClockPair,
+) -> Result<(), TimeError> {
+    const DAY: i128 = 86_400 * NANOS_PER_SECOND;
+    let (source_anchor, target_anchor) = clocks.require()?;
+    let delta = date_nanos(target_anchor) - date_nanos(source_anchor);
+    let tolerance = TOLERANCE_NANOS as i128;
+    let min_days = (delta - tolerance).div_euclid(DAY);
+    let max_days = (delta + tolerance + DAY - 1).div_euclid(DAY);
+    let days = i128::from(target.signed_duration_since(source).num_days());
+    if !(min_days..=max_days).contains(&days) {
         return Err(TimeError::DeltaMismatch);
     }
     Ok(())

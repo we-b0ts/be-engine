@@ -372,7 +372,7 @@ fn request_time(value: &super::request_contract::config::TimeField) -> n::Native
         },
         utc_offset: value.utc_offset.clone(),
         relation: p::TimeRelation::PreserveOffset,
-        anchor: p::TimeAnchor::ApiRequestStart,
+        anchor: value.anchor,
         clock_group: value.clock_group.clone(),
     }
 }

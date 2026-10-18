@@ -219,7 +219,8 @@ fn naive_relative_times_allow_omitted_offsets_and_validate_optional_offsets() {
     let time = policy.rules[0].as_value().unwrap().contract["/expires_at"]
         .time()
         .unwrap();
-    assert_eq!(time.offset().unwrap().unwrap().local_minus_utc(), 8 * 3600);
+    assert!(time.utc_offset.is_none());
+    assert_eq!(time.offset().unwrap().unwrap().local_minus_utc(), 0);
     let implicit = raw.replace(", utc_offset: '+08:00'", "");
     let policy = parse_policy(&implicit).unwrap();
     let time = policy.rules[0].as_value().unwrap().contract["/expires_at"]
@@ -228,7 +229,17 @@ fn naive_relative_times_allow_omitted_offsets_and_validate_optional_offsets() {
     assert!(time.utc_offset.is_none());
     assert_eq!(time.offset().unwrap().unwrap().local_minus_utc(), 0);
     assert!(parse_policy(&implicit.replace("preserve_offset", "request_window")).is_err());
-    parse_policy(&raw.replace("preserve_offset", "request_window")).unwrap();
+    let window = parse_policy(&raw.replace("preserve_offset", "request_window")).unwrap();
+    assert_eq!(
+        window.rules[0].as_value().unwrap().contract["/expires_at"]
+            .time()
+            .unwrap()
+            .offset()
+            .unwrap()
+            .unwrap()
+            .local_minus_utc(),
+        8 * 3600
+    );
     for invalid in [
         raw.replace("'+08:00'", "'+24:00'"),
         raw.replace("'+08:00'", "'Asia/Shanghai'"),

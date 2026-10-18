@@ -2,6 +2,7 @@ use super::*;
 use serde_json::json;
 mod protocols;
 mod recorded_skip;
+mod recorded_tasks;
 
 fn proof() -> Value {
     json!({"source":"source.rs:trace","fact":"The complete Source trace validates every selected relationship"})

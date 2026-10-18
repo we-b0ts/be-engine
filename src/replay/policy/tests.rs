@@ -519,7 +519,12 @@ fn rejects_memcached_contract_without_an_executable_resource_and_value_slot() {
         }
         fs::write(
             &fixture.policy_path,
-            serde_yaml::to_string(&policy).unwrap(),
+            // Bypass the authoring writer's own validation to exercise the loader.
+            serde_yaml::to_string(&serde_json::json!({
+                "format": policy.format,
+                "rules": policy.rules,
+            }))
+            .unwrap(),
         )
         .unwrap();
         assert!(ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).is_err());

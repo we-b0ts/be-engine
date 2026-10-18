@@ -449,10 +449,23 @@ pub(in crate::replay::policy) fn verify_capture(
                     None
                 };
                 runtime.compare_redis(
-                    &candidate.case_id,
+                    &super::RedisRequestContext {
+                        case: &candidate.case_id,
+                        target: &TargetKey {
+                            host: candidate.host.clone(),
+                            port: candidate.port,
+                        },
+                        database: candidate.database,
+                        username: event["username"].as_str(),
+                        command: &candidate.command,
+                        recorded_at: None,
+                        actual_at: None,
+                        connection_id: None,
+                        sequence: None,
+                        observation_id: None,
+                    },
                     rule,
                     &single,
-                    &candidate.command,
                     publish_comparison
                         .as_ref()
                         .map_or(source_args, |c| &c.source),

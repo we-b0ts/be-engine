@@ -66,10 +66,6 @@ impl ResponseHeaderDateRule {
         crate::config::process_owned_dependencies::validate_source_evidence(&self.source_evidence)?;
         Ok(())
     }
-
-    pub(in crate::replay) fn timezone_seconds(&self) -> Result<i32> {
-        super::config::parse_timezone(&self.timezone)
-    }
 }
 
 pub(in crate::replay) fn matches(api: &str, path: &str) -> bool {

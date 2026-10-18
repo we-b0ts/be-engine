@@ -140,8 +140,10 @@ available. Human authoring can omit repeated information within the same rule:
   direct contract spelling. `relative_time: FORMAT` expands to typed time with
   `preserve_offset`; `request_time: FORMAT` expands to `request_window`. Both
   default to `case.request_start` (SQL `mysql_values.values` defaults to
-  `dependency.request_start`, including JSON time fields) and accept an explicit `anchor`, `utc_offset`
-  and `clock_group`. Formats/units are always explicit. The renderer keeps the
+  `dependency.request_start`, including JSON time fields) and accept an explicit `anchor`
+  and `clock_group`. Relative comparisons of naive timestamps cancel a shared UTC
+  offset; legacy `utc_offset` is validated and removed by authoring normalization.
+  Source and Target must use consistent timezone behavior. Formats/units are always explicit. The renderer keeps the
   effective anchor visible. `unordered` abbreviates `{kind: unordered}`.
 
 For example, a native SQL rule can preserve its original abstraction and scope
@@ -174,7 +176,6 @@ rules:
         1:
           relative_time: sql_datetime
           anchor: case.request_start
-          utc_offset: '+08:00'
           clock_group: audit
     proof:
       source: app/task.py:update
