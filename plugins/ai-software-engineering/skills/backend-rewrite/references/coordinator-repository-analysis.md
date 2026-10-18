@@ -1,37 +1,26 @@
 # Coordinator Repository Analysis
 
 Use for `repository_analysis_required`, after static/dynamic path identification
-and inventory installation. Complete this stage before Replay or implementation
-dispatch. It creates no implementer binding or worktree.
+and inventory installation. Finish grouping before Replay or implementation.
 
-Execute `commands.context` (`repository-analysis context`). Assign one read-only
-`repository-analyst` the returned batch, Source repository locations and complete
-context. It includes `workflow_id`, `recording_run_id`, `source_revision`,
-`batch_id`, selected `scope`, `pending_apis`, `catalog_revision` inside `catalog`,
-and all existing group definitions and API assignments. Reuse existing analysis;
-only pending canonical routes need grouping. Analysis and Replay do not overlap.
+Execute `commands.context` (`repository-analysis context`). Give one read-only
+`repository-analyst` the returned `pending_apis`, Source repository location and
+`catalog_path`. The analyst reads existing assignments from that file and only
+classifies the pending APIs. If `catalog_revision` is `absent`, no catalog exists.
+Do not inline the catalog in status or agent assignments.
 
-The project catalog is
-`.traffic-e2e/local/repository-analysis/catalog.json`; it survives purposes and
-recording changes and is engine-owned. Read through the context command, never
-edit the catalog or rely on conversation history as the existing-group record.
-Group count is unrelated to implementer count. Group by shared behavior, modules,
-state machines and anticipated write hotspots; a route prefix alone is insufficient.
+The project-wide `.traffic-e2e/local/repository-analysis/catalog.json` contains
+only `api_groups`, mapping canonical API routes to group names. It survives
+workflow and recording changes. Existing assignments are reused unchanged.
+Groups have no separate definitions, evidence requirements or count limit.
+The analyst chooses how to group APIs; the engine does not judge that choice.
 
-Require one complete incremental JSON submission from the analyst:
+Return an incremental submission containing exactly the pending routes:
 
 ```json
 {
   "schema_version": 1,
-  "catalog_revision": "<exact context.catalog.catalog_revision>",
-  "groups": {
-    "wework-auth": {
-      "summary": "Enterprise login session lifecycle",
-      "source_refs": ["src/auth/routes.py:create_session"],
-      "shared_modules": ["auth/session"],
-      "write_hotspots": ["src/wework_auth.rs"]
-    }
-  },
+  "catalog_revision": "<exact context.catalog_revision>",
   "assignments": {
     "/api/auth/wework/sessions": "wework-auth",
     "/api/auth/wework/sessions/*": "wework-auth"
@@ -39,20 +28,14 @@ Require one complete incremental JSON submission from the analyst:
 }
 ```
 
-The `assignments` keys must cover exactly `pending_apis`. Include definitions only
-for new groups. Joining an existing group uses its ID in `assignments` without
-redefining it in `groups`. Existing group definitions and route assignments are
-immutable in this incremental interface. Do not invent a regrouping operation.
-
-Store the analyst's submission in a private local file, recheck global status,
-then execute the returned apply command with
-`BACKEND_REWRITE_REPOSITORY_ANALYSIS_FILE` or `--file`:
+Store the submission privately, recheck global status and execute the returned
+apply command with `BACKEND_REWRITE_REPOSITORY_ANALYSIS_FILE` or `--file`:
 
 ```text
 backend-rewrite --target-root <canonical-root> repository-analysis apply <batch-id> --file <analysis.json>
 ```
 
-The engine checks batch/catalog/recording/Source identity, exact coverage and
-references before saving. Identical retries are safe. A stale batch needs fresh
-context and a reconciled analyst result. Follow the returned action; no second
-user confirmation is required for internal grouping.
+The engine checks complete API coverage, valid group names and stale submission
+identity before saving. Existing API assignments cannot be changed by this
+incremental interface. Identical retries are safe. For stale input, obtain fresh
+context. No evidence bundle, call graph or justification report is required.

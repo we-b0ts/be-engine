@@ -35,11 +35,6 @@ fn fixture() -> tempfile::TempDir {
     fs::write(
         catalog,
         serde_json::to_vec(&serde_json::json!({
-            "schema_version": 1,
-            "groups": {
-                "api": {"summary": "API handler", "source_refs": ["src/api.rs:handler"]},
-                "other": {"summary": "Other handler", "source_refs": ["src/other.rs:handler"]}
-            },
             "api_groups": {"/api": "api", "/other": "other"}
         }))
         .unwrap(),
@@ -384,8 +379,10 @@ fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
         panic!("new canonical routes require incremental grouping before Replay");
     };
     assert_eq!(analysis.pending_apis, ["/api/knowledge-bases/*/artifacts"]);
-    assert_eq!(analysis.catalog.api_groups["/api"], "api");
-    assert_eq!(analysis.catalog.api_groups["/other"], "other");
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&fs::read(&analysis.catalog_path).unwrap()).unwrap();
+    assert_eq!(catalog["api_groups"]["/api"], "api");
+    assert_eq!(catalog["api_groups"]["/other"], "other");
     assert!(state.api_inventory.iter().all(|item| item.attempts == 0));
     let submission = target
         .path()
@@ -394,13 +391,7 @@ fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
         &submission,
         serde_json::to_vec(&serde_json::json!({
             "schema_version": 1,
-            "catalog_revision": analysis.catalog.catalog_revision,
-            "groups": {
-                "knowledge-artifacts": {
-                    "summary": "Knowledge-base artifact operations",
-                    "source_refs": ["src/knowledge_base.rs:artifacts"]
-                }
-            },
+            "catalog_revision": analysis.catalog_revision,
             "assignments": {"/api/knowledge-bases/*/artifacts": "knowledge-artifacts"}
         }))
         .unwrap(),

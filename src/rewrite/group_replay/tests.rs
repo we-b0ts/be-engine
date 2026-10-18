@@ -9,7 +9,6 @@ fn state(apis: &[&str], groups: &[(&str, &str)]) -> RewriteState {
     state.implementers = Some(ImplementerPool::new(16));
     state.repository_analysis = Some(RepositoryAnalysisSnapshot {
         catalog_revision: "test-analysis".into(),
-        groups: BTreeMap::new(),
         api_groups: groups
             .iter()
             .map(|(api, group)| ((*api).into(), (*group).into()))

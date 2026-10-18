@@ -8,7 +8,7 @@ use super::{
     implementer::{self, ImplementerPool},
     initialization,
     model::{RewriteApiStatus, RewriteState},
-    repository_analysis::{RepositoryAnalysisGroup, RepositoryAnalysisSnapshot},
+    repository_analysis::RepositoryAnalysisSnapshot,
     store::RewriteStore,
     worker,
 };
@@ -29,23 +29,8 @@ fn state(groups: &[(&str, &str)], capacity: usize) -> RewriteState {
         slice.source_route = (*route).into();
         state.parked_slices.insert(api, slice);
     }
-    let metadata = groups
-        .iter()
-        .map(|(_, id)| {
-            (
-                (*id).into(),
-                RepositoryAnalysisGroup {
-                    summary: format!("Shared {id} module"),
-                    source_refs: vec![format!("app/{id}.py:1")],
-                    shared_modules: vec![(*id).into()],
-                    write_hotspots: Vec::new(),
-                },
-            )
-        })
-        .collect();
     state.repository_analysis = Some(RepositoryAnalysisSnapshot {
         catalog_revision: "test-catalog".into(),
-        groups: metadata,
         api_groups: groups
             .iter()
             .map(|(route, id)| ((*route).into(), (*id).into()))
@@ -61,7 +46,7 @@ fn persist(root: &Path, state: &RewriteState) {
     fs::write(
         directory.join("catalog.json"),
         serde_json::to_vec(&serde_json::json!({
-            "schema_version": 1, "groups": analysis.groups, "api_groups": analysis.api_groups,
+            "api_groups": analysis.api_groups,
         }))
         .unwrap(),
     )

@@ -11,11 +11,11 @@ use super::model::{
     RewriteAction, RewriteActionEnvelope, RewriteApiStatus, RewritePhase, RewriteState,
 };
 use super::{action, api_selector, store::RewriteStore};
-use model::{AnalysisSubmission, AppliedAnalysis, SCHEMA_VERSION};
+use model::{AnalysisSubmission, SCHEMA_VERSION};
 
 pub use model::{
     RepositoryAnalysisApplyOptions, RepositoryAnalysisContext, RepositoryAnalysisContextOptions,
-    RepositoryAnalysisGroup, RepositoryAnalysisSnapshot,
+    RepositoryAnalysisSnapshot,
 };
 
 /// Reconcile only the in-memory project snapshot; the caller owns state persistence.
@@ -113,17 +113,17 @@ pub fn apply_repository_analysis(
     );
     let mut loaded = catalog::load(&root)?;
     let context = context_for_state(&root, &state, &loaded)?;
-    let submission_digest = catalog::digest(&serde_json::to_vec(&submission)?);
-    let scope_digest = scope_digest(&context)?;
-    let retry = loaded
-        .document
-        .last_applied
-        .as_ref()
-        .filter(|receipt| receipt.batch_id == options.batch_id);
-    if let Some(receipt) = retry {
+    let retry = !submission.assignments.is_empty()
+        && submission
+            .assignments
+            .iter()
+            .all(|(api, group)| loaded.document.api_groups.get(api) == Some(group));
+    if retry {
+        let pending = submission.assignments.keys().cloned().collect::<Vec<_>>();
         ensure!(
-            receipt.submission_digest == submission_digest && receipt.scope_digest == scope_digest,
-            "repository analysis retry differs from its committed submission or workflow scope"
+            pending.iter().all(|api| context.scope.contains(api))
+                && options.batch_id == batch_id(&context, &pending, &submission.catalog_revision)?,
+            "repository analysis retry differs from its original workflow scope or batch"
         );
     } else {
         ensure!(
@@ -139,11 +139,6 @@ pub fn apply_repository_analysis(
             "repository analysis catalog revision is stale; request fresh context"
         );
         apply_submission(&mut loaded.document, &context.pending_apis, &submission)?;
-        loaded.document.last_applied = Some(AppliedAnalysis {
-            batch_id: options.batch_id.clone(),
-            submission_digest,
-            scope_digest,
-        });
         catalog::publish(&root, &loaded.revision, &loaded.document)?;
     }
     if refresh(&root, &mut state)? {
@@ -179,28 +174,38 @@ fn context_for_state(
         .cloned()
         .collect::<Vec<_>>();
     let source_revision = crate::source_snapshot::source_runtime_revision(root)?;
-    let identity = serde_json::to_vec(&(
-        &state.workflow_id,
-        &state.recording_run_id,
-        &source_revision,
-        &scope,
-        &pending_apis,
-        &loaded.revision,
-    ))?;
-    Ok(RepositoryAnalysisContext {
+    let mut context = RepositoryAnalysisContext {
         schema_version: SCHEMA_VERSION,
         workflow_id: state.workflow_id.clone(),
         recording_run_id: state.recording_run_id.clone(),
         source_revision,
         scope,
         pending_apis,
-        batch_id: format!(
-            "repository-analysis-{}",
-            catalog::digest(&identity).trim_start_matches("sha256:")
-        ),
+        batch_id: String::new(),
         catalog_path: catalog::path(root),
-        catalog: loaded.snapshot(),
-    })
+        catalog_revision: loaded.revision.clone(),
+    };
+    context.batch_id = batch_id(&context, &context.pending_apis, &loaded.revision)?;
+    Ok(context)
+}
+
+fn batch_id(
+    context: &RepositoryAnalysisContext,
+    pending: &[String],
+    revision: &str,
+) -> Result<String> {
+    let identity = serde_json::to_vec(&(
+        &context.workflow_id,
+        &context.recording_run_id,
+        &context.source_revision,
+        &context.scope,
+        pending,
+        revision,
+    ))?;
+    Ok(format!(
+        "repository-analysis-{}",
+        catalog::digest(&identity).trim_start_matches("sha256:")
+    ))
 }
 
 fn selected_scope(state: &RewriteState) -> Vec<String> {
@@ -212,15 +217,6 @@ fn selected_scope(state: &RewriteState) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
-}
-
-fn scope_digest(context: &RepositoryAnalysisContext) -> Result<String> {
-    Ok(catalog::digest(&serde_json::to_vec(&(
-        &context.workflow_id,
-        &context.recording_run_id,
-        &context.source_revision,
-        &context.scope,
-    ))?))
 }
 
 fn apply_submission(
@@ -238,33 +234,14 @@ fn apply_submission(
         actual == expected,
         "repository analysis assignments must cover exactly the pending canonical API routes"
     );
-    for (id, group) in &submission.groups {
-        catalog::group_id(id)?;
-        catalog::group(group)?;
-        ensure!(
-            !document.groups.contains_key(id),
-            "existing repository analysis group {id} is read-only; reference its id without redefining it"
-        );
-        ensure!(
-            submission
-                .assignments
-                .values()
-                .any(|assigned| assigned == id),
-            "new repository analysis group {id} has no assigned API"
-        );
-    }
     for (api, id) in &submission.assignments {
         catalog::route(api)?;
         ensure!(
             !document.api_groups.contains_key(api),
             "existing API group assignment is read-only: {api}"
         );
-        ensure!(
-            document.groups.contains_key(id) || submission.groups.contains_key(id),
-            "API {api} references unknown repository analysis group {id}"
-        );
+        catalog::group_id(id)?;
     }
-    document.groups.extend(submission.groups.clone());
     document.api_groups.extend(submission.assignments.clone());
     Ok(())
 }

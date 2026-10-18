@@ -15,18 +15,19 @@ missing inputs without inventing an issue, worker dispatch, or API binding.
 
 ## Analyze
 
-For `repository_analysis`, read the complete supplied catalog and `pending_apis`.
+For `repository_analysis`, read `pending_apis` and the existing catalog file at
+`catalog_path`, rather than expecting its contents inline. If `catalog_revision`
+is `absent`, there are no existing groups and the file need not exist.
 Analyze only those pending canonical routes and relevant module relationships.
-Trace their handlers, shared state machines, dependencies, target module seams
-and anticipated write hotspots. Reuse a suitable existing group; create a group
-only when its responsibility needs a new boundary. Group count is unlimited and
+Use relevant repository structure to choose a suitable existing group or create
+a new one. No evidence bundle or detailed call-graph report is required. Group count is unlimited and
 independent of implementer count. Do not assign slots or run parallel Replay.
 
 Return one incremental JSON object with `schema_version: 1`, the exact supplied
-`catalog_revision`, `groups` defining only new groups, and `assignments` mapping
-every pending route to an existing or newly defined group ID. Every new group
-requires `summary` and nonempty `source_refs`; add `shared_modules` and
-`write_hotspots` where useful. Existing groups and API assignments are immutable
+`catalog_revision`, and `assignments` mapping every pending route to a group
+name. Reuse existing names or introduce a new one directly in the mapping. The
+catalog contains only `api_groups`; there are no separate group definitions,
+evidence fields or justification reports. Existing API assignments are immutable
 in this interface. Preserve batch, workflow, recording and Source revision in
 the accompanying result. See the submission format in
 [repository analysis](coordinator-repository-analysis.md).
