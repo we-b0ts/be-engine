@@ -8,6 +8,10 @@ use super::model::RewriteWorkerActivity;
 use super::runtime::{self, RewriteWorkerReportOptions};
 
 pub(super) fn scope_for_handle(state: &RewriteState, handle: &str) -> Result<RewriteWorkScope> {
+    ensure!(
+        state.implementers.is_none(),
+        "pooled workflows do not resolve API ownership from a runtime handle"
+    );
     resolve_handle(state, handle, false)
 }
 
@@ -66,7 +70,42 @@ pub(super) fn report_scope(
             | RewriteWorkerActivity::Queued
             | RewriteWorkerActivity::Idle
     );
-    let scope = resolve_handle(state, &options.agent_handle, runtime_observation)?;
+    let scope = if state.implementers.is_some() {
+        ensure!(
+            !runtime_observation && options.activity != RewriteWorkerActivity::HandoffReady,
+            "pooled workflows require implementer report/handoff with explicit API, dispatch and lease generation"
+        );
+        let path = options
+            .review_report
+            .as_deref()
+            .context("pool integration requires the exact original review report")?;
+        let report: RewriteReviewReport = serde_json::from_slice(&std::fs::read(path)?)?;
+        if let Some(scope) = report.scope {
+            scope
+        } else {
+            let integration = report
+                .integration
+                .context("integration report has no API handoff identities")?;
+            let mut entries = integration
+                .handoffs
+                .iter()
+                .filter(|entry| Some(&entry.handoff_id) == options.handoff_id.as_ref());
+            let entry = entries
+                .next()
+                .context("handoff id is absent from the integration report")?;
+            ensure!(
+                entries.next().is_none(),
+                "handoff id identifies multiple API deliveries"
+            );
+            entry.scope.clone()
+        }
+    } else {
+        resolve_handle(state, &options.agent_handle, runtime_observation)?
+    };
+    ensure!(
+        runtime::scopes(state).contains(&scope) || state.implementers.is_none(),
+        "integration scope has no current implementation dispatch"
+    );
     let dispatch = super::dispatch_id(state, &scope);
     let binding = &state.worker_bindings[&scope.binding_key()];
     ensure!(

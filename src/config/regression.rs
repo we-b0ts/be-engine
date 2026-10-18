@@ -7,14 +7,32 @@ use serde::Deserialize;
 
 pub(crate) const PATH: &str = ".traffic-e2e/regression.yaml";
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RegressionScope {
+    #[serde(default = "default_max_implementers")]
+    pub(crate) max_implementers: usize,
     #[serde(default)]
     pub(crate) auto_next: bool,
     pub(crate) recording_run_id: Option<String>,
     only: Option<Vec<String>>,
     skip: Option<Vec<String>>,
+}
+
+const fn default_max_implementers() -> usize {
+    16
+}
+
+impl Default for RegressionScope {
+    fn default() -> Self {
+        Self {
+            max_implementers: default_max_implementers(),
+            auto_next: false,
+            recording_run_id: None,
+            only: None,
+            skip: None,
+        }
+    }
 }
 
 impl RegressionScope {
@@ -29,6 +47,10 @@ impl RegressionScope {
         };
         let mut policy: Self = serde_yaml::from_slice(&bytes)
             .with_context(|| format!("invalid regression scope {}", path.display()))?;
+        ensure!(
+            policy.max_implementers > 0,
+            "{PATH}: max_implementers must be a positive integer"
+        );
         policy.recording_run_id = policy.recording_run_id.filter(|run_id| !run_id.is_empty());
         if let Some(run_id) = &policy.recording_run_id {
             ensure!(
@@ -71,7 +93,7 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Exact paths preserve trailing/repeated slashes; wildcard patterns stay canonical.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\nonly: []\nskip: []\n";
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Exact paths preserve trailing/repeated slashes; wildcard patterns stay canonical.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\n# Fixed implementation slots; a running workflow retains its original capacity.\nmax_implementers: 16\nonly: []\nskip: []\n";
 
 /// Low-level project initialization also installs the local policy without
 /// replacing user choices. Full repository initialization creates it atomically
@@ -126,6 +148,34 @@ mod tests {
         }
         std::fs::write(root.path().join(PATH), "auto_next: sometimes\n").unwrap();
         assert!(RegressionScope::load(root.path()).is_err());
+    }
+
+    #[test]
+    fn implementer_capacity_defaults_and_rejects_invalid_values() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            RegressionScope::load(root.path()).unwrap().max_implementers,
+            16
+        );
+        initialize(root.path()).unwrap();
+        for (document, expected) in [("only: []\n", 16), ("max_implementers: 4\n", 4)] {
+            std::fs::write(root.path().join(PATH), document).unwrap();
+            assert_eq!(
+                RegressionScope::load(root.path()).unwrap().max_implementers,
+                expected
+            );
+        }
+        for value in ["0", "-1", "1.5", "null", "true", "many"] {
+            std::fs::write(
+                root.path().join(PATH),
+                format!("max_implementers: {value}\n"),
+            )
+            .unwrap();
+            assert!(
+                RegressionScope::load(root.path()).is_err(),
+                "accepted {value}"
+            );
+        }
     }
 
     #[test]

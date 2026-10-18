@@ -6,7 +6,7 @@ use anyhow::Result;
 use std::path::Path;
 
 pub(super) fn new_state(
-    _target_root: &Path,
+    target_root: &Path,
     api: String,
     source_route: String,
     recording_apis: Vec<String>,
@@ -26,6 +26,12 @@ pub(super) fn new_state(
         current_api_index: None,
         parked_slices: std::collections::BTreeMap::new(),
         worker_bindings: std::collections::BTreeMap::new(),
+        implementers: Some(super::implementer::ImplementerPool::new(
+            crate::config::regression::RegressionScope::load(target_root)?.max_implementers,
+        )),
+        repository_analysis: None,
+        group_replay: None,
+        last_group_replay: None,
         source_review_rework: std::collections::BTreeMap::new(),
         worker_event_revision: 0,
         rule_plan_event_revision: 0,

@@ -23,10 +23,12 @@ use traffic_e2e::{
 mod config_protocol;
 mod evidence;
 mod expert;
+mod implementer;
 mod project_init;
 mod purpose;
 mod recorder_capture;
 mod regression;
+mod repository_analysis;
 mod startup;
 
 #[derive(Debug, Parser)]
@@ -122,6 +124,10 @@ enum RewriteCommand {
     Case(CaseArgs),
     /// Apply one coordinator-requested batch of API case path patterns.
     CasePattern(CasePatternArgs),
+    /// Inspect or apply incremental source-backed API grouping before Replay.
+    RepositoryAnalysis(repository_analysis::RepositoryAnalysisArgs),
+    /// Dispatch fixed implementers and report explicit batch activity or deliveries.
+    Implementer(implementer::ImplementerArgs),
     /// Inspect an issue overview or execute one returned bounded evidence query.
     Evidence(evidence::EvidenceArgs),
     /// Plan/apply/recover self-contained rules using current Source-backed evidence.
@@ -524,6 +530,10 @@ async fn run(cli: Cli) -> Result<()> {
                 )
             }
         },
+        RewriteCommand::RepositoryAnalysis(args) => {
+            repository_analysis::run(target_root, args, pretty)
+        }
+        RewriteCommand::Implementer(args) => implementer::run(target_root, args, pretty),
         RewriteCommand::Evidence(args) => {
             print_json(&args.query(RewriteContext { target_root })?, pretty)
         }

@@ -71,6 +71,7 @@ fn method_snapshot_and_route_feedback_merge_by_revision_without_rewriting_files(
     latest.confirmed_dispatch_id = "route-dispatch".into();
     latest.rework_generation += 1;
     let updates = WorkerUpdates {
+        implementers: None,
         workflow_id: state.workflow_id.clone(),
         revision: 2,
         bindings: BTreeMap::from([
@@ -137,6 +138,7 @@ fn duplicate_aliases_cannot_silently_choose_between_distinct_workers() {
             .contains("multiple workers own API /api")
     );
     let updates = WorkerUpdates {
+        implementers: None,
         workflow_id: state.workflow_id.clone(),
         revision: 1,
         bindings: BTreeMap::from([

@@ -50,7 +50,24 @@ mod progress_publication;
 mod recorder_capture;
 mod work_scope;
 pub use ip_capture::RewriteIpCaptureReport;
+mod group_replay;
+mod implementer;
 mod initialization;
+mod repository_analysis;
+pub use group_replay::{GroupReplayKind, GroupReplayResult, GroupReplayRound, GroupReplaySummary};
+pub use implementer::{
+    ImplementerConfirmOptions, ImplementerDelivery, ImplementerDispatch, ImplementerHandoffOptions,
+    ImplementerPoolView, ImplementerReassignOptions, ImplementerReplaceRuntimeOptions,
+    ImplementerReportOptions, ImplementerSlotView, ImplementerTask,
+    confirm as confirm_rewrite_implementer, handoff as handoff_rewrite_implementer,
+    reassign as reassign_rewrite_implementer,
+    replace_runtime as replace_rewrite_implementer_runtime, report as report_rewrite_implementer,
+};
+pub use repository_analysis::{
+    RepositoryAnalysisApplyOptions, RepositoryAnalysisContext, RepositoryAnalysisContextOptions,
+    RepositoryAnalysisGroup, RepositoryAnalysisSnapshot, apply_repository_analysis,
+    repository_analysis_context,
+};
 mod jwt_rule;
 mod purpose;
 mod recording;
@@ -92,6 +109,8 @@ pub use review::{
     export_batch as export_rewrite_integration_batch, rework as rework_rewrite_review,
     rework_with_report as rework_rewrite_review_with_report, show as show_rewrite_review,
 };
+#[cfg(test)]
+mod pool_workflow_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

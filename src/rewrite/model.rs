@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 37;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 38;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -426,6 +426,14 @@ pub(super) struct RewriteState {
     #[serde(default)]
     pub worker_bindings: BTreeMap<String, RewriteWorkerBinding>,
     #[serde(default)]
+    pub implementers: Option<super::implementer::ImplementerPool>,
+    #[serde(default)]
+    pub repository_analysis: Option<super::repository_analysis::RepositoryAnalysisSnapshot>,
+    #[serde(default)]
+    pub group_replay: Option<super::group_replay::GroupReplayRound>,
+    #[serde(default)]
+    pub last_group_replay: Option<super::group_replay::GroupReplaySummary>,
+    #[serde(default)]
     pub source_review_rework: BTreeMap<String, super::review::ReviewRework>,
     #[serde(default)]
     pub worker_event_revision: u64,
@@ -604,6 +612,18 @@ pub enum RewriteExecutionMode {
 
 #[derive(Debug, Clone)]
 pub enum RewriteAction {
+    RepositoryAnalysisRequired {
+        summary: String,
+        analysis: super::repository_analysis::RepositoryAnalysisContext,
+        context: RewriteCommandSpec,
+        apply: RewriteCommandSpec,
+    },
+    ImplementerDispatchRequired {
+        summary: String,
+        dispatch: super::implementer::ImplementerDispatch,
+        confirm: RewriteCommandSpec,
+        report: RewriteCommandSpec,
+    },
     Blocked {
         summary: String,
         system_repair_apis: Vec<String>,
@@ -788,6 +808,14 @@ pub struct RewriteStatusReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteInventoryReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementers: Option<super::implementer::ImplementerPoolView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_analysis: Option<super::repository_analysis::RepositoryAnalysisSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_replay: Option<super::group_replay::GroupReplayRound>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_group_replay: Option<super::group_replay::GroupReplaySummary>,
     pub schema_version: u32,
     pub initialized: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

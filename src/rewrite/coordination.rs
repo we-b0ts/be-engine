@@ -34,16 +34,25 @@ pub(super) fn status_details(
     }
     let busy = resources_busy(target_root)?;
     let base = super::action::status_base(target_root, state)?;
+    if matches!(base, RewriteAction::RepositoryAnalysisRequired { .. }) {
+        return Ok(single_ready("repository_analysis", 1));
+    }
     let execution = super::execution::status_action(target_root)?;
     let failed = matches!(execution, Some(RewriteAction::ExecutionFailed { .. }));
     let selected = if state.revalidation_round.is_none()
+        && state.group_replay.is_none()
         && let Some(expert) = super::expert::required_action(target_root, state, None)
     {
         expert
     } else if busy || failed {
-        super::worker::scheduler::global_action(target_root, state, true)
-            .or(execution.clone())
-            .unwrap_or_else(|| base.clone())
+        (if state.implementers.is_some() {
+            super::implementer::action(target_root, state)?
+        } else {
+            None
+        })
+        .or_else(|| super::worker::scheduler::global_action(target_root, state, true))
+        .or(execution.clone())
+        .unwrap_or_else(|| base.clone())
     } else {
         super::action::select_action(target_root, state, base.clone())
     };
@@ -113,8 +122,9 @@ pub(super) fn details(
     busy: bool,
 ) -> RewriteCoordinationDetails {
     let mut result = RewriteCoordinationDetails::default();
-    let first_pass_ready =
-        super::inventory::can_switch_api(state) && super::inventory::has_unattempted_api(state);
+    let first_pass_ready = state.implementers.is_none()
+        && super::inventory::can_switch_api(state)
+        && super::inventory::has_unattempted_api(state);
     let (dispatch, reports, close) = super::expert::counts(state);
     add(&mut result.ready, "dispatch_expert", dispatch);
     add(&mut result.waiting, "expert_report", reports);
@@ -129,7 +139,9 @@ pub(super) fn details(
             Coverage::ResumeRequired => add(&mut result.ready, "resume_worker", 1),
             Coverage::StatusRequired => add(&mut result.ready, "check_worker_status", 1),
             Coverage::Running => add(&mut result.waiting, "worker_handoff", 1),
-            Coverage::IntegrationRequired if !busy && !first_pass_ready => {
+            Coverage::IntegrationRequired
+                if !busy && !first_pass_ready && state.group_replay.is_none() =>
+            {
                 add(&mut result.ready, "integrate_handoff", 1)
             }
             Coverage::IntegrationRequired => add(&mut result.waiting, "integration_resource", 1),
@@ -259,6 +271,32 @@ pub(super) fn projected_details(
         }
     }
     let mut result = details(state, base, busy);
+    if state.implementers.is_some() {
+        result.ready.remove("dispatch_worker");
+        result.ready.remove("resume_worker");
+        if matches!(selected, RewriteAction::ImplementerDispatchRequired { .. }) {
+            result.ready.remove("advance_workflow");
+            add(&mut result.ready, "dispatch_implementer", 1);
+        }
+        if state.group_replay.is_some() {
+            for key in ["verify_api", "verify_handoff", "dispatch_implementer"] {
+                if let Some(count) = result.ready.remove(key) {
+                    add(&mut result.waiting, "group_replay", count);
+                }
+            }
+            if !busy && matches!(selected, RewriteAction::AdvanceRequired { .. }) {
+                result.ready.remove("advance_workflow");
+                add(&mut result.ready, "replay_group", 1);
+            } else if matches!(selected, RewriteAction::ImplementerDispatchRequired { .. }) {
+                // Other completed groups can still receive assignments while a
+                // serialized Replay holds the traffic resource.
+                add(&mut result.ready, "dispatch_implementer", 1);
+            }
+        }
+        if matches!(selected, RewriteAction::RepositoryAnalysisRequired { .. }) {
+            return single_ready("repository_analysis", 1);
+        }
+    }
     // Count parked repair acceptances as well as the active one. A repair is
     // actionable only after its observed external revision has changed.
     result.ready.remove("verify_system_repair");
@@ -366,10 +404,6 @@ pub(super) fn projected_details(
     result
 }
 
-pub(super) fn pending(state: &RewriteState, action: &RewriteAction, busy: bool) -> usize {
-    details(state, action, busy).pending()
-}
-
 pub(super) fn busy_workers(
     target_root: &Path,
     state: &RewriteState,
@@ -378,7 +412,13 @@ pub(super) fn busy_workers(
     if state.revalidation_round.is_some() {
         return Ok(None);
     }
-    let selected = if let Some(api) = api {
+    let selected = if state.implementers.is_some() {
+        if super::repository_analysis::required_action(target_root, state)?.is_some() {
+            return Ok(None);
+        }
+        super::implementer::action(target_root, state)?
+            .or_else(|| scheduler::global_action(target_root, state, true))
+    } else if let Some(api) = api {
         let scope = super::api_selector::work_scope(state, &api.to_string());
         runtime::scopes(state)
             .contains(&scope)

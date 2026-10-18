@@ -144,7 +144,7 @@ pub(in crate::rewrite) fn current_envelope(target_root: &Path) -> Result<Rewrite
     })
 }
 
-fn apply_report(
+pub(in crate::rewrite) fn apply_report(
     state: &mut RewriteState,
     scope: &RewriteWorkScope,
     options: &RewriteWorkerReportOptions,
@@ -412,6 +412,50 @@ pub(in crate::rewrite) fn report_command(
         env.push(ACTIVITY_ENV.to_string());
     }
     action::command(target_root, argv, env)
+}
+
+pub(in crate::rewrite) fn report_command_for_scope(
+    root: &Path,
+    state: &RewriteState,
+    scope: &RewriteWorkScope,
+    integrated: bool,
+) -> super::super::model::RewriteCommandSpec {
+    let handle = state
+        .worker_bindings
+        .get(&scope.binding_key())
+        .and_then(|binding| binding.agent_handle.as_deref());
+    if !integrated && let Some(pool) = &state.implementers {
+        if let Some((&slot_id, slot, task)) = pool.slots.iter().find_map(|(id, slot)| {
+            slot.tasks
+                .get(&scope.binding_key())
+                .map(|task| (id, slot, task))
+        }) {
+            let mut argv = vec![
+                "implementer".into(),
+                "report".into(),
+                "--slot".into(),
+                slot_id.to_string(),
+                "--api".into(),
+                task.api.clone(),
+                "--dispatch-id".into(),
+                task.dispatch_id.clone(),
+                "--lease-generation".into(),
+                task.lease_generation.to_string(),
+            ];
+            let mut env = vec![ACTIVITY_ENV.into()];
+            super::identity::command_handle(&mut argv, &mut env, slot.agent_handle.as_deref());
+            return action::command(root, argv, env);
+        }
+        if !observation(state, scope).is_some_and(|value| {
+            matches!(
+                value.activity,
+                RewriteWorkerActivity::HandoffReady | RewriteWorkerActivity::Integrated
+            )
+        }) {
+            return action::status_command_for_api(root, Some(&scope.binding_key()));
+        }
+    }
+    report_command(root, handle, integrated || state.implementers.is_some())
 }
 
 #[cfg(test)]

@@ -128,6 +128,20 @@ is unclear.
   result-transition cleanup. E2E state/result publication preserves the actual
   executor revision; `build_info` exposes its build-time constant without status I/O.
 
+- `rewrite/repository_analysis` owns incremental Source-backed module grouping,
+  batch/version validation and workflow snapshots; its `catalog` child owns the
+  ignored project catalog and atomic publication. Route identity and pattern
+  recognition remain with their existing recording/case-pattern owners.
+  `rewrite/implementer` owns fixed slot identity, stable round-robin group
+  assignment, queued API leases and explicit runtime feedback. Its `delivery`
+  child freezes accepted commits/reports separately from reusable checkouts;
+  review and integration retain their existing receipt/admission owners.
+  `rewrite/group_replay` owns frozen group membership, exact method admissions,
+  partial round summaries and continuation after comparison failures.
+  `rewrite/verification` executes each route and publishes its transitions;
+  `rewrite/next` continues an unfinished group through the normal native gates.
+  Group analysis never queries runtime task activity or performs Replay.
+
 - `rewrite/rule_plans` owns global pending-plan admission and busy Apply reports;
   its `events` child owns independent atomic plan publication and merging into
   coordinator snapshots. Validation stays with `rewrite/unified_rule`; policy

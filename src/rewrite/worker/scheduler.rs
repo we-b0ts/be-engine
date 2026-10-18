@@ -24,7 +24,7 @@ pub(in crate::rewrite) fn inventory(
                 }
             };
             let report_worker =
-                runtime::report_command(target_root, worker.agent_handle.as_deref(), false);
+                runtime::report_command_for_scope(target_root, state, &scope, false);
             RewriteWorkerInventoryItem {
                 coverage: runtime::coverage(state, &scope),
                 observed_at: observation.map(|value| value.observed_at.clone()),
@@ -50,15 +50,21 @@ pub(in crate::rewrite) fn global_action(
     if state.case_pattern_identification.is_some() || state.revalidation_round.is_some() {
         return None;
     }
-    let first_pass_ready =
-        inventory::can_switch_api(state) && inventory::has_unattempted_api(state);
+    let first_pass_ready = state.implementers.is_none()
+        && inventory::can_switch_api(state)
+        && inventory::has_unattempted_api(state);
+    let integration_busy = busy || state.group_replay.is_some();
     let scope = runtime::scopes(state)
         .into_iter()
         .filter_map(|scope| {
             let priority = match runtime::coverage(state, &scope) {
-                Coverage::DispatchRequired | Coverage::ResumeRequired => 0,
+                Coverage::DispatchRequired | Coverage::ResumeRequired
+                    if state.implementers.is_none() =>
+                {
+                    0
+                }
                 Coverage::StatusRequired => 1,
-                Coverage::IntegrationRequired if !busy && !first_pass_ready => 2,
+                Coverage::IntegrationRequired if !integration_busy && !first_pass_ready => 2,
                 Coverage::VerificationRequired
                     if !busy && !first_pass_ready && inventory::can_switch_api(state) =>
                 {
@@ -100,11 +106,7 @@ pub(in crate::rewrite) fn scope_action(
                 "must actually invoke built-in ListAgents (/list-agents) in Claude Code or equivalent runtime status tools for all workers awaiting results, including {}; collect results before reporting changes or required refreshes through the owning commands.report_worker. Resolve omitted or unclassified tasks through results or individual queries; historical dispatch confirmation is not runtime status",
                 scope.label()
             ),
-            report_worker: runtime::report_command(
-                target_root,
-                worker.agent_handle.as_deref(),
-                false,
-            ),
+            report_worker: runtime::report_command_for_scope(target_root, state, scope, false),
             worker,
         },
         Coverage::IntegrationRequired => RewriteAction::IntegrationRequired {
@@ -125,11 +127,7 @@ pub(in crate::rewrite) fn scope_action(
                 ],
                 vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()],
             ),
-            report_worker: runtime::report_command(
-                target_root,
-                worker.agent_handle.as_deref(),
-                true,
-            ),
+            report_worker: runtime::report_command_for_scope(target_root, state, scope, true),
             worker,
         },
         Coverage::VerificationRequired => action::replay_advance(
@@ -140,6 +138,14 @@ pub(in crate::rewrite) fn scope_action(
                 scope.label()
             ),
         ),
+        _ if state.implementers.is_some() => super::super::implementer::action(target_root, state)
+            .ok().flatten().unwrap_or_else(|| RewriteAction::WaitRequired {
+                execution_mode: None,
+                summary: "wait for the current group Replay or repository analysis before dispatching this API through its implementer pool".into(),
+                resource: "implementer_dispatch".into(), requested_api: Some(scope.binding_key()), blocking_api: None,
+                active_operation: None, retry_after_seconds: 30,
+                status: action::status_command_for_api(target_root, None),
+            }),
         _ => super::implementation_action(target_root, &scoped, None),
     }
 }
