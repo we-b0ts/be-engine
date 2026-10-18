@@ -18,8 +18,7 @@ pub(crate) fn parse_source_policy(raw: &str) -> Result<SourceTrafficPolicyConfig
 pub(crate) fn parse_source_with_fingerprints(
     raw: &str,
 ) -> Result<(SourceTrafficPolicyConfig, crate::policy::PolicyFingerprints)> {
-    let document = crate::policy::parse_policy(raw)?;
-    let compiled = crate::policy::compile_policy(&document)?;
+    let compiled = crate::policy::parse_and_compile_policy(raw)?;
     Ok((
         project_source_policy(&compiled.native)?,
         compiled.fingerprints,

@@ -20,8 +20,9 @@ fn json_rule(surface: &str) -> String {
 #[test]
 fn three_surfaces_compile_to_distinct_typed_effects() {
     for surface in ["api.response", "dependency.request", "dependency.response"] {
-        let document = parse_policy(&json_rule(surface)).unwrap();
-        let compiled = compile_policy(&document).unwrap();
+        let raw = json_rule(surface);
+        let document = parse_policy(&raw).unwrap();
+        let compiled = parse_and_compile_policy(&raw).unwrap();
         assert_eq!(compiled.rules.len(), 1);
         assert_eq!(
             compiled.rules[0].effect,
@@ -86,6 +87,7 @@ fn unknown_fields_unsupported_contracts_and_duplicate_paths_fail_closed() {
         ),
     ] {
         assert!(parse_policy(&invalid).is_err(), "{invalid}");
+        assert!(parse_and_compile_policy(&invalid).is_err(), "{invalid}");
     }
 }
 
