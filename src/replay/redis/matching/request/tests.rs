@@ -19,6 +19,120 @@ fn arguments(id: &str, time: Option<&str>, status: &str) -> Vec<Vec<u8>> {
     vec![b"events".to_vec(), payload(id, time, status)]
 }
 #[test]
+fn script_batches_use_each_physical_call_clock_and_consume_each_exchange_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let case = temp.path().join("case");
+    std::fs::create_dir(&case).unwrap();
+    std::fs::write(
+        case.join("request.json"),
+        json!({"method":"DELETE","uri":"/tasks/bulk","timestamp":"1970-01-01T00:16:40Z"})
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
+    let path = temp.path().join("policy.yaml");
+    std::fs::write(&path,r#"format: traffic-policy/v1
+rules:
+- id: batch-clock
+  match:
+    api: DELETE /tasks/*
+    resource: {protocol: redis, endpoint: 'redis.test:6379', database: 0}
+    key: {kind: exact, value: metrics}
+  effect:
+    kind: redis_sequence
+    commands:
+    - operation: EVALSHA
+      script: {sha1: '75f75be3d11e483c99c83f8b0b8836c2e2c5923b'}
+      arguments:
+        3: {relative_time: unix_seconds, anchor: dependency.request_start}
+        4: {relative_time: unix_microseconds, anchor: dependency.request_start}
+        5:
+          kind: json
+          fields:
+            /changed_at_us: {relative_time: unix_microseconds, anchor: dependency.request_start}
+  proof: {source: 'metrics.py:publish', fact: 'Each committed iteration publishes its own clock, retaining exact copied fields'}
+"#).unwrap();
+    let cases = BTreeMap::from([(
+        "case".into(),
+        ReplayCase {
+            id: "case".into(),
+            dir: case.clone(),
+            dependencies_path: case.join("dependencies.jsonl"),
+            status: ReplayCaseStatus::Pending,
+        },
+    )]);
+    let policy = ReplayPolicyRuntime::load(&path, &cases).unwrap();
+    policy.request_contracts.set_request_times(
+        "case",
+        crate::replay::assertion::RequestTimes {
+            source: DateTime::from_timestamp(1000, 0),
+            target: Some(chrono::Utc::now()),
+        },
+    );
+    let mut state = RedisReplayState {
+        request_contracts: policy.request_contracts.clone(),
+        ..Default::default()
+    };
+    let args = |micros: i64| {
+        vec![
+            b"75f75be3d11e483c99c83f8b0b8836c2e2c5923b".to_vec(),
+            b"1".to_vec(),
+            b"metrics".to_vec(),
+            format!("{}.{:06}", micros / 1_000_000, micros % 1_000_000).into_bytes(),
+            micros.to_string().into_bytes(),
+            json!({"changed_at_us":micros,"stable":7})
+                .to_string()
+                .into_bytes(),
+        ]
+    };
+    let source_connection = Uuid::new_v4();
+    for index in 0..50 {
+        let source = DateTime::from_timestamp(1000 + index * 3, 0).unwrap();
+        let arguments = args(source.timestamp_micros());
+        let record=serde_json::from_value(json!({"connection_id":source_connection,"sequence":index+1,"target_host":"redis.test","target_port":6379,"resp_version":2,"database":0,"command":"EVALSHA",
+            "timestamp":source,"request_started_at":source,"args":arguments.iter().map(|a|json!({"encoding":"utf8","data":std::str::from_utf8(a).unwrap()})).collect::<Vec<_>>(),
+            "response_kind":"integer","response":{"encoding":"utf8","data":":1\r\n"},"replay_safe":true})).unwrap();
+        state
+            .register_exchange(
+                record,
+                ReplaySource::Case,
+                Some("case"),
+                &mut BTreeMap::new(),
+                &[],
+            )
+            .unwrap();
+    }
+    let target = TargetKey {
+        host: "redis.test".into(),
+        port: 6379,
+    };
+    let connection = TargetConnection::default();
+    let call = |state: &mut RedisReplayState, arguments: &[Vec<u8>]| {
+        state.match_redis(
+            Some("case"),
+            &target,
+            connection,
+            2,
+            0,
+            None,
+            "EVALSHA",
+            arguments,
+        )
+    };
+    for _ in 0..50 {
+        let actual = args(chrono::Utc::now().timestamp_micros());
+        let mut bad = actual.clone();
+        bad[5] = b"{\"changed_at_us\":0,\"stable\":8}".to_vec();
+        assert!(call(&mut state, &bad).is_err());
+        let matched = call(&mut state, &actual).unwrap();
+        state.complete_exchange(&matched);
+    }
+    assert!(state.snapshot().unused_case.is_empty());
+    assert!(call(&mut state, &args(chrono::Utc::now().timestamp_micros())).is_err());
+}
+
+#[test]
 fn publish_time_and_uuid_bind_only_after_complete_match_and_consume_once() {
     let temp = tempfile::tempdir().unwrap();
     let case = temp.path().join("case");

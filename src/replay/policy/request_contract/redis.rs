@@ -78,18 +78,18 @@ impl RequestContracts {
             else {
                 unreachable!()
             };
-            self.compare_redis(case, rule, selector, command, source, actual)
+            self.compare_redis(context, rule, selector, source, actual)
         })())
     }
     pub(super) fn compare_redis(
         &self,
-        case: &str,
+        context: &RedisRequestContext<'_>,
         rule: &ReplayDependencyRule,
         selector: &RedisRequestSelector,
-        command: &str,
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Result<Decision> {
+        let (case, command) = (context.case, context.command);
         ensure!(
             source.len() == actual.len(),
             "Redis key or argument count changed"
@@ -120,7 +120,18 @@ impl RequestContracts {
                 "time maximum requires one plain ZREMRANGEBYSCORE range"
             );
         }
-        let anchor = self.request_times(case);
+        let anchor = |field: &config::TimeField| match field.anchor {
+            crate::policy::TimeAnchor::ApiRequestStart => self.request_times(case),
+            crate::policy::TimeAnchor::DependencyRequestStart => {
+                crate::replay::assertion::RequestTimes {
+                    source: context.recorded_at,
+                    target: context.actual_at,
+                }
+            }
+            crate::policy::TimeAnchor::DependencyDelivery => {
+                unreachable!("validated request anchor")
+            }
+        };
         let mut decision = Decision {
             ids: vec![rule.id.clone()],
             ..Default::default()
@@ -143,7 +154,12 @@ impl RequestContracts {
                 Some(ArgumentRule::Time(field)) => {
                     let source = serde_json::from_slice(source)?;
                     let actual = serde_json::from_slice(actual)?;
-                    times.push(super::time::compare(&source, &actual, field, anchor)?);
+                    times.push(super::time::compare(
+                        &source,
+                        &actual,
+                        field,
+                        anchor(field),
+                    )?);
                     decision.time_validations += 1;
                 }
                 Some(ArgumentRule::Json(fields)) => {
@@ -174,7 +190,7 @@ impl RequestContracts {
                                 &mut decision,
                             )?,
                             JsonField::Time(field) => {
-                                times.push(super::time::compare(a, b, field, anchor)?);
+                                times.push(super::time::compare(a, b, field, anchor(field))?);
                                 decision.time_validations += 1;
                             }
                             JsonField::Jwt(field) => {

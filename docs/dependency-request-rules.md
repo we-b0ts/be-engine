@@ -178,6 +178,17 @@ still fail.
 
 ## Redis script ARGV timestamps
 
+Native `redis_sequence` time fields accept `anchor: dependency.request_start`
+for scalar arguments and JSON time pointers. Each physical Redis invocation
+uses the immutable Source request start (or completion minus duration for older
+captures) and Replay's independently observed Target request start. This allows
+bulk iterations to run at different speeds without accumulating API-start
+drift. Missing dependency clocks reject; there is no fallback to API clocks.
+`case.request_start` remains the default for existing Redis sequence rules.
+Script identity, stable arguments, clock groups, lane ordering and finite
+consumption are unchanged. Source-only plan/apply validation retains the genuine
+Target Replay obligation.
+
 ```yaml
 - id: callback-script-time
   protocol: redis

@@ -250,10 +250,9 @@ fn later_references_need_committed_capture_and_can_verify_sha256_derivation() {
     assert!(
         runtime
             .compare_redis(
-                "case",
+                &super::super::RedisRequestContext::without_exchange("case", &target(), 0, "SET"),
                 &reference,
                 selector,
-                "SET",
                 &args(&source),
                 &args(&actual)
             )
@@ -281,10 +280,9 @@ fn later_references_need_committed_capture_and_can_verify_sha256_derivation() {
     runtime.commit(
         runtime
             .compare_redis(
-                "case",
+                &super::super::RedisRequestContext::without_exchange("case", &target(), 0, "SET"),
                 &reference,
                 selector,
-                "SET",
                 &args(&source),
                 &args(&actual),
             )
@@ -299,10 +297,9 @@ fn later_references_need_committed_capture_and_can_verify_sha256_derivation() {
     assert!(
         restored
             .compare_redis(
-                "case",
+                &super::super::RedisRequestContext::without_exchange("case", &target(), 0, "SET"),
                 &reference,
                 selector,
-                "SET",
                 &args(&source),
                 &args(&actual)
             )

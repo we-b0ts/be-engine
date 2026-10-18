@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::replay::assertion::time::RequestTimes;
@@ -34,6 +34,7 @@ pub(in crate::replay) fn compare(
     );
     for rule in rules {
         let selected = selected_keys(&source, rule.parameter.as_deref())?;
+        let mut selected_day_delta = None;
         for key in selected {
             let source_value = source.get_mut(&key).expect("selected source parameter");
             let target_value = target.get_mut(&key).expect("equal parameter sets");
@@ -45,33 +46,23 @@ pub(in crate::replay) fn compare(
                 source_stable == target_stable && source_offset == target_offset,
                 "stable response header text differs"
             );
-            let timezone =
-                FixedOffset::east_opt(rule.timezone_seconds()?).context("invalid date timezone")?;
-            ensure!(
-                within_date_window(source_date, times.source, timezone)
-                    && within_date_window(target_date, times.target, timezone),
-                "response header date is outside its request time window"
-            );
+            crate::value_contract::time::compare_calendar_dates(source_date, target_date, times)
+                .context(
+                    "response header date does not preserve the request delta at day precision",
+                )?;
+            let day_delta = target_date.signed_duration_since(source_date).num_days();
+            if let Some(previous) = selected_day_delta {
+                ensure!(
+                    previous == day_delta,
+                    "related header dates changed inconsistently"
+                );
+            }
+            selected_day_delta = Some(day_delta);
             *source_value = source_stable;
             *target_value = target_stable;
         }
     }
     Ok(source == target)
-}
-
-fn within_date_window(
-    date: NaiveDate,
-    request: Option<DateTime<Utc>>,
-    timezone: FixedOffset,
-) -> bool {
-    request.is_some_and(|time| {
-        [-5, 0, 5].into_iter().any(|offset| {
-            (time + Duration::seconds(offset))
-                .with_timezone(&timezone)
-                .date_naive()
-                == date
-        })
-    })
 }
 
 fn selected_keys(

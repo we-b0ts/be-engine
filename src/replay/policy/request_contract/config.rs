@@ -95,6 +95,8 @@ impl RandomContract {
 pub(crate) struct TimeField {
     pub time: RelativeTime,
     pub format: RequestTimestampFormat,
+    #[serde(default = "case_anchor", skip_serializing_if = "is_case_anchor")]
+    pub anchor: crate::policy::TimeAnchor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utc_offset: Option<String>,
     /// Fields from one source-proven clock read (or derived time window).
@@ -103,6 +105,12 @@ pub(crate) struct TimeField {
     pub clock_group: Option<String>,
     #[serde(default = "default_tolerance", skip_serializing)]
     pub tolerance: String,
+}
+fn case_anchor() -> crate::policy::TimeAnchor {
+    crate::policy::TimeAnchor::ApiRequestStart
+}
+fn is_case_anchor(value: &crate::policy::TimeAnchor) -> bool {
+    *value == case_anchor()
 }
 fn default_tolerance() -> String {
     "5s".into()
@@ -162,6 +170,10 @@ pub(crate) fn tolerance(value: &str) -> Result<f64> {
 impl TimeField {
     pub(crate) fn validate(&self) -> Result<()> {
         tolerance(&self.tolerance)?;
+        ensure!(
+            self.anchor != crate::policy::TimeAnchor::DependencyDelivery,
+            "Redis request times cannot use a future response-delivery clock"
+        );
         if let Some(group) = &self.clock_group {
             ensure!(
                 !group.is_empty()

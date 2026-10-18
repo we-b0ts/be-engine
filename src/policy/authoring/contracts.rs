@@ -12,6 +12,9 @@ pub(super) fn transform(value: &mut Value, tagged: bool, compact: bool) -> Resul
     let Some(map) = value.as_mapping_mut() else {
         return Ok(());
     };
+    if !compact && map.get("relation").and_then(Value::as_str) == Some("preserve_offset") {
+        remove_relative_offset(map)?;
+    }
     if compact {
         if tagged && map.len() == 1 && map.get("kind").and_then(Value::as_str) == Some("unordered")
         {
@@ -75,5 +78,39 @@ pub(super) fn transform(value: &mut Value, tagged: bool, compact: bool) -> Resul
     if tagged {
         map.insert("kind".into(), "time".into());
     }
+    if alias == "relative_time" {
+        remove_relative_offset(map)?;
+    }
+    Ok(())
+}
+
+fn remove_relative_offset(map: &mut Mapping) -> Result<()> {
+    let Some(offset) = map.get("utc_offset") else {
+        return Ok(());
+    };
+    ensure!(
+        matches!(
+            map.get("format").and_then(Value::as_str),
+            Some("iso8601_naive" | "sql_datetime")
+        ),
+        "utc_offset is only valid for a naive timestamp"
+    );
+    validate_legacy_offset(offset)?;
+    map.remove("utc_offset");
+    Ok(())
+}
+
+pub(super) fn validate_legacy_offset(offset: &Value) -> Result<()> {
+    let offset = offset
+        .as_str()
+        .context("legacy UTC offset must be a string")?;
+    crate::policy::TimeContract {
+        format: crate::policy::TimestampFormat::SqlDatetime,
+        relation: crate::policy::TimeRelation::PreserveOffset,
+        anchor: crate::policy::TimeAnchor::ApiRequestStart,
+        utc_offset: Some(offset.into()),
+        clock_group: None,
+    }
+    .offset()?;
     Ok(())
 }

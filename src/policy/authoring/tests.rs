@@ -1,6 +1,52 @@
 use crate::policy::native::SqlValueContract;
 use crate::policy::*;
 
+#[test]
+fn rendered_policy_omits_default_path_modes_and_calendar_timezones() {
+    let raw = r#"format: traffic-policy/v1
+rules:
+- id: object-key
+  match:
+    api: POST /upload
+    resource: {protocol: http, endpoint: 'store.test:80'}
+    operation: PUT
+    path: /objects/*
+  effect:
+    kind: identity
+    value_type: string
+    capture:
+      kind: http_path
+      segment:
+        index: 1
+        template: '{created_at}'
+        fields:
+          created_at: {kind: timestamp, format: '%Y%m%d%H%M%S', timezone: UTC, mode: preserve_or_request_window}
+    references:
+    - resource: {protocol: http, endpoint: 'store.test:80'}
+  proof: {source: 'storage.py:1', fact: 'Source creates or preserves the complete object key'}
+- id: date
+  match: {api: GET /export}
+  effect: {kind: response_header_date, header: content-disposition, parameter: filename, format: '%Y-%m-%d', timezone: '+08:00'}
+  proof: {source: 'export.py:1', fact: 'Source emits a date with day precision'}
+"#;
+    let policy = parse_policy(raw).unwrap();
+    let rendered = render_policy(&policy).unwrap();
+    assert!(!rendered.contains("timezone:"));
+    assert!(!rendered.contains("preserve_or_request_window"));
+    assert_eq!(
+        compile_policy(&policy).unwrap(),
+        compile_policy(&parse_policy(&rendered).unwrap()).unwrap()
+    );
+    let strict =
+        parse_policy(&raw.replace("preserve_or_request_window", "request_window")).unwrap();
+    let strict_rendered = render_policy(&strict).unwrap();
+    assert!(strict_rendered.contains("mode: request_window"));
+    assert_ne!(
+        compile_policy(&strict).unwrap().fingerprints.runtime,
+        compile_policy(&policy).unwrap().fingerprints.runtime
+    );
+}
+
 fn sql_policy() -> &'static str {
     r#"format: traffic-policy/v1
 source_revision: source-v1
@@ -72,6 +118,7 @@ fn compact_and_fully_explicit_documents_have_identical_effects_proofs_and_identi
     let rendered = render_policy(&compact).unwrap();
     assert!(rendered.contains("relative_time: sql_datetime"));
     assert!(!rendered.contains("preserve_offset"));
+    assert!(!rendered.contains("utc_offset"));
     assert!(!rendered.contains(" @ source-v1"));
     assert_eq!(rendered.matches("source_revision:").count(), 1);
     assert_eq!(rendered.matches("proof:").count(), 2);

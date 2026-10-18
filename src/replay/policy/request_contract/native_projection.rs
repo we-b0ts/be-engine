@@ -71,9 +71,11 @@ pub(in crate::replay::policy) fn time(
     value: &n::NativeTime,
 ) -> Result<config::TimeField> {
     ensure!(
-        value.anchor == TimeAnchor::ApiRequestStart
-            && value.relation == TimeRelation::PreserveOffset,
-        "atomic Redis sequence timestamps require preserve_offset relative to case.request_start"
+        matches!(
+            value.anchor,
+            TimeAnchor::ApiRequestStart | TimeAnchor::DependencyRequestStart
+        ) && value.relation == TimeRelation::PreserveOffset,
+        "atomic Redis sequence timestamps require preserve_offset and a case or dependency request-start anchor"
     );
     let format = match value.format {
         TimestampFormat::UnixSeconds => config::RequestTimestampFormat::UnixSeconds,
@@ -87,6 +89,7 @@ pub(in crate::replay::policy) fn time(
     let projected = config::TimeField {
         time: config::RelativeTime::PreserveRelative,
         format,
+        anchor: value.anchor,
         utc_offset: value.utc_offset.clone(),
         clock_group: value.clock_group.clone(),
         tolerance: "5s".into(),

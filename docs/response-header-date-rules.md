@@ -10,8 +10,8 @@
 
 An exporter may return `Content-Disposition: attachment;
 filename="report_2026-10-07.docx"`, with the date generated for that request.
-An explicit date rule validates each date against its own request's calendar day
-and preserves the rest of the header contract.
+An explicit date rule compares the Source/Target date change with the independently
+observed request-time change at day precision and preserves the rest of the header.
 
 ```yaml
 version: 3
@@ -23,7 +23,6 @@ response_rules:
       - header: content-disposition
         parameter: filename
         format: "%Y-%m-%d"
-        timezone: "+00:00"
         source_evidence: "Exporter:filename appends the current UTC date"
 ```
 
@@ -34,11 +33,14 @@ for `filename*`. Both sides must contain identical parameter sets. Omitting
 `parameter` selects a scalar whole-header value.
 
 `format` is explicit: `%Y-%m-%d`, `%Y%m%d`, `%Y/%m/%d`, `%d-%m-%Y` or
-`%m-%d-%Y`. `timezone` defaults to UTC and is omitted when it is `+00:00`. A non-UTC
-calendar-date rule can declare the source implementation's numeric UTC offset.
-The selected value must contain exactly one valid date of that format. Each
-date must equal the day at its own recorded request start, with a fixed five
-second boundary window around midnight. Missing clocks, invalid dates, multiple
+`%m-%d-%Y`. No timezone configuration is needed. Source and Target must have the
+same timezone behavior; a rule does not compensate for environment differences.
+Legacy numeric `timezone` values are validated and omitted on writing.
+The selected value must contain exactly one valid date of that format. Date-only
+precision allows the adjacent-day ambiguity inherent in crossing an unknown local
+midnight, including a fixed five-second clock tolerance. It cannot prove the
+absolute local calendar day. Related filename and filename* dates must retain
+the same day change. Missing clocks, invalid dates, multiple
 date candidates, duplicate parameters, malformed UTF-8 escapes and multiple
 header values fail. No current-clock fallback is used.
 

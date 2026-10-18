@@ -52,9 +52,6 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
 /// Typed callers can insert rules without a document context; normalize them
 /// here too so compile, rendering and plan evidence bind the same Source.
 pub(crate) fn expanded(document: &TrafficPolicy) -> Result<TrafficPolicy> {
-    if document.source_revision.is_none() {
-        return Ok(document.clone());
-    }
     if let Some(revision) = &document.source_revision {
         proof::revision(revision)?;
     }

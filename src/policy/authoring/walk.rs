@@ -19,6 +19,7 @@ enum Shape {
     SequenceCommand,
     IdentityCapture,
     PathSegment,
+    PathField,
     Origin,
     ProcessSelector,
     SqlResponse,
@@ -193,6 +194,11 @@ impl Walker<'_> {
                 self.list(map, "commands", Shape::SequenceCommand, false, parent, 0)?;
             }
             "response_jwt" => self.list(map, "nonces", Shape::Leaf, true, parent, 0)?,
+            "response_header_date" => {
+                if let Some(offset) = map.remove("timezone") {
+                    contracts::validate_legacy_offset(&offset)?;
+                }
+            }
             "response_generated" => {
                 self.field_map(map, "fields", Shape::GeneratedResponse, parent, 0)?
             }
@@ -269,7 +275,19 @@ impl Walker<'_> {
                 self.one(map, "derived_from", Shape::Leaf, true, parent, depth)?;
                 self.one(map, "segment", Shape::PathSegment, false, parent, depth)?;
             }
-            Shape::PathSegment | Shape::GeneratedResponse => {
+            Shape::PathSegment => self.field_map(map, "fields", Shape::PathField, parent, depth)?,
+            Shape::PathField => {
+                if self.compact && map.get("kind").and_then(Value::as_str) == Some("timestamp") {
+                    if map.get("timezone").and_then(Value::as_str) == Some("UTC") {
+                        map.remove("timezone");
+                    }
+                    if map.get("mode").and_then(Value::as_str) == Some("preserve_or_request_window")
+                    {
+                        map.remove("mode");
+                    }
+                }
+            }
+            Shape::GeneratedResponse => {
                 let kind = map.get("kind").and_then(Value::as_str).unwrap_or("");
                 let child = if kind == "encrypted_json" {
                     Shape::Plaintext
