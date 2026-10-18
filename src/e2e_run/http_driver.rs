@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
@@ -143,7 +143,12 @@ pub(super) async fn capture_case(
     }
     let response = RecordedHttpClient::new(
         config.target_http_origin.clone(),
-        config.target_request_timeout,
+        super::source_response::request_timeout(
+            request_path
+                .parent()
+                .context("request has no case directory")?,
+            config.target_request_timeout,
+        )?,
         config.target_max_response_bytes,
     )
     .with_request_rule_runtime(request_rules)

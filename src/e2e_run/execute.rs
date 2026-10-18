@@ -621,11 +621,7 @@ async fn execute_case(
     };
     let response_assertion = if let Some(response_assertions) = &runtime.response_assertions {
         if let (Ok(actual_bytes), Ok(case_view)) = (&assertion_command, &case_view) {
-            let expected_response = if case_dir.join("expected-response.json").is_file() {
-                case_dir.join("expected-response.json")
-            } else {
-                case_dir.join("expected_response.json")
-            };
+            let expected_response = super::source_response::path(case_dir);
             std::fs::read(&expected_response)
                 .with_context(|| {
                     format!(

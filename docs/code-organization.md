@@ -441,6 +441,10 @@ is unclear.
   `e2e_run/delivery.rs` resolves target-relative managed delivery directories
   and their opt-in named build contexts without moving runtime ownership away
   from the target.
+- `e2e_run/source_response` resolves the immutable primary-response artifact
+  and exposes only its recorded elapsed time for the HTTP execution budget.
+  The driver adds its ordinary execution allowance to that duration; response
+  status, headers and body remain with assertions and never become Target inputs.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state

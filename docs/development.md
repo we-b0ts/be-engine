@@ -1999,6 +1999,12 @@ as unavailable. When the HTTP driver can classify the observed transport
 failure, both the representative and evidence page include an
 `unavailable_reason`, such as `target_connection_closed`,
 `target_connection_failed`, or `target_request_timed_out`.
+The managed HTTP request deadline includes the recorded Source response's
+`duration_ms` plus the ordinary 30-second execution allowance. A recorded
+30.26-second RPC can therefore complete its preserved callback delay without
+being cut off by a shorter fixed client deadline. Missing elapsed metadata
+retains the allowance; malformed elapsed metadata fails explicitly. Only elapsed
+time affects this budget; Source status, headers and body remain assertion data.
 When more are available it returns the next opaque evidence command instead of
 an open cursor. The `representatives` result includes the representative case
 ID, its exact immutable standard `case_dir`, and a structured

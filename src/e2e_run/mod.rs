@@ -24,6 +24,7 @@ mod replay_publication;
 mod request_view;
 mod result;
 mod runtime;
+mod source_response;
 mod startup_inputs;
 mod store;
 mod support;
