@@ -59,6 +59,88 @@ fn path_rule() -> NativeRule {
 }
 
 #[test]
+fn path_timestamp_defaults_and_explicit_modes_have_distinct_semantic_fingerprints() {
+    let mut rule = path_rule();
+    let timestamp = serde_json::json!({
+        "kind":"timestamp", "format":"%Y%m%d%H%M%S"
+    });
+    let NativeEffect::Identity(effect) = &mut rule.effect else {
+        unreachable!()
+    };
+    let IdentityCapture::HttpPath { segment } = &mut effect.capture else {
+        unreachable!()
+    };
+    segment.fields.get_mut("proof").unwrap().contract = serde_json::from_value(timestamp).unwrap();
+    let default = compile_native(&rule).unwrap();
+    let mut explicit = serde_json::to_value(&rule).unwrap();
+    let mode = "/effect/capture/segment/fields/proof/contract/mode";
+    assert_eq!(
+        explicit.pointer(mode).unwrap(),
+        "preserve_or_request_window"
+    );
+    assert_eq!(
+        explicit
+            .pointer("/effect/capture/segment/fields/proof/contract/timezone")
+            .unwrap(),
+        "UTC"
+    );
+    let compatible: NativeRule = serde_json::from_value(explicit.clone()).unwrap();
+    assert_eq!(
+        compile_native(&compatible).unwrap().fingerprint,
+        default.fingerprint
+    );
+    *explicit.pointer_mut(mode).unwrap() = serde_json::json!("request_window");
+    let strict: NativeRule = serde_json::from_value(explicit).unwrap();
+    assert_ne!(
+        compile_native(&strict).unwrap().fingerprint,
+        default.fingerprint
+    );
+    assert_eq!(
+        serde_yaml::from_str::<NativeRule>(&serde_yaml::to_string(&strict).unwrap()).unwrap(),
+        strict
+    );
+}
+
+#[test]
+fn response_header_date_defaults_to_utc_without_timezone_configuration() {
+    let mut rule = path_rule();
+    rule.selector.resource = None;
+    rule.selector.operation = None;
+    rule.selector.path = None;
+    rule.effect = NativeEffect::ResponseHeaderDate(
+        serde_json::from_value(serde_json::json!({
+            "header":"content-disposition", "parameter":"filename", "format":"%Y-%m-%d"
+        }))
+        .unwrap(),
+    );
+    let compiled = compile_native(&rule).unwrap();
+    let NativeEffect::ResponseHeaderDate(effect) = &compiled.rule.effect else {
+        unreachable!()
+    };
+    assert_eq!(effect.timezone, "+00:00");
+}
+
+#[test]
+fn native_relative_times_accept_omitted_offsets_but_absolute_windows_require_them() {
+    for format in [TimestampFormat::Iso8601Naive, TimestampFormat::SqlDatetime] {
+        let mut time = NativeTime {
+            format,
+            relation: super::super::TimeRelation::PreserveOffset,
+            anchor: super::super::TimeAnchor::DependencyRequestStart,
+            utc_offset: None,
+            clock_group: None,
+        };
+        validate_time(&time).unwrap();
+        time.relation = super::super::TimeRelation::RequestWindow;
+        assert!(validate_time(&time).is_err());
+        time.utc_offset = Some("+08:00".into());
+        validate_time(&time).unwrap();
+        time.format = TimestampFormat::UnixSeconds;
+        assert!(validate_time(&time).is_err());
+    }
+}
+
+#[test]
 fn integer_identity_cannot_advertise_an_unimplemented_cross_resource_reference() {
     let mut rule = path_rule();
     let NativeEffect::Identity(effect) = &mut rule.effect else {

@@ -220,11 +220,13 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
         validate_contract_binding(&rule.codec, path, contract)?;
         if let Some(time) = contract.unconditional().time() {
             ensure!(
-                (matches!(
-                    time.format,
-                    TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime
-                )) == time.utc_offset.is_some(),
-                "iso8601_naive requires explicit utc_offset; other formats carry their own timezone or use Unix time"
+                match time.format {
+                    TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => {
+                        time.relation == TimeRelation::PreserveOffset || time.utc_offset.is_some()
+                    }
+                    _ => time.utc_offset.is_none(),
+                },
+                "naive request_window times require utc_offset; relative times need none; zoned and Unix formats forbid it"
             );
             time.offset()?;
         }

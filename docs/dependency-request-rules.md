@@ -292,7 +292,6 @@ lifecycle. Already applied rules must be revised through that lifecycle.
             /data/0/completed_at:
               time: preserve_relative
               format: iso8601_naive
-              utc_offset: '+00:00'
 ```
 
 PUBLISH time contracts require one command, an exact channel, and time-only JSON
@@ -303,11 +302,13 @@ room, status, task identity and all other unselected JSON values remain checked.
 Invalid or duplicate-member JSON cannot use the time contract. No binary
 serializer is interpreted by this JSON capability.
 
-For ISO strings without a timezone, `iso8601_naive` requires an explicit
-source-proven fixed `utc_offset` in `+/-HH:MM` form, at most 14 hours. Do not
-infer the timezone from a displayed date or the Replay host. Fixed offsets do
-not model daylight-saving transitions; use a timezone-bearing source format
-when those transitions are required. RFC3339 retains its embedded timezone and
+For ISO strings without a timezone, `iso8601_naive` and `sql_datetime` need no
+`utc_offset` for relative comparisons: a shared fixed offset cancels in
+`Target - Source`. The engine uses a neutral UTC arithmetic origin and never
+reads the Replay host timezone. Existing explicit offsets remain supported and
+validated. Fixed offsets do not model daylight-saving transitions; use a
+timezone-bearing source format when those transitions are required.
+RFC3339 retains its embedded timezone and
 rejects `utc_offset`. All formats use the independently captured request clocks
 and fixed inclusive five-second relative window; there is no wall-clock fallback.
 
@@ -382,7 +383,7 @@ preserving the recorded start/end window. Independent reads can use the explicit
 `clock_group` contract above.
 
 Supported formats are `unix_seconds`, `unix_milliseconds`, `unix_microseconds`,
-`rfc3339` and explicit-offset `iso8601_naive` as described below.
+`rfc3339` and `iso8601_naive` as described below.
 JSON numeric categories remain checked. Select 1..32 exact non-root JSON
 pointers; wildcard and overlapping pointers are rejected. Bodies must be complete
 unique-member JSON of at most 1 MiB. Other JSON members, array ordering, path,

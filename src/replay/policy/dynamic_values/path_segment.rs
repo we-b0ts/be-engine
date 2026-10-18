@@ -28,10 +28,7 @@ pub enum PathSegmentField {
         format: String,
         #[serde(default = "utc_timezone", skip_serializing_if = "is_utc_timezone")]
         timezone: String,
-        #[serde(
-            default,
-            skip_serializing_if = "crate::policy::native::PathTimestampMode::is_request_window"
-        )]
+        #[serde(default)]
         mode: crate::policy::native::PathTimestampMode,
     },
 }

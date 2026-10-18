@@ -1,5 +1,6 @@
 //! Genuine HTTP PUT and TLS SQLx prepared writes share the path identity.
 use super::*;
+use sqlx::Executor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn rule() -> crate::DynamicValueRule {
@@ -20,7 +21,7 @@ capture:
     template: "{nonce}_{created_at}_{user_id}_{attachment_id}"
     fields:
       nonce: {kind: random, format: hex, length: 12}
-      created_at: {kind: timestamp, format: "%Y%m%d%H%M%S", timezone: UTC}
+      created_at: {kind: timestamp, format: "%Y%m%d%H%M%S"}
       user_id: {kind: exact}
       attachment_id: {kind: exact}
 source_evidence: Storage:key uses UUID hex[:12], UTC now, owner and inserted ID
@@ -87,6 +88,64 @@ fn records() -> Vec<Value> {
     records[1]["connection_id"] = json!("00000000-0000-4000-8000-000000000001");
     records[1]["query_sequence"] = json!(1);
     records
+}
+
+#[tokio::test]
+async fn unchanged_historical_key_replays_http_and_tls_sql_without_extra_configuration() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let policy = r#"format: traffic-policy/v1
+rules:
+- id: preserved-key
+  match:
+    api: GET /users
+    resource: {protocol: http, endpoint: 's3.example.test:80'}
+    operation: PUT
+    path: /bucket/attachments/*
+  effect:
+    kind: identity
+    value_type: string
+    capture:
+      kind: http_path
+      segment:
+        index: 2
+        template: '{nonce}_{created_at}_{user_id}_{attachment_id}'
+        fields:
+          nonce: {kind: random, format: hex, length: 12}
+          created_at: {kind: timestamp, format: '%Y%m%d%H%M%S'}
+          user_id: {kind: exact}
+          attachment_id: {kind: exact}
+    references:
+    - resource: {protocol: http, endpoint: 's3.example.test:80'}
+    - resource: {protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}
+  proof: {source: 'attachment.py:overwrite', fact: 'Overwrite loads the original key and writes it back unchanged'}
+"#;
+        let mut source = records();
+        source[0]["request_started_at"] = json!("2026-10-16T03:12:02Z");
+        source[0]["timestamp"] = json!("2026-10-16T03:12:02Z");
+        let (temp, _, runtime, task) = fixture_with_policy(&source, Some(policy)).await;
+        task.abort();
+        let (addr, task) = http_listener(runtime.clone()).await;
+        let (mysql_addr, mysql_task) =
+            super::dynamic_values_tests::endpoint_listener(runtime.clone(), false).await;
+        let mut client = connect(
+            mysql_addr,
+            &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        ).await;
+        let path = source[0]["uri"].as_str().unwrap();
+        assert!(put(addr, path, "wrong file bytes").await.starts_with("HTTP/1.1 502"));
+        assert!(put(addr, path, "file bytes").await.starts_with("HTTP/1.1 200"));
+        let sql = source[1]["sql"].as_str().unwrap();
+        assert!(client.execute(sql.replace(r#""stable":1"#, r#""stable":2"#).as_str()).await.is_err());
+        assert_eq!(client.execute(sql).await.unwrap().rows_affected(), 1);
+        assert!(put(addr, path, "file bytes").await.starts_with("HTTP/1.1 502"));
+        assert!(client.execute(sql).await.is_err());
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        assert_eq!(state.replay_policy.as_ref().unwrap().report().dynamic_bindings.len(), 1);
+        task.abort();
+        mysql_task.abort();
+    }).await.expect("preserved-key HTTP/SQL Replay timed out");
 }
 
 #[tokio::test]

@@ -651,11 +651,13 @@ fn validate_sequence(rule: &NativeRule, sequence: &RedisSequenceEffect) -> Resul
 
 pub(super) fn validate_time(time: &NativeTime) -> Result<()> {
     ensure!(
-        (matches!(
-            time.format,
-            TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime
-        )) == time.utc_offset.is_some(),
-        "naive time requires explicit UTC offset; other time formats forbid it"
+        match time.format {
+            TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => {
+                time.relation == super::TimeRelation::PreserveOffset || time.utc_offset.is_some()
+            }
+            _ => time.utc_offset.is_none(),
+        },
+        "naive request_window times require UTC offset; relative times need none; other time formats forbid it"
     );
     if let Some(value) = &time.utc_offset {
         offset(value)?;

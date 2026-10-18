@@ -13,10 +13,8 @@ pub(super) struct ComparedTime {
 }
 
 pub(super) fn offset(rule: &TimeField) -> Result<FixedOffset> {
-    let offset = rule
-        .utc_offset
-        .as_deref()
-        .context("iso8601_naive requires a source-proven utc_offset")?;
+    // Both values use the same origin, so its offset cancels in the difference.
+    let offset = rule.utc_offset.as_deref().unwrap_or("+00:00");
     ensure!(
         offset != "-00:00"
             && offset.len() == 6

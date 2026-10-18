@@ -170,7 +170,6 @@ rules:
             /updatedAt:
               relative_time: iso8601_naive
               anchor: case.request_start
-              utc_offset: '+08:00'
               clock_group: payload
         1:
           relative_time: sql_datetime
@@ -464,9 +463,12 @@ For Source/Target values `S`, `T` and trusted anchors `As`, `At`:
   retain integer/fractional precision and reject overflow. Seconds,
   milliseconds, microseconds, RFC3339, AMZ date and explicit-offset naive ISO
   formats remain available through their supported typed adapters.
-- Naive timestamps require a declared UTC offset. Timezone-free text must not
-  acquire the host timezone implicitly. Formats and units do not imply that a
-  business value is generated or safe to translate.
+- Naive relative timestamps need no declared UTC offset: a shared civil offset
+  cancels in the Source/Target difference, including delivery translation.
+  A neutral UTC origin supplies arithmetic without reading the host timezone.
+  Absolute request-window checks of naive timestamps still require an explicit
+  offset; zoned and Unix formats need none. Formats and units do not imply that
+  a business value is generated or safe to translate.
 - Preserve the baseline cross-field precision contract: equal Source instants
   require exactly equal Target instants; distinct Source instants may have
   translation-offset differences of at most one microsecond. The five-second
@@ -617,7 +619,7 @@ dropping rules. Preserve unrelated project progress and local artifacts.
 | --- | --- | --- | --- |
 | Protocol x codec x surface | Reuse one contract on HTTP/Redis/Memcached JSON/PB slots and primary JSON/PB responses where the adapter supports the envelope. | Unsupported frame/type/effect fails explicitly; missing protocol support is not inferred from codec support. | P1-P2 |
 | Collection | Reordered members with identical multiplicity; disjoint time/identity fields compose. | Added/removed member, changed duplicate count, changed stable element or incompatible pairing. | P1-P3 |
-| Time precision | Seconds/millis/micros and RFC3339 represent the same permitted relation; explicit naive offset works. | Lost microseconds, wrong unit/offset/anchor, absent clocks, overflow, equal Source instants becoming unequal, or cross-field shift differing beyond 1 microsecond. | P1-P2 |
+| Time precision | Seconds/millis/micros and RFC3339 represent the same permitted relation; naive relative times need no offset configuration. | Lost microseconds, wrong unit/anchor or absolute-window offset, absent clocks, overflow, equal Source instants becoming unequal, or cross-field shift differing beyond 1 microsecond. | P1-P2 |
 | Generated identities | Valid shape and consistent capture/reference mapping across selected calls. | Collapsed IDs, changed references, unselected substitution, wrong endpoint, or a failed candidate leaking bindings. | P3 |
 | Script/nonce/PUBLISH | Declared script envelope and UUID/time fields all validate before commit. | Changed Lua digest/body/numkeys/KEYS/ARGV, nonce reuse, UUID selector ambiguity or partial commit. | P3 |
 | Signed/encoded content | Both signatures validate; stable claims/URL bytes and related expiry/TTL remain checked. | Wrong signature/key/algorithm/kid, altered stable claims, duplicate URL parameter, invalid envelope/padding, or changes hidden by whole-token random. | P3 |

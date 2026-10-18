@@ -13,6 +13,45 @@ fn clocks() -> AnchorClocks {
 }
 
 #[test]
+fn naive_relative_times_cancel_shared_offsets_without_timezone_configuration() {
+    for (format, separator) in [
+        (TimestampFormat::Iso8601Naive, 'T'),
+        (TimestampFormat::SqlDatetime, ' '),
+    ] {
+        let contract = FieldContract::Time {
+            format,
+            relation: TimeRelation::PreserveOffset,
+            anchor: crate::policy::TimeAnchor::ApiRequestStart,
+            utc_offset: None,
+            clock_group: None,
+        };
+        let fields = [Field {
+            rule_id: "relative",
+            pointer: "/updated",
+            contract: &contract,
+        }];
+        let source = json!({"updated":format!("1970-01-01{separator}08:00:10.123456"),"stable":1});
+        for (time, passes) in [
+            ("08:01:50.123456", true),
+            ("08:01:55.123456", true),
+            ("08:01:45.123456", true),
+            ("08:01:55.123457", false),
+            ("08:01:45.123455", false),
+            ("00:01:50.123456", false),
+        ] {
+            let target = json!({"updated":format!("1970-01-01{separator}{time}"),"stable":1});
+            assert_eq!(
+                compare(&source, &target, &fields, clocks()).passed(),
+                passes
+            );
+        }
+        let target = json!({"updated":format!("1970-01-01{separator}08:01:50.123456"),"stable":2});
+        assert!(!compare(&source, &target, &fields, clocks()).passed());
+        assert!(!compare(&source, &source, &fields, AnchorClocks::default()).passed());
+    }
+}
+
+#[test]
 fn source_sibling_condition_keeps_terminal_durations_exact_through_unordered_pairing() {
     let duration = FieldContract::Conditional {
         when: crate::policy::FieldCondition {

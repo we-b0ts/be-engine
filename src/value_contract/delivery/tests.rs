@@ -4,6 +4,35 @@ use chrono::TimeZone;
 use serde_json::json;
 
 #[test]
+fn naive_delivery_preserves_civil_text_without_timezone_configuration() {
+    for (format, source, target) in [
+        (
+            TimestampFormat::Iso8601Naive,
+            "2026-10-18T23:59:59.123456",
+            "2026-10-19T00:01:39.123456",
+        ),
+        (
+            TimestampFormat::SqlDatetime,
+            "2026-10-18 23:59:59.123456",
+            "2026-10-19 00:01:39.123456",
+        ),
+    ] {
+        let mut config = TimeContract {
+            format,
+            relation: crate::policy::TimeRelation::PreserveOffset,
+            anchor: TimeAnchor::DependencyDelivery,
+            utc_offset: None,
+            clock_group: None,
+        };
+        let source = json!(source);
+        let delta = 100 * time::NANOS_PER_SECOND;
+        assert_eq!(shift(&source, &config, delta).unwrap(), json!(target));
+        config.utc_offset = Some("+08:00".into());
+        assert_eq!(shift(&source, &config, delta).unwrap(), json!(target));
+    }
+}
+
+#[test]
 fn delivery_only_translates_declared_time_and_keeps_source_immutable() {
     let doc=crate::policy::parse_policy(r#"format: traffic-policy/v1
 rules:

@@ -90,7 +90,12 @@ pub struct HeaderDateEffect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameter: Option<String>,
     pub format: String,
+    #[serde(default = "utc_offset")]
     pub timezone: String,
+}
+
+fn utc_offset() -> String {
+    "+00:00".into()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
