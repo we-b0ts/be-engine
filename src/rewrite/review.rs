@@ -32,6 +32,10 @@ pub use model::*;
 pub use repair::{rework, rework_with_report};
 
 pub fn check(options: RewriteReviewOptions) -> Result<RewriteReviewReport> {
+    ensure!(
+        options.quality_check.is_none(),
+        "--quality-check requires --pre-revalidation"
+    );
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     let state = RewriteStore::new(&target_root)?
         .load()?
@@ -45,6 +49,7 @@ pub fn check_batch(
 ) -> Result<RewriteReviewReport> {
     ensure!(
         options.integration
+            && options.quality_check.is_none()
             && options.worktree.is_some()
             && options.scope.is_none()
             && options.handoff_id.is_none(),
@@ -68,8 +73,8 @@ pub fn check_batch(
     )
 }
 
-/// The integrator's sole complete-check entry point, serialized with coordinator
-/// transitions so concurrent invocations cannot duplicate the heavy suite.
+/// The existing final-stage entry point binds the integrator's successful
+/// quality-check attestation to the frozen candidate without executing the tool.
 pub fn check_pre_revalidation(mut options: RewriteReviewOptions) -> Result<RewriteReviewReport> {
     ensure!(
         options.scope.is_none() && options.handoff_id.is_none() && options.worktree.is_some(),
@@ -77,6 +82,12 @@ pub fn check_pre_revalidation(mut options: RewriteReviewOptions) -> Result<Rewri
     );
     options.integration = true;
     let (root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
+    ensure!(
+        options.quality_check.as_deref() == Some(project.quality_check.as_str()),
+        "run delivery.quality_check ({}) on the final committed candidate, then report success using --quality-check {}",
+        project.quality_check,
+        project.quality_check
+    );
     let store = RewriteStore::new(&root)?;
     let _lock = store.lock()?;
     ensure!(
@@ -106,8 +117,8 @@ pub fn check_pre_revalidation(mut options: RewriteReviewOptions) -> Result<Rewri
     Ok(report)
 }
 
-// Ordinary delivery checks are lightweight; the explicit final mode executes
-// repository commands and binds its receipt to the complete regression scope.
+// Every review executes engine source/isolation checks only. Final mode also
+// binds the agent-owned quality check to the complete regression scope.
 fn check_candidate(
     target_root: &Path,
     project: &crate::e2e_run::ResolvedProjectConfig,
@@ -131,6 +142,10 @@ fn check_candidate(
         "delivery.managed_paths differs from the canonical target; publish configuration changes before reviewing code"
     );
     if final_review {
+        ensure!(
+            candidate_project.quality_check == project.quality_check,
+            "delivery.quality_check differs from the canonical target; publish configuration changes before final review"
+        );
         pre_revalidation::ensure_committed(&root)?;
     }
     let integration_mode = options.integration || options.worktree.is_none();
@@ -220,7 +235,7 @@ fn check_candidate(
             super::quality::run_pre_revalidation(
                 &root,
                 &validation.scan_base_revision,
-                &project.managed_paths,
+                &project.quality_check,
                 &options.hardcode_ai_verified,
             )?
         } else if integration_mode {
@@ -297,7 +312,7 @@ fn check_candidate(
         unreachable!("worker review requires a scope")
     };
     let required_gates = if final_review {
-        super::quality::final_gate_names(&root, &project.managed_paths)
+        super::quality::final_gate_names()
     } else {
         super::quality::gate_names()
     };
@@ -310,13 +325,13 @@ fn check_candidate(
         hardcode_ai_verified: options.hardcode_ai_verified, accepted_target_fingerprint: None,
         required_gates,
         next_step: match status {
-            ReviewStatus::Passed if final_review => "Publish this exact checked candidate, then use review accept --report to admit its final receipt and start the full revalidation sweep. Do not run a duplicate manual Cargo suite. Progress-only publication preserves the receipt; code, inputs, policy or scope changes require a fresh final check.",
-            ReviewStatus::ChangesRequired if final_review => "Inspect the final quality logs. The integrator fixes routine formatting and Clippy findings, commits corrections and reruns review check --pre-revalidation. Return API behavior decisions to the responsible worker. Full revalidation starts only after the passing exact candidate is published and admitted.",
+            ReviewStatus::Passed if final_review => "Publish this exact checked candidate, then use review accept --report to admit its final receipt and start the full revalidation sweep. The reported quality_check was executed by the integrator; review check does not execute repository commands. Progress-only publication preserves the receipt; code, inputs, policy or scope changes require a fresh final check.",
+            ReviewStatus::ChangesRequired if final_review => "Inspect the source/isolation findings. The integrator fixes routine findings, commits corrections, reruns the configured quality_check after relevant changes and reports success through review check --pre-revalidation --quality-check TOOL. Return API behavior decisions to the responsible worker. Full revalidation starts only after the passing exact candidate is published and admitted.",
             ReviewStatus::Passed if batch.is_some() => "Return the exact candidate, this engine source/isolation report, and any targeted tests performed. This ordinary review does not run fmt, tests or Clippy. The coordinator must publish head_revision, then use this report for listed handoffs still handoff_ready. Retain already integrated handoffs and resume only unreported handoffs after interruption; review check does not publish or verify APIs.",
             ReviewStatus::Passed if integration_mode => "Return this exact candidate, the engine source/isolation report, and any targeted tests performed. This ordinary review does not run fmt, tests or Clippy. The coordinator must publish head_revision before worker report --activity integrated --review-report or review accept --report. Matching HEADs need no new commit; equal files alone do not prove publication. Formal API acceptance remains separate.",
-            ReviewStatus::Passed => "Deliver this exact code and worker source/isolation report, with the relevant tests you ran. Clippy is performed once by the code integrator with review check --pre-revalidation before the final full sweep. The coordinator must inspect source evidence before handoff_ready; integration requires its own candidate review.",
-            ReviewStatus::ChangesRequired if integration_mode => "Fix the reported source/isolation findings in the assigned integration worktree. The integrator owns routine formatting/Clippy repairs; full checks run only through review check --pre-revalidation. Return API behavior decisions to the responsible worker. Follow the exact hardcode source-evidence contract when applicable, commit corrections and rerun candidate review.",
-            ReviewStatus::ChangesRequired => "Fix the reported source or Replay-isolation findings in the assigned worker worktree, then rerun worker review. For hardcoded domains follow the exact source-evidence contract and --hardcode-ai-verified. Run relevant tests as needed; the integrator runs the final Clippy check before full revalidation.",
+            ReviewStatus::Passed => "Deliver this exact code and worker source/isolation report, with the relevant tests you ran. The code integrator runs the configured quality_check and reports success at final pre-revalidation review before the full sweep. The coordinator must inspect source evidence before handoff_ready; integration requires its own candidate review.",
+            ReviewStatus::ChangesRequired if integration_mode => "Fix the reported source/isolation findings in the assigned integration worktree. The integrator owns routine formatting/Clippy repairs; the integrator executes the configured quality_check before reporting final pre-revalidation review. Return API behavior decisions to the responsible worker. Follow the exact hardcode source-evidence contract when applicable, commit corrections and rerun candidate review.",
+            ReviewStatus::ChangesRequired => "Fix the reported source or Replay-isolation findings in the assigned worker worktree, then rerun worker review. For hardcoded domains follow the exact source-evidence contract and --hardcode-ai-verified. Run relevant tests as needed; the integrator runs the configured final quality_check before full revalidation.",
             ReviewStatus::EvidenceRequired => "Trace each spawn's startup entry and callers; supply --evidence with source locations and ownership, then rerun review check. Unknown/request ownership cannot pass.",
         }.into(),
     };

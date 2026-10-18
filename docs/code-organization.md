@@ -579,11 +579,11 @@ is unclear.
 - Within `rewrite`, `quality.rs` owns delivery-time isolation and explicit worker,
   integration and final pre-revalidation receipt scope and policy identities.
   Worker and ordinary integration stages run source/isolation checks without
-  mandatory repository commands. The final stage owns full fmt/test/Clippy
-  execution with real command outcomes/logs, not skill-attested shell results.
-  `quality/commands` derives project-local Cargo commands and their relative
-  working directories, runs them serially with private logs, and binds command
-  inventory plus cwd into receipt validation and policy identity.
+  mandatory repository commands. The existing final stage binds the agent's
+  successful `quality_check` attestation to the frozen candidate; the integrator
+  executes the project-configured tool across the target and managed directories.
+  Review never executes fmt, tests, Clippy or other repository commands. The
+  configured tool and stage bind receipt validation and policy identity.
   Worker receipts cannot satisfy integration admission; ordinary integration
   receipts cannot satisfy the final gate. Historical command DTOs remain readable
   but do not grant current admission. `target_quality.rs` is a
@@ -620,7 +620,7 @@ is unclear.
   progress publication. Ordinary review fingerprints use the same policy
   exclusion; traffic verification fingerprints retain configured traffic policy.
   `review/pre_revalidation` owns the final state-machine gate, exact-candidate
-  check reuse and admission, preserved system-repair slices, and the complete
+  requirement projection, check reuse and admission, preserved system-repair slices, and the complete
   post-admission sweep. It binds durable sweep progress to the accepted report's
   SHA256 identity, preserving crash recovery without inheriting an earlier
   candidate's consumed membership. Its `inputs` child hashes Cargo manifests,

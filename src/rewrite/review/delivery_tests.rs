@@ -74,6 +74,7 @@ fn options(root: &Path, worktree: &Path, scope: Option<RewriteWorkScope>) -> Rew
         target_root: root.into(),
         worktree: Some(worktree.into()),
         integration: scope.is_none(),
+        quality_check: None,
         scope,
         evidence: None,
         handoff_id: None,

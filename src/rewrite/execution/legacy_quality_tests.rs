@@ -169,6 +169,7 @@ fn old_failed_quality_retry_admits_current_receipt_without_reexecuting_checks() 
         scope: None,
         evidence: None,
         integration: true,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })

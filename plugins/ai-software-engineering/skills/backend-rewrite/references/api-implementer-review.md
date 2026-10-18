@@ -30,8 +30,8 @@ domain values (including test code), and the exact assignment/code/input
 identities. It does not execute repository commands such as fmt, workspace
 tests or Clippy. Run tests relevant to the changes as needed and return their
 results. Build and debug as needed to establish API correctness. You do not
-need to run Clippy; the code integrator runs the engine-managed full quality
-check before final revalidation. A passing worker report establishes handoff
+need to run Clippy; the code integrator executes the configured quality_check
+and reports success before final revalidation. A passing worker report establishes handoff
 eligibility; it does not certify complete integration quality. Fix source and
 isolation findings before returning a handoff.
 

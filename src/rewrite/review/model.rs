@@ -14,6 +14,8 @@ pub struct RewriteReviewOptions {
     pub scope: Option<RewriteWorkScope>,
     pub evidence: Option<PathBuf>,
     pub integration: bool,
+    /// Confirms the agent passed this tool on the final committed candidate.
+    pub quality_check: Option<String>,
     pub handoff_id: Option<String>,
     pub hardcode_ai_verified: Vec<String>,
 }

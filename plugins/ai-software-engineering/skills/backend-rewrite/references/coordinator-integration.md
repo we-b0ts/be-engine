@@ -76,16 +76,17 @@ Send only the data needed for the assignment:
 Accepted worker handoffs have passed source/isolation and delivery identity
 checks, with relevant local test results. Workers do not need to run Clippy.
 Ordinary integration uses focused builds/tests as needed; the final
-pre-revalidation stage owns the full quality suite. Do not add
+pre-revalidation stage requires the configured agent-owned quality check. Do not add
 independent business-logic verification to integration assignments; worker
 explanations support actual conflicts and required quality evidence. Assign
 routine formatting and Clippy repairs to the integrator, including problems
 inherited from worker deliveries. Return changes requiring API behavior
 decisions to their responsible implementer with exact findings.
 `review check --integration` checks source/isolation and exact identity without
-mandatory Cargo commands. The final-stage action supplies `review check
---pre-revalidation`, which executes the full suite and creates its real receipt.
-Do not require a manual duplicate Cargo suite before either command.
+mandatory Cargo commands. The existing final-stage action supplies the quality
+tool requirement and `review check --pre-revalidation --quality-check TOOL`.
+The integrator executes the tool before reporting success; the review command
+creates its version-bound receipt without executing repository commands.
 
 For `review`, supply the same role, roots, base and assignment ID, plus exact
 findings/report when available and available work-item provenance. For
@@ -173,8 +174,8 @@ supported for retained assignments; new assignments use engine-generated exports
 The engine checks every current dispatch and handoff before issuing one report.
 The report
 must cover every required engine source/isolation check and the canonical
-inputs that will be used for acceptance. It does not certify the final full
-quality suite. If applying required inputs changes that context, complete the
+inputs that will be used for acceptance. It does not attest the configured final
+quality_check. If applying required inputs changes that context, complete the
 supported input transition and send the candidate back for review before
 reporting integration. Do not run quality commands in the coordinator or accept
 only the worker's earlier report.
@@ -203,7 +204,7 @@ while verification is idle, then execute `review accept --report
 /absolute/integration-report.json` (or set `BACKEND_REWRITE_REVIEW_REPORT`). The
 global report must come from `review check --integration` without a scope or
 handoff ID. For a final-stage assignment, require the distinct report from
-`review check --pre-revalidation` and admit it with `review accept` after exact
+`review check --pre-revalidation --quality-check TOOL` and admit it with `review accept` after exact
 publication. A normal integration report cannot satisfy the final gate. Do not
 manufacture an API handoff or report `integrated` for either global task.
 
@@ -214,10 +215,12 @@ Never relabel an invalidated handoff after changing the recording.
 ## Admit The Final Pre-Revalidation Candidate
 
 When the engine returns `pre_revalidation_review_required`, retain one
-`pre_revalidation_review` assignment for the existing integrator. Pass its
-`commands.check` unchanged except for the documented integration-worktree
-substitution. The engine command runs the full quality suite; the skill does
-not add a second manual run.
+`pre_revalidation_review` assignment for the existing integrator. Pass
+`details.quality_check`, `details.quality_paths` and `commands.check` unchanged
+except for the documented integration-worktree substitution. The integrator
+executes the required tool on the final committed candidate and then uses the
+existing command to report success. The engine never runs the tool. Keep the
+existing publication, acceptance and revalidation sequence.
 
 Use the publication freshness checks above. Publish the exact passing candidate,
 then execute `review accept --report /absolute/final-report.json`. Acceptance

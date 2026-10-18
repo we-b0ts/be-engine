@@ -73,8 +73,8 @@ integrator evidence endpoint or engine integration activity to invent.
    Supply current `--evidence` and
    `--hardcode-ai-verified` mappings when required. Only a `passed` report
    qualifies. Resolve routine formatting/lint findings and integration-induced
-   failures here. Full Clippy is required by the final stage below, not by each
-   integration. Preserve behavior and record repairs in the candidate provenance.
+   failures here. The configured quality_check is required by the final stage
+   below rather than each integration. Preserve behavior and record repairs in the candidate provenance.
    Return changes requiring API behavior decisions with exact findings to their
    responsible worker. Commit corrections and rerun complete candidate review.
 5. Return the candidate and its absolute passing `report_path` based on the
@@ -86,7 +86,7 @@ identity. Ordinary integration review repeats those checks against the complete
 merged candidate without mandatory fmt, workspace tests or Clippy. It binds the
 accepted handoff, canonical review policy and runtime inputs, and exact candidate
 code. A batch report binds every included handoff to that candidate. It does not
-certify that the final full quality suite ran. Never reuse a worker report for
+attest that the configured final quality tool passed. Never reuse a worker report for
 integration, an ordinary integration report for the final stage, or a candidate
 report after subsequent relevant changes.
 
@@ -97,8 +97,8 @@ conflicts, routine quality repairs and required evidence.
 
 Build and run focused tests as needed during ordinary integration; a full
 fmt/test/Clippy run is not a per-delivery gate. Include the local checks you
-actually executed with their outcomes. The separate final stage below owns the
-mandatory full suite.
+actually executed with their outcomes. The existing final stage below requires
+the configured agent-owned quality_check.
 
 When the reviewed handoff needs no code change after input application, the
 candidate may equal the assigned base. Return the identity and checks without
@@ -168,29 +168,40 @@ The engine issues `pre_revalidation_review_required` only when ordinary work is
 ready for the final full revalidation or completion. This final gate also
 applies to an unchanged purpose baseline: ordinary Source-review exemption is
 not final quality proof. Work in the retained integration worktree at the
-assigned canonical base, preserving any unfinished changes. Execute the
-returned check command; its form is:
+assigned canonical base, preserving any unfinished changes. First commit the
+final target/managed code and changed tracked build/toolchain inputs. Execute
+`details.quality_check` across `details.quality_paths` using the project's
+configuration. The tool is configured by `project.delivery.quality_check` and
+defaults to `cargo-clippy`; other languages can select `eslint`, `ruff`,
+`golangci-lint` or a project tool identifier. For `cargo-clippy`, run
+`cargo clippy --workspace --all-targets -- -D warnings` from each applicable
+Rust project directory. Fix findings and check the corrected candidate before
+reporting success. Run formatting and unit tests according to project
+instructions and the changes being made.
+
+After the tool passed, execute the returned reporting command; its form is:
 
 ```bash
 backend-rewrite --target-root /absolute/canonical review check \
-  --pre-revalidation --worktree /absolute/integration
+  --pre-revalidation --quality-check cargo-clippy --worktree /absolute/integration
 ```
 
-This is the single entrypoint for the full quality suite. It runs format,
-workspace tests and Clippy for the target and configured managed Rust projects,
-plus Source, keyword and Replay-isolation checks. Do not manually run the same
-full Cargo suite before calling it, and do not substitute `--integration`, a
-batch report or a worker report. Keep scope/handoff selectors out of this global
-check. Each Rust project's commands execute in its own directory; the receipt
-binds that working directory and the applicable repository Cargo/toolchain
-inputs. Commit the target/managed code and any changed tracked Cargo or toolchain
-inputs before checking. Progress, policy and private runtime keep their existing
-separate handling. Supply current Source evidence and exact hardcode mappings
-when required.
+Use the exact tool identifier returned by the engine. `--quality-check TOOL`
+attests that you successfully ran it on this final committed candidate. The
+engine checks the identifier against the canonical configuration, performs
+Source, keyword and Replay-isolation checks, and binds the attestation to code,
+build inputs and final scope. It does not execute fmt, tests, Clippy or another
+repository tool, and does not independently certify the agent's execution. Do
+not supply this flag for a failed, omitted or stale tool run. Do not substitute
+`--integration`, a batch report or a worker report; keep scope/handoff selectors
+out of this global check. Progress, policy and private runtime keep their
+existing separate handling. Supply current Source evidence and exact hardcode
+mappings when required.
 
-Inspect the report status and actual command results/logs. Repair routine
-formatting/lint failures directly in this worktree, commit the corrected
-candidate, then repeat the final-stage command. Return API behavior decisions
+Inspect the report status and retain the local tool command and result in your
+agent response. Repair routine formatting/lint failures directly in this
+worktree, commit the corrected candidate, rerun the quality tool as needed, then
+report its successful result through the same final-stage command. Return API behavior decisions
 with exact evidence to their responsible implementer. A failure or stale
 receipt cannot advance full revalidation. Do not modify code after a passing
 check and continue to describe that report as current.
@@ -201,10 +212,10 @@ and invokes `review accept`; you do not publish or accept it. The engine binds
 the receipt to code, canonical inputs, review policy, inventory and immutable
 recording. Relevant changes require a fresh final-stage check. Progress-only
 publication does not invalidate an already admitted matching receipt. When the
-engine reuses current final proof, do not run another full suite merely because
+engine reuses current final proof, do not run the quality tool again merely because
 another API in the same revalidation round is next. Retrying the identical
 successful candidate reuses the cached result and restores its report file if
-needed; it does not execute a second suite.
+needed; the engine never executes the quality tool.
 
 ## Output
 

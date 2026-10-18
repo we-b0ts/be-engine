@@ -35,6 +35,7 @@ fn options(
                 scope: Some(scope.clone()),
                 evidence: None,
                 integration: true,
+                quality_check: None,
                 handoff_id: Some("commit-a".into()),
                 hardcode_ai_verified: vec![],
             })

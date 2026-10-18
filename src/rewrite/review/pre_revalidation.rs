@@ -89,7 +89,8 @@ pub(super) fn context(root: &Path, state: &RewriteState) -> Result<String> {
         Err(error) => return Err(error).context("failed to read final regression policy"),
     };
     Ok(fingerprint::id(&[
-        "pre-revalidation-context-v1",
+        "pre-revalidation-context-v2",
+        &crate::e2e_run::resolve_project(root)?.1.quality_check,
         &state.workflow_id,
         &state.recording_run_id,
         &serde_json::to_string(&inventory)?,
@@ -120,18 +121,6 @@ pub(super) fn remember(root: &Path, report: &mut RewriteReviewReport) -> Result<
         report.report_path = crate::internal_runtime::root(root)
             .join("rewrite/pre-revalidation-candidates")
             .join(format!("{}.json", uuid::Uuid::new_v4().simple()));
-        if let Some(quality) = report.quality.as_mut() {
-            let logs = report.report_path.with_extension("logs");
-            for (index, command) in quality.commands.iter_mut().enumerate() {
-                use std::os::unix::fs::PermissionsExt;
-                fs::create_dir_all(&logs)?;
-                let destination = logs.join(format!("{index}.log"));
-                fs::copy(&command.log_path, &destination)
-                    .context("retain final check log in canonical artifacts")?;
-                fs::set_permissions(&destination, fs::Permissions::from_mode(0o600))?;
-                command.log_path = destination;
-            }
-        }
         write_json(&report.report_path, report)?;
         write_json(&checked_path(root), report)?;
     }
@@ -255,9 +244,12 @@ pub(in crate::rewrite) fn required_action(
         }
         return Ok(None);
     }
+    let (_, project) = crate::e2e_run::resolve_project(root)?;
     Ok(Some(RewriteAction::PreRevalidationReviewRequired {
-        summary: "Before the final full revalidation sweep, delegate commands.check to the code integrator in its retained integration worktree. This is the sole full fmt/test/Clippy entry point. Fix routine findings there, publish the exact passing candidate, then admit its report through commands.accept. Ordinary worker/integration receipts cannot satisfy this stage; status and next never run these checks.".into(),
-        check: action::command(root, vec!["review".into(), "check".into(), "--pre-revalidation".into()], vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()]),
+        quality_check: project.quality_check.clone(),
+        quality_paths: std::iter::once(PathBuf::from(".")).chain(project.managed_paths).collect(),
+        summary: "Before the final full revalidation sweep, the code integrator must run quality_check on the final committed candidate across quality_paths in its retained integration worktree. After success, execute commands.check to report the successful tool; review check performs source/isolation checks and never executes repository quality commands. Fix routine findings there, publish the exact passing candidate, then admit its report through commands.accept. Ordinary worker/integration receipts cannot satisfy this existing stage.".into(),
+        check: action::command(root, vec!["review".into(), "check".into(), "--pre-revalidation".into(), "--quality-check".into(), project.quality_check], vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()]),
         accept: action::command(root, vec!["review".into(), "accept".into()], vec!["BACKEND_REWRITE_REVIEW_REPORT".into()]),
     }))
 }

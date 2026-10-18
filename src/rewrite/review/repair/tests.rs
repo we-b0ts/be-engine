@@ -59,6 +59,7 @@ fn failed_candidate() -> (
         target_root: target.path().into(),
         worktree: Some(worktree),
         integration: true,
+        quality_check: None,
         scope: None,
         handoff_id: None,
         evidence: None,

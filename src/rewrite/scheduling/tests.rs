@@ -45,6 +45,7 @@ fn accept_final(root: &Path, state: &mut RewriteState) {
         scope: None,
         evidence: None,
         integration: false,
+        quality_check: Some("cargo-clippy".into()),
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })

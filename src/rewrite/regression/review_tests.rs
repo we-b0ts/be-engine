@@ -95,6 +95,7 @@ fn unchanged_purposes_require_final_review_and_sweep_before_progress_completion(
             target_root: target.path().into(),
             worktree: Some(target.path().into()),
             integration: true,
+            quality_check: Some("cargo-clippy".into()),
             scope: None,
             handoff_id: None,
             evidence: None,
@@ -198,6 +199,7 @@ fn changed_purpose_needs_a_fresh_accepted_receipt_and_keeps_rework_gates() {
         scope: None,
         evidence: None,
         integration: true,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: vec![],
     })

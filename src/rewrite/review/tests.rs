@@ -11,6 +11,7 @@ pub(in crate::rewrite) fn worker_report(root: &Path, scope: RewriteWorkScope) ->
         scope: Some(scope),
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })
@@ -47,6 +48,7 @@ fn options(root: &Path, scope: RewriteWorkScope) -> RewriteReviewOptions {
         scope: Some(scope),
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     }
@@ -199,6 +201,7 @@ fn local_review_does_not_mutate_workflow_and_integrated_receipt_survives_resume(
         scope: None,
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })
@@ -289,6 +292,7 @@ fn assigned_worktree_delivery(route_workers: bool) {
         scope: Some(scope.clone()),
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     };
@@ -352,6 +356,7 @@ fn assigned_worktree_delivery(route_workers: bool) {
         scope: Some(scope.clone()),
         evidence: None,
         integration: true,
+        quality_check: None,
         handoff_id: delivery.handoff_id.clone(),
         hardcode_ai_verified: Vec::new(),
     })
@@ -405,6 +410,7 @@ fn assigned_worktree_delivery(route_workers: bool) {
         scope: None,
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })
@@ -517,6 +523,7 @@ fn nested_target_maps_repository_worktree_and_reviews_managed_sibling() {
         scope: Some(scope),
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     };
@@ -641,6 +648,7 @@ fn review_covers_managed_siblings_without_executing_cargo() {
         scope: None,
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })
@@ -665,6 +673,7 @@ fn review_covers_managed_siblings_without_executing_cargo() {
         scope: None,
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })
@@ -696,6 +705,7 @@ fn completed_api_quality_rework_reuses_worker_and_duplicate_route_is_idempotent(
         scope: None,
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })
@@ -754,6 +764,7 @@ fn failing_integrated_review(root: &Path) -> RewriteReviewReport {
         scope: None,
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })
@@ -865,6 +876,7 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
         scope: None,
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: Vec::new(),
     })
@@ -902,6 +914,7 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
         scope: Some(scope.clone()),
         evidence: None,
         integration: true,
+        quality_check: None,
         handoff_id: feedback.handoff_id.clone(),
         hardcode_ai_verified: Vec::new(),
     })

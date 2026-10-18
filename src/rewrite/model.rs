@@ -710,6 +710,8 @@ pub enum RewriteAction {
     },
     PreRevalidationReviewRequired {
         summary: String,
+        quality_check: String,
+        quality_paths: Vec<std::path::PathBuf>,
         check: RewriteCommandSpec,
         accept: RewriteCommandSpec,
     },

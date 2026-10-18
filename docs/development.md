@@ -287,8 +287,9 @@ a candidate with tracked changes outside the target and those paths is rejected.
 
 Worker, integration and final pre-revalidation review share Source and
 Replay-isolation checks. Worker and ordinary integration review do not execute
-mandatory repository quality commands. Final pre-revalidation review is a
-separate engine stage that executes the full suite once for the final candidate.
+repository quality commands. The existing final pre-revalidation stage records
+the integrator's successful quality check on the final candidate; it does not
+execute repository commands either.
 All review stages enforce complete changed production Rust files <=1000 lines.
 Added Tokio spawn paths require structured startup ownership evidence via `--evidence`; request-owned
 and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
@@ -297,10 +298,15 @@ It also performs the mandatory Replay-isolation and source-sensitive public
 domain checks, including `demo.test` occurrences in test fixtures. API workers
 build/debug and run relevant tests as needed; they do not need to run Clippy.
 The integrator builds and tests as needed during daily integration. At
-`pre_revalidation_review_required`, it executes the returned `review check
---pre-revalidation --worktree /absolute/integration`; that single command runs
-format, workspace tests and Clippy plus source/isolation checks. The skill
-requires this command without a duplicate manual suite. Routine formatting/lint
+`pre_revalidation_review_required`, it executes `details.quality_check` across
+`details.quality_paths` on the final committed candidate. After success it runs
+the returned `review check --pre-revalidation --quality-check TOOL --worktree
+/absolute/integration` to report the successful tool and perform Source/isolation
+checks. `project.delivery.quality_check` defaults to `cargo-clippy`; other
+languages can configure their own tool identifier. For `cargo-clippy` the
+integrator runs `cargo clippy --workspace --all-targets -- -D warnings` in each
+applicable project. The engine never executes fmt, tests, Clippy or another
+repository tool. Formatting and unit tests follow project instructions. Routine formatting/lint
 repairs stay with the integrator. Stage-bound receipts prevent a worker report
 from replacing integration review or an ordinary integration report from
 replacing final pre-revalidation proof.
@@ -316,7 +322,7 @@ reports `worker report ... --activity integrated --review-report
 original accepted handoff, not its earlier worker report. Global evidence-only
 or ordinary source-review refresh uses `review check --integration --worktree
 /absolute/integration` without scope or handoff ID. Final review uses the
-distinct `review check --pre-revalidation --worktree /absolute/integration`
+distinct `review check --pre-revalidation --quality-check TOOL --worktree /absolute/integration`
 without worker or batch selectors. After exact publication the coordinator
 admits either global report using `review accept --report /absolute/report.json`;
 only the final-stage report can satisfy the final full-revalidation gate.
@@ -360,7 +366,7 @@ Quality results are bound to candidate code, canonical check configuration,
 runtime inputs, rules and the diff base. Publication admission matches actual
 code content without substituting a worker's private runtime fingerprint for the
 canonical identity. Code or input changes invalidate the report. Worker and ordinary integration
-reports do not waive final full checks.
+reports do not waive the final agent-owned quality check.
 Admission requires the exact reviewed commit. After admission, an ordinary
 progress-only commit may retain that receipt: the reviewed commit must remain
 an ancestor, with code, canonical inputs, rules and the diff base unchanged,
@@ -1674,7 +1680,7 @@ gates before delivery. The coordinator admits version-bound integration reports;
 the legacy `target-quality run` entrypoint only validates an existing receipt.
 One admitted integrated API handoff schedules that API's Replay. After ordinary
 work drains, `pre_revalidation_review_required` blocks the final full sweep until
-the integrator's full-check candidate is published and its final-stage receipt
+the integrator's quality-checked candidate is published and its final-stage receipt
 is admitted. Final unified verification then handles shared changes.
 
 Returned `next` commands omit `--api`; the engine retains its selected route
@@ -1857,13 +1863,19 @@ the exact check and admission commands when proof is missing or stale:
 
 ```bash
 backend-rewrite --target-root /absolute/canonical review check \
-  --pre-revalidation --worktree /absolute/integration
+  --pre-revalidation --quality-check cargo-clippy --worktree /absolute/integration
 ```
 
-The retained integrator executes this command, which runs full format/tests/
-Clippy and source/isolation checks and records real outcomes/logs. The skill does
-not add a manual duplicate Cargo suite. The integrator repairs routine
-formatting/lint issues in its worktree, commits the candidate, and rechecks.
+The retained integrator first executes the tool named by `details.quality_check`
+across `details.quality_paths` on the final committed candidate. This requirement
+is configured by `project.delivery.quality_check` (default `cargo-clippy`); for
+Rust the agent runs `cargo clippy --workspace --all-targets -- -D warnings`.
+Only after success does it execute the returned command with the required tool
+identifier. The flag attests successful agent execution; the engine matches it
+to canonical configuration, runs Source/isolation checks, and records a
+version-bound final receipt. It does not execute repository quality commands or
+independently certify the tool run. The integrator repairs routine findings,
+commits the corrected candidate, and checks it before reporting success.
 Changes requiring API behavior decisions return to the responsible implementer.
 Only the coordinator publishes the exact passing candidate and calls `review
 accept --report ...`; acceptance validates proof without repeating execution.
@@ -1957,9 +1969,10 @@ for the exact published candidate; `advance_required` can then start focused
 Replay. Missing or stale ordinary proof returns `source_review_required`.
 Before the final full revalidation, the distinct
 `pre_revalidation_review_required` stage requires the integrator to execute
-`review check --pre-revalidation`, publish the exact candidate and admit its
-final-stage receipt. The command executes the full quality suite once; the skill
-does not duplicate it. Code or relevant input changes require fresh final proof. Initial diagnostic Replay can run
+the configured `quality_check` on the final committed candidate, report success
+through `review check --pre-revalidation --quality-check TOOL`, publish the exact
+candidate and admit its final-stage receipt. The engine command never executes
+repository tools; stages and order are unchanged. Code or relevant input changes require fresh final proof. Initial diagnostic Replay can run
 before the workflow has a delivery report. Repository-specific development
 requirements belong in `AGENTS.md` or `CLAUDE.md`; project configuration cannot
 replace or disable the engine Source/Replay-isolation checks.
@@ -2310,6 +2323,7 @@ repository root:
 ```yaml
 delivery:
   pr_base: dev-migration
+  quality_check: cargo-clippy
   managed_paths:
     - path: ../backend-rs
       build_context: sibling-backend
@@ -2335,18 +2349,20 @@ omitted and accepts values through 1800 seconds. The target request timeout is 3
 timeout remains a coordinator-owned default. The target's native HTTP port is the port in
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback.
 
-`review check` owns the Source/Replay-isolation standard; `project.yaml` has no
-configurable quality-command field. Worker and ordinary integration review do
-not execute mandatory fmt, tests or Clippy. The engine's final
-`review check --pre-revalidation` runs format, workspace tests and Clippy for
-each Rust target and every managed directory containing `Cargo.toml`. Each
-command executes in that project's own directory, preserving its Cargo
-configuration discovery; the target-relative working directory is part of the
-receipt and check-policy identity. Managed projects are tested independently
-rather than only compiled as dependencies. The integrator calls this single
-entrypoint and returns its actual final-stage report; the skill does not require
-a duplicate manual Cargo suite. Repository-specific development requirements
-belong in `AGENTS.md` or `CLAUDE.md` and do not replace the engine standard.
+`review check` owns the Source/Replay-isolation standard and never executes
+repository quality commands in any stage. Configure the final tool identifier
+in `project.delivery.quality_check` (default `cargo-clippy`). At the existing
+`pre_revalidation_review_required` stage, the integrator executes that tool on
+the final committed target and managed projects. Only after success does it
+report `--quality-check TOOL` through `review check --pre-revalidation`. The
+engine matches the tool to canonical configuration and binds the agent's
+attestation to the candidate and inputs; execution remains the agent's
+responsibility. For `cargo-clippy`, use `cargo clippy --workspace --all-targets
+-- -D warnings` in each applicable Rust project. Other language tools use their
+project configuration. Formatting and unit tests follow repository instructions
+and the changes being made. The existing publish, accept and full revalidation
+sequence remains unchanged. Repository-specific requirements in `AGENTS.md` or
+`CLAUDE.md` do not replace the engine Source/Replay-isolation standard.
 
 Managed replay reads its target response limit from
 `recorder.recording.max_body_bytes` in `project.yaml`.

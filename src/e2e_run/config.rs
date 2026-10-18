@@ -123,6 +123,7 @@ pub(crate) fn render_project_config(
             verification: VerificationProjectConfig::default(),
             delivery: DeliveryProjectConfig {
                 pr_base: options.pr_base.clone(),
+                quality_check: super::model::default_quality_check(),
                 managed_paths: Vec::new(),
             },
             state: StateProjectConfig {
@@ -263,6 +264,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         max_failed_cases_per_api: config.project.verification.max_failed_cases_per_api,
         replay_startup_timeout: Duration::from_secs(config.project.replay.startup_timeout_seconds),
         pr_base: config.project.delivery.pr_base,
+        quality_check: config.project.delivery.quality_check,
         managed_paths: managed.paths,
         recorder_config,
         source_traffic_policy,

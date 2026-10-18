@@ -260,7 +260,7 @@ pub(super) fn checks_passed(
         ensure!(report.integration.is_some() && report.scope.is_none()
             && report.integration.as_ref().is_some_and(|review| review.handoff_id.is_none() && review.handoffs.is_empty()),
             "final review must cover the global integration candidate");
-        quality.ensure_pre_revalidation(code_root, &project.managed_paths)?;
+        quality.ensure_pre_revalidation(&project.quality_check)?;
     } else if report.integration.is_some() {
         quality.ensure_passed()?;
     } else {

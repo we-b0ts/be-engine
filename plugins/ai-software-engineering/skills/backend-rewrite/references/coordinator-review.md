@@ -14,7 +14,7 @@ missing, failing, wrong-dispatch, and stale reports. A passing worker report mus
 cover Source rules, Replay isolation and current delivery identity. It does not
 execute repository quality commands or certify full integration quality. Workers
 build/debug and run relevant tests as needed and do not need Clippy. The
-integrator runs the engine-managed final full checks before revalidation.
+integrator executes the configured quality tool before final revalidation.
 
 An ended worker with incomplete unaccepted delivery is `idle`; resume the same
 binding for missing material. Use `rework_required` only after an accepted
@@ -22,11 +22,14 @@ handoff. Admission does not replace integration or formal acceptance.
 
 ## Final Review Before Full Revalidation
 
-On `pre_revalidation_review_required`, delegate the exact returned `commands.check`
-to the retained integrator in its assigned worktree. Its form is `review check
---pre-revalidation --worktree ...`; this single engine entrypoint executes the
-full fmt/test/Clippy suite and source/isolation checks, then writes a final-stage
-receipt. The skill requires this command rather than duplicate Cargo commands.
+On the existing `pre_revalidation_review_required` stage, delegate
+`details.quality_check`, `details.quality_paths` and the returned `commands.check`
+to the retained integrator in its assigned worktree. The integrator executes
+the configured tool on the final committed candidate and fixes findings. Only
+after success does it run `review check --pre-revalidation --quality-check TOOL
+--worktree ...` to report the successful check and obtain the Source/isolation
+receipt. The engine does not execute repository commands. This changes no
+workflow stages, publication steps or revalidation scheduling.
 
 Publish the exact passing candidate and invoke `review accept --report
 /absolute/final-report.json` through the
@@ -56,9 +59,10 @@ worktree; never execute checks in the canonical coordinator worktree.
 Ordinary engine candidate review covers the whole branch against `pr_base` and
 repeats Source/Replay-isolation checks without mandatory repository commands.
 Do not require a full fmt/test/Clippy suite for each integration. The separate
-`pre_revalidation_review_required` action supplies the engine's full-check
-command and requires its distinct final-stage report. Do not ask the integrator
-to run that same suite manually before calling the engine command.
+`pre_revalidation_review_required` action supplies the required quality tool
+and reporting command and requires its distinct final-stage report. The
+integrator runs the tool once for the final candidate before reporting success;
+the engine command does not repeat it.
 Changes already published on the canonical branch still need a current receipt;
 use that exact version for a global quality refresh without manufacturing a
 worker handoff. Follow the integration protocol to synchronize a retained

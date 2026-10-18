@@ -185,6 +185,8 @@ fn final_review_is_one_ready_step_without_parallel_replay_claims() {
     let command = rewrite::action::status_command_for_api(target.path(), None);
     let gate = RewriteAction::PreRevalidationReviewRequired {
         summary: "review the final candidate".into(),
+        quality_check: "cargo-clippy".into(),
+        quality_paths: vec![".".into()],
         check: command.clone(),
         accept: command,
     };

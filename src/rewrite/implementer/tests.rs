@@ -109,6 +109,7 @@ fn delivery(
         scope: Some(crate::rewrite::RewriteWorkScope::Api { api: api.into() }),
         evidence: None,
         integration: false,
+        quality_check: None,
         handoff_id: None,
         hardcode_ai_verified: vec![],
     })

@@ -1,6 +1,6 @@
 //! Compatibility admission for the retired coordinator quality execution step.
-//! Ordinary delivery review checks source and isolation. Final commands run
-//! through review check --pre-revalidation; this module only reads receipts.
+//! Delivery review checks source and isolation. Final review records the
+//! agent-owned quality_check; this module only reads admitted receipts.
 use super::model::{RewriteAction, RewriteActionEnvelope, RewritePhase, RewriteState};
 use super::store::RewriteStore;
 use super::{action, review, traffic_operation, worker};

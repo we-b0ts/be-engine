@@ -23,6 +23,8 @@ project:
     max_failed_cases_per_api: 10
   delivery:
     pr_base: dev-migration
+    # Agent executes this tool before final review; use the project's language-specific tool.
+    quality_check: cargo-clippy
   state:
     runtime_root: local/runtime
 recorder:
