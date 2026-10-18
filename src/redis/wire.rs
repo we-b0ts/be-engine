@@ -153,6 +153,33 @@ pub(crate) fn is_pubsub_command(name: &str) -> bool {
         || name.eq_ignore_ascii_case("SUNSUBSCRIBE")
 }
 
+/// Replace only the subject of an already validated confirmation. Protocol kind
+/// and the recorded integer subscription count retain their original values.
+pub(crate) fn translate_subscription_confirmation(
+    command: &RedisCommand,
+    raw: &[u8],
+    subject: &[u8],
+) -> Result<Vec<u8>> {
+    validate_subscription_confirmation(command, raw)?;
+    let bytes = Bytes::copy_from_slice(raw);
+    let (Resp2Frame::Array(values), _) = redis_protocol::resp2::decode::decode_bytes(&bytes)
+        .map_err(|err| anyhow!(err))?
+        .context("incomplete confirmation")?
+    else {
+        return Err(anyhow!("subscription confirmation is not an array"));
+    };
+    let kind = resp2_bytes_ref(&values[0]).context("confirmation kind is absent")?;
+    let Resp2Frame::Integer(count) = values[2] else {
+        return Err(anyhow!("confirmation count is not an integer"));
+    };
+    let mut output = format!("*3\r\n${}\r\n", kind.len()).into_bytes();
+    output.extend_from_slice(kind);
+    output.extend_from_slice(format!("\r\n${}\r\n", subject.len()).as_bytes());
+    output.extend_from_slice(subject);
+    output.extend_from_slice(format!("\r\n:{count}\r\n").as_bytes());
+    Ok(output)
+}
+
 pub(crate) fn validate_subscription_confirmation(command: &RedisCommand, raw: &[u8]) -> Result<()> {
     if !is_pubsub_command(&command.name) {
         return Err(anyhow!(

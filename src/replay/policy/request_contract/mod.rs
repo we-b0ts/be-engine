@@ -13,6 +13,7 @@ pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
 mod redis;
 mod unified_response;
+mod url;
 pub(in crate::replay) use unified_response::PreparedRedisDelivery;
 pub(crate) use unified_response::redis_bulk_payload;
 mod script;

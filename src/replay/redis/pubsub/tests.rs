@@ -5,6 +5,7 @@ use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 mod compact_evidence;
+mod request_contracts;
 mod scale;
 mod subscription_evidence;
 
@@ -82,7 +83,10 @@ async fn load_runtime(root: &Path, lazy: bool) -> Result<Arc<ReplayRuntime>> {
                 control_socket_path: None,
                 ca_cert_path: Some(root.join("ca.pem")),
                 ca_key_path: Some(root.join("ca-key.pem")),
-                policy_path: None,
+                policy_path: root
+                    .join(".traffic-e2e/policy.yaml")
+                    .is_file()
+                    .then(|| root.join(".traffic-e2e/policy.yaml")),
                 http_ignore_query_params: vec![],
                 process_owned_dependencies: vec![],
                 allowed_unused_http: None,

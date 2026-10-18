@@ -194,6 +194,15 @@ no-argument unsubscribe-all commands, and RESP3 push frames remain unsupported.
 Cases rejected by an older Recorder for unsubscription need a new recording;
 never change the existing evidence or its `replay_safe` flag.
 
+Explicit `redis_sequence` key capture/reference supports single-subject SUBSCRIBE
+and UNSUBSCRIBE, translating only the confirmed subject after admission. LPUSH
+and RPUSH JSON slots support independent canonical UUIDs and bounded nonempty
+strings, while task ID fields retain explicit capture/reference relationships.
+RPC PUBLISH composes selected time/URL contracts with protocol identity copies;
+unselected application fields, ACK correlation and finite consumption stay strict.
+See [Generated Redis request values](../../../../../docs/redis-generated-requests.md)
+for exact vocabulary, query-date relationships and the signature-shape boundary.
+
 Match Case evidence before run-level Global evidence. Consume ordinary
 exchanges once. A marked Redis background cache-snapshot seed is the narrow
 exception: Replay may return its first successful recorded response for every

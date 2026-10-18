@@ -231,6 +231,12 @@ is unclear.
   resolves exact recording-level anchors and canonical single-use aliases.
   Payload semantics remain with
   the application. Source acquisition and Replay do not consume HTTP oracles.
+  The RPC adapter supplies protocol-identity comparison copies to request policy;
+  it still owns callback bindings and commits them only on request admission.
+  `value_contract/url_query` owns bounded unique query selection, UTC date-segment
+  validation and strict URL remainders; `request_contract/url` resolves selected
+  values, timestamp references, request clocks and random shapes. Neither owns lanes,
+  subscriptions, signatures or recorded callback results.
 - Top-level `mysql`, `redis`, `memcached`, and `kafka` modules own reusable
   protocol parsing and encoding only. Top-level `motan` is a traffic-e2e
   adapter over `motan-protocol` and `motan-codec` from the Breeze Motan Git

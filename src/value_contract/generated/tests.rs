@@ -3,6 +3,63 @@ use chrono::TimeZone;
 use serde_json::json;
 
 use super::*;
+
+#[test]
+fn bounded_redis_random_values_validate_both_sides_without_equal_length_for_strings() {
+    let compare = |a: Value, b: Value, format, length, max| {
+        compare_bounded_random(&a, &b, &format, length, max)
+    };
+    assert!(
+        compare(
+            json!("6fa459ea-ee8a-3ca4-894e-db77e160355e"),
+            json!("01234567-89ab-4def-8123-456789abcdef"),
+            RandomEncoding::Uuid,
+            Some(36),
+            None
+        )
+        .is_ok()
+    );
+    assert!(
+        compare(
+            json!("gen1@source"),
+            json!("gen123456@longer-target"),
+            RandomEncoding::String,
+            None,
+            Some(255)
+        )
+        .is_ok()
+    );
+    for invalid in [
+        json!(""),
+        json!("x".repeat(256)),
+        json!("line\nbreak"),
+        json!(null),
+        json!(123),
+    ] {
+        for (a, b) in [
+            (invalid.clone(), json!("gen1@source")),
+            (json!("gen1@source"), invalid),
+        ] {
+            assert!(compare(a, b, RandomEncoding::String, None, Some(255)).is_err());
+        }
+    }
+    for invalid in [
+        "0123456789ab4def8123456789abcdef",
+        "01234567-89AB-4DEF-8123-456789ABCDEF",
+        "not-a-uuid",
+    ] {
+        assert!(
+            compare(
+                json!(invalid),
+                json!("01234567-89ab-4def-8123-456789abcdef"),
+                RandomEncoding::Uuid,
+                Some(36),
+                None
+            )
+            .is_err()
+        );
+    }
+}
 use crate::policy::{Proof, TimeAnchor, TimeRelation, TimestampFormat, native::*};
 
 pub(super) fn proof<T>(contract: T) -> Proven<T> {

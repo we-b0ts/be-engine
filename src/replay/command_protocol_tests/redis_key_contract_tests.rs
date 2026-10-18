@@ -1,6 +1,7 @@
 //! Key contracts through native TCP Replay, protected plan/apply and finite lanes.
 use super::*;
 use serde_json::json;
+mod generated_queue;
 
 struct Fixture {
     _temp: crate::replay::policy::test_fixture::ManagedFixtureDirectory,

@@ -95,12 +95,41 @@ impl PubSubState {
         args: &[Vec<u8>],
     ) -> Option<bool> {
         exchange.rpc_push?;
+        Some(
+            self.compatible_request(exchange, args)
+                .is_some_and(|(source, actual)| source.matches(&actual)),
+        )
+    }
+
+    /// Translate protocol identities in private comparison copies only. Payload
+    /// authorization remains with the selected request contracts.
+    pub(in crate::replay::redis) fn comparison_args(
+        &self,
+        exchange: &ReplayExchange,
+        args: &[Vec<u8>],
+    ) -> Option<RpcComparison> {
+        let (source, actual) = self.compatible_request(exchange, args)?;
+        Some(RpcComparison {
+            source: vec![
+                exchange.args[0].clone(),
+                serde_json::to_vec(&source.comparison_value(&actual)).ok()?,
+            ],
+            actual: vec![args[0].clone(), serde_json::to_vec(&actual.value).ok()?],
+        })
+    }
+
+    fn compatible_request(
+        &self,
+        exchange: &ReplayExchange,
+        args: &[Vec<u8>],
+    ) -> Option<(rpc::Request, rpc::Request)> {
+        exchange.rpc_push?;
         let source = rpc::request(&exchange.record.command, &exchange.args)
             .ok()
             .flatten()?;
-        let Some(actual) = rpc::request(&exchange.record.command, args).ok().flatten() else {
-            return Some(false);
-        };
+        let actual = rpc::request(&exchange.record.command, args)
+            .ok()
+            .flatten()?;
         let realm = (
             TargetKey {
                 host: normalize_host(&exchange.record.target_host),
@@ -109,30 +138,31 @@ impl PubSubState {
             exchange.record.database,
             exchange.record.username.clone(),
         );
-        Some(
-            exchange.args.first() == args.first()
-                && source.matches(&actual)
-                && self
-                    .bindings
-                    .callbacks
-                    .get(&(realm.clone(), source.identity.clone()))
-                    .is_none_or(|v| *v == actual.identity)
-                && self
-                    .bindings
-                    .callback_targets
-                    .get(&(realm.clone(), actual.identity.clone()))
-                    .is_none_or(|bound| *bound == source.identity)
-                && self
-                    .bindings
-                    .hosts
-                    .get(&(realm.clone(), source.identity.host.clone()))
-                    .is_none_or(|v| *v == actual.identity.host)
-                && self
-                    .bindings
-                    .host_targets
-                    .get(&(realm.clone(), actual.identity.host.clone()))
-                    .is_none_or(|bound| *bound == source.identity.host),
-        )
+        (exchange.args.first() == args.first()
+            && source.identity.sid == actual.identity.sid
+            && source.identity.namespace == actual.identity.namespace
+            && source.envelope_matches(&actual)
+            && self
+                .bindings
+                .callbacks
+                .get(&(realm.clone(), source.identity.clone()))
+                .is_none_or(|v| *v == actual.identity)
+            && self
+                .bindings
+                .callback_targets
+                .get(&(realm.clone(), actual.identity.clone()))
+                .is_none_or(|bound| *bound == source.identity)
+            && self
+                .bindings
+                .hosts
+                .get(&(realm.clone(), source.identity.host.clone()))
+                .is_none_or(|v| *v == actual.identity.host)
+            && self
+                .bindings
+                .host_targets
+                .get(&(realm.clone(), actual.identity.host.clone()))
+                .is_none_or(|bound| *bound == source.identity.host))
+        .then_some((source, actual))
     }
 
     pub(in crate::replay::redis) fn claim(

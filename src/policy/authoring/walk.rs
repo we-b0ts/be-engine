@@ -265,7 +265,10 @@ impl Walker<'_> {
             Shape::SequenceArgument => {
                 self.field_map(map, "fields", Shape::SequenceField, parent, depth)?
             }
-            Shape::SequenceField => self.list(map, "nonces", Shape::Leaf, true, parent, depth)?,
+            Shape::SequenceField => {
+                self.list(map, "nonces", Shape::Leaf, true, parent, depth)?;
+                self.field_map(map, "query", Shape::SequenceField, parent, depth)?;
+            }
             Shape::SequenceCommand => {
                 self.one(map, "script", Shape::Leaf, true, parent, depth)?;
                 self.field_map(map, "arguments", Shape::SequenceArgument, parent, depth)?;

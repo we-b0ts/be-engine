@@ -169,50 +169,84 @@ impl RequestContracts {
                         .context("target value requires bounded complete unique-member JSON")?;
                     let source_original = source.clone();
                     let actual_original = actual.clone();
-                    for (pointer, field) in &fields.json {
-                        let a = source_original
-                            .pointer(pointer)
-                            .context("source request field is missing")?;
-                        let b = actual_original
-                            .pointer(pointer)
-                            .context("target request field is missing")?;
-                        match field {
-                            JsonField::Random(field) => field.random.compare(a, b)?,
-                            JsonField::Identity(reference) => self.compare_identity(
-                                case,
-                                rule,
-                                selector.database,
-                                &reference.identity,
-                                a.as_str()
-                                    .context("source identity reference is not a string")?,
-                                b.as_str()
-                                    .context("target identity reference is not a string")?,
-                                &mut decision,
-                            )?,
-                            JsonField::Time(field) => {
-                                times.push(super::time::compare(a, b, field, anchor(field))?);
-                                decision.time_validations += 1;
-                            }
-                            JsonField::Jwt(field) => {
-                                self.jwt(
+                    for (pattern, field) in &fields.json {
+                        let pointers = crate::replay::policy::response::select_json_pointers(
+                            pattern,
+                            &source_original,
+                            &actual_original,
+                        );
+                        ensure!(
+                            !pointers.is_empty() && pointers.len() <= 16384,
+                            "selected Redis JSON fields are missing or exceed bounds"
+                        );
+                        for pointer in &pointers {
+                            let time_start = times.len();
+                            let a = source_original
+                                .pointer(pointer)
+                                .context("source request field is missing")?;
+                            let b = actual_original
+                                .pointer(pointer)
+                                .context("target request field is missing")?;
+                            match field {
+                                JsonField::Random(field) => field.random.compare(a, b)?,
+                                JsonField::Url(field) => {
+                                    let compared = field.compare(a, b, anchor)?;
+                                    decision.time_validations += compared.len();
+                                    times.extend(compared);
+                                }
+                                JsonField::Identity(reference) => self.compare_identity(
                                     case,
-                                    &rule.id,
-                                    pointer,
-                                    a,
-                                    b,
-                                    &source_original,
-                                    &actual_original,
-                                    match fields.json.get(&field.jwt.relative_to) {
-                                        Some(JsonField::Time(field)) => field,
-                                        _ => anyhow::bail!("JWT anchor has no typed time contract"),
-                                    },
-                                    &field.jwt,
+                                    rule,
+                                    selector.database,
+                                    &reference.identity,
+                                    a.as_str()
+                                        .context("source identity reference is not a string")?,
+                                    b.as_str()
+                                        .context("target identity reference is not a string")?,
                                     &mut decision,
-                                )?;
+                                )?,
+                                JsonField::Time(field) => {
+                                    times.push(super::time::compare(a, b, field, anchor(field))?);
+                                    decision.time_validations += 1;
+                                }
+                                JsonField::Jwt(field) => {
+                                    self.jwt(
+                                        case,
+                                        &rule.id,
+                                        pointer,
+                                        a,
+                                        b,
+                                        &source_original,
+                                        &actual_original,
+                                        match fields.json.get(&field.jwt.relative_to) {
+                                            Some(JsonField::Time(field)) => field,
+                                            _ => anyhow::bail!(
+                                                "JWT anchor has no typed time contract"
+                                            ),
+                                        },
+                                        &field.jwt,
+                                        &mut decision,
+                                    )?;
+                                }
+                            }
+                            *source.pointer_mut(pointer).unwrap() = Value::Null;
+                            *actual.pointer_mut(pointer).unwrap() = Value::Null;
+                            // Explicit named clocks on array patterns belong to each
+                            // matched element, rather than every element sharing a read.
+                            let indices = pattern
+                                .split('/')
+                                .zip(pointer.split('/'))
+                                .filter_map(|(p, v)| (p == "*").then_some(v))
+                                .collect::<Vec<_>>();
+                            if !indices.is_empty() {
+                                for time in &mut times[time_start..] {
+                                    if let Some(group) = &mut time.group {
+                                        group.push(':');
+                                        group.push_str(&indices.join(":"));
+                                    }
+                                }
                             }
                         }
-                        *source.pointer_mut(pointer).unwrap() = Value::Null;
-                        *actual.pointer_mut(pointer).unwrap() = Value::Null;
                     }
                     ensure!(source == actual, "unselected Redis JSON fields differ");
                 }

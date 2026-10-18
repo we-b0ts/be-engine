@@ -77,6 +77,12 @@ callback delivery, so a subscription established while an RPC is pending is
 valid when it is ready before the recorded ACK deadline. Missing/ambiguous subscribers, queue
 failures, disconnects, or case changes leave required evidence dirty.
 
+Explicit Source-backed request contracts may select generated RPC application
+fields, including per-element times and bounded signed-URL query values. They
+compose with the protocol identity adapter using comparison copies; original
+request evidence, callback bindings and result delivery remain with their
+existing owners. See [Generated Redis request values](redis-generated-requests.md).
+
 The adapter accepts JSON RPC envelopes up to 1 MiB. Capture retains at most
 4096 outstanding calls and expires abandoned reservations after 610 seconds.
 Global notifications use a paged disk index and one ordered scheduler per
