@@ -17,6 +17,7 @@ mod url;
 pub(in crate::replay) use unified_response::PreparedRedisDelivery;
 pub(crate) use unified_response::redis_bulk_payload;
 mod script;
+mod source_applicability;
 mod source_records;
 mod source_session;
 mod time;
@@ -58,6 +59,7 @@ struct State {
     identity_references: BTreeMap<String, usize>,
     cases: BTreeMap<String, CaseAnchor>,
     applicable: BTreeSet<String>,
+    redis_applicability: source_applicability::RedisApplicability,
     usage: BTreeMap<String, usize>,
     time_validations: BTreeMap<String, usize>,
     unavailable_value_slots: BTreeMap<String, usize>,
@@ -304,114 +306,6 @@ impl RequestContracts {
                     .iter()
                     .any(|rule| rule.rule.surface != crate::policy::Surface::ApiResponse)
             })
-    }
-    pub(in crate::replay) fn observe_source(&self, case: &str, bytes: &[u8]) -> Result<()> {
-        if !self.enabled() {
-            return Ok(());
-        }
-        self.register_source_records(case, bytes)?;
-        for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
-            let event: Value = serde_json::from_slice(line)?;
-            if event["global_dependency_reason"].is_string() {
-                continue;
-            }
-            self.observe_unified_source(case, &event)?;
-            let protocol = match event["event_type"].as_str() {
-                Some("redis_exchange") => DependencyProtocol::Redis,
-                Some("http_exchange") => DependencyProtocol::Http,
-                _ => continue,
-            };
-            let target = if protocol == DependencyProtocol::Redis {
-                TargetKey {
-                    host: event["target_host"].as_str().unwrap_or_default().into(),
-                    port: event["target_port"].as_u64().unwrap_or_default() as u16,
-                }
-            } else {
-                let Ok(authority) = event["authority"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .parse::<hyper::http::uri::Authority>()
-                else {
-                    continue;
-                };
-                TargetKey {
-                    host: authority.host().into(),
-                    port: authority.port_u16().unwrap_or(
-                        if event["scheme"]
-                            .as_str()
-                            .is_some_and(|s| s.contains("https"))
-                        {
-                            443
-                        } else {
-                            80
-                        },
-                    ),
-                }
-            };
-            for rule in self.selected(case, &target, protocol) {
-                let native_protocol = if protocol == DependencyProtocol::Redis {
-                    crate::policy::Protocol::Redis
-                } else {
-                    crate::policy::Protocol::Http
-                };
-                let database = event["database"]
-                    .as_i64()
-                    .map(crate::policy::Database::Index);
-                if !self.native_rule_scope_matches(
-                    &rule.id,
-                    Some(case),
-                    native_protocol,
-                    &target,
-                    database.as_ref(),
-                    event["username"].as_str(),
-                ) {
-                    continue;
-                }
-                let matches = if let Some(super::redis_value::RedisSelector::Requests(selector)) =
-                    &rule.redis
-                {
-                    selector.database == event["database"]
-                        && selector
-                            .commands
-                            .iter()
-                            .filter(|c| event["command"] == c.command)
-                            .any(|command| {
-                                event["args"]
-                                    .as_array()
-                                    .and_then(|args| {
-                                        args.iter()
-                                            .map(evidence::decode)
-                                            .collect::<Result<Vec<_>>>()
-                                            .ok()
-                                    })
-                                    .is_some_and(|args| {
-                                        command.validate_arguments(&args).is_ok()
-                                            && command
-                                                .key(&args)
-                                                .is_some_and(|key| selector.key.matches(key))
-                                    })
-                            })
-                } else {
-                    rule.http.as_ref().is_some_and(|h| {
-                        event["method"] == h.method
-                            && super::pattern::path_pattern_matches(
-                                &h.path,
-                                &super::pattern::uri_path(
-                                    event["uri"].as_str().unwrap_or_default(),
-                                ),
-                            )
-                    })
-                };
-                if matches {
-                    self.state
-                        .lock()
-                        .expect("request contracts")
-                        .applicable
-                        .insert(rule.id.clone());
-                }
-            }
-        }
-        Ok(())
     }
     pub(in crate::replay) fn candidates(&self) -> Vec<Candidate> {
         self.state

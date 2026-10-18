@@ -291,8 +291,10 @@ is unclear.
   recomputing method evidence. `replay/report/background_overlay/original_evidence`
   owns reversible overlay restoration shared by reclassification and ownership
   planners, so interrupted applies can resume from original unused witnesses.
-  `background_overlay/policy` reconciles MySQL rule applicability using exact
-  case/exchange occurrence witnesses retained by the matcher. Only unused
+  `request_contract/source_applicability` observes native request selectors and
+  retains complete Redis rule inventories by Case, connection and wire sequence.
+  `background_overlay/policy` reconciles MySQL and Redis rule applicability using
+  exact occurrence witnesses retained by their policy owners. Only unused
   occurrences proven process-owned lose their Case obligation; actual rule use,
   other Case occurrences and legacy reports without proof remain strict.
   `e2e_run/reclassify/session` selects exact shared-session method projections and
