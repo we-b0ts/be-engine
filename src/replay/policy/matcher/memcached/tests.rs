@@ -39,7 +39,7 @@ rules:
     slot: value
     codec: {codec}
     contract:
-      /created_at: {{kind: time, format: unix_seconds, relation: preserve_offset, anchor: dependency.request_start}}
+      /created_at: {{kind: time, format: unix_seconds, relation: preserve_offset}}
       /members: {{kind: unordered}}
     proof: {{source: 'src/session:build', fact: 'Members come from a set; the timestamp uses the dependency request clock'}}
 "#)).unwrap();

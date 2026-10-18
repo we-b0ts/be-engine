@@ -18,7 +18,7 @@ fn finite_sharing_rejects_patterned_redis_identity() {
     let rule = json!({"id":"token-time","match":{"resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},
         "operation":"HGET","key":{"kind":"exact","value":"token_v2"}},"proof":proof,
         "effect":{"kind":"finite_sharing","protocol":"redis","hash_field":"00123","response_time":{
-            "/timestamp":{"contract":{"format":"unix_milliseconds","relation":"preserve_offset","anchor":"dependency.response_delivery"},"proof":proof}}}});
+            "/timestamp":{"contract":{"format":"unix_milliseconds","relation":"preserve_offset"},"proof":proof}}}});
     let parse = |rule: Value| {
         crate::policy::parse_policy(
             &json!({"format":"traffic-policy/v1","rules":[rule]}).to_string(),

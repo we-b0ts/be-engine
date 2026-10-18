@@ -12,6 +12,10 @@ pub(super) fn transform(value: &mut Value, tagged: bool, compact: bool) -> Resul
     let Some(map) = value.as_mapping_mut() else {
         return Ok(());
     };
+    ensure!(
+        !map.contains_key("anchor"),
+        "anchor is not configurable; time contracts use the corresponding dependency request start"
+    );
     if !compact && map.get("relation").and_then(Value::as_str) == Some("preserve_offset") {
         remove_relative_offset(map)?;
     }
@@ -54,7 +58,7 @@ pub(super) fn transform(value: &mut Value, tagged: bool, compact: bool) -> Resul
     ensure!(
         map.keys().all(|key| matches!(
             key.as_str(),
-            Some("relative_time" | "request_time" | "anchor" | "utc_offset" | "clock_group")
+            Some("relative_time" | "request_time" | "utc_offset" | "clock_group")
         )),
         "time abbreviations cannot mix kind/format/relation or unknown fields"
     );
@@ -73,8 +77,6 @@ pub(super) fn transform(value: &mut Value, tagged: bool, compact: bool) -> Resul
         }
         .into(),
     );
-    map.entry("anchor".into())
-        .or_insert_with(|| "case.request_start".into());
     if tagged {
         map.insert("kind".into(), "time".into());
     }
@@ -107,7 +109,7 @@ pub(super) fn validate_legacy_offset(offset: &Value) -> Result<()> {
     crate::policy::TimeContract {
         format: crate::policy::TimestampFormat::SqlDatetime,
         relation: crate::policy::TimeRelation::PreserveOffset,
-        anchor: crate::policy::TimeAnchor::ApiRequestStart,
+        anchor: crate::policy::TimeAnchor::DependencyRequestStart,
         utc_offset: Some(offset.into()),
         clock_group: None,
     }

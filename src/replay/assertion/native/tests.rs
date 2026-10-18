@@ -9,6 +9,10 @@ fn clocks() -> AnchorClocks {
             source: chrono::DateTime::from_timestamp(1_000, 0),
             target: chrono::DateTime::from_timestamp(2_000, 0),
         },
+        dependency: super::super::RequestTimes {
+            source: chrono::DateTime::from_timestamp(1_000, 0),
+            target: chrono::DateTime::from_timestamp(2_000, 0),
+        },
         ..Default::default()
     }
 }
@@ -94,7 +98,8 @@ fn signed_native_tokens_compose_inside_unordered_items_without_speculative_nonce
 
 #[test]
 fn protobuf_container_rule_and_generic_child_time_share_one_strict_codec() {
-    let policy = crate::policy::parse_policy(r#"
+    let policy = crate::policy::parse_policy(
+        r#"
 format: traffic-policy/v1
 rules:
 - id: child-time
@@ -107,7 +112,7 @@ rules:
       /items: {field_path: [1], field_type: message, repeated: true}
       /items/*/created: {field_path: [1, 2], field_type: uint64}
   contract:
-    /items/*/created: {kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}
+    /items/*/created: {kind: time, format: unix_seconds, relation: preserve_offset}
   proof: {source: 'source/payload.rs:1', fact: 'time comes from case clock'}
 - id: item-order
   match: {api: 'GET /payload'}
@@ -120,7 +125,9 @@ rules:
         selector: {kind: protobuf, field_path: [1], alias: /items, element_type: message}
       proof: {source: 'source/payload.rs:2', fact: 'items come from a set'}
   proof: {source: 'source/payload.rs:2', fact: 'items come from a set'}
-"#).unwrap();
+"#,
+    )
+    .unwrap();
     let compiled = crate::policy::compile_policy(&policy).unwrap();
     let context = NativeResponseContext::load(
         &compiled,
@@ -167,5 +174,8 @@ rules:
             .unwrap()
             .passed()
     );
-    let _ = (TimeAnchor::ApiRequestStart, TimeRelation::PreserveOffset);
+    let _ = (
+        TimeAnchor::DependencyRequestStart,
+        TimeRelation::PreserveOffset,
+    );
 }

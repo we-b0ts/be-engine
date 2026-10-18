@@ -786,6 +786,8 @@ fn redis_hash_dependency(
 fn redis_dependency(connection_id: Uuid, sequence: u64, key: &str, response: &[u8]) -> Value {
     serde_json::json!({
         "event_type": "redis_exchange",
+        "timestamp": "1970-01-01T00:16:40Z",
+        "duration_ms": 0,
         "connection_id": connection_id,
         "sequence": sequence,
         "target_host": "redis.internal",

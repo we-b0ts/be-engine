@@ -268,7 +268,7 @@ pub(in crate::replay::policy::feedback) fn configured_sql_values(
         let field = MysqlTimeFieldRule {
             source_evidence: String::new(),
             time: selected.time_rule(),
-            anchor: crate::policy::TimeAnchor::ApiRequestStart,
+            anchor: crate::policy::TimeAnchor::DependencyRequestStart,
         };
         match (
             configured.entry(selected.value_index),

@@ -20,7 +20,7 @@ pub(super) fn convert(
                             p::TimeRelation::PreserveOffset
                         }
                     },
-                    anchor: p::TimeAnchor::ApiRequestStart,
+                    anchor: p::TimeAnchor::DependencyRequestStart,
                     utc_offset: None,
                     clock_group: None,
                 },
@@ -36,7 +36,7 @@ pub(super) fn convert(
                         r::ResponseDurationUnit::Minutes => p::DurationUnit::Minutes,
                         r::ResponseDurationUnit::Hours => p::DurationUnit::Hours,
                     },
-                    anchor: p::TimeAnchor::ApiRequestStart,
+                    anchor: p::TimeAnchor::DependencyRequestStart,
                 },
             );
         }

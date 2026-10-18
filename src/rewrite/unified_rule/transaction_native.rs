@@ -212,15 +212,10 @@ fn capture_source_proof_requires_fresh_recording_and_crash_recovery_restores_the
 #[test]
 fn stateful_sequence_plan_requires_the_complete_source_trace_and_preserves_target_replay_obligation()
  {
-    for (complete, anchor) in [
-        (false, "case.request_start"),
-        (true, "case.request_start"),
-        (false, "dependency.request_start"),
-        (true, "dependency.request_start"),
-    ] {
+    for complete in [false, true] {
         let fixture = Fixture::new();
         let proof = json!({"source":"src/tasks.rs:12","fact":"Source issues this ordered two-command update using request-relative scores"});
-        let time = json!({"contract":{"kind":"time","format":"unix_seconds","relation":"preserve_offset","anchor":anchor},"proof":proof});
+        let time = json!({"contract":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"},"proof":proof});
         write(
             &fixture.proposal,
             json!({"id":"task-window","match":{"api":"GET /api",

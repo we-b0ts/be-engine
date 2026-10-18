@@ -26,9 +26,8 @@ pub(crate) struct AnchorClocks {
 impl AnchorClocks {
     fn get(self, anchor: TimeAnchor) -> ClockPair {
         match anchor {
-            TimeAnchor::ApiRequestStart => self.case,
             TimeAnchor::DependencyRequestStart => self.dependency,
-            TimeAnchor::DependencyDelivery => self.delivery,
+            TimeAnchor::ApiRequestStart | TimeAnchor::DependencyDelivery => ClockPair::default(),
         }
     }
 }

@@ -87,7 +87,7 @@ async fn typed_header_contract_validates_real_replay_without_rewriting_source_ev
     let proof = json!({"source":"sdk.py:build_headers","fact":"Source signs this dependency request with its current UTC date"});
     let document = json!({"format":"traffic-policy/v1","rules":[{"id":"signing-time",
         "match":{"api":"GET /api","resource":{"protocol":"http","endpoint":"api.example.test:80"},"operation":"POST","path":"/business"},
-        "effect":{"kind":"http_request","headers":{"x-amz-date":{"contract":{"format":"amz_date","relation":"request_window","anchor":"dependency.request_start"},"proof":proof}}},"proof":proof}]});
+        "effect":{"kind":"http_request","headers":{"x-amz-date":{"contract":{"format":"amz_date","relation":"request_window"},"proof":proof}}},"proof":proof}]});
     crate::policy::compile_policy(&serde_json::from_value(document.clone()).unwrap()).unwrap();
     let policy = target.path().join(".traffic-e2e/policy.yaml");
     fs::write(&policy, serde_yaml::to_string(&document).unwrap()).unwrap();

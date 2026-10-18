@@ -1,12 +1,12 @@
 //! Per-call Redis clocks remain independent of API duration and batch speed.
 use super::*;
 
-fn script_rule(anchor: &str) -> ReplayDependencyRule {
+fn script_rule() -> ReplayDependencyRule {
     rule(json!({"key":"metrics","commands":[{"command":"EVALSHA",
         "script":{"sha1":"75f75be3d11e483c99c83f8b0b8836c2e2c5923b"},"argument_values":{
-        "3":{"time":"preserve_relative","format":"unix_seconds","anchor":anchor},
-        "4":{"time":"preserve_relative","format":"unix_microseconds","anchor":anchor},
-        "5":{"json":{"/changed_at_us":{"time":"preserve_relative","format":"unix_microseconds","anchor":anchor}}}
+        "3":{"time":"preserve_relative","format":"unix_seconds"},
+        "4":{"time":"preserve_relative","format":"unix_microseconds"},
+        "5":{"json":{"/changed_at_us":{"time":"preserve_relative","format":"unix_microseconds"}}}
     }}]}))
 }
 
@@ -23,9 +23,8 @@ fn command(seconds: i64) -> Vec<Vec<u8>> {
 
 #[test]
 fn dependency_clocks_support_faster_batches_and_never_fall_back_to_api_clocks() {
-    let selector = script_rule("dependency.request_start");
+    let selector = script_rule();
     validate(&selector).unwrap();
-    let legacy = runtime(script_rule("case.request_start"));
     let runtime = runtime(selector);
     let target = target();
     for iteration in 0..50 {
@@ -41,14 +40,6 @@ fn dependency_clocks_support_faster_batches_and_never_fall_back_to_api_clocks() 
             .unwrap()
             .unwrap();
         runtime.commit(decision);
-        if iteration > 3 {
-            assert!(
-                legacy
-                    .preview_redis_context(&context, &source, &actual)
-                    .unwrap()
-                    .is_err()
-            );
-        }
         assert!(
             runtime
                 .preview_redis_context(&context, &source, &command(target_clock + 6))
@@ -94,6 +85,14 @@ fn dependency_clocks_support_faster_batches_and_never_fall_back_to_api_clocks() 
 }
 
 #[test]
-fn dependency_sequence_timestamps_reject_response_delivery_anchors() {
-    assert!(validate(&script_rule("dependency.response_delivery")).is_err());
+fn dependency_sequence_timestamps_reject_every_configured_anchor() {
+    for anchor in [
+        "case.request_start",
+        "dependency.request_start",
+        "dependency.response_delivery",
+    ] {
+        let mut document = serde_json::to_value(script_rule()).unwrap();
+        document["redis"]["commands"][0]["argument_values"]["3"]["anchor"] = json!(anchor);
+        assert!(serde_json::from_value::<ReplayDependencyRule>(document).is_err());
+    }
 }

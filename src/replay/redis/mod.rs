@@ -146,6 +146,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     unified_delivery: Option<super::policy::request_contract::PreparedRedisDelivery>,
     rpc_push: Option<usize>,
     rpc_response: Option<Vec<u8>>,
@@ -697,7 +698,13 @@ async fn deliver_redis_exchange(
     let rendered = matched
         .response_time_shift
         .as_ref()
-        .map(|shift| shift.render(chrono::Utc::now()))
+        .map(|shift| {
+            shift.render(
+                matched
+                    .request_started_at
+                    .context("Redis time shift requires the target dependency request start")?,
+            )
+        })
         .transpose();
     let rendered = match rendered {
         Ok(value) => value,

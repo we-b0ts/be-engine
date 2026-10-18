@@ -16,7 +16,7 @@ rules:
   slot: value
   codec: {codec}
   contract:
-    /time: {{kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}}
+    /time: {{kind: time, format: unix_seconds, relation: preserve_offset}}
   delivery: {{rebase_time: [/time]}}
   proof: {{source: 'fixture.rs:clock', fact: 'Expiry preserves its offset from the request'}}
 "#
@@ -26,7 +26,7 @@ rules:
 
 fn clocks() -> AnchorClocks {
     AnchorClocks {
-        case: ClockPair {
+        dependency: ClockPair {
             source: chrono::DateTime::from_timestamp(1000, 0),
             target: chrono::DateTime::from_timestamp(2000, 0),
         },
@@ -55,7 +55,9 @@ fn delivery_decodes_source_once_and_keeps_json_and_pb_delivery_strict() {
         });
         assert_eq!(decodes, 1);
         assert_eq!(delivery.validation().time_validations["delivery-clock"], 1);
-        let rendered = delivery.render(clocks().case.target.unwrap()).unwrap();
+        let rendered = delivery
+            .render(clocks().dependency.target.unwrap())
+            .unwrap();
         assert_eq!(rendered, expected);
         assert_eq!(delivery.original, original);
         assert!(Delivery::prepare(&original, &rules, Default::default()).is_err());
@@ -93,9 +95,9 @@ fn delivery_preparation_benchmark() {
     }))
     .unwrap();
     let source_clocks = AnchorClocks {
-        case: ClockPair {
-            source: clocks().case.source,
-            target: clocks().case.source,
+        dependency: ClockPair {
+            source: clocks().dependency.source,
+            target: clocks().dependency.source,
         },
         ..Default::default()
     };

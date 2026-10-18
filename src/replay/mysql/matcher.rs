@@ -250,6 +250,10 @@ impl ReplayState {
                     }
                     let dynamic = self.replay_policy.as_ref().and_then(|policy| {
                         policy.dynamic_values.mysql(&MysqlPolicyContext {
+                            request_times: crate::replay::assertion::RequestTimes {
+                                source: contracts::source_started(&exchange.record),
+                                target: Some(request_observed_at),
+                            },
                             case_id: exchange.case_id.as_deref(),
                             identity,
                             command,
@@ -336,6 +340,10 @@ impl ReplayState {
                             )
                             .or_else(|| {
                                 policy.preview_mysql_sql_values(&MysqlPolicyContext {
+                                    request_times: crate::replay::assertion::RequestTimes {
+                                        source: contracts::source_started(&exchange.record),
+                                        target: Some(request_observed_at),
+                                    },
                                     case_id: active_case_id.as_deref(),
                                     identity,
                                     command,
@@ -371,6 +379,10 @@ impl ReplayState {
                         if !cross_protocol
                             && self.replay_policy.as_ref().is_some_and(|policy| {
                                 policy.allows_mysql_sql_difference(&MysqlPolicyContext {
+                                    request_times: crate::replay::assertion::RequestTimes {
+                                        source: contracts::source_started(&exchange.record),
+                                        target: Some(request_observed_at),
+                                    },
                                     case_id: active_case_id.as_deref(),
                                     identity,
                                     command,
@@ -422,6 +434,10 @@ impl ReplayState {
                             DependencyRuleDecision::default()
                         } else if let Some(policy) = &self.replay_policy {
                             let context = MysqlPolicyContext {
+                                request_times: crate::replay::assertion::RequestTimes {
+                                    source: contracts::source_started(&exchange.record),
+                                    target: Some(request_observed_at),
+                                },
                                 case_id: active_case_id.as_deref(),
                                 identity,
                                 command,
@@ -503,6 +519,7 @@ impl ReplayState {
                             identity,
                             &self.mysql.exchanges[index].record,
                             &exchange.record.response,
+                            Some(request_observed_at),
                         ) else {
                             continue;
                         };
@@ -655,6 +672,10 @@ impl ReplayState {
                         )
                         && self.replay_policy.as_ref().is_some_and(|policy| {
                             policy.mysql_sql_values_metadata_matches(&MysqlPolicyContext {
+                                request_times: crate::replay::assertion::RequestTimes {
+                                    source: contracts::source_started(&exchange.record),
+                                    target: None,
+                                },
                                 case_id: self.active_case_id.as_deref(),
                                 identity,
                                 command: "COM_STMT_EXECUTE",

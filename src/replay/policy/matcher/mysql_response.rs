@@ -9,13 +9,14 @@ impl ReplayPolicyRuntime {
         identity: &ReplaySessionIdentity,
         record: &RecordedMysqlExchange,
         delivered: &RecordedMysqlResponse,
+        target_started_at: Option<chrono::DateTime<Utc>>,
     ) -> Result<(RecordedMysqlResponse, Vec<String>)> {
         if record.outcome != crate::DependencyExchangeOutcome::Response
             || delivered.status != "resultset"
         {
             return Ok((delivered.clone(), vec![]));
         }
-        let Some((case_id, case)) =
+        let Some((_case_id, case)) =
             case_id.and_then(|id| self.cases.get(id).map(|case| (id, case)))
         else {
             return Ok((delivered.clone(), vec![]));
@@ -68,7 +69,10 @@ impl ReplayPolicyRuntime {
             crate::replay::mysql::time_shift::shift_response(
                 delivered,
                 &fields,
-                self.request_contracts.request_times(case_id),
+                crate::replay::assertion::RequestTimes {
+                    source: crate::replay::mysql::contracts::source_started(record),
+                    target: target_started_at,
+                },
             )?,
             ids,
         ))

@@ -4,12 +4,40 @@ use serde_json::json;
 
 fn clocks() -> AnchorClocks {
     AnchorClocks {
-        case: ClockPair {
+        dependency: ClockPair {
             source: Some(Utc.timestamp_opt(10, 0).unwrap()),
             target: Some(Utc.timestamp_opt(110, 0).unwrap()),
         },
         ..Default::default()
     }
+}
+
+#[test]
+fn time_contract_uses_only_independent_dependency_start_and_never_falls_back() {
+    let contract = FieldContract::Time {
+        format: TimestampFormat::UnixSeconds,
+        relation: TimeRelation::PreserveOffset,
+        anchor: crate::policy::TimeAnchor::DependencyRequestStart,
+        utc_offset: None,
+        clock_group: None,
+    };
+    let fields = [Field {
+        rule_id: "clock",
+        pointer: "/at",
+        contract: &contract,
+    }];
+    let source = json!({"at": 10, "stable": 7});
+    let target = json!({"at": 110, "stable": 7});
+    let mut independent = clocks();
+    independent.case = ClockPair {
+        source: Some(Utc.timestamp_opt(0, 0).unwrap()),
+        target: Some(Utc.timestamp_opt(1000, 0).unwrap()),
+    };
+    assert!(compare(&source, &target, &fields, independent).passed());
+    independent.case = independent.dependency;
+    independent.delivery = independent.dependency;
+    independent.dependency = ClockPair::default();
+    assert!(!compare(&source, &target, &fields, independent).passed());
 }
 
 #[test]
@@ -21,7 +49,7 @@ fn naive_relative_times_cancel_shared_offsets_without_timezone_configuration() {
         let contract = FieldContract::Time {
             format,
             relation: TimeRelation::PreserveOffset,
-            anchor: crate::policy::TimeAnchor::ApiRequestStart,
+            anchor: crate::policy::TimeAnchor::DependencyRequestStart,
             utc_offset: None,
             clock_group: None,
         };
@@ -60,7 +88,7 @@ fn source_sibling_condition_keeps_terminal_durations_exact_through_unordered_pai
         },
         contract: Box::new(FieldContract::Duration {
             unit: crate::policy::DurationUnit::Seconds,
-            anchor: crate::policy::TimeAnchor::ApiRequestStart,
+            anchor: crate::policy::TimeAnchor::DependencyRequestStart,
         }),
     };
     let unordered = FieldContract::Unordered;
@@ -139,7 +167,7 @@ fn time_requires_independent_anchors_even_for_equal_values() {
     let contract = FieldContract::Time {
         format: TimestampFormat::UnixMicroseconds,
         relation: TimeRelation::PreserveOffset,
-        anchor: TimeAnchor::ApiRequestStart,
+        anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
     };
@@ -160,7 +188,7 @@ fn unordered_time_pairs_whole_elements_and_rejects_relationship_changes() {
     let time = FieldContract::Time {
         format: TimestampFormat::UnixMicroseconds,
         relation: TimeRelation::PreserveOffset,
-        anchor: TimeAnchor::ApiRequestStart,
+        anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
     };
@@ -228,7 +256,7 @@ fn explicitly_independent_clocks_keep_each_anchor_window_and_strict_group_copies
     let clock = |group: Option<&str>| FieldContract::Time {
         format: TimestampFormat::UnixMicroseconds,
         relation: TimeRelation::PreserveOffset,
-        anchor: TimeAnchor::ApiRequestStart,
+        anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: group.map(str::to_owned),
     };

@@ -62,7 +62,6 @@ effect:
                   kind: time
                   format: amz_date
                   relation: preserve_offset
-                  anchor: dependency.request_start
                   clock_group: signing
                 X-Amz-Credential:
                   kind: utc_date_segment
@@ -77,7 +76,6 @@ effect:
               kind: time
               format: rfc3339
               relation: preserve_offset
-              anchor: dependency.request_start
               clock_group: expiry
 ```
 

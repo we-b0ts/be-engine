@@ -79,7 +79,7 @@ rules:
     slot: body
     codec: {codec}
     contract:
-      /time: {{kind: time, format: unix_seconds, relation: preserve_offset, anchor: dependency.request_start}}
+      /time: {{kind: time, format: unix_seconds, relation: preserve_offset}}
       /members: {{kind: unordered}}
     proof: {{source: 'src/client:send', fact: 'Request time uses the dependency clock; member order is not observed'}}
   - id: http-response
@@ -92,9 +92,9 @@ rules:
     slot: body
     codec: {codec}
     contract:
-      /time: {{kind: time, format: unix_seconds, relation: preserve_offset, anchor: dependency.response_delivery}}
+      /time: {{kind: time, format: unix_seconds, relation: preserve_offset}}
     delivery: {{rebase_time: [/time]}}
-    proof: {{source: 'src/server:build', fact: 'Response time uses delivery clock and is not signed'}}
+    proof: {{source: 'src/server:build', fact: 'Response time preserves its offset from the dependency request start and is not signed'}}
 "#)).unwrap();
     (temp, case, path, event)
 }
@@ -133,7 +133,8 @@ async fn request_and_response_json_and_protobuf_share_native_safe_contracts_and_
         let (address, runtime, task) =
             super::super::tests::spawn_http_replay_with_policy(&case, vec![], Some(path), None)
                 .await;
-        let response = send(address, payload(pb, Utc::now().timestamp(), true, 7), "7").await;
+        let sent_at = Utc::now().timestamp();
+        let response = send(address, payload(pb, sent_at, true, 7), "7").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["x-stable"], "fixed");
         let declared = response.headers()["content-length"]
@@ -146,13 +147,10 @@ async fn request_and_response_json_and_protobuf_share_native_safe_contracts_and_
         assert_eq!(declared, bytes.len());
         let decoded =
             crate::value_codec::CodecView::decode(&compiled.rules[1].rule.codec, &bytes).unwrap();
-        assert!(
-            decoded.logical["time"]
-                .as_i64()
-                .unwrap()
-                .abs_diff(Utc::now().timestamp())
-                <= 3
-        );
+        // Preserve the Source response's +5s offset from this dependency's
+        // start, regardless of when Replay delivers the response.
+        let timestamp = decoded.logical["time"].as_i64().unwrap();
+        assert!((sent_at + 5..=Utc::now().timestamp() + 5).contains(&timestamp));
         assert_eq!(decoded.logical["stable"], 7);
         if pb {
             assert!(bytes.ends_with(&[24, 7, 72, 0x87, 0]));
@@ -210,7 +208,8 @@ async fn request_and_response_json_and_protobuf_share_native_safe_contracts_and_
                 bytes
             );
         }
-        let response = send(address, payload(pb, Utc::now().timestamp(), true, 7), "7").await;
+        let sent_at = Utc::now().timestamp();
+        let response = send(address, payload(pb, sent_at, true, 7), "7").await;
         assert_eq!(
             response.status(),
             StatusCode::BAD_GATEWAY,

@@ -229,16 +229,6 @@ impl Walker<'_> {
 
     fn node(&self, value: &mut Value, shape: Shape, parent: &Value, depth: usize) -> Result<()> {
         ensure!(depth < 128, "authoring contract nesting exceeds 128 levels");
-        // SQL write clocks belong to the individual dependency request. Keep an
-        // explicitly selected API clock for values generated before a batch.
-        if !self.compact
-            && matches!(shape, Shape::SqlValue | Shape::SqlTime)
-            && let Some(map) = value.as_mapping_mut()
-            && map.get("kind").and_then(Value::as_str) != Some("json")
-        {
-            map.entry("anchor".into())
-                .or_insert_with(|| "dependency.request_start".into());
-        }
         if matches!(
             shape,
             Shape::Field

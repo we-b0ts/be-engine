@@ -373,7 +373,7 @@ fn missing_json_and_presence_sensitive_protobuf_fields_cannot_authorize_a_rule()
                 "/absent":{"field_path":[9],"field_type":"int64"}
             }});
             rule["contract"] = json!({"/absent":{"kind":"time","format":"unix_microseconds",
-                "relation":"preserve_offset","anchor":"dependency.request_start"}});
+                "relation":"preserve_offset"}});
         }
         write(&fixture.proposal, rule);
         let source: &[u8] = if protobuf {

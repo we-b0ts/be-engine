@@ -132,21 +132,6 @@ pub(super) fn validate(
         };
         let case_dir = super::super::resolve_published_report_path(std::path::Path::new(case_dir));
         let request: Value = serde_json::from_slice(&fs::read(case_dir.join("request.json"))?)?;
-        let request_times = crate::replay::assertion::RequestTimes {
-            source: request["timestamp"].as_str().and_then(|s| s.parse().ok()),
-            target: case["target_request_started_at"]
-                .as_str()
-                .and_then(|s| s.parse().ok()),
-        };
-        ensure!(
-            request_times.source.is_some() && request_times.target.is_some(),
-            "SQL time evidence requires source and target request timestamps; replay the case with the current engine"
-        );
-        let target_request = request_times.target.expect("validated request timestamp");
-        ensure!(
-            target_request >= start && target_request <= finish,
-            "SQL time target request timestamp is outside the replay interval"
-        );
         let (method, path) = crate::replay::policy::response::parse_api(&feedback.api)?;
         if request["method"].as_str() != Some(method)
             || !crate::replay::policy::pattern::path_pattern_matches(
@@ -167,6 +152,23 @@ pub(super) fn validate(
             if event["event_type"] != "mysql_exchange" || !identity(s, &event, true) {
                 continue;
             }
+            let request_times = crate::replay::assertion::RequestTimes {
+                source: crate::replay::recording_evidence::dependency_started_at(&event),
+                target: actual["request_started_at"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok()),
+            };
+            ensure!(
+                request_times.source.is_some() && request_times.target.is_some(),
+                "SQL time evidence requires source and target dependency request timestamps; replay with the current engine"
+            );
+            let target_request = request_times
+                .target
+                .expect("validated dependency timestamp");
+            ensure!(
+                target_request >= start && target_request <= finish,
+                "SQL dependency request timestamp is outside the replay interval"
+            );
             // An unscoped rule still requires proof from the same actual
             // database connection identity, never from an unrelated endpoint.
             if !event["target_host"].as_str().is_some_and(|host| {
@@ -223,6 +225,7 @@ pub(super) fn validate(
                 };
                 let normalized =
                     aliases.mysql(&crate::replay::policy::matcher::MysqlPolicyContext {
+                        request_times,
                         case_id: actual["case_id"].as_str(),
                         identity: &identity,
                         command: actual["command"].as_str().unwrap_or_default(),

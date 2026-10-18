@@ -163,6 +163,10 @@ impl ReplayState {
                 } else if let Some(policy) = &self.replay_policy {
                     match policy.preview_http(
                         &HttpPolicyContext {
+                            request_times: crate::replay::assertion::RequestTimes {
+                                source: request_headers::time_reference::source(&exchange.record),
+                                target: Some(request_started_at),
+                            },
                             case_id: active_case_id.as_deref(),
                             target,
                             method: method.as_str(),
@@ -198,6 +202,10 @@ impl ReplayState {
                     && let Ok(recorded_body) = decode_body(&exchange.record.request_body)
                     && policy.preview_http_json(
                         &HttpPolicyContext {
+                            request_times: crate::replay::assertion::RequestTimes {
+                                source: request_headers::time_reference::source(&exchange.record),
+                                target: Some(request_started_at),
+                            },
                             case_id: active_case_id.as_deref(),
                             target,
                             method: method.as_str(),

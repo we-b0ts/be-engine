@@ -139,12 +139,16 @@ available. Human authoring can omit repeated information within the same rule:
 - Nested contracts may retain the full `contract`/`proof` wrapper or use the
   direct contract spelling. `relative_time: FORMAT` expands to typed time with
   `preserve_offset`; `request_time: FORMAT` expands to `request_window`. Both
-  default to `case.request_start` (SQL `mysql_values.values` defaults to
-  `dependency.request_start`, including JSON time fields) and accept an explicit `anchor`
-  and `clock_group`. Relative comparisons of naive timestamps cancel a shared UTC
-  offset; legacy `utc_offset` is validated and removed by authoring normalization.
-  Source and Target must use consistent timezone behavior. Formats/units are always explicit. The renderer keeps the
-  effective anchor visible. `unordered` abbreviates `{kind: unordered}`.
+  use the independently observed start of their own request: the HTTP request
+  for API responses and the physical dependency request for dependency contracts.
+  `anchor` is not a configuration field: compact, expanded and nested contracts
+  reject it, including an explicit `dependency.request_start` value. The same
+  rule applies to duration contracts. `clock_group` only correlates values from
+  one Source-proven clock read; it never selects another clock. Relative
+  comparisons of naive timestamps cancel a shared UTC offset; legacy
+  `utc_offset` is validated and removed by authoring normalization. Source and
+  Target must use consistent timezone behavior. Formats/units remain explicit.
+  `unordered` abbreviates `{kind: unordered}`.
 
 For example, a native SQL rule can preserve its original abstraction and scope
 without repeating the same Source paragraph for every time field:
@@ -171,11 +175,9 @@ rules:
           fields:
             /updatedAt:
               relative_time: iso8601_naive
-              anchor: case.request_start
               clock_group: payload
         1:
           relative_time: sql_datetime
-          anchor: case.request_start
           clock_group: audit
     proof:
       source: app/task.py:update
@@ -184,7 +186,7 @@ rules:
 
 The example revision is a placeholder fixture identity; projects declare their
 actual frozen Source identity. The equivalent value-rule spelling is
-`/expires_at: {relative_time: unix_microseconds, anchor: case.request_start}`;
+`/expires_at: {relative_time: unix_microseconds}`;
 JSON and typed PB reuse it on each supported surface. No resource registry,
 business default, new effect, dynamic macro or expression language is introduced.
 
@@ -236,7 +238,6 @@ rules:
         kind: time
         relation: preserve_offset
         format: unix_microseconds
-        anchor: case.request_start
     proof:
       source: src/session.rs:create
       fact: Source serializes a membership set and derives expiry from this request.
@@ -278,7 +279,6 @@ rules:
         kind: time
         relation: preserve_offset
         format: unix_microseconds
-        anchor: dependency.response_delivery
     delivery:
       rebase_time: [/expires_at]
     proof:
@@ -295,17 +295,19 @@ rules:
         kind: time
         relation: preserve_offset
         format: unix_microseconds
-        anchor: case.request_start
     proof:
       source: src/session.rs:response
       fact: The response forwards the expiry created for this request.
 ```
 
-The canonical anchors are `case.request_start`, `dependency.request_start`
-and `dependency.response_delivery`. The runtime supplies the independently
-observed Source/Target pair for the declared anchor; a payload cannot choose
-its own clock. Missing or inadequate historical anchors are unavailable,
-not permission to fall back to the current wall clock. New Redis recordings retain
+Time and duration contracts use the start of their own request: dependency
+contracts use the corresponding dependency request, and API response contracts
+use their own HTTP request.
+The protocol adapter supplies its independently observed Source/Target pair.
+The outer API request never substitutes for a dependency clock. Response
+delivery, current wall time and a payload value are never fallback clocks. Missing or inadequate historical dependency clocks are
+unavailable and fail the selected contract. An API response requires the independently observed start of its own HTTP
+request; it does not select an arbitrary child SQL/Redis dependency. New Redis recordings retain
 exact request-start observations. Lock causality uses completion before reference
 start; a historical floor-millisecond duration supplies only a conservative bound
 and cannot prove a submillisecond ordering. Resource endpoints use
@@ -411,7 +413,7 @@ rules:
         when:
           relative_pointer: ../status
           not_in: [published, withdrawn, closed]
-        contract: {kind: duration, unit: seconds, anchor: case.request_start}
+        contract: {kind: duration, unit: seconds}
     proof:
       source: app/publications.py:waiting_duration
       fact: Active durations use now minus submitted_at; terminal states freeze at updated_at and therefore remain exact.
@@ -587,7 +589,7 @@ failure/evidence -> candidate + missing proof
 ```
 
 The same CLI accepts one rule, a list, or a complete policy document. Engine-generated
-scopes, codec selectors and anchors should be prefilled so workers supply only
+scopes and codec selectors should be prefilled so workers supply only
 the Source fact and genuinely missing schema/relationship choices. Plans show
 what stays strict, affected coverage, residual differences and the exact next
 verification action. They never ask workers to construct internal fingerprints.

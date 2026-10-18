@@ -198,7 +198,7 @@ effect:
     - operation: ZADD
       arguments:
         1:
-          contract: {kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}
+          contract: {kind: time, format: unix_seconds, relation: preserve_offset}
           proof: {source: 'scheduler.rs:2', fact: 'current request time'}
 "#;
     let rule: NativeRule = serde_yaml::from_str(yaml).unwrap();
@@ -210,7 +210,7 @@ effect:
         ))
         .is_err()
     );
-    let duplicate=yaml.replace("          proof: {source: 'scheduler.rs:2', fact: 'current request time'}","          proof: {source: 'scheduler.rs:2', fact: 'current request time'}\n        1:\n          contract: {kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}\n          proof: {source: 'scheduler.rs:3', fact: 'must not replace first slot'}");
+    let duplicate=yaml.replace("          proof: {source: 'scheduler.rs:2', fact: 'current request time'}","          proof: {source: 'scheduler.rs:2', fact: 'current request time'}\n        1:\n          contract: {kind: time, format: unix_seconds, relation: preserve_offset}\n          proof: {source: 'scheduler.rs:3', fact: 'must not replace first slot'}");
     assert!(serde_yaml::from_str::<NativeRule>(&duplicate).is_err());
 }
 
@@ -219,7 +219,7 @@ fn grouped_clock_names_are_semantic_and_sequence_claims_keep_command_slots() {
     let time = NativeTime {
         format: TimestampFormat::UnixMicroseconds,
         relation: crate::policy::TimeRelation::PreserveOffset,
-        anchor: crate::policy::TimeAnchor::ApiRequestStart,
+        anchor: crate::policy::TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: Some("first-read".into()),
     };

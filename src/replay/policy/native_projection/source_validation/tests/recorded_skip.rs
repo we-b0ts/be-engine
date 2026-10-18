@@ -71,8 +71,8 @@ fn recorded_skip_source_contracts_validate_preserved_keys_and_independent_sessio
                     "effect":{"kind":"redis_sequence","key":{"kind":"capture","binding":"wework-session","template":"wework_auth_session:{value}","format":{"kind":"uuid_v4"}},
                     "commands":[{"operation":"SET","arguments":{"1":{"kind":"json","fields":{
                         "/poll_token":{"kind":"random","format":"base64url","length":43},
-                        "/created_at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset","anchor":"case.request_start"},
-                        "/expires_at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset","anchor":"case.request_start"}
+                        "/created_at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"},
+                        "/expires_at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"}
                     }}}}]},"proof":{"source":"app/api/endpoints/wework_auth.py:308-333","fact":"Source creates a uuid4 key, an independent token_urlsafe(32), and creation/expiry clocks before SET EX 300"}});
                 let proposed = crate::policy::parse_policy(
                     &json!({"format":"traffic-policy/v1","rules":[rule]}).to_string(),

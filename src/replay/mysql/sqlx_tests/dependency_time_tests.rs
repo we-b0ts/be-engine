@@ -4,7 +4,7 @@ use sqlx::Executor;
 
 const SQL: &str = "UPDATE tasks SET deleted=?, updated_at=?, payload=? WHERE id=?";
 
-fn policy(anchor: &str) -> String {
+fn policy() -> String {
     format!(
         r#"format: traffic-policy/v1
 rules:
@@ -17,11 +17,11 @@ rules:
   effect:
     kind: mysql_values
     values:
-      1: {{relative_time: sql_datetime, anchor: {anchor}}}
+      1: {{relative_time: sql_datetime}}
       2:
         kind: json
         fields:
-          /changed_at_us: {{relative_time: unix_microseconds, anchor: {anchor}}}
+          /changed_at_us: {{relative_time: unix_microseconds}}
   proof: {{source: 'store.py:delete', fact: 'Each iteration obtains now and copies the same clock into its audit fields'}}
 "#
     )
@@ -74,14 +74,7 @@ async fn prepared(
 async fn dependency_request_time_supports_faster_batches_over_tls_text_and_prepared_writes() {
     tokio::time::timeout(Duration::from_secs(20), async {
         let source = records(50);
-        let (temp, addr, runtime, task) = fixture_with_policy(
-            &source,
-            Some(
-                &policy("dependency.request_start")
-                    .replace(", anchor: dependency.request_start", ""),
-            ),
-        )
-        .await;
+        let (temp, addr, runtime, task) = fixture_with_policy(&source, Some(&policy())).await;
         let case = temp.path().join(".traffic-e2e/local/recordings/case-id");
         let original = std::fs::read(case.join("dependencies.jsonl")).unwrap();
         let mut client = connect(addr, &case.join(".replay/ca.pem")).await;
@@ -163,55 +156,30 @@ async fn dependency_request_time_supports_faster_batches_over_tls_text_and_prepa
     .unwrap();
 }
 
-#[tokio::test]
-async fn case_request_time_keeps_its_original_semantics_for_late_batch_writes() {
-    tokio::time::timeout(Duration::from_secs(15), async {
-        let source = records(50).pop().unwrap();
-        let (temp, addr, runtime, task) =
-            fixture_with_policy(&[source], Some(&policy("case.request_start"))).await;
-        let mut client = connect(
-            addr,
-            &temp
-                .path()
-                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
-        )
-        .await;
-        let clock = now();
-        assert!(
-            prepared(&mut client, 50, clock, payload(clock))
-                .await
-                .is_err()
-        );
-        client.close().await.unwrap();
-        let state = runtime.state.lock().await;
-        assert_eq!(state.mysql.events.matched_query_count, 0);
-        assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), 1);
-        task.abort();
-    })
-    .await
-    .unwrap();
-}
-
 #[test]
-fn mysql_time_admission_retains_anchors_and_rejects_future_delivery_clocks() {
-    for anchor in ["case.request_start", "dependency.request_start"] {
-        let document: crate::policy::TrafficPolicy = serde_yaml::from_str(&policy(anchor)).unwrap();
-        let compiled = crate::policy::compile_policy(&document).unwrap();
-        let projection =
-            crate::replay::policy::native_projection::project_native(&compiled.native).unwrap();
-        let encoded = serde_yaml::to_string(&projection.document).unwrap();
-        let restored: crate::replay::policy::ReplayPolicyDocument =
-            serde_yaml::from_str(&encoded).unwrap();
-        assert_eq!(
-            serde_json::to_value(&projection.document).unwrap(),
-            serde_json::to_value(restored).unwrap()
+fn mysql_time_contracts_reject_configured_clocks_and_render_without_anchors() {
+    for anchor in [
+        "case.request_start",
+        "dependency.request_start",
+        "dependency.response_delivery",
+        "arbitrary",
+    ] {
+        let raw = policy().replace(
+            "relative_time: sql_datetime",
+            &format!("relative_time: sql_datetime, anchor: {anchor}"),
         );
-        if anchor == "dependency.request_start" {
-            assert!(encoded.contains("anchor: dependency.request_start"));
-        }
+        assert!(crate::policy::parse_policy(&raw).is_err(), "{anchor}");
     }
-    let document: crate::policy::TrafficPolicy =
-        serde_yaml::from_str(&policy("dependency.response_delivery")).unwrap();
-    let error = crate::policy::compile_policy(&document).unwrap_err();
-    assert!(format!("{error:#}").contains("future response-delivery clock"));
+    let document = crate::policy::parse_policy(&policy()).unwrap();
+    let compiled = crate::policy::compile_policy(&document).unwrap();
+    let projection =
+        crate::replay::policy::native_projection::project_native(&compiled.native).unwrap();
+    let encoded = serde_yaml::to_string(&projection.document).unwrap();
+    assert!(!encoded.contains("anchor:"));
+    let restored: crate::replay::policy::ReplayPolicyDocument =
+        serde_yaml::from_str(&encoded).unwrap();
+    assert_eq!(
+        serde_json::to_value(&projection.document).unwrap(),
+        serde_json::to_value(restored).unwrap()
+    );
 }

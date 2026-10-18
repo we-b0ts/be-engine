@@ -44,6 +44,7 @@ pub(super) struct HttpWitness {
     pub headers: BTreeMap<String, Vec<String>>,
 }
 impl RequestContracts {
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::replay) fn observe_redis(
         &self,
         case: &str,
@@ -52,6 +53,7 @@ impl RequestContracts {
         command: &str,
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
+        clocks: crate::replay::assertion::RequestTimes,
     ) {
         if source.len() != actual.len() || source == actual {
             return;
@@ -89,7 +91,15 @@ impl RequestContracts {
         let source = serde_json::to_vec(source).expect("argument serialization");
         let actual = serde_json::to_vec(actual).expect("argument serialization");
         self.observe(
-            case, target, command, database, "", capability, &source, &actual,
+            case,
+            target,
+            command,
+            database,
+            "",
+            capability,
+            &source,
+            &actual,
+            clocks.target,
         );
     }
     #[allow(clippy::too_many_arguments)]
@@ -140,6 +150,7 @@ impl RequestContracts {
             "http_multipart",
             source,
             &actual,
+            clocks.target,
         );
     }
     #[allow(clippy::too_many_arguments)]
@@ -153,6 +164,7 @@ impl RequestContracts {
         capability: &str,
         source: &[u8],
         actual: &[u8],
+        actual_started_at: Option<DateTime<Utc>>,
     ) {
         if actual.len() > 1024 * 1024 {
             return;
@@ -160,7 +172,7 @@ impl RequestContracts {
         let Ok(anchor) = self.anchor(case) else {
             return;
         };
-        let Some(actual_anchor) = anchor.actual else {
+        let Some(actual_anchor) = actual_started_at else {
             return;
         };
         let mut candidate = Candidate {
@@ -458,8 +470,10 @@ pub(in crate::replay::policy) fn verify_capture(
                         database: candidate.database,
                         username: event["username"].as_str(),
                         command: &candidate.command,
-                        recorded_at: None,
-                        actual_at: None,
+                        recorded_at: crate::replay::recording_evidence::dependency_started_at(
+                            &event,
+                        ),
+                        actual_at: Some(candidate.actual_anchor),
                         connection_id: None,
                         sequence: None,
                         observation_id: None,

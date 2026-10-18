@@ -37,6 +37,7 @@ fn sql_time_compares_relative_differences_with_fixed_microsecond_boundary() {
                 .format("%Y-%m-%d %H:%M:%S%.6f")
             );
             let context = MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: "COM_QUERY",
@@ -55,13 +56,18 @@ fn sql_time_compares_relative_differences_with_fixed_microsecond_boundary() {
 }
 
 #[test]
-fn sql_time_requires_both_request_anchors_and_does_not_reuse_a_previous_case_anchor() {
+fn sql_time_requires_both_dependency_clocks_and_never_uses_the_api_clock() {
     let fixture = fixture();
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
     let identity = mysql_identity();
     let source = "UPDATE subtasks_0155 SET updated_at='2020-01-01 08:00:00' WHERE id=7";
     let actual = "UPDATE subtasks_0155 SET updated_at='2026-09-07 20:00:00' WHERE id=7";
-    let context = MysqlPolicyContext {
+    let times = RequestTimes {
+        source: Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()),
+        target: Some(Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 0).unwrap()),
+    };
+    let mut context = MysqlPolicyContext {
+        request_times: times,
         case_id: Some(CASE_ID),
         identity: &identity,
         command: "COM_QUERY",
@@ -70,9 +76,8 @@ fn sql_time_requires_both_request_anchors_and_does_not_reuse_a_previous_case_anc
         recorded: None,
         actual: None,
     };
-    let target = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 0).unwrap();
-    anchor_sql_times(&runtime, target);
-    let times = runtime.request_contracts.request_times(CASE_ID);
+    // Even a perfectly matching API pair cannot supply a missing dependency.
+    runtime.request_contracts.set_request_times(CASE_ID, times);
     for missing in [
         RequestTimes {
             source: None,
@@ -83,15 +88,12 @@ fn sql_time_requires_both_request_anchors_and_does_not_reuse_a_previous_case_anc
             ..times
         },
     ] {
-        runtime
-            .request_contracts
-            .set_request_times(CASE_ID, missing);
+        context.request_times = missing;
         assert!(runtime.preview_mysql_sql_values(&context).unwrap().is_err());
     }
-    anchor_sql_times(&runtime, target);
-    assert!(runtime.preview_mysql_sql_values(&context).unwrap().is_ok());
+    context.request_times = times;
     runtime.begin_case(CASE_ID);
-    assert!(runtime.preview_mysql_sql_values(&context).unwrap().is_err());
+    assert!(runtime.preview_mysql_sql_values(&context).unwrap().is_ok());
 }
 
 #[test]

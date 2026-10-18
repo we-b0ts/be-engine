@@ -98,6 +98,7 @@ fn mysql_capture_pair_binds_source_table_and_keeps_reference_tables_exact() {
             format!("SELECT id FROM {table} WHERE {qualifier}.name='new-name' AND owner_id=7");
         let result = runtime
             .mysql(&MysqlPolicyContext {
+                request_times: Default::default(),
                 case_id: Some("case"),
                 identity: &identity,
                 command: "COM_QUERY",
@@ -121,6 +122,7 @@ fn mysql_capture_pair_binds_source_table_and_keeps_reference_tables_exact() {
     let actual = "UPDATE other_0002 SET name='new-name'";
     let result = runtime
         .mysql(&MysqlPolicyContext {
+            request_times: Default::default(),
             case_id: Some("case"),
             identity: &identity,
             command: "COM_QUERY",

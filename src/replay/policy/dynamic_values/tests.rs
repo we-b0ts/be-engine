@@ -32,6 +32,7 @@ fn capture(runtime: &DynamicValues, source: &str, target: &str) -> Result<Dynami
     let target_sql = format!("SELECT id FROM kinds WHERE name='{target}' AND user_id=1");
     Ok(runtime
         .mysql(&MysqlPolicyContext {
+            request_times: Default::default(),
             case_id: Some("case"),
             identity: &identity,
             command: "COM_QUERY",
@@ -88,6 +89,7 @@ fn a_single_capture_authorizes_sql_json_and_redis_references_without_a_format() 
     ];
     let normalized = runtime
         .mysql(&MysqlPolicyContext {
+            request_times: Default::default(),
             case_id: Some("case"),
             identity: &identity,
             command: "COM_STMT_EXECUTE",

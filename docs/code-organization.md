@@ -867,7 +867,7 @@ explicit repository-wide audit.
   timestamp fields; `timestamp` owns Unix integer and RFC3339 string validation
   and translation; `evidence` verifies source-selected immutable exchanges
   against a finalized API attempt without heuristic discovery. Redis delivery
-  owns the send-time anchor and successful-use observations; finite matching
+  owns independent dependency request clocks and successful-use observations; finite matching
   remains unchanged. `policy/feedback/redis_time_shift` owns stale-safe policy
   plan/apply, with source proof retained in coordinator plan records.
   `replay/redis/key_selector` owns compact and legacy-compatible key/hash-field

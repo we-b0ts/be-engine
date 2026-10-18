@@ -70,7 +70,7 @@ fn fields() -> BTreeMap<String, FieldContract> {
             FieldContract::Time {
                 format: TimestampFormat::UnixSeconds,
                 relation: TimeRelation::PreserveOffset,
-                anchor: TimeAnchor::ApiRequestStart,
+                anchor: TimeAnchor::DependencyRequestStart,
                 utc_offset: None,
                 clock_group: None,
             },
@@ -96,7 +96,7 @@ fn compare(source: &[u8], target: &[u8]) -> bool {
         &target.comparison_value(&paths),
         &field_views,
         AnchorClocks {
-            case: ClockPair {
+            dependency: ClockPair {
                 source: chrono::DateTime::from_timestamp(1000, 0),
                 target: chrono::DateTime::from_timestamp(2000, 0),
             },
@@ -198,7 +198,7 @@ fn repeated_scalar_element_contracts_release_only_selected_raw_elements() {
     let contract = FieldContract::Time {
         format: TimestampFormat::UnixSeconds,
         relation: TimeRelation::PreserveOffset,
-        anchor: TimeAnchor::ApiRequestStart,
+        anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
     };
@@ -213,7 +213,7 @@ fn repeated_scalar_element_contracts_release_only_selected_raw_elements() {
                 contract: &contract
             }],
             AnchorClocks {
-                case: ClockPair {
+                dependency: ClockPair {
                     source: chrono::DateTime::from_timestamp(1000, 0),
                     target: chrono::DateTime::from_timestamp(2000, 0)
                 },

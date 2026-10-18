@@ -381,6 +381,7 @@ pub enum FieldContract {
     Time {
         format: TimestampFormat,
         relation: TimeRelation,
+        #[serde(skip)]
         anchor: TimeAnchor,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         utc_offset: Option<String>,
@@ -389,6 +390,7 @@ pub enum FieldContract {
     },
     Duration {
         unit: DurationUnit,
+        #[serde(skip)]
         anchor: TimeAnchor,
     },
 }
@@ -470,6 +472,7 @@ impl FieldCondition {
 pub struct TimeContract {
     pub format: TimestampFormat,
     pub relation: TimeRelation,
+    #[serde(skip)]
     pub anchor: TimeAnchor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utc_offset: Option<String>,
@@ -533,10 +536,11 @@ pub enum TimeRelation {
     PreserveOffset,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum TimeAnchor {
     #[serde(rename = "case.request_start")]
     ApiRequestStart,
+    #[default]
     #[serde(rename = "dependency.request_start")]
     DependencyRequestStart,
     #[serde(rename = "dependency.response_delivery")]

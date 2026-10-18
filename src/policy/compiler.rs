@@ -233,13 +233,8 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
         match contract.unconditional() {
             FieldContract::Time { anchor, .. } | FieldContract::Duration { anchor, .. } => {
                 ensure!(
-                    rule.surface != Surface::ApiResponse || *anchor == TimeAnchor::ApiRequestStart,
-                    "API response time contracts require case.request_start"
-                );
-                ensure!(
-                    rule.surface != Surface::DependencyRequest
-                        || *anchor != TimeAnchor::DependencyDelivery,
-                    "dependency requests cannot depend on a future response-delivery clock"
+                    *anchor == TimeAnchor::DependencyRequestStart,
+                    "time contracts require the corresponding dependency request start"
                 );
             }
             FieldContract::Unordered => {}

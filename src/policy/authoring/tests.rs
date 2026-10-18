@@ -2,6 +2,82 @@ use crate::policy::native::SqlValueContract;
 use crate::policy::*;
 
 #[test]
+fn configured_time_anchors_reject_in_compact_full_and_nested_contracts() {
+    for clock in [
+        "case.request_start",
+        "dependency.request_start",
+        "dependency.response_delivery",
+        "unknown",
+    ] {
+        for original in [
+            sql_policy().to_owned(),
+            render_policy(&parse_policy(sql_policy()).unwrap()).unwrap(),
+        ] {
+            for field in [
+                "relative_time: sql_datetime",
+                "relative_time: iso8601_naive",
+            ] {
+                let raw = original.replace(field, &format!("{field}, anchor: {clock}"));
+                assert!(parse_policy(&raw).is_err(), "{field}: {clock}");
+            }
+        }
+    }
+    let policy = parse_policy(sql_policy()).unwrap();
+    let raw = serde_yaml::to_string(&policy).unwrap();
+    assert!(!raw.contains("anchor:"));
+    assert!(!render_policy(&policy).unwrap().contains("anchor:"));
+    let full = sql_policy().replace(
+        "relative_time: sql_datetime, utc_offset: '+08:00'",
+        "kind: time, format: sql_datetime, relation: preserve_offset",
+    );
+    assert!(parse_policy(&full).is_ok());
+    for clock in [
+        "case.request_start",
+        "dependency.request_start",
+        "dependency.response_delivery",
+    ] {
+        let forbidden = full.replace(
+            "relation: preserve_offset",
+            &format!("relation: preserve_offset, anchor: {clock}"),
+        );
+        assert!(parse_policy(&forbidden).is_err());
+    }
+}
+
+#[test]
+fn duration_and_encrypted_duration_do_not_require_or_accept_an_anchor() {
+    let raw = r#"format: traffic-policy/v1
+rules:
+- id: duration
+  surface: api.response
+  match: {api: GET /jobs}
+  slot: body
+  codec: json
+  contract: {/elapsed: {kind: duration, unit: seconds}}
+  proof: {source: 'jobs.py:1', fact: 'Duration uses an independently observed dependency clock'}
+"#;
+    let policy = parse_policy(raw).unwrap();
+    assert!(!render_policy(&policy).unwrap().contains("anchor:"));
+    assert!(
+        parse_policy(&raw.replace("unit: seconds", "unit: seconds, anchor: case.request_start"))
+            .is_err()
+    );
+    assert!(
+        serde_yaml::from_str::<crate::policy::native::PlaintextContract>(
+            "kind: duration\nunit: seconds\nanchor: dependency.request_start"
+        )
+        .is_err()
+    );
+    let duration: crate::policy::native::PlaintextContract =
+        serde_yaml::from_str("kind: duration\nunit: seconds").unwrap();
+    assert!(
+        !serde_yaml::to_string(&duration)
+            .unwrap()
+            .contains("anchor:")
+    );
+}
+
+#[test]
 fn rendered_policy_omits_default_path_modes_and_calendar_timezones() {
     let raw = r#"format: traffic-policy/v1
 rules:
@@ -220,8 +296,12 @@ rules:
 "#
         );
         let policy = parse_policy(&raw).unwrap();
-        let full = raw.replace("/members: unordered","/members: {kind: unordered}").replace(
-            "{relative_time: unix_microseconds}","{kind: time, format: unix_microseconds, relation: preserve_offset, anchor: case.request_start}");
+        let full = raw
+            .replace("/members: unordered", "/members: {kind: unordered}")
+            .replace(
+                "{relative_time: unix_microseconds}",
+                "{kind: time, format: unix_microseconds, relation: preserve_offset}",
+            );
         assert_eq!(
             compile_policy(&policy).unwrap(),
             compile_policy(&parse_policy(&full).unwrap()).unwrap()

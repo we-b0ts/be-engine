@@ -13,18 +13,16 @@ impl RequestContracts {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
-        if let Some(result) = self.preview_unified_redis(
-            &RedisRequestContext::without_exchange(case, target, database, command),
-            source,
-            actual,
-        ) {
+        // Unit fixtures supply this pair explicitly as dependency observations;
+        // production callers must populate RedisRequestContext from the exchange.
+        let times = self.request_times(case);
+        let mut context = RedisRequestContext::without_exchange(case, target, database, command);
+        context.recorded_at = times.source;
+        context.actual_at = times.target;
+        if let Some(result) = self.preview_unified_redis(&context, source, actual) {
             return Some(result);
         }
-        self.preview_redis_legacy(
-            &RedisRequestContext::without_exchange(case, target, database, command),
-            source,
-            actual,
-        )
+        self.preview_redis_legacy(&context, source, actual)
     }
 
     pub(super) fn preview_redis_legacy(
@@ -120,17 +118,9 @@ impl RequestContracts {
                 "time maximum requires one plain ZREMRANGEBYSCORE range"
             );
         }
-        let anchor = |field: &config::TimeField| match field.anchor {
-            crate::policy::TimeAnchor::ApiRequestStart => self.request_times(case),
-            crate::policy::TimeAnchor::DependencyRequestStart => {
-                crate::replay::assertion::RequestTimes {
-                    source: context.recorded_at,
-                    target: context.actual_at,
-                }
-            }
-            crate::policy::TimeAnchor::DependencyDelivery => {
-                unreachable!("validated request anchor")
-            }
+        let anchor = |_field: &config::TimeField| crate::replay::assertion::RequestTimes {
+            source: context.recorded_at,
+            target: context.actual_at,
         };
         let mut decision = Decision {
             ids: vec![rule.id.clone()],
@@ -142,6 +132,10 @@ impl RequestContracts {
             selector,
             source.first().context("source key missing")?,
             actual.first().context("target key missing")?,
+            crate::replay::assertion::RequestTimes {
+                source: context.recorded_at,
+                target: context.actual_at,
+            },
             &mut decision,
         )?;
         let mut times = Vec::new();

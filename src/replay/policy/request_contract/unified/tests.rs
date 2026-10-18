@@ -2,7 +2,8 @@ use super::*;
 use serde_json::json;
 
 fn runtime(operation: &str) -> RequestContracts {
-    let policy = crate::policy::parse_policy(&format!(r#"
+    let policy = crate::policy::parse_policy(&format!(
+        r#"
 format: traffic-policy/v1
 rules:
 - id: session-value
@@ -16,9 +17,11 @@ rules:
   codec: json
   contract:
     /members: {{kind: unordered}}
-    /expires_at: {{kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}}
+    /expires_at: {{kind: time, format: unix_seconds, relation: preserve_offset}}
   proof: {{source: 'src/session.rs:12-20', fact: 'Members are a set; expiry is request-relative'}}
-"#)).unwrap();
+"#
+    ))
+    .unwrap();
     let mut runtime = RequestContracts::default();
     runtime
         .configure_compiled(Some(Arc::new(
@@ -233,6 +236,8 @@ fn source_predicates_and_auth_identity_cannot_be_chosen_by_target() {
             .is_none()
     );
     context.username = Some("alice");
+    context.recorded_at = DateTime::from_timestamp(1000, 0);
+    context.actual_at = DateTime::from_timestamp(2000, 0);
     assert!(
         runtime
             .preview_redis_context(&context, &args(source()), &args(target()))

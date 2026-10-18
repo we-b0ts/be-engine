@@ -221,6 +221,10 @@ impl ReplayState {
             .as_ref()
             .map(|policy| {
                 policy.http_header_timestamp_rules(&crate::replay::policy::HttpPolicyContext {
+                    request_times: crate::replay::assertion::RequestTimes {
+                        source: source_time_reference,
+                        target: Some(request_started_at),
+                    },
                     case_id: self.active_case_id.as_deref(),
                     target: &exchange.identity.target,
                     method: &exchange.record.method,

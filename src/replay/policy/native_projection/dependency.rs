@@ -82,8 +82,8 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                             match &value.contract {
                                 n::GeneratedValue::Time(time) => {
                                     ensure!(
-                                        time.anchor == TimeAnchor::ApiRequestStart,
-                                        "HTTP query times require case.request_start"
+                                        time.anchor == TimeAnchor::DependencyRequestStart,
+                                        "HTTP query times require the corresponding dependency request start"
                                     );
                                     c::DynamicValueRule {
                                         bind: None,
@@ -128,11 +128,11 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                 .iter()
                 .map(|(name, value)| {
                     ensure!(
-                        value.contract.time.anchor == TimeAnchor::ApiRequestStart
+                        value.contract.time.anchor == TimeAnchor::DependencyRequestStart
                             && value.contract.time.relation == TimeRelation::PreserveOffset
                             && value.contract.time.format == TimestampFormat::SqlDatetime
                             && value.contract.time.clock_group.is_none(),
-                        "MySQL delivery time preserves case-relative offsets"
+                        "MySQL delivery time preserves dependency-request-relative offsets"
                     );
                     Ok((
                         name.clone(),
@@ -199,7 +199,7 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                     response_time,
                 } => {
                     let response_json=response_time.iter().map(|(pointer,time)| {
-                        ensure!(time.contract.anchor==TimeAnchor::DependencyDelivery && time.contract.relation==TimeRelation::PreserveOffset && time.contract.clock_group.is_none(),"shared Redis delivery uses a completion/delivery offset");
+                        ensure!(time.contract.anchor==TimeAnchor::DependencyRequestStart && time.contract.relation==TimeRelation::PreserveOffset && time.contract.clock_group.is_none(),"shared Redis delivery uses a dependency-request offset");
                         let format=match time.contract.format {
                             TimestampFormat::UnixSeconds=>crate::replay::redis::time_shift::RedisTimestampFormat::UnixSeconds,
                             TimestampFormat::UnixMilliseconds=>crate::replay::redis::time_shift::RedisTimestampFormat::UnixMilliseconds,
@@ -275,8 +275,8 @@ fn mysql_time(
     source: &crate::policy::Proof,
 ) -> Result<c::MysqlTimeFieldRule> {
     ensure!(
-        value.anchor != TimeAnchor::DependencyDelivery,
-        "SQL request times cannot use a future response-delivery clock"
+        value.anchor == TimeAnchor::DependencyRequestStart,
+        "SQL request times require the corresponding dependency request start"
     );
     Ok(c::MysqlTimeFieldRule {
         source_evidence: proof(source),

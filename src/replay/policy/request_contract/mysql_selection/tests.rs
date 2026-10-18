@@ -193,7 +193,7 @@ fn runtime(native: bool) -> RequestContracts {
     let effect = if native {
         "  effect:\n    kind: mysql_values\n    values:\n      0: {relative_time: unix_seconds}\n"
     } else {
-        "  surface: dependency.request\n  slot: {sql_value: 0}\n  codec: json\n  contract:\n    /stamp: {kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}\n"
+        "  surface: dependency.request\n  slot: {sql_value: 0}\n  codec: json\n  contract:\n    /stamp: {kind: time, format: unix_seconds, relation: preserve_offset}\n"
     };
     let policy = crate::policy::parse_policy(&format!(
         r#"format: traffic-policy/v1

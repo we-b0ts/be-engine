@@ -79,6 +79,10 @@ impl Fixture {
             command,
             &args(source),
             &args(actual),
+            crate::replay::assertion::RequestTimes {
+                source: DateTime::from_timestamp(1000, 0),
+                target: DateTime::from_timestamp(2000, 0),
+            },
         );
         assert_eq!(self.runtime.candidates().len(), before + 1);
     }
@@ -131,6 +135,7 @@ impl Fixture {
 fn exchange(command: &str, args: &[&str]) -> Value {
     let capture = |bytes: &str| json!({"encoding":"utf8","data":bytes,"truncated":false});
     json!({
+        "timestamp":"1970-01-01T00:16:40Z","duration_ms":0,
         "event_type":"redis_exchange","target_host":"cache.test","target_port":6379,
         "database":0,"command":command,"outcome":"response","replay_safe":true,
         "args":args.iter().map(|v| capture(v)).collect::<Vec<_>>(),

@@ -8,12 +8,11 @@ accounts conservatively for keys, tokens, ASTs and bound constant metadata withi
 16 MiB. BLOB/text bytes, predicates, status fields and finite consumption remain
 exact outside the explicitly authorized identity/time fields.
 
-For `mysql_values.values`, scalar and JSON time fields default to the individual
+For `mysql_values.values`, scalar and JSON time fields always use the individual
 dependency request start. Source uses its recorded start (or completion minus
-recorded duration); Target uses its independently observed request start. No
-configuration anchor is required. An explicit `case.request_start` remains
-available for values actually generated at API entry, and retains that behavior;
-it is not automatically migrated. PREPARE does not invent an execution clock.
+recorded duration); Target uses its independently observed request start. The `anchor` configuration field is forbidden, including an explicit dependency
+start. API-entry and response-delivery times are never fallback clocks. PREPARE
+does not invent an execution clock.
 
 Rule planning retains complete candidate evidence but compares only structurally
 corresponding MySQL requests. Different statement structures supply no independent

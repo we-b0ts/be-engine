@@ -8,7 +8,7 @@ fn json_rule(surface: &str) -> String {
         "api: GET /sessions\n      resource: {protocol: redis, endpoint: 'cache:6379', database: 0}\n      operation: GET\n      key: {prefix: 'session:'}"
     };
     format!(
-        "format: traffic-policy/v1\nrules:\n  - id: session\n    surface: {surface}\n    match:\n      {selector}\n    slot: {}\n    codec: json\n    contract:\n      /expires_at: {{kind: time, format: unix_microseconds, relation: preserve_offset, anchor: case.request_start}}\n    proof: {{source: 'src/session.rs:12-18', fact: 'Expiry is request time plus a fixed lifetime'}}\n",
+        "format: traffic-policy/v1\nrules:\n  - id: session\n    surface: {surface}\n    match:\n      {selector}\n    slot: {}\n    codec: json\n    contract:\n      /expires_at: {{kind: time, format: unix_microseconds, relation: preserve_offset}}\n    proof: {{source: 'src/session.rs:12-18', fact: 'Expiry is request time plus a fixed lifetime'}}\n",
         if surface == "api.response" {
             "body"
         } else {
@@ -72,7 +72,10 @@ fn unknown_fields_unsupported_contracts_and_duplicate_paths_fail_closed() {
         raw.replace("codec: json", "codec: json\n    ignore: true"),
         raw.replace("kind: time", "kind: random"),
         raw.replace("relation: preserve_offset", "relation: ignore"),
-        raw.replace("anchor: case.request_start", "anchor: arbitrary_clock"),
+        raw.replace(
+            "relation: preserve_offset",
+            "relation: preserve_offset, anchor: arbitrary_clock",
+        ),
         raw.replace(
             "    proof:",
             "      /expires_at: {kind: unordered}\n    proof:",

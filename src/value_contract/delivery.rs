@@ -85,9 +85,8 @@ pub(crate) fn materialize(
 
 fn anchor(clocks: AnchorClocks, anchor: TimeAnchor) -> time::ClockPair {
     match anchor {
-        TimeAnchor::ApiRequestStart => clocks.case,
         TimeAnchor::DependencyRequestStart => clocks.dependency,
-        TimeAnchor::DependencyDelivery => clocks.delivery,
+        TimeAnchor::ApiRequestStart | TimeAnchor::DependencyDelivery => time::ClockPair::default(),
     }
 }
 

@@ -472,24 +472,30 @@ impl Drafts {
             vec![]
         };
         for format in formats {
-            for anchor in ["case.request_start", "dependency.request_start"] {
-                let contract = json!({"kind":"time","format":format,"relation":"preserve_offset","anchor":anchor});
-                let typed: FieldContract = serde_json::from_value(contract.clone())?;
-                if crate::value_contract::json::compare(
-                    source,
-                    target,
-                    &[Field {
-                        rule_id: "draft",
-                        pointer: "",
-                        contract: &typed,
-                    }],
-                    clocks,
-                )
-                .passed()
-                {
-                    self.push(base, pointer, contract, witness)?;
-                    return Ok(());
+            let contract = json!({"kind":"time","format":format,"relation":"preserve_offset"});
+            let typed: FieldContract = serde_json::from_value(contract.clone())?;
+            let observed = if base["surface"] == "api.response" {
+                AnchorClocks {
+                    dependency: clocks.case,
+                    ..clocks
                 }
+            } else {
+                clocks
+            };
+            if crate::value_contract::json::compare(
+                source,
+                target,
+                &[Field {
+                    rule_id: "draft",
+                    pointer: "",
+                    contract: &typed,
+                }],
+                observed,
+            )
+            .passed()
+            {
+                self.push(base, pointer, contract, witness)?;
+                return Ok(());
             }
         }
         if let (Some(a), Some(b)) = (source.as_object(), target.as_object()) {

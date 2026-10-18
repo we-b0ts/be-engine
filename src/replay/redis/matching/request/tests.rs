@@ -45,12 +45,12 @@ rules:
     - operation: EVALSHA
       script: {sha1: '75f75be3d11e483c99c83f8b0b8836c2e2c5923b'}
       arguments:
-        3: {relative_time: unix_seconds, anchor: dependency.request_start}
-        4: {relative_time: unix_microseconds, anchor: dependency.request_start}
+        3: {relative_time: unix_seconds}
+        4: {relative_time: unix_microseconds}
         5:
           kind: json
           fields:
-            /changed_at_us: {relative_time: unix_microseconds, anchor: dependency.request_start}
+            /changed_at_us: {relative_time: unix_microseconds}
   proof: {source: 'metrics.py:publish', fact: 'Each committed iteration publishes its own clock, retaining exact copied fields'}
 "#).unwrap();
     let cases = BTreeMap::from([(
@@ -176,7 +176,7 @@ fn publish_time_and_uuid_bind_only_after_complete_match_and_consume_once() {
         (2, None, "RUNNING"),
     ] {
         let args = arguments(SOURCE, time, status);
-        let record=serde_json::from_value(json!({"connection_id":Uuid::new_v4(),"sequence":sequence,"target_host":"redis.test","target_port":6379,"resp_version":2,"database":0,"command":"PUBLISH","args":args.iter().map(|a|json!({"encoding":"utf8","data":String::from_utf8(a.clone()).unwrap()})).collect::<Vec<_>>(),"response_kind":"integer","response":{"encoding":"utf8","data":":1\r\n"},"replay_safe":true})).unwrap();
+        let record=serde_json::from_value(json!({"timestamp":"1970-01-01T00:16:40Z","duration_ms":0,"connection_id":Uuid::new_v4(),"sequence":sequence,"target_host":"redis.test","target_port":6379,"resp_version":2,"database":0,"command":"PUBLISH","args":args.iter().map(|a|json!({"encoding":"utf8","data":String::from_utf8(a.clone()).unwrap()})).collect::<Vec<_>>(),"response_kind":"integer","response":{"encoding":"utf8","data":":1\r\n"},"replay_safe":true})).unwrap();
         state
             .register_exchange(
                 record,
@@ -203,15 +203,20 @@ fn publish_time_and_uuid_bind_only_after_complete_match_and_consume_once() {
             args,
         )
     };
+    let dependency_start = chrono::Utc::now();
+    let actual_time = dependency_start.format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
+    let stale_time = (dependency_start + chrono::TimeDelta::seconds(6))
+        .format("%Y-%m-%dT%H:%M:%S%.6f")
+        .to_string();
     for (time, status) in [
-        (Some("1970-01-01T00:33:26"), "COMPLETED"),
-        (Some("1970-01-01T00:33:20.123456"), "FAILED"),
+        (Some(stale_time.as_str()), "COMPLETED"),
+        (Some(actual_time.as_str()), "FAILED"),
         (None, "COMPLETED"),
     ] {
         assert!(call(&mut state, &arguments(SOURCE, time, status)).is_err());
     }
     // Failed previews using SOURCE as target must not pin the UUID before this match.
-    let actual = arguments(TARGET, Some("1970-01-01T00:33:20.123456"), "COMPLETED");
+    let actual = arguments(TARGET, Some(&actual_time), "COMPLETED");
     let matched = call(&mut state, &actual).unwrap();
     state.complete_exchange(&matched);
     assert!(call(&mut state, &actual).is_err());

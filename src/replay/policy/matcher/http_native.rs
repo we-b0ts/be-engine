@@ -7,7 +7,7 @@ use crate::value_contract::json::{self, AnchorClocks, Field};
 impl ReplayPolicyRuntime {
     pub(super) fn compare_native_query_times(
         &self,
-        case: &str,
+        request_times: crate::replay::assertion::RequestTimes,
         rules: &[&ReplayDependencyRule],
         source: &BTreeMap<String, Vec<String>>,
         target: &BTreeMap<String, Vec<String>>,
@@ -87,7 +87,7 @@ impl ReplayPolicyRuntime {
             &Value::Object(right),
             &selected_fields,
             AnchorClocks {
-                case: self.request_contracts.request_times(case),
+                dependency: request_times,
                 ..Default::default()
             },
         );

@@ -23,11 +23,11 @@ fn policy() -> Value {
         "id":"rpc-downloads","match":{"api":"POST /scenario","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"key":{"kind":"exact","value":"jobs"}},
         "effect":{"kind":"redis_sequence","commands":[{"operation":"PUBLISH","arguments":{"1":{"kind":"json","fields":{
             "/data/0/plugins/*/download_path":{"kind":"url","query":{
-                "X-Amz-Date":{"kind":"time","format":"amz_date","relation":"preserve_offset","anchor":"dependency.request_start","clock_group":"signing"},
+                "X-Amz-Date":{"kind":"time","format":"amz_date","relation":"preserve_offset","clock_group":"signing"},
                 "X-Amz-Signature":{"kind":"random","format":"hex","length":64}
                 ,"X-Amz-Credential":{"kind":"utc_date_segment","separator":"/","index":1,"relative_to":"X-Amz-Date"}
             }},
-            "/data/0/plugins/*/expires_at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset","anchor":"dependency.request_start","clock_group":"expiry"}
+            "/data/0/plugins/*/expires_at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset","clock_group":"expiry"}
         }}}}]},"proof":{"source":"app/downloads.py:dispatch","fact":"Source signs fresh download URLs and reads an independent expiry clock per plugin; paths, names, lifetime and RPC semantics are stable"}
     }]})
 }

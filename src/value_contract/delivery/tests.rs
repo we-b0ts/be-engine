@@ -20,7 +20,7 @@ fn naive_delivery_preserves_civil_text_without_timezone_configuration() {
         let mut config = TimeContract {
             format,
             relation: crate::policy::TimeRelation::PreserveOffset,
-            anchor: TimeAnchor::DependencyDelivery,
+            anchor: TimeAnchor::DependencyRequestStart,
             utc_offset: None,
             clock_group: None,
         };
@@ -46,14 +46,14 @@ rules:
     codec: json
     contract:
       /members: {kind: unordered}
-      /expiry: {kind: time, format: unix_microseconds, relation: preserve_offset, anchor: dependency.response_delivery}
+      /expiry: {kind: time, format: unix_microseconds, relation: preserve_offset}
     delivery: {rebase_time: [/expiry]}
     proof: {source: 'src/session.py:40 read', fact: 'Source expiry retains its offset from the recorded input delivery.'}
 "#).unwrap();
     let compiled = crate::policy::compile_policy(&doc).unwrap();
     let source = json!({"members":[2,1,2],"expiry":12_000_001,"stable":true});
     let clocks = AnchorClocks {
-        delivery: ClockPair {
+        dependency: ClockPair {
             source: Some(Utc.timestamp_opt(10, 0).unwrap()),
             target: Some(Utc.timestamp_opt(110, 0).unwrap()),
         },

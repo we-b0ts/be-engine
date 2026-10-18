@@ -354,7 +354,7 @@ fn time(value: &old::TimeRule) -> Result<n::NativeTime> {
         format,
         utc_offset,
         relation: p::TimeRelation::PreserveOffset,
-        anchor: p::TimeAnchor::ApiRequestStart,
+        anchor: p::TimeAnchor::DependencyRequestStart,
         clock_group: None,
     })
 }

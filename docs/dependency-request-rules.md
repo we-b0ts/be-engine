@@ -159,9 +159,9 @@ dynamic claims are rejected. A failed field leaves all bindings uncommitted.
         2: {time: preserve_relative, format: unix_seconds}
 ```
 
-There is no configured clock or offset. The source anchor is the immutable
-inbound recording timestamp; the target anchor is taken by Replay immediately
-before the engine sends the inbound request. Each selected time preserves its
+There is no configured clock or offset. Each command uses its immutable
+Source dependency request start and independently observed Target dependency
+request start. `anchor` is not an allowed configuration field. Each selected time preserves its
 distance from its own anchor. Integer and fractional Unix seconds are supported;
 the numeric category is preserved. Tolerance is fixed at 5s and is omitted from
 generated rules. Legacy explicit 5s remains readable; other values are rejected.
@@ -181,13 +181,12 @@ still fail.
 
 ## Redis script ARGV timestamps
 
-Native `redis_sequence` time fields accept `anchor: dependency.request_start`
-for scalar arguments and JSON time pointers. Each physical Redis invocation
+Native `redis_sequence` scalar and JSON time fields always use the start of
+their own dependency request; `anchor` is forbidden in configuration. Each physical Redis invocation
 uses the immutable Source request start (or completion minus duration for older
 captures) and Replay's independently observed Target request start. This allows
 bulk iterations to run at different speeds without accumulating API-start
 drift. Missing dependency clocks reject; there is no fallback to API clocks.
-`case.request_start` remains the default for existing Redis sequence rules.
 Script identity, stable arguments, clock groups, lane ordering and finite
 consumption are unchanged. Source-only plan/apply validation retains the genuine
 Target Replay obligation.

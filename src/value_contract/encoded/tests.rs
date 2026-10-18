@@ -19,13 +19,13 @@ rules:
     /duration:
       kind: conditional
       when: {relative_pointer: ../status, not_in: [closed]}
-      contract: {kind: duration, unit: seconds, anchor: case.request_start}
+      contract: {kind: duration, unit: seconds}
   proof: {source: 'source.py:duration', fact: 'Source freezes duration for closed items and measures elapsed request time for other items'}
 "#;
     let compiled = compile_policy(&parse_policy(input).unwrap()).unwrap();
     let rules = compiled.rules.iter().collect::<Vec<_>>();
     let clocks = AnchorClocks {
-        case: crate::value_contract::time::ClockPair {
+        dependency: crate::value_contract::time::ClockPair {
             source: chrono::DateTime::from_timestamp(10, 0),
             target: chrono::DateTime::from_timestamp(110, 0),
         },

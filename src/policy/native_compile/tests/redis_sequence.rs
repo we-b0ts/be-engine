@@ -35,7 +35,7 @@ fn redis_random_shapes_require_closed_encodings_and_explicit_nonconflicting_boun
 #[test]
 fn url_date_scope_requires_a_selected_time_and_inherits_source_proof() {
     let mut url = json!({"kind":"url","query":{
-        "X-Amz-Date":{"kind":"time","format":"amz_date","relation":"preserve_offset","anchor":"dependency.request_start"},
+        "X-Amz-Date":{"kind":"time","format":"amz_date","relation":"preserve_offset"},
         "X-Amz-Signature":{"kind":"random","format":"hex","length":64},
         "X-Amz-Credential":{"kind":"utc_date_segment","separator":"/","index":1,"relative_to":"X-Amz-Date"}
     }});

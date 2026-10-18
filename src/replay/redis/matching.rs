@@ -201,6 +201,10 @@ impl RedisReplayState {
                             command,
                             &exchange.args,
                             args,
+                            crate::replay::assertion::RequestTimes {
+                                source: exchange.record.started_at(),
+                                target: self.request_observed_at,
+                            },
                         );
                         self.dynamic_values.observe_redis(
                             case,
@@ -434,6 +438,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            request_started_at: self.request_observed_at,
             unified_delivery,
             rpc_push: exchange.rpc_push,
             rpc_response,
@@ -515,6 +520,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            request_started_at: self.request_observed_at,
             unified_delivery: None,
             rpc_push: None,
             rpc_response: None,

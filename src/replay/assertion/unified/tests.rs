@@ -14,7 +14,7 @@ rules:
     codec: json
     contract:
       /members: {kind: unordered}
-      /expiry: {kind: time, format: unix_microseconds, relation: preserve_offset, anchor: case.request_start}
+      /expiry: {kind: time, format: unix_microseconds, relation: preserve_offset}
     proof: {source: 'src/session.py:30 create', fact: 'Source serializes a set and computes expiry from the request clock.'}
 "#).unwrap();
     let loaded = load_replay_policy(&policy).unwrap();

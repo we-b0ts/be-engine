@@ -100,6 +100,7 @@ impl RequestContracts {
         selector: &super::config::RedisRequestSelector,
         source: &[u8],
         actual: &[u8],
+        clocks: crate::replay::assertion::RequestTimes,
         decision: &mut Decision,
     ) -> Result<()> {
         let Some(contract) = &selector.key_contract else {
@@ -126,9 +127,9 @@ impl RequestContracts {
                 );
                 let index = segment_index.unwrap_or(a.len() - 1);
                 ensure!(index < a.len(), "key window segment is absent");
-                let clocks = self.request_times(case);
                 for (slot, clock) in [(a[index], clocks.source), (b[index], clocks.target)] {
-                    let clock = clock.context("key time window requires both request anchors")?;
+                    let clock =
+                        clock.context("key time window requires both dependency request starts")?;
                     let number = slot
                         .parse::<i64>()
                         .context("key window must be an integer")?;

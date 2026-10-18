@@ -20,6 +20,10 @@ pub(super) fn validate(
     };
     let clock = started(event)?.context("Source SQL request clock missing")?;
     let context = MysqlPolicyContext {
+        request_times: crate::replay::assertion::RequestTimes {
+            source: Some(clock),
+            target: Some(clock),
+        },
         case_id: Some(case.id),
         identity: &identity,
         command: &record.command,
@@ -89,8 +93,13 @@ pub(super) fn validate(
     ) {
         runtime.commit(Some(case.id), decision.map_err(anyhow::Error::msg)?);
     }
-    let (response, ids) =
-        runtime.shift_mysql_response(Some(case.id), &identity, &record, &record.response)?;
+    let (response, ids) = runtime.shift_mysql_response(
+        Some(case.id),
+        &identity,
+        &record,
+        &record.response,
+        crate::replay::mysql::contracts::source_started(&record),
+    )?;
     ensure!(
         serde_json::to_value(&response)? == serde_json::to_value(&record.response)?,
         "Source SQL response self translation changed values"

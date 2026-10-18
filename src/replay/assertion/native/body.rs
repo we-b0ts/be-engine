@@ -115,6 +115,7 @@ pub(crate) fn compare_body(
                     &[],
                     crate::value_contract::json::AnchorClocks {
                         case: times,
+                        dependency: times,
                         ..Default::default()
                     },
                 )?

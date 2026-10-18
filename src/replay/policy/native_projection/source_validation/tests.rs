@@ -56,7 +56,7 @@ fn source_session_validates_independent_random_json_with_a_generated_session_key
         "key":{"contract":{"kind":"capture","binding":"session","template":"sessions:{value}","format":{"kind":"uuid_v4"}},"proof":proof()},
         "commands":[{"operation":"SET","arguments":{"1":{"contract":{"kind":"json","fields":{
             "/poll_token":{"contract":{"kind":"random","format":"base64url","length":43},"proof":proof()},
-            "/created_at":{"contract":{"kind":"time","format":"unix_seconds","relation":"preserve_offset","anchor":"case.request_start"},"proof":proof()}
+            "/created_at":{"contract":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"},"proof":proof()}
         }},"proof":proof()}}}]},"proof":proof()});
     let policy = compile(vec![definition.clone()]);
     let data = json!({"poll_token":token,"created_at":1000,"status":"pending"}).to_string();
@@ -94,7 +94,7 @@ fn source_session_validates_independent_random_json_with_a_generated_session_key
 
 #[test]
 fn source_session_requires_complete_sequence_and_preserves_original_clocks_and_lanes() {
-    let time = json!({"contract":{"kind":"time","format":"unix_seconds","relation":"preserve_offset","anchor":"case.request_start"},"proof":proof()});
+    let time = json!({"contract":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"},"proof":proof()});
     let policy = compile(vec![
         json!({"id":"schedule","match":{"api":"POST /tasks","resource":resource(),"key":{"kind":"exact","value":"tasks"}},"effect":{"kind":"redis_sequence","commands":[{"operation":"ZADD","arguments":{"1":time}},{"operation":"ZREMRANGEBYSCORE","arguments":{"2":time}}]},"proof":proof()}),
     ]);

@@ -25,6 +25,7 @@ fn cached_time_templates_follow_policy_reload_and_recheck_bound_values() {
         ] {
             let params = values(&[json!(time), json!(id)]);
             let context = MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: "COM_STMT_EXECUTE",
@@ -40,6 +41,7 @@ fn cached_time_templates_follow_policy_reload_and_recheck_bound_values() {
         }
         let other = sql.replace(column, "unselected_column");
         let context = MysqlPolicyContext {
+            request_times: runtime.request_contracts.request_times(CASE_ID),
             case_id: Some(CASE_ID),
             identity: &identity,
             command: "COM_STMT_EXECUTE",
@@ -84,6 +86,7 @@ dependency_rules:
         let target_params = values(&[json!("2026-09-07 12:00:01.123456"), json!(7)]);
         for reverse in [false, true] {
             let context = MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: if reverse {
@@ -98,6 +101,7 @@ dependency_rules:
             };
             assert!(runtime.preview_mysql_sql_values(&context).unwrap().is_ok());
             let prepare = MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 command: "COM_STMT_EXECUTE",
                 sql: Some(&prepared),
                 actual: None,
@@ -114,6 +118,7 @@ dependency_rules:
                 _ => unreachable!(),
             };
             let context = MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: "COM_QUERY",
@@ -133,6 +138,7 @@ dependency_rules:
     for table in ["subtasks_1024", "tasks_0155", "subtasks_155"] {
         let sql = format!("UPDATE {table} SET updated_at=? WHERE {table}.id = ?");
         let context = MysqlPolicyContext {
+            request_times: runtime.request_contracts.request_times(CASE_ID),
             case_id: Some(CASE_ID),
             identity: &identity,
             command: "COM_STMT_EXECUTE",

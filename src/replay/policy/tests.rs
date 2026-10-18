@@ -49,6 +49,7 @@ fn compact_sql_time_rule_matches_across_api_paths_but_not_databases() {
             let mut identity = mysql_identity();
             identity.database = Some(database.into());
             let context = MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: "COM_STMT_EXECUTE",
@@ -105,7 +106,9 @@ dependency_rules:
     ]);
     let now = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 1).unwrap();
     anchor_sql_times(&runtime, now);
+    let dependency_times = runtime.request_contracts.request_times(CASE_ID);
     let context = |actual| MysqlPolicyContext {
+        request_times: dependency_times,
         case_id: Some(CASE_ID),
         identity: &identity,
         command: "COM_STMT_EXECUTE",
@@ -268,6 +271,7 @@ fn binds_and_references_runtime_mysql_uuid() {
         json!("2026-07-15 12:30:01"),
     ]);
     let insert_context = MysqlPolicyContext {
+        request_times: runtime.request_contracts.request_times(CASE_ID),
         case_id: Some(CASE_ID),
         identity: &identity,
         command: "COM_STMT_EXECUTE",
@@ -277,6 +281,7 @@ fn binds_and_references_runtime_mysql_uuid() {
         actual: Some(&actual_insert),
     };
     let changed_table = MysqlPolicyContext {
+        request_times: runtime.request_contracts.request_times(CASE_ID),
         case_id: Some(CASE_ID),
         identity: &identity,
         command: "COM_STMT_EXECUTE",
@@ -299,6 +304,7 @@ fn binds_and_references_runtime_mysql_uuid() {
     let update = preview_mysql_contract(
         &runtime,
         &MysqlPolicyContext {
+            request_times: runtime.request_contracts.request_times(CASE_ID),
             case_id: Some(CASE_ID),
             identity: &identity,
             command: "COM_STMT_EXECUTE",
@@ -345,6 +351,7 @@ fn rejects_changed_reference_and_out_of_window_time() {
         preview_mysql_contract(
             &runtime,
             &MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: "COM_STMT_EXECUTE",
@@ -371,6 +378,7 @@ fn rejects_changed_reference_and_out_of_window_time() {
         preview_mysql_contract(
             &runtime,
             &MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: "COM_STMT_EXECUTE",
@@ -389,6 +397,7 @@ fn rejects_changed_reference_and_out_of_window_time() {
     let decision = preview_mysql_contract(
         &runtime,
         &MysqlPolicyContext {
+            request_times: runtime.request_contracts.request_times(CASE_ID),
             case_id: Some(CASE_ID),
             identity: &identity,
             command: "COM_STMT_EXECUTE",
@@ -407,6 +416,7 @@ fn rejects_changed_reference_and_out_of_window_time() {
         preview_mysql_contract(
             &runtime,
             &MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: "COM_STMT_EXECUTE",
@@ -555,6 +565,7 @@ fn validates_scoped_http_query_fields() {
     let decision = runtime
         .preview_http(
             &HttpPolicyContext {
+                request_times: crate::replay::assertion::RequestTimes { source: Some(Utc.with_ymd_and_hms(2026, 7, 15, 4, 29, 58).unwrap()), target: Some(Utc.with_ymd_and_hms(2026, 7, 15, 4, 30, 0).unwrap()) },
                 case_id: Some(CASE_ID),
                 target: &TargetKey {
                     host: "ecs.aliyuncs.com".to_string(),
@@ -653,6 +664,7 @@ fn scoped_and_unscoped_rules_compose_on_disjoint_mysql_params() {
     let decision = preview_mysql_contract(
         &runtime,
         &MysqlPolicyContext {
+            request_times: runtime.request_contracts.request_times(CASE_ID),
             case_id: Some(CASE_ID),
             identity: &identity,
             command: "COM_STMT_EXECUTE",
@@ -679,6 +691,7 @@ fn preview_mysql_contract(
 ) -> Result<super::matcher::DependencyRuleDecision, String> {
     let record = serde_json::from_value(json!({
         "connection_id":uuid::Uuid::nil(), "query_sequence":1,
+        "timestamp":context.request_times.source, "duration_ms":0,
         "target_host":context.identity.target.as_ref().unwrap().host,
         "target_port":context.identity.target.as_ref().unwrap().port,
         "database":context.identity.database, "username":context.identity.username,

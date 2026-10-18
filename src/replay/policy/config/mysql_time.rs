@@ -20,7 +20,7 @@ enum TimeConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct TimeFieldConfig {
     time: TimeConfig,
-    #[serde(default = "case_anchor", skip_serializing_if = "is_case_anchor")]
+    #[serde(skip)]
     anchor: crate::policy::TimeAnchor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tolerance: Option<String>,
@@ -32,14 +32,6 @@ pub(super) struct TimeFieldConfig {
     timezone: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     source_evidence: String,
-}
-
-fn case_anchor() -> crate::policy::TimeAnchor {
-    crate::policy::TimeAnchor::ApiRequestStart
-}
-
-fn is_case_anchor(anchor: &crate::policy::TimeAnchor) -> bool {
-    *anchor == case_anchor()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -60,8 +52,8 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
 
     fn try_from(config: TimeFieldConfig) -> Result<Self> {
         ensure!(
-            config.anchor != crate::policy::TimeAnchor::DependencyDelivery,
-            "SQL request times cannot use a future response-delivery clock"
+            config.anchor == crate::policy::TimeAnchor::DependencyRequestStart,
+            "SQL request times require the corresponding dependency request start"
         );
         let mut time = match config.time {
             TimeConfig::Reference(relative_to) => TimeRule {

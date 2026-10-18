@@ -60,11 +60,11 @@ fn recorded_generated_rpc_and_celery_source_contracts_validate_without_changing_
                     json!({"kind":"exact","value":String::from_utf8(values[0].clone()).unwrap()}),
                     json!({"kind":"redis_sequence","commands":[{"operation":"PUBLISH","arguments":{"1":{"kind":"json","fields":{
                         "/data/0/plugins/*/download_path":{"kind":"url","query":{
-                            "X-Amz-Date":{"kind":"time","format":"amz_date","relation":"preserve_offset","anchor":"dependency.request_start","clock_group":"signing"},
+                            "X-Amz-Date":{"kind":"time","format":"amz_date","relation":"preserve_offset","clock_group":"signing"},
                             "X-Amz-Credential":{"kind":"utc_date_segment","separator":"/","index":1,"relative_to":"X-Amz-Date"},
                             "X-Amz-Signature":{"kind":"random","format":"hex","length":64}
                         }},
-                        "/data/0/plugins/*/download_url_expires_at":{"kind":"time","format":"rfc3339","relation":"preserve_offset","anchor":"dependency.request_start","clock_group":"expiry"}
+                        "/data/0/plugins/*/download_url_expires_at":{"kind":"time","format":"rfc3339","relation":"preserve_offset","clock_group":"expiry"}
                     }}}}]}),
                 )]
             } else {

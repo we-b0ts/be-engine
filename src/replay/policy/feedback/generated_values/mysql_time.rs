@@ -118,7 +118,7 @@ impl<'a> JointEvidence<'a> {
     pub(super) fn validate_witness(
         &self,
         report: &Value,
-        case: &Value,
+        _case: &Value,
         request: &Value,
         dependencies: &[u8],
         source_event: &Value,
@@ -170,6 +170,7 @@ impl<'a> JointEvidence<'a> {
             username: actual_event["username"].as_str().map(str::to_owned),
         };
         let Some(Ok(normalized)) = aliases.mysql(&MysqlPolicyContext {
+            request_times: Default::default(),
             case_id: Some(case_id),
             identity: &session,
             command: actual_event["command"].as_str().unwrap_or_default(),
@@ -250,7 +251,7 @@ impl<'a> JointEvidence<'a> {
         {
             return Ok(false);
         }
-        let times = request_times(report, case, request)?;
+        let times = request_times(report, source_event, actual_event)?;
         for (index, time) in selected {
             let Ok(selected_times) =
                 mysql_values::selected_times(&source[*index], &actual[*index], time)
@@ -270,18 +271,18 @@ impl<'a> JointEvidence<'a> {
 
 fn request_times(
     report: &Value,
-    case: &Value,
-    request: &Value,
+    source_event: &Value,
+    actual_event: &Value,
 ) -> Result<crate::replay::assertion::RequestTimes> {
     let parse = |value: &Value| {
         value
             .as_str()
             .and_then(|text| text.parse::<chrono::DateTime<chrono::Utc>>().ok())
     };
-    let source = parse(&request["timestamp"])
-        .context("joint SQL evidence requires a source request timestamp")?;
-    let target = parse(&case["target_request_started_at"])
-        .context("joint SQL evidence requires a target request timestamp")?;
+    let source = crate::replay::recording_evidence::dependency_started_at(source_event)
+        .context("joint SQL evidence requires a source dependency request timestamp")?;
+    let target = parse(&actual_event["request_started_at"])
+        .context("joint SQL evidence requires a target dependency request timestamp")?;
     let start =
         parse(&report["started_at"]).context("joint SQL evidence has no Replay start timestamp")?;
     let finish = parse(&report["finalized_at"])

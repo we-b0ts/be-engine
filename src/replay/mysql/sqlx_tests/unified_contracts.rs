@@ -17,7 +17,7 @@ rules:
   codec: json
   contract:
     /members: {{kind: unordered}}
-    /time: {{kind: time, format: unix_microseconds, relation: preserve_offset, anchor: case.request_start}}
+    /time: {{kind: time, format: unix_microseconds, relation: preserve_offset}}
   proof: {{source: 'sql_payload.py:10-25', fact: 'Source serializes a membership set and a request-relative microsecond timestamp'}}
 {}
 "#,
@@ -44,8 +44,7 @@ async fn sql_json_contract_preserves_statement_and_finite_consumption_over_tls()
         write["params"] = json!([{"kind":"string","value":payload(1_577_836_800_000_000,json!(["a","b","a"]))},{"kind":"integer","value":7}]);
         let (temp, addr, runtime, task) = fixture_with_policy(&[write], Some(&policy("dependency.request", "COM_STMT_EXECUTE", sql, "{sql_value: 0}", false))).await;
         let original = std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap();
-        let anchor = runtime.state.lock().await.replay_policy.as_ref().unwrap().request_contracts.request_times("case-id").target.unwrap().timestamp_micros();
-        let good = payload(anchor,json!(["a","a","b"]));
+        let good = payload(Utc::now().timestamp_micros(),json!(["a","a","b"]));
         let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         for (body, id, valid) in [(good.replace("checked","changed"),7,false),(good.clone(),8,false),(good.clone(),7,true),(good,7,false)] {
             let result = sqlx::query(sql).bind(body).bind(id).execute(&mut client).await;
@@ -92,18 +91,10 @@ async fn sql_json_response_changes_only_explicit_delivery_time() {
                 .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl"),
         )
         .unwrap();
-        let anchor = runtime
-            .state
-            .lock()
-            .await
-            .replay_policy
-            .as_ref()
-            .unwrap()
-            .request_contracts
-            .request_times("case-id")
-            .target
-            .unwrap()
-            .timestamp_micros();
+        // This SQL request starts far from the API clock; only its own observation rebases delivery.
+        let dependency_start =
+            chrono::DateTime::from_timestamp(2_000_000_000, 123_456_000).unwrap();
+        runtime.state.lock().await.mysql.observed_at_for_test = Some(dependency_start);
         let mut client = connect(
             addr,
             &temp
@@ -113,7 +104,10 @@ async fn sql_json_response_changes_only_explicit_delivery_time() {
         .await;
         let row = (&mut client).fetch_one(sql).await.unwrap();
         let body: Value = serde_json::from_str(row.get::<&str, _>("payload")).unwrap();
-        assert_eq!(body["time"], json!(anchor + 1_000_000));
+        assert_eq!(
+            body["time"],
+            json!(dependency_start.timestamp_micros() + 1_000_000)
+        );
         assert_eq!(body["members"], json!(["a", "b", "a"]));
         assert_eq!(body["stable"], "checked");
         assert!((&mut client).fetch_one(sql).await.is_err());
@@ -233,7 +227,7 @@ rules:
   slot: {sql_value: 0}
   codec: json
   contract:
-    /updated_at: {kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}
+    /updated_at: {kind: time, format: unix_seconds, relation: preserve_offset}
   proof: {source: 'src/settings.rs:update', fact: 'Only request-derived updated_at may vary when present'}
 "#;
         let sql = "UPDATE settings SET json='{\"stable\":7}' WHERE id=7";

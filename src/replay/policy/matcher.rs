@@ -78,6 +78,7 @@ pub(in crate::replay) struct ReplayPolicyRuntime {
 
 #[derive(Debug)]
 pub(in crate::replay) struct HttpPolicyContext<'a> {
+    pub(in crate::replay) request_times: crate::replay::assertion::RequestTimes,
     pub(in crate::replay) case_id: Option<&'a str>,
     pub(in crate::replay) target: &'a TargetKey,
     pub(in crate::replay) method: &'a str,
@@ -87,6 +88,7 @@ pub(in crate::replay) struct HttpPolicyContext<'a> {
 
 #[derive(Debug)]
 pub(in crate::replay) struct MysqlPolicyContext<'a> {
+    pub(in crate::replay) request_times: crate::replay::assertion::RequestTimes,
     pub(in crate::replay) case_id: Option<&'a str>,
     pub(in crate::replay) identity: &'a ReplaySessionIdentity,
     pub(in crate::replay) command: &'a str,
@@ -444,6 +446,7 @@ impl ReplayPolicyRuntime {
                         .expect("validated scalar value"),
                     value,
                     &mut decision,
+                    context.request_times,
                 )?;
             } else if recorded_value != actual_value {
                 return Err(format!(
@@ -528,7 +531,7 @@ impl ReplayPolicyRuntime {
         }
         let mut decision = DependencyRuleDecision::default();
         let native_times = self.compare_native_query_times(
-            case_id,
+            context.request_times,
             &matching_rules,
             &recorded_query,
             &actual_query,
@@ -552,6 +555,7 @@ impl ReplayPolicyRuntime {
                     &Value::String(recorded_values[0].clone()),
                     &Value::String(actual_values[0].clone()),
                     &mut decision,
+                    context.request_times,
                 )?;
             }
             decision.dynamic_query_params.push(name.to_string());
@@ -559,6 +563,7 @@ impl ReplayPolicyRuntime {
         Ok(decision)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn preview_dynamic_value(
         &self,
         case_id: &str,
@@ -567,6 +572,7 @@ impl ReplayPolicyRuntime {
         recorded: &Value,
         actual: &Value,
         decision: &mut DependencyRuleDecision,
+        request_times: crate::replay::assertion::RequestTimes,
     ) -> Result<(), String> {
         let usage = decision.usage.entry(rule_id.to_string()).or_default();
         if let Some(reference) = &field.reference {
@@ -592,12 +598,7 @@ impl ReplayPolicyRuntime {
             usage.validations += 1;
         }
         if let Some(time) = &field.time {
-            validate_relative_time(
-                recorded,
-                actual,
-                time,
-                self.request_contracts.request_times(case_id),
-            )?;
+            validate_relative_time(recorded, actual, time, request_times)?;
             usage.time_validations += 1;
         }
         if let Some(binding) = &field.bind {

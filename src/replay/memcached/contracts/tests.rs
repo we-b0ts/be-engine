@@ -39,10 +39,11 @@ rules:
     slot: value
     codec: json
     contract:
-      /expires_at: {kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}
+      /expires_at: {kind: time, format: unix_seconds, relation: preserve_offset}
     delivery: {rebase_time: [/expires_at]}
     proof: {source: 'src/session:read', fact: 'Expiry preserves its offset from the API request'}
-"#.to_owned();
+"#
+    .to_owned();
     if request {
         raw = raw
             .replace(
@@ -367,11 +368,7 @@ async fn binary_get_delivery_rebases_json_and_protobuf_with_live_correlation_and
         let (temp, _policy) = source_fixture_with(false, codec);
         let case = temp.path().join(".traffic-e2e/local/recordings/case");
         let path = temp.path().join("policy.yaml");
-        let yaml = std::fs::read_to_string(&path).unwrap().replace(
-            "anchor: case.request_start",
-            "anchor: dependency.response_delivery",
-        );
-        std::fs::write(&path, &yaml).unwrap();
+        let yaml = std::fs::read_to_string(&path).unwrap();
         let compiled =
             crate::policy::compile_policy(&crate::policy::parse_policy(&yaml).unwrap()).unwrap();
         let mut frame = vec![0; 24];
@@ -572,7 +569,7 @@ rules:
     slot: value
     codec: {codec}
     contract:
-      /expires_at: {{kind: time, format: unix_seconds, relation: preserve_offset, anchor: case.request_start}}
+      /expires_at: {{kind: time, format: unix_seconds, relation: preserve_offset}}
     delivery: {{rebase_time: [/expires_at]}}
     proof: {{source: 'src/session:read', fact: 'Expiry preserves its offset from the API request'}}
 "#
@@ -585,7 +582,7 @@ rules:
             &source,
             &[&compiled.rules[0]],
             AnchorClocks {
-                case: ClockPair {
+                dependency: ClockPair {
                     source: Some(source_at),
                     target: Some(target_at),
                 },

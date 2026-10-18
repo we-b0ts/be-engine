@@ -80,7 +80,7 @@ pub(super) fn convert(
                                 time: n::NativeTime {
                                     format: p::TimestampFormat::SqlDatetime,
                                     relation: p::TimeRelation::PreserveOffset,
-                                    anchor: p::TimeAnchor::ApiRequestStart,
+                                    anchor: p::TimeAnchor::DependencyRequestStart,
                                     utc_offset: Some("+00:00".into()),
                                     clock_group: None,
                                 },
@@ -378,7 +378,10 @@ pub(super) fn convert(
                                 (
                                     pointer.clone(),
                                     proven(
-                                        redis_time(field.format, p::TimeAnchor::DependencyDelivery),
+                                        redis_time(
+                                            field.format,
+                                            p::TimeAnchor::DependencyRequestStart,
+                                        ),
                                         &rule.source_evidence,
                                     ),
                                 )
@@ -418,7 +421,7 @@ pub(super) fn convert(
                                     pointer.clone(),
                                     time_field(&redis_time(
                                         field.format,
-                                        p::TimeAnchor::DependencyDelivery,
+                                        p::TimeAnchor::DependencyRequestStart,
                                     )),
                                 )
                             })

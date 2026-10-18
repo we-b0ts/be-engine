@@ -122,11 +122,15 @@ After ordinary endpoint/session/command/argument matching and recorded response
 delay, immediately before delivery:
 
 ```text
-new_timestamp = recorded_timestamp + (response_send_time - recorded_response_time)
+new_timestamp = recorded_timestamp + (target_request_start - source_request_start)
 ```
 
 The offset uses the field's declared unit. All selected fields in a delivered
-response use the same time anchor. The engine always transforms an immutable
+response use that matched dependency request's independently observed Source and
+Target starts. Source uses its exact request start, or recorded completion minus
+recorded duration. Missing clocks fail explicitly; API starts, response delivery
+and current wall time are never substitutes. `anchor` cannot be configured.
+The engine always transforms an immutable
 response copy, with no cumulative shifting. Original relative expiry/future
 validity is preserved; timestamps are never reset to now. The application's
 expiry duration remains in normal product code and need not be configured here.

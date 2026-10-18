@@ -867,6 +867,9 @@ pub(super) async fn write_http_dependency(
 ) {
     let dependency = serde_json::json!({
         "event_type": "http_exchange",
+        "request_started_at": "2026-07-15T04:30:00Z",
+        "timestamp": "2026-07-15T04:30:00Z",
+        "duration_ms": 0,
         "scheme": scheme,
         "id": uuid::Uuid::new_v4(),
         "method": "POST",

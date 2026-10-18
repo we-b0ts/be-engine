@@ -682,6 +682,10 @@ fn validate_sequence(rule: &NativeRule, sequence: &RedisSequenceEffect) -> Resul
 
 pub(super) fn validate_time(time: &NativeTime) -> Result<()> {
     ensure!(
+        time.anchor == super::TimeAnchor::DependencyRequestStart,
+        "time contracts require the corresponding dependency request start"
+    );
+    ensure!(
         match time.format {
             TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => {
                 time.relation == super::TimeRelation::PreserveOffset || time.utc_offset.is_some()

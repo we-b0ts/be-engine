@@ -84,6 +84,7 @@ pub(in crate::replay::policy) fn validate_parameters(
                     &scalar(&source[position])?,
                     &scalar(&actual[position])?,
                     &mut decision,
+                    Default::default(),
                 )
                 .map_err(anyhow::Error::msg)?;
         }
@@ -111,7 +112,7 @@ mod tests {
         let proof = json!({"source":"source.py:save","fact":"Source mints a UUID, keeps it for later updates, and stores the request-relative creation instant"});
         let resource = json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app"});
         let document = json!({"format":"traffic-policy/v1","rules":[
-            {"id":"created","match":{"api":"POST /events","resource":resource,"sql":"INSERT INTO events (id,created) VALUES (?,?)"},"effect":{"kind":"mysql_values","params":{"0":{"contract":{"kind":"uuid_v4","binding":"event"},"proof":proof}},"values":{"1":{"contract":{"kind":"time","format":"sql_datetime","relation":"preserve_offset","anchor":"case.request_start","utc_offset":"+00:00"},"proof":proof}}},"proof":proof},
+            {"id":"created","match":{"api":"POST /events","resource":resource,"sql":"INSERT INTO events (id,created) VALUES (?,?)"},"effect":{"kind":"mysql_values","params":{"0":{"contract":{"kind":"uuid_v4","binding":"event"},"proof":proof}},"values":{"1":{"contract":{"kind":"time","format":"sql_datetime","relation":"preserve_offset","utc_offset":"+00:00"},"proof":proof}}},"proof":proof},
             {"id":"updated","match":{"api":"POST /events","resource":resource,"sql":"UPDATE events SET label=? WHERE id=?"},"effect":{"kind":"mysql_values","params":{"1":{"contract":{"kind":"reference","binding":"event"},"proof":proof}}},"proof":proof}
         ]});
         let document: crate::policy::TrafficPolicy = serde_json::from_value(document).unwrap();
@@ -129,7 +130,7 @@ mod tests {
         )]);
         let mut runtime = ReplayPolicyRuntime::load(&policy, &cases).unwrap();
         let clocks = AnchorClocks {
-            case: crate::value_contract::time::ClockPair {
+            dependency: crate::value_contract::time::ClockPair {
                 source: Some("2020-01-01T00:00:00Z".parse().unwrap()),
                 target: Some("2026-01-01T00:00:00Z".parse().unwrap()),
             },

@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn scalar_and_json_sql_times_share_groups_and_compose_with_value_codecs() {
         let proof = json!({"source":"source.py:save","fact":"Source stores the generated timestamps and an unordered membership collection"});
-        let time = |format: &str, group: Option<&str>| json!({"kind":"time","format":format,"relation":"preserve_offset","anchor":"case.request_start","utc_offset":"+00:00","clock_group":group});
+        let time = |format: &str, group: Option<&str>| json!({"kind":"time","format":format,"relation":"preserve_offset","utc_offset":"+00:00","clock_group":group});
         let mut json_time = time("iso8601_naive", Some("another-clock"));
         json_time.as_object_mut().unwrap().remove("kind");
         let template = "UPDATE events SET created=?, updated=?, payload=? WHERE id=?";
@@ -324,7 +324,7 @@ mod tests {
         let source = "UPDATE events SET created='2020-01-01 00:00:00.123456', updated='2020-01-01 00:00:00.123456', payload='{\"time\":\"2020-01-01T00:00:02.123456\",\"members\":[\"a\",\"b\",\"a\"],\"stable\":7}' WHERE id=7";
         let actual = "UPDATE events SET created='2026-01-01 00:00:00.123456', updated='2026-01-01 00:00:00.123456', payload='{\"time\":\"2026-01-01T00:00:02.123457\",\"members\":[\"a\",\"a\",\"b\"],\"stable\":7}' WHERE id=7";
         let clocks = AnchorClocks {
-            case: crate::value_contract::time::ClockPair {
+            dependency: crate::value_contract::time::ClockPair {
                 source: Some("2020-01-01T00:00:00Z".parse().unwrap()),
                 target: Some("2026-01-01T00:00:00Z".parse().unwrap()),
             },

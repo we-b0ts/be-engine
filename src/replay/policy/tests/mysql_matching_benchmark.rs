@@ -27,6 +27,7 @@ fn mysql_policy_matching_benchmark() {
     for _ in 0..100 {
         for recorded in &candidates {
             let context = MysqlPolicyContext {
+                request_times: runtime.request_contracts.request_times(CASE_ID),
                 case_id: Some(CASE_ID),
                 identity: &identity,
                 command: "COM_STMT_EXECUTE",

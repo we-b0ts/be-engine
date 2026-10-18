@@ -3,7 +3,8 @@ use super::*;
 #[test]
 fn source_http_session_requires_all_query_fields_and_header_clocks() {
     let generated = json!({"contract":{"kind":"uuid_v4"},"proof":proof()});
-    let header = json!({"contract":{"format":"rfc3339","relation":"request_window","anchor":"dependency.request_start"},"proof":proof()});
+    let header =
+        json!({"contract":{"format":"rfc3339","relation":"request_window"},"proof":proof()});
     let policy = compile(vec![
         json!({"id":"client","match":{"api":"POST /tasks","resource":{"protocol":"http","endpoint":"client.test:8080"},"operation":"GET","path":"/work"},"effect":{"kind":"http_request","headers":{"x-request-time":header},"query":{"first":generated,"second":generated}},"proof":proof()}),
     ]);
@@ -23,8 +24,7 @@ fn source_http_session_requires_all_query_fields_and_header_clocks() {
 
 #[test]
 fn source_sql_session_requires_each_physical_response_time_column_and_complete_rows() {
-    let time =
-        json!({"format":"sql_datetime","relation":"preserve_offset","anchor":"case.request_start"});
+    let time = json!({"format":"sql_datetime","relation":"preserve_offset"});
     let column =
         json!({"contract":{"time":time,"preserve_values":["0001-01-01 00:00:00"]},"proof":proof()});
     let policy = compile(vec![

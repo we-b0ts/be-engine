@@ -34,7 +34,7 @@ mod tuple_tests;
 mod unified_contracts;
 
 fn exchange(sql: &str, response: Value) -> Value {
-    json!({"event_type":"mysql_exchange", "target_host":"127.0.0.1", "target_port":3306,
+    json!({"event_type":"mysql_exchange", "timestamp":"2020-01-01T00:00:00Z", "duration_ms":0, "target_host":"127.0.0.1", "target_port":3306,
         "target_addr":"127.0.0.1:3306", "database":"appdb", "username":"root",
         "command":"COM_QUERY", "sql":sql, "response":response})
 }

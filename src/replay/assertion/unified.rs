@@ -53,6 +53,7 @@ pub(super) fn compare(
         rules,
         AnchorClocks {
             case: times,
+            dependency: times,
             ..Default::default()
         },
     )?;

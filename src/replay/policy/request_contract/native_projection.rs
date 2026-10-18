@@ -80,11 +80,9 @@ pub(in crate::replay::policy) fn time(
     value: &n::NativeTime,
 ) -> Result<config::TimeField> {
     ensure!(
-        matches!(
-            value.anchor,
-            TimeAnchor::ApiRequestStart | TimeAnchor::DependencyRequestStart
-        ) && value.relation == TimeRelation::PreserveOffset,
-        "atomic Redis sequence timestamps require preserve_offset and a case or dependency request-start anchor"
+        matches!(value.anchor, TimeAnchor::DependencyRequestStart)
+            && value.relation == TimeRelation::PreserveOffset,
+        "atomic Redis sequence timestamps require preserve_offset and the corresponding dependency request start"
     );
     let format = match value.format {
         TimestampFormat::UnixSeconds => config::RequestTimestampFormat::UnixSeconds,

@@ -72,7 +72,6 @@ contract:
     kind: time
     format: unix_milliseconds
     relation: preserve_offset
-    anchor: dependency.request_start
 proof:
   source: src/cache.rs:write
   fact: The consumer treats members as a multiset; written_at comes from this request's clock.
@@ -98,10 +97,10 @@ local proof overrides are allowed; blank source/fact values and null proofs
 reject. Proof never inherits across rules. Complete `contract`/`proof` pairs
 remain supported.
 `relative_time: unix_microseconds` abbreviates typed `preserve_offset` time;
-`request_time: rfc3339` abbreviates `request_window`. Both default to
-`case.request_start`, except `mysql_values.values` scalar/JSON times default to
-`dependency.request_start`. Explicit anchors retain their meaning. Declare an
-offset or clock group when the Source contract requires it.
+`request_time: rfc3339` abbreviates `request_window`. Neither accepts `anchor`.
+Dependency rules always use that physical dependency's Source/Target request
+starts; API response rules use their own HTTP request starts. Missing clocks
+fail closed. Declare a clock group when the Source contract requires one.
 `unordered` abbreviates `{kind: unordered}`. Keep complex constraints explicit.
 The engine expands all these forms into complete typed rules, proofs and Source
 identities in plan/evidence, with the same effective fingerprints and gates.
@@ -112,7 +111,7 @@ a protocol miss, null bulk response or quiet no-response is an unavailable slot
 and retains its original outcome without counting as a successful rule match.
 Missing selected JSON/PB fields or a changed type in an available payload fail.
 
-Time contracts declare format, relation and anchor. Unix seconds, milliseconds
+Time contracts declare format and relation; request ownership fixes the clock. Unix seconds, milliseconds
 and microseconds preserve integer precision; formatted times require their
 explicit offset when necessary. Source and Target use independent clocks.
 Request windows use the fixed engine boundary; preserve-offset comparisons

@@ -551,6 +551,7 @@ fn evaluate_response(
                 &unified_rules,
                 crate::value_contract::json::AnchorClocks {
                     case: times,
+                    dependency: times,
                     ..Default::default()
                 },
             )?;

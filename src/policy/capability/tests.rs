@@ -18,7 +18,7 @@ fn repeated_scalar_elements_keep_their_declared_type_without_changing_collection
     let time = FieldContract::Time {
         format: TimestampFormat::UnixMicroseconds,
         relation: TimeRelation::PreserveOffset,
-        anchor: TimeAnchor::ApiRequestStart,
+        anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
     };
@@ -46,7 +46,7 @@ fn repeated_messages_never_infer_a_scalar_type_for_an_unbound_descendant() {
     });
     let duration = FieldContract::Duration {
         unit: crate::policy::DurationUnit::Microseconds,
-        anchor: TimeAnchor::ApiRequestStart,
+        anchor: TimeAnchor::DependencyRequestStart,
     };
     assert!(validate_contract_binding(&codec, "/rows/*", &duration).is_err());
     assert!(validate_contract_binding(&codec, "/rows/0", &duration).is_err());

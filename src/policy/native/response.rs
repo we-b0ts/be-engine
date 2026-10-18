@@ -187,6 +187,7 @@ pub enum PlaintextContract {
     Time(super::NativeTime),
     Duration {
         unit: DurationUnit,
+        #[serde(skip)]
         anchor: crate::policy::TimeAnchor,
     },
     UuidV4,

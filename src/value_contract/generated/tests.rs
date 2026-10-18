@@ -176,7 +176,7 @@ fn encrypted_plaintext_composes_unordered_time_and_uuid_with_strict_remainder() 
             proof(PlaintextContract::Time(NativeTime {
                 format: TimestampFormat::UnixSeconds,
                 relation: TimeRelation::PreserveOffset,
-                anchor: TimeAnchor::ApiRequestStart,
+                anchor: TimeAnchor::DependencyRequestStart,
                 utc_offset: None,
                 clock_group: None,
             })),
@@ -187,7 +187,7 @@ fn encrypted_plaintext_composes_unordered_time_and_uuid_with_strict_remainder() 
     let source = json!({"user":7,"roles":["read","write"],"expires":1_700_000_060,"jti":"f5a90118-572c-48a5-8103-d870bdc7b8e5"});
     let target = json!({"user":7,"roles":["write","read"],"expires":1_800_000_060,"jti":"332348d4-46d5-467b-a179-d8aee5e04b5f"});
     let clocks = AnchorClocks {
-        case: super::super::time::ClockPair {
+        dependency: super::super::time::ClockPair {
             source: Some(chrono::Utc.timestamp_opt(1_700_000_000, 0).unwrap()),
             target: Some(chrono::Utc.timestamp_opt(1_800_000_000, 0).unwrap()),
         },

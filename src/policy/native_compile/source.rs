@@ -262,8 +262,9 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                         compiler::validate_pointer(pointer, false)?;
                         proven(time, validate_time)?;
                         ensure!(
-                            time.contract.anchor == super::super::TimeAnchor::DependencyDelivery,
-                            "shared Redis response rebasing anchors completion/delivery clocks"
+                            time.contract.anchor
+                                == super::super::TimeAnchor::DependencyRequestStart,
+                            "shared Redis response rebasing uses dependency request clocks"
                         );
                     }
                 }

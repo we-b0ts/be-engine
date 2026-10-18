@@ -382,7 +382,7 @@ async fn redis_time_shift_scope_rejects_duplicate_partial_and_unsafe_shared_lane
             }
             "timestamp" => {
                 record.as_object_mut().unwrap().remove("timestamp");
-                (record.to_string(), "original exchange timestamp")
+                (record.to_string(), "original dependency request start")
             }
             _ => unreachable!(),
         };

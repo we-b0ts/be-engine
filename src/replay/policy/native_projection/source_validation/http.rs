@@ -82,6 +82,10 @@ pub(super) fn validate(
         runtime.dynamic_values.commit(case.id, normalized.decision);
     }
     let context = HttpPolicyContext {
+        request_times: crate::replay::assertion::RequestTimes {
+            source: source_time,
+            target: source_time,
+        },
         case_id: Some(case.id),
         target: &target,
         method,

@@ -44,8 +44,8 @@ impl ResponseShift {
             "Redis time-shift requires a complete successful ordinary JSON read"
         );
         let recorded_at = record
-            .timestamp
-            .context("Redis time-shift requires the original exchange timestamp")?;
+            .started_at()
+            .context("Redis time-shift requires the original dependency request start")?;
         let payload = decode_payload(&record.response.decode()?)?;
         let mut fields = BTreeMap::new();
         let mut rule_ids = Vec::new();
