@@ -64,6 +64,9 @@ pub(super) fn classify<'a>(
             read_span = true;
         } else if successful_prepare(current) {
             // PREPARE executes no SQL; only its later EXECUTE can prove reads.
+        } else if successful_ping(current) {
+            // Captured PING proves continuity without executing SQL or changing
+            // transaction state. Unknown sequence gaps above remain strict.
         } else if successful_end(current, &["commit", "rollback"])
             && (read_span || before & 0x2009 == 0)
         {

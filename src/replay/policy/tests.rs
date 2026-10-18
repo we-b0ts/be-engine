@@ -609,6 +609,7 @@ fn unscoped_rules_are_applicable_only_with_matching_recorded_dependencies() {
         &identity,
         "COM_STMT_EXECUTE",
         Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
+        None,
     );
     assert!(
         runtime
@@ -622,6 +623,7 @@ fn unscoped_rules_are_applicable_only_with_matching_recorded_dependencies() {
         &identity,
         "COM_STMT_EXECUTE",
         Some("SELECT 1"),
+        None,
     );
     assert!(
         runtime
@@ -636,6 +638,7 @@ fn unscoped_rules_are_applicable_only_with_matching_recorded_dependencies() {
         &identity,
         "COM_STMT_EXECUTE",
         Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
+        Some(7),
     );
     let report = runtime.report();
     assert!(report.dependency_rules[0].applicable);
@@ -643,6 +646,10 @@ fn unscoped_rules_are_applicable_only_with_matching_recorded_dependencies() {
     assert_eq!(
         report.unused_applicable_dependency_rule_ids,
         vec!["audit-insert"]
+    );
+    assert_eq!(
+        serde_json::to_value(report.recorded_mysql_rule_applicability).unwrap(),
+        json!({"audit-insert":[{"case_id":CASE_ID,"index":7}]})
     );
 }
 
@@ -657,6 +664,7 @@ fn scoped_and_unscoped_rules_compose_on_disjoint_mysql_params() {
         &identity,
         "COM_STMT_EXECUTE",
         Some(sql),
+        None,
     );
     let recorded = values(&[json!(10), json!("old"), json!("request-id")]);
     let actual = values(&[json!(20), json!("new"), json!("request-id")]);
@@ -931,12 +939,14 @@ fn observe_mysql_policy_exchanges(
         identity,
         "COM_STMT_EXECUTE",
         Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
+        None,
     );
     runtime.observe_recorded_mysql_exchange(
         Some(CASE_ID),
         identity,
         "COM_STMT_EXECUTE",
         Some("UPDATE request_log_202607 SET response_status=200 WHERE uuid=?"),
+        None,
     );
 }
 

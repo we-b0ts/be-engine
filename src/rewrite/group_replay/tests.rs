@@ -3,7 +3,7 @@ use crate::rewrite::{
     api_batch, implementer::ImplementerPool, repository_analysis::RepositoryAnalysisSnapshot,
 };
 
-fn state(apis: &[&str], groups: &[(&str, &str)]) -> RewriteState {
+pub(super) fn state(apis: &[&str], groups: &[(&str, &str)]) -> RewriteState {
     let mut state = crate::rewrite::test_state();
     inventory::install(&mut state, apis.iter().map(|api| (*api).into()).collect()).unwrap();
     state.implementers = Some(ImplementerPool::new(16));
@@ -17,7 +17,7 @@ fn state(apis: &[&str], groups: &[(&str, &str)]) -> RewriteState {
     state
 }
 
-fn result(api: &str, passed: bool) -> crate::E2eApiRunResult {
+pub(super) fn result(api: &str, passed: bool) -> crate::E2eApiRunResult {
     serde_json::from_value(serde_json::json!({
         "engine_fingerprint": crate::build_info::ENGINE_FINGERPRINT,
         "run_key": "test-replay", "api": api, "attempt": 1,

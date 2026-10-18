@@ -99,6 +99,9 @@ pub(in crate::replay) fn project_native(
             | n::NativeEffect::ResponseBody(_) => response::project(&mut output, rule)?,
             n::NativeEffect::ResponseGenerated(_) => (),
             n::NativeEffect::InputJwt(effect) => input(&mut output, rule, effect)?,
+            // The inbound runtime consumes this typed effect directly; no
+            // legacy request-rule document represents custom signatures.
+            n::NativeEffect::InputSignedTimestamp(_) => (),
             n::NativeEffect::CaptureHttp(_)
             | n::NativeEffect::CaptureBreeze(_)
             | n::NativeEffect::CaptureHttpResponse(_)

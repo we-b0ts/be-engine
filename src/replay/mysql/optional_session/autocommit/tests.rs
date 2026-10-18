@@ -161,3 +161,76 @@ fn incomplete_and_inconsistent_setup_evidence_stays_required() {
     records.push(records[1].clone());
     assert!(setups(&records).is_empty(), "duplicate sequence");
 }
+
+fn ping(sequence: u64, status: u16) -> Value {
+    let mut record = control(sequence, "", status, status);
+    record["command"] = json!("COM_PING");
+    record["sql"] = Value::Null;
+    record
+}
+
+#[test]
+fn captured_pings_preserve_read_proof_inside_and_between_read_sessions() {
+    for index in [2, 4] {
+        let mut records = records();
+        let sequence = records[index]["query_sequence"].as_u64().unwrap();
+        let status = records[index]["server_status_before"].as_u64().unwrap() as u16;
+        for record in &mut records[index..] {
+            record["query_sequence"] = json!(record["query_sequence"].as_u64().unwrap() + 1);
+        }
+        records.insert(index, ping(sequence, status));
+        assert_eq!(setups(&records), [0, 5]);
+        assert!(!optional(&records).contains_key(&index));
+        if index == 2 {
+            assert_eq!(
+                optional(&records).get(&3),
+                Some(&OptionalSessionExchange::Rollback)
+            );
+        }
+        records.remove(index);
+        assert!(
+            setups(&records).is_empty(),
+            "a missing PING is still an unknown gap"
+        );
+    }
+}
+
+#[test]
+fn incomplete_or_state_changing_pings_cannot_prove_optional_setup() {
+    for (field, value) in [
+        ("command", json!("COM_QUERY")),
+        ("sql", json!("SELECT 1")),
+        ("server_status_before", Value::Null),
+        ("query_sequence", json!(99)),
+        ("parse_warnings", json!(["incomplete"])),
+        ("outcome", json!("client_terminated")),
+    ] {
+        let mut records = records();
+        for record in &mut records[2..] {
+            record["query_sequence"] = json!(record["query_sequence"].as_u64().unwrap() + 1);
+        }
+        let mut maintenance = ping(6, 1);
+        maintenance[field] = value;
+        records.insert(2, maintenance);
+        assert!(setups(&records).is_empty(), "{field}");
+    }
+    for (field, value) in [
+        ("status", json!("error")),
+        ("server_status", Value::Null),
+        ("server_status", json!(0)),
+        ("server_status", json!(9)),
+        ("affected_rows", json!(1)),
+        ("last_insert_id", json!(1)),
+        ("error_code", json!(1205)),
+        ("rows_truncated", json!(true)),
+    ] {
+        let mut records = records();
+        for record in &mut records[2..] {
+            record["query_sequence"] = json!(record["query_sequence"].as_u64().unwrap() + 1);
+        }
+        let mut maintenance = ping(6, 1);
+        maintenance["response"][field] = value;
+        records.insert(2, maintenance);
+        assert!(setups(&records).is_empty(), "response.{field}");
+    }
+}

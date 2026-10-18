@@ -466,12 +466,18 @@ pub(super) fn next_pending_api_for_concurrent_work(state: &RewriteState) -> Opti
         .map(|item| item.api.as_str())
 }
 
-pub(super) fn has_unattempted_api(state: &RewriteState) -> bool {
-    (state.phase == RewritePhase::ApiPending && state.attempts.is_empty())
-        || state
-            .api_inventory
-            .iter()
-            .any(|item| item.status == RewriteApiStatus::Pending && item.attempts == 0)
+pub(super) fn unattempted_apis(state: &RewriteState) -> impl Iterator<Item = &str> {
+    let active = (state.phase == RewritePhase::ApiPending && state.attempts.is_empty())
+        .then_some(state.api.as_str());
+    let pending = state
+        .api_inventory
+        .iter()
+        .filter(|item| item.status == RewriteApiStatus::Pending && item.attempts == 0)
+        .map(|item| item.api.as_str());
+    active
+        .into_iter()
+        .chain(pending)
+        .filter(|api| !super::regression_scope::is_skipped(state, api))
 }
 
 fn load_pending(state: &mut RewriteState, index: usize) -> Result<()> {

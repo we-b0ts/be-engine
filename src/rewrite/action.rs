@@ -168,6 +168,21 @@ pub(super) fn select_action(
     if let Some(selected) = global_worker_action(target_root, state, &base) {
         return selected;
     }
+    if matches!(
+        base,
+        RewriteAction::AdvanceRequired {
+            kind: RewriteAdvanceKind::Replay,
+            ..
+        } | RewriteAction::ImplementationRequired { .. }
+            | RewriteAction::SystemRepairRequired {
+                acceptance: None,
+                ..
+            }
+            | RewriteAction::Complete { .. }
+    ) && let Some(first_pass) = super::scheduling::first_pass_action(target_root, state)
+    {
+        return first_pass;
+    }
     if matches!(base, RewriteAction::ImplementationRequired { .. }) {
         if state.implementers.is_some() {
             return super::scheduling::idle_action(target_root, state).unwrap_or(base);

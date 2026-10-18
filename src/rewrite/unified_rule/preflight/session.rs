@@ -9,7 +9,8 @@ fn stateful(rule: &CompiledNativeRule) -> bool {
         | NativeEffect::RedisLock
         | NativeEffect::RedisPublishIdentity(_)
         | NativeEffect::HttpRequest(_)
-        | NativeEffect::InputJwt(_) => true,
+        | NativeEffect::InputJwt(_)
+        | NativeEffect::InputSignedTimestamp(_) => true,
         NativeEffect::MysqlValues(effect) => {
             !effect.params.is_empty() || !effect.response_time.is_empty()
         }

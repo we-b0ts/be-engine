@@ -97,7 +97,7 @@ pub(crate) fn semantic_rule(rule: &NativeRule) -> Result<serde_json::Value> {
 impl NativeEffect {
     pub fn domain(&self) -> NativeDomain {
         match self {
-            Self::InputJwt(_) => NativeDomain::Input,
+            Self::InputJwt(_) | Self::InputSignedTimestamp(_) => NativeDomain::Input,
             Self::CaptureHttp(_) | Self::CaptureBreeze(_) | Self::CaptureHttpResponse(_) => {
                 NativeDomain::Capture
             }
@@ -119,6 +119,7 @@ impl NativeEffect {
             Self::HttpRequest(_) => "http_request_contract",
             Self::MysqlValues(_) => "sql_value_contract",
             Self::InputJwt(_) => "input_token_rebase",
+            Self::InputSignedTimestamp(_) => "input_signed_timestamp_rebase",
             Self::CaptureHttp(_) => "capture_http_scope",
             Self::CaptureBreeze(_) => "capture_breeze_scope",
             Self::CaptureHttpResponse(_) => "capture_response_urls",
@@ -436,6 +437,16 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
                 InputTokenLocation::Query { name } => text(name, "input query token", 128)?,
             }
             Ok(())
+        }
+        NativeEffect::InputSignedTimestamp(effect) => {
+            let mut scope = rule.selector.clone();
+            scope.api = None;
+            ensure!(
+                rule.selector.api.is_some() && scope == NativeMatch::default(),
+                "signed timestamp input requires an immutable Source API scope"
+            );
+            validate_startup_key(&effect.signing_key)?;
+            crate::request_rules::signed_timestamp::validate(effect)
         }
         NativeEffect::CaptureHttp(_)
         | NativeEffect::CaptureBreeze(_)

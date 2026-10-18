@@ -148,3 +148,56 @@ async fn autocommit_failures_and_write_session_omissions_stay_visible() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn recorded_ping_continuity_allows_multiple_normal_driver_read_sessions() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let mut records = cold_records();
+        let mut ping = records[3].clone();
+        ping["command"] = json!("COM_PING");
+        ping["sql"] = Value::Null;
+        ping["query_sequence"] = json!(8);
+        records.push(ping);
+        for (index, sequence, before) in [(1, 9, 0), (2, 10, 1), (3, 11, 0)] {
+            let mut record = records[index].clone();
+            record["query_sequence"] = json!(sequence);
+            record["server_status_before"] = json!(before);
+            records.push(record);
+        }
+        let (temp, addr, runtime, task) = fixture(&records, true).await;
+        let capture = temp
+            .path()
+            .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
+        let original = std::fs::read(&capture).unwrap();
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
+        for _ in 0..2 {
+            client.ping().await.unwrap();
+            let row = sqlx::query("SELECT id FROM users WHERE id=?")
+                .bind(1_i32)
+                .fetch_one(&mut client)
+                .await
+                .unwrap();
+            assert_eq!(row.get::<i32, _>("id"), 1);
+        }
+        let state = runtime.state.lock().await;
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        assert_eq!(state.allowed_unused_autocommit().len(), 1);
+        assert_eq!(state.allowed_unused_rollbacks().len(), 4);
+        assert_eq!(
+            state.mysql.exchanges.len(),
+            7,
+            "PING is proof, not a required business call"
+        );
+        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert_eq!(std::fs::read(capture).unwrap(), original);
+        task.abort();
+    })
+    .await
+    .unwrap();
+}

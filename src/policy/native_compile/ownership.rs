@@ -318,6 +318,17 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             };
             add(S::ApiInput, slot, OwnedLocation::Scalar, false);
         }
+        NativeEffect::InputSignedTimestamp(effect) => {
+            // Stable signed fields must also be protected from another input
+            // transform; otherwise that transform would invalidate this signature.
+            for pointer in effect
+                .fields
+                .values()
+                .chain(std::iter::once(&effect.signature_pointer))
+            {
+                add(S::ApiInput, L::Body, json(pointer), false);
+            }
+        }
         NativeEffect::FiniteSharing(FiniteSharingEffect::Redis { response_time, .. }) => {
             for pointer in response_time.keys() {
                 add(S::DependencyResponse, L::Value, json(pointer), false);

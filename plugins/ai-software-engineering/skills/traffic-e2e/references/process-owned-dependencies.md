@@ -50,6 +50,13 @@ diagnostic hint, not proof of ownership or response causality.
 
 ## Supported Rules
 
+MySQL reclassification also reconciles value-rule applicability using the exact
+Source case/exchange occurrences stored in new Replay reports. A rule selected
+only by unused process-owned traffic no longer leaves an API obligation. Any
+remaining business occurrence or actual Target use remains checked. Restoration
+and rule removal restore the original obligation. Reports without occurrence
+proof require fresh Replay; ownership is never inferred from rule ids alone.
+
 The current narrow rule types are:
 
 - MySQL read-only SELECT templates scoped to exact host, port, database, username

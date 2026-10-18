@@ -80,8 +80,9 @@ only when all methods are skipped; a passing method does not complete a failing
 sibling. Local `.traffic-e2e/regression.yaml` `only` and `skip` use the same routes;
 `skip` takes precedence. Complete incremental repository analysis before starting
 Replay. The engine finishes each group's Replay round before dispatching its
-failure batch; per-API results remain independent. Preserve the user's scope and
-execute returned commands unchanged.
+failure batch; per-API results remain independent. After dispatch, prioritize
+never-attempted APIs at group boundaries before ordinary integration or acceptance.
+Preserve the user's scope and execute returned commands unchanged.
 
 New workflows use `max_implementers: 16` from local `regression.yaml`, fixed for
 that workflow. Slot names and paths are `api-implementer-0` through the configured

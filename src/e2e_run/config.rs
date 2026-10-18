@@ -116,6 +116,8 @@ pub(crate) fn render_project_config(
             },
             replay: ReplayProjectConfig {
                 startup_timeout_seconds: super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
+                request_timeout_allowance_seconds:
+                    super::model::DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS,
                 dependency_loading: crate::replay::ReplayDependencyLoading::managed_default(),
                 case_dependency_post_response_window_ms:
                     crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
@@ -212,7 +214,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         "managed project replay with http_gateway.enabled requires an enabled http_gateway.ready probe"
     );
     let target_request_timeout =
-        Duration::from_secs(super::model::DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS);
+        Duration::from_secs(config.project.replay.request_timeout_allowance_seconds);
     let target_max_response_bytes = recorder.recording.max_body_bytes;
     let target_port = recorder_target_http_port(&recorder.http_gateway.matched_upstream)?;
     let target_http_readiness_enabled = recorder.http_gateway.enabled;
@@ -600,11 +602,38 @@ mod tests {
         let mut project: ProjectConfig =
             serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
         project.project.target.startup_timeout_seconds = 240;
+        project.project.replay.startup_timeout_seconds = 300;
+        project.project.replay.request_timeout_allowance_seconds = 120;
         fs::write(config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
 
         let (_, config) = resolve_project(target.path()).unwrap();
 
         assert_eq!(config.target_startup_timeout, Duration::from_secs(240));
+        assert_eq!(config.replay_startup_timeout, Duration::from_secs(300));
+        assert_eq!(config.target_request_timeout, Duration::from_secs(120));
+        let case = tempfile::tempdir().unwrap();
+        fs::write(
+            case.path().join("expected-response.json"),
+            r#"{"duration_ms":45000}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            super::super::source_response::request_timeout(
+                case.path(),
+                config.target_request_timeout
+            )
+            .unwrap(),
+            Duration::from_secs(165)
+        );
+        for invalid in [0, 1801] {
+            project.project.replay.request_timeout_allowance_seconds = invalid;
+            assert!(
+                validate_project_config(&project)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("request_timeout_allowance_seconds")
+            );
+        }
     }
 
     #[test]

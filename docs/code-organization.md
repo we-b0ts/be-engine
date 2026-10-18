@@ -291,6 +291,10 @@ is unclear.
   recomputing method evidence. `replay/report/background_overlay/original_evidence`
   owns reversible overlay restoration shared by reclassification and ownership
   planners, so interrupted applies can resume from original unused witnesses.
+  `background_overlay/policy` reconciles MySQL rule applicability using exact
+  case/exchange occurrence witnesses retained by the matcher. Only unused
+  occurrences proven process-owned lose their Case obligation; actual rule use,
+  other Case occurrences and legacy reports without proof remain strict.
   `e2e_run/reclassify/session` selects exact shared-session method projections and
   owns revision checkpoints for snapshot, index, and progress publication.
   `rewrite/background_reclassification` projects those results into matching
@@ -485,7 +489,9 @@ is unclear.
   owns the atomic verification transition. `action.rs` projects actions and
   commands; `coordination.rs` projects executable `pending` and the expanded
   ready/waiting breakdown from the native workflow gate and selected action.
-  `scheduling.rs` owns gated API revalidation selection and resumable system-repair blocking;
+  `scheduling.rs` owns first-attempt priority at group boundaries, gated API
+  revalidation selection and resumable system-repair blocking. Action selection,
+  worker scheduling and coordination counts share its first-attempt eligibility;
   `waiting.rs` owns bounded read-only waits and the return to external task-event
   reconciliation. Neither implements a task-runtime adapter.
   `repair.rs` owns revision readiness and the API-scoped permission to replay an
@@ -678,7 +684,8 @@ explicit repository-wide audit.
   direct-table JOIN SELECTs; `sql_match/cache` owns Replay-local
   compiled templates, constant normalization and fresh parameter binding.
   `sql_match/query_in` owns bounded full-AST list-order compatibility inside
-  correlated `EXISTS` branches and supported `UNION ALL` read trees with joins,
+  correlated `EXISTS` branches, direct-table JOINs and derived COUNT wrappers,
+  and supported `UNION ALL` read trees with joins,
   derived tables, inline windows, and computed projections. Every surrounding
   query node remains strict.
   `sql_match/predicate/in_list` owns scalar/flat-tuple list shapes, per-component
@@ -697,7 +704,8 @@ explicit repository-wide audit.
   tails used to classify a case's leading transaction end, and keeps case-to-case
   transaction inference out of the loader. SELECT expressions do not require per-shape
   registration. Its `autocommit` child checks setup omission over the loaded
-  read-only span. `replay/mysql/cleanup_selection` gives a required transaction
+  read-only span, including retained zero-effect COM_PING continuity witnesses.
+  Unknown post-read sequence gaps remain strict. `replay/mysql/cleanup_selection` gives a required transaction
   end precedence over identical optional cleanup only after its immediately
   preceding recorded exchange has been consumed. Recorder's MySQL semantic
   tracker owns before-command status continuity and final resultset status
@@ -768,6 +776,10 @@ explicit repository-wide audit.
 - `request_rules` owns explicit inbound-request transformation policy and the
   per-send runtime. Its `jwt` child owns compact HMAC JWT verification,
   Bearer-header or named-query selection, and relative NumericDate translation;
+  `signed_timestamp` consumes typed `input_signed_timestamp` effects, verifies
+  bounded sorted-field MD5 signatures and rebases JSON string timestamps using
+  only the immutable request clock and startup secret. The Source-validation
+  adapter freezes the same private key witnesses before unified rule apply.
   `keys` resolves private references to
   target startup inputs, and `policy` projects/edits only `request_rules`.
   `request_headers` remains encryption-only. `e2e_run/jwt_evidence` projects

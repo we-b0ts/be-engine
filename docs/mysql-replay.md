@@ -224,7 +224,11 @@ known inactive start, complete ordinary reads, no writes, locks, explicit BEGIN,
 unsupported statements or failures, and a confirmed inactive finish. Successful
 PREPARE does not execute SQL. An initial sequence gap before the first read is
 allowed only with consistent inactive status on both sides, because Recorder
-can omit driver setup such as SET NAMES. Gaps after reads start remain strict.
+can omit driver setup such as SET NAMES. Recorder retains semantic COM_PING
+exchanges as continuity evidence, although they are not required business
+dependencies. A complete successful, zero-effect PING with unchanged transaction
+status preserves that proof. Gaps after reads start remain strict; older
+captures which omitted such PINGs require a fresh recording for this proof.
 The check is scoped to one immutable dependency file and does not infer the
 contents of a gap or join evidence across cases/Global. SQL effect checks share
 the load-local cache used for rollback classification.
@@ -383,10 +387,12 @@ branch's column/value pairing remain exact. For example, `(a=1 AND b=2) OR
 OR (a=3 AND b=2)`. No distribution, absorption or logical expansion is performed.
 The grammar distinguishes BETWEEN's internal AND. A narrow fallback also supports
 scalar and flat-tuple `IN` / `NOT IN` list reordering inside correlated `EXISTS`
-subqueries when the outer query and every subquery are single-table SELECTs and
-the `EXISTS` participates in an `OR` branch. The complete parsed query remains
+subqueries when the `EXISTS` participates in an `OR` branch. Direct-table JOIN
+chains and `SELECT count(*) FROM (SELECT ...) alias` wrappers also admit list
+reordering, including the paginated SELECT corresponding to that count. The complete parsed query remains
 strict: projections, functions, JSON paths, tables, correlations, boolean
-structure, operators and every non-list value must be identical. This covers
+structure, JOIN conditions, sorting, pagination, operators and every non-list
+value must be identical. This covers
 source collections whose order changes inside access-control `EXISTS` checks
 without treating the surrounding complex predicate as generally equivalent.
 A second full-AST fallback supports the same list reordering in supported

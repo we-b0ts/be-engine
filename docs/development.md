@@ -1642,8 +1642,11 @@ remaining routes; the group’s failed API batch is dispatched after the round
 finishes. Infrastructure execution errors retain a partial summary and unfinished
 membership for recovery without repeating completed routes. `inventory` exposes
 active/last group rounds and the pool. Other groups’ ready implementation can
-continue while traffic remains serialized. There is no global first-attempt
-barrier delaying integration until every API is discovered.
+continue while traffic remains serialized. At each group boundary, dispatch its
+failed APIs first, then prioritize APIs with no Replay attempts over integration,
+acceptance Replay and pending refreshes with prior attempts. An active group
+always drains before this selection. Ordinary integration and acceptance resume
+when no eligible first attempt remains; rule, review and repair gates still apply.
 
 Source quality rework preserves assigned findings in `context.review.rework`
 alongside any behavioral issue. Repeated routing to the same owner and target
@@ -2345,8 +2348,14 @@ context into an image automatically.
 Target readiness path and status come from the project document's
 `recorder.http_gateway.ready` section. Target startup readiness uses
 `project.target.startup_timeout_seconds`, which defaults to 180 seconds when
-omitted and accepts values through 1800 seconds. The target request timeout is 30 seconds; the Replay service startup
-timeout remains a coordinator-owned default. The target's native HTTP port is the port in
+omitted and accepts values through 1800 seconds. `project.replay.startup_timeout_seconds`
+controls Replay service readiness (default 60), separately from dependency index
+and case-loading timeouts. On a contended host, increase this existing readiness
+budget before retrying a startup timeout. `project.replay.request_timeout_allowance_seconds`
+adds 30 seconds by default to each HTTP case's recorded Source duration; it accepts
+1 through 1800 seconds. Increase this bounded allowance for large downloads on
+slower hosts. It changes the execution budget, not response or dependency assertions.
+The target's native HTTP port is the port in
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback.
 
 `review check` owns the Source/Replay-isolation standard and never executes
@@ -3098,13 +3107,15 @@ additional observation window. This source-recording wait does not classify
 response causality and does not apply to target-local cache initialization
 during Replay.
 
-Recognized MySQL connection maintenance is not a semantic dependency. The
+Recognized MySQL connection maintenance is not a required business dependency. The
 strict built-in fingerprints are protocol `COM_PING`, c3p0's exact
 empty-database `SHOW FULL TABLES` probe using the `PROBABLYNOT` sentinel, and exact
 `SELECT 1` with an optional trailing semicolon. Their raw `mysql_query` and
 `mysql_response` records remain in the applicable case or Global debug
-JSONL, while their derived `mysql_exchange` records are omitted from semantic
-dependency JSONL and summaries. Replay handles the same fingerprints without a
+JSONL. COM_PING exchanges also remain in semantic dependency JSONL as explicit
+connection sequence/status proof for read-only session classification; summaries
+and required-exchange counts omit them. The probe queries' derived exchanges
+are omitted from semantic JSONL. Replay handles the same fingerprints without a
 recorded exchange: ping returns OK, `SELECT 1` returns one integer row, and the
 c3p0 empty-database probe returns MySQL error 1102.
 

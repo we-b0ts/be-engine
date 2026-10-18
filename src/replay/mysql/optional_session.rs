@@ -108,7 +108,7 @@ pub(in crate::replay) fn classify(
             if continued_read && successful_end(current, &["commit"]) {
                 optional.insert(index, OptionalSessionExchange::Commit);
             }
-            read_only = continued_read && successful_prepare(current)
+            read_only = continued_read && (successful_prepare(current) || successful_ping(current))
                 || (continued_read
                     || current
                         .server_status_before
@@ -146,6 +146,26 @@ fn successful_prepare(exchange: &RecordedMysqlExchange) -> bool {
         && exchange
             .server_status_before
             .is_some_and(|flags| flags & 8 == 0)
+}
+
+fn successful_ping(exchange: &RecordedMysqlExchange) -> bool {
+    exchange.command == "COM_PING"
+        && exchange.sql.is_none()
+        && exchange.params.as_ref().is_none_or(Vec::is_empty)
+        && exchange.outcome == crate::DependencyExchangeOutcome::Response
+        && exchange.parse_warnings.is_empty()
+        && exchange.response.status == "ok"
+        && exchange
+            .server_status_before
+            .zip(exchange.response.server_status)
+            .is_some_and(|(before, after)| before & 8 == 0 && before & 0x200b == after & 0x200b)
+        && exchange.response.error_code.is_none()
+        && exchange.response.error_message.is_none()
+        && exchange.response.affected_rows == Some(0)
+        && exchange.response.last_insert_id == Some(0)
+        && !exchange.response.rows_truncated
+        && exchange.response.no_rows()
+        && exchange.response.columns.is_empty()
 }
 
 fn status_after(exchange: &RecordedMysqlExchange) -> Option<u16> {

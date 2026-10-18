@@ -394,3 +394,6 @@ pub(super) fn interrupted(state: &mut RewriteState, error: &anyhow::Error) -> bo
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod scheduling_tests;

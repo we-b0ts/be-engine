@@ -50,10 +50,7 @@ impl Template {
         let Statement::Query(query) = statements.pop()? else {
             return None;
         };
-        let nested_exists = validate_nested_query_tree(&query).is_some()
-            && select(&query)
-                .and_then(|select| select.selection.as_ref())
-                .is_some_and(|selection| has_nested_in_anchor(selection, false));
+        let nested_exists = validate_nested_query_tree(&query).is_some();
         let union_all = validate_union_query_tree(&query).is_some();
         (nested_exists || union_all).then_some(Self { query })
     }
@@ -124,15 +121,22 @@ fn validate_nested_query_tree(query: &Query) -> Option<()> {
     struct Validator {
         queries: usize,
         exists: usize,
+        count_wrappers: usize,
+        nested_in: bool,
     }
     impl Visitor for Validator {
         type Break = ();
 
         fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
             self.queries += 1;
-            if validate_nested_select(query).is_none() {
+            let Some(select) = validate_nested_select(query) else {
                 return ControlFlow::Break(());
-            }
+            };
+            self.count_wrappers += usize::from(derived_count(select));
+            self.nested_in |= select
+                .selection
+                .as_ref()
+                .is_some_and(|selection| has_nested_in_anchor(selection, false));
             ControlFlow::Continue(())
         }
 
@@ -149,13 +153,13 @@ fn validate_nested_query_tree(query: &Query) -> Option<()> {
     }
     let mut validator = Validator::default();
     query.visit(&mut validator).is_continue().then_some(())?;
-    (validator.queries == validator.exists + 1).then_some(())
+    (validator.queries == validator.exists + validator.count_wrappers + 1
+        && (validator.nested_in || validator.count_wrappers > 0))
+        .then_some(())
 }
 
 fn validate_nested_select(query: &Query) -> Option<&Select> {
     if query.with.is_some()
-        || query.order_by.is_some()
-        || query.limit_clause.is_some()
         || query.fetch.is_some()
         || !query.locks.is_empty()
         || query.for_clause.is_some()
@@ -170,6 +174,7 @@ fn validate_nested_select(query: &Query) -> Option<&Select> {
     };
     let empty_group =
         matches!(&select.group_by, GroupByExpr::Expressions(items, _) if items.is_empty());
+    let count_wrapper = derived_count(select);
     if select.flavor != SelectFlavor::Standard
         || !select.optimizer_hints.is_empty()
         || select.distinct.is_some()
@@ -178,14 +183,17 @@ fn validate_nested_select(query: &Query) -> Option<&Select> {
         || select.exclude.is_some()
         || select.into.is_some()
         || select.from.len() != 1
-        || !select.from[0].joins.is_empty()
-        || !matches!(
-            select.from[0].relation,
-            TableFactor::Table { args: None, .. }
-        )
+        || !count_wrapper
+            && (!matches!(
+                select.from[0].relation,
+                TableFactor::Table { args: None, .. }
+            ) || select.from[0]
+                .joins
+                .iter()
+                .any(|join| !matches!(join.relation, TableFactor::Table { args: None, .. })))
         || !select.lateral_views.is_empty()
         || select.prewhere.is_some()
-        || select.selection.is_none()
+        || !count_wrapper && select.selection.is_none()
         || !select.connect_by.is_empty()
         || !empty_group
         || !select.cluster_by.is_empty()
@@ -196,18 +204,36 @@ fn validate_nested_select(query: &Query) -> Option<&Select> {
         || select.qualify.is_some()
         || select.value_table_mode.is_some()
         || select.projection.is_empty()
-        || select.projection.iter().any(|item| match item {
-            SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => !matches!(
-                expr,
-                Expr::Identifier(_) | Expr::CompoundIdentifier(_) | Expr::Value(_)
-            ),
-            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..) => false,
-            _ => true,
-        })
+        || !count_wrapper
+            && select.projection.iter().any(|item| match item {
+                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                    !matches!(
+                        expr,
+                        Expr::Identifier(_) | Expr::CompoundIdentifier(_) | Expr::Value(_)
+                    )
+                }
+                SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..) => false,
+                _ => true,
+            })
     {
         return None;
     }
     Some(select)
+}
+
+/// A count wrapper adds exactly one derived query scope. Its full AST, including
+/// aliases, stays strict; the child must independently pass the same validation.
+fn derived_count(select: &Select) -> bool {
+    select.from.len() == 1
+        && select.from[0].joins.is_empty()
+        && matches!(
+            select.from[0].relation,
+            TableFactor::Derived { lateral: false, .. }
+        )
+        && select.selection.is_none()
+        && matches!(select.projection.as_slice(),
+            [SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. }]
+                if expr.to_string().eq_ignore_ascii_case("count(*)"))
 }
 
 fn validate_union_query_tree(query: &Query) -> Option<()> {

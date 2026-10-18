@@ -107,10 +107,11 @@ requires target to change its normal SQL parameter binding.
 
 A narrow complex-predicate fallback permits the same scalar/flat-tuple list
 reordering inside correlated `EXISTS` subqueries that participate in an `OR`
-branch of a single-table SELECT. Every query scope must remain a single-table
-SELECT. The complete AST outside eligible lists stays exact, including
+branch, direct-table JOIN chains, and derived `SELECT count(*) FROM (SELECT ...)`
+wrappers. The complete AST outside eligible lists stays exact, including
 functions, JSON paths, projections, tables, correlations, operators, boolean
-structure and non-list values; joins and other subquery forms remain strict.
+structure, JOIN conditions, sorting, pagination and non-list values. Unsupported
+subquery forms remain strict.
 
 A separate bounded full-query fallback permits the same list reordering inside
 supported `UNION ALL` read trees, including JOIN predicates, derived tables,
@@ -149,6 +150,10 @@ matchable. Both 0 and 1 are retained during recording; writes, failed controls,
 unknown transaction starts and incomplete spans remain strict. Initial gaps
 caused by omitted setup may be crossed only before the first read and with
 consistent inactive status; gaps inside a transaction never establish proof.
+New recordings retain complete COM_PING exchanges in semantic JSONL for sequence
+continuity; unchanged-status, zero-effect PINGs do not break a read-only span and
+are not required business exchanges. Older recordings with omitted post-read
+PINGs need fresh recording rather than an inferred explanation for their gaps.
 No rule or new recording is needed when the immutable capture already has the
 required status evidence. This does not verify transaction isolation equivalence.
 

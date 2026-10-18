@@ -18,8 +18,10 @@ flate2 = "1"
 getrandom = "0.3"
 hmac = "0.12"
 jsonwebtoken = { version = "9.3", default-features = false }
+md-5 = "0.10"
 serde_path_to_error = "0.1"
 sha2 = "0.10"
+subtle = "2"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-rustls = { version = "0.27", features = ["http1", "webpki-roots"] }

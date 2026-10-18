@@ -536,9 +536,12 @@ implementer coding and tests may proceed.
 Complete grouping for all new selected APIs before the first Replay. Each group
 round freezes its eligible routes and target/recording identity, saves per-API
 results, and continues after ordinary failures. Dispatch that group’s failed
-APIs only once its round completes. There is no all-inventory first-attempt
-barrier for integration: other completed groups can proceed. Acceptance rounds
-include only exact reviewed/integrated or otherwise admitted API methods; an
+APIs only once its round completes, before starting the next group's Replay.
+At group boundaries, prioritize APIs with no Replay attempts over integration,
+acceptance Replay and pending refreshes with prior attempts. Resume integration
+and acceptance when no eligible first attempt remains, preserving rule, review
+and repair gates. Acceptance rounds include only exact reviewed/integrated or
+otherwise admitted API methods; an
 unhanded sibling does not acquire Replay permission through group membership.
 Infrastructure interruption preserves completed results and unfinished membership.
 

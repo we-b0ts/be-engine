@@ -31,7 +31,9 @@ pub(crate) use source_process::{
 use udp::{UdpDependencySummary, record_udp_summary};
 
 pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
-    !matches!(event, RecorderEvent::MysqlExchange(exchange) if is_debug_only_mysql_exchange(exchange))
+    // PING is semantic continuity evidence even though maintenance stays out
+    // of the business dependency summary. Never turn its sequence into a gap.
+    !matches!(event, RecorderEvent::MysqlExchange(exchange) if exchange.command != "COM_PING" && is_debug_only_mysql_exchange(exchange))
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if redis::is_client_library_info_exchange(exchange))
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.session_setup && exchange.response_kind != "error" && exchange.replay_safe)
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "PING" && exchange.response_kind != "error" && exchange.replay_safe)

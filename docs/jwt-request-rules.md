@@ -1,5 +1,8 @@
 # JWT request rules
 
+For custom signed JSON timestamps, see
+[signed timestamp request rules](signed-timestamp-request-rules.md).
+
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
 > syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,

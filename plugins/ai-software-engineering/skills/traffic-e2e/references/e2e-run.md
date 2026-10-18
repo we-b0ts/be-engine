@@ -34,7 +34,13 @@ All acquisition, classification, input and comparison rules share the
 `traffic-policy/v1` document named by `project.policy`, normally
 `.traffic-e2e/policy.yaml`. Initialization creates this policy empty.
 Relevant target fields are `.traffic-e2e/Dockerfile.target`, startup mount paths,
-and `startup_timeout_seconds` (180 by default, at most 1800). Quality gates are
+and `startup_timeout_seconds` (180 by default, at most 1800).
+`project.replay.startup_timeout_seconds` controls dependency service readiness
+(default 60), independently of index/case loading timeouts. HTTP requests use
+the recorded Source response duration plus
+`project.replay.request_timeout_allowance_seconds` (default 30, range 1..1800).
+These execution budgets can be increased on slower hosts without changing assertions.
+Quality gates are
 an engine standard rather than project configuration. The timeout bounds the interval from
 target launch until every enabled endpoint passes readiness. Native HTTP port,
 readiness probes, and request policy come from the embedded recorder. Do not

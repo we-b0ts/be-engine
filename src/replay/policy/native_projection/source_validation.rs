@@ -5,6 +5,7 @@ mod http;
 mod input;
 mod mysql;
 mod redis;
+mod signed_input;
 #[cfg(test)]
 mod tests;
 use super::*;
@@ -55,6 +56,7 @@ pub(crate) fn validate_native_source_dependencies(
     let mut identities = BTreeSet::new();
     for case in cases {
         input::validate(compiled, target_root, case, &mut checked)?;
+        signed_input::validate(compiled, target_root, case, &mut checked)?;
         redis::register_callbacks(&mut redis_state, case)?;
         for event in ordered(case.events)? {
             if event["session_setup"] != true
@@ -119,6 +121,7 @@ fn dependency_effect(effect: &NativeEffect) -> bool {
             | NativeEffect::HttpRequest(_)
             | NativeEffect::MysqlValues(_)
             | NativeEffect::InputJwt(_)
+            | NativeEffect::InputSignedTimestamp(_)
     )
 }
 

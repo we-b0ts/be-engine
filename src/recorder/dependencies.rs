@@ -204,7 +204,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn mysql_maintenance_requests_are_kept_in_debug_only() {
+    async fn mysql_ping_preserves_semantic_evidence_while_probe_queries_stay_debug_only() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();
         let case = CaseContext {
@@ -272,9 +272,9 @@ mod tests {
         let semantic = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
             .await
             .unwrap();
-        assert_eq!(semantic.lines().count(), 1);
+        assert_eq!(semantic.lines().count(), 2);
         assert!(semantic.contains("SELECT 3"));
-        assert!(!semantic.contains("COM_PING"));
+        assert!(semantic.contains("COM_PING"));
         assert!(!semantic.contains("PROBABLYNOT"));
         assert!(!semantic.contains("SELECT 1"));
         assert!(!semantic.contains("SELECT 2"));
@@ -343,9 +343,9 @@ mod tests {
             tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
                 .await
                 .unwrap();
-        assert_eq!(bootstrap_semantic.lines().count(), 1);
+        assert_eq!(bootstrap_semantic.lines().count(), 2);
         assert!(bootstrap_semantic.contains("SELECT 3"));
-        assert!(!bootstrap_semantic.contains("COM_PING"));
+        assert!(bootstrap_semantic.contains("COM_PING"));
         assert!(!bootstrap_semantic.contains("PROBABLYNOT"));
         assert!(!bootstrap_semantic.contains("SELECT 1"));
         assert!(!bootstrap_semantic.contains("SELECT 2"));
