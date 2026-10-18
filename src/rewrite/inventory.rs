@@ -412,6 +412,7 @@ pub(super) fn reset_for_recording(state: &mut RewriteState) {
         state.api.clear();
         state.source_route.clear();
     }
+    super::group_replay::refresh(state);
 }
 
 pub(super) fn defer_completed_for_target_change(

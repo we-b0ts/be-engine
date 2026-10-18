@@ -407,9 +407,30 @@ pub(super) fn worker_action_while_busy(
     target_root: &Path,
     state: &RewriteState,
 ) -> Option<RewriteActionEnvelope> {
-    let action = super::worker::scheduler::global_action(target_root, state, true)?;
+    if super::repository_analysis::required_action(target_root, state)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return None;
+    }
+    let action = (if state.implementers.is_some() {
+        super::implementer::action(target_root, state)
+            .ok()
+            .flatten()
+    } else {
+        None
+    })
+    .or_else(|| super::worker::scheduler::global_action(target_root, state, true))?;
     let mut envelope = action::envelope(target_root, state, action);
-    envelope.pending = super::coordination::pending(state, &envelope.action, true);
+    envelope.pending = super::coordination::projected_details(
+        target_root,
+        state,
+        &envelope.action,
+        &envelope.action,
+        true,
+    )
+    .pending();
     Some(envelope)
 }
 

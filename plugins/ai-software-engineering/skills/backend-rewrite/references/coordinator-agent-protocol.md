@@ -8,9 +8,15 @@ Follow the main loop in
 
 ## Role Language
 
-In this protocol, **API implementer** means the dedicated `api-implementer`
-bound to one API work item. The engine may still expose protocol names such as
-`implementation worker`, `subagent`, `agent_handle`; those names do not create additional core roles.
+In this protocol, **API implementer** means a fixed `api-implementer-N` slot
+with a reusable worktree and runtime handle. It may retain several API tasks from
+several groups, but develops at most one API at a time. Each API keeps its own
+binding, dispatch, lease and review identity. Historical protocol names such as
+`worker`, `subagent` and `agent_handle` do not create additional roles.
+
+The **repository analyst** performs read-only static/dynamic source route analysis
+and returns results to the coordinator. It has no implementation-worker binding
+or implementation worktree and is never confirmed or reported as an API implementer.
 
 The **code integrator** is one retained `code-integrator` task for the workflow
 and is never stored or reported as an API-implementer binding. An **API expert** is a
@@ -21,128 +27,58 @@ them through the returned engine command.
 
 ## Persistent Assignment
 
-Maintain one exact work item to one dedicated task runtime handle and one worktree:
+For pooled workflows, read [fixed implementers](coordinator-implementers.md).
+`inventory.implementers` is the authoritative slot, queue and group projection.
+The default is 16 slots; the workflow captures `max_implementers` at creation.
 
 ```text
-API path/pattern <-> worker handle <-> worker worktree
+group -> fixed api-implementer-N slot -> actual runtime handle + fixed worktree
+API -> original dispatch + lease generation + per-API handoff/review
 ```
 
-Issue IDs, attempts, and workflow revisions can change without changing this
-binding. HTTP scope covers all included recorded methods at that exact canonical
-path/pattern. Match `details.worker.work_scope` for task ownership. The API
-inventory summarizes routes and keeps method verification under each item's
-`methods`; its current selection does not assign a worker. Never dispatch separate method workers
-for one route, infer scope from a directory name, or enumerate methods in the
-assignment. The worker obtains `facts.method_apis` and method-bound issue queries
-from scoped evidence. HTTP commands always use the canonical route; never send
-`METHOD API`. The engine persists the actual runtime handle and returns `agent_handle`
-with its work scope in status and inventory. Match live runtime entries by that
-handle; do not keep a separate binding/dispatch ID table. Supply the runtime's
-addressable identifier, such as Codex's canonical `agent_name` when its tools
-use that as the target; a display label is not an addressable handle. Retain any
-additional session/task ID required by the runtime's own status query.
-A finished worker turn does not release ownership. Retain the binding and
-worktree through final workflow completion.
+An HTTP API includes every recorded method on its canonical route. Do not create
+separate method implementers. Several APIs may share one handle; a plain handle
+cannot select a pooled API observation. Match the engine's API/dispatch/lease
+identities, never task names or directory contents. Supply the runtime's
+addressable handle and retain any additional task ID required by its status API.
 
-Create worktrees from the integrated target revision under:
+Use the returned absolute worktree, always under:
 
 ```text
-<coordinator-root>/.traffic-e2e/local/rewrite-worktrees/<workflow.id>/<work-item-slug>
+<canonical-target-root>/.traffic-e2e/local/rewrite-worktrees/api-implementer-N
 ```
 
-Use an `api-` slug prefix. Dispatch only:
-
-- Role: `api-implementer`.
-- Exact work scope: canonical API path/pattern.
-- Absolute canonical target root for engine evidence queries.
-- Absolute assigned worktree for edits and local tests.
-- Source repository locations for behavior analysis.
-- On a post-input resume, the completed input transition and remaining delivery
-  requirement; the worker still retrieves all current issue facts itself.
-
-The worker obtains the current issue, binding/dispatch identity, and diagnostic
-facts from the engine's scoped evidence entrypoint. Do not attach action JSON,
-evidence IDs, evidence commands, or diagnostic bodies to the assignment. Retain
-the original result and its review report so the engine can validate its turn.
-Workers edit and test only their worktrees; they do not initialize a private rewrite workflow or
-operate other work items.
+Do not add workflow prefixes or API slugs. Reuse its cache and preserve queued
+or unhanded work. Retain a separate `integrator` checkout. Source analysis needs
+no implementation checkout.
 
 ## Dispatch And Resume
 
-For `implementation_required`:
+For `implementer_dispatch_required`, delegate the returned same-group batch to
+its fixed slot. Reuse its actual handle when present; create the runtime session
+and checkout only when needed. Include the canonical target root, worktree,
+Source locations, group context and original per-API identities. The implementer
+reads its own scoped evidence before each API. Execute `commands.confirm` only
+after runtime acceptance, including accepted queued work. Confirmation records
+members as queued, not running.
 
-1. Read `details.worker.state` and recover the assigned handle if one exists.
-2. For `dispatch_required`, create its worktree and dispatch a real dedicated
-   worker. For `resume_required`, refresh the retained worktree from the
-   integrated revision when synchronization is conflict-free, preserving all
-   unintegrated changes. Otherwise leave source conflict resolution to that
-   worker. Resume the same handle with the same assignment fields; its evidence
-   context supplies the frozen base for this dispatch.
-3. After the task runtime accepts the submission, execute `commands.confirm_worker`
-   with the actual `--agent-handle` or `BACKEND_REWRITE_SUBAGENT_HANDLE` and optional
-   `BACKEND_REWRITE_SUBAGENT_NAME`. Register the assigned absolute worktree using
-   `--worktree` or `BACKEND_REWRITE_WORKER_WORKTREE`; repeat this on resume so the
-   engine freezes the new dispatch's base. Confirm accepted queued work as well; report
-   `queued` when the task runtime exposes that state.
-   If the canonical target is nested below its Git repository root, keep
-   `--target-root` on that nested project. The registered worktree may be the
-   outer Git worktree or its corresponding target-project child; the engine
-   normalizes both forms to the child. The target and configured
-   `delivery.managed_paths` are writable delivery scope; managed sibling paths
-   are target-relative (for example `../backend-rs`). Do not modify other
-   repository directories because review rejects tracked changes outside that
-   scope.
-4. Confirmation records the accepted binding only. Report `running` or `queued`
-   explicitly using the owning action's `commands.report_worker` when that state
-   is known, then continue with the returned global action. A confirmation with
-   no activity report remains `worker_status_required` in `pending`.
+Continue with the returned global action. Report real per-API activity through
+`implementer report`, supplying slot, handle, API, original API dispatch and lease
+generation. A slot may queue more batches from its other mapped groups while
+working on one API. Handoffs release only the completed subset and do not make
+remaining tasks idle. Follow [the exact CLI protocol](coordinator-implementers.md).
 
-Confirmation gates that work item's evidence and acceptance. It does not block
-another work item's dispatch or feedback. Never perform API diagnosis in the
-coordinator to bypass missing worker capability. Confirmation is delivery of a
-dispatch, not proof that the worker remains running or has completed its work.
+Restore current assignments from `inventory` after interruption. Resume the same
+handle before replacing it. Proven runtime absence uses the slot-level
+[`implementer replace-runtime`](coordinator-implementers.md#restore-a-missing-runtime)
+command with an actual runtime query and timestamp. Reload all new dispatch/lease
+identities after replacement. Do not infer completion from an ended runtime turn,
+clear pending tasks or reset the tree to obtain an empty slot.
 
-A later failed acceptance creates a new dispatch for the same worker. Replacing
-an existing owner requires **either one of two equal authorization bases**:
-
-- `user_approved`: the user explicitly authorized the transfer, including an
-  earlier authorization that covers this replacement. Use
-  `--approve-ownership-transfer`; do not ask again for an already authorized transfer.
-- `runtime_api_confirmed_missing`: **actually invoke** a runtime API/tool or
-  supported command covering the exact stored worker handle, and obtain a result
-  establishing that the worker no longer exists and cannot be resumed. Supply
-  `--runtime-query-command` and `--runtime-query-at` together. These parameters
-  attest that the query actually ran and confirmed absence; no additional user
-  approval or evidence file is required.
-
-For the runtime basis, after the actual query and replacement creation:
-
-```bash
-backend-rewrite worker transfer --previous-agent-handle OLD --agent-handle NEW \
-  --reason 'runtime query confirmed the original worker no longer exists' \
-  --runtime-query-command 'ListAgents' \
-  --runtime-query-at '<actual query time in RFC 3339, including timezone>'
-```
-
-`--runtime-query-command` identifies the API/tool or command actually invoked:
-for example `ListAgents`, its supported `/list-agents` entrypoint, or another
-runtime's live agent-list or per-task status API. Record the actual query time
-(e.g. `2026-09-12T12:00:00+08:00`), not an invented timestamp. Follow
-[mandatory runtime queries](#mandatory-runtime-queries) for query coverage.
-Merely naming `/list-agents` does not execute a query. A new session, cached
-engine state, an incomplete listing, a timeout, permission error, or other failed
-query does not establish absence. An ended but resumable worker retains
-ownership. If list scope cannot establish absence of the exact worker, obtain a
-per-task result or explicit user approval. Explicit user cancellation still
-takes precedence over automatic replacement.
-
-After establishing either basis, preserve the worktree, create the replacement,
-then execute `worker transfer` with a single-line `--reason` and exactly one
-of the authorization alternatives. The engine checks the command and time
-format, records the authorization, verifies the old handle still owns the work
-and issues a new dispatch for the replacement. It trusts the coordinator's
-attestation; it does not execute the submitted API/command or independently
-prove the query ran. Never give two workers simultaneous ownership of one work item.
+Legacy workflows without `inventory.implementers` retain their existing
+`implementation_required` / `commands.confirm_worker` protocol. Their per-API
+`worker confirm`, runtime observations and explicit `worker transfer` remain
+compatibility interfaces, not the dispatch path for new pooled workflows.
 
 ## API Expert Assistance
 
@@ -195,84 +131,51 @@ eligibility. Empty handoffs and worker resumes do not reset this timer.
 
 ## Runtime Events And Handoffs
 
-Use completion events from the task runtime as the normal notification path.
-Events accelerate result handling; they do not replace the mandatory runtime
-queries below.
-Use the result's actual worker handle and original review report. The engine
-resolves the binding and validates the report's workflow, scope and dispatch.
-Never replace a stale result's report with a newer one. Execute the returned
-`commands.report_worker`, or `worker report --agent-handle HANDLE --activity ACTIVITY`:
+Use completion events as the normal notification path, together with the
+mandatory live query passes below. Preserve original results and review paths;
+never relabel an old completion with the current API's dispatch or lease.
 
-| Activity | Meaning |
+Pooled running/queued/idle observations use `implementer report` with explicit
+API/dispatch/lease identity. A completed subset uses `implementer handoff --slot
+N --agent-handle HANDLE --deliveries FILE`, whose JSON entries bind each API,
+dispatch, lease generation, unique handoff ID and original passing review report.
+This submission may cross assigned groups. See
+[fixed implementers](coordinator-implementers.md#runtime-activity-and-partial-handoff).
+
+| Activity or transition | Meaning |
 | --- | --- |
-| `queued` | Task runtime accepted the task and is waiting to run it. |
-| `running` | The coordinator reports that this dispatch is running. |
-| `idle` | The worker stopped without a usable handoff; resume is required. |
-| `handoff_ready` | The coordinator received a reviewable handoff. |
-| `integrated` | The identified handoff and required inputs are published with a current passing integration report. |
-| `rework_required` | The identified handoff needs API-worker changes, such as a business conflict or behavior defect. Routine formatting/Clippy repairs stay with the integrator. |
+| `queued` | This API was accepted and is waiting in the slot queue. |
+| `running` | The runtime is developing this API; a slot can have only one. |
+| `idle` | This API stopped without an accepted handoff and requires recovery/resume. |
+| Batch handoff | Reviewable completed API subset; all unlisted tasks remain assigned. |
+| `integrated` | The identified handoff and required inputs were published with matching integration proof. |
+| `rework_required` | That handoff needs implementer changes; the integrator retains routine formatting/lint repair. |
 
-For `running`, `queued`, and `idle`, report a fresh runtime observation for the
-current assignment. Never relabel a delayed completion as a current observation.
-These activities do not accept a review report.
+Integration and rework retain `worker report` with the original handle, unique
+handoff ID and original review report. Those exact delivery identities identify
+one API even when the handle owns many. Do not use handle-only `worker report`
+for pooled runtime observations or use it instead of batch handoff.
 
-For `handoff_ready`, `integrated`, and `rework_required`, also supply the same stable
-`BACKEND_REWRITE_WORKER_HANDOFF_ID`, normally the worker commit or another exact
-handoff identity, and `--review-report` from the original delivery. For rework,
-use the accepted worker report or that handoff's integration report. Each review
-returns a separate file; one batch integration review may list several handoffs
-in that same file. Retain its exact path. The engine rejects an integration
-report without a matching received handoff. Duplicate handoff events do not create duplicate work. Stale
-attempts or wrong handles cannot advance the current issue; recover its current
-status without replacing the dedicated worker.
+For rule, route, capture or startup-only results, apply the supported transition
+with the original evidence identity before reporting idle when permitted. A new
+idle dispatch can invalidate old planner preconditions. If the API no longer
+needs implementation but its slot still retains a lease, report idle using that
+lease to release it. Never relabel old results with a newly issued dispatch.
 
-For a result containing only rule, route, capture, or startup inputs, reconcile
-its original identity and execute the supported plan/apply or route transition
-before reporting `idle` when that transition is permitted. An idle
-report creates an unconfirmed dispatch and can invalidate the required planner
-or route preconditions. After the mutation, refresh status. If it advanced or
-parked the original implementation issue, do not report the old completion as
-`idle`, `handoff_ready`, or `integrated`. If the same dispatch still requires an
-implementation handoff, report the ended worker as `idle` and resume its handle
-for the remaining engine requirement. When no code repair remains, request review
-and delivery of the unchanged current target: its existing commit and a passing
-local report are sufficient. Do not request an artificial patch or new commit.
-Input application alone is not acceptance.
+Every usable code delivery requires a current passing per-API `review check`
+report. Retain workflow/recording, API/group, issue, binding, dispatch and lease;
+proven cause, Source evidence, changed files/shared impact, exact commit, focused
+test results, original absolute report path, required inputs and remaining risks.
+The engine freezes accepted commits and reports before reusing the checkout.
+Implementers need no mandatory Clippy run; final pre-revalidation review owns the
+full suite. See [review](coordinator-review.md).
 
-If the input transition must wait and the engine requires a worker status report,
-report the actual `idle` state. Retain the old result as context; have the same
-worker revalidate its inputs after the next dispatch is confirmed. Do not relabel
-old evidence or claim the ended worker is running to preserve a planner.
-
-A usable code handoff requires a passing `review check` report for its final code;
-follow [coordinator-review.md](coordinator-review.md). Require the returned
-source evidence; send semantic questions back to its author.
-Report `handoff_ready` with `--review-report` or
-`BACKEND_REWRITE_WORKER_REVIEW_REPORT`. An unaccepted incomplete delivery from
-an ended worker is `idle`, so the same worker can resume and finish its review.
-The worker report must pass Source, Replay-isolation, domain, assignment and
-delivery-identity checks against current canonical inputs. It has no mandatory
-fmt, workspace-test or Clippy gate. Workers build/debug and run relevant tests
-as needed; the distinct final pre-revalidation stage owns the full quality suite.
-
-A usable handoff contains the original overview's workflow/recording,
-work scope, issue, binding and dispatch identities, proven cause and
-supporting evidence, commit/patch identity, changed files and shared-module
-impact, local test results, the passing review's absolute `report_path` and any
-spawn ownership evidence, necessary coordinator transition inputs, and any
-remaining risks. After consuming any non-code result as above, a task ending
-with no usable handoff for its still-current dispatch is `idle`. Reporting idle
-issues a fresh dispatch identity for the same worker; reject late completion
-from the superseded turn and follow the returned resume action.
-After `backend-rewrite wait` returns `worker_events_required`, perform the
-[mandatory runtime query pass](#mandatory-runtime-queries), reconcile ended
-tasks and arrived events, and report actual changes before refreshing global
-status. Keep the original review report and handoff identity.
-
-The worker returns the handoff and ends its turn; it does not wait for Replay.
-When the engine accepts that handoff and returns `integration_required`, switch
-to [coordinator-integration.md](coordinator-integration.md). Do not extend this
-agent-lifecycle protocol into candidate preparation or publication.
+After a handoff, keep unlisted tasks queued/running according to real activity.
+After a bounded wait returns `worker_events_required`, query all outstanding
+runtime handles, reconcile each result and task identity, report changes, then
+refresh global status. A handoff is neither Replay success nor whole-slot idle.
+When integration is selected, follow
+[coordinator integration](coordinator-integration.md).
 
 ## Authorized Regression Start
 
@@ -319,9 +222,10 @@ already fixed externally. Only current verification failures can produce new
 implementation assignments or expert assistance. Each API receives permission
 for one new worker binding under the new purpose; consume it on that API's first
 binding when needed. No additional approval or old-worker query is required.
-Once bound, further replacement uses the normal explicit-approval or
-`runtime_api_confirmed_missing` transfer contract. Other APIs retain their own
-first-binding permission.
+Reuse the workflow’s fixed slots for later batches; a new API does not create
+another worktree. Restore active leases through their owning slot. Legacy
+workflows retain the explicit-approval or `runtime_api_confirmed_missing` transfer
+contract for replacement of their per-API owner.
 
 The captured committed `pr_base` revision is the trusted review baseline. Old
 source-review files must not trigger startup review. If the purpose makes no
@@ -343,9 +247,10 @@ are not task-runtime worker cleanup requirements.
 At session start/resume with retained assignments, after interruption, on
 `worker_status_required`, before waiting on outstanding agents, and after every
 bounded engine or task-runtime wait, **actually invoke a runtime agent-list or
-status tool**. Query all assigned workers still awaiting results in one pass,
-including parked API workers. Also check retained integrator,
-route-analysis, and expert tasks before waiting on them, without reporting their
+status tool**. Query all slot handles still awaiting results in one pass, then reconcile every
+assigned API; several APIs sharing a handle need only one runtime query. Include
+parked APIs in that coverage. Also check retained integrator,
+repository-analyst, and expert tasks before waiting on them, without reporting their
 handles as API implementers. A pass just completed after a wait can serve the
 immediately following wait; repeat after intervening work or assignment changes.
 
@@ -374,12 +279,14 @@ immediately following wait; repeat after intervening work or assignment changes.
   Resolve it through an available equivalent query. If no query capability can
   establish the state, identify the runtime interface gap; do not repeatedly
   wait as though the worker were known to be running or create a duplicate.
-- An actual query explicitly establishing that the stored worker no longer
-  exists permits the `runtime_api_confirmed_missing` transfer described above.
-  Record its actual API/command and query time; do not report absence as completion.
+- An actual query establishing that the stored handle no longer exists permits
+  pooled `implementer replace-runtime` (or legacy `runtime_api_confirmed_missing`
+  transfer). Record its actual API/command and query time; do not report absence
+  as completion.
 
 Collect the full pass before reporting changes or required observation refreshes
-through the existing per-worker `report_worker` commands. Do not re-query the
+through the returned pooled `implementer report` commands, retaining each API’s
+original dispatch and lease (legacy flows use `report_worker`). Do not re-query the
 whole set between those reports or refresh every unchanged running observation
 on every wait. For an ended task, consume its result and required inputs before
 deciding between `handoff_ready` and `idle`, as described above. Respect explicit

@@ -19,6 +19,10 @@ fn inventory_rewrite_uncached(context: RewriteContext) -> Result<RewriteInventor
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     if super::purpose::pending(&target_root)?.is_some() {
         return Ok(RewriteInventoryReport {
+            implementers: None,
+            repository_analysis: None,
+            group_replay: None,
+            last_group_replay: None,
             schema_version: ACTION_SCHEMA_VERSION,
             initialized: RewriteStore::new(&target_root)?.exists(),
             workflow: None,
@@ -43,6 +47,10 @@ fn inventory_rewrite_uncached(context: RewriteContext) -> Result<RewriteInventor
                 super::coordination::status_details(&target_root, &state)?
             };
             RewriteInventoryReport {
+                implementers: super::implementer::view(&target_root, &state)?,
+                repository_analysis: state.repository_analysis.clone(),
+                group_replay: state.group_replay.clone(),
+                last_group_replay: state.last_group_replay.clone(),
                 schema_version: ACTION_SCHEMA_VERSION,
                 initialized: true,
                 workflow: Some(action::workflow_view(&state)),
@@ -56,6 +64,10 @@ fn inventory_rewrite_uncached(context: RewriteContext) -> Result<RewriteInventor
         None => {
             let pending = status_rewrite(context)?.pending;
             RewriteInventoryReport {
+                implementers: None,
+                repository_analysis: None,
+                group_replay: None,
+                last_group_replay: None,
                 schema_version: ACTION_SCHEMA_VERSION,
                 initialized: false,
                 workflow: None,
@@ -190,6 +202,9 @@ fn api_envelope_unannotated(
     if let Some(plan) = super::rule_plans::idle_action(target_root, state)? {
         return Ok(action::envelope(target_root, state, plan));
     }
+    if let Some(analysis) = super::repository_analysis::required_action(target_root, state)? {
+        return Ok(action::envelope(target_root, state, analysis));
+    }
     if let Some(api) = api
         && let Some(envelope) =
             super::regression_scope::skipped_envelope(target_root, state, &api.to_string())
@@ -202,6 +217,7 @@ fn api_envelope_unannotated(
         return Ok(envelope);
     }
     if state.revalidation_round.is_none()
+        && state.group_replay.is_none()
         && let Some(expert) = super::expert::required_action(
             target_root,
             state,
@@ -213,6 +229,7 @@ fn api_envelope_unannotated(
     // Inspecting a parked worker does not activate that API. Dispatch and status
     // feedback stay available while another API is at a system-repair gate.
     if api.is_some()
+        && state.group_replay.is_none()
         && let Some(envelope) = super::coordination::busy_workers(target_root, state, api)?
     {
         return Ok(envelope);

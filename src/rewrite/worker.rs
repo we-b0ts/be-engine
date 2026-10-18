@@ -88,7 +88,7 @@ pub(super) fn implementation_action(
         }
     };
     let confirm_worker = confirmation_command(target_root, &worker);
-    let report_worker = runtime::report_command(target_root, worker.agent_handle.as_deref(), false);
+    let report_worker = runtime::report_command_for_scope(target_root, state, &scope, false);
     let acceptance = action::next_command(target_root);
     RewriteAction::ImplementationRequired {
         summary,
@@ -200,6 +200,10 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
     let mut state = store
         .load()?
         .context("rewrite workflow is not initialized")?;
+    ensure!(
+        state.implementers.is_none(),
+        "pooled workflows require implementer confirm with the exact batch identity"
+    );
     let scope = super::api_selector::canonical_scope(&state, &options.work_scope);
     ensure!(
         runtime::scopes(&state).contains(&scope),
@@ -294,7 +298,7 @@ pub(super) fn validate_runtime_query(query: &RewriteWorkerMissingQuery) -> Resul
     Ok(())
 }
 
-fn confirm_binding(
+pub(in crate::rewrite) fn confirm_binding(
     state: &mut RewriteState,
     scope: &RewriteWorkScope,
     expected_dispatch_id: &str,
@@ -305,7 +309,9 @@ fn confirm_binding(
     let binding_key = scope.binding_key();
     ensure!(
         !state.worker_bindings.iter().any(|(key, binding)| {
-            key != &binding_key && binding.agent_handle_fingerprint == handle_fingerprint
+            (state.implementers.is_none()
+                && key != &binding_key
+                && binding.agent_handle_fingerprint == handle_fingerprint)
                 || binding.expert.as_ref().is_some_and(|expert| {
                     expert.agent_handle_fingerprint.as_ref() == Some(&handle_fingerprint)
                 })
@@ -316,10 +322,16 @@ fn confirm_binding(
     match state.worker_bindings.get_mut(&binding_key) {
         Some(binding) => {
             ensure!(
-                binding.agent_handle_fingerprint == handle_fingerprint,
+                state.implementers.is_some()
+                    || binding.agent_handle_fingerprint == handle_fingerprint,
                 "{} is already bound to a different subagent handle; resume the stored handle or request explicit ownership transfer",
                 scope.label()
             );
+            if binding.agent_handle_fingerprint != handle_fingerprint {
+                binding.agent_handle_fingerprint = handle_fingerprint.clone();
+                binding.transfer_generation = binding.transfer_generation.saturating_add(1);
+                changed = true;
+            }
             if agent_name.is_some() && binding.agent_name != agent_name {
                 binding.agent_name = agent_name;
                 changed = true;
@@ -468,6 +480,15 @@ fn dispatch_id(state: &RewriteState, scope: &RewriteWorkScope) -> String {
         attempt.as_str(),
         issue.observed_target_fingerprint.as_str(),
     ]);
+    let original = if state.implementers.is_some() {
+        fingerprint::id(&[
+            "implementer-recording-dispatch-v1",
+            &original,
+            &state.recording_run_id,
+        ])
+    } else {
+        original
+    };
     let generation = state
         .worker_bindings
         .get(&binding_key)

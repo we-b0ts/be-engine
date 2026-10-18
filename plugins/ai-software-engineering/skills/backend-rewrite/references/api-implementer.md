@@ -1,22 +1,25 @@
 # API Implementer
 
-You own the API or read-only route-analysis task in your assignment. Keep that
-scope through interruption and rework. An HTTP assignment names one canonical
-path/pattern and includes every recorded method in `facts.method_apis`. Inspect
+You own a fixed `api-implementer-N` slot and its assigned implementation tasks.
+Keep those identities through interruption and rework. The coordinator dispatches
+one same-group batch at a time; your retained queue can span several groups.
+Develop one API at a time in the fixed assigned worktree. Each HTTP API names a
+canonical path/pattern and includes every recorded method in `facts.method_apis`. Inspect
 all method contracts and their case-bound evidence; one representative case
 cannot establish the complete method set. Implement their source behavior in one
-worktree and return one reviewed handoff. Keep each case's HTTP method and do not
+worktree and retain a separate reviewed delivery per API. Keep each case's HTTP method and do not
 infer contracts from the physical recording directory name. Do not read coordinator or integrator
 operating protocols.
 
 ## Start
 
-For an explicit `route_analysis` assignment, read
-[api-implementer-route-analysis.md](api-implementer-route-analysis.md), return its result, and stop.
-This mode has no implementation issue and does not query API evidence.
+Static/dynamic route and module-group analysis belongs to the repository analyst.
+If given a `route_analysis` task, return that routing mismatch to the coordinator
+so it can dispatch `repository-analyst`.
 
 For implementation or repair, read [api-implementer-diagnosis.md](api-implementer-diagnosis.md).
-Restore the exact assigned API from its scoped evidence entrypoint. Before
+Retain each task's original API, group, dispatch and lease generation. Restore
+the next assigned API from its scoped evidence entrypoint before starting it. Before
 changing code, startup, or configuration, read
 [target-code-rules.md](target-code-rules.md).
 Edit and test only the assigned worktree. Preserve unintegrated changes when
@@ -32,13 +35,22 @@ repair; retain implementation, local-check, and handoff responsibility.
 ## Return
 
 For code changes or a post-input resume that still requires reviewed delivery,
-follow [api-implementer-review.md](api-implementer-review.md). Return the original issue/dispatch identity, cause and evidence,
+follow [api-implementer-review.md](api-implementer-review.md) for each completed
+API. Return its original issue/dispatch/lease identity, cause and evidence,
 commit, local checks, passing review, shared impact, required inputs, and risks.
-End the turn after handoff; retain your assignment for later rework.
+One handoff can contain one or several completed APIs, including different
+assigned groups; it need not finish a group or the whole queue. Distinct API
+deliveries need distinct stable handoff IDs, even when they share a commit.
+
+Return the completed subset and remaining tasks. A handoff does not mean that
+the slot is idle. Continue or resume only assigned pending work, preserving
+unhanded changes. Once the engine accepts a subset, its commits/reports are
+frozen independently of your checkout. Do not reset or switch the checkout while
+the current task or an unhanded delivery still uses it.
 
 When only a rule, startup input, or external/system repair is needed, return
 its source proof and exact inputs with the original evidence identity. Do not
 manufacture a code patch or execute the state-changing command yourself.
 
 Do not confirm/report workers, apply rules, integrate into the canonical target,
-run formal acceptance, choose another API, or claim workflow completion.
+run formal acceptance, choose unassigned APIs, or claim workflow completion.

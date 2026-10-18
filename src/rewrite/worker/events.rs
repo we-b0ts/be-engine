@@ -18,6 +18,14 @@ struct WorkerUpdates {
     workflow_id: String,
     revision: u64,
     bindings: BTreeMap<String, BindingUpdate>,
+    #[serde(default)]
+    implementers: Option<ImplementerUpdate>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ImplementerUpdate {
+    revision: u64,
+    pool: crate::rewrite::implementer::ImplementerPool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,6 +59,12 @@ pub(in crate::rewrite) fn overlay(target_root: &Path, state: &mut RewriteState) 
         return Ok(());
     }
     normalize_updates(&mut updates)?;
+    if let Some(update) = updates.implementers.as_ref()
+        && update.revision > state.worker_event_revision
+        && state.implementers.is_some()
+    {
+        state.implementers = Some(update.pool.clone());
+    }
     for (key, update) in updates.bindings {
         if update.revision <= state.worker_event_revision {
             continue;
@@ -116,6 +130,12 @@ pub(in crate::rewrite) fn publish_many(
                 binding,
             },
         );
+    }
+    if let Some(pool) = &state.implementers {
+        updates.implementers = Some(ImplementerUpdate {
+            revision: updates.revision,
+            pool: pool.clone(),
+        });
     }
     let path = root(target_root).join("worker-updates.json");
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));

@@ -9,14 +9,16 @@ relevant action below.
 ## Coordinator Boundary
 
 The engine selects the legal action; the coordinator executes or delegates it.
-API implementers own API diagnosis and implementation. The retained code integrator owns
-candidate preparation and review. An engine-requested API expert investigates
+Repository analysts own read-only source route and module-group analysis. API implementers own
+API diagnosis and implementation. The retained code integrator owns candidate
+preparation and review. An engine-requested API expert investigates
 read-only and reports through the coordinator to the existing API implementer. The
 task runtime supplies live handles and events but does not replace engine state.
 
-Do not turn a task mode into another role: `route_analysis` belongs to an API
-implementer, and source review belongs to the code integrator. Only the coordinator reports
-their results to the engine or performs coordinator-owned mutations.
+`route_analysis` belongs to the repository analyst, and source review belongs to
+the code integrator. Neither task is an API-implementer assignment. Only the
+coordinator reports their results to the engine or performs coordinator-owned
+mutations.
 
 ## Contents
 
@@ -101,7 +103,9 @@ listed protocol before handling that action.
 | --- | --- | --- | --- |
 | `purpose_required` | Confirm the user-authorized purpose after the required live runtime query | None | [authorized regression start](coordinator-agent-protocol.md#authorized-regression-start) |
 | `recording_in_progress`, `recording_refresh_pending` | Observe external publication and wait for the selected evidence | External recording owner | [recording actions](coordinator-recording.md) |
-| `case_pattern_identification_required` | Retain the batch, delegate analysis, then apply the exact result | API implementer in read-only `route_analysis` mode | [case patterns](coordinator-case-patterns.md) |
+| `case_pattern_identification_required` | Retain the batch, delegate analysis, then apply the exact result | Repository analyst in read-only `route_analysis` mode | [case patterns](coordinator-case-patterns.md) |
+| `repository_analysis_required` | Complete incremental grouping before Replay | Repository analyst | [repository analysis](coordinator-repository-analysis.md) |
+| `implementer_dispatch_required` | Create/resume the fixed slot and confirm its exact same-group API batch | API implementer | [fixed implementers](coordinator-implementers.md) |
 | `implementation_required`, `worker_status_required` | Dispatch/resume/query the bound implementer and report actual runtime observations | API implementer | [agent protocol](coordinator-agent-protocol.md) |
 | `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
 | `integration_required` | Retain identity, publish only the reviewed candidate, then report integration | Code integrator | [integration](coordinator-integration.md) |
@@ -115,7 +119,7 @@ listed protocol before handling that action.
 
 ## Coordinator Loop
 
-Use the existing `backend-rewrite` interface. Response schema v35 actions have
+Use the existing `backend-rewrite` interface. Actions have
 exactly `kind`, `summary`, `details`, and `commands`. Status/next expose scheduling
 and short issue facts, not diagnostic payloads. Default `workflow` has `id` and
 `revision`; use `inventory` for binding recovery and scheduling detail. Never
@@ -199,9 +203,10 @@ a worker, the coordinator must invoke the task runtime and confirm the accepted
 submission; the CLI cannot create task handles. Do not repeatedly call `next`
 while ignoring its returned action.
 
-The coordinator imposes no worker concurrency limit. Submit every returned
-dispatch/resume to the task runtime, retain the actual handle for accepted queued
-work, and respect runtime backpressure after a rejected submission. A rejected
+The engine limits implementation slots to the workflow’s effective
+`max_implementers` (default 16). Submit returned same-group batches to their fixed
+slots, retain the actual handle for accepted queued work, and respect runtime
+backpressure after a rejected submission. A rejected
 submission is not confirmed. One waiting or failed item must not prevent other
 engine-issued executable work from being handled.
 
@@ -235,10 +240,13 @@ The engine owns this phase order and returns the legal next action:
 
 ```text
 adopt completed external traffic -> identify patterns for new uncovered APIs
-    -> stable API inventory -> prepare -> focused Replay
-    -> implementation issue -> reviewed handoff -> integration -> focused Replay
-    -> API complete -> next API
-    -> all included APIs pass at the current target fingerprint -> final delivery
+    -> stable API inventory -> finish incremental module analysis and grouping
+    -> freeze group Replay round -> replay every admitted API, save each result
+    -> dispatch same-group failure batch to its fixed implementer slot
+    -> reviewed partial handoff (one/many APIs, possibly across assigned groups)
+    -> integrate exact deliveries -> group acceptance Replay
+    -> repeat failures or continue other groups
+    -> final full-check review -> final full revalidation -> final delivery
 
 source-proven capture gap -> apply capture rule -> API waits
     -> drain other runnable work -> wait for one full-scope external batch
@@ -296,8 +304,26 @@ See [external recording evidence](coordinator-recording.md).
 ### `case_pattern_identification_required`
 
 Read [coordinator-case-patterns.md](coordinator-case-patterns.md). Delegate
-read-only route analysis of the complete batch, then apply its matched result
-through the returned command. Do not create an implementation issue for it.
+read-only route analysis of the complete batch to the repository analyst, then
+apply its matched result through the returned command. Do not create an
+implementation issue for it.
+
+### `repository_analysis_required`
+
+Read [repository analysis](coordinator-repository-analysis.md). Give the analyst
+fresh context containing all existing groups and exactly the pending APIs. Apply
+one complete incremental submission through the returned batch/version-bound
+command. Finish analysis before Replay; no overlap or implementer binding is
+needed. Existing grouped APIs reuse the project catalog.
+
+### `implementer_dispatch_required`
+
+Read [fixed implementers](coordinator-implementers.md). Accept the engine’s
+round-robin group mapping or explicitly adjust future mapping, then dispatch the
+exact same-group batch to the returned `api-implementer-N` slot and fixed path.
+Confirm the accepted runtime handle through `commands.confirm`. More than 16
+groups reuse the slots. Runtime reports and completed-subset handoffs retain
+per-API dispatch and lease identities.
 
 ### `plan_apply_required`
 
@@ -338,8 +364,9 @@ When `details.reason=source_route_required`, a caller-selected dynamic API has
 not yet produced a standard recording with confirmed case-pattern coverage and
 lacks a proven source registration route. Recorded inventory APIs use their
 confirmed case pattern without interrupting Replay. Assign
-`api-implementer` a read-only `route_analysis` task with the exact API, source
-location, and a retained assignment ID. Retain its actual runtime handle and
+`repository-analyst` a read-only `route_analysis` task with the exact API, source
+location, and a retained assignment ID, following
+[repository-analyst.md](repository-analyst.md). Retain its actual runtime handle and
 resume the same task for missing proof. Require that same identity and a
 source-proven complete route. Re-read status and match the same API and request
 before repeating the retained invocation with `--source-route`.
@@ -365,12 +392,13 @@ require progress commits.
 
 ### Worker And Integration Actions
 
-For `implementation_required`, `worker_status_required`, `integration_required`,
+For `implementer_dispatch_required`, `implementation_required`,
+`worker_status_required`, `integration_required`,
 and `expert_required`, follow
 [coordinator-agent-protocol.md](coordinator-agent-protocol.md).
 Dispatch/resume, task runtime observations, handoffs, and integration are reported
-through the exact returned commands. Confirmation belongs to one work item;
-it does not freeze scheduling or feedback for other items. A worker ending
+through the exact returned commands. Pooled confirmation binds the returned same-group batch; it does not freeze
+scheduling or feedback for other slots. A worker ending
 without a handoff requires resume, not acceptance.
 
 `pending` counts executable coordinator actions, including these worker
@@ -471,8 +499,8 @@ public `progress.yaml` is committed. Use `inventory` for the full per-API list.
 
 HTTP worker scopes are canonical paths/patterns. The API inventory summarizes
 routes and exposes each route's method-keyed verification ledger in `methods`;
-it is not a list of worker assignments. Use
-`details.worker.work_scope` and the engine-issued commands when dispatching,
+it is not a list of worker assignments. Use pooled dispatch/task identities (or legacy `details.worker.work_scope`)
+and the engine-issued commands when dispatching,
 resuming, integrating or accepting. A route acceptance selects all included
 method cases and runs one Replay/target session; each method keeps its own
 focused evidence and progress. Excluded methods stay skipped. HTTP coordinator
@@ -498,18 +526,20 @@ round or repeats a consumed member. An unscoped `next`
 uses the same route batch as an explicit route command. Methods are implementation
 and verification details, never separate coordinator work items.
 
-Every `implementation_required` action uses a worker. Inventory size controls
-only how much work the engine can make ready. Worker concurrency belongs to
-the task runtime; the coordinator does not impose a limit. The engine may park
-implementation and system-repair issues while it serializes the selected API's Replay. Expensive worker diagnosis, coding, and
-tests may overlap; only one traffic operation may be live.
+New workflows have a fixed pool, default 16, and a project-level API grouping
+catalog. Groups are unlimited and map round-robin to slots; coordinator-adjusted
+mappings affect future dispatch. Each slot queues multiple APIs/groups but runs
+one API at a time. The engine serializes traffic and publication while independent
+implementer coding and tests may proceed.
 
-While any recorded API has no focused verification attempt, the engine gives that
-first-pass Replay priority over ready worker handoff integration and integrated
-handoff acceptance; do not bypass that priority. Worker dispatch, resume, status
-reconciliation, and feedback remain immediately actionable. Once every API has an
-attempt, ordinary integration and acceptance resume; final fingerprint revalidation
-still proves the combined target.
+Complete grouping for all new selected APIs before the first Replay. Each group
+round freezes its eligible routes and target/recording identity, saves per-API
+results, and continues after ordinary failures. Dispatch that group’s failed
+APIs only once its round completes. There is no all-inventory first-attempt
+barrier for integration: other completed groups can proceed. Acceptance rounds
+include only exact reviewed/integrated or otherwise admitted API methods; an
+unhanded sibling does not acquire Replay permission through group membership.
+Infrastructure interruption preserves completed results and unfinished membership.
 
 Use the [coordinator loop](#coordinator-loop) for advancing ready work,
 resuming from status, and waiting for handoffs.
@@ -550,9 +580,9 @@ for external evidence handoff.
 Keep worker handoff, work-item completion, and workflow completion distinct. A
 worker handoff supplies a reviewed code version, local results, and required inputs; only integrated
 acceptance can complete its API. Later integrated changes may
-make that item `revalidation_pending`. Retain every work item's worker binding
-and worktree until `terminal_allowed=true` and final delivery no longer needs
-them.
+make that item `revalidation_pending`. Retain API delivery identities independently of the checkout. Accepted handoffs
+release only their API leases; the slot/worktree can continue assigned work.
+Keep the fixed pool and separate integration checkout through final delivery.
 
 Local `.traffic-e2e/regression.yaml` uses `only` to select exact inventory routes
 without an HTTP method, including every recorded method on each route. A pattern
@@ -564,11 +594,12 @@ Preserve the user's selected scope; a terminal result covers that scope.
 Optional `auto_next: true` lets one unscoped `next` continue successful Replay
 only while the existing global scheduler selects another Replay. It defaults
 to false. Returned next commands omit `--api`; execute them unchanged. Explicit
-`--api` or source-route inputs use single execution. Automatic continuation
+`--api` or source-route inputs select the entry API; pooled execution still
+finishes the frozen group round before returning. Automatic continuation
 preserves first-pass discovery, worker/expert actions, integration and review
 priorities, scope and gates. Report arrived feedback immediately as before;
-each Replay boundary re-evaluates it. Failed or stale Replay and any non-Replay
-next action stop continuation. During execution, wait and independent
+each Replay boundary re-evaluates it. Ordinary group-member failures continue to the remaining group APIs. Stale
+Replay, execution errors and higher-priority non-Replay actions stop continuation. During execution, wait and independent
 worker/expert actions expose actual `execution_mode: auto_next` or `single`.
 Wait summaries also retain current Replay progress. Treat wait as observation,
 without issuing an extra next.

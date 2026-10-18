@@ -138,6 +138,64 @@ fn admit_final(root: &Path) {
     crate::rewrite::review::accept(root.into(), report.report_path).unwrap();
 }
 
+#[tokio::test]
+async fn single_mode_finishes_group_after_failure_and_returns_before_other_groups() {
+    let target = configured_target();
+    let root = target.path();
+    let mut state = test_state();
+    inventory::install(
+        &mut state,
+        vec!["GET /a".into(), "GET /other".into(), "GET /b".into()],
+    )
+    .unwrap();
+    state.implementers = Some(crate::rewrite::implementer::ImplementerPool::new(16));
+    // Store loads refresh the workflow snapshot from the project catalog, just
+    // as a restarted coordinator does. Persist the analyzed groups themselves.
+    let catalog = root.join(".traffic-e2e/local/repository-analysis/catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(
+        catalog,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "groups": {
+                "auth": {"summary": "Authentication", "source_refs": ["src/auth.rs"]},
+                "other": {"summary": "Other handlers", "source_refs": ["src/other.rs"]}
+            },
+            "api_groups": {"/a": "auth", "/b": "auth", "/other": "other"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    RewriteStore::new(root).unwrap().save(&state).unwrap();
+    let mut visited = Vec::new();
+    run_steps(options(root), RewriteExecutionMode::Single, |options| {
+        let store = RewriteStore::new(root).unwrap();
+        let mut state = store.load().unwrap().unwrap();
+        let selector = options
+            .api
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| "/a".parse().unwrap());
+        let route = selector.to_string();
+        crate::rewrite::group_replay::prepare(root, &mut state, &route).unwrap();
+        store.save(&state).unwrap();
+        visited.push(route.clone());
+        let mut more = false;
+        let mut result = replay(options, visited.len() != 1, |state| {
+            more = crate::rewrite::group_replay::after_replay(root, state, &route).unwrap();
+        });
+        result.replay_can_continue |= more;
+        std::future::ready(Ok(result))
+    })
+    .await
+    .unwrap();
+    assert_eq!(visited, ["/a", "/b"]);
+    let state = RewriteStore::new(root).unwrap().load().unwrap().unwrap();
+    assert!(state.group_replay.is_none());
+    assert!(state.last_group_replay.as_ref().unwrap().complete);
+    assert_eq!(state.api_inventory[1].attempts, 0);
+}
+
 #[test]
 fn mode_uses_invocation_intent_instead_of_the_internal_selection() {
     let target = configured_target();

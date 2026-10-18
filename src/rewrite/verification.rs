@@ -16,9 +16,13 @@ pub(super) async fn run_and_transition(
     route_batch: bool,
 ) -> Result<bool> {
     let result = run_attempt_and_transition(target_root, state, route_batch).await;
+    let group_interrupted = result
+        .as_ref()
+        .err()
+        .is_some_and(|error| super::group_replay::interrupted(state, error));
     // Errors after reservation (including evidence publication) cannot refund a
     // permit or leave the old issue hidden as a running retry.
-    if engine_retry::clear_running(state) {
+    if engine_retry::clear_running(state) || group_interrupted {
         state.bump();
         RewriteStore::new(target_root)?.save(state)?;
     }
@@ -35,6 +39,13 @@ async fn run_attempt_and_transition(
     if super::review::pre_revalidation::required_action(target_root, state)?.is_some() {
         return Ok(false);
     }
+    let replayed_route = super::api_selector::public_api(&state.api).to_string();
+    let group_round = super::group_replay::prepare(target_root, state, &replayed_route)?;
+    if group_round {
+        // Persist exact round membership before traffic starts. An executor or
+        // evidence error resumes the unfinished route without rerunning siblings.
+        RewriteStore::new(target_root)?.save(state)?;
+    }
     let in_round = state.revalidation_round.is_some();
     let replay_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let case_source = state
@@ -50,9 +61,13 @@ async fn run_attempt_and_transition(
         case_source,
         run_key: None,
     };
+    let route_batch = route_batch || group_round && !state.api.starts_with("MOTAN ");
     let mut prepared = route_batch
         .then(|| api_batch::prepare(target_root, state))
         .transpose()?;
+    if group_round && let Some(batch) = prepared.as_mut() {
+        super::group_replay::restrict(state, batch)?;
+    }
     let apis = prepared
         .as_ref()
         .map_or_else(|| vec![api.clone()], |batch| batch.apis.clone());
@@ -73,8 +88,11 @@ async fn run_attempt_and_transition(
     }
     let (_, _project) = crate::e2e_run::resolve_project(target_root)?;
     api_batch::apply_results(target_root, state, &results, prepared.as_ref())?;
+    let group_can_continue =
+        super::group_replay::after_replay(target_root, state, &replayed_route)?;
     Ok(!results.is_empty()
-        && (results.iter().all(|result| result.passed)
+        && (group_can_continue
+            || results.iter().all(|result| result.passed)
             || in_round && state.revalidation_round.is_some()))
 }
 

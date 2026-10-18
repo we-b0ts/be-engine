@@ -270,8 +270,9 @@ available runtime evidence prove that a required external response-driving value
 is unavailable and completion would require invention. Repeated failures, empty
 dependency streams, or tool errors do not prove that blocker.
 
-Do not return or execute an acceptance command. End the turn after the result;
-do not wait for acceptance. If two repairs do not
+Do not return or execute an acceptance command or wait for acceptance. Return
+the completed subset with original API/dispatch/lease identities and remaining
+assigned tasks; ending a turn does not make the whole slot idle. If two repairs do not
 improve the active issue, stop adding local patches and return a bounded
 structural replan from the current issue and attempt delta.
 

@@ -99,6 +99,12 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
             Vec::new(),
         )?,
     };
+    state.implementers = Some(super::implementer::ImplementerPool::new(
+        policy.max_implementers,
+    ));
+    state.repository_analysis = None;
+    state.group_replay = None;
+    state.last_group_replay = None;
     if !options.record_new_traffic {
         if previous.is_none() {
             regression_scope::apply(&target_root, &mut state)?;

@@ -42,6 +42,9 @@ impl RewriteStore {
         let mut state = self.load_snapshot()?;
         if let Some(state) = state.as_mut() {
             super::regression_scope::apply(&self.target_root, state)?;
+            super::repository_analysis::refresh(&self.target_root, state)?;
+            super::group_replay::refresh(state);
+            super::implementer::refresh(state)?;
         } else {
             super::regression_scope::validate_uninitialized(&self.target_root)?;
         }
@@ -75,6 +78,9 @@ impl RewriteStore {
         {
             super::inventory::initialize_legacy(&mut state);
         }
+        super::repository_analysis::refresh(&self.target_root, &mut state)?;
+        super::group_replay::refresh(&mut state);
+        super::implementer::refresh(&mut state)?;
         Ok(Some(state))
     }
 

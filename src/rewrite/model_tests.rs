@@ -18,6 +18,10 @@ fn older_state_uses_bounded_recording_defaults() {
         "current_api_index",
         "parked_slices",
         "worker_bindings",
+        "implementers",
+        "repository_analysis",
+        "group_replay",
+        "last_group_replay",
         "api_catalog_initialized",
         "api_catalog",
         "case_pattern_identification",
@@ -38,6 +42,10 @@ fn older_state_uses_bounded_recording_defaults() {
     assert!(state.current_api_index.is_none());
     assert!(state.parked_slices.is_empty());
     assert!(state.worker_bindings.is_empty());
+    assert!(state.implementers.is_none());
+    assert!(state.repository_analysis.is_none());
+    assert!(state.group_replay.is_none());
+    assert!(state.last_group_replay.is_none());
     assert!(!state.api_catalog_initialized);
     assert!(state.api_catalog.is_empty());
     assert!(state.case_pattern_identification.is_none());
@@ -148,7 +156,7 @@ fn implementation_action_has_one_stable_public_shape() {
         action,
     })
     .unwrap();
-    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(37)));
+    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(38)));
     assert!(status.get("active_issue").is_none());
     assert!(status.get("next").is_none());
 }

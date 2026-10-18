@@ -17,6 +17,7 @@ retained implementation or integration tasks after final delivery.
 ## Retain One Integrator
 
 Keep one integrator handle and one separate integration worktree per workflow.
+Use `<canonical-target-root>/.traffic-e2e/local/rewrite-worktrees/integrator`.
 Use the runtime's actual spawn/resume capability with the role and skill
 entrypoint; a role name is not a fabricated runtime type or handle. Keep its
 assignment record outside engine-owned runtime files. Retain the handle and
@@ -49,7 +50,9 @@ Execute `commands.export_batch` with `BACKEND_REWRITE_REVIEW_WORKTREE` set to
 the retained integration worktree. To include additional chosen ready or retained
 integrated routes, append one `--api '/route'` for each additional member; keep the
 command's original route. The engine exports their exact accepted identities,
-worker worktrees, delivery commits, review paths, and the complete `check` command.
+worker worktrees, frozen delivery commits/review paths, and the complete `check`
+command. A pooled implementer may already have reused its checkout; consume the
+exported accepted commit and report, never its current HEAD or working files.
 Pass this output to the integrator. Do not copy handoff IDs from prose, expand
 short IDs into commit SHAs, or construct the batch JSON yourself. Handoff IDs and
 delivery commits are separate fields even when their text happens to be identical.
@@ -186,7 +189,8 @@ or [coordinator-rule-actions.md](coordinator-rule-actions.md), and follow
 configuration commit requirements. Only when code and required inputs are in
 place, report `integrated` with the accepted handoff ID, original worker handle,
 and `--review-report /absolute/integration-report.json`. For a batch, repeat
-the worker report for each listed original handle and handoff ID using the same
+the worker report for each listed API delivery’s original handle and unique
+handoff ID (several APIs may share the same handle) using the same
 review report. A successful duplicate is harmless; after interruption, inspect
 inventory and report only the remaining ready handoffs. The engine verifies
 the candidate's original handoff, published code and quality inputs before

@@ -12,6 +12,16 @@ impl Serialize for RewriteAction {
         S: Serializer,
     {
         match self {
+            Self::RepositoryAnalysisRequired { summary, analysis, context, apply } => RewriteActionView {
+                kind: "repository_analysis_required", summary,
+                details: analysis,
+                commands: serde_json::json!({"context": context, "apply": apply}),
+            }.serialize(serializer),
+            Self::ImplementerDispatchRequired { summary, dispatch, confirm, report } => RewriteActionView {
+                kind: "implementer_dispatch_required", summary,
+                details: dispatch,
+                commands: serde_json::json!({"confirm": confirm, "report": report}),
+            }.serialize(serializer),
             Self::ExpertRequired { summary, expert, commands, execution_mode } => RewriteActionView {
                 kind: "expert_required",
                 summary,

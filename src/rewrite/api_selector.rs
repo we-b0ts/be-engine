@@ -76,7 +76,13 @@ pub(super) fn select(state: &RewriteState, selector: &RewriteApiSelector) -> Res
                             api: (*api).clone(),
                         },
                     ));
-            (outside_round, !ready, priority, *api)
+            (
+                outside_round,
+                !super::group_replay::planned_method(state, api),
+                !ready,
+                priority,
+                *api,
+            )
         })
         .unwrap();
     selected.parse()

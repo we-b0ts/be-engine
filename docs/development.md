@@ -1313,7 +1313,9 @@ The binary writes one compact JSON object per command by default. Pass global
 `--pretty` only for interactive human inspection. This keeps automation output
 atomic and avoids reconstructing one response with `head` and `tail`.
 
-Worker transfer is an exceptional compare-and-swap ownership change. It is
+Legacy per-API worker transfer is an exceptional compare-and-swap ownership
+change for workflows without an implementer pool. New workflows use the fixed
+slot protocol below. It is
 valid for an unresolved `implementation_required` API
 work item, including a parked item, and requires its
 current `--previous-agent-handle`, a replacement `--agent-handle`, a bounded
@@ -1405,14 +1407,148 @@ issues. The coordinator does not scan `unverified` to choose work. `inventory`
 expands the English `details.ready` and `details.waiting` breakdown and dedicated
 worker bindings; ready counts sum to `pending`.
 
-Each implementation issue has one persistent worker handle and isolated
-worktree. There is no coordinator worker limit; the task runtime controls
-concurrency and accepted queuing. Dispatch/resume a real worker, then execute
-`commands.confirm_worker` with its actual handle and assigned `--worktree`.
-Confirmation of one API never
-blocks dispatch or feedback for another. Workers own evidence, diagnosis,
-implementation, local tests, and the complete delivery review; the coordinator supplies only the assignment
-fields described above and retains the original delivery report.
+New workflows use a bounded, reusable implementer pool. Local
+`.traffic-e2e/regression.yaml` accepts `max_implementers: 16` (default 16, positive
+integer). The workflow freezes this value at creation; editing it affects the
+next workflow, not active slot count or group mapping. `inventory.implementers`
+exposes the effective limit, stable slots/handles, group mappings, queued tasks,
+current API and counts. An API’s recorded methods remain one implementation unit.
+Action schema 38 adds `repository_analysis_required` and
+`implementer_dispatch_required`; `inventory` also exposes the adopted analysis,
+active group round and last partial/completed group summary. Existing workflows
+without a pool retain their original per-API binding protocol.
+
+Names and paths are fixed by slot, without workflow prefixes or API slugs:
+
+```text
+<canonical-target-root>/.traffic-e2e/local/rewrite-worktrees/api-implementer-0
+...
+<canonical-target-root>/.traffic-e2e/local/rewrite-worktrees/api-implementer-15
+<canonical-target-root>/.traffic-e2e/local/rewrite-worktrees/integrator
+```
+
+The returned implementation path is enforced. For targets nested in a larger Git
+repository, it is the outer worktree root; the engine normalizes review/edit
+scope to the corresponding target child and configured managed siblings. Reuse
+worktrees and caches, preserving queued tasks and unhanded changes. Slots are
+created lazily; an API does not allocate a new checkout. Historical worktree
+migration is outside this protocol.
+
+The coordinator creates an absent checkout with `git worktree add` at the exact
+engine-returned root, based on the integrated target revision. Confirmation
+rejects ordinary directories, symlinks and mismatched Git roots. The engine does
+not create task-runtime sessions or fabricate their handles.
+
+After static/dynamic route identification and inventory adoption, the engine
+requires complete incremental repository analysis before any group Replay:
+
+```bash
+backend-rewrite repository-analysis context
+backend-rewrite repository-analysis apply <batch-id> --file /absolute/analysis.json
+```
+
+`repository_analysis_required` returns the exact batch, selected/pending routes,
+Source/workflow/recording identity and existing group catalog. A read-only
+`repository-analyst` traces shared modules/state machines/write hotspots and
+returns one complete incremental submission:
+
+```json
+{
+  "schema_version": 1,
+  "catalog_revision": "<exact returned catalog revision>",
+  "groups": {
+    "sessions": {
+      "summary": "Session lifecycle",
+      "source_refs": ["src/routes/sessions.py:create_session"],
+      "shared_modules": ["auth/session"],
+      "write_hotspots": ["src/session.rs"]
+    }
+  },
+  "assignments": {"/api/sessions": "sessions"}
+}
+```
+
+The assignments cover exactly pending canonical routes. Define only new groups;
+joining an existing group references its ID without redefining it. Existing group
+metadata and assignments are immutable through this incremental interface. The
+engine checks batch/version/Source/recording identity and writes
+`.traffic-e2e/local/repository-analysis/catalog.json`. This ignored project catalog
+survives workflow changes; it is read through the context command, not edited by
+agents. No ungrouped API starts Replay, and analysis does not overlap Replay.
+
+Group count is unlimited. New group IDs are mapped in stable order round-robin
+to the workflow’s slots; persisted mappings remain stable. Same-group APIs default
+to the same implementer. A group beyond the slot count wraps around. The
+coordinator may explicitly change future mapping:
+
+```bash
+backend-rewrite implementer reassign --group sessions --slot 3 --reason 'redistribute remaining work'
+```
+
+In-flight assignments retain their original slot and lease. There is no automatic
+cost scoring or rebalancing. An implementer can queue work from several groups
+but develops at most one API at a time. Unrelated groups can continue on their
+slots while another group is waiting.
+
+`implementer_dispatch_required` returns one same-group batch in `details`, with
+slot/name/worktree/handle, group ID, batch dispatch ID, lease generation, and an
+`apis` list containing each API’s own dispatch and lease. The coordinator
+creates/resumes that slot’s actual runtime session and executes `commands.confirm`
+after acceptance:
+
+```text
+backend-rewrite implementer confirm --slot <N> --group <group-id> --dispatch-id <batch-id> --agent-handle <actual-handle>
+backend-rewrite implementer report --slot <N> --api '/route' --dispatch-id <api-dispatch-id> --lease-generation <generation> --agent-handle <actual-handle> --activity running
+```
+
+Confirmation is idempotent and records members queued; report real `running`,
+`queued` or `idle` activity per original API lease. Pool observations cannot use
+handle-only `worker report`: one handle can own several APIs. The engine rejects
+stale dispatch/lease callbacks and simultaneous running APIs in one slot. Query
+runtime handles in bulk, then reconcile their API tasks through returned reports.
+The task runtime still controls accepted queuing and execution availability.
+
+Resume retained handles first. When an actual runtime API query confirms that
+the exact old handle is missing and cannot be resumed, create a replacement
+session and recover the slot through:
+
+```text
+backend-rewrite implementer replace-runtime --slot <N> --previous-agent-handle <old> --agent-handle <new> --reason '<proven absence>' --runtime-query-command '<actual query>' --runtime-query-at '<actual RFC3339 timestamp with timezone>'
+```
+
+This preserves the fixed checkout, mapping and pending tasks while renewing
+their dispatch/lease identities; old callbacks are rejected. Reload `inventory`
+before resuming pending work. Accepted handoff history stays unchanged. Runtime
+timeouts, incomplete listings, session restart or an ended resumable task do not
+establish absence, and the replacement must never share the checkout with a
+still-active original session.
+
+Implementers own Source diagnosis, code and relevant local tests. Before delivery,
+each API obtains its own current passing scoped review. A handoff may contain
+one API, multiple APIs, or a completed subset spanning assigned groups:
+
+```json
+[
+  {
+    "api": "/api/sessions",
+    "dispatch_id": "<original API dispatch>",
+    "lease_generation": 1,
+    "handoff_id": "<unique stable API delivery identity>",
+    "review_report": "/absolute/original-review.json"
+  }
+]
+```
+
+```text
+backend-rewrite implementer handoff --slot <N> --agent-handle <actual-handle> --deliveries /absolute/deliveries.json
+```
+
+Validation admits every selected member before publishing updates. Accepted
+commits and reports are frozen independently of the reusable checkout; those
+API leases are released, and unlisted tasks remain assigned. Distinct API
+handoffs need distinct IDs even if they share a commit. Handoff does not imply
+whole-slot idle or API completion. Integrators consume the exported frozen commit
+and report, never the implementer’s current HEAD after reuse.
 
 API expert assistance uses existing worker confirmation, activity reports, and
 integration admission. The coordinator supplies no extra timestamps or runtime
@@ -1475,43 +1611,33 @@ Repeated identical commands are idempotent; a second expert handle or conflictin
 delivery is rejected. Expert confirmation persists its runtime handle and fingerprint; status and
 inventory expose the known handle for task recovery and closure.
 
-Worker confirmation uses `worker confirm --api '/api' --agent-handle HANDLE
---worktree /absolute/worker`. The engine persists the
-actual implementation handle and returns `agent_handle` with its work scope in
-status and inventory. Returned commands already include a known handle. First
-binding and a binding whose raw handle is not yet recorded require the actual
-runtime handle. Successful confirmation/reporting records it. Display names
-are not identifiers; use the runtime's addressable handle (Codex's canonical
-`agent_name` when its tools accept that target).
+Legacy workflows without a pool retain per-API `worker confirm` and runtime
+`worker report` behavior. New pooled runtime observations and handoffs use the
+explicit `implementer` interfaces above. Integration and rework still use the
+original handle, unique handoff ID and original matching review report through
+`worker report`; these exact delivery identities disambiguate APIs sharing one
+handle. Reports never substitute fresh review files for old callback identities.
 
-Runtime observations use `worker report --agent-handle HANDLE --activity ACTIVITY`.
-No binding or dispatch ID is accepted as a command argument. Internal IDs remain
-in evidence and review reports; the engine validates deliveries against them.
-Running, queued and idle describe a fresh runtime observation, not a delayed
-callback relabeled as current. Set
-`BACKEND_REWRITE_SUBAGENT_HANDLE` and `BACKEND_REWRITE_WORKER_ACTIVITY` to
-`running`, `queued`, `idle`, or `handoff_ready`. Handoffs also require
-`BACKEND_REWRITE_WORKER_HANDOFF_ID` and a passing `--review-report` for the final
-delivery. Scoped reviews return a separate report path on each check, preserving
-the original workflow, scope and dispatch through retries. Retain that path;
-never substitute a new report for an old callback. The coordinator inspects the
-spawn evidence before accepting it.
-`integration_required` asks the coordinator
-to delegate that identified handoff and required inputs to the code integrator,
-publish its exact checked candidate, then report `integrated` with the same ID
-and the integrator's passing `--review-report`. A worker ending without a handoff is `idle` and
-requires resuming its existing binding. Integration conflicts return the ready
-handoff via `rework_required` with its handoff ID and original worker or integration
-`--review-report`; the engine issues a new dispatch to
-the same worker and rejects callbacks for the superseded dispatch. Integration
-is acknowledged only while the verification resource is free.
+`integration_required` delegates selected accepted handoffs to the retained
+integrator, publishes its exact checked candidate, and reports each delivery
+integrated with that candidate’s passing report. Source conflicts requiring API
+behavior changes return to the implementer through `rework_required`. Integration
+requires a free verification/publication resource.
 
-When any recorded API still has zero focused verification attempts, its first-pass
-Replay is scheduled before ready handoff integration or integrated-handoff
-acceptance. This discovery barrier exposes independent API failures early so their
-workers can run in parallel. Dispatch, resume, runtime-status, and feedback actions
-remain immediate. After every API has an attempt, integration and acceptance resume,
-followed by the existing unified target-fingerprint revalidation.
+Group Replay rounds freeze the recording, target fingerprint, route list and
+exact per-method admissions. An initial round contains selected APIs pending
+fresh verification in one group, including `api_pending` retries whose old
+evidence became stale even when they retain earlier attempts. Acceptance contains
+only reviewed/integrated or otherwise precisely
+admitted API methods. A shared group never admits an unhanded API. Routes run
+sequentially, preserving recorded methods, isolation and per-API evidence, and
+results are saved as each route finishes. Ordinary failure continues to the
+remaining routes; the group’s failed API batch is dispatched after the round
+finishes. Infrastructure execution errors retain a partial summary and unfinished
+membership for recovery without repeating completed routes. `inventory` exposes
+active/last group rounds and the pool. Other groups’ ready implementation can
+continue while traffic remains serialized. There is no global first-attempt
+barrier delaying integration until every API is discovered.
 
 Source quality rework preserves assigned findings in `context.review.rework`
 alongside any behavioral issue. Repeated routing to the same owner and target
@@ -1552,8 +1678,8 @@ the integrator's full-check candidate is published and its final-stage receipt
 is admitted. Final unified verification then handles shared changes.
 
 Returned `next` commands omit `--api`; the engine retains its selected route
-independently of command arguments. Explicit `next --api '/route'` remains a
-single-scope operation, even with automatic continuation configured. Schema 36
+independently of command arguments. Explicit `next --api '/route'` selects the entry route; pooled execution still
+finishes that frozen group round. Legacy workflows retain single-scope behavior. Schema 36
 adds `advance_required.details.operation` (`replay` or `workflow`) and the
 engine-selected `details.api` without asking the coordinator to select it.
 
@@ -1571,7 +1697,9 @@ all recorded APIs.
 ```yaml
 # Optional: directly reuse this completed standard recording.
 # recording_run_id: "20260911093000"
-# Optional: continue passing Replay while the existing scheduler selects Replay.
+# Fixed implementation slots captured when the next workflow starts.
+max_implementers: 16
+# Optional: continue passing Replay beyond a completed group when selected.
 auto_next: false
 # Omitted or empty only selects every API in the recorded inventory.
 only:
@@ -1589,9 +1717,11 @@ merging new feedback. A started round drains before worker dispatch, integration
 repair acceptance or a new round. Outside a round, first-pass discovery and ready
 handoffs retain their existing priorities. Stale Replay, resource recovery,
 review, rule/input handling, waiting and final publication retain their gates.
-Changing `auto_next` to false stops continuation after the current step.
+Changing `auto_next` to false stops continuation beyond the current group; a
+started group round still drains. Legacy workflows stop after the current step.
 The omitted field defaults to false; its value must be a boolean. Explicit API
-or source-route inputs always use single execution. These local settings do not
+or source-route inputs use single entry selection; pooled group rounds still
+complete before returning to the coordinator. These local settings do not
 invalidate evidence or require a commit.
 
 While an operation runs, ordinary `status` returns `wait_required` unless a
@@ -1703,8 +1833,9 @@ Failure to create the work branch while still on base restores the previous stat
 `status` remains read-only throughout. The legacy `regression begin` CLI is hidden;
 coordinators should use the purpose command returned by `status`.
 
-`status`, `inventory` and `next` use the current settings between traffic
-operations. Excluded APIs are reported as `skipped`, do not dispatch workers or
+`status`, `inventory` and `next` use current selection/recording/auto-next
+settings between traffic operations. `max_implementers` is the exception: the
+active workflow keeps its captured effective limit until a new workflow starts. Excluded APIs are reported as `skipped`, do not dispatch workers or
 block completion, and retain original progress/evidence for later re-inclusion.
 A scoped `status --api` or `next --api` for an excluded API returns `complete`
 with an explicit skipped explanation and false current-verification flags.
@@ -1783,7 +1914,10 @@ A commit preserving effective worktree content does not change the fingerprint.
 After a finalized unscoped standard recording, the coordinator compares its
 concrete APIs with a persistent historical API catalog canonicalized by current
 `case_path_patterns`. Only new uncovered APIs produce one
-`case_pattern_identification_required` batch. Its fixed apply command receives
+`case_pattern_identification_required` batch. The coordinator delegates this
+read-only static/dynamic source route analysis to `repository-analyst`, separately
+from API implementation; the analyst has no implementation-worker binding or
+worktree. Its fixed apply command receives
 the complete JSON pattern list through
 `BACKEND_REWRITE_CASE_PATH_PATTERNS_JSON`; `[]` confirms that every candidate is
 static. This action has no source-revision or evidence input. Apply updates the

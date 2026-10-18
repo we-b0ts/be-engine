@@ -55,12 +55,15 @@ another check. Reports identify the worker check stage; an obsolete or missing
 stage cannot qualify for handoff. A worker report cannot replace integration
 review or the separate final pre-revalidation receipt.
 
-## Return And Stop
+## Return A Completed Subset
 
 Return the original evidence overview's workflow/recording, work scope, issue,
-binding, and dispatch identities; proven cause and source evidence; changed
+binding, dispatch and lease identities; proven cause and source evidence; changed
 files and shared impact; exact commit/patch; local test results; passing absolute
 `report_path` and spawn evidence; required coordinator inputs; remaining risks.
 
 Do not report your own handoff, accept an integration report or run traffic acceptance,
-or mark the work item complete. End the turn and retain your assignment.
+or mark the work item complete. Return one reviewed record per completed API.
+A partial handoff may span assigned groups; include remaining queued tasks. It
+does not imply whole-slot idle. Continue or resume only assigned pending work
+without replacing the original per-API identities.

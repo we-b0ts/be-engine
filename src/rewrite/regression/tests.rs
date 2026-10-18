@@ -27,6 +27,24 @@ fn fixture() -> tempfile::TempDir {
     .unwrap();
     git(target.path(), &["add", ".gitignore"]);
     git(target.path(), &["commit", "-qm", "ignore runtime"]);
+    rewrite::test_support::install_source_snapshot(target.path());
+    let catalog = target
+        .path()
+        .join(".traffic-e2e/local/repository-analysis/catalog.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(
+        catalog,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "groups": {
+                "api": {"summary": "API handler", "source_refs": ["src/api.rs:handler"]},
+                "other": {"summary": "Other handler", "source_refs": ["src/other.rs:handler"]}
+            },
+            "api_groups": {"/api": "api", "/other": "other"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let mut state = rewrite::worker::tests::implementation_state_with_inventory(false);
     state.recording_apis = vec!["GET /api".into(), "GET /other".into()];
     let issue = state.active_issue.clone();
@@ -101,7 +119,7 @@ fn current_session_query_must_report_zero_for_both_purposes_before_mutation() {
 }
 
 #[test]
-fn new_purpose_authorizes_one_first_binding_independently_for_each_api() {
+fn new_purpose_authorizes_first_batches_in_fixed_slots_for_each_api() {
     for record_new_traffic in [false, true] {
         let target = fixture();
         let store = RewriteStore::new(target.path()).unwrap();
@@ -127,49 +145,78 @@ fn new_purpose_authorizes_one_first_binding_independently_for_each_api() {
             origin.session_runtime_query.as_ref().unwrap().queried_at,
             query.queried_at
         );
-        for (api, handle) in [("GET /api", "new-worker-a"), ("GET /other", "new-worker-b")] {
-            // Model a fresh Replay failure for each API in the new workflow.
-            let mut state = store.load().unwrap().unwrap();
-            if !state.api_inventory.iter().any(|item| item.api == api) {
-                let mut item = worker::tests::implementation_state_with_inventory(false)
-                    .api_inventory[0]
-                    .clone();
-                item.api = api.into();
-                item.status = rewrite::RewriteApiStatus::ImplementationRequired;
-                state.api_inventory.push(item);
-            }
-            state.active_slice =
-                worker::tests::implementation_state_with_inventory(false).active_slice;
-            state.api = api.into();
-            let index = state
-                .api_inventory
-                .iter()
-                .position(|item| item.api == api)
-                .unwrap();
-            state.api_inventory[index].status = rewrite::RewriteApiStatus::ImplementationRequired;
-            state.current_api_index = Some(index);
-            store.save(&state).unwrap();
+        // Model completed group discovery with one fresh failure in each group.
+        // Both purposes now use the real pool; no legacy per-API confirmation.
+        let mut state = store.load().unwrap().unwrap();
+        inventory::install(&mut state, vec!["GET /api".into(), "GET /other".into()]).unwrap();
+        state.active_slice = worker::tests::implementation_state_with_inventory(false).active_slice;
+        let mut other = state.active_slice.clone();
+        other.api = "GET /other".into();
+        other.source_route = "/other".into();
+        state.parked_slices.insert(other.api.clone(), other);
+        state.recording_run_id = "20260802000000".into();
+        for item in &mut state.api_inventory {
+            item.status = rewrite::RewriteApiStatus::ImplementationRequired;
+            item.attempts = 1;
+        }
+        store.save(&state).unwrap();
+        for (api, handle) in [("/api", "new-worker-a"), ("/other", "new-worker-b")] {
+            let state = store.load().unwrap().unwrap();
+            let Some(rewrite::RewriteAction::ImplementerDispatchRequired { dispatch, .. }) =
+                rewrite::implementer::action(target.path(), &state).unwrap()
+            else {
+                panic!("a discovered failure must produce its fixed-slot batch");
+            };
+            assert_eq!(dispatch.apis.len(), 1);
+            assert_eq!(dispatch.apis[0].api, api);
+            fs::create_dir_all(dispatch.worktree.parent().unwrap()).unwrap();
+            let branch = format!("implementer-slot-{}", dispatch.slot_id);
+            git(
+                target.path(),
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    &branch,
+                    dispatch.worktree.to_str().unwrap(),
+                    "HEAD",
+                ],
+            );
             let confirm = |agent: &str| {
-                worker::confirm(rewrite::RewriteWorkerConfirmOptions {
+                rewrite::implementer::confirm(rewrite::ImplementerConfirmOptions {
                     target_root: target.path().into(),
-                    work_scope: rewrite::RewriteWorkScope::Api {
-                        api: rewrite::api_selector::public_api(api).into(),
-                    },
-                    worktree: None,
+                    slot_id: dispatch.slot_id,
+                    group_id: dispatch.group_id.clone(),
+                    dispatch_id: dispatch.dispatch_id.clone(),
                     agent_handle: agent.into(),
-                    agent_name: None,
                 })
             };
             confirm(handle).unwrap();
             confirm(handle).unwrap(); // Idempotent confirmation does not grant another replacement.
-            assert!(
-                confirm("unapproved-replacement")
-                    .unwrap_err()
-                    .to_string()
-                    .contains("ownership transfer")
+            assert!(confirm("unapproved-replacement").is_err());
+            let confirmed = store.load().unwrap().unwrap();
+            assert_eq!(
+                confirmed.implementers.as_ref().unwrap().slots[&dispatch.slot_id]
+                    .agent_handle
+                    .as_deref(),
+                Some(handle)
+            );
+            assert_eq!(
+                confirmed.worker_bindings[api].agent_handle.as_deref(),
+                Some(handle)
             );
         }
-        assert_eq!(store.load().unwrap().unwrap().worker_bindings.len(), 2);
+        let confirmed = store.load().unwrap().unwrap();
+        assert_eq!(confirmed.worker_bindings.len(), 2);
+        assert_eq!(
+            confirmed
+                .implementers
+                .as_ref()
+                .unwrap()
+                .effective_max_implementers,
+            16
+        );
     }
 }
 
@@ -251,7 +298,6 @@ fn new_round_preserves_recording_scope_and_replays_before_workers() {
 #[test]
 fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
     let target = fixture();
-    crate::rewrite::test_support::install_source_snapshot(target.path());
     let store = RewriteStore::new(target.path()).unwrap();
     let mut previous = store.load().unwrap().unwrap();
     previous.recording_apis.clear();
@@ -318,14 +364,61 @@ fn replay_purpose_identifies_uncovered_patterns_before_installing_inventory() {
     })
     .unwrap();
 
-    let state = store.load().unwrap().unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    let canonical = artifacts::standard_recording_apis(target.path(), &state).unwrap();
     assert_eq!(
-        artifacts::standard_recording_apis(target.path(), &state).unwrap(),
+        canonical,
         [
             "GET /api",
             "GET /api/knowledge-bases/*/artifacts",
             "GET /other"
         ]
+    );
+    // Model the normal next inventory-installation step, without running traffic.
+    // Path identification never grants module grouping to the newly canonical API.
+    inventory::install(&mut state, canonical).unwrap();
+    store.save(&state).unwrap();
+    let Some(rewrite::RewriteAction::RepositoryAnalysisRequired { analysis, .. }) =
+        rewrite::repository_analysis::required_action(target.path(), &state).unwrap()
+    else {
+        panic!("new canonical routes require incremental grouping before Replay");
+    };
+    assert_eq!(analysis.pending_apis, ["/api/knowledge-bases/*/artifacts"]);
+    assert_eq!(analysis.catalog.api_groups["/api"], "api");
+    assert_eq!(analysis.catalog.api_groups["/other"], "other");
+    assert!(state.api_inventory.iter().all(|item| item.attempts == 0));
+    let submission = target
+        .path()
+        .join(".traffic-e2e/local/new-api-analysis.json");
+    fs::write(
+        &submission,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "catalog_revision": analysis.catalog.catalog_revision,
+            "groups": {
+                "knowledge-artifacts": {
+                    "summary": "Knowledge-base artifact operations",
+                    "source_refs": ["src/knowledge_base.rs:artifacts"]
+                }
+            },
+            "assignments": {"/api/knowledge-bases/*/artifacts": "knowledge-artifacts"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    rewrite::repository_analysis::apply_repository_analysis(
+        rewrite::RepositoryAnalysisApplyOptions {
+            target_root: target.path().into(),
+            batch_id: analysis.batch_id,
+            file: submission,
+        },
+    )
+    .unwrap();
+    let state = store.load().unwrap().unwrap();
+    assert!(rewrite::repository_analysis::is_complete(&state));
+    assert_eq!(
+        state.repository_analysis.as_ref().unwrap().api_groups["/api/knowledge-bases/*/artifacts"],
+        "knowledge-artifacts"
     );
 }
 

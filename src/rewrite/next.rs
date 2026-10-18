@@ -87,12 +87,17 @@ where
         // Inspect newly published plans after every completed step, including
         // failed comparisons. The replay transaction may have started before
         // these independent plan events existed.
-        if let Some(state) = super::store::RewriteStore::new(&options.target_root)?.load()?
-            && let Some(plan) = super::rule_plans::idle_action(&options.target_root, &state)?
+        let current = super::store::RewriteStore::new(&options.target_root)?.load()?;
+        if let Some(state) = current.as_ref()
+            && let Some(plan) = super::rule_plans::idle_action(&options.target_root, state)?
         {
-            return Ok(super::action::envelope(&options.target_root, &state, plan));
+            return Ok(super::action::envelope(&options.target_root, state, plan));
         }
-        if mode != RewriteExecutionMode::AutoNext || !result.replay_can_continue {
+        let group_continues = current
+            .as_ref()
+            .is_some_and(|state| state.implementers.is_some() && state.group_replay.is_some());
+        if !result.replay_can_continue || mode != RewriteExecutionMode::AutoNext && !group_continues
+        {
             return Ok(result.envelope);
         }
         // The previous atomic step has released its workflow lock and traffic lease.
@@ -100,7 +105,8 @@ where
         let status = super::status_rewrite(RewriteContext {
             target_root: options.target_root.clone(),
         })?;
-        if !crate::config::regression::RegressionScope::load(&options.target_root)?.auto_next
+        if (!group_continues
+            && !crate::config::regression::RegressionScope::load(&options.target_root)?.auto_next)
             || !matches!(
                 status.action,
                 RewriteAction::AdvanceRequired {

@@ -61,6 +61,9 @@ pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<Re
     {
         return Ok(state_action(target_root, state));
     }
+    if let Some(analysis) = super::repository_analysis::required_action(target_root, state)? {
+        return Ok(analysis);
+    }
     for api in super::scheduling::repair_apis(state) {
         let scoped = inventory::scoped(state, Some(&api.parse()?))?;
         repair::acceptance_ready(target_root, &scoped)?;
@@ -96,7 +99,10 @@ pub(super) fn select_action(
     if let Ok(Some(plan)) = super::rule_plans::idle_action(target_root, state) {
         return plan;
     }
-    if matches!(base, RewriteAction::PlanApplyRequired { .. }) {
+    if matches!(
+        base,
+        RewriteAction::PlanApplyRequired { .. } | RewriteAction::RepositoryAnalysisRequired { .. }
+    ) {
         return base;
     }
     if matches!(base, RewriteAction::PreRevalidationReviewRequired { .. }) {
@@ -130,6 +136,13 @@ pub(super) fn select_action(
     {
         return round;
     }
+    if !matches!(
+        base,
+        RewriteAction::SourceReviewRequired { .. } | RewriteAction::TargetQualityRequired { .. }
+    ) && let Some(round) = super::group_replay::action(target_root, state)
+    {
+        return round;
+    }
     if let Some(expert) = super::expert::required_action(target_root, state, None) {
         return expert;
     }
@@ -156,6 +169,9 @@ pub(super) fn select_action(
         return selected;
     }
     if matches!(base, RewriteAction::ImplementationRequired { .. }) {
+        if state.implementers.is_some() {
+            return super::scheduling::idle_action(target_root, state).unwrap_or(base);
+        }
         return worker::state_action(target_root, state);
     }
     if matches!(
@@ -182,7 +198,14 @@ fn global_worker_action(
     {
         return None;
     }
-    let selected = worker::scheduler::global_action(target_root, state, false)?;
+    let selected = if state.implementers.is_some() {
+        super::implementer::action(target_root, state)
+            .ok()
+            .flatten()
+            .or_else(|| worker::scheduler::global_action(target_root, state, false))?
+    } else {
+        worker::scheduler::global_action(target_root, state, false)?
+    };
     if matches!(selected, RewriteAction::AdvanceRequired { .. })
         && (matches!(
             base,
@@ -199,6 +222,11 @@ pub(super) fn for_scoped_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
+    // A reusable slot owns batches, so scoped inspection must preserve the
+    // global analysis and group-round gates rather than offer a legacy lease.
+    if state.implementers.is_some() {
+        return for_status(target_root, state);
+    }
     if let Some(plan) = super::rule_plans::idle_action(target_root, state)? {
         return Ok(envelope(target_root, state, plan));
     }
@@ -391,6 +419,9 @@ pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteA
     let selected_api = super::api_selector::work_scope(state, &state.api).binding_key();
     let display_api = super::api_selector::public_api(&state.api);
     if let Some(action) = case_patterns::state_action(target_root, state) {
+        return action;
+    }
+    if let Ok(Some(action)) = super::repository_analysis::required_action(target_root, state) {
         return action;
     }
     if super::transition::replay_completion_pending(state) {

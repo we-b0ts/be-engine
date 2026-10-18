@@ -128,6 +128,22 @@ async fn advance_atomic(
     let mut state = match store.load()? {
         Some(mut state) => {
             let migrated = inventory::initialize_legacy(&mut state);
+            if let Some(required) =
+                super::repository_analysis::required_action(&target_root, &state)?
+            {
+                if migrated {
+                    store.save(&state)?;
+                }
+                return Ok(action::envelope(&target_root, &state, required));
+            }
+            if let Some(requested) = options.api.as_ref()
+                && let Some(required @ RewriteAction::AdvanceRequired { .. }) =
+                    super::group_replay::action(&target_root, &state)
+                && matches!(&required, RewriteAction::AdvanceRequired { api: Some(api), .. }
+                    if api != api_selector::public_api(&requested.to_string()))
+            {
+                return Ok(action::envelope(&target_root, &state, required));
+            }
             if let Some(plan) = super::rule_plans::idle_action(&target_root, &state)? {
                 return Ok(action::envelope(&target_root, &state, plan));
             }
@@ -351,6 +367,14 @@ async fn advance_atomic(
             let uses_recorded_patterns = inventory::install(&mut state, apis)?;
             state.recording_refresh = None;
             regression_scope::apply(&target_root, &mut state)?;
+            super::repository_analysis::refresh(&target_root, &mut state)?;
+            super::implementer::refresh(&mut state)?;
+            if let Some(required) =
+                super::repository_analysis::required_action(&target_root, &state)?
+            {
+                store.save(&state)?;
+                return Ok(action::envelope(&target_root, &state, required));
+            }
             if state.current_api_index.is_none() {
                 store.save(&state)?;
                 return Ok(action::for_state(&target_root, &state));

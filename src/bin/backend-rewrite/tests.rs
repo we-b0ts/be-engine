@@ -70,6 +70,8 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "purpose",
             "case",
             "case-pattern",
+            "repository-analysis",
+            "implementer",
             "evidence",
             "rule",
             "recorder-capture",

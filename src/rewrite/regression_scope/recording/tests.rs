@@ -29,6 +29,7 @@ fn target() -> tempfile::TempDir {
         "/.traffic-e2e/local/\n/.traffic-e2e/regression.yaml\n",
     )
     .unwrap();
+    test_support::install_source_snapshot(target.path());
     for args in [
         vec!["init", "-q", "--initial-branch=master"],
         vec!["config", "user.name", "Test"],
