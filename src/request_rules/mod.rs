@@ -9,6 +9,7 @@ pub use jwt::nonce::{
     DynamicClaim as JwtDynamicClaim, NonceClaim as JwtNonceClaim, NonceFormat as JwtNonceFormat,
 };
 pub(crate) mod policy;
+pub(crate) mod signed_timestamp;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -292,6 +293,7 @@ impl RequestRules {
 
 pub(crate) struct RequestRuleRuntime {
     rules: Vec<RuntimeJwtRule>,
+    signed_timestamps: Vec<(crate::policy::NativeRule, PathBuf)>,
 }
 
 struct RuntimeJwtRule {
@@ -343,12 +345,27 @@ impl RequestRuleRuntime {
                 )),
             });
         }
-        Ok(Self { rules })
+        let signed_timestamps = compiled
+            .native
+            .iter()
+            .filter(|native| {
+                matches!(
+                    native.rule.effect,
+                    crate::policy::NativeEffect::InputSignedTimestamp(_)
+                )
+            })
+            .map(|native| (native.rule.clone(), target_root.to_path_buf()))
+            .collect();
+        Ok(Self {
+            rules,
+            signed_timestamps,
+        })
     }
 
     #[cfg(test)]
     pub(crate) fn with_test_keys(rules: Vec<(JwtRule, JwtProfile, Vec<u8>)>) -> Self {
         Self {
+            signed_timestamps: Vec::new(),
             rules: rules
                 .into_iter()
                 .map(|(rule, profile, key)| RuntimeJwtRule {
@@ -447,6 +464,29 @@ impl RequestRuleRuntime {
                 outcome: "time_shifted_signature_verified".into(),
                 offset_seconds: Some(offset),
             });
+        }
+        for (rule, root) in &self.signed_timestamps {
+            let Some(api) = &rule.selector.api else {
+                continue;
+            };
+            if !api.split_once(' ').is_some_and(|(method, path)| {
+                method == source_method
+                    && crate::path_pattern::matches_path_pattern(path, &source_path)
+            }) || !rule.when.as_ref().is_none_or(|when| {
+                source_body
+                    .as_ref()
+                    .is_some_and(|body| when.matches_body(body))
+            }) {
+                continue;
+            }
+            let crate::policy::NativeEffect::InputSignedTimestamp(effect) = &rule.effect else {
+                continue;
+            };
+            let key = keys::resolve_source(root, &signed_timestamp::key_source(effect))?;
+            if let Some(mut observation) = signed_timestamp::apply(request, effect, &key, now)? {
+                observation.rule_id = rule.id.clone();
+                observations.push(observation);
+            }
         }
         Ok(observations)
     }

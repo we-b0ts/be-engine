@@ -41,6 +41,10 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "replay.startup_timeout_seconds must be positive"
     );
     ensure!(
+        (1..=1800).contains(&project.replay.request_timeout_allowance_seconds),
+        "replay.request_timeout_allowance_seconds must be between 1 and 1800"
+    );
+    ensure!(
         !project.policy.as_os_str().is_empty()
             && project.policy.is_relative()
             && project.policy.components().all(|part| matches!(
@@ -174,6 +178,7 @@ mod dependency_loading_defaults {
                 serde_yaml::from_str(if settings.is_empty() { "{}" } else { settings }).unwrap();
             assert!(config.dependency_loading.lazy_cases);
             assert_eq!(config.startup_timeout_seconds, 60);
+            assert_eq!(config.request_timeout_allowance_seconds, 30);
         }
         let config: ReplayProjectConfig =
             serde_yaml::from_str("dependency_loading: {lazy_cases: false}\n").unwrap();

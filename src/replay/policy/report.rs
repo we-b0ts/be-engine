@@ -14,8 +14,19 @@ pub(in crate::replay) struct ReplayPolicyReport {
     pub(in crate::replay) key_bindings: Vec<super::request_contract::KeyBindingReport>,
     pub(in crate::replay) dynamic_capture_candidates: Vec<super::dynamic_values::CaptureCandidate>,
     pub(in crate::replay) unused_applicable_dependency_rule_ids: Vec<String>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(in crate::replay) recorded_mysql_rule_applicability: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeSet<RecordedDependencyRuleSource>,
+    >,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub(in crate::replay) unavailable_value_slots: std::collections::BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::replay) struct RecordedDependencyRuleSource {
+    pub(in crate::replay) case_id: String,
+    pub(in crate::replay) index: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

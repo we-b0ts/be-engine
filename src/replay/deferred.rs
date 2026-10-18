@@ -304,7 +304,7 @@ fn install(
         if policy.dynamic_values.enabled() {
             policy.dynamic_values.observe_source(case_id, raw)?;
         }
-        for exchange in &state.mysql.exchanges[mysql_start..] {
+        for (offset, exchange) in state.mysql.exchanges[mysql_start..].iter().enumerate() {
             policy.observe_recorded_mysql_exchange(
                 exchange.case_id.as_deref(),
                 &ReplaySessionIdentity {
@@ -314,6 +314,7 @@ fn install(
                 },
                 &exchange.record.command,
                 exchange.record.sql.as_deref(),
+                Some(mysql_start + offset),
             );
         }
         http::observe_recorded_policy_exchanges(policy, &state.http_exchanges[http_start..]);

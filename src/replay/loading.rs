@@ -280,10 +280,11 @@ impl ReplayRuntime {
             policy
                 .request_contracts
                 .configure_witnesses(witnesses, !lazy)?;
-            for exchange in mysql
+            for (index, exchange) in mysql
                 .exchanges
                 .iter()
-                .filter(|exchange| exchange.source == ReplaySource::Case)
+                .enumerate()
+                .filter(|(_, exchange)| exchange.source == ReplaySource::Case)
             {
                 policy.observe_recorded_mysql_exchange(
                     exchange.case_id.as_deref(),
@@ -294,6 +295,7 @@ impl ReplayRuntime {
                     },
                     &exchange.record.command,
                     exchange.record.sql.as_deref(),
+                    Some(index),
                 );
             }
             http::observe_recorded_policy_exchanges(policy, &http_exchanges);

@@ -334,10 +334,101 @@ fn nested_in_compatibility_rejects_unscoped_or_complex_subqueries() {
     let mut cache = SqlCache::default();
     for sql in [
         "SELECT kinds.id FROM kinds WHERE kinds.id IN (2,1) AND EXISTS (SELECT 1 FROM members WHERE members.kind_id=kinds.id AND members.entity_id IN ('b','a'))",
-        "SELECT kinds.id FROM kinds WHERE kinds.id IN (2,1) OR EXISTS (SELECT 1 FROM members JOIN users ON users.id=members.user_id WHERE members.kind_id=kinds.id AND members.entity_id IN ('b','a'))",
+        "SELECT kinds.id FROM kinds WHERE kinds.id IN (2,1) OR EXISTS (SELECT 1 FROM (SELECT * FROM members) AS members WHERE members.kind_id=kinds.id AND members.entity_id IN ('b','a'))",
         "SELECT kinds.id FROM kinds WHERE kinds.id IN (2,1) OR kinds.id IN (SELECT kind_id FROM members)",
         "WITH visible AS (SELECT kind_id FROM members) SELECT kinds.id FROM kinds WHERE kinds.id IN (2,1) OR EXISTS (SELECT 1 FROM visible WHERE visible.kind_id=kinds.id)",
     ] {
         assert!(cache.get(sql).bind("COM_QUERY", None).is_none(), "{sql}");
+    }
+}
+
+#[test]
+fn derived_counts_and_joined_exists_preserve_full_query_identity() {
+    let source = nested_query("3,1,2", "'b','a','a'", "'Owner','Developer'");
+    let target = nested_query("2,3,1", "'a','b','a'", "'Developer','Owner'");
+    for (source, target) in [
+        (
+            format!("SELECT count(*) AS total FROM ({source}) AS items"),
+            format!("SELECT count(*) AS total FROM ({target}) AS items"),
+        ),
+        (
+            source.replacen(
+                "FROM kinds",
+                "FROM kinds INNER JOIN namespace ON namespace.name=kinds.namespace",
+                1,
+            ),
+            target.replacen(
+                "FROM kinds",
+                "FROM kinds INNER JOIN namespace ON namespace.name=kinds.namespace",
+                1,
+            ),
+        ),
+        (
+            source.replace(
+                "FROM resource_members",
+                "FROM resource_members JOIN users ON users.id=resource_members.user_id",
+            ),
+            target.replace(
+                "FROM resource_members",
+                "FROM resource_members JOIN users ON users.id=resource_members.user_id",
+            ),
+        ),
+        (
+            format!("{source} ORDER BY kinds.id DESC LIMIT 10"),
+            format!("{target} ORDER BY kinds.id DESC LIMIT 10"),
+        ),
+    ] {
+        assert!(equal(&source, &target), "{source}");
+        for changed in [
+            target.replace("'Developer','Owner'", "'Developer','Guest'"),
+            target.replace("'a','b','a'", "'a','b'"),
+            target.replace(
+                "resource_members.resource_id = kinds.id",
+                "resource_members.resource_id = kinds.user_id",
+            ),
+            target.replace("FROM resource_members", "FROM other_members"),
+            target.replace("kinds.id IN", "kinds.id NOT IN"),
+            format!("{target} FOR UPDATE"),
+        ] {
+            assert!(!equal(&source, &changed), "{changed}");
+        }
+    }
+}
+
+#[test]
+fn derived_count_templates_bind_fresh_values_and_keep_wrapper_exact() {
+    let source = "SELECT count(*) AS total FROM (SELECT id FROM tasks WHERE name IN ('b','a','a') AND id IN (2,1)) AS items";
+    let target = "SELECT count(*) AS total FROM (SELECT id FROM tasks WHERE name IN (?,?,?) AND id IN (?,?)) AS items";
+    let mut cache = SqlCache::default();
+    let recorded = cache.get(source).bind("COM_QUERY", None).unwrap();
+    let prepared = cache.get(target);
+    assert!(prepared.metadata().unwrap().matches(&recorded, true));
+    let mut params = [
+        mysql_json("string", json!("a")),
+        mysql_json("string", json!("b")),
+        mysql_json("string", json!("a")),
+        mysql_json("integer", json!(1)),
+        mysql_json("integer", json!(2)),
+    ];
+    assert!(
+        prepared
+            .bind("COM_STMT_EXECUTE", Some(&params))
+            .unwrap()
+            .matches(&recorded, false)
+    );
+    params[1] = mysql_json("string", json!("c"));
+    assert!(
+        !prepared
+            .bind("COM_STMT_EXECUTE", Some(&params))
+            .unwrap()
+            .matches(&recorded, false)
+    );
+    for changed in [
+        source.replace("count(*)", "count(id)"),
+        source.replace("AS total", "AS other"),
+        source.replace("AS items", "AS other"),
+        source.replace("(2,1)", "(2,'1')"),
+    ] {
+        assert!(!equal(source, &changed), "{changed}");
     }
 }

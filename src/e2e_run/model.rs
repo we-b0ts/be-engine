@@ -34,6 +34,10 @@ fn default_target_startup_timeout_seconds() -> u64 {
     DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
 }
 
+fn default_request_timeout_allowance_seconds() -> u64 {
+    DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS
+}
+
 fn default_replay_case_dependency_post_response_window_ms() -> u64 {
     crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS
 }
@@ -81,6 +85,9 @@ pub(super) struct TargetProjectConfig {
 pub(super) struct ReplayProjectConfig {
     #[serde(default = "default_replay_startup_timeout_seconds")]
     pub startup_timeout_seconds: u64,
+    /// Additional wall time beyond the recorded Source response duration.
+    #[serde(default = "default_request_timeout_allowance_seconds")]
+    pub request_timeout_allowance_seconds: u64,
     #[serde(
         default = "crate::replay::ReplayDependencyLoading::managed_default",
         deserialize_with = "crate::replay::ReplayDependencyLoading::deserialize_managed"

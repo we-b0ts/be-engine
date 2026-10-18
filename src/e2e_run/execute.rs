@@ -456,7 +456,7 @@ async fn run_active_with_replay(
     let ready = async {
         tokio::select! {
             ready = wait_for_replay_ready(state, config.replay_startup_timeout) => {
-                ready.context("replay server did not become ready")
+                ready.context("replay server did not become ready; project.replay.startup_timeout_seconds controls the readiness budget independently of dependency_loading.index_timeout_seconds and case_timeout_seconds")
             }
             status = replay.wait() => {
                 let status = status.context("failed to wait for replay process during startup")?;

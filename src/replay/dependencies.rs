@@ -221,7 +221,11 @@ pub(super) fn register_dependency_records(
         let DependencyRecord::MysqlExchange(exchange) = record else {
             unreachable!("non-MySQL dependency records were handled above")
         };
-        if exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare" {
+        if exchange.command == "COM_PING"
+            || exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare"
+        {
+            // PING and PREPARE already contributed to session evidence above;
+            // they do not create a required business exchange.
             continue;
         }
         if crate::mysql::wire::is_no_response_command(&exchange.command) {

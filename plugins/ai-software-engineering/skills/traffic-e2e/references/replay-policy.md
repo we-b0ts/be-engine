@@ -134,6 +134,9 @@ Use the typed native owner when a contract involves more than one value:
   parameters, typed values and physical result time columns;
 - `input_jwt`, `response_jwt`, `response_generated`, `response_body` and
   `response_header_date`: their dedicated execution or assertion owner;
+- `input_signed_timestamp`: source-verified sorted-field MD5 JSON timestamp
+  rebasing with a frozen startup signing input; see
+  [signed timestamp request rules](../../../../../docs/signed-timestamp-request-rules.md);
 - `capture_http`, `capture_breeze`, `capture_http_response`, `process_owned`
   and `finite_sharing`: acquisition, classification and finite sharing.
 

@@ -73,6 +73,7 @@ impl ReplayPolicyRuntime {
             },
             cases,
             applicable_dependency_rule_ids: BTreeSet::new(),
+            recorded_mysql_rule_applicability: BTreeMap::new(),
             bindings: BTreeMap::new(),
         })
     }

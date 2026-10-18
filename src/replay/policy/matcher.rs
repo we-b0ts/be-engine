@@ -20,7 +20,7 @@ use super::config::{
     load_replay_policy,
 };
 use super::pattern::{path_pattern_matches, query_values, text_pattern_matches, uri_path};
-use super::report::{DependencyRuleReport, ReplayPolicyReport};
+use super::report::{DependencyRuleReport, RecordedDependencyRuleSource, ReplayPolicyReport};
 use super::value::{validate_relative_time, validate_value};
 use crate::replay::{
     RecordedMysqlValue, ReplayCase, ReplaySessionIdentity, TargetKey, normalize_host, normalize_sql,
@@ -72,6 +72,7 @@ pub(in crate::replay) struct ReplayPolicyRuntime {
     mysql_selectors: mysql_selectors::MysqlSelectors,
     cases: BTreeMap<String, CaseIdentity>,
     applicable_dependency_rule_ids: BTreeSet<String>,
+    recorded_mysql_rule_applicability: BTreeMap<String, BTreeSet<RecordedDependencyRuleSource>>,
     usage: BTreeMap<String, DependencyRuleUsage>,
     bindings: BTreeMap<String, BTreeMap<String, Value>>,
 }
@@ -224,6 +225,7 @@ impl ReplayPolicyRuntime {
             loaded,
             cases: case_identities,
             applicable_dependency_rule_ids: BTreeSet::new(),
+            recorded_mysql_rule_applicability: BTreeMap::new(),
             usage,
             bindings: BTreeMap::new(),
         };
@@ -248,22 +250,30 @@ impl ReplayPolicyRuntime {
         identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
+        exchange_index: Option<usize>,
     ) {
-        let Some(case) = case_id.and_then(|case_id| self.cases.get(case_id)) else {
+        let Some(case_id) = case_id else {
             return;
         };
-        self.applicable_dependency_rule_ids.extend(
-            self.loaded
-                .document
-                .dependency_rules
-                .iter()
-                .filter(|rule| {
-                    rule.protocol == DependencyProtocol::Mysql
-                        && rule_matches_case(rule, case)
-                        && self.mysql_selectors.matches(rule, identity, command, sql)
-                })
-                .map(|rule| rule.id.clone()),
-        );
+        let Some(case) = self.cases.get(case_id) else {
+            return;
+        };
+        for rule in self.loaded.document.dependency_rules.iter().filter(|rule| {
+            rule.protocol == DependencyProtocol::Mysql
+                && rule_matches_case(rule, case)
+                && self.mysql_selectors.matches(rule, identity, command, sql)
+        }) {
+            self.applicable_dependency_rule_ids.insert(rule.id.clone());
+            if let Some(index) = exchange_index {
+                self.recorded_mysql_rule_applicability
+                    .entry(rule.id.clone())
+                    .or_default()
+                    .insert(RecordedDependencyRuleSource {
+                        case_id: case_id.into(),
+                        index,
+                    });
+            }
+        }
     }
 
     pub(in crate::replay) fn observe_recorded_http_exchange(
@@ -692,6 +702,7 @@ impl ReplayPolicyRuntime {
             dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
             request_contract_candidates: self.request_contracts.candidates(),
             unused_applicable_dependency_rule_ids,
+            recorded_mysql_rule_applicability: self.recorded_mysql_rule_applicability.clone(),
             unavailable_value_slots: self.request_contracts.unavailable_value_slots(),
         }
     }

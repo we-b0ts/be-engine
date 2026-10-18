@@ -8,6 +8,92 @@ use crate::{
 const CASE: &str = "case-a";
 const SQL: &str = "SELECT subtasks_0640.id AS subtasks_0640_id FROM subtasks_0640 WHERE subtasks_0640.status='RUNNING' AND subtasks_0640.created_at>='2026-09-05'";
 
+fn rule_policy(sources: Value) -> Value {
+    json!({
+        "dependency_rules":[
+            {"id":"callback-value","protocol":"mysql","applicable":true,"matches":0},
+            {"id":"used-value","protocol":"mysql","applicable":true,"matches":1},
+            {"id":"http-value","protocol":"http","applicable":true,"matches":0}
+        ],
+        "recorded_mysql_rule_applicability":{
+            "callback-value":sources,
+            "used-value":[{"case_id":CASE,"index":0}]
+        },
+        "unused_applicable_dependency_rule_ids":["callback-value","http-value"]
+    })
+}
+
+#[test]
+fn process_owned_reclassification_updates_exact_rule_applicability_reversibly() {
+    let f = Fixture::new();
+    f.apply();
+    let dependencies = fs::read(f.case_dir.join("dependencies.jsonl")).unwrap();
+    let mut report = f.read_report();
+    report["replay_policy"] = rule_policy(json!([{"case_id":CASE,"index":0}]));
+    f.write_report(&report);
+    for _ in 0..2 {
+        f.reclassify();
+        let report = f.read_report();
+        let policy = &report["replay_policy"];
+        assert_eq!(policy["dependency_rules"][0]["applicable"], false);
+        assert_eq!(policy["dependency_rules"][1]["applicable"], true);
+        assert_eq!(policy["dependency_rules"][1]["matches"], 1);
+        assert_eq!(
+            policy["unused_applicable_dependency_rule_ids"],
+            json!(["http-value"])
+        );
+        let original: Value = parse_background_dependency_evidence(&report.to_string()).unwrap();
+        assert_eq!(
+            original["replay_policy"],
+            rule_policy(json!([{"case_id":CASE,"index":0}]))
+        );
+    }
+    fs::write(&f.rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    f.reclassify();
+    assert_eq!(
+        f.read_report()["replay_policy"],
+        rule_policy(json!([{"case_id":CASE,"index":0}]))
+    );
+    assert_eq!(
+        fs::read(f.case_dir.join("dependencies.jsonl")).unwrap(),
+        dependencies
+    );
+}
+
+#[test]
+fn business_occurrences_and_missing_occurrence_proof_keep_rule_obligations() {
+    for sources in [
+        json!([{"case_id":CASE,"index":0},{"case_id":CASE,"index":1}]),
+        json!([{"case_id":"other-case","index":0}]),
+        json!([{"case_id":CASE,"index":"unknown"}]),
+        json!([]),
+        Value::Null,
+        json!("legacy"),
+    ] {
+        let f = Fixture::new();
+        f.apply();
+        let mut report = f.read_report();
+        report["replay_policy"] = rule_policy(sources.clone());
+        if sources == "legacy" {
+            report["replay_policy"]
+                .as_object_mut()
+                .unwrap()
+                .remove("recorded_mysql_rule_applicability");
+        }
+        f.write_report(&report);
+        f.reclassify();
+        assert_eq!(
+            f.read_report()["replay_policy"]["dependency_rules"][0]["applicable"],
+            true,
+            "{sources}"
+        );
+        assert_eq!(
+            f.read_report()["replay_policy"]["unused_applicable_dependency_rule_ids"],
+            json!(["callback-value", "http-value"])
+        );
+    }
+}
+
 struct Fixture {
     _temp: tempfile::TempDir,
     rules: PathBuf,

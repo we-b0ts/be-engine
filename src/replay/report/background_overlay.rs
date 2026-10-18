@@ -16,6 +16,7 @@ use crate::recorder::background::BackgroundDependencyMatcher;
 
 mod mysql;
 mod original_evidence;
+mod policy;
 
 pub(crate) use original_evidence::parse_background_dependency_evidence;
 use original_evidence::restore_previous_reclassification;
@@ -90,6 +91,7 @@ pub(crate) fn reclassify_background_report(
         reclassify_command_protocol(report, protocol, &matched.commands, &mut by_protocol);
     }
     annotate_api_origins(report, &origins);
+    policy::reclassify(report);
     by_protocol.retain(|_, count| *count > 0);
     let matched_unused_case = by_protocol.values().sum();
     let rules_fingerprint = fingerprints.classification;

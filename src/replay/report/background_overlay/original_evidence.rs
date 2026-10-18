@@ -25,6 +25,7 @@ pub(super) fn restore_previous_reclassification(report: &mut Value) {
         };
         restore_array(protocol_report, "unused_global", "unused_case");
     }
+    super::policy::reclassify(report);
 }
 
 fn restore_array(report: &mut Value, global_field: &str, case_field: &str) {

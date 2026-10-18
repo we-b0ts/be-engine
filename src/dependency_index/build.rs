@@ -165,8 +165,9 @@ impl Builder {
             let mysql_skipped = tag == "mysql_exchange"
                 && (crate::mysql::wire::is_no_response_command(
                     value["command"].as_str().unwrap_or_default(),
-                ) || value["command"] == "COM_STMT_PREPARE"
-                    && value["response"]["status"] == "stmt_prepare");
+                ) || value["command"] == "COM_PING"
+                    || value["command"] == "COM_STMT_PREPARE"
+                        && value["response"]["status"] == "stmt_prepare");
             let has_endpoint = matches!(
                 tag,
                 "mysql_connection"
