@@ -50,6 +50,23 @@ pub(crate) enum JsonField {
     Jwt(JwtField),
     Identity(super::key::IdentityField),
     Random(RandomField),
+    Url(UrlField),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UrlField {
+    pub url: BTreeMap<String, UrlQueryField>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub(crate) enum UrlQueryField {
+    Time(TimeField),
+    Random(RandomField),
+    UtcDateSegment {
+        utc_date_segment: crate::policy::native::UtcDateSegment,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -62,12 +79,19 @@ pub(crate) struct RandomField {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RandomContract {
     pub format: crate::policy::native::RandomEncoding,
-    pub length: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
 }
 
 impl RandomContract {
     pub(crate) fn validate(&self) -> Result<()> {
-        crate::value_contract::generated::validate_bounded_random(&self.format, self.length)
+        crate::value_contract::generated::validate_bounded_random(
+            &self.format,
+            self.length,
+            self.max_length,
+        )
     }
 
     pub(super) fn compare(
@@ -75,16 +99,12 @@ impl RandomContract {
         source: &serde_json::Value,
         target: &serde_json::Value,
     ) -> Result<()> {
-        crate::value_contract::generated::compare_value(
+        crate::value_contract::generated::compare_bounded_random(
             source,
             target,
-            &crate::policy::native::GeneratedResponse::Random {
-                format: self.format.clone(),
-                length: Some(self.length),
-            },
-            None,
-            "redis-json-random",
-            crate::value_contract::json::AnchorClocks::default(),
+            &self.format,
+            self.length,
+            self.max_length,
         )
         .map_err(|_| anyhow::anyhow!("random Redis JSON field has invalid type or encoding"))?;
         Ok(())
@@ -234,9 +254,12 @@ impl RedisRequestSelector {
                     match key {
                         super::key::KeyContract::TimeWindow { .. } =>
                             matches!(command.command.as_str(), "INCRBY" | "EXPIRE"),
-                        _ => command.command == "SET",
+                        _ => matches!(
+                            command.command.as_str(),
+                            "SET" | "SUBSCRIBE" | "UNSUBSCRIBE"
+                        ),
                     },
-                    "key contract selects INCRBY/EXPIRE windows or SET identities"
+                    "key contract selects INCRBY/EXPIRE windows or SET/SUBSCRIBE/UNSUBSCRIBE identities"
                 );
             }
             for (index, field) in &command.argument_values {
@@ -255,11 +278,12 @@ impl RedisRequestSelector {
                     ArgumentRule::Json(json) => {
                         ensure!(
                             command.command == "SET" && *index == 1
-                                || command.command == "RPUSH" && (1..=128).contains(index)
+                                || matches!(command.command.as_str(), "RPUSH" | "LPUSH")
+                                    && (1..=128).contains(index)
                                 || command.command == "PUBLISH" && *index == 1
                                 || matches!(command.command.as_str(), "EVAL" | "EVALSHA")
                                     && (3..=128).contains(index),
-                            "JSON request rules select SET/PUBLISH value index 1, RPUSH elements or bounded script ARGV"
+                            "JSON request rules select SET/PUBLISH value index 1, LPUSH/RPUSH elements or bounded script ARGV"
                         );
                         ensure!(
                             !json.json.is_empty() && json.json.len() <= 32,
@@ -267,21 +291,74 @@ impl RedisRequestSelector {
                         );
                         for (pointer, field) in &json.json {
                             ensure!(
-                                command.command != "PUBLISH" || matches!(field, JsonField::Time(_)),
-                                "PUBLISH request fields support time contracts only; UUID bindings retain their own rules"
+                                command.command != "PUBLISH"
+                                    || matches!(field, JsonField::Time(_) | JsonField::Url(_)),
+                                "PUBLISH request fields support time and URL contracts; UUID bindings retain their own rules"
                             );
                             super::super::response::validate_json_pointer(pointer)?;
                             ensure!(
-                                !pointer.is_empty() && !pointer.split('/').any(|part| part == "*"),
-                                "request fields require exact non-root pointers"
+                                !pointer.is_empty(),
+                                "request fields require non-root pointers"
                             );
                             match field {
                                 JsonField::Identity(reference) => reference.identity.validate()?,
                                 JsonField::Random(field) => field.random.validate()?,
+                                JsonField::Url(field) => {
+                                    ensure!(
+                                        (1..=16).contains(&field.url.len()),
+                                        "URL requires 1..16 query fields"
+                                    );
+                                    for (name, query) in &field.url {
+                                        crate::value_contract::url_query::validate_name(name)?;
+                                        match query {
+                                            UrlQueryField::UtcDateSegment {
+                                                utc_date_segment: segment,
+                                            } => {
+                                                ensure!(
+                                                    segment.index < 64
+                                                        && segment.separator.is_ascii_punctuation()
+                                                        && !matches!(
+                                                            segment.separator,
+                                                            '&' | '=' | '?' | '#'
+                                                        )
+                                                        && matches!(
+                                                            field.url.get(&segment.relative_to),
+                                                            Some(UrlQueryField::Time(_))
+                                                        ),
+                                                    "URL UTC date segment requires a bounded segment and a selected query time"
+                                                );
+                                            }
+                                            UrlQueryField::Time(time) => {
+                                                ensure!(
+                                                    matches!(
+                                                        time.format,
+                                                        RequestTimestampFormat::AmzDate
+                                                            | RequestTimestampFormat::Rfc3339
+                                                            | RequestTimestampFormat::Iso8601Naive
+                                                            | RequestTimestampFormat::SqlDatetime
+                                                    ),
+                                                    "URL query times require a textual timestamp format"
+                                                );
+                                                time.validate()?;
+                                            }
+                                            UrlQueryField::Random(random) => {
+                                                ensure!(
+                                                    random.random.max_length.is_none(),
+                                                    "URL query random values require a fixed encoded length"
+                                                );
+                                                random.random.validate()?;
+                                            }
+                                        }
+                                    }
+                                }
                                 JsonField::Time(time) => {
                                     time.validate()?;
                                 }
                                 JsonField::Jwt(field) => {
+                                    ensure!(
+                                        !pointer.split('/').any(|p| p == "*"),
+                                        "JWT request fields require exact pointers"
+                                    );
                                     ensure!(
                                         command.command == "SET",
                                         "signed JSON request fields currently select SET values"

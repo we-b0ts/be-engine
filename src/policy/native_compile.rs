@@ -604,14 +604,45 @@ fn validate_sequence(rule: &NativeRule, sequence: &RedisSequenceEffect) -> Resul
                         "sequence JSON requires 1..32 fields"
                     );
                     for (pointer, field) in fields {
-                        compiler::validate_pointer(pointer, false)?;
+                        compiler::validate_pointer(pointer, true)?;
                         proven(field, |field| match field {
                             SequenceField::Time(time) => validate_time(time),
                             SequenceField::Identity(reference) => validate_reference(reference),
-                            SequenceField::Random { format, length } => {
-                                crate::value_contract::generated::validate_bounded_random(
-                                    format, *length,
-                                )
+                            SequenceField::Random {
+                                format,
+                                length,
+                                max_length,
+                            } => crate::value_contract::generated::validate_bounded_random(
+                                format,
+                                *length,
+                                *max_length,
+                            ),
+                            SequenceField::Url { query } => {
+                                ensure!(
+                                    (1..=16).contains(&query.len()),
+                                    "URL requires 1..16 selected query fields"
+                                );
+                                for (name, field) in query {
+                                    crate::value_contract::url_query::validate_name(name)?;
+                                    proven(field, |field| {
+                                        match field {
+                                        SequenceUrlField::Time(time) => {
+                                            ensure!(matches!(time.format,TimestampFormat::AmzDate | TimestampFormat::Rfc3339 | TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime),"URL query times require a textual timestamp format");
+                                            validate_time(time)
+                                        },
+                                        SequenceUrlField::UtcDateSegment(segment) => {
+                                            ensure!(segment.index < 64 && segment.separator.is_ascii_punctuation()
+                                                && !matches!(segment.separator,'&'|'='|'?'|'#')
+                                                && matches!(query.get(&segment.relative_to).map(|v|&v.contract),Some(SequenceUrlField::Time(_))),
+                                                "URL UTC date segment requires a bounded segment and a selected query time");
+                                            Ok(())
+                                        }
+                                        SequenceUrlField::Random { format, length } =>
+                                            crate::value_contract::generated::validate_bounded_random(format, Some(*length), None),
+                                    }
+                                    })?;
+                                }
+                                Ok(())
                             }
                             SequenceField::Jwt {
                                 algorithm,

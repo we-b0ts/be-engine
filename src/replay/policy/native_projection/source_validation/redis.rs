@@ -3,6 +3,24 @@ use crate::policy::Database;
 use crate::replay::policy::request_contract::RedisRequestContext;
 use crate::replay::{ReplaySource, TargetKey};
 
+pub(super) fn register_callbacks(
+    state: &mut crate::replay::redis::RedisReplayState,
+    case: &NativeSourceCase<'_>,
+) -> Result<()> {
+    // JSONL completion order can place an ACK after its PUBLISH. Link the
+    // original finite callback evidence before validating request contracts.
+    for event in case.events.iter().filter(|event| {
+        event["event_type"] == "redis_pub_sub_push" && event["rpc_request"].is_object()
+    }) {
+        state.pubsub.register(
+            serde_json::from_value(event.clone())?,
+            ReplaySource::Case,
+            Some(case.id),
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn validate(
     runtime: &mut ReplayPolicyRuntime,
     state: &mut crate::replay::redis::RedisReplayState,

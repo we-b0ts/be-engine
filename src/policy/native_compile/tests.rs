@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+mod redis_sequence;
 use crate::policy::{Database, Endpoint, Resource};
 
 fn proven<T>(contract: T) -> Proven<T> {

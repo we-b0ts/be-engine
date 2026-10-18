@@ -9,9 +9,6 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
     fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
-        if exchange.rpc_push.is_some() {
-            return self.pubsub.matches(exchange, args).unwrap_or(false);
-        }
         if exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none()
             && let Some(case) = exchange.case_id.as_deref()
@@ -37,6 +34,20 @@ impl RedisReplayState {
                 Some(args),
             );
         }
+        let mut rpc_exchange;
+        let rpc_comparison;
+        let (exchange, args) = if exchange.rpc_push.is_some() {
+            let Some(comparison) = self.pubsub.comparison_args(exchange, args) else {
+                return false;
+            };
+            rpc_comparison = comparison;
+            rpc_exchange = exchange.clone();
+            rpc_exchange.args = rpc_comparison.source.clone();
+            rpc_exchange.rpc_push = None;
+            (&rpc_exchange, rpc_comparison.actual.as_slice())
+        } else {
+            (exchange, args)
+        };
         let normalized =
             if exchange.source == ReplaySource::Case && exchange.shared_rule_id.is_none() {
                 match self
@@ -324,6 +335,20 @@ impl RedisReplayState {
                     .into(),
             });
         }
+        let mut rpc_exchange;
+        let rpc_comparison;
+        let (comparison_exchange, comparison_args) = if exchange.rpc_push.is_some() {
+            rpc_comparison = self
+                .pubsub
+                .comparison_args(exchange, args)
+                .expect("selected RPC identities were validated");
+            rpc_exchange = exchange.clone();
+            rpc_exchange.args = rpc_comparison.source.clone();
+            rpc_exchange.rpc_push = None;
+            (&rpc_exchange, rpc_comparison.actual.as_slice())
+        } else {
+            (exchange, args)
+        };
         let normalized = (exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none())
         .then(|| {
@@ -338,24 +363,42 @@ impl RedisReplayState {
                     username: exchange.record.username.as_deref(),
                 },
                 &exchange.record.command,
-                &exchange.args,
-                args,
+                &comparison_exchange.args,
+                comparison_args,
             )
         })
         .flatten()
         .transpose()
         .expect("selected Redis arguments were validated");
-        let mut normalized_exchange = exchange.clone();
+        let mut normalized_exchange = comparison_exchange.clone();
         let arguments = if let Some(normalized) = &normalized {
             normalized_exchange.args = normalized.source.clone();
             normalized.actual.as_slice()
         } else {
-            args
+            comparison_args
         };
         let request_decision = self
             .request_preview(&normalized_exchange, &normalized_exchange.args, arguments)
             .transpose()
             .expect("selected Redis request contract was validated");
+        let response = if matches!(command, "SUBSCRIBE" | "UNSUBSCRIBE")
+            && exchange.args.first() != args.first()
+            && !response.starts_with(b"-")
+        {
+            crate::redis::translate_subscription_confirmation(
+                &crate::redis::RedisCommand {
+                    name: command.into(),
+                    args: exchange.args.clone(),
+                },
+                &response,
+                &args[0],
+            )
+            .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("subscription confirmation translation failed: {error:#}"),
+            })?
+        } else {
+            response
+        };
         let mut rule_ids = value::used_rules(&normalized_exchange, arguments, &self.value_rules);
         rule_ids.extend(self.lock_tokens.claim(&normalized_exchange, arguments));
         if !request_decision

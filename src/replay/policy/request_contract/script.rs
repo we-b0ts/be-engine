@@ -34,6 +34,12 @@ impl RedisRequestCommand {
     }
 
     pub(super) fn validate_arguments(&self, args: &[Vec<u8>]) -> Result<()> {
+        if matches!(self.command.as_str(), "SUBSCRIBE" | "UNSUBSCRIBE") {
+            ensure!(
+                args.len() == 1,
+                "subscription identity requires one explicit subject"
+            );
+        }
         let Some(_) = &self.script else {
             return Ok(());
         };
@@ -69,9 +75,10 @@ impl RedisRequestCommand {
                 return false;
             };
             return self.argument_values.values().all(|field| match field {
-                super::config::ArgumentRule::Json(fields) => {
-                    fields.json.keys().all(|p| json.pointer(p).is_some())
-                }
+                super::config::ArgumentRule::Json(fields) => fields
+                    .json
+                    .keys()
+                    .all(|p| crate::value_contract::json::pointer_observed(&json, p)),
                 _ => false,
             });
         }

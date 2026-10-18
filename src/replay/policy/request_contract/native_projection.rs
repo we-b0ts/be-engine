@@ -33,8 +33,17 @@ pub(in crate::replay::policy) fn sequence(
                             let field=match &field.contract {
                                 n::SequenceField::Time(value)=>config::JsonField::Time(time(&rule.id,&location,value)?),
                                 n::SequenceField::Identity(value)=>config::JsonField::Identity(key::IdentityField {identity:reference(value)}),
-                                n::SequenceField::Random {format, length}=>config::JsonField::Random(config::RandomField {
-                                    random: config::RandomContract { format: format.clone(), length: *length },
+                                n::SequenceField::Random {format, length, max_length}=>config::JsonField::Random(config::RandomField {
+                                    random: config::RandomContract { format: format.clone(), length: *length, max_length: *max_length },
+                                }),
+                                n::SequenceField::Url {query}=>config::JsonField::Url(config::UrlField {
+                                    url: query.iter().map(|(name, field)| Ok((name.clone(), match &field.contract {
+                                        n::SequenceUrlField::Time(value)=>config::UrlQueryField::Time(time(&rule.id,&format!("{location}:{name}"),value)?),
+                                        n::SequenceUrlField::UtcDateSegment(value)=>config::UrlQueryField::UtcDateSegment {utc_date_segment:value.clone()},
+                                        n::SequenceUrlField::Random {format,length}=>config::UrlQueryField::Random(config::RandomField {
+                                            random: config::RandomContract {format:format.clone(),length:Some(*length),max_length:None},
+                                        }),
+                                    }))).collect::<Result<_>>()?,
                                 }),
                                 n::SequenceField::Jwt {algorithm,signing_key,relative_to,nonces}=>{
                                     config::JsonField::Jwt(config::JwtField {jwt:config::JwtContract {

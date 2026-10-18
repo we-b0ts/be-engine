@@ -664,25 +664,35 @@ fn validate_source_commands(
                 config::ArgumentRule::Json(fields) => {
                     let json = crate::replay::json_order::parse(bytes)
                         .context("source JSON request incomplete")?;
-                    for (pointer, field) in &fields.json {
-                        let value = json
-                            .pointer(pointer)
-                            .context("source selected JSON field missing")?;
-                        match field {
-                            config::JsonField::Random(field) => {
-                                field.random.compare(value, value)?
-                            }
-                            config::JsonField::Identity(_) => {
-                                ensure!(
-                                    value.is_string(),
-                                    "source identity reference is not a string"
-                                );
-                            }
-                            config::JsonField::Time(field) => {
-                                super::time::timestamp(value, field)?;
-                            }
-                            config::JsonField::Jwt(_) => {
-                                ensure!(value.is_string(), "source JWT field must be a string");
+                    for (pattern, field) in &fields.json {
+                        let pointers = crate::replay::policy::response::select_json_pointers(
+                            pattern, &json, &json,
+                        );
+                        ensure!(
+                            !pointers.is_empty() && pointers.len() <= 16384,
+                            "source selected JSON fields missing or exceed bounds"
+                        );
+                        for pointer in &pointers {
+                            let value = json
+                                .pointer(pointer)
+                                .context("source selected JSON field missing")?;
+                            match field {
+                                config::JsonField::Url(field) => field.validate_source(value)?,
+                                config::JsonField::Random(field) => {
+                                    field.random.compare(value, value)?
+                                }
+                                config::JsonField::Identity(_) => {
+                                    ensure!(
+                                        value.is_string(),
+                                        "source identity reference is not a string"
+                                    );
+                                }
+                                config::JsonField::Time(field) => {
+                                    super::time::timestamp(value, field)?;
+                                }
+                                config::JsonField::Jwt(_) => {
+                                    ensure!(value.is_string(), "source JWT field must be a string");
+                                }
                             }
                         }
                     }

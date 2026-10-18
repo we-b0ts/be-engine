@@ -113,10 +113,28 @@ pub(crate) fn callback(payload: &[u8]) -> Result<Option<(Identity, Value)>> {
 }
 
 impl Request {
+    /// Application contracts select data only. Every other envelope member
+    /// remains exact except the two identities verified by the RPC adapter.
+    pub fn envelope_matches(&self, actual: &Self) -> bool {
+        let (Some(source), Some(target)) = (self.value.as_object(), actual.value.as_object())
+        else {
+            return false;
+        };
+        source.len() == target.len()
+            && source.iter().all(|(name, value)| {
+                matches!(name.as_str(), "data" | "host_id" | "callback")
+                    || target.get(name) == Some(value)
+            })
+    }
+
     pub fn matches(&self, actual: &Self) -> bool {
+        self.comparison_value(actual) == actual.value
+    }
+
+    pub fn comparison_value(&self, actual: &Self) -> Value {
         let mut expected = self.value.clone();
         expected["host_id"] = actual.value["host_id"].clone();
         expected["callback"][2] = actual.value["callback"][2].clone();
-        expected == actual.value
+        expected
     }
 }

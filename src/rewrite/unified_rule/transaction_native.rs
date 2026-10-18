@@ -316,3 +316,42 @@ fn independent_redis_nonce_with_key_capture_survives_public_plan_and_apply() {
     assert_eq!(applied.traffic_e2e_report["verified"], false);
     assert!(fixture.state().rule_replay_pending);
 }
+
+#[test]
+fn generated_queue_uuid_and_bounded_origin_survive_public_plan_apply_with_fresh_replay_pending() {
+    let fixture = Fixture::new();
+    write(
+        &fixture.proposal,
+        json!({"id":"queue-generated","match":{"api":"GET /api",
+        "resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"key":{"kind":"exact","value":"queue"}},
+        "effect":{"kind":"redis_sequence","commands":[{"operation":"LPUSH","arguments":{"1":{"kind":"json","fields":{
+            "/delivery_tag":{"kind":"random","format":"uuid","length":36},
+            "/origin":{"kind":"random","format":"string","max_length":255}
+        }}}}]},"proof":{"source":"src/producer.rs:publish","fact":"Source generates a fresh delivery UUID and process origin metadata while preserving the queued business body"}}),
+    );
+    let source = fixture
+        .state()
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("apis/api/case-1");
+    let event = json!({"event_type":"redis_exchange","timestamp":"2026-10-16T00:00:00Z",
+        "connection_id":uuid::Uuid::nil(),"sequence":1,"duration_ms":0,"target_host":"cache.test","target_port":6379,
+        "database":0,"resp_version":2,"command":"LPUSH","args":[raw_body(b"queue"),raw_body(json!({"delivery_tag":"01234567-89ab-4def-8123-456789abcdef","origin":"gen123@source","body":"exact"}).to_string().as_bytes())],
+        "response_kind":"integer","response":raw_body(b":1\r\n"),"outcome":"response","replay_safe":true}).to_string();
+    fs::write(source.join("dependencies.jsonl"), &event).unwrap();
+    fixture.confirm();
+    let planned = fixture.plan().unwrap();
+    assert_eq!(planned.traffic_e2e_report["status"], "planned_needs_replay");
+    assert_eq!(
+        planned.traffic_e2e_report["preflight"]["rules"]["queue-generated"],
+        1
+    );
+    let applied = apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
+    assert_eq!(applied.traffic_e2e_report["verified"], false);
+    assert!(fixture.state().rule_replay_pending);
+    assert_eq!(
+        fs::read_to_string(source.join("dependencies.jsonl")).unwrap(),
+        event
+    );
+}

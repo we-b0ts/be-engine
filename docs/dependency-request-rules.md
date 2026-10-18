@@ -1,5 +1,8 @@
 # Generated dependency request fields
 
+Current native queue, subscription, RPC and signed-URL contracts are documented
+in [Generated Redis request values](redis-generated-requests.md).
+
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
 > syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,

@@ -164,7 +164,14 @@ pub enum SequenceField {
     Time(NativeTime),
     Random {
         format: super::RandomEncoding,
-        length: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        length: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_length: Option<usize>,
+    },
+    Url {
+        #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
+        query: BTreeMap<String, Proven<SequenceUrlField>>,
     },
     Jwt {
         algorithm: SignatureAlgorithm,
@@ -174,6 +181,26 @@ pub enum SequenceField {
         nonces: Vec<Proven<NonceClaim>>,
     },
     Identity(IdentityReference),
+}
+
+/// Selected URL query values; the complete URL remainder stays exact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SequenceUrlField {
+    Time(NativeTime),
+    UtcDateSegment(UtcDateSegment),
+    Random {
+        format: super::RandomEncoding,
+        length: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UtcDateSegment {
+    pub separator: char,
+    pub index: usize,
+    pub relative_to: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

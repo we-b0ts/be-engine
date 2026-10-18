@@ -4,6 +4,10 @@ use crate::redis::{RedisSubscriptionKind, parse_pubsub_push, socketio_rpc as rpc
 use std::path::Path;
 use tokio::sync::mpsc;
 mod adapter;
+pub(super) struct RpcComparison {
+    pub source: Vec<Vec<u8>>,
+    pub actual: Vec<Vec<u8>>,
+}
 mod inventory;
 pub(in crate::replay) use inventory::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,

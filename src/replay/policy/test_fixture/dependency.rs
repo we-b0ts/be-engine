@@ -615,8 +615,40 @@ fn sequence(value: &request::RedisRequestSelector, fact: &str) -> Result<n::Redi
                                             n::SequenceField::Random {
                                                 format: field.random.format.clone(),
                                                 length: field.random.length,
+                                                max_length: field.random.max_length,
                                             }
                                         }
+                                        request::JsonField::Url(field) => n::SequenceField::Url {
+                                            query: field
+                                                .url
+                                                .iter()
+                                                .map(|(name, field)| {
+                                                    let field = match field {
+                                                        request::UrlQueryField::Time(time) => {
+                                                            n::SequenceUrlField::Time(request_time(
+                                                                time,
+                                                            ))
+                                                        }
+                                                        request::UrlQueryField::UtcDateSegment { utc_date_segment: segment } => n::SequenceUrlField::UtcDateSegment(segment.clone()),
+                                                        request::UrlQueryField::Random(random) => {
+                                                            n::SequenceUrlField::Random {
+                                                                format: random
+                                                                    .random
+                                                                    .format
+                                                                    .clone(),
+                                                                length: random
+                                                                    .random
+                                                                    .length
+                                                                    .context(
+                                                                        "URL query requires length",
+                                                                    )?,
+                                                            }
+                                                        }
+                                                    };
+                                                    Ok((name.clone(), proven(field, fact)))
+                                                })
+                                                .collect::<Result<_>>()?,
+                                        },
                                         request::JsonField::Jwt(field) => n::SequenceField::Jwt {
                                             algorithm: algorithm(field.jwt.algorithm),
                                             signing_key: startup(&field.jwt.signing_key_source),

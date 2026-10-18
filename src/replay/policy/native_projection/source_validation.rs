@@ -55,6 +55,7 @@ pub(crate) fn validate_native_source_dependencies(
     let mut identities = BTreeSet::new();
     for case in cases {
         input::validate(compiled, target_root, case, &mut checked)?;
+        redis::register_callbacks(&mut redis_state, case)?;
         for event in ordered(case.events)? {
             if event["session_setup"] != true
                 && let (Some(connection), Some(sequence)) = (
