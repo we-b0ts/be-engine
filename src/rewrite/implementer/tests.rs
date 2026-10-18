@@ -26,7 +26,6 @@ fn pool_state() -> RewriteState {
     state.parked_slices.insert(slice.api.clone(), slice);
     state.repository_analysis = Some(RepositoryAnalysisSnapshot {
         catalog_revision: "test-catalog".into(),
-        groups: BTreeMap::new(),
         api_groups: BTreeMap::from([
             ("/api".into(), "alpha".into()),
             ("/other".into(), "beta".into()),
@@ -55,12 +54,14 @@ fn setup() -> (tempfile::TempDir, RewriteState) {
     let state = pool_state();
     let directory = target.path().join(".traffic-e2e/local/repository-analysis");
     fs::create_dir_all(&directory).unwrap();
-    let groups = ["alpha", "beta"].into_iter().map(|id| (id, serde_json::json!({
-        "summary": id, "source_refs": ["app/routes.rs:1"], "shared_modules": [], "write_hotspots": []
-    }))).collect::<BTreeMap<_, _>>();
-    fs::write(directory.join("catalog.json"), serde_json::to_vec(&serde_json::json!({
-        "schema_version": 1, "groups": groups, "api_groups": state.repository_analysis.as_ref().unwrap().api_groups
-    })).unwrap()).unwrap();
+    fs::write(
+        directory.join("catalog.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "api_groups": state.repository_analysis.as_ref().unwrap().api_groups
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     RewriteStore::new(target.path())
         .unwrap()
         .save(&state)

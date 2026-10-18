@@ -156,7 +156,7 @@ fn implementation_action_has_one_stable_public_shape() {
         action,
     })
     .unwrap();
-    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(38)));
+    assert_eq!(status.get("schema_version"), Some(&serde_json::json!(39)));
     assert!(status.get("active_issue").is_none());
     assert!(status.get("next").is_none());
 }

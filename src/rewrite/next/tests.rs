@@ -157,11 +157,6 @@ async fn single_mode_finishes_group_after_failure_and_returns_before_other_group
     fs::write(
         catalog,
         serde_json::to_vec(&serde_json::json!({
-            "schema_version": 1,
-            "groups": {
-                "auth": {"summary": "Authentication", "source_refs": ["src/auth.rs"]},
-                "other": {"summary": "Other handlers", "source_refs": ["src/other.rs"]}
-            },
             "api_groups": {"/a": "auth", "/b": "auth", "/other": "other"}
         }))
         .unwrap(),

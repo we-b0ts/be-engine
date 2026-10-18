@@ -5,27 +5,14 @@ use std::path::Path;
 use super::*;
 use crate::rewrite::model::RewriteApiProgress;
 
-fn group() -> RepositoryAnalysisGroup {
-    RepositoryAnalysisGroup {
-        summary: "Shared authorization session state machine".into(),
-        source_refs: vec!["app/api/auth.py:10".into()],
-        shared_modules: vec!["auth/session".into()],
-        write_hotspots: vec!["src/auth_session.rs".into()],
-    }
-}
-
 fn document() -> model::CatalogDocument {
-    model::CatalogDocument {
-        schema_version: SCHEMA_VERSION,
-        ..Default::default()
-    }
+    model::CatalogDocument::default()
 }
 
 fn submission(routes: &[&str]) -> AnalysisSubmission {
     AnalysisSubmission {
         schema_version: SCHEMA_VERSION,
         catalog_revision: "absent".into(),
-        groups: BTreeMap::from([("auth".into(), group())]),
         assignments: routes
             .iter()
             .map(|route| ((*route).into(), "auth".into()))
@@ -104,6 +91,58 @@ fn explicit_grouping_is_required_even_for_identified_static_routes() {
 }
 
 #[test]
+fn analysis_outputs_only_new_routes_and_a_versioned_catalog_path() {
+    let root = source_root();
+    let mut document = document();
+    for index in 0..115 {
+        let id = format!("existing-{index}");
+        document.api_groups.insert(format!("/api/old/{index}"), id);
+    }
+    catalog::publish(root.path(), "absent", &document).unwrap();
+    let before = fs::read(catalog::path(root.path())).unwrap();
+    let state = state(&["GET /api/old/0", "GET /api/new"]);
+    save(root.path(), &state);
+    let context = context(root.path());
+    let output = serde_json::to_value(&context).unwrap();
+    assert_eq!(output["pending_apis"], serde_json::json!(["/api/new"]));
+    assert_eq!(output["catalog_revision"], catalog::digest(&before));
+    assert_eq!(
+        output["catalog_path"],
+        context.catalog_path.to_str().unwrap()
+    );
+    assert!(output.get("catalog").is_none());
+    assert!(output.get("scope").is_none());
+    assert!(serde_json::to_vec(&output).unwrap().len() < 1500);
+    let action = required_action(root.path(), &state).unwrap().unwrap();
+    let action_output = serde_json::to_value(action).unwrap();
+    assert_eq!(action_output["details"], output);
+    assert!(serde_json::to_vec(&action_output).unwrap().len() < 3000);
+    assert_eq!(fs::read(&context.catalog_path).unwrap(), before);
+}
+
+#[test]
+fn classification_catalog_contains_only_api_groups() {
+    let submission: AnalysisSubmission = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "catalog_revision": "absent",
+        "assignments": {"/api/login": "auth"}
+    }))
+    .unwrap();
+    let mut document = document();
+    apply_submission(&mut document, &["/api/login".into()], &submission).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    catalog::publish(root.path(), "absent", &document).unwrap();
+    let output: serde_json::Value =
+        serde_json::from_slice(&fs::read(catalog::path(root.path())).unwrap()).unwrap();
+    assert_eq!(
+        output,
+        serde_json::json!({"api_groups": {"/api/login": "auth"}})
+    );
+    let loaded = catalog::load(root.path()).unwrap();
+    assert_eq!(loaded.document.api_groups["/api/login"], "auth");
+}
+
+#[test]
 fn legacy_workflows_and_unconfirmed_patterns_do_not_enter_grouping() {
     let root = tempfile::tempdir().unwrap();
     let mut state = state(&["GET /api/static"]);
@@ -131,45 +170,28 @@ fn incremental_assignments_must_cover_exactly_the_new_routes() {
     for routes in [&["/api/a"][..], &["/api/a", "/api/b", "/api/c"][..]] {
         let mut catalog = document();
         assert!(apply_submission(&mut catalog, &pending, &submission(routes)).is_err());
-        assert!(catalog.groups.is_empty());
         assert!(catalog.api_groups.is_empty());
     }
     let mut catalog = document();
     apply_submission(&mut catalog, &pending, &submission(&["/api/a", "/api/b"])).unwrap();
     assert_eq!(catalog.api_groups.len(), 2);
-    assert_eq!(catalog.groups.len(), 1);
 }
 
 #[test]
 fn existing_groups_are_reused_without_redefinition_or_assignment_changes() {
     let mut catalog = document();
     apply_submission(&mut catalog, &["/api/a".into()], &submission(&["/api/a"])).unwrap();
-    let mut next = submission(&["/api/b"]);
-    assert!(apply_submission(&mut catalog, &["/api/b".into()], &next).is_err());
-    next.groups.clear();
+    let next = submission(&["/api/b"]);
     apply_submission(&mut catalog, &["/api/b".into()], &next).unwrap();
     assert_eq!(catalog.api_groups["/api/b"], "auth");
-    assert_eq!(catalog.groups["auth"], group());
     assert!(apply_submission(&mut catalog, &["/api/b".into()], &next).is_err());
 }
 
 #[test]
-fn analysis_does_not_accept_unknown_groups_or_missing_source_evidence() {
-    let pending = vec!["/api/a".into()];
-    let mut unknown = submission(&["/api/a"]);
-    unknown.groups.clear();
-    assert!(apply_submission(&mut document(), &pending, &unknown).is_err());
-    let mut no_evidence = submission(&["/api/a"]);
-    no_evidence
-        .groups
-        .get_mut("auth")
-        .unwrap()
-        .source_refs
-        .clear();
-    assert!(apply_submission(&mut document(), &pending, &no_evidence).is_err());
-    let mut orphan = submission(&["/api/a"]);
-    orphan.groups.insert("unreferenced".into(), group());
-    assert!(apply_submission(&mut document(), &pending, &orphan).is_err());
+fn analysis_rejects_empty_group_names() {
+    let mut unnamed = submission(&["/api/a"]);
+    unnamed.assignments.insert("/api/a".into(), String::new());
+    assert!(apply_submission(&mut document(), &["/api/a".into()], &unnamed).is_err());
 }
 
 #[test]
@@ -184,9 +206,8 @@ fn strict_documents_reject_duplicate_routes_unknown_fields_and_versions() {
     )
     .unwrap();
     assert!(catalog::read_submission::<AnalysisSubmission>(&file).is_err());
-    let mut invalid = document();
-    invalid.schema_version += 1;
-    assert!(catalog::publish(root.path(), "absent", &invalid).is_err());
+    fs::write(&file, r#"{"api_groups":{},"unknown":true}"#).unwrap();
+    assert!(catalog::read_submission::<model::CatalogDocument>(&file).is_err());
     assert!(!catalog::path(root.path()).exists());
 }
 
@@ -220,10 +241,12 @@ fn group_catalog_survives_new_workflows_and_only_new_canonical_routes_need_analy
     save(root.path(), &next);
     let next_context = context(root.path());
     assert_eq!(next_context.pending_apis, ["/api/b"]);
-    assert_eq!(next_context.catalog.api_groups["/api/a"], "auth");
+    assert_eq!(
+        catalog::load(root.path()).unwrap().document.api_groups["/api/a"],
+        "auth"
+    );
     let mut second = submission(&["/api/b"]);
-    second.catalog_revision = next_context.catalog.catalog_revision.clone();
-    second.groups.clear();
+    second.catalog_revision = next_context.catalog_revision.clone();
     apply_repository_analysis(options(root.path(), &next_context, &second)).unwrap();
     assert!(context(root.path()).pending_apis.is_empty());
 }
@@ -242,7 +265,9 @@ fn apply_is_idempotent_after_catalog_publication_before_state_adoption() {
     assert_eq!(bytes, fs::read(catalog::path(root.path())).unwrap());
     assert!(context(root.path()).pending_apis.is_empty());
     let mut changed = submission(&["/api/a"]);
-    changed.groups.get_mut("auth").unwrap().summary = "Different grouping decision".into();
+    changed
+        .assignments
+        .insert("/api/a".into(), "different".into());
     let changed_request = options(root.path(), &before, &changed);
     assert!(apply_repository_analysis(changed_request).is_err());
     let mut another_workflow = original;
@@ -301,7 +326,6 @@ fn pure_dispatch_barrier_requires_global_coverage_of_the_adopted_scope() {
     assert!(!is_complete(&state));
     state.repository_analysis = Some(RepositoryAnalysisSnapshot {
         catalog_revision: "test".into(),
-        groups: BTreeMap::from([("auth".into(), group())]),
         api_groups: BTreeMap::from([("/api/a".into(), "auth".into())]),
     });
     assert!(!is_complete(&state));

@@ -65,8 +65,7 @@ pub use implementer::{
 };
 pub use repository_analysis::{
     RepositoryAnalysisApplyOptions, RepositoryAnalysisContext, RepositoryAnalysisContextOptions,
-    RepositoryAnalysisGroup, RepositoryAnalysisSnapshot, apply_repository_analysis,
-    repository_analysis_context,
+    RepositoryAnalysisSnapshot, apply_repository_analysis, repository_analysis_context,
 };
 mod jwt_rule;
 mod purpose;

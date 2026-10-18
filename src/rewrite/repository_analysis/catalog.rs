@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,9 +5,7 @@ use anyhow::{Context, Result, ensure};
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
-use super::model::{
-    CatalogDocument, RepositoryAnalysisGroup, RepositoryAnalysisSnapshot, SCHEMA_VERSION,
-};
+use super::model::{CatalogDocument, RepositoryAnalysisSnapshot};
 
 pub(super) const CATALOG_PATH: &str = ".traffic-e2e/local/repository-analysis/catalog.json";
 const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
@@ -22,7 +19,6 @@ impl LoadedCatalog {
     pub fn snapshot(&self) -> RepositoryAnalysisSnapshot {
         RepositoryAnalysisSnapshot {
             catalog_revision: self.revision.clone(),
-            groups: self.document.groups.clone(),
             api_groups: self.document.api_groups.clone(),
         }
     }
@@ -43,10 +39,7 @@ pub(super) fn load(root: &Path) -> Result<LoadedCatalog> {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(LoadedCatalog {
-                document: CatalogDocument {
-                    schema_version: SCHEMA_VERSION,
-                    ..Default::default()
-                },
+                document: CatalogDocument::default(),
                 revision: "absent".into(),
             });
         }
@@ -113,34 +106,6 @@ pub(super) fn group_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn group(group: &RepositoryAnalysisGroup) -> Result<()> {
-    line("group summary", &group.summary)?;
-    ensure!(
-        !group.source_refs.is_empty(),
-        "group analysis requires source_refs"
-    );
-    for (name, values) in [
-        ("source reference", &group.source_refs),
-        ("shared module", &group.shared_modules),
-        ("write hotspot", &group.write_hotspots),
-    ] {
-        let mut unique = BTreeSet::new();
-        for value in values {
-            line(name, value)?;
-            ensure!(unique.insert(value), "duplicate {name}");
-        }
-    }
-    Ok(())
-}
-
-fn line(label: &str, value: &str) -> Result<()> {
-    ensure!(
-        value == value.trim() && !value.is_empty() && value.len() <= 4096,
-        "{label} must be a nonempty trimmed value of at most 4096 bytes"
-    );
-    super::super::validate_single_line(label, value)
-}
-
 pub(super) fn route(route: &str) -> Result<()> {
     let parsed = route.parse::<crate::recording_api::RecordingApiScope>()?;
     ensure!(
@@ -152,21 +117,9 @@ pub(super) fn route(route: &str) -> Result<()> {
 }
 
 fn validate(document: &CatalogDocument) -> Result<()> {
-    ensure!(
-        document.schema_version == SCHEMA_VERSION,
-        "unsupported repository analysis catalog schema version {}",
-        document.schema_version
-    );
-    for (id, metadata) in &document.groups {
-        group_id(id)?;
-        group(metadata)?;
-    }
     for (api, id) in &document.api_groups {
         route(api)?;
-        ensure!(
-            document.groups.contains_key(id),
-            "repository analysis route {api} references unknown group {id}"
-        );
+        group_id(id)?;
     }
     Ok(())
 }
