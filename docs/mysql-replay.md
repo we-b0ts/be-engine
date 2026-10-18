@@ -224,11 +224,20 @@ known inactive start, complete ordinary reads, no writes, locks, explicit BEGIN,
 unsupported statements or failures, and a confirmed inactive finish. Successful
 PREPARE does not execute SQL. An initial sequence gap before the first read is
 allowed only with consistent inactive status on both sides, because Recorder
-can omit driver setup such as SET NAMES. Recorder retains semantic COM_PING
+can omit driver setup such as SET NAMES. Within a Case, those same confirmed
+inactive boundaries also separate completed read spans. Sequence continuity is
+required inside each active transaction; a gap between completed spans starts
+a new span without inferring or authorizing the missing commands. This permits
+omitting a Case's read-only initialization even when an older recording omitted
+maintenance between its completed sessions. Recorded writes, locking reads,
+explicit transactions, failed/incomplete exchanges, identity changes and
+inconsistent or active boundary status still keep setup required. Global
+evidence retains its stricter post-read sequence continuity.
+Recorder retains semantic COM_PING
 exchanges as continuity evidence, although they are not required business
 dependencies. A complete successful, zero-effect PING with unchanged transaction
-status preserves that proof. Gaps after reads start remain strict; older
-captures which omitted such PINGs require a fresh recording for this proof.
+status preserves that proof, including inside an active read transaction.
+Unknown gaps inside active transactions remain strict.
 The check is scoped to one immutable dependency file and does not infer the
 contents of a gap or join evidence across cases/Global. SQL effect checks share
 the load-local cache used for rollback classification.

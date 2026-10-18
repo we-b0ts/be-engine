@@ -709,7 +709,9 @@ explicit repository-wide audit.
   transaction inference out of the loader. SELECT expressions do not require per-shape
   registration. Its `autocommit` child checks setup omission over the loaded
   read-only span, including retained zero-effect COM_PING continuity witnesses.
-  Unknown post-read sequence gaps remain strict. `replay/mysql/cleanup_selection` gives a required transaction
+  Case-local completed read spans may restart across consistent inactive
+  boundaries; active-transaction gaps and Global post-read gaps remain strict.
+  `replay/mysql/cleanup_selection` gives a required transaction
   end precedence over identical optional cleanup only after its immediately
   preceding recorded exchange has been consumed. Recorder's MySQL semantic
   tracker owns before-command status continuity and final resultset status

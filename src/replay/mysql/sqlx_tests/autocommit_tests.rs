@@ -201,3 +201,59 @@ async fn recorded_ping_continuity_allows_multiple_normal_driver_read_sessions() 
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn case_local_inactive_gaps_allow_cold_setup_omission_across_seven_read_sessions() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let base = cold_records();
+        let mut records = vec![base[0].clone()];
+        for index in 0..7 {
+            for (offset, template) in base[1..].iter().enumerate() {
+                let mut record = template.clone();
+                record["query_sequence"] = json!(5 + 4 * index + offset);
+                records.push(record);
+            }
+        }
+        for policy in [false, true] {
+            let (temp, addr, runtime, task) = fixture(&records, policy).await;
+            let capture = temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
+            let original = std::fs::read(&capture).unwrap();
+            let mut client = connect(addr, &capture.parent().unwrap().join(".replay/ca.pem")).await;
+            {
+                let state = runtime.state.lock().await;
+                assert_eq!(state.allowed_unused_autocommit().len(), 1);
+                assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), 7);
+            }
+            for _ in 0..7 {
+                client.ping().await.unwrap();
+                let row = sqlx::query("SELECT id FROM users WHERE id=?")
+                    .bind(1_i32)
+                    .fetch_one(&mut client)
+                    .await
+                    .unwrap();
+                assert_eq!(row.get::<i32, _>("id"), 1);
+            }
+            let state = runtime.state.lock().await;
+            assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+            assert_eq!(state.allowed_unused_autocommit().len(), 1);
+            assert_eq!(state.allowed_unused_rollbacks().len(), 14);
+            assert_eq!(state.mysql.exchanges.len(), 22);
+            assert_eq!(state.mysql.events.matched_query_count, 7);
+            assert!(state.mysql.events.unmatched_queries.is_empty());
+            let report = serde_json::to_value(state.snapshot_report()).unwrap();
+            assert_eq!(
+                report["allowed_unused_mysql_autocommit_exchanges"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(std::fs::read(&capture).unwrap(), original);
+            task.abort();
+        }
+    })
+    .await
+    .unwrap();
+}

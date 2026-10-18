@@ -131,7 +131,7 @@ pub(in crate::replay) fn classify(
                     .insert((connection, next), ReadPrefix { identity, status });
             }
         }
-        autocommit::classify(&exchanges, &mut read_sql, &mut optional);
+        autocommit::classify(&exchanges, source, &mut read_sql, &mut optional);
     }
     optional
 }
