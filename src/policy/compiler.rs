@@ -433,7 +433,7 @@ fn validate_match(rule: &Rule) -> Result<()> {
                 .context("SQL selector cannot be tokenized completely")?;
             ensure!(
                 !tokens.is_empty()
-                    && tokens.len() <= 16_384
+                    && tokens.len() <= crate::mysql::sql::bounds::MAX_TOKENS
                     && !tokens.iter().any(|token| token.is(";"))
                     && crate::mysql::access::analyze_sql(sql).statements_complete,
                 "SQL selector requires one bounded complete statement without a statement separator"

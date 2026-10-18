@@ -1,8 +1,8 @@
 //! Shared statement capability bounds, independent of cache admission.
 use super::Token;
 
-pub(crate) const MAX_STATEMENT_BYTES: usize = 1024 * 1024;
-pub(crate) const MAX_TOKENS: usize = 16_384;
+pub(crate) const MAX_STATEMENT_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_TOKENS: usize = 32_768;
 
 pub(crate) fn statement(sql: &str) -> Option<Vec<Token>> {
     tokens(sql).filter(|tokens| valid(tokens))

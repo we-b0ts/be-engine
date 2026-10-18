@@ -1,8 +1,9 @@
-//! AUTOCOMMIT omission is derived from a complete read-only case-local span.
+//! AUTOCOMMIT omission is derived from read-only spans on one loaded connection.
 use super::*;
 
 pub(super) fn classify<'a>(
     exchanges: &BTreeMap<u64, (usize, &'a RecordedMysqlExchange)>,
+    source: ReplaySource,
     read_sql: &mut HashMap<&'a str, read::Effect>,
     optional: &mut BTreeMap<usize, OptionalSessionExchange>,
 ) {
@@ -24,12 +25,14 @@ pub(super) fn classify<'a>(
                 return;
             }
             if last_sequence.checked_add(1) != Some(sequence) {
-                // Recorder omits successful SET NAMES and similar setup. An
-                // initial gap is permitted only before the first read, with
-                // inactive status on both sides. Never bridge a transaction.
-                if saw_read || before & 0x2009 != 0 {
+                // A Case may contain separate completed read sessions on one
+                // pooled connection. Consistent inactive status on both sides
+                // starts a new span without inferring the missing commands.
+                // Global evidence retains its stricter post-read continuity.
+                if before & 0x2009 != 0 || saw_read && source != ReplaySource::Case {
                     return;
                 }
+                read_span = false;
             }
         } else if before & 0x2009 != 0 {
             return;
@@ -66,7 +69,7 @@ pub(super) fn classify<'a>(
             // PREPARE executes no SQL; only its later EXECUTE can prove reads.
         } else if successful_ping(current) {
             // Captured PING proves continuity without executing SQL or changing
-            // transaction state. Unknown sequence gaps above remain strict.
+            // transaction state, including inside an active read transaction.
         } else if successful_end(current, &["commit", "rollback"])
             && (read_span || before & 0x2009 == 0)
         {

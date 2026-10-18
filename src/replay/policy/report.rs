@@ -19,6 +19,9 @@ pub(in crate::replay) struct ReplayPolicyReport {
         String,
         std::collections::BTreeSet<RecordedDependencyRuleSource>,
     >,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(in crate::replay) recorded_redis_rule_applicability:
+        std::collections::BTreeMap<String, std::collections::BTreeSet<RecordedRedisRuleSource>>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub(in crate::replay) unavailable_value_slots: std::collections::BTreeMap<String, usize>,
 }
@@ -27,6 +30,13 @@ pub(in crate::replay) struct ReplayPolicyReport {
 pub(in crate::replay) struct RecordedDependencyRuleSource {
     pub(in crate::replay) case_id: String,
     pub(in crate::replay) index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::replay) struct RecordedRedisRuleSource {
+    pub(in crate::replay) case_id: String,
+    pub(in crate::replay) connection_id: String,
+    pub(in crate::replay) sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

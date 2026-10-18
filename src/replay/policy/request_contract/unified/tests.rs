@@ -245,3 +245,31 @@ fn source_predicates_and_auth_identity_cannot_be_chosen_by_target() {
             .is_ok()
     );
 }
+
+#[test]
+fn redis_value_rule_applicability_retains_only_selected_source_identities() {
+    let runtime = runtime("SET");
+    let event = json!({"event_type":"redis_exchange","connection_id":"value-lane","sequence":4,
+        "target_host":"cache.test","target_port":6379,"database":0,"command":"SET","replay_safe":true,
+        "request_started_at":"1970-01-01T00:16:40Z","timestamp":"1970-01-01T00:16:40Z",
+        "args":[{"encoding":"utf8","data":"session:1","truncated":false},{"encoding":"utf8","data":source(),"truncated":false}]});
+    for (field, value) in [
+        ("database", json!(1)),
+        ("target_port", json!(6380)),
+        ("global_dependency_reason", json!("process-owned")),
+    ] {
+        let mut unrelated = event.clone();
+        unrelated[field] = value;
+        runtime
+            .observe_source("case", unrelated.to_string().as_bytes())
+            .unwrap();
+        assert!(runtime.recorded_redis_rule_applicability().is_empty());
+    }
+    runtime
+        .observe_source("case", event.to_string().as_bytes())
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(runtime.recorded_redis_rule_applicability()).unwrap(),
+        json!({"session-value":[{"case_id":"case","connection_id":"value-lane","sequence":4}]})
+    );
+}

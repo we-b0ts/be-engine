@@ -703,6 +703,9 @@ impl ReplayPolicyRuntime {
             request_contract_candidates: self.request_contracts.candidates(),
             unused_applicable_dependency_rule_ids,
             recorded_mysql_rule_applicability: self.recorded_mysql_rule_applicability.clone(),
+            recorded_redis_rule_applicability: self
+                .request_contracts
+                .recorded_redis_rule_applicability(),
             unavailable_value_slots: self.request_contracts.unavailable_value_slots(),
         }
     }

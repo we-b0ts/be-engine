@@ -4,17 +4,33 @@ use anyhow::{Result, ensure};
 use serde_json::Value;
 
 pub(in crate::replay) fn capture(bytes: &[u8], pointer: Option<&str>) -> Result<String> {
+    capture_with_limit(bytes, pointer, 1024 * 1024)
+}
+
+pub(super) fn capture_with_limit(
+    bytes: &[u8],
+    pointer: Option<&str>,
+    max_bytes: usize,
+) -> Result<String> {
     match pointer {
         None => {
             ensure!(!std::str::from_utf8(bytes)?.trim_start().starts_with(['{','[']),"structured JSON captures require an explicit JSON pointer");
             Ok(std::str::from_utf8(bytes)?.into())
         }
-        Some(pointer) => crate::replay::json_order::parse(bytes).and_then(|value|value.pointer(pointer).and_then(Value::as_str).map(str::to_owned)).ok_or_else(||anyhow::anyhow!("dynamic JSON capture requires complete JSON with unique members and a string at the selected pointer")),
+        Some(pointer) => crate::json_value::parse_with_limit(bytes, max_bytes).and_then(|value|value.pointer(pointer).and_then(Value::as_str).map(str::to_owned)).ok_or_else(||anyhow::anyhow!("dynamic JSON capture requires complete JSON with unique members and a string at the selected pointer")),
     }
 }
 
 pub(super) fn contains_identity(bytes: &[u8], pairs: &[IdentityPair]) -> bool {
-    if bytes.len() > 1024 * 1024 || pairs.is_empty() {
+    contains_identity_with_limit(bytes, pairs, 1024 * 1024)
+}
+
+pub(super) fn contains_identity_with_limit(
+    bytes: &[u8],
+    pairs: &[IdentityPair],
+    max_bytes: usize,
+) -> bool {
+    if bytes.len() > max_bytes || pairs.is_empty() {
         return false;
     }
     if std::str::from_utf8(bytes)
@@ -22,12 +38,21 @@ pub(super) fn contains_identity(bytes: &[u8], pairs: &[IdentityPair]) -> bool {
     {
         return true;
     }
-    crate::replay::json_order::parse(bytes)
+    crate::json_value::parse_with_limit(bytes, max_bytes)
         .is_some_and(|mut value| normalize_json(&mut value, pairs, false, 0).unwrap_or(false))
 }
 
 pub(super) fn normalize(bytes: &[u8], pairs: &[IdentityPair], actual: bool) -> Result<Vec<u8>> {
-    if pairs.is_empty() || bytes.len() > 1024 * 1024 {
+    normalize_with_limit(bytes, pairs, actual, 1024 * 1024)
+}
+
+pub(super) fn normalize_with_limit(
+    bytes: &[u8],
+    pairs: &[IdentityPair],
+    actual: bool,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    if pairs.is_empty() || bytes.len() > max_bytes {
         return Ok(bytes.to_vec());
     }
     let Ok(text) = std::str::from_utf8(bytes) else {
@@ -43,7 +68,7 @@ pub(super) fn normalize(bytes: &[u8], pairs: &[IdentityPair], actual: bool) -> R
             Ok(bytes.to_vec())
         };
     }
-    if let Some(mut json) = crate::replay::json_order::parse(bytes)
+    if let Some(mut json) = crate::json_value::parse_with_limit(bytes, max_bytes)
         && matches!(json, Value::Object(_) | Value::Array(_))
     {
         let changed = normalize_json(&mut json, pairs, actual, 0)?;

@@ -532,11 +532,7 @@ impl RequestContracts {
                 crate::replay::contract_value::Delivery::prepare(&payload, &selected, clocks)?;
             ids.extend(validation.validation().evaluated.iter().cloned());
         }
-        self.state
-            .lock()
-            .expect("request contracts")
-            .applicable
-            .extend(ids);
+        self.observe_source_applicability(case, event, ids);
         Ok(())
     }
 

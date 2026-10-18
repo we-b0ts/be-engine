@@ -73,7 +73,7 @@ fn literal_statement(bytes: usize) -> String {
 }
 
 #[test]
-fn sql_value_statements_accept_1_mib_but_templates_retain_64_kib() {
+fn sql_value_statements_accept_8_mib_but_templates_retain_64_kib() {
     let template = SqlValueTemplate::new(
         "UPDATE entries SET payload=?, updated_at=? WHERE id=?",
         &[],
@@ -81,14 +81,20 @@ fn sql_value_statements_accept_1_mib_but_templates_retain_64_kib() {
         None,
     )
     .unwrap();
-    for bytes in [64 * 1024 + 1, 256 * 1024, 267_027, 1024 * 1024] {
+    for bytes in [
+        64 * 1024 + 1,
+        267_027,
+        1024 * 1024,
+        1_314_248,
+        8 * 1024 * 1024,
+    ] {
         let sql = literal_statement(bytes);
         assert_eq!(sql.len(), bytes);
         assert!(bounded_statement_tokens(&sql).is_some());
         assert!(template.matches(&sql));
         assert!(bounded_tokens(&sql).is_none());
     }
-    let oversized = literal_statement(1024 * 1024 + 1);
+    let oversized = literal_statement(8 * 1024 * 1024 + 1);
     assert!(bounded_statement_tokens(&oversized).is_none());
     assert!(!template.matches(&oversized));
 
@@ -101,9 +107,10 @@ fn sql_value_statements_accept_1_mib_but_templates_retain_64_kib() {
 
 #[test]
 fn larger_sql_value_statements_retain_token_and_statement_safety_bounds() {
-    let sql = format!("SELECT {}", vec!["?"; 8192].join(","));
-    assert_eq!(bounded_statement_tokens(&sql).unwrap().len(), 16_384);
-    assert_eq!(bounded_tokens(&sql).unwrap().len(), 16_384);
+    let sql = format!("SELECT {}", vec!["?"; 16_384].join(","));
+    assert_eq!(bounded_statement_tokens(&sql).unwrap().len(), 32_768);
+    assert_eq!(bounded_tokens(&sql).unwrap().len(), 32_768);
+    assert!(bounded_statement_tokens(&format!("{sql},")).is_none());
     assert!(bounded_statement_tokens(&format!("{sql},?")).is_none());
 
     let large = literal_statement(300_000);

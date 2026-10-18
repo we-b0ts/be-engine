@@ -130,6 +130,29 @@ fn negative_parse_results_are_cached_but_oversized_statements_are_not_retained()
 }
 
 #[test]
+fn large_attachment_statements_match_without_exceeding_cache_retention() {
+    let selection = selection(&[(
+        "attachment",
+        "UPDATE attachments SET payload=?, status='READY' WHERE id=7",
+    )]);
+    let prefix = "UPDATE attachments SET payload='";
+    let suffix = "', status='READY' WHERE id=7";
+    for bytes in [1_314_248, 8 * 1024 * 1024] {
+        let sql = format!(
+            "{prefix}{}{suffix}",
+            "x".repeat(bytes - prefix.len() - suffix.len())
+        );
+        assert_eq!(sql.len(), bytes);
+        assert!(selection.matches("attachment", &record(&sql, None), &mut None));
+        let cache = selection.statements.lock().unwrap();
+        assert!(cache.bytes <= MAX_BYTES);
+        if bytes == 8 * 1024 * 1024 {
+            assert!(cache.get(&sql).is_none());
+        }
+    }
+}
+
+#[test]
 fn statement_cache_evicts_by_entry_and_retained_byte_limits() {
     let selection = MysqlSelection::default();
     for id in 0..=MAX_ENTRIES {

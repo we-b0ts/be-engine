@@ -30,7 +30,7 @@ fn large_sql_parses_without_cache_admission_and_keeps_literal_bytes_exact() {
         cache
             .get(&format!(
                 "SELECT id FROM tasks WHERE payload='{}'",
-                "x".repeat(1024 * 1024)
+                "x".repeat(8 * 1024 * 1024)
             ))
             .bind("COM_QUERY", None)
             .is_none()
@@ -46,17 +46,17 @@ fn list(count: usize, reverse: bool) -> String {
 }
 
 #[test]
-fn semantic_predicates_accept_16384_tokens_and_recheck_bound_values() {
-    let source = format!("SELECT id FROM tasks WHERE id IN ({})", list(8188, false));
-    assert_eq!(tokens(&source).unwrap().len(), 16_384);
+fn semantic_predicates_accept_32768_tokens_and_recheck_bound_values() {
+    let source = format!("SELECT id FROM tasks WHERE id IN ({})", list(16_380, false));
+    assert_eq!(tokens(&source).unwrap().len(), 32_768);
     let mut cache = SqlCache::default();
     let recorded = cache.get(&source).bind("COM_QUERY", None).unwrap();
     let sql = format!(
         "SELECT id FROM tasks WHERE id IN ({})",
-        vec!["?"; 8188].join(",")
+        vec!["?"; 16_380].join(",")
     );
     let compiled = cache.get(&sql);
-    let mut params = (0..8188)
+    let mut params = (0..16_380)
         .rev()
         .map(|v| mysql_json("integer", json!(v)))
         .collect::<Vec<_>>();
@@ -67,7 +67,7 @@ fn semantic_predicates_accept_16384_tokens_and_recheck_bound_values() {
             .matches(&recorded, false)
     );
     assert!(compiled.metadata().unwrap().matches(&recorded, true));
-    params[0] = mysql_json("integer", json!(8188));
+    params[0] = mysql_json("integer", json!(16_380));
     assert!(
         !compiled
             .bind("COM_STMT_EXECUTE", Some(&params))
@@ -75,30 +75,36 @@ fn semantic_predicates_accept_16384_tokens_and_recheck_bound_values() {
             .matches(&recorded, false)
     );
 
-    let oversized = format!("SELECT id FROM tasks WHERE id IN ({})", list(8189, false));
+    let oversized = format!("SELECT id FROM tasks WHERE id IN ({})", list(16_381, false));
     assert!(cache.get(&oversized).bind("COM_QUERY", None).is_none());
 }
 
 #[test]
-fn full_query_list_matching_uses_the_same_16384_token_budget() {
+fn full_query_list_matching_uses_the_same_32768_token_budget() {
     let sql = |count, reverse| {
         format!(
             "SELECT id FROM tasks WHERE id IN ({}) UNION ALL SELECT id FROM tasks WHERE id=9999",
             list(count, reverse)
         )
     };
-    let source = sql(6000, false);
-    assert!(tokens(&source).unwrap().len() > 8192);
+    let source = sql(12_000, false);
+    assert!(tokens(&source).unwrap().len() > 16_384);
     let mut cache = SqlCache::default();
     let compiled = cache.get(&source);
     assert!(compiled.query_in.is_some());
     let recorded = compiled.bind("COM_QUERY", None).unwrap();
-    let target = cache.get(&sql(6000, true)).bind("COM_QUERY", None).unwrap();
+    let target = cache
+        .get(&sql(12_000, true))
+        .bind("COM_QUERY", None)
+        .unwrap();
     assert!(target.matches(&recorded, false));
-    let changed = cache.get(&sql(5999, true)).bind("COM_QUERY", None).unwrap();
+    let changed = cache
+        .get(&sql(11_999, true))
+        .bind("COM_QUERY", None)
+        .unwrap();
     assert!(!changed.matches(&recorded, false));
 
-    let oversized = sql(8188, false);
-    assert!(tokens(&oversized).unwrap().len() > 16_384);
+    let oversized = sql(16_380, false);
+    assert!(tokens(&oversized).unwrap().len() > 32_768);
     assert!(cache.get(&oversized).bind("COM_QUERY", None).is_none());
 }

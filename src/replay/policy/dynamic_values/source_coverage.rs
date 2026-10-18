@@ -25,10 +25,17 @@ impl DynamicValues {
                 .and_then(|rules| rules.get(&rule.id))
                 .cloned()
                 .unwrap_or_default();
-            if !payloads
-                .iter()
-                .any(|bytes| strings::contains_identity(bytes, &pairs))
-            {
+            if !payloads.iter().any(|bytes| {
+                if context.protocol == Protocol::Mysql {
+                    strings::contains_identity_with_limit(
+                        bytes,
+                        &pairs,
+                        crate::mysql::sql::bounds::MAX_STATEMENT_BYTES,
+                    )
+                } else {
+                    strings::contains_identity(bytes, &pairs)
+                }
+            }) {
                 continue;
             }
             for (index, resource) in guard.references.iter().enumerate() {

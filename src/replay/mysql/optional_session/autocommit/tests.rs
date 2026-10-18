@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::{Value, json};
 
+mod case_boundaries;
+
 fn control(seq: u64, sql: &str, before: u16, after: u16) -> Value {
     json!({"event_type":"mysql_exchange", "connection_id":Uuid::nil(),
         "query_sequence":seq, "target_host":"db.internal", "target_port":3306,
@@ -24,13 +26,20 @@ fn records() -> Vec<Value> {
 }
 
 fn optional(records: &[Value]) -> BTreeMap<usize, OptionalSessionExchange> {
+    optional_in(records, ReplaySource::Global)
+}
+
+fn optional_in(
+    records: &[Value],
+    source: ReplaySource,
+) -> BTreeMap<usize, OptionalSessionExchange> {
     super::super::classify(
         &records
             .iter()
             .cloned()
             .map(|record| serde_json::from_value(record).unwrap())
             .collect::<Vec<_>>(),
-        ReplaySource::Global,
+        source,
         &mut super::super::ReadPrefixes::default(),
     )
 }

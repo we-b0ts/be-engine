@@ -1,6 +1,6 @@
 # MySQL driver interoperability
 
-SQL value matching supports one statement up to 1 MiB and 16,384 tokens,
+SQL value matching supports one statement up to 8 MiB and 32,768 tokens,
 including recorded inline image/text values versus prepared parameters plus a
 bound identity. Configured templates retain their separate 64 KiB bound.
 Large statements are parsed without entering the SQL cache; cache retention
@@ -224,11 +224,20 @@ known inactive start, complete ordinary reads, no writes, locks, explicit BEGIN,
 unsupported statements or failures, and a confirmed inactive finish. Successful
 PREPARE does not execute SQL. An initial sequence gap before the first read is
 allowed only with consistent inactive status on both sides, because Recorder
-can omit driver setup such as SET NAMES. Recorder retains semantic COM_PING
+can omit driver setup such as SET NAMES. Within a Case, those same confirmed
+inactive boundaries also separate completed read spans. Sequence continuity is
+required inside each active transaction; a gap between completed spans starts
+a new span without inferring or authorizing the missing commands. This permits
+omitting a Case's read-only initialization even when an older recording omitted
+maintenance between its completed sessions. Recorded writes, locking reads,
+explicit transactions, failed/incomplete exchanges, identity changes and
+inconsistent or active boundary status still keep setup required. Global
+evidence retains its stricter post-read sequence continuity.
+Recorder retains semantic COM_PING
 exchanges as continuity evidence, although they are not required business
 dependencies. A complete successful, zero-effect PING with unchanged transaction
-status preserves that proof. Gaps after reads start remain strict; older
-captures which omitted such PINGs require a fresh recording for this proof.
+status preserves that proof, including inside an active read transaction.
+Unknown gaps inside active transactions remain strict.
 The check is scoped to one immutable dependency file and does not infer the
 contents of a gap or join evidence across cases/Global. SQL effect checks share
 the load-local cache used for rollback classification.
@@ -423,10 +432,10 @@ actual value equivalence, without inferring dynamic bindings.
 
 The Replay-local FIFO cache retains compiled SQL templates, negative parsing
 results, parameter-independent metadata shapes and normalized constant queries.
-It holds at most 256 SQL strings and 1 MiB of original SQL text (the associated
-compiled representations consume additional bounded memory). A single SQL is
-limited to 64 KiB and 16384 tokens for this compatibility path, with bounded
-parenthesis/parser depth. Flat AND/OR groups are traversed iteratively; their
+It holds at most 256 SQL strings within a 16 MiB retained-memory budget, including
+compiled representations. Statements up to 8 MiB and 32,768 tokens are supported;
+statements over the separate 64 KiB cache-entry limit parse without retention.
+Parenthesis/parser depth remains bounded. Flat AND/OR groups are traversed iteratively; their
 term count does not consume the predicate nesting budget. PREPARE uses a linear
 path when every branch has the same parameter template, including common fixed
 literals. Each recorded branch must satisfy that template and the branch counts

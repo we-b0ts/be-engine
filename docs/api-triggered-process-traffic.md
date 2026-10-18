@@ -23,6 +23,15 @@ ambiguous origin, or a request referencing the captured identity retains strict
 lane ordering. No new recording or additional rule is needed when the existing
 recording and configured API-origin rule already contain complete proof.
 
+Redis request-rule applicability follows the same ownership overlay. Replay
+retains each matching Source command's Case, connection and wire sequence. A
+rule loses its Case obligation only when all of those occurrences are proven
+unused background work and the Target never used the rule. Other Case
+occurrences, actual rule use and incomplete occurrence inventories remain
+required. Removing the process-owned rule restores the original obligation.
+Historical reports without this occurrence inventory require fresh Replay
+against the existing recording; they cannot be waived by rule name alone.
+
 ## Contract and first supported selectors
 
 An ordinary process-owned rule remains unchanged. A Redis rule can additionally

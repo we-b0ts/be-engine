@@ -295,11 +295,14 @@ fn strings(values: &[crate::mysql::sql::Token]) -> Vec<String> {
     }
     for value in values {
         if let crate::mysql::sql::Token::Bytes(bytes) = value
-            && bytes.len() <= 1024 * 1024
+            && bytes.len() <= crate::mysql::sql::bounds::MAX_STATEMENT_BYTES
             && let Ok(text) = std::str::from_utf8(bytes)
         {
             out.push(text.into());
-            if let Some(value) = crate::replay::json_order::parse(bytes) {
+            if let Some(value) = crate::json_value::parse_with_limit(
+                bytes,
+                crate::mysql::sql::bounds::MAX_STATEMENT_BYTES,
+            ) {
                 visit(&value, &mut out, 0);
             }
         }

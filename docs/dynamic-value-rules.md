@@ -18,6 +18,11 @@ with `kind: dynamic_value`; there is no separate top-level `dynamic_values`
 section. Its case-local binding is shared internally across protocol adapters.
 It does not bind inbound API requests or final API responses.
 
+MySQL identity normalization accepts one SQL statement up to 8 MiB and 32,768
+tokens. Inline SQL string/JSON values and prepared string parameters use the
+8 MiB value budget, including Source reference coverage and binding audit.
+Configured SQL templates retain their separate 64 KiB bound.
+
 ```yaml
 version: 3
 expected_response: assertions_only

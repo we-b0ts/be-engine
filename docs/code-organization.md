@@ -291,8 +291,10 @@ is unclear.
   recomputing method evidence. `replay/report/background_overlay/original_evidence`
   owns reversible overlay restoration shared by reclassification and ownership
   planners, so interrupted applies can resume from original unused witnesses.
-  `background_overlay/policy` reconciles MySQL rule applicability using exact
-  case/exchange occurrence witnesses retained by the matcher. Only unused
+  `request_contract/source_applicability` observes native request selectors and
+  retains complete Redis rule inventories by Case, connection and wire sequence.
+  `background_overlay/policy` reconciles MySQL and Redis rule applicability using
+  exact occurrence witnesses retained by their policy owners. Only unused
   occurrences proven process-owned lose their Case obligation; actual rule use,
   other Case occurrences and legacy reports without proof remain strict.
   `e2e_run/reclassify/session` selects exact shared-session method projections and
@@ -672,8 +674,10 @@ Before an MR, set `CODE_ORG_BASE` to the target branch. Use `--all` only for an
 explicit repository-wide audit.
 
 - `mysql/sql.rs` owns conservative SQL token/value identity shared by replay and
-  narrow MySQL ownership selectors. Its `projection` child resolves bounded
-  single-table SELECT fields, aliases and row-selection clauses without owning
+  narrow MySQL ownership selectors. Its `bounds` child owns statement byte/token
+  capability limits, shared by value policies, identity normalization and
+  statement parsing; cache admission remains a separate responsibility. Its
+  `projection` child resolves bounded single-table SELECT fields, aliases and row-selection clauses without owning
   recorded evidence. `replay/mysql/projection.rs` validates evidence and maps
   result columns and cells onto the target projection; the matcher retains
   identity, policy and exchange-consumption decisions.
@@ -705,7 +709,9 @@ explicit repository-wide audit.
   transaction inference out of the loader. SELECT expressions do not require per-shape
   registration. Its `autocommit` child checks setup omission over the loaded
   read-only span, including retained zero-effect COM_PING continuity witnesses.
-  Unknown post-read sequence gaps remain strict. `replay/mysql/cleanup_selection` gives a required transaction
+  Case-local completed read spans may restart across consistent inactive
+  boundaries; active-transaction gaps and Global post-read gaps remain strict.
+  `replay/mysql/cleanup_selection` gives a required transaction
   end precedence over identical optional cleanup only after its immediately
   preceding recorded exchange has been consumed. Recorder's MySQL semantic
   tracker owns before-command status continuity and final resultset status
