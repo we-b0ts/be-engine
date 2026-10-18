@@ -1,6 +1,6 @@
 //! Source-only checks against the original preserved-key and session fixtures.
 use super::*;
-use crate::policy::native::{IdentityCapture, PathIdentityField, PathTimestampMode, PolicyRule};
+use crate::policy::native::{IdentityCapture, PolicyRule};
 use sha2::{Digest, Sha256};
 
 #[test]
@@ -28,12 +28,12 @@ fn recorded_skip_source_contracts_validate_preserved_keys_and_independent_sessio
         let IdentityCapture::HttpPath { segment } = &mut effect.capture else {
             unreachable!()
         };
-        let PathIdentityField::Timestamp { mode, .. } =
-            &mut segment.fields.get_mut("created_at").unwrap().contract
-        else {
-            unreachable!()
-        };
-        *mode = PathTimestampMode::PreserveOrRequestWindow;
+        let field = &mut segment.fields.get_mut("created_at").unwrap().contract;
+        let mut declaration = serde_json::to_value(&*field).unwrap();
+        let fields = declaration.as_object_mut().unwrap();
+        fields.remove("mode");
+        fields.remove("timezone");
+        *field = serde_json::from_value(declaration).unwrap();
     }
     assert_eq!(document.rules.len(), 2);
     let mut cases = Vec::new();

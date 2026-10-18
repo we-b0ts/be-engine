@@ -209,22 +209,24 @@ decoded slashes, backslashes and control characters are rejected.
 - `random` currently requires `format: hex` and an explicit length (1–1024);
   both values must have that shape. Shape alone does not prove randomness.
 - `timestamp` currently requires the strict 14-digit UTC format
-  `%Y%m%d%H%M%S`; UTC is implicit and omitted from generated rules. Both values
-  must be within the shared inclusive ±5-second window of their own dependency
-  HTTP request start.
+  `%Y%m%d%H%M%S`; `timezone` defaults to UTC. When the **entire decoded path
+  identity** is byte-identical, a valid historical timestamp is accepted by
+  default. Existing keys reused by overwrite requests need no additional mode.
+  All template fields still require their declared shapes and valid dates.
+
+  When any identity component differs, both timestamps must be within the shared
+  inclusive ±5-second window of their own dependency HTTP request start.
   This is independent of the inbound API clock. For older recordings, a
   missing request start can be estimated from that exchange's completion
   timestamp minus integral nonnegative `duration_ms`, as with header rules.
-  Missing clocks, invalid dates and out-of-window values fail even when the
-  source and target literals are equal. There is no configurable tolerance.
+  Changed keys with missing clocks or out-of-window timestamps fail. Invalid
+  calendar dates always fail. There is no configurable tolerance.
 
-  With explicit Source proof that overwrite requests reuse an existing object
-  key, `mode: preserve_or_request_window` also permits a valid timestamp outside
-  that window when the **entire decoded path identity** is byte-identical.
-  Changing a nonce or any other identity component still requires both clocks
-  to satisfy the ordinary request window. Invalid calendar dates always fail.
-  The default `mode: request_window` retains the strict behavior above. Do not
-  relabel an old calendar date as random hex to bypass its contract.
+  Explicit `mode: preserve_or_request_window` remains accepted and has the same
+  behavior as omitting it. `mode: request_window` explicitly requires the window
+  even for identical identities. Canonical contracts retain the effective mode,
+  so changing it changes the execution fingerprint. Do not relabel an old
+  calendar date as random hex to bypass its contract.
 
 Capture changes only the declared path identity. Uploaded bodies retain
 ordinary strict comparison, including text that contains the filename.

@@ -11,7 +11,7 @@ fn rule() -> DynamicValueRule {
         "capture":{"protocol":"http","target":{"host":"s3.example.test","port":80},"method":"PUT","path":"/bucket/attachments/*",
             "path_segment":{"index":2,"template":"{nonce}_{created_at}_{user_id}_{attachment_id}","fields":{
                 "nonce":{"kind":"random","format":"hex","length":12},
-                "created_at":{"kind":"timestamp","format":"%Y%m%d%H%M%S","timezone":"UTC"},
+                "created_at":{"kind":"timestamp","format":"%Y%m%d%H%M%S"},
                 "user_id":{"kind":"exact"},"attachment_id":{"kind":"exact"}}}},
         "source_evidence":"Storage:key uses UUID hex[:12], UTC now, owner and inserted attachment ID"
     })).unwrap()
@@ -222,27 +222,25 @@ fn path_timestamps_use_independent_clocks_and_inclusive_five_second_window() {
 }
 
 #[test]
-fn preserved_path_timestamps_require_the_entire_original_identity_to_stay_equal() {
-    let mut rule = rule();
-    let DynamicValueCapture::Http {
-        path_segment: Some(capture),
-        ..
-    } = &mut rule.capture
-    else {
-        unreachable!()
-    };
+fn default_path_timestamps_preserve_only_the_entire_unchanged_identity() {
+    let rule = rule();
+    let capture = segment(&rule);
     let source = "aabbccddeeff_20200101000000_7_100";
     let times = RequestTimes {
         source: Some(clock("2026-10-10T00:00:00Z")),
         target: Some(clock("2026-10-18T00:00:00Z")),
     };
-    assert!(capture.compare(source, source, times).is_err());
-    let PathSegmentField::Timestamp { mode, .. } = capture.fields.get_mut("created_at").unwrap()
-    else {
-        unreachable!()
-    };
-    *mode = crate::policy::native::PathTimestampMode::PreserveOrRequestWindow;
     capture.compare(source, source, times).unwrap();
+    capture
+        .compare(
+            source,
+            source,
+            RequestTimes {
+                source: None,
+                target: None,
+            },
+        )
+        .unwrap();
     for changed in [
         "112233445566_20200101000000_7_100",
         "aabbccddeeff_20200101000000_8_100",
@@ -251,8 +249,13 @@ fn preserved_path_timestamps_require_the_entire_original_identity_to_stay_equal(
     ] {
         assert!(capture.compare(source, changed, times).is_err());
     }
-    let invalid = "aabbccddeeff_20200230000000_7_100";
-    assert!(capture.compare(invalid, invalid, times).is_err());
+    for invalid in [
+        "aabbccddeeff_20200230000000_7_100",
+        "aabbccddeeff_20200101000060_7_100",
+        "not-hex-xxxx_20200101000000_7_100",
+    ] {
+        assert!(capture.compare(invalid, invalid, times).is_err());
+    }
     capture
         .compare(
             "aabbccddeeff_20261010000000_7_100",
@@ -260,6 +263,32 @@ fn preserved_path_timestamps_require_the_entire_original_identity_to_stay_equal(
             times,
         )
         .unwrap();
+}
+
+#[test]
+fn explicit_request_window_still_checks_equal_path_timestamps() {
+    let mut declaration = serde_json::to_value(rule()).unwrap();
+    declaration["capture"]["path_segment"]["fields"]["created_at"]["mode"] =
+        json!("request_window");
+    let rule: DynamicValueRule = serde_json::from_value(declaration).unwrap();
+    let capture = segment(&rule);
+    let source = "aabbccddeeff_20200101000000_7_100";
+    assert!(
+        capture
+            .compare(
+                source,
+                source,
+                RequestTimes {
+                    source: Some(clock("2026-10-10T00:00:00Z")),
+                    target: Some(clock("2026-10-18T00:00:00Z")),
+                },
+            )
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::from_value::<DynamicValueRule>(serde_json::to_value(&rule).unwrap()).unwrap(),
+        rule
+    );
 }
 
 #[test]

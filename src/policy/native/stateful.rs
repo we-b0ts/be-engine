@@ -95,8 +95,9 @@ pub enum PathIdentityField {
     },
     Timestamp {
         format: String,
+        #[serde(default = "utc_timezone")]
         timezone: String,
-        #[serde(default, skip_serializing_if = "PathTimestampMode::is_request_window")]
+        #[serde(default)]
         mode: PathTimestampMode,
     },
 }
@@ -104,15 +105,13 @@ pub enum PathIdentityField {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PathTimestampMode {
-    #[default]
     RequestWindow,
+    #[default]
     PreserveOrRequestWindow,
 }
 
-impl PathTimestampMode {
-    pub(crate) fn is_request_window(&self) -> bool {
-        *self == Self::RequestWindow
-    }
+fn utc_timezone() -> String {
+    "UTC".into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

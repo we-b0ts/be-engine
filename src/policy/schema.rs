@@ -480,6 +480,16 @@ pub struct TimeContract {
 impl TimeContract {
     pub fn offset(&self) -> Result<Option<chrono::FixedOffset>> {
         let Some(value) = &self.utc_offset else {
+            // A shared civil offset cancels in a relative comparison and in
+            // delivery translation. UTC is only a neutral arithmetic origin.
+            if self.relation == TimeRelation::PreserveOffset
+                && matches!(
+                    self.format,
+                    TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime
+                )
+            {
+                return Ok(chrono::FixedOffset::east_opt(0));
+            }
             return Ok(None);
         };
         ensure!(

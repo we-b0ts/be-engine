@@ -17,7 +17,7 @@ rules:
   effect:
     kind: mysql_values
     values:
-      1: {{relative_time: sql_datetime, anchor: {anchor}, utc_offset: '+00:00'}}
+      1: {{relative_time: sql_datetime, anchor: {anchor}}}
       2:
         kind: json
         fields:

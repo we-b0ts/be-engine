@@ -70,10 +70,8 @@ fn microseconds_keep_integer_precision_and_fixed_inclusive_tolerance() {
     );
 }
 #[test]
-fn naive_iso_requires_declared_offset_and_preserves_relative_time() {
+fn naive_iso_preserves_relative_time_without_a_declared_offset() {
     let mut rule = rule("iso8601_naive");
-    assert!(rule.validate().is_err());
-    rule.utc_offset = Some("+08:00".into());
     rule.validate().unwrap();
     assert!(
         compare(
@@ -103,6 +101,16 @@ fn naive_iso_requires_declared_offset_and_preserves_relative_time() {
             "{bad}"
         );
     }
+    rule.utc_offset = Some("+08:00".into());
+    assert!(
+        compare(
+            &json!("1970-01-01T08:16:40.123456"),
+            &json!("1970-01-01T08:33:20.123456"),
+            &rule,
+            clocks()
+        )
+        .is_ok()
+    );
     for bad in ["UTC", "+8:00", "+25:00", "+14:01"] {
         rule.utc_offset = Some(bad.into());
         assert!(rule.validate().is_err());

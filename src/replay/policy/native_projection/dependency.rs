@@ -131,7 +131,6 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                         value.contract.time.anchor == TimeAnchor::ApiRequestStart
                             && value.contract.time.relation == TimeRelation::PreserveOffset
                             && value.contract.time.format == TimestampFormat::SqlDatetime
-                            && value.contract.time.utc_offset.is_some()
                             && value.contract.time.clock_group.is_none(),
                         "MySQL delivery time preserves case-relative offsets"
                     );

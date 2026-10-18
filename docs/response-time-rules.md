@@ -38,7 +38,8 @@ offset, tolerance or current-clock fallback is added to the engine. A wrong
 TTL or an unchanged absolute expiry on a later request fails when its offset
 differs by more than five seconds. Missing anchors, invalid formats, overflow,
 null/boolean/container values and mismatched JSON types fail. RFC3339 requires
-a timezone and compares instants, so equivalent timezone representations work.
+a timezone in the value and compares instants, so equivalent timezone
+representations work without an additional timezone configuration.
 Numeric formats support JSON numbers and numeric strings of the same type.
 Supported formats are `unix_seconds`, `unix_milliseconds`, `rfc3339` and
 `amz_date`. Wildcard pointers check every selected array item; other fields,

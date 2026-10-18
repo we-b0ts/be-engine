@@ -23,7 +23,8 @@ fn source_http_session_requires_all_query_fields_and_header_clocks() {
 
 #[test]
 fn source_sql_session_requires_each_physical_response_time_column_and_complete_rows() {
-    let time = json!({"format":"sql_datetime","relation":"preserve_offset","anchor":"case.request_start","utc_offset":"+00:00"});
+    let time =
+        json!({"format":"sql_datetime","relation":"preserve_offset","anchor":"case.request_start"});
     let column =
         json!({"contract":{"time":time,"preserve_values":["0001-01-01 00:00:00"]},"proof":proof()});
     let policy = compile(vec![
