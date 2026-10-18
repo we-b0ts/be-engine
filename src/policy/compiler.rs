@@ -42,10 +42,18 @@ pub struct PolicyFingerprints {
 }
 
 pub fn parse_policy(yaml: &str) -> Result<TrafficPolicy> {
-    let document: TrafficPolicy =
-        serde_yaml::from_str(yaml).context("invalid traffic-policy/v1 document")?;
+    let document = decode_policy(yaml)?;
     compile_policy(&document)?;
     Ok(document)
+}
+
+/// Parse and validate once when the caller needs the compiled policy.
+pub fn parse_and_compile_policy(yaml: &str) -> Result<CompiledPolicy> {
+    compile_policy(&decode_policy(yaml)?)
+}
+
+fn decode_policy(yaml: &str) -> Result<TrafficPolicy> {
+    serde_yaml::from_str(yaml).context("invalid traffic-policy/v1 document")
 }
 
 pub fn compile_policy(document: &TrafficPolicy) -> Result<CompiledPolicy> {

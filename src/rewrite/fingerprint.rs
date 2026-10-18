@@ -46,8 +46,7 @@ pub(super) fn replay_identity(target_root: &Path) -> Result<String> {
     let policy = policy_file(target_root)?;
     match fs::read(&policy) {
         Ok(bytes) => {
-            let policy = crate::policy::parse_policy(std::str::from_utf8(&bytes)?)?;
-            let compiled = crate::policy::compile_policy(&policy)?;
+            let compiled = crate::policy::parse_and_compile_policy(std::str::from_utf8(&bytes)?)?;
             hash.update(b"runtime-policy-effects-v1");
             hash.update(compiled.fingerprints.runtime.as_bytes());
         }
@@ -277,11 +276,9 @@ pub(super) fn source_traffic_policy_revision(target_root: &Path) -> Result<Strin
     let path = policy_file(target_root)?;
     let source = fs::read_to_string(&path)
         .with_context(|| format!("failed to read traffic policy {}", path.display()))?;
-    Ok(
-        crate::policy::compile_policy(&crate::policy::parse_policy(&source)?)?
-            .fingerprints
-            .capture,
-    )
+    Ok(crate::policy::parse_and_compile_policy(&source)?
+        .fingerprints
+        .capture)
 }
 
 fn config_file_revision(target_root: &Path, relative: &str, label: &str) -> Result<String> {
