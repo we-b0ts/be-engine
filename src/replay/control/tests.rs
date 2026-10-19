@@ -1,5 +1,7 @@
 use super::*;
 
+mod streaming;
+
 #[tokio::test(start_paused = true)]
 async fn replay_end_keeps_case_active_for_default_post_response_window() {
     let temp = tempfile::tempdir().unwrap();

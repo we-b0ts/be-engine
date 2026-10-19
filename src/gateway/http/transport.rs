@@ -1,17 +1,16 @@
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
 use hyper::body::Incoming;
 use hyper::header::{CONTENT_TYPE, HOST, HeaderName, HeaderValue};
 use hyper::http::uri::{Authority, PathAndQuery, Scheme};
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
-use std::convert::Infallible;
 
 use crate::ProxyClient;
 use crate::config::HttpGatewayFixedResponseConfig;
 use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 
-pub(crate) type GatewayBody = BoxBody<Bytes, Infallible>;
+pub(crate) type GatewayBody = UnsyncBoxBody<Bytes, anyhow::Error>;
 
 pub(crate) async fn send_upstream(
     client: &ProxyClient,
@@ -110,7 +109,9 @@ pub(crate) fn build_fixed_response(
 }
 
 fn boxed_body(bytes: Bytes) -> GatewayBody {
-    Full::new(bytes).boxed()
+    Full::new(bytes)
+        .map_err(|never| match never {})
+        .boxed_unsync()
 }
 
 #[cfg(test)]

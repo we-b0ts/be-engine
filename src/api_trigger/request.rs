@@ -23,8 +23,8 @@ pub(super) fn read(path: &Path, pointers: &BTreeSet<String>) -> Result<Option<Re
         std::fs::metadata(path)?.len() <= 128 * 1024 * 1024,
         "API trigger request evidence exceeds limit"
     );
-    let value: Value =
-        serde_json::from_slice(&std::fs::read(path)?).context("invalid request artifact")?;
+    let value: Value = serde_json::from_slice(&crate::request_headers::load_request_file(path)?)
+        .context("invalid request artifact")?;
     let (Some(uri), Some(method)) = (value["uri"].as_str(), value["method"].as_str()) else {
         // Non-HTTP primary cases cannot prove an HTTP API origin or independent victim.
         return Ok(None);

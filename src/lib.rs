@@ -30,6 +30,7 @@ mod e2e_run;
 mod engine_binary;
 mod gateway;
 mod http;
+mod interaction;
 mod internal_runtime;
 mod json_value;
 mod kafka;
@@ -164,6 +165,10 @@ pub use e2e_run::{
     recover_e2e_run, resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence,
     run_e2e_api, run_e2e_round, startup_mount_exists, status_e2e_run, upgrade_source_snapshot,
 };
+pub use http::stream::{ResponseChunk as HttpResponseChunk, ResponseStream as HttpResponseStream};
+pub use interaction::policy::{
+    CompletionRule, CorrelationRule, EventCompletion, InteractionPolicy, StreamTerminal,
+};
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
 pub use platform::{
@@ -296,6 +301,7 @@ struct AppStateInner {
     client: ProxyClient,
     upstream_tls_config: Arc<ClientConfig>,
     active_cases: ActiveCaseRegistry,
+    interactions: gateway::http::interaction::Sessions,
     dependency_connections: DependencyConnections,
     kubectl_proxy_manager: KubectlProxyManager,
     recording_lifecycle: RecordingLifecycle,
@@ -406,6 +412,7 @@ impl AppState {
                 client,
                 upstream_tls_config,
                 active_cases: ActiveCaseRegistry::new(case_matching_ready),
+                interactions: gateway::http::interaction::Sessions::default(),
                 dependency_connections: DependencyConnections::default(),
                 kubectl_proxy_manager: KubectlProxyManager::default(),
                 recording_lifecycle,

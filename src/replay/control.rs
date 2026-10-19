@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use super::*;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
+mod interaction;
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READY_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -568,7 +569,7 @@ pub(super) async fn end_case(
     let Some(case_id) = request.case_id.as_deref() else {
         return serde_json::json!({"ok": false, "error": "end requires case_id"});
     };
-    let post_response_window = {
+    let (post_response_window, case_dir) = {
         let state = state.lock().await;
         if !state.cases.contains_key(case_id) {
             return serde_json::json!({
@@ -582,9 +583,17 @@ pub(super) async fn end_case(
                 "error": format!("replay case {case_id} is not active")
             });
         }
-        state.case_dependency_post_response_window
+        (
+            state.case_dependency_post_response_window,
+            state.cases[case_id].dir.clone(),
+        )
     };
-    if !post_response_window.is_zero() {
+    let interaction =
+        match interaction::drain(&state, case_id, &case_dir, post_response_window).await {
+            Ok(interaction) => interaction,
+            Err(error) => return serde_json::json!({"ok": false, "error": format!("{error:#}")}),
+        };
+    if !interaction && !post_response_window.is_zero() {
         tokio::time::sleep(post_response_window).await;
     }
 

@@ -28,6 +28,7 @@ fn http_event(authority: &str, method: &str, uri: &str) -> RecorderEvent {
         response_status: Some(200),
         response_headers: Some(Default::default()),
         response_body: None,
+        response_stream: None,
         discovered_tcp_targets: Vec::new(),
         duration_ms: 10,
         error: None,

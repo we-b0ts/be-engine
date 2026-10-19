@@ -3,6 +3,7 @@ use super::{
     plan::{ApiTriggeredRedisSelector, plan_api_triggered_redis},
 };
 mod mysql;
+mod private_requests;
 mod redis_extended;
 mod same_resource;
 mod transactions;

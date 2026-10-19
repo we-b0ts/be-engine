@@ -43,7 +43,8 @@ without it retain an empty method set; readers never scan or rewrite old cases
 to populate it. It does not change Replay selection or verification gates.
 
 Build the normal engine binary. The gateway SDK uses published
-`brz-http-gateway = 0.1.6`; Redis uses published `brz-redis`.
+`brz-http-gateway = 0.2.11` with `redis-recording` enabled; Redis uses published
+`brz-redis = 0.0.16`. No sibling gateway checkout is required.
 
 ```bash
 cargo build --locked --release --bin traffic-e2e
@@ -141,15 +142,23 @@ With `/api/teams/*/skills`, requests for different team IDs share the
 `apis/api-teams-wildcard-skills/` group and its case limit. Previously published
 recordings retain their existing groups.
 
-`--no-interception` is for local adapter tests only. HTTP request and response
-bodies are buffered. When streaming recording is explicitly enabled, primary
-`text/event-stream` responses use a bounded 50 ms observation after receiving
-Source headers, then Recorder ends the upstream
-response and finalizes the case. The adapter forwards this finite response and
-releases admission after finalization. See [bounded SSE support](http-sse.md)
-for the recording/replay contract. HTTP upgrade and indefinite streaming sessions
-are not supported. The existing body capture limit bounds request buffering;
-oversized input is rejected before Source dispatch.
+`--no-interception` is for local adapter tests only. Ordinary HTTP bodies remain
+buffered. With `recorder.http_gateway.record_streaming: true`, SSE, NDJSON
+and Socket.IO EIO4 sessions are forwarded incrementally. Raw binary response
+streams additionally require `recorder.http_gateway.record_raw_streaming: true`.
+Socket.IO supports polling, direct WebSocket and polling upgrade. One connection
+owns one case and one recording slot across authentication and multiple events.
+The default business idle is 10 seconds and the activity limit is 10 minutes.
+Normal closure keeps Source running and uses the existing dependency window:
+100 ms of additional admission, then a bounded drain of accepted exchanges
+(default 5000 ms). Closing and finalization together have a 60-second hard limit.
+Protocol heartbeats do not reset business idle. An unfinished request times out
+explicitly and an activity-limit capture is incomplete.
+
+See [streaming and Socket.IO](interaction-recording.md) for completion profiles,
+input timing, dependency streaming and background-work policy. The former SSE 50 ms
+contract is retired; its recordings require re-recording. Request body limits
+still apply before Source dispatch.
 
 ## Direct standby and run identity
 
@@ -213,9 +222,12 @@ Loss of registration stops admission and initiates graceful shutdown.
 
 For an incoming request the adapter validates the reserved scope/token headers
 and checks token ownership with Redis GET. It removes both headers before
-Recorder/Source dispatch. A local semaphore keeps one request active even after
-the 60-second Redis slot expires. Busy returns 404 without deleting the active
-token. Missing/stale admission also returns 404 without Source dispatch.
+Recorder/Source dispatch. A local semaphore retains exclusive admission, and
+token-checked renewal keeps the Redis reservation alive through dispatch and
+case cleanup. Lost ownership closes admission and fails an active interaction.
+Ordinary HTTP busy admission returns 404 without deleting the active token;
+new streaming connections return 503. Missing/stale ordinary HTTP admission
+also returns 404 without Source dispatch.
 
 After the full Recorder response, including its case/dependency finalization,
 the adapter calls `RedisAdmissionProvider::complete` to compare the token and
@@ -225,8 +237,9 @@ Errors/disconnects after dispatch return 502/504 and retain the reservation for
 TTL recovery. A downstream disconnect does not cancel the upstream operation.
 The core Recorder owns no Redis logic or gateway identity.
 
-Shutdown withdraws the address, stops new adapter connections, drains an active
-request, finalizes Recorder, stops Source, then removes interception rules.
+Shutdown withdraws the address, stops new adapter connections, stops Source,
+drains active requests and disconnect dependencies, finalizes Recorder, then
+removes interception rules.
 Evidence lives under
 `<data-root>/.traffic-e2e/local/artifacts/recordings/<run-id>/`; authorization and
 cookie request headers are encrypted using a persistent key in

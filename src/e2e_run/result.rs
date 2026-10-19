@@ -451,6 +451,9 @@ fn representative_status(
 }
 
 pub(crate) fn response_pointer_scope(pointer: &str) -> &'static str {
+    if pointer == "$interaction" || pointer.starts_with("$interaction/") {
+        return "response_interaction";
+    }
     if pointer == "$sse_observation" || pointer.starts_with("$sse_observation/") {
         return "response_sse_observation";
     }

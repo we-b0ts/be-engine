@@ -26,6 +26,7 @@ use crate::http::rewrite::{self, RewriteInput};
 use crate::http::termination::{ClientTermination, ObservedClientIo};
 use crate::recorder::connections::DependencyIo;
 use crate::recorder::http::dependency::PendingHttpCapture;
+use crate::recorder::http::stream;
 use crate::recorder::{
     HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
     TcpGatewayConnectionEvent, capture_body, redact_headers,
@@ -310,40 +311,54 @@ async fn handle_http_request(
         }
     };
 
+    let capture_event = HttpExchangeEvent {
+        outcome: crate::DependencyExchangeOutcome::Response,
+        id,
+        timestamp: Utc::now(),
+        request_started_at,
+        client_addr: client_addr.clone(),
+        scheme: "fake_ip_http".to_string(),
+        method: method.to_string(),
+        uri: original_uri.to_string(),
+        authority: authority.clone(),
+        request_headers: with_fake_gateway_headers(
+            request_headers_for_record.clone(),
+            &entry,
+            fake_addr,
+            Some(upstream_addr),
+        ),
+        request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+        response_status: None,
+        response_headers: None,
+        response_body: None,
+        response_stream: None,
+        discovered_tcp_targets: Vec::new(),
+        duration_ms: 0,
+        error: None,
+    };
     let pending = PendingHttpCapture::new(
         state.clone(),
         targets.clone(),
-        HttpExchangeEvent {
-            outcome: crate::DependencyExchangeOutcome::Response,
-            id,
-            timestamp: Utc::now(),
-            request_started_at,
-            client_addr: client_addr.clone(),
-            scheme: "fake_ip_http".to_string(),
-            method: method.to_string(),
-            uri: original_uri.to_string(),
-            authority: authority.clone(),
-            request_headers: with_fake_gateway_headers(
-                request_headers_for_record.clone(),
-                &entry,
-                fake_addr,
-                Some(upstream_addr),
-            ),
-            request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
-            response_status: None,
-            response_headers: None,
-            response_body: None,
-            discovered_tcp_targets: Vec::new(),
-            duration_ms: 0,
-            error: None,
-        },
+        capture_event.clone(),
         started,
-        termination,
+        termination.clone(),
     );
     pending
         .run(async {
             match send_upstream(state.client(), outbound).await {
                 Ok(upstream_response) => {
+                    if stream::is_stream(upstream_response.headers()) {
+                        return stream::response(
+                            upstream_response,
+                            stream::CaptureContext {
+                                state,
+                                targets: targets.clone(),
+                                event: capture_event,
+                                started,
+                                termination,
+                            },
+                        );
+                    }
                     let status = upstream_response.status();
                     let mut response_headers = upstream_response.headers().clone();
                     let mut body_bytes = match upstream_response.into_body().collect().await {
@@ -447,6 +462,7 @@ async fn handle_http_request(
                             &body_bytes,
                             state.config().recording.max_body_bytes,
                         )),
+                        response_stream: None,
                         discovered_tcp_targets,
                         duration_ms: started.elapsed().as_millis(),
                         error: None,
@@ -629,35 +645,37 @@ async fn handle_https_request(
         }
     };
 
+    let capture_event = HttpExchangeEvent {
+        outcome: crate::DependencyExchangeOutcome::Response,
+        id,
+        timestamp: Utc::now(),
+        request_started_at,
+        client_addr: client_addr.clone(),
+        scheme: "fake_ip_https".to_string(),
+        method: method.to_string(),
+        uri: original_uri.to_string(),
+        authority: authority.clone(),
+        request_headers: with_fake_gateway_headers(
+            request_headers_for_record.clone(),
+            &entry,
+            fake_addr,
+            Some(upstream_addr),
+        ),
+        request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+        response_status: None,
+        response_headers: None,
+        response_body: None,
+        response_stream: None,
+        discovered_tcp_targets: Vec::new(),
+        duration_ms: 0,
+        error: None,
+    };
     let pending = PendingHttpCapture::new(
         state.clone(),
         targets.clone(),
-        HttpExchangeEvent {
-            outcome: crate::DependencyExchangeOutcome::Response,
-            id,
-            timestamp: Utc::now(),
-            request_started_at,
-            client_addr: client_addr.clone(),
-            scheme: "fake_ip_https".to_string(),
-            method: method.to_string(),
-            uri: original_uri.to_string(),
-            authority: authority.clone(),
-            request_headers: with_fake_gateway_headers(
-                request_headers_for_record.clone(),
-                &entry,
-                fake_addr,
-                Some(upstream_addr),
-            ),
-            request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
-            response_status: None,
-            response_headers: None,
-            response_body: None,
-            discovered_tcp_targets: Vec::new(),
-            duration_ms: 0,
-            error: None,
-        },
+        capture_event.clone(),
         started,
-        termination,
+        termination.clone(),
     );
     pending
         .run(async {
@@ -675,6 +693,18 @@ async fn handle_https_request(
             };
             match upstream_response {
                 Ok(upstream_response) => {
+                    if stream::is_stream(upstream_response.headers()) {
+                        return stream::response(
+                            upstream_response,
+                            stream::CaptureContext {
+                                state,
+                                targets: targets.clone(),
+                                event: capture_event,
+                                started,
+                                termination,
+                            },
+                        );
+                    }
                     let status = upstream_response.status();
                     let mut response_headers = upstream_response.headers().clone();
                     let mut body_bytes = match upstream_response.into_body().collect().await {
@@ -778,6 +808,7 @@ async fn handle_https_request(
                             &body_bytes,
                             state.config().recording.max_body_bytes,
                         )),
+                        response_stream: None,
                         discovered_tcp_targets,
                         duration_ms: started.elapsed().as_millis(),
                         error: None,

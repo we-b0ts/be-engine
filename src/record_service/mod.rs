@@ -87,6 +87,14 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         options.scope.clone(),
         Duration::from_millis(config.http_gateway.request_timeout_ms),
         config.recording.max_body_bytes,
+    )
+    .with_interactions(
+        state.clone(),
+        options
+            .advertise_url
+            .as_deref()
+            .unwrap_or("http://127.0.0.1:4080")
+            .parse()?,
     );
     let (stop_adapter, adapter_stopped) = watch::channel(false);
     let mut source = None;
@@ -123,6 +131,10 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         loop {
             tokio::select! {
                 signal = &mut shutdown => { signal?; break Ok(()); }
+                _ = state.wait_for_interaction_source_stop() => {
+                    process::stop_source(source).await?;
+                    break Ok(());
+                }
                 status = source.wait() => break Err(anyhow::anyhow!("Source exited: {}", status?)),
                 result = &mut recorder => { recorder_finished = true; result.context("Recorder task failed")??; break Err(anyhow::anyhow!("Recorder stopped unexpectedly")); }
                 result = adapter.as_mut().unwrap() => { adapter_finished = true; result.context("adapter task failed")??; break Err(anyhow::anyhow!("adapter stopped unexpectedly")); }
@@ -131,10 +143,18 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         }
     }.await;
     relay.close();
+    state.close_interactions();
     if let Err(error) = coordination.unregister().await {
         warn!(%error, "recorder unregister failed; address TTL will expire");
     }
     let _ = stop_adapter.send(true);
+    // Source exit can emit disconnect dependencies. Keep Recorder and active
+    // ownership alive until the process has exited, before draining relay/cases.
+    let source_cleanup = if let Some(source) = &mut source {
+        process::stop_source(source).await
+    } else {
+        Ok(())
+    };
     if tokio::time::timeout(Duration::from_secs(60), relay.drain())
         .await
         .is_err()
@@ -154,11 +174,6 @@ pub async fn run(options: RecordOptions) -> Result<()> {
                 Err(anyhow::anyhow!("Recorder finalization timed out"))
             }
         }
-    };
-    let source_cleanup = if let Some(source) = &mut source {
-        process::stop_source(source).await
-    } else {
-        Ok(())
     };
     if let Some(mut adapter) = adapter
         && !adapter_finished

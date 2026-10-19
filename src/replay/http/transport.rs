@@ -104,7 +104,7 @@ async fn handle_http_request(
     state: Arc<Mutex<ReplayState>>,
     pending_exchange: Arc<std::sync::Mutex<Option<termination::PendingHttpTermination>>>,
     deadline: tokio::sync::watch::Sender<Option<tokio::time::Instant>>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<stream_delivery::DeliveryBody>, Infallible> {
     let started = tokio::time::Instant::now();
     let request_started_at = Utc::now();
     let method = request.method().clone();
@@ -118,10 +118,10 @@ async fn handle_http_request(
     let body = match request.into_body().collect().await {
         Ok(body) => body.to_bytes(),
         Err(error) => {
-            return Ok(error_response(
+            return Ok(stream_delivery::ordinary(error_response(
                 StatusCode::BAD_GATEWAY,
                 &format!("failed to read replay request body: {error}"),
-            ));
+            )));
         }
     };
     let scheme = match target.protocol {
@@ -164,16 +164,22 @@ async fn handle_http_request(
             *pending_exchange
                 .lock()
                 .expect("HTTP pending termination poisoned") = Some(*exchange);
-            return pending::<Result<Response<Full<Bytes>>, Infallible>>().await;
+            return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
         }
         Err(HttpReplayMatchError::Blackhole) => {
-            return pending::<Result<Response<Full<Bytes>>, Infallible>>().await;
+            return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
         }
         Err(HttpReplayMatchError::BadGateway(reason)) => {
-            return Ok(error_response(StatusCode::BAD_GATEWAY, &reason));
+            return Ok(stream_delivery::ordinary(error_response(
+                StatusCode::BAD_GATEWAY,
+                &reason,
+            )));
         }
     };
-    let response = response_from_record(record)
-        .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, &error.to_string()));
+    let response = stream_delivery::response(record, started, state)
+        .await
+        .unwrap_or_else(|error| {
+            stream_delivery::ordinary(error_response(StatusCode::BAD_GATEWAY, &error.to_string()))
+        });
     Ok(response)
 }

@@ -33,6 +33,10 @@ impl Default for DependencyActivity {
 }
 
 impl DependencyActivity {
+    pub(super) fn snapshot(&self) -> (usize, Instant) {
+        let state = self.state.lock().expect("dependency activity poisoned");
+        (state.in_flight, state.last_activity)
+    }
     pub(super) fn reserve(self: &Arc<Self>) -> DependencyReservation {
         {
             let mut state = self.state.lock().expect("dependency activity poisoned");

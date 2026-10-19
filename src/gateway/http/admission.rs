@@ -39,7 +39,7 @@ pub(super) async fn try_admit_case(
             recording_api,
             published_cases,
             max_cases,
-            uri = %uri,
+            uri = %uri.path(),
             "HTTP gateway matched request sent to fallback"
         );
         return None;
@@ -64,7 +64,7 @@ pub(super) async fn try_admit_case(
                 rule_name: case.rule_name.clone(),
                 uri_group: case.uri_group.clone(),
                 case_pattern: case_pattern.to_string(),
-                uri: uri.to_string(),
+                uri: uri.path().to_owned(),
                 upstream: upstream_base.to_string(),
             };
             if let Err(err) = state
@@ -117,7 +117,7 @@ pub(super) async fn try_admit_case(
                 reason = active_case_rejection_reason(reason),
                 rule = %case.rule_name,
                 case_pattern,
-                uri = %uri,
+                uri = %uri.path(),
                 "HTTP gateway matched request sent to fallback"
             );
             None

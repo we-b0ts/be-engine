@@ -96,8 +96,17 @@ recorder:
         proxy_listen: 127.0.0.1:8001
   http_gateway:
     enabled: true
-    # False sends any request whose Accept includes text/event-stream to fallback.
+    # Enable bounded SSE/NDJSON/raw response streams and Socket.IO sessions.
     record_streaming: false
+    # Opt in separately; ordinary binary downloads otherwise retain HTTP behavior.
+    record_raw_streaming: false
+    interaction:
+      business_idle_ms: 10000
+      max_duration_ms: 600000
+      request_timeout_ms: 120000
+      cleanup_timeout_ms: 60000
+      input_gap_ms: 100
+      preserve_input_timing: false
     listen: 0.0.0.0:4080
     matched_upstream: http://127.0.0.1:7171
     request_timeout_ms: 15000

@@ -30,6 +30,23 @@ is unclear.
 
 ## Current Boundaries
 
+- `interaction/model` owns versioned input programs and independent output
+  observations. `policy` validates protocol completion profiles and bounded
+  execution budgets; `lifecycle`, `socketio`, `stream` and `observation` own pure
+  framing, completion correlation and monotonic case decisions. They do not read
+  expected evidence, persist recordings or own dependency cleanup.
+  `gateway/http/interaction` owns primary transport forwarding, session admission,
+  recording and close orchestration. `active_case` retains dependency attribution
+  through the existing fixed post-response window and accepted in-flight drain;
+  its `interaction` child owns the lease/publication barrier. `record_service/proxy` owns
+  external admission lease scheduling and transparent ingress transport; the
+  gateway SDK owns atomic Redis reservation operations. `interaction/replay`
+  drives only recorded inputs against fresh Target connections; response assertion
+  compares independent output observations. Replay control retains case identity
+  and asynchronous dependency delivery ownership through the existing case-end
+  lifecycle. Normal interaction closure keeps Source and Target running;
+  process shutdown remains with the ordinary recording and run supervisors.
+
 - `policy/schema` owns the strict self-contained `traffic-policy/v1` document.
   `policy/compiler` owns typed capability validation, field ownership and
   semantic effect fingerprints; neither module reads evidence or changes runtime

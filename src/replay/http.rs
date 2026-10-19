@@ -44,6 +44,7 @@ mod recording;
 pub(super) use evidence::register_global_exchange;
 pub(in crate::replay) mod request_headers;
 mod selector;
+mod stream_delivery;
 mod termination;
 mod transport;
 pub(crate) mod unordered;
@@ -80,6 +81,10 @@ pub(super) struct RecordedHttpExchange {
     response_headers: Option<HeaderSnapshot>,
     response_body: Option<RecordedBodyCapture>,
     #[serde(default)]
+    response_stream: Option<crate::http::stream::ResponseStream>,
+    #[serde(skip)]
+    stream_delivery: Option<MatchedHttpExchangeReport>,
+    #[serde(default)]
     discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
     #[serde(default)]
     global_dependency_reason: Option<String>,
@@ -94,6 +99,8 @@ pub(super) struct RecordedHttpExchange {
 struct RecordedBodyCapture {
     encoding: String,
     truncated: bool,
+    #[serde(default)]
+    stored_len: Option<usize>,
     data: String,
 }
 
@@ -240,6 +247,51 @@ pub(super) fn register_http_exchange(
         )?;
     }
     termination::validate_record(&record)?;
+    let stream_mime = record
+        .response_headers
+        .as_ref()
+        .and_then(|headers| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        })
+        .and_then(|(_, values)| values.first())
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+        });
+    anyhow::ensure!(
+        record.response_stream.is_some()
+            || !matches!(
+                stream_mime.as_deref(),
+                Some("text/event-stream" | "application/x-ndjson" | "application/ndjson")
+            ),
+        "recorded HTTP streaming dependency has no chunk timing evidence; re-record this case"
+    );
+    if let Some(stream) = &record.response_stream {
+        let body = record
+            .response_body
+            .as_ref()
+            .context("HTTP stream has no recorded payload")?;
+        // Global indexes retain byte-length metadata while deferring payload
+        // bytes. Validate their shape without loading every Global response;
+        // materialization and delivery validate the actual payload on demand.
+        let payload_len = if record.response_evidence.is_some() {
+            body.stored_len
+                .context("deferred HTTP stream has no stored payload length; re-record this case")?
+        } else {
+            decode_body(body)?.len()
+        };
+        stream.validate(payload_len)?;
+        anyhow::ensure!(
+            record.error.is_none(),
+            "HTTP stream contains a capture error"
+        );
+    }
     let identity = identity_from_record(&record)?;
     let protocol = match identity.scheme {
         HttpReplayScheme::Http => ReplayProtocol::Http,
@@ -754,6 +806,17 @@ pub(super) fn release_consumed_payloads(
 }
 
 impl ReplayState {
+    pub(in crate::replay) fn http_has_case_in_flight(&self) -> bool {
+        self.http_exchanges.iter().any(|e| {
+            e.source == ReplaySource::Case
+                && matches!(
+                    e.status,
+                    super::ReplayExchangeStatus::Responding
+                        | super::ReplayExchangeStatus::AwaitingClientTermination
+                )
+        })
+    }
+
     pub(in crate::replay) fn http_has_in_flight(&self) -> bool {
         self.http_exchanges.iter().any(|e| {
             matches!(

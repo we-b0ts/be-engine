@@ -11,20 +11,19 @@ use tokio::time::{Instant, timeout_at};
 
 use super::recovery::TimeoutRecovery;
 use crate::ProxyClient;
-use crate::http::sse::{self, SseObservation, SseObservationPolicy};
 
 pub(super) struct AcquiredResponse {
     pub(super) status: StatusCode,
     pub(super) headers: HeaderMap,
     pub(super) body: Bytes,
-    pub(super) sse_observation: Option<SseObservation>,
+    pub(super) stream: Option<Incoming>,
 }
 
 pub(super) async fn acquire(
     client: &ProxyClient,
     request: Request<Full<Bytes>>,
     request_timeout: Duration,
-    sse_body_limit: Option<usize>,
+    raw_streaming: bool,
     mut recovery: Option<&mut TimeoutRecovery>,
 ) -> Result<AcquiredResponse> {
     let deadline = Instant::now() + request_timeout;
@@ -51,37 +50,37 @@ pub(super) async fn acquire(
     };
     let status = response.status();
     let headers = response.headers().clone();
-    let (body, sse_observation) =
-        if let Some(sse_body_limit) = sse_body_limit.filter(|_| sse::is_event_stream(&headers)) {
-            let (body, observation) = sse::observe(
-                response.into_body(),
-                SseObservationPolicy::default(),
-                sse_body_limit,
-            )
-            .await?;
-            (body, Some(observation))
-        } else {
-            let mut response_body = response.into_body();
-            let body = match timeout_at(deadline, (&mut response_body).collect()).await {
-                Ok(body) => body
-                    .context("failed to read gateway upstream response body")?
-                    .to_bytes(),
-                Err(elapsed) => {
-                    if let Some(recovery) = recovery.as_mut() {
-                        recovery.begin().await;
-                        let result = drain_body(&mut response_body).await;
-                        recovery.source_finished(&result).await;
-                    }
-                    return Err(elapsed.into());
+    if super::interaction::response_protocol(&headers).is_some_and(|protocol| {
+        protocol != crate::interaction::model::Protocol::RawStream || raw_streaming
+    }) {
+        return Ok(AcquiredResponse {
+            status,
+            headers,
+            body: Bytes::new(),
+            stream: Some(response.into_body()),
+        });
+    }
+    let body = {
+        let mut response_body = response.into_body();
+        match timeout_at(deadline, (&mut response_body).collect()).await {
+            Ok(body) => body
+                .context("failed to read gateway upstream response body")?
+                .to_bytes(),
+            Err(elapsed) => {
+                if let Some(recovery) = recovery.as_mut() {
+                    recovery.begin().await;
+                    let result = drain_body(&mut response_body).await;
+                    recovery.source_finished(&result).await;
                 }
-            };
-            (body, None)
-        };
+                return Err(elapsed.into());
+            }
+        }
+    };
     Ok(AcquiredResponse {
         status,
         headers,
         body,
-        sse_observation,
+        stream: None,
     })
 }
 

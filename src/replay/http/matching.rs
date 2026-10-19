@@ -488,6 +488,12 @@ impl ReplayState {
                 termination::PendingHttpTermination::new(detail, &exchange.record),
             )));
         }
+        if exchange.record.response_stream.is_some() {
+            self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Responding;
+            self.refresh_http_global_report(index);
+            exchange.record.stream_delivery = Some(detail);
+            return Ok(exchange.record);
+        }
         self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
         self.refresh_http_global_report(index);
         self.complete_http_exchange(detail);

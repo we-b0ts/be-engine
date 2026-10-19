@@ -39,6 +39,8 @@ struct ActualResponse {
     body: CapturedBody,
     #[serde(skip_serializing_if = "Option::is_none")]
     sse_observation: Option<crate::http::sse::SseObservation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interaction: Option<crate::interaction::model::OutputObservation>,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,14 +143,19 @@ pub(super) async fn capture_case(
     if kind.protocol_version.is_some() {
         return capture_motan_case(config, kind, actual_response_path).await;
     }
-    let response = RecordedHttpClient::new(
-        config.target_http_origin.clone(),
+    let request_timeout = if kind.interaction.is_some() {
+        config.target_request_timeout
+    } else {
         super::source_response::request_timeout(
             request_path
                 .parent()
                 .context("request has no case directory")?,
             config.target_request_timeout,
-        )?,
+        )?
+    };
+    let response = RecordedHttpClient::new(
+        config.target_http_origin.clone(),
+        request_timeout,
         config.target_max_response_bytes,
     )
     .with_request_rule_runtime(request_rules)
@@ -158,23 +165,23 @@ pub(super) async fn capture_case(
         Ok(text) => ("utf8", text.to_owned()),
         Err(_) => ("base64", STANDARD.encode(&response.body)),
     };
-    active_artifact::write_json(
-        actual_response_path,
-        &ActualResponse {
-            version: 1,
-            request_sent_at: response.request_sent_at,
-            request_rules: response.request_rules,
-            request_headers: Some(response.request_headers),
-            status: response.status.as_u16(),
-            headers: Some(response.headers),
-            sse_observation: response.sse_observation,
-            body: CapturedBody {
-                encoding,
-                data,
-                truncated: false,
-            },
+    let mut actual = serde_json::to_value(ActualResponse {
+        version: 1,
+        request_sent_at: response.request_sent_at,
+        request_rules: response.request_rules,
+        request_headers: Some(response.request_headers),
+        status: response.status.as_u16(),
+        headers: Some(response.headers),
+        sse_observation: response.sse_observation,
+        interaction: response.interaction,
+        body: CapturedBody {
+            encoding,
+            data,
+            truncated: false,
         },
-    )
+    })?;
+    crate::interaction::private::protect_output(&mut actual, actual_response_path)?;
+    active_artifact::write_json(actual_response_path, &actual)
 }
 
 pub(super) fn response_unavailable_reason(error: &anyhow::Error) -> E2eResponseUnavailableReason {
@@ -223,6 +230,8 @@ pub(super) fn response_unavailable_reason(error: &anyhow::Error) -> E2eResponseU
 
 #[derive(Deserialize)]
 struct RequestKind {
+    #[serde(default)]
+    interaction: Option<serde_json::Value>,
     #[serde(default)]
     protocol_version: Option<String>,
     #[serde(default)]
@@ -303,6 +312,7 @@ async fn capture_motan_case(
             status,
             headers: None,
             sse_observation: None,
+            interaction: None,
             body: CapturedBody {
                 encoding,
                 data,
