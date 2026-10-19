@@ -3,7 +3,7 @@ mod scan;
 mod tail;
 use super::{
     OriginIndex,
-    evidence::{EvidenceFile, OriginWitness, case_id, timestamp},
+    evidence::{EvidenceFile, OriginWitness, timestamp},
     request,
 };
 use crate::{
@@ -47,6 +47,7 @@ pub(super) fn associate(
     files: &[EvidenceFile],
     rules: &[BackgroundDependencyRuleConfig],
     index: &mut OriginIndex,
+    transactions: Option<&crate::dependency_index::mysql_transactions::Facts>,
 ) -> Result<()> {
     let owners: BTreeMap<_, _> = rules
         .iter()
@@ -62,7 +63,8 @@ pub(super) fn associate(
     if owners.is_empty() {
         return Ok(());
     }
-    let candidates = scan::candidates(files, index)?;
+    let candidates =
+        scan::candidates(files, index, transactions.expect("MySQL transaction facts"))?;
     let mut fingerprints = BTreeMap::<String, usize>::new();
     let mut reader = RecordReader::new(8 * 1024 * 1024);
     let mut connections = BTreeMap::<String, BTreeMap<u64, Exchange>>::new();
@@ -71,7 +73,7 @@ pub(super) fn associate(
     let mut boundaries = BTreeMap::<String, Vec<Option<OriginWitness>>>::new();
     let mut invalid = BTreeSet::new();
     for (file_index, file) in files.iter().enumerate() {
-        let case = case_id(&file.path)?;
+        let case = file.scope_key()?;
         for record in file.index.mysql.iter().flatten() {
             if !owners.values().any(|r| matches!(r, BackgroundDependencyRuleConfig::Mysql {selector,..}
                 if record.summary["target_host"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&selector.target_host))
@@ -340,9 +342,9 @@ fn independent(
     if !owners.contains_key(&origin.rule) {
         return false;
     }
-    let request = &files[event.file].request;
+    let request = files[event.file].request.as_ref();
     event.case != origin.trigger_case_id
-        && !request::references(request, &origin.captured_identity)
+        && request.is_none_or(|r| !request::references(r, &origin.captured_identity))
         && event.time.is_some_and(|t| t >= origin.captured_at)
 }
 

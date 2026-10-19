@@ -6,6 +6,7 @@ mod evidence;
 mod matcher;
 mod model;
 pub(in crate::replay) mod optional_session;
+pub(in crate::replay) mod ownership;
 mod projection;
 mod report_inventory;
 mod response;

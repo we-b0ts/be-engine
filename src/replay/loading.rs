@@ -220,6 +220,18 @@ impl ReplayRuntime {
         .await
         .context("HTTP cross-case preload task failed")??;
         let http_case_exchange_index = http::case_exchange_index(&http_exchanges);
+        let mysql_root = root_dir.clone();
+        let mysql_rules = process_owned_dependencies.to_vec();
+        let mysql_cases = cases.keys().cloned().collect();
+        let mysql = tokio::task::spawn_blocking(move || -> Result<_> {
+            mysql.set_origins(
+                mysql::ownership::load(&mysql_root, &mysql_rules)?,
+                &mysql_cases,
+            );
+            Ok(mysql)
+        })
+        .await
+        .context("MySQL transaction ownership preparation failed")??;
         let redis_root = root_dir.clone();
         let redis_policy = config.policy_path.clone();
         let redis_cases = cases.clone();

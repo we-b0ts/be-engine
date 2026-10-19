@@ -51,6 +51,9 @@ pub(crate) struct OriginIndex {
     pub source_bytes: u64,
 }
 
+// An explicit Source namespace, never an HTTP case or a trigger request.
+pub(super) const GLOBAL_SCOPE: &str = "$global-source";
+
 impl OriginIndex {
     pub(crate) fn witness(&self, case_id: &str, event: &Value) -> Option<&OriginWitness> {
         let witness = if let Some(key) = crate::config::api_trigger::mysql::wire_key(case_id, event)
@@ -83,8 +86,19 @@ impl OriginIndex {
 
 pub(super) struct EvidenceFile {
     pub path: PathBuf,
-    pub request: request::RequestFacts,
+    pub relative: PathBuf,
+    pub request: Option<request::RequestFacts>,
     pub index: FileIndex,
+}
+
+impl EvidenceFile {
+    pub fn scope_key(&self) -> Result<String> {
+        if self.request.is_none() {
+            Ok(GLOBAL_SCOPE.into())
+        } else {
+            case_id(&self.path)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -97,6 +111,7 @@ struct Origin {
 pub(super) fn build(
     files: &[EvidenceFile],
     rules: &[BackgroundDependencyRuleConfig],
+    transactions: Option<&crate::dependency_index::mysql_transactions::Facts>,
 ) -> Result<OriginIndex> {
     let mut index = OriginIndex::default();
     let mut reader = RecordReader::new(8 * 1024 * 1024);
@@ -109,10 +124,11 @@ pub(super) fn build(
             origins.clone()
         } else {
             let mut captured = BTreeMap::<String, Vec<Origin>>::new();
-            for file in files
-                .iter()
-                .filter(|f| request::matches(source, &f.request))
-            {
+            for file in files.iter().filter(|f| {
+                f.request
+                    .as_ref()
+                    .is_some_and(|r| request::matches(source, r))
+            }) {
                 let values = capture_file(&file.path, source.binding().1, &mut index.source_bytes)?;
                 if values.len() != 1 {
                     index.ambiguous_triggers += 1;
@@ -121,6 +137,8 @@ pub(super) fn build(
                 let (identity, captured_at) = values.into_iter().next().expect("one capture");
                 if file
                     .request
+                    .as_ref()
+                    .expect("HTTP trigger request")
                     .started_at
                     .is_none_or(|start| captured_at < start)
                 {
@@ -172,7 +190,7 @@ pub(super) fn build(
     }
     // Read and decode each candidate once, regardless of how many rules share a source.
     for file in files {
-        let victim = case_id(&file.path)?;
+        let victim = file.scope_key()?;
         // Independence is checked against the captured identity in observe().
         // Another resource on the trigger's route is still a foreign request.
         let eligible = |state: &&mut RuleOrigins<'_>| !state.origins.is_empty();
@@ -241,7 +259,7 @@ pub(super) fn build(
         }
     }
     super::redis_script::associate(files, rules, &mut index)?;
-    super::mysql_transaction::associate(files, rules, &mut index)?;
+    super::mysql_transaction::associate(files, rules, &mut index, transactions)?;
     index.source_bytes += reader.source_bytes;
     Ok(index)
 }
@@ -339,9 +357,14 @@ fn observe(
     if victim == origin.case_id {
         return Ok(());
     }
-    let references = request::references(&file.request, &origin.identity);
-    let same_resource_read =
-        references && super::same_resource::allows(rule, &file.request, &origin.identity);
+    let references = file
+        .request
+        .as_ref()
+        .is_some_and(|r| request::references(r, &origin.identity));
+    let same_resource_read = file
+        .request
+        .as_ref()
+        .is_some_and(|r| references && super::same_resource::allows(rule, r, &origin.identity));
     if timestamp(event).is_none_or(|time| time < origin.captured_at)
         || (references && !same_resource_read)
         || (mysql && !crate::config::api_trigger::mysql::complete(event))

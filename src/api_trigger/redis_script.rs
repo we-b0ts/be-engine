@@ -26,7 +26,7 @@ pub(super) fn associate(
         return Ok(());
     }
     let mut reader = RecordReader::new(8 * 1024 * 1024);
-    for file in files {
+    for file in files.iter().filter(|file| file.request.is_some()) {
         let case = case_id(&file.path)?;
         let mut previous = BTreeMap::<String, (Value, String)>::new();
         for record in &file.index.redis {

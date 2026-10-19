@@ -317,6 +317,7 @@ impl Recorder {
                     tracing::warn!(error=%error,"Source proof index prewarm failed; first use will rebuild it")
                 }
             }
+            self.prepare_mysql_ownership().await;
         }
         Ok(has_failed_cases)
     }

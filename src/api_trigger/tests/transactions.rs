@@ -50,6 +50,141 @@ fn fixture() -> Fixture {
 }
 
 #[test]
+fn global_write_transaction_owns_case_commit_and_warm_load_reads_no_payloads() {
+    let f = fixture();
+    let events = events();
+    f.mysql_events(&events[3..]);
+    write_lines(&f.root.join("global-dependencies.jsonl"), &events[..3]);
+    let mut rules = f.mysql_rules();
+    rules.push(write_selector().rule("job-write", SOURCE_REVISION, PROOF));
+    let cold = load(&f.root, &rules).unwrap();
+    let witness = cold
+        .witness("victim", &events[3])
+        .expect("Global write must own its Case COMMIT");
+    assert_eq!(witness.rule, "job-write");
+    assert_eq!(witness.trigger_case_id, "origin");
+    let warm = load(&f.root, &rules).unwrap();
+    assert!(warm.cache_reused);
+    assert_eq!(warm.source_bytes, 0);
+    assert!(warm.witness("victim", &events[3]).is_some());
+
+    let mut changed = events[..3].to_vec();
+    changed[2]["sql"] = "UPDATE jobs_0001 SET status='DONE' WHERE id=99".into();
+    write_lines(&f.root.join("global-dependencies.jsonl"), &changed);
+    let stale = load(&f.root, &rules).unwrap();
+    assert!(!stale.cache_reused);
+    assert!(
+        stale.witness("victim", &events[3]).is_none(),
+        "changed Global write invalidates ownership"
+    );
+}
+
+#[test]
+fn recording_seals_facts_and_ownership_and_replay_imports_them() {
+    let f = fixture();
+    let events = events();
+    f.mysql_events(&events[3..]);
+    write_lines(&f.root.join("global-dependencies.jsonl"), &events[..3]);
+    let mut rules = f.mysql_rules();
+    rules.push(write_selector().rule("job-write", SOURCE_REVISION, PROOF));
+    super::super::seal(&f.root, &rules).unwrap();
+    assert!(
+        f.root
+            .join(crate::dependency_index::mysql_transactions::FRAGMENT)
+            .is_file()
+    );
+    assert!(f.root.join(super::super::cache::FRAGMENT).is_file());
+    let directory = crate::dependency_index::store::cache_directory(&f.root);
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("api-origins-")
+        {
+            fs::remove_file(path).unwrap();
+        }
+    }
+    let imported = load(&f.root, &rules).unwrap();
+    assert!(imported.cache_reused);
+    assert_eq!(imported.source_bytes, 0);
+    assert!(imported.witness("victim", &events[3]).is_some());
+}
+
+#[test]
+fn changed_ownership_rules_reuse_transaction_facts_without_retaining_exemptions() {
+    let f = fixture();
+    let events = events();
+    f.mysql_events(&events[3..]);
+    write_lines(&f.root.join("global-dependencies.jsonl"), &events[..3]);
+    let selector = write_selector();
+    let mut rules = f.mysql_rules();
+    rules.push(selector.rule("job-write", SOURCE_REVISION, PROOF));
+    assert!(
+        load(&f.root, &rules)
+            .unwrap()
+            .witness("victim", &events[3])
+            .is_some()
+    );
+    let facts =
+        crate::dependency_index::store::cache_directory(&f.root).join("mysql-transactions-v1.json");
+    let before = crate::dependency_index::FileStamp::read(&facts).unwrap();
+    let mut changed = selector;
+    changed.include_transaction_boundaries = false;
+    changed.transaction_members.clear();
+    let mut changed_rules = f.mysql_rules();
+    changed_rules.push(changed.rule("job-write", SOURCE_REVISION, PROOF));
+    let changed = load(&f.root, &changed_rules).unwrap();
+    assert!(changed.witness("victim", &events[3]).is_none());
+    assert_eq!(
+        crate::dependency_index::FileStamp::read(&facts).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn concurrent_ownership_loads_share_one_cold_construction() {
+    let f = fixture();
+    let events = events();
+    f.mysql_events(&events[3..]);
+    write_lines(&f.root.join("global-dependencies.jsonl"), &events[..3]);
+    let mut rules = f.mysql_rules();
+    rules.push(write_selector().rule("job-write", SOURCE_REVISION, PROOF));
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+    let workers: Vec<_> = (0..4)
+        .map(|_| {
+            let barrier = barrier.clone();
+            let root = f.root.clone();
+            let rules = rules.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                load(&root, &rules).unwrap()
+            })
+        })
+        .collect();
+    let results: Vec<_> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    assert_eq!(
+        results.iter().filter(|result| !result.cache_reused).count(),
+        1
+    );
+    assert!(
+        results
+            .iter()
+            .filter(|result| result.cache_reused)
+            .all(|result| result.source_bytes == 0)
+    );
+    assert!(
+        results
+            .iter()
+            .all(|result| result.witness("victim", &events[3]).is_some())
+    );
+}
+
+#[test]
 fn complete_origin_transactions_include_only_explicit_members_and_boundaries() {
     let f = fixture();
     let selector = write_selector();

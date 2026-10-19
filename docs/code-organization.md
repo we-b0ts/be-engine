@@ -113,7 +113,10 @@ is unclear.
   complete wire-sequence provenance; its `tail` child attributes only a direct
   successful UPDATE-to-COMMIT handoff when the prefix is missing. `redis_script` owns adjacent script-probe
   association. Optional MySQL record locations and SQL prefilter facts belong to `dependency_index/mysql`
-  and are built only for configured API-origin discovery. MySQL literal
+  and are retained during Recorder summary traversal. `dependency_index/mysql_transactions`
+  owns rule-independent, Source-bound intervals across Global and Case records.
+  `api_trigger/cache` owns versioned policy ownership and portable prewarm import;
+  Global evidence has no fabricated primary request. MySQL literal
   INSERT parsing belongs to `mysql/sql/insert`. The existing report overlay owns
   unused-only reclassification and provenance, while Recorder retains idle
   candidates without changing active case ownership or Redis snapshots. Status
@@ -121,6 +124,11 @@ is unclear.
   `replay/redis/api_origin` applies that same immutable proof to foreign-case
   command ordering before listeners are ready; stateful lanes stay strict and
   recording attribution and finite consumption remain unchanged.
+  `replay/mysql/ownership` projects only selected-Case ownership keys before
+  Target admission and classifies deferred exchanges without file reads.
+  `replay/mysql/matcher/request` uses those identities for candidate precedence;
+  native dirty/report accounting excludes proven foreign obligations and keeps
+  the reversible Source provenance separate from protocol consumption.
 
 - `engine_binary` resolves companion executables and Linux reexec paths for a
   replaced running engine. Replay, coordinator workers and local interception

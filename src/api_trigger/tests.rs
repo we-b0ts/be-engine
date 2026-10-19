@@ -4,6 +4,7 @@ use super::{
 };
 mod mysql;
 mod private_requests;
+mod recorded_ownership;
 mod redis_extended;
 mod same_resource;
 mod transactions;

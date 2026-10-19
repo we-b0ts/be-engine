@@ -54,6 +54,7 @@ impl ReplayState {
             unused_global_exchanges: self.unused_exchanges(ReplaySource::Global),
             unused_global_exchange_count: self.global_mysql_unused_count(),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
+            process_owned_mysql_exchanges: self.process_owned_mysql(),
             allowed_unused_mysql_rollback_exchanges: self.allowed_unused_rollbacks(),
             allowed_unused_mysql_commit_exchanges: self.allowed_unused_commits(),
             allowed_unused_mysql_autocommit_exchanges: self.allowed_unused_autocommit(),

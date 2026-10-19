@@ -9,6 +9,33 @@ use std::{
     path::Path,
 };
 
+/// SQL-free selector and wire facts shared by Recorder and legacy index repair.
+pub(super) fn record(location: RecordLocation, value: &Value) -> Option<IndexedMysqlRecord> {
+    if value["event_type"] != "mysql_exchange" {
+        return None;
+    }
+    let sql = value["sql"].as_str().unwrap_or_default();
+    let tokens = crate::mysql::sql::tokens(sql);
+    let integer_hashes: Option<Vec<_>> = tokens.as_ref().map(|tokens| {
+        tokens
+            .iter()
+            .filter_map(|token| match token {
+                crate::mysql::sql::Token::Number(number) => Some(digest(number.as_bytes())),
+                _ => None,
+            })
+            .collect()
+    });
+    Some(IndexedMysqlRecord {
+        location,
+        summary: json!({"target_host":value["target_host"],"target_port":value["target_port"],
+            "database":value["database"],"username":value["username"],"command":value["command"],
+            "sql_token_count":tokens.map(|tokens| tokens.len()),"integer_hashes":integer_hashes,
+            "connection_id":value["connection_id"],"query_sequence":value["query_sequence"],
+            "server_status_before":value["server_status_before"],"server_status_after":value["response"]["server_status"],
+            "sql_summary":{"fingerprint":crate::config::process_owned_dependencies::mysql::evidence::fingerprint(sql)}}),
+    })
+}
+
 #[derive(Deserialize)]
 struct SqlRecord {
     #[serde(default)]
@@ -52,9 +79,10 @@ pub(super) fn extend(path: &Path, mut index: FileIndex) -> Result<FileIndex> {
             let facts: SqlRecord = serde_json::from_slice(&raw).with_context(|| {
                 format!("invalid SQL index evidence {} line {line}", path.display())
             })?;
-            if facts.event_type == "mysql_exchange"
-                && let Some(sql) = facts.sql
-            {
+            if facts.event_type == "mysql_exchange" {
+                // Non-SQL controls can carry the status continuity between two
+                // statements. Keep them in legacy repairs as Recorder does.
+                let sql = facts.sql.unwrap_or_default();
                 let tokens = crate::mysql::sql::tokens(&sql);
                 let integer_hashes: Option<Vec<_>> = tokens.as_ref().map(|ts| {
                     ts.iter()
