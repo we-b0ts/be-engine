@@ -7,6 +7,7 @@ pub(crate) mod global;
 mod global_tests;
 mod model;
 mod mysql;
+pub(crate) mod mysql_transactions;
 mod pages;
 pub(crate) mod proof;
 mod reader;

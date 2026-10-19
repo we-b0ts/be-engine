@@ -41,6 +41,8 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) unused_global_exchange_count: usize,
     pub(in crate::replay) unused_case_exchanges: Vec<RecordedExchangeSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) process_owned_mysql_exchanges: Vec<mysql::ownership::OwnedExchange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_rollback_exchanges: Vec<RecordedExchangeSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_commit_exchanges: Vec<RecordedExchangeSummary>,

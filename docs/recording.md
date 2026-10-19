@@ -279,6 +279,14 @@ file catalog for [indexed rule proof](rule-evidence-index.md). Later rule plans
 reuse recording hashes and read only applicable original evidence; skipped APIs
 remain part of that immutable catalog.
 
+Finalization also prepares `.mysql-transactions.json` (SQL-free connection,
+sequence and transaction-state facts) and, when API-origin rules are configured,
+`.mysql-ownership.json` (Source-backed operation ownership). Transaction facts join
+Global and Case records without changing their original capture attribution.
+These derived artifacts are private and contain no Target observations. Preparation
+failure is explicit in Recorder logs and preserves recording completion; Replay
+rebuilds missing, corrupt or stale artifacts under a shared cache lock.
+
 Expose the finalized recording tree under the target's conventional
 `.traffic-e2e/local/artifacts/recordings/<run-id>/`, with its key accessible
 privately at `.traffic-e2e/local/secrets/traffic-e2e-enc.sec` when encryption is

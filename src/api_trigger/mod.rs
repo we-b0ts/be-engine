@@ -12,7 +12,29 @@ mod same_resource;
 mod tests;
 
 pub(crate) use cache::load;
+pub(crate) use cache::seal;
 pub(crate) use evidence::OriginIndex;
+
+/// Shared Source preparation for managed Replay's index phase and standalone loading.
+pub(crate) fn prepare(
+    source: &std::path::Path,
+    rules: &[crate::BackgroundDependencyRuleConfig],
+) -> anyhow::Result<OriginIndex> {
+    if rules.iter().any(|rule| {
+        matches!(rule, crate::BackgroundDependencyRuleConfig::Mysql { .. })
+            && rule.trigger_source().is_some()
+    }) {
+        load(source, rules)
+    } else {
+        let (root, files) = crate::dependency_index::recording_files(source)?;
+        crate::dependency_index::mysql_transactions::load(&root, &files)?;
+        if rules.iter().any(|rule| rule.trigger_source().is_some()) {
+            load(&root, rules)
+        } else {
+            Ok(OriginIndex::default())
+        }
+    }
+}
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;

@@ -13,6 +13,20 @@ pub(crate) fn parse_background_dependency_evidence<T: DeserializeOwned>(
 }
 
 pub(super) fn restore_previous_reclassification(report: &mut Value) {
+    if let Some(object) = report.as_object_mut() {
+        let owned = take_array(object, "process_owned_mysql_exchanges");
+        if !owned.is_empty() {
+            let mut case = take_array(object, "unused_case_exchanges");
+            for mut exchange in owned {
+                if let Some(fields) = exchange.as_object_mut() {
+                    fields.remove("ownership_rule");
+                    fields.remove("trigger_case_id");
+                }
+                case.push(exchange);
+            }
+            object.insert("unused_case_exchanges".into(), Value::Array(case));
+        }
+    }
     restore_array(report, "unused_global_exchanges", "unused_case_exchanges");
     restore_array(
         report,
@@ -91,6 +105,29 @@ pub(super) fn update_global_count(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_mysql_ownership_is_restored_before_current_policy_is_applied() {
+        let mut report = json!({"process_owned_mysql_exchanges":[{"case_id":"case-a","index":624,
+            "command":"COM_QUERY","connection_id":"connection","query_sequence":411,
+            "ownership_rule":"old-rule","trigger_case_id":"origin"}],"unused_case_exchanges":[]});
+        restore_previous_reclassification(&mut report);
+        assert_eq!(report["unused_case_exchanges"][0]["index"], 624);
+        assert!(
+            report["unused_case_exchanges"][0]
+                .get("ownership_rule")
+                .is_none()
+        );
+        assert!(
+            report["unused_case_exchanges"][0]
+                .get("trigger_case_id")
+                .is_none()
+        );
+        assert!(report["process_owned_mysql_exchanges"].is_null());
+        let expected = report.clone();
+        restore_previous_reclassification(&mut report);
+        assert_eq!(report, expected);
+    }
 
     #[test]
     fn original_witness_projection_is_idempotent_for_every_overlay_protocol() {

@@ -306,6 +306,31 @@ SCRIPT or EVALSHA process exception is added.
 
 ## MySQL UPDATEs and complete transactions
 
+MySQL ownership preparation includes immutable Global prefixes and Case tails.
+A background UPDATE admitted just before an HTTP request and its COMMIT captured
+inside that request therefore retain one proven transaction owner. A Global
+record has no invented HTTP request or Case origin. A missing association alone
+does not authorize exclusion; ambiguous connections, mixed trigger identities,
+incomplete responses and active-transaction gaps remain required.
+
+Recorder precomputes rule-independent transaction facts and policy-dependent
+ownership after its writers are sealed and the completed run is published.
+Managed Replay rebuilds stale or missing results during dependency-index
+preparation, before its readiness budget starts. Standalone Replay uses the same
+fallback. Caches bind the complete Case/Global inventory, file identities,
+request facts, rule fingerprint and analysis version; rule changes reuse valid
+transaction facts. Cross-process locks serialize cold construction. Warm ownership
+loads read no SQL or response payloads. Global construction reuses paged metadata
+and seeks only the selected original exchanges.
+
+Before Target admission, Replay retains only compact ownership keys for selected
+Cases. Proven foreign operations do not impose that Case's consumption obligation
+or outrank its own matching candidates. Finite delivery and failures stay with
+the protocol adapter. The report's `process_owned_mysql_exchanges` retains the
+original wire identity, rule and trigger Case. Policy reclassification restores
+these original obligations before checking the current rules, so removing a rule
+does not preserve an old exemption. Business COMMITs remain required.
+
 The API-origin MySQL planner also accepts a single-table UPDATE with literal
 or `?` assignments and an identity predicate. For example:
 

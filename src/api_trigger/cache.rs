@@ -13,7 +13,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const VERSION: u32 = 13;
+const VERSION: u32 = 14;
+pub(crate) const FRAGMENT: &str = ".mysql-ownership.json";
 #[derive(Serialize, Deserialize)]
 struct Envelope {
     checksum: String,
@@ -52,6 +53,14 @@ pub(crate) fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> R
         let request = file.with_file_name("request.json");
         stamps.insert(request.clone(), FileStamp::read(&request)?);
     }
+    let global = root.join("global-dependencies.jsonl");
+    if global.try_exists()? {
+        stamps.insert(global.clone(), FileStamp::read(&global)?);
+    }
+    let stamps: BTreeMap<_, _> = stamps
+        .into_iter()
+        .map(|(path, stamp)| Ok((path.strip_prefix(&root)?.to_owned(), stamp)))
+        .collect::<Result<_>>()?;
     let rules_sha256 = digest(&serde_json::to_vec(&rules)?);
     let directory = crate::dependency_index::store::cache_directory(&root);
     private_directory(&directory)?;
@@ -64,17 +73,28 @@ pub(crate) fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> R
         .truncate(false)
         .open(directory.join("api-origins.lock"))?;
     lock.lock()?;
-    if let Ok(raw) = fs::read(&cache)
-        && let Ok(mut envelope) = serde_json::from_slice::<Envelope>(&raw)
-        && digest(&serde_json::to_vec(&envelope.payload)?) == envelope.checksum
-        && envelope.payload.version == VERSION
-        && envelope.payload.rules_sha256 == rules_sha256
-        && envelope.payload.stamps == stamps
-    {
-        ensure!(stamps.iter().all(|(path, expected)| FileStamp::read(path).is_ok_and(|stamp| stamp == *expected)),
-            "recording changed while reading API origin cache");
-        envelope.payload.index.cache_reused = true;
-        return Ok(envelope.payload.index);
+    for path in [&cache, &root.join(FRAGMENT)] {
+        if let Ok(raw) = fs::read(path)
+            && let Ok(mut envelope) = serde_json::from_slice::<Envelope>(&raw)
+            && digest(&serde_json::to_vec(&envelope.payload)?) == envelope.checksum
+            && envelope.payload.version == VERSION
+            && envelope.payload.rules_sha256 == rules_sha256
+            && envelope.payload.stamps == stamps
+        {
+            ensure!(
+                stamps
+                    .iter()
+                    .all(|(path, expected)| FileStamp::read(&root.join(path))
+                        .is_ok_and(|stamp| stamp == *expected)),
+                "recording changed while reading API origin cache"
+            );
+            if path != &cache {
+                persist(&cache, &raw)?;
+            }
+            paths(&mut envelope.payload.index, &root, false)?;
+            envelope.payload.index.cache_reused = true;
+            return Ok(envelope.payload.index);
+        }
     }
     let pointers: std::collections::BTreeSet<_> = rules
         .iter()
@@ -84,29 +104,50 @@ pub(crate) fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> R
     let mysql = rules
         .iter()
         .any(|r| matches!(r, BackgroundDependencyRuleConfig::Mysql { .. }));
+    let transactions = mysql
+        .then(|| crate::dependency_index::mysql_transactions::load(&root, &files))
+        .transpose()?;
+    let transaction_files: BTreeMap<_, _> = transactions
+        .as_ref()
+        .into_iter()
+        .flat_map(|t| &t.files)
+        .map(|file| (file.path.clone(), file))
+        .collect();
     let mut evidence = Vec::new();
     for path in files {
         let Some(request) = request::read(&path.with_file_name("request.json"), &pointers)? else {
             continue;
         };
+        let relative = path.strip_prefix(&root)?.to_owned();
+        let mut index = crate::dependency_index::load_file(&path)?;
+        if let Some(file) = transaction_files.get(&relative) {
+            index.mysql = Some(file.records.clone());
+        }
         evidence.push(EvidenceFile {
-            request,
-            index: if mysql {
-                crate::dependency_index::store::load_mysql_file(&path)?
-            } else {
-                crate::dependency_index::load_file(&path)?
-            },
+            request: Some(request),
+            relative,
+            index,
             path,
         });
     }
-    let mut index = build(&evidence, &rules)?;
+    if let Some(file) = transaction_files.get(Path::new("global-dependencies.jsonl")) {
+        evidence.push(EvidenceFile {
+            path: global,
+            relative: file.path.clone(),
+            request: None,
+            index: file.index(),
+        });
+    }
+    let mut index = build(&evidence, &rules, transactions.as_ref())?;
     index.evidence_fingerprint = digest(&serde_json::to_vec(&(VERSION, &rules_sha256, &stamps))?);
     ensure!(
         stamps
             .iter()
-            .all(|(path, expected)| FileStamp::read(path).is_ok_and(|stamp| stamp == *expected)),
+            .all(|(path, expected)| FileStamp::read(&root.join(path))
+                .is_ok_and(|stamp| stamp == *expected)),
         "recording changed while building API origin index"
     );
+    paths(&mut index, &root, true)?;
     let saved = Cache {
         version: VERSION,
         rules_sha256,
@@ -125,7 +166,58 @@ pub(crate) fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> R
     }
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&cache, fs::Permissions::from_mode(0o600))?;
-    Ok(envelope.payload.index)
+    let mut index = envelope.payload.index;
+    paths(&mut index, &root, false)?;
+    Ok(index)
+}
+
+fn paths(index: &mut OriginIndex, root: &Path, relative: bool) -> Result<()> {
+    for witness in index
+        .witnesses
+        .values_mut()
+        .chain(index.wire_witnesses.values_mut())
+    {
+        witness.dependencies_path = if relative {
+            witness.dependencies_path.strip_prefix(root)?.to_owned()
+        } else {
+            ensure!(
+                !witness.dependencies_path.is_absolute()
+                    && witness
+                        .dependencies_path
+                        .components()
+                        .all(|c| matches!(c, std::path::Component::Normal(_))),
+                "invalid portable ownership path"
+            );
+            root.join(&witness.dependencies_path)
+        };
+    }
+    Ok(())
+}
+
+pub(crate) fn seal(root: &Path, rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
+    crate::dependency_index::mysql_transactions::seal(root)?;
+    let rules: Vec<_> = rules
+        .iter()
+        .filter(|rule| rule.trigger_source().is_some())
+        .cloned()
+        .collect();
+    if rules.is_empty() {
+        return Ok(());
+    }
+    load(root, &rules)?;
+    let path = crate::dependency_index::store::cache_directory(root).join(format!(
+        "api-origins-{}.json",
+        digest(&serde_json::to_vec(&rules)?)
+    ));
+    persist(&root.join(FRAGMENT), &fs::read(path)?)
+}
+
+fn persist(path: &Path, bytes: &[u8]) -> Result<()> {
+    if path.exists() {
+        crate::config::edit::write_atomic(path, bytes)
+    } else {
+        crate::config::edit::create_atomic(path, bytes)
+    }
 }
 
 fn private_directory(path: &Path) -> Result<()> {

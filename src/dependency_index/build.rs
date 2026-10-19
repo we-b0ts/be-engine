@@ -90,7 +90,7 @@ impl Builder {
                 metadata: Vec::new(),
                 http: Vec::new(),
                 redis: Vec::new(),
-                mysql: None,
+                mysql: Some(Vec::new()),
                 redis_lanes: Default::default(),
                 proof_records: Some(Vec::new()),
             },
@@ -110,6 +110,23 @@ impl Builder {
         };
         self.index.events += 1;
         let tag = value["event_type"].as_str().unwrap_or_default();
+        if tag == "mysql_exchange" {
+            let record = super::mysql::record(
+                RecordLocation {
+                    line,
+                    offset,
+                    length: raw.len() as u64,
+                    sha256: digest(raw),
+                },
+                value,
+            )
+            .expect("MySQL record");
+            self.index
+                .mysql
+                .as_mut()
+                .expect("SQL metadata inventory")
+                .push(record);
+        }
         if tag.ends_with("_exchange") {
             self.index
                 .proof_records

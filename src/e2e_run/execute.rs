@@ -423,6 +423,8 @@ async fn run_active(
     state: &mut ActiveRunState,
 ) -> Result<()> {
     let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingIndex);
+    let index_deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(config.replay_loading.index_timeout_seconds);
     crate::dependency_index::store::prepare_with_timeout(
         layout.case_source.clone(),
         config.replay_loading.index_timeout_seconds,
@@ -430,6 +432,19 @@ async fn run_active(
     )
     .await
     .context("Replay dependency index preparation failed")?;
+    // Cold Source analysis belongs to the index budget, not listener readiness
+    // or per-request execution. The Replay process imports the resulting cache.
+    let source = layout.case_source.clone();
+    let rules =
+        crate::config::SourceTrafficPolicyConfig::load_with_fingerprints(&config.replay_policy)?
+            .0
+            .process_owned_dependencies;
+    let preparation =
+        tokio::task::spawn_blocking(move || crate::api_trigger::prepare(&source, &rules));
+    tokio::time::timeout_at(index_deadline, preparation)
+        .await
+        .context("MySQL Source ownership preparation exceeded the dependency index budget")?
+        .context("MySQL Source ownership preparation task failed")??;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Building);
     let target_image = build_target_image(config, layout).await?;
     let mut replay =
