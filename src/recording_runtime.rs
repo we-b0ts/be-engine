@@ -44,6 +44,11 @@ impl AppState {
     where
         F: std::future::Future<Output = Result<()>>,
     {
+        anyhow::ensure!(
+            self.config().upstream_routes.is_empty()
+                || self.inner.recording_upstreams.get().is_some(),
+            "Kubernetes upstream routes must be prepared by traffic-e2e record before starting Recorder"
+        );
         tokio::pin!(shutdown);
         let control_server = match control_socket {
             Some(path) => Some(

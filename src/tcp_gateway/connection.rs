@@ -143,6 +143,18 @@ async fn handle_connection(
         .observe_accessed_endpoint(&entry.domain, fake_addr.port())
         .await?;
 
+    if let Err(error) = state.recording_upstream(&entry.domain, fake_addr.port()) {
+        record_proxy_error(
+            &state,
+            "tcp_gateway",
+            client_addr,
+            Some(format!("{}:{}", entry.domain, fake_addr.port())),
+            error.to_string(),
+        )
+        .await;
+        return Err(error);
+    }
+
     if state.dns_bypass_matcher().matches(&entry.domain) {
         return proxy_raw_tcp(
             client,
@@ -247,7 +259,7 @@ async fn proxy_raw_tcp(
 ) -> Result<()> {
     let id = Uuid::new_v4();
     let started = Instant::now();
-    let upstream_addr = upstream_addr(&entry, fake_addr.port())?;
+    let upstream_addr = routed_upstream_addr(&state, &entry, fake_addr.port())?;
     let mut upstream = match TcpStream::connect(upstream_addr).await {
         Ok(upstream) => upstream,
         Err(err) => {
@@ -631,7 +643,18 @@ async fn upstream_looks_like_mysql_after_data(stream: &TcpStream) -> Result<bool
     upstream_looks_like_mysql(stream).await
 }
 
-pub(super) fn upstream_addr(entry: &FakeDnsEntry, port: u16) -> Result<SocketAddr> {
+pub(super) fn routed_upstream_addr(
+    state: &AppState,
+    entry: &FakeDnsEntry,
+    port: u16,
+) -> Result<SocketAddr> {
+    if let Some(address) = state.recording_upstream(&entry.domain, port)? {
+        return Ok(address);
+    }
+    upstream_addr(entry, port)
+}
+
+fn upstream_addr(entry: &FakeDnsEntry, port: u16) -> Result<SocketAddr> {
     let ip = entry
         .real_ips
         .first()

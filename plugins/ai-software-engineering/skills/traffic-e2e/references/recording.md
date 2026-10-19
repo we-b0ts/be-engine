@@ -36,6 +36,15 @@ project YAML, `record --policy PATH` loads the same typed policy Source effects.
 With a project YAML, an explicit `--policy` must name that same file. The default HTTP include
 rule covers all methods and paths; existing exclusions still apply. Keep
 Source and Recorder on separate loopback ports in the container namespace.
+For external Kubernetes dependencies, configure `recorder.upstream_routes` with
+the original hostname, namespace and Service, plus optional `recorder.kubernetes`
+kubectl/kubeconfig/context settings. The controller discovers Service TCP ports
+and waits for supervised forwards before starting Source; no port fields are
+required. Copy kubectl from its independent distribution image. Supply
+controller-private credentials through runtime mounts or an explicitly reviewed
+project recording image build. Forward exit fails the recording; Replay never
+starts these forwards.
+See the repository's `docs/kubernetes-recording.md` for the full contract.
 For a host bind mount, set `TRAFFIC_E2E_ARTIFACT_OWNER` to the host user's numeric
 UID:GID so completed evidence remains privately readable by that user.
 

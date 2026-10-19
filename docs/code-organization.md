@@ -364,6 +364,13 @@ is unclear.
   `source` owns fixed-identity process startup, trust, isolation and cleanup.
   Redis primitives stay in the gateway SDK. CLI bootstrap initializes encryption
   before starting Tokio threads. There is one public Source recording command.
+  Its `kubernetes` child owns recording-startup Service discovery, ready barriers
+  and supervised port-forward shutdown. `discovery` interprets bounded Service
+  metadata; `process` owns scoped kubectl process groups and bounded pipe reads.
+  `config/upstream_routes` owns only the strict route/cluster configuration.
+  `recording_upstream` owns immutable recording-only dial bindings; DNS and native
+  gateways preserve original host/port identity and protocol capture. Replay does
+  not load tunnel bindings or start kubectl.
 - `local_interception` owns reusable fixed-identity firewall setup/cleanup and
   diagnostics; CLI entry points delegate to it. `command_output` owns shared
   broken-pipe-safe diagnostic output for those library and CLI callers.

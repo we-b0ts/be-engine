@@ -127,6 +127,42 @@ Project recording images use `FROM <engine-image>@sha256:<digest> AS engine`
 and `COPY --from=engine /usr/local/bin/traffic-e2e /usr/local/bin/traffic-e2e`.
 Their normal Source image supplies application code and system libraries;
 recording image builds do not need an engine checkout, Cargo or SSH access.
+Projects using Kubernetes dependencies copy kubectl from its independent
+[distribution image](#kubectl-distribution-image), not from the engine stage.
+
+### kubectl distribution image
+
+Package a verified static Linux/amd64 kubectl independently of the engine:
+
+```bash
+./scripts/build-kubectl.sh --kubectl /data0/icy/bin/kubectl --publish
+```
+
+Without `--publish`, this only builds and checks the local image. The default tag
+is `registry.api.demo.test/weibo_rd_if/kubectl:<client-version>` without the leading
+`v`. `--tag IMAGE` overrides it. The script validates the executable format and
+client platform, stages only the binary, records its version and SHA256 labels,
+and checks it in a network-disabled container. Publication refuses an existing
+tag and inspects the pushed manifest. Docker, `file`, `sha256sum` and Python 3 are
+required; neither the binary nor cluster credentials are committed.
+
+The published `kubectl:1.24.4` manifest is
+`sha256:253a3a69fd34454f6ddf584a1339d7a748c8268a038afe2c5d83836d6c6ec0af`.
+Its binary SHA256 is
+`7a5bd1dc2ef61468e2a01bd66cc6590e472cab984229c88d5f67c375b9f13ccc`.
+The scratch image contains only `/usr/local/bin/kubectl`; project recording
+images copy it from a separate build stage as shown in
+[`docker/record/Dockerfile.example`](../docker/record/Dockerfile.example).
+The engine and Recorder runtime remain independent of this tool image.
+
+Configure [Kubernetes upstream routes](kubernetes-recording.md) to discover
+Service ports and supervise forwards before Source starts. Projects choose
+controller-private runtime mounts or explicitly package a portable kubeconfig
+in their dedicated recording image through a private build context. A packaged
+kubeconfig retains its credentials in image layers; rebuilding is required to
+rotate them. Keep these files outside Git and restrict their image path to root
+with a `0700` parent directory and a `0600` file. The shared engine and kubectl
+distribution images contain no kubeconfig.
 
 ### Runtime images
 

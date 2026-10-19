@@ -3,11 +3,15 @@
 # It also needs setpriv (util-linux), iptables, iproute2, and its normal CA bundle.
 ARG SOURCE_IMAGE
 ARG ENGINE_IMAGE
+ARG KUBECTL_IMAGE=be-engine-kubectl:1.24.4
 FROM ${ENGINE_IMAGE} AS engine
+FROM ${KUBECTL_IMAGE} AS kubectl
 FROM ${SOURCE_IMAGE}
 
 # Supply an immutable published engine image; no Rust build or SSH is needed here.
 COPY --from=engine /usr/local/bin/traffic-e2e /usr/local/bin/traffic-e2e
+# kubectl has its own versioned distribution image, independent of the engine.
+COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
 
 # Controller owns interception and private evidence; it launches Source as 998:998.
 USER 0:0

@@ -52,6 +52,7 @@ mod recording_completion;
 mod recording_control;
 mod recording_network;
 mod recording_runtime;
+mod recording_upstream;
 mod redis;
 mod replay;
 mod repository;
@@ -143,6 +144,7 @@ pub use config::{
     plan_mysql_background_dependency, plan_redis_background_dependency,
     resolve_unified_policy_path,
 };
+pub use config::{KubernetesConfig, UpstreamRouteConfig, UpstreamTransportConfig};
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
@@ -297,6 +299,7 @@ struct AppStateInner {
     recorder: Recorder,
     dns_registry: FakeDnsRegistry,
     dns_bypass_matcher: DomainMatcher,
+    recording_upstreams: std::sync::OnceLock<recording_upstream::RecordingUpstreams>,
     ca: MitmCa,
     client: ProxyClient,
     upstream_tls_config: Arc<ClientConfig>,
@@ -359,6 +362,13 @@ impl AppState {
         let cache_snapshots = CacheSnapshotStore::new(&config.recording);
         let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
             .context("failed to initialize DNS bypass matcher")?;
+        for route in &config.upstream_routes {
+            anyhow::ensure!(
+                !dns_bypass_matcher.matches(&route.host),
+                "upstream route for {} conflicts with DNS bypass",
+                route.host
+            );
+        }
         let recording_output_dir = config.recording_output_dir();
         let recording_api_limits = recording_apis
             .iter()
@@ -408,6 +418,7 @@ impl AppState {
                 recorder,
                 dns_registry,
                 dns_bypass_matcher,
+                recording_upstreams: std::sync::OnceLock::new(),
                 ca,
                 client,
                 upstream_tls_config,
