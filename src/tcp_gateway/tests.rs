@@ -19,6 +19,7 @@ use tokio_rustls::{TlsAcceptor, TlsConnector};
 use crate::dns_mock::FakeDnsEntry;
 
 use super::*;
+mod upstream_routes;
 
 #[tokio::test]
 async fn mitms_fake_ip_https_and_records_exchange() {

@@ -83,8 +83,12 @@ async fn handle_datagram(
             .await?;
     }
     let payload = &datagram.payload;
+    let kubernetes_route = target
+        .as_ref()
+        .is_some_and(|target| state.has_recording_upstream(&target.entry.domain));
     let upstream_addr = target
         .as_ref()
+        .filter(|_| !kubernetes_route)
         .and_then(|target| upstream_addr(&target.entry, fake_addr.port()).ok());
 
     let mut error = None;
@@ -106,6 +110,10 @@ async fn handle_datagram(
             )
             .await;
         error = Some("request blocked by recording access policy".to_string());
+    } else if kubernetes_route {
+        error = Some(
+            "Kubernetes port-forward routes support TCP only; UDP cannot be forwarded".to_string(),
+        );
     } else if state.config().udp_gateway.forward {
         match upstream_addr {
             Some(upstream) => {

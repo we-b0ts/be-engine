@@ -75,7 +75,18 @@ async fn handle_query(
         .observe_resolved_domain(&question.domain)
         .await?;
     let response = if question.qtype == 1 && question.qclass == 1 {
-        if let Some(entry) = state
+        if state.has_recording_upstream(&question.domain) {
+            let entry = state
+                .dns_registry()
+                .allocate_or_update(&question.domain, vec![Ipv4Addr::LOCALHOST])
+                .await?;
+            build_fake_a_response(
+                &query,
+                question.question_end,
+                entry.fake_ip,
+                config.ttl_seconds,
+            )?
+        } else if let Some(entry) = state
             .dns_registry()
             .get_response_alias_by_domain(&question.domain)
             .await
@@ -293,6 +304,62 @@ fn read_u16(packet: &[u8], offset: usize) -> Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn kubernetes_route_returns_fake_ip_without_contacting_real_dns() {
+        let temp = tempfile::tempdir().unwrap();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let mut config = crate::AppConfig::default();
+        config.dns_mock.enabled = true;
+        config.tcp_gateway.enabled = true;
+        let upstream = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        config.dns_mock.upstream_dns = upstream.local_addr().unwrap();
+        config.dns_mock.registry_path = temp.path().join("dns.json");
+        config.recording.output_dir = temp.path().join("recordings");
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+        let host = "api.team.svc.cluster.local";
+        config.upstream_routes.push(crate::UpstreamRouteConfig {
+            host: host.into(),
+            via: crate::UpstreamTransportConfig::KubernetesPortForward {
+                namespace: "team".into(),
+                service: "api".into(),
+            },
+        });
+        let state = AppState::new(config).await.unwrap();
+        let server = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        handle_query(
+            server,
+            state.clone(),
+            query_for(host),
+            client.local_addr().unwrap(),
+        )
+        .await
+        .unwrap();
+        let mut response = [0; 512];
+        let received = tokio::time::timeout(Duration::from_secs(1), client.recv(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        let ips = parse_a_answers(&response[..received]).unwrap();
+        assert_eq!(ips.len(), 1);
+        assert_ne!(ips[0], Ipv4Addr::LOCALHOST);
+        assert_eq!(
+            state
+                .dns_registry()
+                .get_by_fake_ip(ips[0])
+                .await
+                .unwrap()
+                .domain,
+            host
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), upstream.recv(&mut response))
+                .await
+                .is_err()
+        );
+    }
 
     fn query_for(domain: &str) -> Vec<u8> {
         let mut query = Vec::new();

@@ -1,6 +1,7 @@
 //! Standalone Source/Recorder service with optional gateway coordination.
 
 mod coordination;
+mod kubernetes;
 mod options;
 mod proxy;
 mod source;
@@ -13,7 +14,7 @@ use crate::{
     AppState, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
 };
 use anyhow::{Context, Result, bail, ensure};
-use std::{path::Path, time::Duration};
+use std::{future::Future, path::Path, pin::Pin, time::Duration};
 use tokio::{
     net::TcpListener,
     sync::{oneshot, watch},
@@ -46,6 +47,29 @@ pub async fn run(options: RecordOptions) -> Result<()> {
             "recording service unified policy Source projection loaded"
         );
     }
+    let mut forwards = kubernetes::PortForwards::default();
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
+    let prepared = tokio::select! {
+        result = forwards.prepare(&config, Duration::from_secs(options.startup_timeout_seconds)) => result.map(|()| true),
+        signal = &mut shutdown => signal.map(|()| false),
+    };
+    let result = match prepared {
+        Ok(true) => run_prepared(options, config, &mut forwards, shutdown.as_mut()).await,
+        Ok(false) => Ok(()),
+        Err(error) => Err(error),
+    };
+    let cleanup = forwards.shutdown().await;
+    result?;
+    cleanup
+}
+
+async fn run_prepared(
+    options: RecordOptions,
+    config: crate::AppConfig,
+    forwards: &mut kubernetes::PortForwards,
+    mut shutdown: Pin<&mut impl Future<Output = Result<()>>>,
+) -> Result<()> {
     let coordination = coordination::Coordination::connect(&options).await?;
     let program =
         process::resolve_source_program(&options.source_command[0], &options.source_workdir)?;
@@ -58,6 +82,7 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         Some(options.storage_owner()?),
     )
     .await?;
+    state.install_recording_upstreams(forwards.routes.clone())?;
     let guard = if options.no_interception {
         None
     } else {
@@ -76,10 +101,9 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         )?)
     };
     let control = runtime.path.join("recorder.sock");
-    let (stop_recorder, stopped_recorder) = oneshot::channel();
+    let (stop_recorder, stopped_recorder) = oneshot::channel::<Result<()>>();
     let mut recorder = tokio::spawn(state.clone().run_until(Some(control.clone()), async {
-        let _ = stopped_recorder.await;
-        Ok(())
+        stopped_recorder.await.unwrap_or(Ok(()))
     }));
     let relay = proxy::Relay::new(
         coordination.reservations.clone(),
@@ -101,11 +125,10 @@ pub async fn run(options: RecordOptions) -> Result<()> {
     let mut adapter = None;
     let mut recorder_finished = false;
     let mut adapter_finished = false;
-    let shutdown = shutdown_signal();
-    tokio::pin!(shutdown);
-    let result = async {
+    let mut result = async {
         tokio::select! {
             ready = wait_startup(&control, options.startup_timeout_seconds, false, &mut recorder, &mut recorder_finished) => ready?,
+            error = forwards.failure() => return Err(error),
             signal = &mut shutdown => { signal?; return Ok(()); }
         }
         source::verify_sensitive_state_isolated(&options.data_root, &options.data_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("recordings"), &config.tls.ca_key_path)?;
@@ -114,13 +137,18 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         let source = source.as_mut().unwrap();
         tokio::select! {
             ready = wait_startup(&control, options.startup_timeout_seconds, true, &mut recorder, &mut recorder_finished) => ready?,
+            error = forwards.failure() => return Err(error),
             status = source.wait() => bail!("Source exited during startup: {}", status?),
             signal = &mut shutdown => { signal?; return Ok(()); }
         }
         let listener = TcpListener::bind(options.listen).await?;
         adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped)));
         // Cleanup always tries token-checked unregister, even if SET timed out.
-        coordination.register().await?;
+        tokio::select! {
+            registered = coordination.register() => registered?,
+            error = forwards.failure() => return Err(error),
+            signal = &mut shutdown => { signal?; return Ok(()); }
+        }
         relay.open();
         info!(listen = %options.listen, run_id = %state.recorder().run_dir.file_name().unwrap().to_string_lossy(),
             manifest = %state.recorder().run_dir.join("recording-run.json").display(),
@@ -131,6 +159,7 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         loop {
             tokio::select! {
                 signal = &mut shutdown => { signal?; break Ok(()); }
+                error = forwards.failure() => break Err(error),
                 _ = state.wait_for_interaction_source_stop() => {
                     process::stop_source(source).await?;
                     break Ok(());
@@ -161,7 +190,21 @@ pub async fn run(options: RecordOptions) -> Result<()> {
     {
         warn!("recording service request drain timed out");
     }
-    let _ = stop_recorder.send(());
+    if result.is_ok()
+        && let Some(error) = forwards.try_failure()
+    {
+        result = Err(error);
+    }
+    if let Err(error) = forwards.shutdown().await
+        && result.is_ok()
+    {
+        result = Err(error);
+    }
+    let recorder_shutdown = result
+        .as_ref()
+        .copied()
+        .map_err(|error| anyhow::anyhow!("recording service failed: {error}"));
+    let _ = stop_recorder.send(recorder_shutdown);
     let recorder_cleanup = if recorder_finished {
         Ok(())
     } else {

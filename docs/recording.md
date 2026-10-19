@@ -185,9 +185,17 @@ Build and container lifecycle belong to the deployment caller. The controller
 runs as root for interception and launches Source as 998:998; pass exit signals
 to the controller. Persist the entire data root, including private keys.
 Use a published engine image as a build stage and copy
-`/usr/local/bin/traffic-e2e` into the Source image. See the
+`/usr/local/bin/traffic-e2e` into the Source image. For Kubernetes recording,
+copy `/usr/local/bin/kubectl` from its separate versioned distribution image.
+See the
 [engine image build and publication](development.md#engine-binary-image)
 instructions; project recording builds do not compile the engine or need SSH.
+The [kubectl image builder](development.md#kubectl-distribution-image) accepts an
+existing static Linux/amd64 executable, independently of the engine runtime.
+Supply controller-private credentials through read-only runtime mounts or an
+explicitly packaged project recording image using a private build context.
+Configure [Kubernetes dependency recording](kubernetes-recording.md)
+to discover Service TCP ports and prepare supervised forwards before Source starts.
 
 Project Dockerfiles have separate roles:
 

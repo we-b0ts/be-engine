@@ -37,8 +37,10 @@ mod repository_protocol;
 pub(crate) mod rule_document;
 pub(crate) mod source_traffic_policy;
 mod unified_policy_path;
+pub(crate) mod upstream_routes;
 pub use unified_policy_path::resolve_unified_policy_path;
 pub(crate) use unified_policy_path::resolve_unified_policy_root;
+pub use upstream_routes::{KubernetesConfig, UpstreamRouteConfig, UpstreamTransportConfig};
 
 pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
@@ -115,6 +117,10 @@ pub const DEFAULT_UDP_GATEWAY_LISTEN: &str = "127.0.0.1:4002";
 pub struct AppConfig {
     pub artifacts: Option<ArtifactsConfig>,
     pub dns_mock: DnsMockConfig,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub upstream_routes: Vec<UpstreamRouteConfig>,
+    #[serde(skip_serializing_if = "KubernetesConfig::is_default")]
+    pub kubernetes: KubernetesConfig,
     pub tcp_gateway: TcpGatewayConfig,
     pub udp_gateway: UdpGatewayConfig,
     pub http: HttpConfig,
@@ -298,6 +304,7 @@ impl AppConfig {
     pub fn validate(&self) -> Result<()> {
         self.validate_artifacts()?;
         self.dns_mock.validate()?;
+        upstream_routes::validate(self)?;
         self.recording.validate()?;
         process_owned_dependencies::validate(&self.process_owned_dependencies)?;
         self.http_response_rewrite.validate()?;

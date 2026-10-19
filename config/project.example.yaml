@@ -34,6 +34,19 @@ recorder:
   # policy values belong in the single project.policy file.
   artifacts:
     root_dir: ./.traffic-e2e/local/artifacts
+  # Optional external-cluster Service forwarding, prepared before Source starts.
+  # kubeconfig and referenced credentials are read-only runtime mounts.
+  kubernetes:
+    kubectl_binary: kubectl
+    # kubeconfig: /run/kube/config
+    # context: recording-cluster
+  upstream_routes: []
+  # - host: chat-shell.example.svc.cluster.local
+  #   via:
+  #     type: kubernetes_port_forward
+  #     namespace: example
+  #     service: chat-shell
+  # Service TCP ports are discovered automatically; no port fields are accepted.
   dns_mock:
     enabled: true
     listen: 127.0.0.153:4053

@@ -46,8 +46,8 @@ mod tests;
 #[cfg(test)]
 mod timeout_tests;
 
+use connection::routed_upstream_addr as upstream_addr;
 pub(crate) use connection::run;
-use connection::upstream_addr;
 use detection::DetectedProtocol;
 pub(crate) use detection::{
     DetectedProtocol as DetectedClientProtocol, Detection as ClientProtocolDetection,
@@ -71,7 +71,7 @@ async fn serve_http_connection(
     client_addr: Option<String>,
     state: AppState,
 ) -> Result<()> {
-    let upstream_addr = upstream_addr(&entry, fake_addr.port())?;
+    let upstream_addr = upstream_addr(&state, &entry, fake_addr.port())?;
     let client = DependencyIo::new(client, state.dependency_connections(), "http")?;
     let termination = ClientTermination::default();
     let io = TokioIo::new(ObservedClientIo::new(client, termination.clone()));
@@ -112,7 +112,7 @@ async fn serve_https_mitm_connection(
     client_addr: Option<String>,
     state: AppState,
 ) -> Result<()> {
-    let upstream_addr = upstream_addr(&entry, fake_addr.port())?;
+    let upstream_addr = upstream_addr(&state, &entry, fake_addr.port())?;
     let authority = format_authority(&entry.domain, fake_addr.port(), 443);
     let server_config = state
         .ca()
