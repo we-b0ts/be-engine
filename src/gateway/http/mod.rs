@@ -26,6 +26,7 @@ use crate::recorder::{
 use crate::recording_control::RecordingListener;
 
 mod admission;
+pub(crate) mod interaction;
 mod lifecycle;
 mod ready;
 mod recovery;
@@ -112,6 +113,7 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
                 .preserve_header_case(true)
                 .title_case_headers(true)
                 .serve_connection(io, service)
+                .with_upgrades()
                 .await
             {
                 warn!(error = %err, "HTTP gateway connection ended with error");
@@ -149,6 +151,9 @@ async fn handle_gateway_request(
         );
     }
     let request_headers = req.headers().clone();
+    if let Some(protocol) = interaction::request_protocol(&req) {
+        return interaction::handle(req, state, config, client_addr, protocol).await;
+    }
     let request_headers_for_record =
         match state.recorder().capture_request_headers(&request_headers) {
             Ok(headers) => headers,
@@ -270,6 +275,8 @@ async fn handle_gateway_request(
         }
     }
 
+    let case_guard = case_guard.map(std::sync::Arc::new);
+    let stream_guard = case_guard.clone();
     let lifecycle_state = state.clone();
     let active_case_id = case.as_ref().map(|case| case.id);
     let (mut timeout_recovery, timeout_response) = match &case {
@@ -293,7 +300,7 @@ async fn handle_gateway_request(
             );
         }
 
-        let mut case_request_record = case.as_ref().map(|_| CaseRequestRecord {
+        let case_request_record = case.as_ref().map(|_| CaseRequestRecord {
             timestamp: Utc::now(),
             client_addr: client_addr.clone(),
             method: method.to_string(),
@@ -310,6 +317,7 @@ async fn handle_gateway_request(
                 Some(&request_headers),
             ),
             sse_observation: None,
+            interaction: None,
         });
 
         let outbound_uri = match build_upstream_uri(&upstream_base, &original_uri) {
@@ -371,7 +379,7 @@ async fn handle_gateway_request(
             state.client(),
             outbound,
             request_timeout,
-            should_record.then_some(state.config().recording.max_body_bytes),
+            config.record_streaming && config.record_raw_streaming,
             timeout_recovery.as_mut(),
         )
         .await;
@@ -380,7 +388,7 @@ async fn handle_gateway_request(
             status,
             headers: mut response_headers,
             body: mut body_bytes,
-            sse_observation,
+            stream,
         } = match upstream_response {
             Ok(response) => response,
             Err(err) => {
@@ -420,12 +428,32 @@ async fn handle_gateway_request(
                 .await;
             }
         };
-        if sse_observation.is_some()
-            && let Some(request) = &mut case_request_record
-        {
-            request.sse_observation = Some(crate::http::sse::SseObservationPolicy::default());
+        if let Some(stream) = stream {
+            if let (Some(case), Some(guard)) = (case.clone(), stream_guard) {
+                return interaction::adopt_response(
+                    state,
+                    case,
+                    guard,
+                    client_addr,
+                    method,
+                    original_uri,
+                    admitted_case_pattern.unwrap_or_else(|| "/".to_owned()),
+                    request_headers_for_record,
+                    request_headers,
+                    request_body,
+                    upstream_base,
+                    started,
+                    status,
+                    response_headers,
+                    stream,
+                )
+                .await;
+            }
+            let mut response = Response::new(stream.map_err(anyhow::Error::from).boxed_unsync());
+            *response.status_mut() = status;
+            *response.headers_mut() = response_headers;
+            return response;
         }
-
         let mut discovered_tcp_targets = Vec::new();
         match rewrite::apply(
             &state.config().http_response_rewrite,
@@ -497,6 +525,7 @@ async fn handle_gateway_request(
                     &body_bytes,
                     state.config().recording.max_body_bytes,
                 )),
+                response_stream: None,
                 discovered_tcp_targets,
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
@@ -534,7 +563,8 @@ async fn handle_gateway_request(
                     )),
                     duration_ms: started.elapsed().as_millis(),
                     error: None,
-                    sse_observation,
+                    sse_observation: None,
+                    interaction: None,
                 },
                 state
                     .active_case_invalidation(case.id)
@@ -623,6 +653,7 @@ async fn record_gateway_error_with_status(
                     None,
                 ),
                 sse_observation: None,
+                interaction: None,
             },
             CaseResponseRecord {
                 timestamp: Utc::now(),
@@ -634,6 +665,7 @@ async fn record_gateway_error_with_status(
                 duration_ms: ctx.started.elapsed().as_millis(),
                 error: Some(error.clone()),
                 sse_observation: None,
+                interaction: None,
             },
             ctx.state
                 .active_case_invalidation(case.id)
@@ -667,6 +699,7 @@ async fn record_gateway_error_with_status(
             response_status: None,
             response_headers: None,
             response_body: None,
+            response_stream: None,
             discovered_tcp_targets: Vec::new(),
             duration_ms: ctx.started.elapsed().as_millis(),
             error: Some(error.clone()),

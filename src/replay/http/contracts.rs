@@ -235,6 +235,7 @@ pub(super) fn materialize_response(
     exchange.record.response_body = Some(RecordedBodyCapture {
         encoding: "base64".into(),
         truncated: false,
+        stored_len: Some(value.len()),
         data: STANDARD.encode(value),
     });
     exchange.record.response_headers = Some(request_headers::capture(&native_headers));

@@ -7,6 +7,7 @@ pub(crate) mod native;
 mod unified;
 pub use headers::date::ResponseHeaderDateCandidate;
 pub(in crate::replay) mod hessian2;
+mod interaction;
 mod joined_string;
 pub(in crate::replay) mod jwt;
 mod model;
@@ -79,7 +80,8 @@ pub(crate) fn read_expected_response_body(
     gateway_protocol: ResponseGatewayProtocol,
 ) -> Result<Vec<u8>> {
     let bytes = read_regular(path, "expected response")?;
-    let response: ExpectedResponse = serde_json::from_slice(&bytes)
+    let decrypted = interaction::decrypt_output_bytes(&bytes, path)?;
+    let response: ExpectedResponse = serde_json::from_slice(decrypted.as_deref().unwrap_or(&bytes))
         .with_context(|| format!("invalid expected response {}", path.display()))?;
     let body = response
         .body
@@ -94,8 +96,10 @@ pub(crate) fn read_actual_response_body(
     gateway_protocol: ResponseGatewayProtocol,
 ) -> Result<Vec<u8>> {
     let bytes = read_regular(path, "actual response")?;
-    let response: ActualResponse = serde_json::from_slice(&bytes)
-        .with_context(|| format!("invalid actual response {}", path.display()))?;
+    let decrypted = interaction::decrypt_output_bytes(&bytes, path)?;
+    let response: ActualResponse =
+        serde_json::from_slice(decrypted.as_deref().unwrap_or(&bytes))
+            .with_context(|| format!("invalid actual response {}", path.display()))?;
     response_body_for_gateway(
         decode_body(&response.body, "actual response")?,
         gateway_protocol,
@@ -108,8 +112,10 @@ pub(crate) fn read_replay_request_times(
 ) -> Result<RequestTimes> {
     let request: RecordedRequest =
         serde_json::from_slice(&read_regular(request_path, "recorded request")?)?;
+    let actual_bytes = read_regular(actual_path, "actual response")?;
+    let decrypted_actual = interaction::decrypt_output_bytes(&actual_bytes, actual_path)?;
     let actual: ActualResponse =
-        serde_json::from_slice(&read_regular(actual_path, "actual response")?)?;
+        serde_json::from_slice(decrypted_actual.as_deref().unwrap_or(&actual_bytes))?;
     Ok(RequestTimes {
         source: request.timestamp,
         target: actual.request_sent_at,
@@ -210,15 +216,25 @@ fn assert_recorded_response_with_policy(
     actual_bytes: &[u8],
     policy: &LoadedReplayPolicy,
 ) -> Result<ResponseAssertionCaseReport> {
+    let decrypted_request =
+        crate::request_headers::decrypt_request_bytes(request_bytes, &options.request)?;
+    let request_bytes = decrypted_request.as_deref().unwrap_or(request_bytes);
+    let decrypted_expected =
+        interaction::decrypt_output_bytes(expected_bytes, &options.expected_response)?;
+    let expected_content = decrypted_expected.as_deref().unwrap_or(expected_bytes);
+    let decrypted_actual =
+        interaction::decrypt_output_bytes(actual_bytes, &options.actual_response)?;
+    let actual_content = decrypted_actual.as_deref().unwrap_or(actual_bytes);
     let request: RecordedRequest = serde_json::from_slice(request_bytes)
         .with_context(|| format!("invalid recorded request {}", options.request.display()))?;
-    let expected: ExpectedResponse = serde_json::from_slice(expected_bytes).with_context(|| {
-        format!(
-            "invalid expected response {}",
-            options.expected_response.display()
-        )
-    })?;
-    let actual: ActualResponse = serde_json::from_slice(actual_bytes).with_context(|| {
+    let expected: ExpectedResponse =
+        serde_json::from_slice(expected_content).with_context(|| {
+            format!(
+                "invalid expected response {}",
+                options.expected_response.display()
+            )
+        })?;
+    let actual: ActualResponse = serde_json::from_slice(actual_content).with_context(|| {
         format!(
             "invalid actual response {}",
             options.actual_response.display()
@@ -229,6 +245,13 @@ fn assert_recorded_response_with_policy(
         "unsupported actual response version {}; expected 1",
         actual.version
     );
+    ensure!(
+        expected.sse_observation.is_none() && actual.sse_observation.is_none(),
+        "legacy SSE observation recordings require re-recording with the interaction lifecycle"
+    );
+    let expected_interaction = expected.interaction.as_ref();
+    let actual_interaction = actual.interaction.as_ref();
+    interaction::validate_input(request.interaction.as_ref(), expected_interaction)?;
     let oneway = expected.response_expected == Some(false);
     let expected_status = match expected.status.as_ref() {
         Some(status) => status.code(),
@@ -236,11 +259,16 @@ fn assert_recorded_response_with_policy(
         None => anyhow::bail!("expected response has no status"),
     };
     let expected_body = match expected.body.as_ref().or(expected.frame.as_ref()) {
+        _ if expected_interaction.is_some() => Vec::new(),
         Some(body) => decode_body(body, "expected response")?,
         None if oneway => Vec::new(),
         None => anyhow::bail!("expected response has no body or frame"),
     };
-    let actual_body = decode_body(&actual.body, "actual response")?;
+    let actual_body = if actual_interaction.is_some() {
+        Vec::new()
+    } else {
+        decode_body(&actual.body, "actual response")?
+    };
     let actual_status = actual.status;
     let expected_request_headers = request.headers.clone();
     let expected_body =
@@ -248,7 +276,7 @@ fn assert_recorded_response_with_policy(
     let actual_body = payload::business_body(&request, actual_body, oneway, "actual response")?;
     let expected_status = expected_body.carrier_status().unwrap_or(expected_status);
     let actual_status = actual_body.carrier_status().unwrap_or(actual_status);
-    evaluate_response(
+    let mut report = evaluate_response(
         AssertionInputs {
             times: RequestTimes {
                 source: request.timestamp,
@@ -273,7 +301,10 @@ fn assert_recorded_response_with_policy(
             actual_fingerprint: fingerprint(actual_bytes),
         },
         policy,
-    )
+    )?;
+    interaction::compare(expected_interaction, actual_interaction, &mut report)?;
+    report.passed &= report.differences.is_empty();
+    Ok(report)
 }
 
 struct AssertionInputs {

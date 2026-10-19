@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn standard_header_set_is_stable() {
-        assert_eq!(STANDARD_RESPONSE_HEADERS.len(), 14);
+        assert_eq!(STANDARD_RESPONSE_HEADERS.len(), 15);
         assert!(STANDARD_RESPONSE_HEADERS.is_sorted());
     }
 

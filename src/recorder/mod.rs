@@ -38,6 +38,7 @@ mod storage;
 mod summary;
 mod writer;
 
+pub use crate::http::stream::ResponseStream as HttpResponseStream;
 pub use capture::*;
 pub(crate) use case::{
     CaseInvalidation, CaseInvalidationContext, PrimaryCaseDescriptor, PrimarySourceBinding,

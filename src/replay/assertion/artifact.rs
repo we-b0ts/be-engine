@@ -10,6 +10,8 @@ use super::model::ResponseGatewayProtocol;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RecordedRequest {
+    #[serde(default)]
+    pub(super) interaction: Option<crate::interaction::model::InputTranscript>,
     pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) method: String,
     pub(super) uri: String,
@@ -40,6 +42,8 @@ impl RecordedRequest {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ExpectedResponse {
+    #[serde(default)]
+    pub(super) interaction: Option<crate::interaction::model::OutputObservation>,
     #[serde(default)]
     pub(super) sse_observation: Option<SseObservation>,
     pub(super) status: Option<RecordedStatus>,
@@ -76,6 +80,8 @@ impl RecordedStatus {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ActualResponse {
+    #[serde(default)]
+    pub(super) interaction: Option<crate::interaction::model::OutputObservation>,
     #[serde(default)]
     pub(super) sse_observation: Option<SseObservation>,
     #[serde(default)]

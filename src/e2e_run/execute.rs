@@ -514,7 +514,7 @@ async fn run_active_with_replay(
             &case.case_dir,
             &case_runtime,
         )
-        .await;
+        .await?;
         case_progress::log_completion(position + 1, total_cases);
         if failure_limit.observe(&case.group_id, state.cases[position].status) {
             state.push_error(format!(
@@ -529,7 +529,9 @@ async fn run_active_with_replay(
         .iter()
         .any(|case| case.status == CaseStatus::Pending);
 
-    stop_target_runtime(layout, state).await?;
+    if state.target_started {
+        stop_target_runtime(layout, state).await?;
+    }
     state.status = RunStatus::Finalizing;
     store::write_active(layout, state)?;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Finalizing);
@@ -567,7 +569,7 @@ async fn execute_case(
     case_id: &str,
     case_dir: &Path,
     runtime: &CaseExecutionRuntime,
-) {
+) -> Result<()> {
     let case_index = position;
     if state
         .cases
@@ -577,7 +579,7 @@ async fn execute_case(
         state.push_error(format!(
             "case {case_id} no longer matches run position {position}"
         ));
-        return;
+        return Ok(());
     }
     state.cases[case_index].status = CaseStatus::Running;
 
@@ -587,7 +589,7 @@ async fn execute_case(
         state.cases[case_index].status = CaseStatus::Incomplete;
         state.push_error(format!("case {case_id} begin failed: {error:#}"));
         let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
-        return;
+        return Ok(());
     }
 
     if config.replay_loading.lazy_cases
@@ -729,8 +731,19 @@ async fn execute_case(
         state.push_error(format!(
             "case {case_id} replay evidence is dirty: {error:#}"
         ));
+        // Dirty evidence normally releases the case and permits the next input.
+        // A cleanup failure retains ownership; stop this run through its existing
+        // error cleanup instead of admitting another case into that live scope.
+        let status = control(state, "status", None, false, false).await?;
+        ensure!(
+            status
+                .pointer("/session/active_case_id")
+                .is_some_and(serde_json::Value::is_null),
+            "case {case_id} dependency cleanup retained active ownership: {error:#}"
+        );
     }
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
+    Ok(())
 }
 
 fn mark_unfinished_cases(state: &mut ActiveRunState) {
@@ -764,3 +777,6 @@ fn finish_and_publish(
     )?;
     Ok(run_result(layout, state))
 }
+
+#[cfg(test)]
+mod tests;

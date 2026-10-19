@@ -83,7 +83,14 @@ impl ReplayState {
         pending: PendingHttpTermination,
         result: Result<()>,
     ) {
-        let detail = pending.detail;
+        self.finish_http_response(pending.detail, result);
+    }
+
+    pub(super) fn finish_http_response(
+        &mut self,
+        detail: MatchedHttpExchangeReport,
+        result: Result<()>,
+    ) {
         match result {
             Ok(()) => {
                 self.http_exchanges[detail.index].status = ReplayExchangeStatus::Consumed;

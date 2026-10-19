@@ -96,6 +96,7 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
         request_body: RecordedBodyCapture {
             encoding: "utf8".to_string(),
             truncated: false,
+            stored_len: Some(0),
             data: String::new(),
         },
         response_status: Some(200),
@@ -103,8 +104,11 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
         response_body: Some(RecordedBodyCapture {
             encoding: "utf8".to_string(),
             truncated: false,
+            stored_len: Some(2),
             data: "{}".to_string(),
         }),
+        response_stream: None,
+        stream_delivery: None,
         discovered_tcp_targets: vec![DiscoveredTcpTarget {
             protocol: "motan".to_string(),
             alias: "vintage-node-10-145-1-107.trp.test".to_string(),
@@ -159,6 +163,7 @@ fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
         request_body: RecordedBodyCapture {
             encoding: "utf8".to_string(),
             truncated: false,
+            stored_len: Some(0),
             data: String::new(),
         },
         response_status: Some(200),
@@ -166,8 +171,11 @@ fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
         response_body: Some(RecordedBodyCapture {
             encoding: "utf8".to_string(),
             truncated: false,
+            stored_len: Some(2),
             data: "{}".to_string(),
         }),
+        response_stream: None,
+        stream_delivery: None,
         discovered_tcp_targets: vec![DiscoveredTcpTarget {
             protocol: "http".to_string(),
             alias: "http-10-145-1-107-8881.trp.test".to_string(),

@@ -26,14 +26,17 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
         path_prefixes: vec!["/api/".to_string()],
         ..Default::default()
     }];
-    config.recording.output_dir = temp.path().join("recordings");
+    std::fs::create_dir_all(temp.path().join(".traffic-e2e/local")).unwrap();
+    crate::platform::encryption_key::load_or_create(temp.path()).unwrap();
+    config.recording.output_dir = temp.path().join(".traffic-e2e/local/artifacts/recordings");
     config.recording.case_dependency_post_response_window_ms = 0;
     config.dns_mock.registry_path = temp.path().join("dns.json");
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     let state = crate::AppState::new(config).await.unwrap();
+    let gateway_state = state.clone();
     let gateway = tokio::spawn(async move {
-        crate::gateway::http::run_with_listener(state, gateway_listener)
+        crate::gateway::http::run_with_listener(gateway_state, gateway_listener)
             .await
             .unwrap()
     });
@@ -55,15 +58,7 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
         }
         let (mut stream, _) = source.accept().await.unwrap();
         read_request(&mut stream).await;
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\nD\r\ndata: ready\n\n\r\n").await.unwrap();
-        let mut buffer = [0; 1024];
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buffer))
-                .await
-                .unwrap()
-                .unwrap(),
-            0
-        );
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\nD\r\ndata: ready\n\n\r\n0\r\n\r\n").await.unwrap();
     });
     let (status, body) = tokio::time::timeout(
         Duration::from_secs(2),
@@ -94,7 +89,8 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
     );
     assert_eq!(fixture.releases.load(Ordering::SeqCst), 1);
     assert!(fixture.token.lock().unwrap().is_none());
-    let run_dir = std::fs::read_dir(temp.path().join("recordings"))
+    source.await.unwrap();
+    let run_dir = std::fs::read_dir(temp.path().join(".traffic-e2e/local/artifacts/recordings"))
         .unwrap()
         .next()
         .unwrap()
@@ -104,9 +100,15 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
         assert!(!run_dir.join("apis").exists());
         assert!(!run_dir.join("staging").exists());
         assert!(!run_dir.join("failed").exists());
-        source.await.unwrap();
         return;
     }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !run_dir.join("apis/api-example").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     let case_dir = std::fs::read_dir(run_dir.join("apis/api-example"))
         .unwrap()
         .next()
@@ -116,9 +118,5 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
     let expected: serde_json::Value =
         serde_json::from_slice(&std::fs::read(case_dir.join("expected-response.json")).unwrap())
             .unwrap();
-    assert_eq!(
-        expected["sse_observation"]["end"],
-        "observation_window_elapsed"
-    );
-    source.await.unwrap();
+    assert_eq!(expected["interaction"]["end"]["reason"], "server_eof");
 }

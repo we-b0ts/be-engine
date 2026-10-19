@@ -30,7 +30,11 @@ use crate::recorder::{
 use crate::recording_control::RecordingListener;
 use crate::{AppState, ProxyClient};
 
-type ProxyBody = BoxBody<Bytes, Infallible>;
+type ProxyBody = BoxBody<Bytes, std::io::Error>;
+
+use crate::recorder::http::stream;
+#[cfg(test)]
+mod stream_tests;
 
 #[cfg(test)]
 mod timeout_tests;
@@ -313,35 +317,49 @@ async fn forward_and_record(
         }
     };
 
+    let capture_event = HttpExchangeEvent {
+        outcome: crate::DependencyExchangeOutcome::Response,
+        id,
+        timestamp: Utc::now(),
+        request_started_at,
+        client_addr: client_addr.clone(),
+        scheme: scheme.to_string(),
+        method: method.to_string(),
+        uri: original_uri.to_string(),
+        authority: authority.clone(),
+        request_headers: request_headers_for_record.clone(),
+        request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
+        response_status: None,
+        response_headers: None,
+        response_body: None,
+        response_stream: None,
+        discovered_tcp_targets: Vec::new(),
+        duration_ms: 0,
+        error: None,
+    };
     let pending = PendingHttpCapture::new(
         state.clone(),
         targets.clone(),
-        HttpExchangeEvent {
-            outcome: crate::DependencyExchangeOutcome::Response,
-            id,
-            timestamp: Utc::now(),
-            request_started_at,
-            client_addr: client_addr.clone(),
-            scheme: scheme.to_string(),
-            method: method.to_string(),
-            uri: original_uri.to_string(),
-            authority: authority.clone(),
-            request_headers: request_headers_for_record.clone(),
-            request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
-            response_status: None,
-            response_headers: None,
-            response_body: None,
-            discovered_tcp_targets: Vec::new(),
-            duration_ms: 0,
-            error: None,
-        },
+        capture_event.clone(),
         started,
-        termination,
+        termination.clone(),
     );
     pending
         .run(async {
             match send_upstream(state.client(), outbound).await {
                 Ok(upstream_response) => {
+                    if stream::is_stream(upstream_response.headers()) {
+                        return stream::response(
+                            upstream_response,
+                            stream::CaptureContext {
+                                state,
+                                targets: targets.clone(),
+                                event: capture_event,
+                                started,
+                                termination,
+                            },
+                        );
+                    }
                     let status = upstream_response.status();
                     let mut response_headers = upstream_response.headers().clone();
                     let mut body_bytes = match upstream_response.into_body().collect().await {
@@ -432,6 +450,7 @@ async fn forward_and_record(
                             &body_bytes,
                             state.config().recording.max_body_bytes,
                         )),
+                        response_stream: None,
                         discovered_tcp_targets,
                         duration_ms: started.elapsed().as_millis(),
                         error: None,
@@ -509,6 +528,7 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
         response_status: None,
         response_headers: None,
         response_body: None,
+        response_stream: None,
         discovered_tcp_targets: Vec::new(),
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),
@@ -569,7 +589,9 @@ fn simple_response(status: StatusCode, body: &str) -> Response<ProxyBody> {
 }
 
 fn boxed_body(bytes: Bytes) -> ProxyBody {
-    Full::new(bytes).boxed()
+    Full::new(bytes)
+        .map_err(|never: Infallible| match never {})
+        .boxed()
 }
 
 fn make_upstream_uri(uri: &Uri, scheme: &str, authority: Option<&str>) -> Result<Uri> {

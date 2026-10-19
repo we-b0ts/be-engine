@@ -190,11 +190,14 @@ pub struct HttpConfig {
 #[serde(default)]
 pub struct HttpGatewayConfig {
     pub enabled: bool,
-    /// Record requests declaring SSE in Accept; defaults to false (configured fallback).
+    /// Enable bounded HTTP streams and Socket.IO sessions.
     pub record_streaming: bool,
+    /// Opt in to raw response streaming; binary downloads otherwise stay ordinary HTTP.
+    pub record_raw_streaming: bool,
+    pub interaction: crate::interaction::policy::InteractionPolicy,
     pub listen: SocketAddr,
     pub matched_upstream: String,
-    /// Upper bound including the body; recorded SSE uses 50 ms after response headers.
+    /// Deadline for ordinary HTTP requests, including the body.
     pub request_timeout_ms: u64,
     pub fallback_upstream: String,
     pub fallback_mode: HttpGatewayFallbackMode,
@@ -423,6 +426,8 @@ impl Default for HttpGatewayConfig {
         Self {
             enabled: false,
             record_streaming: false,
+            record_raw_streaming: false,
+            interaction: crate::interaction::policy::InteractionPolicy::default(),
             listen: "127.0.0.1:18080"
                 .parse()
                 .expect("valid default HTTP gateway listen address"),

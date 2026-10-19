@@ -30,6 +30,43 @@ pub(in crate::e2e_run) fn response_observation_with_status(
             None => observation(E2eValuePresence::Missing, None),
         };
     }
+    if pointer == "$interaction" || pointer.starts_with("$interaction/") {
+        let suffix = pointer.trim_start_matches("$interaction");
+        let Some(interaction) = response.get("interaction") else {
+            return observation(E2eValuePresence::Missing, None);
+        };
+        if suffix == "/events/length" {
+            return interaction
+                .get("events")
+                .and_then(Value::as_array)
+                .map_or_else(
+                    || observation(E2eValuePresence::Missing, None),
+                    |events| {
+                        observation(E2eValuePresence::Present, Some(Value::from(events.len())))
+                    },
+                );
+        }
+        let Some(value) = interaction.pointer(suffix) else {
+            return observation(E2eValuePresence::Missing, None);
+        };
+        if suffix == "/end/close" || suffix == "/end/close/reason" {
+            return observation(
+                E2eValuePresence::Present,
+                Some(serde_json::json!({"private": true, "code": value.get("code")})),
+            );
+        }
+        if suffix.starts_with("/events") || suffix.is_empty() {
+            // Events carry authenticated private payloads. Public diagnostics
+            // describe the observation without expanding decrypted messages.
+            return observation(
+                E2eValuePresence::Present,
+                Some(
+                    serde_json::json!({"private": true, "sequence": value.get("sequence"), "heartbeat": value.get("heartbeat")}),
+                ),
+            );
+        }
+        return observed_value(value, pointer);
+    }
     if pointer == "$sse_observation" || pointer.starts_with("$sse_observation/") {
         let json_pointer = format!("/{}", pointer.trim_start_matches('$'));
         return match response.pointer(&json_pointer) {
@@ -38,6 +75,9 @@ pub(in crate::e2e_run) fn response_observation_with_status(
         };
     }
     if let Some(name) = pointer.strip_prefix("$headers/") {
+        if response.get("private_interaction_output_headers").is_some() {
+            return observation(E2eValuePresence::Unavailable, None);
+        }
         let Some(headers) = response.get("headers").and_then(Value::as_object) else {
             return observation(E2eValuePresence::Unavailable, None);
         };
@@ -108,6 +148,11 @@ fn header_observation(
     let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
         return observation(E2eValuePresence::Unavailable, None);
     };
+    if value.get("private_headers").is_some()
+        || value.get("private_interaction_output_headers").is_some()
+    {
+        return observation(E2eValuePresence::Unavailable, None);
+    }
     let Some(headers) = value.get(headers_field).and_then(Value::as_object) else {
         return observation(E2eValuePresence::Unavailable, None);
     };

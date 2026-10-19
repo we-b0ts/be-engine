@@ -3,17 +3,17 @@ use super::*;
 use crate::dependency_index::RecordRef;
 
 pub(in crate::replay) fn register_global_exchange(
-    record: RecordedHttpExchange,
+    mut record: RecordedHttpExchange,
     reference: RecordRef,
     exchanges: &mut Vec<ReplayHttpExchange>,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
 ) -> Result<()> {
+    record.response_evidence = Some(reference);
     register_http_exchange(record, ReplaySource::Global, None, exchanges, targets)?;
     let record = &mut exchanges
         .last_mut()
         .expect("registered HTTP exchange")
         .record;
-    record.response_evidence = Some(reference);
     if let Some(body) = &mut record.response_body {
         body.data = String::new();
     }
@@ -24,6 +24,18 @@ impl RecordedHttpExchange {
     pub(super) fn materialize_response(&mut self) -> Result<()> {
         if let Some(reference) = self.response_evidence.take() {
             self.response_body = reference.load::<RecordedHttpExchange>()?.response_body;
+        }
+        if let Some(stream) = &self.response_stream {
+            let body = self
+                .response_body
+                .as_ref()
+                .context("HTTP stream has no materialized payload")?;
+            let payload_len = decode_body(body)?.len();
+            anyhow::ensure!(
+                body.stored_len.is_none_or(|stored| stored == payload_len),
+                "materialized HTTP stream payload does not match its stored length"
+            );
+            stream.validate(payload_len)?;
         }
         Ok(())
     }

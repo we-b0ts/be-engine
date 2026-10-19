@@ -111,6 +111,8 @@ pub struct HttpExchangeEvent {
     pub response_status: Option<u16>,
     pub response_headers: Option<HeaderMapSnapshot>,
     pub response_body: Option<BodyCapture>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_stream: Option<super::HttpResponseStream>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
     pub duration_ms: u128,

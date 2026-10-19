@@ -10,7 +10,7 @@ use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 
 use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 
-pub(super) type GatewayBody = BoxBody<Bytes, Infallible>;
+pub(super) type GatewayBody = BoxBody<Bytes, std::io::Error>;
 
 pub(super) fn build_upstream_uri(upstream_addr: SocketAddr, original_uri: &Uri) -> Result<Uri> {
     let path_and_query = original_uri
@@ -87,7 +87,9 @@ pub(super) fn simple_response(status: StatusCode, body: &str) -> Response<Gatewa
 }
 
 fn boxed_body(bytes: Bytes) -> GatewayBody {
-    Full::new(bytes).boxed()
+    Full::new(bytes)
+        .map_err(|never: Infallible| match never {})
+        .boxed()
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ use crate::{ActiveCaseGuard, AppState};
 pub(super) async fn run_matched_request<F>(
     state: AppState,
     case_id: Uuid,
-    active_case_guard: ActiveCaseGuard,
+    active_case_guard: std::sync::Arc<ActiveCaseGuard>,
     started: Instant,
     mut timeout_response: oneshot::Receiver<()>,
     request: F,

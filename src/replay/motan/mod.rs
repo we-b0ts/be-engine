@@ -182,6 +182,17 @@ impl Default for MotanReplayState {
 }
 
 impl MotanReplayState {
+    pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
+        self.exchanges.iter().any(|e| {
+            e.source == ReplaySource::Case
+                && matches!(
+                    e.status,
+                    ReplayExchangeStatus::Responding
+                        | ReplayExchangeStatus::AwaitingClientTermination
+                )
+        })
+    }
+
     pub(in crate::replay) fn has_in_flight(&self) -> bool {
         self.exchanges.iter().any(|e| {
             matches!(

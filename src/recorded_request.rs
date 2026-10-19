@@ -18,7 +18,7 @@ use hyper_util::rt::TokioExecutor;
 use serde::Deserialize;
 
 use crate::http::response_headers;
-use crate::http::sse::{self, SseObservation, SseObservationPolicy};
+use crate::http::sse::{SseObservation, SseObservationPolicy};
 use crate::recorder::HeaderMapSnapshot;
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
@@ -32,6 +32,8 @@ struct RecordedRequest {
     #[serde(default)]
     // Execution policy lives in request.json; expected-response.json is never read here.
     sse_observation: Option<SseObservationPolicy>,
+    #[serde(default)]
+    interaction: Option<crate::interaction::model::InputTranscript>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +59,7 @@ pub(crate) struct RecordedHttpResponse {
     pub(crate) headers: HeaderMapSnapshot,
     pub(crate) body: Bytes,
     pub(crate) sse_observation: Option<SseObservation>,
+    pub(crate) interaction: Option<crate::interaction::model::OutputObservation>,
 }
 
 impl RecordedHttpClient {
@@ -110,6 +113,11 @@ impl RecordedHttpClient {
         bytes: &[u8],
         request_label: &str,
     ) -> Result<RecordedHttpResponse> {
+        let decrypted = crate::request_headers::decrypt_request_bytes(
+            bytes,
+            std::path::Path::new(request_label),
+        )?;
+        let bytes = decrypted.as_deref().unwrap_or(bytes);
         let mut value: serde_json::Value = serde_json::from_slice(bytes)
             .with_context(|| format!("invalid recorded request {request_label}"))?;
         let request_sent_at = chrono::Utc::now();
@@ -121,13 +129,33 @@ impl RecordedHttpClient {
             .unwrap_or_default();
         let recorded: RecordedRequest =
             serde_json::from_value(value).context("invalid recorded request shape")?;
-        if let Some(policy) = recorded.sse_observation {
-            policy
-                .validate()
-                .context("invalid recorded request SSE observation policy")?;
-        }
+        ensure!(
+            recorded.sse_observation.is_none(),
+            "legacy SSE observation recordings require re-recording with the interaction lifecycle"
+        );
         let request = build_request(&self.origin, &recorded)?;
         let request_headers = response_headers::snapshot_request_context(request.headers());
+        if let Some(transcript) = &recorded.interaction {
+            let response = crate::interaction::replay::execute(
+                &self.client,
+                &self.origin,
+                request,
+                transcript,
+                self.request_timeout,
+                self.max_response_bytes,
+            )
+            .await?;
+            return Ok(RecordedHttpResponse {
+                request_sent_at,
+                request_rules,
+                request_headers,
+                status: response.status,
+                headers: response.headers,
+                body: response.body,
+                sse_observation: None,
+                interaction: Some(response.observation),
+            });
+        }
         let deadline = tokio::time::Instant::now() + self.request_timeout;
         let response = tokio::time::timeout_at(deadline, self.client.request(request))
             .await
@@ -135,21 +163,12 @@ impl RecordedHttpClient {
             .context("recorded HTTP request failed")?;
         let status = response.status();
         let headers = response_headers::snapshot_standard(response.headers());
-        let (body, sse_observation) = if let Some(policy) = recorded.sse_observation {
-            let (body, observation) =
-                sse::observe(response.into_body(), policy, self.max_response_bytes)
-                    .await
-                    .context("failed to read recorded HTTP response body")?;
-            (body, Some(observation))
-        } else {
-            let body = tokio::time::timeout_at(
-                deadline,
-                collect_limited(response.into_body(), self.max_response_bytes),
-            )
-            .await
-            .context("recorded HTTP request timed out")??;
-            (body, None)
-        };
+        let body = tokio::time::timeout_at(
+            deadline,
+            collect_limited(response.into_body(), self.max_response_bytes),
+        )
+        .await
+        .context("recorded HTTP request timed out")??;
         Ok(RecordedHttpResponse {
             request_sent_at,
             request_rules,
@@ -157,7 +176,8 @@ impl RecordedHttpClient {
             status,
             headers,
             body,
-            sse_observation,
+            sse_observation: None,
+            interaction: None,
         })
     }
 }
@@ -309,6 +329,7 @@ mod tests {
         let recorded = RecordedRequest {
             method: "POST".to_string(),
             sse_observation: None,
+            interaction: None,
             uri: "/api".to_string(),
             headers: BTreeMap::from([
                 ("host".to_string(), vec!["source".to_string()]),

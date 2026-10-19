@@ -66,6 +66,7 @@ pub(super) async fn record_http_error(ctx: HttpErrorContext) -> Response<Gateway
         response_status: None,
         response_headers: None,
         response_body: None,
+        response_stream: None,
         discovered_tcp_targets: Vec::new(),
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),

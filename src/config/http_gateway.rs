@@ -25,6 +25,11 @@ pub struct HttpGatewayFixedResponseConfig {
 }
 
 pub(super) fn validate_config(config: &HttpGatewayConfig) -> Result<()> {
+    config.interaction.validate()?;
+    ensure!(
+        !config.record_raw_streaming || config.record_streaming,
+        "http_gateway.record_raw_streaming requires record_streaming"
+    );
     ensure!(
         config.request_timeout_ms > 0,
         "http_gateway.request_timeout_ms must be greater than zero"

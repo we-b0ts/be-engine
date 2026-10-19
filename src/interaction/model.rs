@@ -1,0 +1,243 @@
+//! Portable input programs and independently observed output evidence.
+
+use std::collections::BTreeMap;
+
+use anyhow::{Context, Result, ensure};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde::{Deserialize, Serialize};
+
+use super::policy::InteractionPolicy;
+
+pub const TRANSCRIPT_VERSION: u8 = 1;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Protocol {
+    Sse,
+    Ndjson,
+    RawStream,
+    WebSocket,
+    SocketIo,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageKind {
+    Text,
+    Binary,
+}
+
+/// Text is UTF-8; binary data is canonical base64. Never infer the encoding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WireMessage {
+    pub kind: MessageKind,
+    pub data: String,
+}
+
+impl WireMessage {
+    pub fn text(data: impl Into<String>) -> Self {
+        Self {
+            kind: MessageKind::Text,
+            data: data.into(),
+        }
+    }
+
+    pub fn binary(data: &[u8]) -> Self {
+        Self {
+            kind: MessageKind::Binary,
+            data: STANDARD.encode(data),
+        }
+    }
+
+    pub fn decode(&self) -> Result<Vec<u8>> {
+        match self.kind {
+            MessageKind::Text => Ok(self.data.as_bytes().to_vec()),
+            MessageKind::Binary => STANDARD
+                .decode(&self.data)
+                .context("invalid interaction binary base64"),
+        }
+    }
+}
+
+/// Only this program is visible to the request driver. Expected output is absent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InputTranscript {
+    pub version: u8,
+    pub protocol: Protocol,
+    pub policy: InteractionPolicy,
+    #[serde(default)]
+    pub actions: Vec<InputAction>,
+}
+
+impl InputTranscript {
+    pub fn new(protocol: Protocol, policy: InteractionPolicy) -> Self {
+        Self {
+            version: TRANSCRIPT_VERSION,
+            protocol,
+            policy,
+            actions: Vec::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.version == TRANSCRIPT_VERSION,
+            "unsupported interaction input version {}",
+            self.version
+        );
+        self.policy.validate()?;
+        let mut previous = None;
+        let mut seen = std::collections::BTreeSet::new();
+        if matches!(
+            self.protocol,
+            Protocol::Sse | Protocol::Ndjson | Protocol::RawStream
+        ) {
+            // The initial HTTP request is implicit in the request artifact.
+            // A later client close can depend on its actual business completion.
+            seen.insert(0);
+        }
+        let mut offset = 0;
+        for action in &self.actions {
+            ensure!(
+                !self.policy.preserve_input_timing || !action.compressible_gap,
+                "timing-preserving interaction cannot contain compressed input gaps"
+            );
+            ensure!(
+                action.sequence < (1 << 63),
+                "interaction input uses a reserved request identity"
+            );
+            ensure!(
+                previous.is_none_or(|sequence| action.sequence > sequence),
+                "interaction input sequences must strictly increase"
+            );
+            ensure!(
+                action.offset_ms >= offset,
+                "interaction input offsets must not decrease"
+            );
+            ensure!(
+                action.after.iter().all(|sequence| seen.contains(sequence)),
+                "interaction completion barriers must reference previous inputs"
+            );
+            ensure!(
+                !action.compressible_gap || !action.after.is_empty(),
+                "compressed input gap requires an explicit completion barrier"
+            );
+            ensure!(
+                !action.compressible_gap
+                    || action.gap_start_ms.is_some_and(|at| at <= action.offset_ms),
+                "compressed input gap requires its Source completion time"
+            );
+            if let InputActionKind::Message { message } = &action.action {
+                ensure!(
+                    message.decode()?.len() <= self.policy.max_message_bytes,
+                    "interaction input message exceeds configured limit"
+                );
+            }
+            previous = Some(action.sequence);
+            seen.insert(action.sequence);
+            offset = action.offset_ms;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InputAction {
+    pub sequence: u64,
+    pub offset_ms: u64,
+    /// Completed input sequences, selected from Source observations when recording.
+    /// HTTP streams use implicit sequence 0 for their initial request.
+    #[serde(default)]
+    pub after: Vec<u64>,
+    #[serde(default)]
+    pub compressible_gap: bool,
+    /// Source completion time for the safe gap; raw Source offsets remain intact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_start_ms: Option<u64>,
+    /// A client ACK refers to a live server event, never to its recorded ACK ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_ref: Option<AckReference>,
+    pub action: InputActionKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AckReference {
+    pub namespace: String,
+    pub server_event_ordinal: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InputActionKind {
+    /// One Engine.IO packet, delivered over either polling or WebSocket.
+    Message {
+        message: WireMessage,
+    },
+    /// Upgrade an existing Engine.IO polling session; its live SID is rebound.
+    Upgrade {
+        uri: String,
+        #[serde(default)]
+        headers: BTreeMap<String, Vec<String>>,
+    },
+    Close {
+        code: Option<u16>,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OutputObservation {
+    pub version: u8,
+    pub protocol: Protocol,
+    pub events: Vec<OutputEvent>,
+    pub end: EndObservation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OutputEvent {
+    pub sequence: u64,
+    pub offset_ms: u64,
+    pub message: WireMessage,
+    /// Protocol control traffic is retained but cannot extend business idle.
+    #[serde(default)]
+    pub heartbeat: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EndObservation {
+    pub reason: EndReason,
+    pub offset_ms: u64,
+    #[serde(default)]
+    pub pending: Vec<u64>,
+    pub clean: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<CloseObservation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CloseObservation {
+    pub code: Option<u16>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EndReason {
+    ServerEof,
+    ClientClose,
+    BusinessIdle,
+    RequestTimeout,
+    MaxDuration,
+    TransportError,
+    ProtocolError,
+    BudgetExceeded,
+    CleanupTimeout,
+}

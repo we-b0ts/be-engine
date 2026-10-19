@@ -141,19 +141,34 @@ pub(crate) fn decrypt_dependency_headers(
 fn decrypt_request_payload(raw: &[u8], request_path: Option<&Path>) -> Result<Option<Vec<u8>>> {
     let mut request: Value =
         serde_json::from_slice(raw).context("recorded request is not valid JSON")?;
-    let Some(headers) = request.get_mut("headers").and_then(Value::as_object_mut) else {
-        return Ok(None);
+    let mut changed = if let Some(path) = request_path {
+        crate::interaction::private::decrypt_request(&mut request, path)?
+    } else {
+        ensure!(
+            request.get("private_uri").is_none() && request.get("private_headers").is_none(),
+            "private interaction request requires its evidence path"
+        );
+        false
     };
-    if !headers.values().any(contains_encrypted_value) {
+    if let Some(headers) = request.get_mut("headers").and_then(Value::as_object_mut)
+        && headers.values().any(contains_encrypted_value)
+    {
+        let cipher = RequestHeaderCipher::from_environment_or_request_path(request_path)?;
+        decrypt_headers(headers, &cipher)?;
+        changed = true;
+    }
+    if !changed {
         return Ok(None);
     }
-
-    let cipher = RequestHeaderCipher::from_environment_or_request_path(request_path)?;
-    decrypt_headers(headers, &cipher)?;
     let mut payload =
         serde_json::to_vec_pretty(&request).context("failed to serialize decrypted request")?;
     payload.push(b'\n');
     Ok(Some(payload))
+}
+
+/// Decode a caller-owned immutable view without creating plaintext evidence files.
+pub(crate) fn decrypt_request_bytes(raw: &[u8], path: &Path) -> Result<Option<Vec<u8>>> {
+    decrypt_request_payload(raw, Some(path))
 }
 
 fn decrypt_headers(
@@ -310,6 +325,24 @@ impl RequestHeaderCipher {
 }
 
 /// Reuse the managed authenticated cipher for private dependency request witnesses.
+pub(crate) struct EvidenceCipher(RequestHeaderCipher);
+
+impl EvidenceCipher {
+    pub(crate) fn from_path(path: &Path) -> Result<Self> {
+        Ok(Self(RequestHeaderCipher::from_environment_or_request_path(
+            Some(path),
+        )?))
+    }
+
+    pub(crate) fn encrypt(&self, label: &str, bytes: &[u8]) -> Result<String> {
+        self.0.encrypt(label, bytes)
+    }
+
+    pub(crate) fn decrypt(&self, label: &str, value: &str) -> Result<Vec<u8>> {
+        self.0.decrypt(label, value)
+    }
+}
+
 pub(crate) fn encrypt_evidence(path: &Path, label: &str, bytes: &[u8]) -> Result<String> {
     RequestHeaderCipher::from_environment_or_request_path(Some(path))?.encrypt(label, bytes)
 }

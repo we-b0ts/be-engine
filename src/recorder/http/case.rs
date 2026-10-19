@@ -21,6 +21,8 @@ pub(crate) struct CaseRequestRecord {
     pub(crate) body: CaseBodyCapture,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) sse_observation: Option<SseObservationPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) interaction: Option<crate::interaction::model::InputTranscript>,
 }
 
 #[derive(Serialize)]
@@ -35,6 +37,8 @@ pub(crate) struct CaseResponseRecord {
     pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) sse_observation: Option<SseObservation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) interaction: Option<crate::interaction::model::OutputObservation>,
 }
 
 pub(crate) async fn finalize_http_case(
@@ -44,12 +48,24 @@ pub(crate) async fn finalize_http_case(
     response: CaseResponseRecord,
     invalidation: Option<CaseInvalidation>,
 ) -> Result<()> {
+    let mut stored_request = serde_json::to_value(&request)?;
+    let mut stored_response = serde_json::to_value(&response)?;
+    if request.interaction.is_some() {
+        crate::interaction::private::protect_request(
+            &mut stored_request,
+            &recorder.case_dir(case).join("request.json"),
+        )?;
+        crate::interaction::private::protect_output(
+            &mut stored_response,
+            &recorder.case_dir(case).join("expected-response.json"),
+        )?;
+    }
     if let Some(invalidation) = invalidation {
         recorder
-            .write_case_json(case, "request.json.invalid", &request)
+            .write_case_json(case, "request.json.invalid", &stored_request)
             .await?;
         recorder
-            .write_case_json(case, "expected-response.json.invalid", &response)
+            .write_case_json(case, "expected-response.json.invalid", &stored_response)
             .await?;
         return recorder
             .fail_case_with_context(
@@ -67,7 +83,7 @@ pub(crate) async fn finalize_http_case(
             "request.json.partial"
         };
         recorder
-            .write_case_json(case, request_filename, &request)
+            .write_case_json(case, request_filename, &stored_request)
             .await?;
         if response.body.is_some() {
             let response_filename = if response.body.as_ref().is_some_and(|body| body.truncated) {
@@ -76,7 +92,7 @@ pub(crate) async fn finalize_http_case(
                 "expected-response.json.partial"
             };
             recorder
-                .write_case_json(case, response_filename, &response)
+                .write_case_json(case, response_filename, &stored_response)
                 .await?;
         }
         recorder.fail_case(case, reason, message).await
@@ -86,10 +102,10 @@ pub(crate) async fn finalize_http_case(
             .as_ref()
             .map(|pattern| format!("{} {pattern}", request.method));
         recorder
-            .write_case_json(case, "request.json", &request)
+            .write_case_json(case, "request.json", &stored_request)
             .await?;
         recorder
-            .write_case_json(case, "expected-response.json", &response)
+            .write_case_json(case, "expected-response.json", &stored_response)
             .await?;
         if let Some(message) = recorder.case_dependency_safety_issue(case).await? {
             return recorder
@@ -100,6 +116,28 @@ pub(crate) async fn finalize_http_case(
             .publish_case_for_api(case, recording_api.as_deref())
             .await
     }
+}
+
+pub(crate) async fn finalize_interaction_http_case(
+    recorder: &Recorder,
+    publication: &crate::active_case::InteractionPublication,
+    case: &CaseContext,
+    request: CaseRequestRecord,
+    mut response: CaseResponseRecord,
+    invalidation: Option<CaseInvalidation>,
+) -> Result<()> {
+    // This is the interaction publication linearization point. Keep ownership
+    // across all file writes, safety checks, rename and run-report publication.
+    let mut commit = publication.begin().await;
+    let invalidation = commit.invalidation.clone().or(invalidation);
+    if invalidation.is_some()
+        && let Some(observation) = &mut response.interaction
+    {
+        observation.end.clean = false;
+    }
+    let result = finalize_http_case(recorder, case, request, response, invalidation).await;
+    commit.finalized = true;
+    result
 }
 
 fn invalid_case_reason(
@@ -120,6 +158,18 @@ fn invalid_case_reason(
     }
     if let Some(error) = &response.error {
         return Some(("upstream_response_error", error.clone()));
+    }
+    if let Some(observation) = &response.interaction {
+        if !observation.end.clean {
+            return Some((
+                "interaction_incomplete",
+                format!(
+                    "interaction ended with {:?}; pending={:?}",
+                    observation.end.reason, observation.end.pending
+                ),
+            ));
+        }
+        return None;
     }
     let Some(body) = &response.body else {
         return Some((
@@ -185,6 +235,7 @@ mod tests {
             headers: HeaderMapSnapshot::new(),
             body: capture_case_body(b"", 1024, 1024, None),
             sse_observation: None,
+            interaction: None,
         }
     }
 
@@ -205,6 +256,7 @@ mod tests {
             duration_ms: 1,
             error: None,
             sse_observation: None,
+            interaction: None,
         }
     }
 
@@ -274,5 +326,107 @@ mod tests {
         let reason = invalid_case_reason(&request(), &json_response(b"not-json")).unwrap();
 
         assert_eq!(reason.0, "expected_response_json_invalid");
+    }
+
+    #[tokio::test]
+    async fn interaction_lease_loss_after_drain_prevents_publication() {
+        use crate::active_case::{ActiveCaseRegistry, DependencyDrainResult};
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let registry = ActiveCaseRegistry::default();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "stream".into(),
+            uri_group: None,
+        };
+        let _owner = registry.try_reserve(case.clone()).unwrap();
+        _owner.activate_dependencies().unwrap();
+        let publication = registry.register_interaction_publication(case.id).unwrap();
+        assert_eq!(
+            registry
+                .drain_case_dependencies(case.id, Duration::from_millis(1), Duration::from_secs(1),)
+                .await,
+            DependencyDrainResult::Drained
+        );
+        let loss = CaseInvalidation::new("interaction_reservation_lost", "test token replaced");
+        assert!(registry.invalidate_case(case.id, loss.clone()).is_none());
+        assert!(registry.invalidate_interaction_reservation(Some(case.id), loss));
+        finalize_interaction_http_case(
+            &recorder,
+            &publication,
+            &case,
+            request(),
+            json_response(b""),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!recorder.case_dir(&case).exists());
+        let failed = recorder.case_failed_dir(&case);
+        assert!(failed.join("request.json.invalid").exists());
+        let detail: serde_json::Value = serde_json::from_slice(
+            &tokio::fs::read(failed.join("recording-error.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(detail["reason"], "interaction_reservation_lost");
+    }
+
+    #[tokio::test]
+    async fn interaction_publication_barrier_orders_later_lease_loss_after_commit() {
+        use crate::active_case::ActiveCaseRegistry;
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let registry = ActiveCaseRegistry::default();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "stream".into(),
+            uri_group: None,
+        };
+        let _owner = registry.try_reserve(case.clone()).unwrap();
+        let publication = registry.register_interaction_publication(case.id).unwrap();
+        // Block real file writes after the finalizer has acquired its commit
+        // ownership; this makes the loss/publication ordering deterministic.
+        let disk = recorder.dependency_write_lock.lock().await;
+        let task = tokio::spawn({
+            let recorder = recorder.clone();
+            let case = case.clone();
+            let publication = publication.clone();
+            async move {
+                finalize_interaction_http_case(
+                    &recorder,
+                    &publication,
+                    &case,
+                    request(),
+                    json_response(b""),
+                    None,
+                )
+                .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match tokio::time::timeout(Duration::from_millis(5), publication.begin()).await {
+                    Err(_) => break,
+                    Ok(guard) => drop(guard),
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let loss = || CaseInvalidation::new("interaction_reservation_lost", "late token loss");
+        assert!(!registry.invalidate_interaction_reservation(Some(case.id), loss()));
+        assert!(!task.is_finished());
+        drop(disk);
+        task.await.unwrap().unwrap();
+        assert!(recorder.case_dir(&case).join("request.json").exists());
+        assert!(!registry.invalidate_interaction_reservation(Some(case.id), loss()));
+        assert!(!recorder.case_failed_dir(&case).exists());
     }
 }

@@ -1,11 +1,11 @@
-//! Reservation-aware forwarding. Case completion follows Recorder's full response.
+//! Reservation-aware forwarding, with one lease per full interaction case.
 
 use anyhow::{Context, Result};
 use brz_http_gateway::redis_admission::RedisAdmissionProvider;
 use brz_http_gateway::{ADMISSION_SCOPE_HEADER, ADMISSION_TOKEN_HEADER, AdmissionTicket};
 use brz_redis::Redis;
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Full, Limited, combinators::UnsyncBoxBody};
 use hyper::{Request, Response, StatusCode, body::Incoming, service::service_fn};
 use hyper_util::{
     client::legacy::{Client, connect::HttpConnector},
@@ -26,16 +26,32 @@ use tokio::{
 };
 use tracing::warn;
 
+mod interaction;
+mod listener;
+mod ordinary;
+#[cfg(test)]
+mod tests;
+mod transport;
+mod wire;
+
+use interaction::InteractionRelay;
+pub(super) use listener::serve;
+use wire::{full, remove_hop_headers, response};
+
+type RelayError = Box<dyn std::error::Error + Send + Sync>;
+type RelayBody = UnsyncBoxBody<Bytes, RelayError>;
+
 #[derive(Clone)]
 pub(super) struct Relay<R> {
     reservations: Option<RedisAdmissionProvider<R>>,
-    client: Client<HttpConnector, Full<Bytes>>,
+    client: Client<HttpConnector, RelayBody>,
     origin: hyper::Uri,
     scope: String,
     ready: Arc<AtomicBool>,
     slot: Arc<Semaphore>,
     timeout: Duration,
     max_body: usize,
+    interactions: Option<InteractionRelay>,
 }
 
 impl<R: Redis + Clone + 'static> Relay<R> {
@@ -57,7 +73,17 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             slot: Arc::new(Semaphore::new(1)),
             timeout,
             max_body,
+            interactions: None,
         }
+    }
+
+    pub(super) fn with_interactions(
+        mut self,
+        state: crate::AppState,
+        advertise: hyper::Uri,
+    ) -> Self {
+        self.interactions = Some(InteractionRelay::new(state, advertise));
+        self
     }
 
     pub(super) fn open(&self) {
@@ -79,153 +105,12 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         }
     }
 
-    async fn handle(&self, mut request: Request<Incoming>) -> Response<Full<Bytes>> {
-        let ticket = if self.reservations.is_some() {
-            match AdmissionTicket::from_headers(request.headers()) {
-                Ok(Some(ticket)) if ticket.scope() == self.scope => Some(ticket),
-                _ => return response(StatusCode::NOT_FOUND, "recording admission required"),
-            }
+    async fn handle(&self, mut request: Request<Incoming>) -> Response<RelayBody> {
+        wire::strip_private(request.headers_mut());
+        if self.interactions.is_some() && wire::is_interaction(&request) {
+            self.handle_interaction(request).await
         } else {
-            None
-        };
-        request.headers_mut().remove(ADMISSION_SCOPE_HEADER);
-        request.headers_mut().remove(ADMISSION_TOKEN_HEADER);
-        let Ok(_permit) = self.slot.clone().try_acquire_owned() else {
-            // Do not release an identical replay of the currently executing token.
-            return response(StatusCode::NOT_FOUND, "recorder busy");
-        };
-        if let (Some(reservations), Some(ticket)) = (&self.reservations, &ticket) {
-            match reservations.owns(ticket).await {
-                Ok(true) => {}
-                _ => return response(StatusCode::NOT_FOUND, "reservation unavailable"),
-            }
+            self.handle_ordinary(request).await
         }
-        if !self.ready.load(Ordering::SeqCst) {
-            self.release(&ticket).await;
-            return response(StatusCode::NOT_FOUND, "recorder unavailable");
-        }
-        let (mut parts, body) = request.into_parts();
-        let body =
-            match tokio::time::timeout(self.timeout, Limited::new(body, self.max_body).collect())
-                .await
-            {
-                Ok(Ok(body)) => body.to_bytes(),
-                _ => {
-                    self.release(&ticket).await;
-                    return response(StatusCode::NOT_FOUND, "request cannot be recorded");
-                }
-            };
-        let mut uri = self.origin.clone().into_parts();
-        uri.path_and_query = parts.uri.path_and_query().cloned();
-        parts.uri = match hyper::Uri::from_parts(uri) {
-            Ok(uri) => uri,
-            Err(_) => {
-                self.release(&ticket).await;
-                return response(StatusCode::NOT_FOUND, "invalid request URI");
-            }
-        };
-        remove_hop_headers(&mut parts.headers);
-        if !self.ready.load(Ordering::SeqCst) {
-            self.release(&ticket).await;
-            return response(StatusCode::NOT_FOUND, "recorder unavailable");
-        }
-        let request = Request::from_parts(parts, Full::new(body));
-        let result = tokio::time::timeout(self.timeout, async {
-            let response = match self.client.request(request).await {
-                Ok(response) => response,
-                Err(error) if error.is_connect() => return Ok(None),
-                Err(error) => return Err(anyhow::Error::new(error)),
-            };
-            let (mut parts, body) = response.into_parts();
-            let body = body.collect().await?.to_bytes();
-            remove_hop_headers(&mut parts.headers);
-            Ok(Some(Response::from_parts(parts, Full::new(body))))
-        })
-        .await;
-        match result {
-            Ok(Ok(Some(response))) => {
-                self.release(&ticket).await;
-                response
-            }
-            Ok(Ok(None)) => {
-                self.release(&ticket).await;
-                response(StatusCode::NOT_FOUND, "recorder unreachable")
-            }
-            Ok(Err(error)) => {
-                warn!(%error, "recorder response failed; reservation retained");
-                response(StatusCode::BAD_GATEWAY, "recorder response failed")
-            }
-            Err(_) => response(StatusCode::GATEWAY_TIMEOUT, "recorder request timed out"),
-        }
-    }
-}
-
-pub(super) async fn serve<R: Redis + Clone + 'static>(
-    listener: TcpListener,
-    relay: Relay<R>,
-    stop: watch::Receiver<bool>,
-) -> Result<()> {
-    let mut tasks = JoinSet::new();
-    let mut stopping = stop.clone();
-    loop {
-        tokio::select! {
-            changed = stopping.changed() => { changed.ok(); break; }
-            joined = tasks.join_next(), if !tasks.is_empty() => { if let Some(Err(error)) = joined { warn!(%error, "recording service connection failed"); } }
-            accepted = listener.accept() => {
-                let (stream, _) = accepted.context("recording service accept failed")?;
-                let relay = relay.clone();
-                let mut stopping = stop.clone();
-                tasks.spawn(async move {
-                    let service = service_fn(move |request| {
-                        let relay = relay.clone();
-                        async move {
-                            // Keep the upstream operation alive if the downstream disconnects.
-                            let result = tokio::spawn(async move { relay.handle(request).await }).await;
-                            Ok::<_, Infallible>(result.unwrap_or_else(|_| response(StatusCode::BAD_GATEWAY, "recording request task failed")))
-                        }
-                    });
-                    let connection = hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(stream), service);
-                    tokio::pin!(connection);
-                    tokio::select! {
-                        result = &mut connection => { if let Err(error) = result { warn!(%error, "recording service HTTP connection ended"); } }
-                        _ = stopping.changed() => { connection.as_mut().graceful_shutdown(); let _ = connection.await; }
-                    }
-                });
-            }
-        }
-    }
-    while tasks.join_next().await.is_some() {}
-    Ok(())
-}
-
-fn response(status: StatusCode, message: &'static str) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(status)
-        .body(Full::new(Bytes::from_static(message.as_bytes())))
-        .unwrap()
-}
-
-fn remove_hop_headers(headers: &mut hyper::HeaderMap) {
-    let named: Vec<_> = headers
-        .get_all("connection")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(',').map(str::trim))
-        .filter_map(|name| name.parse::<hyper::header::HeaderName>().ok())
-        .collect();
-    for name in named {
-        headers.remove(name);
-    }
-    for name in [
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-    ] {
-        headers.remove(name);
     }
 }

@@ -6,7 +6,7 @@ use hyper::HeaderMap;
 
 pub(crate) const X_REQUEST_ID: &str = "x-request-id";
 
-pub(crate) const STANDARD_RESPONSE_HEADERS: [&str; 14] = [
+pub(crate) const STANDARD_RESPONSE_HEADERS: [&str; 15] = [
     "access-control-allow-credentials",
     "access-control-allow-headers",
     "access-control-allow-methods",
@@ -18,6 +18,7 @@ pub(crate) const STANDARD_RESPONSE_HEADERS: [&str; 14] = [
     "content-disposition",
     "content-type",
     "location",
+    "sec-websocket-protocol",
     "vary",
     "www-authenticate",
     X_REQUEST_ID,

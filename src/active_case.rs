@@ -7,9 +7,11 @@ use uuid::Uuid;
 use crate::recorder::{CaseContext, CaseInvalidation};
 
 mod activity;
+mod interaction;
 mod recovery;
 
 use activity::{DependencyActivity, DependencyReservation};
+pub(crate) use interaction::InteractionPublication;
 
 #[derive(Clone)]
 pub(crate) struct ActiveCaseRegistry {
@@ -19,6 +21,7 @@ pub(crate) struct ActiveCaseRegistry {
 
 struct ActiveCaseState {
     active: Vec<ActiveCaseRegistration>,
+    interaction_publications: std::collections::HashMap<Uuid, Arc<InteractionPublication>>,
     bootstrap_open: bool,
     bootstrap_sealed: bool,
     bootstrap_dependencies: Arc<DependencyActivity>,
@@ -92,6 +95,7 @@ impl ActiveCaseRegistry {
         Self {
             state: Arc::new(Mutex::new(ActiveCaseState {
                 active: Vec::new(),
+                interaction_publications: std::collections::HashMap::new(),
                 bootstrap_open: true,
                 bootstrap_sealed: false,
                 bootstrap_dependencies: Arc::new(DependencyActivity::default()),
@@ -159,6 +163,7 @@ impl ActiveCaseRegistry {
         state
             .active
             .retain(|registration| registration.case.id != case_id);
+        state.interaction_publications.remove(&case_id);
         self.active_count.send_replace(state.active.len());
     }
 
