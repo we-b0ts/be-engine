@@ -9,6 +9,9 @@ use crate::http::termination::ClientTermination;
 use crate::recorder::{HttpExchangeEvent, RecorderEvent};
 use crate::{AppState, DependencyExchangeOutcome};
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) struct HttpCaptureContext {
     pub(crate) state: AppState,
     pub(crate) targets: DependencyTargets,
@@ -18,6 +21,19 @@ pub(crate) struct HttpCaptureContext {
 }
 
 impl HttpCaptureContext {
+    pub(crate) async fn collect_response_body(
+        &self,
+        body: hyper::body::Incoming,
+    ) -> anyhow::Result<bytes::Bytes> {
+        use http_body_util::BodyExt;
+        let bytes = body.collect().await?.to_bytes();
+        anyhow::ensure!(
+            !self.termination.engine_stopped(),
+            "HTTP dependency response ended during engine cleanup before capture completed"
+        );
+        Ok(bytes)
+    }
+
     pub(crate) fn accepts_server(
         &self,
         observed: crate::dependency::termination::ObservedTermination,

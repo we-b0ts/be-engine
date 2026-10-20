@@ -223,6 +223,100 @@ async fn failed_source_transport_after_timeout_stops_admission() {
     server.abort();
 }
 
+#[tokio::test]
+async fn recovery_before_headers_is_bounded_without_dropping_source_ownership() {
+    bounded_recovery(false).await;
+}
+
+#[tokio::test]
+async fn recovery_during_body_is_bounded_without_dropping_source_ownership() {
+    bounded_recovery(true).await;
+}
+
+async fn bounded_recovery(body_timeout: bool) {
+    let temp = tempdir().unwrap();
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut config = config(temp.path(), upstream.local_addr().unwrap());
+    config.http_gateway.request_timeout_ms = 100;
+    config.recording.case_dependency_drain_timeout_ms = 100;
+    config.recording.case_dependency_post_response_window_ms = 0;
+    let state = AppState::new(config).await.unwrap();
+    let (check_tx, check_rx) = oneshot::channel();
+    let (preserved_tx, preserved_rx) = oneshot::channel();
+    let (finish_tx, finish_rx) = oneshot::channel();
+    let source = tokio::spawn(async move {
+        let (mut stream, _) = upstream.accept().await.unwrap();
+        request(&mut stream).await;
+        if body_timeout {
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        }
+        check_rx.await.unwrap();
+        assert!(
+            timeout(Duration::from_millis(20), stream.read(&mut [0]))
+                .await
+                .is_err(),
+            "recovery expiry must leave the Source request alive for its supervisor"
+        );
+        preserved_tx.send(()).unwrap();
+        finish_rx.await.unwrap();
+        if body_timeout {
+            stream.write_all(b"done").await.unwrap();
+        } else {
+            reply(&mut stream, "done").await;
+        }
+    });
+    let (address, gateway) = gateway(state.clone()).await;
+    let response = timeout(Duration::from_secs(2), get(address, "/record/old"))
+        .await
+        .unwrap();
+    assert!(response.starts_with(if body_timeout {
+        "HTTP/1.1 200"
+    } else {
+        "HTTP/1.1 504"
+    }));
+    timeout(
+        Duration::from_secs(2),
+        state.inner.active_cases.wait_for_quiescing(),
+    )
+    .await
+    .expect("a never-ending Source recovery must stop new recording admission");
+    assert!(state.inner.active_cases.case_slot_occupied());
+    let staging = only_case(&state.recorder().run_dir.join("staging/record-old"));
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(staging.join("timeout-recovery.json")).unwrap())
+            .unwrap();
+    assert_eq!(report["phase"], "source_recovery_timeout");
+    assert_eq!(report["stop_reason"], "source_recovery_timeout");
+    assert_eq!(report["source_recovery_timeout_ms"], 100);
+    assert!(!state.recorder().run_dir.join("failed").exists());
+    check_tx.send(()).unwrap();
+    preserved_rx.await.unwrap();
+    finish_tx.send(()).unwrap();
+    source.await.unwrap();
+    assert!(
+        state
+            .inner
+            .active_cases
+            .wait_for_no_active_case(Duration::from_secs(2))
+            .await
+    );
+    let failed = only_case(&state.recorder().run_dir.join("failed/record-old"));
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(failed.join("timeout-recovery.json")).unwrap())
+            .unwrap();
+    assert_eq!(report["phase"], "completed");
+    assert_eq!(report["stop_reason"], "source_recovery_timeout");
+    let error: Value =
+        serde_json::from_slice(&std::fs::read(failed.join("recording-error.json")).unwrap())
+            .unwrap();
+    assert_eq!(error["reason"], "upstream_response_error");
+    assert_eq!(state.recording_lifecycle_phase(), "quiescing");
+    gateway.abort();
+}
+
 fn only_case(group: &std::path::Path) -> std::path::PathBuf {
     let cases = std::fs::read_dir(group)
         .unwrap()

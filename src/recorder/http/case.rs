@@ -129,7 +129,17 @@ pub(crate) async fn finalize_interaction_http_case(
     // This is the interaction publication linearization point. Keep ownership
     // across all file writes, safety checks, rename and run-report publication.
     let mut commit = publication.begin().await;
-    let invalidation = commit.invalidation.clone().or(invalidation);
+    let invalidation = if let Some(observation) = &response.interaction {
+        interaction_invalidation(
+            observation.end.reason,
+            observation.end.offset_ms,
+            &observation.end.pending,
+            commit.invalidation.clone(),
+            invalidation,
+        )
+    } else {
+        commit.invalidation.clone().or(invalidation)
+    };
     if invalidation.is_some()
         && let Some(observation) = &mut response.interaction
     {
@@ -138,6 +148,64 @@ pub(crate) async fn finalize_interaction_http_case(
     let result = finalize_http_case(recorder, case, request, response, invalidation).await;
     commit.finalized = true;
     result
+}
+
+pub(crate) fn interaction_invalidation(
+    reason: crate::interaction::model::EndReason,
+    elapsed_ms: u64,
+    pending: &[u64],
+    reservation: Option<CaseInvalidation>,
+    dependency: Option<CaseInvalidation>,
+) -> Option<CaseInvalidation> {
+    use crate::interaction::model::EndReason;
+    let dependency = dependency.filter(|secondary| {
+        reservation.as_ref().is_none_or(|earlier| {
+            earlier.reason != secondary.reason || earlier.message != secondary.message
+        })
+    });
+    let primary = primary_interaction_failure(reason, elapsed_ms, pending);
+    let mut secondary = reservation.into_iter().chain(dependency);
+    // A cleanup transport error can be caused by an already recorded lease or
+    // dependency failure. Only independent primary budgets override that cause.
+    let mut failure = if matches!(reason, EndReason::RequestTimeout | EndReason::MaxDuration) {
+        primary.or_else(|| secondary.next())
+    } else {
+        secondary.next().or(primary)
+    }?;
+    for secondary in secondary {
+        if secondary.reason == failure.reason && secondary.message == failure.message {
+            continue;
+        }
+        failure.message.push_str(&format!(
+            "; secondary invalidation {}: {}",
+            secondary.reason, secondary.message
+        ));
+        if failure.context.is_none() {
+            failure.context = secondary.context;
+        }
+    }
+    Some(failure)
+}
+
+pub(crate) fn primary_interaction_failure(
+    reason: crate::interaction::model::EndReason,
+    elapsed_ms: u64,
+    pending: &[u64],
+) -> Option<CaseInvalidation> {
+    use crate::interaction::model::EndReason;
+    let failure = match reason {
+        EndReason::RequestTimeout => "interaction_request_timeout",
+        EndReason::MaxDuration => "interaction_max_duration",
+        EndReason::TransportError => "interaction_transport_error",
+        EndReason::ProtocolError => "interaction_protocol_error",
+        EndReason::BudgetExceeded => "interaction_budget_exceeded",
+        EndReason::CleanupTimeout => "interaction_cleanup_timeout",
+        EndReason::BusinessIdle | EndReason::ServerEof | EndReason::ClientClose => return None,
+    };
+    Some(CaseInvalidation::new(
+        failure,
+        format!("primary interaction ended with {reason:?} at {elapsed_ms}ms; pending={pending:?}"),
+    ))
 }
 
 fn invalid_case_reason(
@@ -331,48 +399,95 @@ mod tests {
     #[tokio::test]
     async fn interaction_lease_loss_after_drain_prevents_publication() {
         use crate::active_case::{ActiveCaseRegistry, DependencyDrainResult};
+        use crate::interaction::{
+            model::{EndReason, Protocol},
+            observation::Observation,
+        };
         use std::time::Duration;
 
-        let temp = tempfile::tempdir().unwrap();
-        let recorder = Recorder::new(temp.path()).await.unwrap();
-        let registry = ActiveCaseRegistry::default();
-        let case = CaseContext {
-            id: Uuid::new_v4(),
-            rule_name: "stream".into(),
-            uri_group: None,
-        };
-        let _owner = registry.try_reserve(case.clone()).unwrap();
-        _owner.activate_dependencies().unwrap();
-        let publication = registry.register_interaction_publication(case.id).unwrap();
-        assert_eq!(
-            registry
-                .drain_case_dependencies(case.id, Duration::from_millis(1), Duration::from_secs(1),)
-                .await,
-            DependencyDrainResult::Drained
-        );
-        let loss = CaseInvalidation::new("interaction_reservation_lost", "test token replaced");
-        assert!(registry.invalidate_case(case.id, loss.clone()).is_none());
-        assert!(registry.invalidate_interaction_reservation(Some(case.id), loss));
-        finalize_interaction_http_case(
-            &recorder,
-            &publication,
-            &case,
-            request(),
-            json_response(b""),
-            None,
-        )
-        .await
-        .unwrap();
-        assert!(!recorder.case_dir(&case).exists());
-        let failed = recorder.case_failed_dir(&case);
-        assert!(failed.join("request.json.invalid").exists());
-        let detail: serde_json::Value = serde_json::from_slice(
-            &tokio::fs::read(failed.join("recording-error.json"))
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(detail["reason"], "interaction_reservation_lost");
+        for end in [
+            EndReason::TransportError,
+            EndReason::ProtocolError,
+            EndReason::MaxDuration,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(temp.path().join(".traffic-e2e/local")).unwrap();
+            crate::platform::encryption_key::load_or_create(temp.path()).unwrap();
+            let recorder =
+                Recorder::new(temp.path().join(".traffic-e2e/local/artifacts/recordings"))
+                    .await
+                    .unwrap();
+            let registry = ActiveCaseRegistry::default();
+            let case = CaseContext {
+                id: Uuid::new_v4(),
+                rule_name: "stream".into(),
+                uri_group: None,
+            };
+            let _owner = registry.try_reserve(case.clone()).unwrap();
+            _owner.activate_dependencies().unwrap();
+            let publication = registry.register_interaction_publication(case.id).unwrap();
+            assert_eq!(
+                registry
+                    .drain_case_dependencies(
+                        case.id,
+                        Duration::from_millis(1),
+                        Duration::from_secs(1),
+                    )
+                    .await,
+                DependencyDrainResult::Drained
+            );
+            let loss = CaseInvalidation::new("interaction_reservation_lost", "test token replaced");
+            assert!(registry.invalidate_case(case.id, loss.clone()).is_none());
+            assert!(registry.invalidate_interaction_reservation(Some(case.id), loss.clone()));
+            let (input, output) = Observation::new(Protocol::Sse, Default::default())
+                .unwrap()
+                .finish(end, 10, true)
+                .unwrap();
+            let mut request = request();
+            request.interaction = Some(input);
+            let mut response = json_response(b"");
+            response.interaction = Some(output);
+            finalize_interaction_http_case(
+                &recorder,
+                &publication,
+                &case,
+                request,
+                response,
+                Some(loss),
+            )
+            .await
+            .unwrap();
+            assert!(!recorder.case_dir(&case).exists());
+            let failed = recorder.case_failed_dir(&case);
+            assert!(failed.join("request.json.invalid").exists());
+            let detail: serde_json::Value = serde_json::from_slice(
+                &tokio::fs::read(failed.join("recording-error.json"))
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                detail["reason"],
+                if end == EndReason::MaxDuration {
+                    "interaction_max_duration"
+                } else {
+                    "interaction_reservation_lost"
+                }
+            );
+            assert_eq!(
+                detail["message"]
+                    .as_str()
+                    .unwrap()
+                    .matches("test token replaced")
+                    .count(),
+                1
+            );
+            assert!(publication.begin().await.finalized);
+            assert!(!registry.invalidate_interaction_reservation(
+                Some(case.id),
+                CaseInvalidation::new("late_loss", "after failed publication")
+            ));
+        }
     }
 
     #[tokio::test]

@@ -1,6 +1,26 @@
 use super::*;
 use std::path::PathBuf;
 
+#[test]
+fn standalone_timeout_uses_common_default_and_cli_override_for_streams() {
+    for (arguments, expected_ms) in [
+        (vec!["test", "--", "true"], 900_000),
+        (
+            vec!["test", "--request-timeout-seconds", "17", "--", "true"],
+            17_000,
+        ),
+    ] {
+        let options = OptionsCli::try_parse_from(arguments).unwrap().options;
+        let config = options.config().unwrap();
+        assert_eq!(config.http_gateway.request_timeout_ms, expected_ms);
+        let policy = config
+            .http_gateway
+            .interaction_policy(crate::interaction::model::Protocol::Sse);
+        assert_eq!(policy.request_timeout_ms, expected_ms);
+        assert_eq!(policy.max_duration_ms, expected_ms);
+    }
+}
+
 pub(super) fn fixture(temp: &tempfile::TempDir) -> PathBuf {
     let directory = temp.path().join(".traffic-e2e");
     std::fs::create_dir_all(&directory).unwrap();
@@ -80,6 +100,13 @@ fn project_recording_settings_and_policy_survive_online_routing() {
     assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
     assert_eq!(config.recording.redact_headers, ["x-private-header"]);
     assert_eq!(config.http_gateway.request_timeout_ms, 731);
+    assert_eq!(
+        config
+            .http_gateway
+            .interaction_policy(crate::interaction::model::Protocol::Sse)
+            .request_timeout_ms,
+        731
+    );
     assert!(!config.http_gateway.record_streaming);
     assert_eq!(config.http_gateway.per_api_case_limits.default, 7);
     assert_eq!(
@@ -125,6 +152,11 @@ fn project_recording_settings_and_policy_survive_online_routing() {
     assert_eq!(overridden.http_gateway.ready.path, "/api/ready");
     assert_eq!(overridden.http_gateway.per_api_case_limits.default, 5);
     assert_eq!(overridden.http_gateway.request_timeout_ms, 2000);
+    let policy = overridden
+        .http_gateway
+        .interaction_policy(crate::interaction::model::Protocol::Sse);
+    assert_eq!(policy.request_timeout_ms, 2000);
+    assert_eq!(policy.max_duration_ms, 2000);
     assert!(!overridden.http_gateway.record_streaming);
 
     let yaml = std::fs::read_to_string(&path).unwrap();

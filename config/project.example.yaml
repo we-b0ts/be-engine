@@ -115,14 +115,14 @@ recorder:
     record_raw_streaming: false
     interaction:
       business_idle_ms: 10000
-      max_duration_ms: 600000
-      request_timeout_ms: 120000
+      # HTTP streams inherit request_timeout_ms below for their complete lifetime.
+      # Socket.IO/WebSocket may set a longer max_duration_ms for the full session.
       cleanup_timeout_ms: 60000
       input_gap_ms: 100
       preserve_input_timing: false
     listen: 0.0.0.0:4080
     matched_upstream: http://127.0.0.1:7171
-    request_timeout_ms: 15000
+    request_timeout_ms: 900000
     fallback_upstream: http://10.37.254.56:7171
     fallback_mode: fixed_response
     fixed_response:

@@ -1,6 +1,7 @@
 //! Supervise a timed-out Source request without releasing its case admission slot.
 
 use chrono::{DateTime, Utc};
+use std::{future::Future, time::Duration};
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -16,6 +17,7 @@ pub(super) struct TimeoutRecovery {
     downstream: Option<oneshot::Sender<()>>,
     reset: Option<ConnectionResetReport>,
     timed_out_at: Option<DateTime<Utc>>,
+    recovery_timed_out_at: Option<DateTime<Utc>>,
     source_completed: bool,
 }
 
@@ -34,13 +36,49 @@ impl TimeoutRecovery {
                 downstream: Some(downstream),
                 reset: None,
                 timed_out_at: None,
+                recovery_timed_out_at: None,
                 source_completed: false,
             },
             receiver,
         )
     }
 
-    pub(super) async fn begin(&mut self) {
+    pub(super) async fn observe_source_completion<F>(&mut self, operation: F)
+    where
+        F: Future<Output = anyhow::Result<()>>,
+    {
+        let budget_ms = self
+            .state
+            .config()
+            .recording
+            .case_dependency_drain_timeout_ms;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(budget_ms);
+        self.begin().await;
+        tokio::pin!(operation);
+        let result = match tokio::time::timeout_at(deadline, &mut operation).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.recovery_timed_out_at = Some(Utc::now());
+                self.persist(
+                    "source_recovery_timeout",
+                    Some(format!(
+                        "Source did not finish within the {budget_ms} ms recovery budget after the HTTP request timed out"
+                    )),
+                )
+                .await;
+                self.state.begin_case_quiescing();
+                warn!(case_id = %self.case.id, recovery_timeout_ms = budget_ms,
+                    "HTTP timeout recovery exceeded its budget; requesting Source shutdown while retaining request ownership");
+                // The recording supervisor owns Source termination. Keep the
+                // original request/body future until that process exits so its
+                // transport outcome and dependency evidence can still finalize.
+                operation.await
+            }
+        };
+        self.source_finished(&result).await;
+    }
+
+    async fn begin(&mut self) {
         if !self.state.inner.active_cases.begin_timeout_recovery(
             self.case.id,
             format!(
@@ -60,7 +98,7 @@ impl TimeoutRecovery {
         self.persist("waiting_for_source", None).await;
     }
 
-    pub(super) async fn source_finished(&mut self, result: &anyhow::Result<impl Sized>) {
+    async fn source_finished(&mut self, result: &anyhow::Result<()>) {
         match result {
             Ok(_) => {
                 self.source_completed = true;
@@ -99,6 +137,9 @@ impl TimeoutRecovery {
         let report = serde_json::json!({
             "timestamp": Utc::now(),
             "timed_out_at": self.timed_out_at,
+            "source_recovery_timed_out_at": self.recovery_timed_out_at,
+            "source_recovery_timeout_ms": self.state.config().recording.case_dependency_drain_timeout_ms,
+            "stop_reason": self.recovery_timed_out_at.as_ref().map(|_| "source_recovery_timeout"),
             "case_id": self.case.id,
             "request_timeout_ms": self.timeout_ms,
             "phase": phase,

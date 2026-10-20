@@ -25,9 +25,9 @@ impl Default for InteractionPolicy {
     fn default() -> Self {
         Self {
             business_idle_ms: 10_000,
-            max_duration_ms: 600_000,
+            max_duration_ms: 900_000,
             cleanup_timeout_ms: 60_000,
-            request_timeout_ms: 120_000,
+            request_timeout_ms: 900_000,
             input_gap_ms: 100,
             preserve_input_timing: false,
             max_message_bytes: 8 * 1024 * 1024,

@@ -62,17 +62,16 @@ pub(super) async fn acquire(
         Ok(response) => response.context("gateway upstream request failed")?,
         Err(elapsed) => {
             if let Some(recovery) = recovery.as_mut() {
-                recovery.begin().await;
-                let result = async {
-                    let response = upstream
-                        .await
-                        .context("gateway upstream request failed during recovery")?;
-                    // Keep the transport alive through the entire response. Early SSE
-                    // observation termination cannot establish Source completion here.
-                    drain_body(&mut response.into_body()).await
-                }
-                .await;
-                recovery.source_finished(&result).await;
+                recovery
+                    .observe_source_completion(async {
+                        let response = upstream
+                            .await
+                            .context("gateway upstream request failed during recovery")?;
+                        // Early SSE observation termination cannot establish
+                        // Source completion during HTTP header recovery.
+                        drain_body(&mut response.into_body()).await
+                    })
+                    .await;
             }
             return Err(elapsed.into());
         }
@@ -97,9 +96,7 @@ pub(super) async fn collect_body(
             .to_bytes()),
         Err(elapsed) => {
             if let Some(recovery) = recovery {
-                recovery.begin().await;
-                let result = drain_body(body).await;
-                recovery.source_finished(&result).await;
+                recovery.observe_source_completion(drain_body(body)).await;
             }
             Err(elapsed.into())
         }

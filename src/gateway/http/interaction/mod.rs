@@ -205,7 +205,8 @@ pub(crate) async fn handle(
     let Some(rule) = matched else {
         return passthrough(req, &state, &config).await;
     };
-    let observation = match Observation::new(protocol, config.interaction.clone()) {
+    let policy = config.interaction_policy(protocol);
+    let observation = match Observation::new(protocol, policy.clone()) {
         Ok(observation) => observation,
         Err(_) => {
             return simple_response(
@@ -257,9 +258,8 @@ pub(crate) async fn handle(
     let (parts, body) = req.into_parts();
     let body = match tokio::time::timeout(
         std::time::Duration::from_millis(
-            config.interaction.request_timeout_ms.min(
-                config
-                    .interaction
+            policy.request_timeout_ms.min(
+                policy
                     .max_duration_ms
                     .saturating_sub(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)),
             ),
@@ -287,7 +287,7 @@ pub(crate) async fn handle(
         &uri,
         &body,
         started,
-        std::time::Duration::from_millis(config.interaction.max_duration_ms),
+        std::time::Duration::from_millis(policy.max_duration_ms),
     );
     let (close, _) = watch::channel(None);
     let session = Arc::new(Session {
@@ -367,7 +367,7 @@ pub(super) async fn adopt_response(
 ) -> Response<GatewayBody> {
     let protocol =
         response_protocol(&response_headers).expect("response stream protocol was classified");
-    let policy = state.config().http_gateway.interaction.clone();
+    let policy = state.config().http_gateway.interaction_policy(protocol);
     let observation = if method == hyper::Method::GET
         && protocol == Protocol::Sse
         && policy.stream_terminal.is_none()

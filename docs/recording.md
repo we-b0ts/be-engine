@@ -12,6 +12,15 @@ reuses the Recorder section of `.traffic-e2e/project.yaml` and the single
 The app does not inspect Git or start the rewrite coordinator. Ingress selects API traffic. Recorder preserves the configured HTTP include/exclude
 rules; their default permits all methods and paths.
 
+HTTP request waits and HTTP streaming duration share
+`recorder.http_gateway.request_timeout_ms`, default 900000 ms (900 seconds).
+`--request-timeout-seconds` overrides the same budget for both. Ordinary HTTP
+timeouts retain their case while Source gets the configured
+`recording.case_dependency_drain_timeout_ms` recovery budget to finish. If it
+cannot finish within that budget, admission closure wakes the supervisor to stop
+Source and finalize the failed recording. Source exit is confirmed before the
+supervisor closes any remaining dependency connections as engine-owned cleanup.
+
 HTTP include and exclude rules support `paths` for exact, case-sensitive URI
 path matching. Query strings are ignored when matching requests and must not
 appear in configured paths. `/api/jobs` does not match `/api/jobs/` or
@@ -53,6 +62,14 @@ Build the normal engine binary. The gateway SDK uses published
 cargo build --locked --release --bin traffic-e2e
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
+```
+
+The supervised timeout regressions also launch a real fixed-identity Source
+without installing interception rules. Run them on a host with Python 3 and root
+or passwordless sudo:
+
+```bash
+cargo test --lib record_service::tests::quiescing -- --ignored --test-threads=1
 ```
 
 Run in an isolated container network namespace, with a root controller and

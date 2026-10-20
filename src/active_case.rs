@@ -21,6 +21,7 @@ use stream_tail::{StreamTail, StreamTailRequest};
 pub(crate) struct ActiveCaseRegistry {
     state: Arc<Mutex<ActiveCaseState>>,
     active_count: watch::Sender<usize>,
+    quiescing: watch::Sender<bool>,
 }
 
 struct ActiveCaseState {
@@ -102,6 +103,7 @@ impl Default for ActiveCaseRegistry {
 impl ActiveCaseRegistry {
     pub(crate) fn new(case_matching_ready: bool) -> Self {
         let (active_count, _) = watch::channel(0);
+        let (quiescing, _) = watch::channel(false);
         Self {
             state: Arc::new(Mutex::new(ActiveCaseState {
                 active: Vec::new(),
@@ -113,6 +115,7 @@ impl ActiveCaseRegistry {
                 quiescing: false,
             })),
             active_count,
+            quiescing,
         }
     }
 
@@ -171,6 +174,7 @@ impl ActiveCaseRegistry {
             .any(|registration| registration.case.id == case_id && registration.recovering)
         {
             state.quiescing = true;
+            self.quiescing.send_replace(true);
         }
         state
             .active
@@ -201,7 +205,22 @@ impl ActiveCaseRegistry {
         state.quiescing = true;
         state.case_matching_ready = false;
         state.bootstrap_open = false;
+        self.quiescing.send_replace(true);
         changed
+    }
+
+    /// Closed admission requires the recording supervisor to stop Source and
+    /// drain evidence, including when a live dependency prevents publication.
+    pub(crate) async fn wait_for_quiescing(&self) {
+        let mut quiescing = self.quiescing.subscribe();
+        loop {
+            if *quiescing.borrow_and_update() {
+                return;
+            }
+            if quiescing.changed().await.is_err() {
+                return;
+            }
+        }
     }
 
     pub(crate) fn is_quiescing(&self) -> bool {

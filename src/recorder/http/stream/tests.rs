@@ -68,6 +68,129 @@ async fn client_cancellation_with_flushed_body_prefix_keeps_complete_evidence() 
     cancellation_with_backpressure(true).await;
 }
 
+#[tokio::test]
+async fn engine_cleanup_cannot_certify_close_delimited_dependency_eof() {
+    close_delimited_eof(true).await;
+}
+
+#[tokio::test]
+async fn independent_close_delimited_eof_stays_complete_after_later_engine_cleanup() {
+    close_delimited_eof(false).await;
+}
+
+async fn close_delimited_eof(engine_cleanup: bool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = crate::AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.recording.case_dependency_post_response_window_ms = 0;
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    let state = AppState::new(config).await.unwrap();
+    let case = crate::recorder::CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: "close-delimited-stream".into(),
+        uri_group: None,
+    };
+    let guard = state.try_reserve_active_case(case.clone()).unwrap();
+    state.activate_case_dependencies(&guard).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (close, closed) = tokio::sync::oneshot::channel();
+    let source = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(socket.read_u8().await.unwrap());
+        }
+        // No length or chunk framing: the actual TCP EOF delimits this body.
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nprefix")
+            .await
+            .unwrap();
+        closed.await.unwrap();
+        socket.shutdown().await.unwrap();
+    });
+    let socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(socket))
+            .await
+            .unwrap();
+    let connection = tokio::spawn(connection);
+    let response = sender
+        .send_request(
+            hyper::Request::builder()
+                .uri("/stream")
+                .header("host", "dependency.test")
+                .body(Full::new(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let termination = ClientTermination::default();
+    let mut body = CaptureBody {
+        body: response.into_body(),
+        capture: Capture::new(context(&state, termination.clone())),
+        ending: None,
+    };
+    assert_eq!(
+        body.frame().await.unwrap().unwrap().into_data().unwrap(),
+        "prefix"
+    );
+    if engine_cleanup {
+        termination.connection_observation().observe_engine_stop();
+    }
+    close.send(()).unwrap();
+    assert!(
+        body.frame().await.is_none(),
+        "Hyper should observe body EOF"
+    );
+    if !engine_cleanup {
+        // A subsequent global cleanup cannot revoke an already observed EOF.
+        termination.connection_observation().observe_engine_stop();
+        body.capture.finish(true, None);
+    }
+    drop(body);
+    assert_eq!(
+        state.active_case_invalidation(case.id).is_some(),
+        engine_cleanup
+    );
+    assert!(
+        state
+            .drain_active_case_dependencies(case.id)
+            .await
+            .is_none()
+    );
+    state
+        .recorder()
+        .flush_case_dependency_files(&state.recorder().case_staging_dir(&case))
+        .await
+        .unwrap();
+    let raw = tokio::fs::read_to_string(
+        state
+            .recorder()
+            .case_staging_dir(&case)
+            .join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
+    let evidence: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+    assert_eq!(evidence["response_body"]["data"], "cHJlZml4");
+    assert_eq!(evidence["response_stream"]["complete"], !engine_cleanup);
+    if engine_cleanup {
+        assert!(
+            evidence["error"]
+                .as_str()
+                .unwrap()
+                .contains("engine cleanup")
+        );
+    } else {
+        assert!(evidence["error"].is_null());
+    }
+    source.await.unwrap();
+    connection.abort();
+}
+
 async fn cancellation_with_backpressure(flushed: bool) {
     use crate::http::termination::ObservedClientIo;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

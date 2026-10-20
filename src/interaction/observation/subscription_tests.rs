@@ -58,7 +58,15 @@ fn subscription_mode_does_not_certify_a_partial_sse_message() {
 
 #[test]
 fn response_streams_and_legacy_inputs_keep_real_completion_requirements() {
-    let mut response = Observation::new(Protocol::Sse, InteractionPolicy::default()).unwrap();
+    let mut response = Observation::new(
+        Protocol::Sse,
+        InteractionPolicy {
+            request_timeout_ms: 120_000,
+            max_duration_ms: 600_000,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     response.stream_bytes(b": ping\n\n", 9_000).unwrap();
     assert_eq!(response.pending(), vec![0]);
     assert_eq!(response.decision(10_000), LifecycleDecision::Continue);

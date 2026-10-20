@@ -186,6 +186,9 @@ impl Capture {
             return;
         }
         self.finished = true;
+        // Closing a connection-delimited response during engine cleanup can
+        // look like ordinary body EOF to Hyper. It cannot certify completion.
+        let engine_stopped = self.context.termination.engine_stopped();
         let capture_error = self.error.take();
         // Body drop alone is not proof of cancellation. Only the independently
         // observed downstream termination can complete a cancelled capture.
@@ -197,7 +200,12 @@ impl Capture {
             .flatten()
             .filter(|observed| self.context.accepts_server(*observed));
         let terminated = server.or(client);
-        self.error = capture_error.or(error);
+        self.error = capture_error.or(error).or_else(|| {
+            engine_stopped.then(|| {
+                "HTTP dependency response ended during engine cleanup before capture completed"
+                    .into()
+            })
+        });
         if server.is_none()
             && client.is_some()
             && !self.prefix.is_complete()
@@ -229,7 +237,8 @@ impl Capture {
             || self.context.started.elapsed(),
             |observed| observed.at.saturating_duration_since(self.context.started),
         );
-        self.stream.complete = (eof || terminated.is_some()) && self.error.is_none();
+        self.stream.complete =
+            !engine_stopped && (eof || terminated.is_some()) && self.error.is_none();
         self.stream.end_ms = duration.as_millis().min(u64::MAX as u128) as u64;
         let mut event = self.context.event.clone();
         event.timestamp = Utc::now();

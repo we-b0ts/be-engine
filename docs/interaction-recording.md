@@ -7,8 +7,10 @@ An Accept offer such as `application/json, text/event-stream` permits either
 response; JSON responses (including errors) and non-stream empty responses retain
 ordinary HTTP recording, including their status, headers and body. Protocol
 selection never resends the request or sends an already executed POST to fallback.
-Response-header waits use the ordinary HTTP request timeout; established streams use the interaction
-lifecycle budgets. When streaming recording is disabled, requests explicitly
+The shared `recorder.http_gateway.request_timeout_ms` defaults to 900000 ms
+(900 seconds) and controls HTTP response waits and pending streaming exchanges.
+Established streams retain the interaction lifecycle's completion and capture
+limits. When streaming recording is disabled, requests explicitly
 offering SSE or NDJSON still use the configured pre-dispatch fallback. Raw
 `application/octet-stream` recording additionally requires
 `recorder.http_gateway.record_raw_streaming: true`. Binary downloads otherwise
@@ -31,14 +33,23 @@ The shared defaults under `recorder.http_gateway.interaction` are:
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `business_idle_ms` | 10000 | Close after business quiet with no pending work |
-| `request_timeout_ms` | 120000 | Fail an unfinished exchange |
-| `max_duration_ms` | 600000 | Hard limit from admission; reaching it is incomplete |
+| `request_timeout_ms` | 900000 | Resolved from the shared HTTP request timeout; fail an unfinished exchange |
+| `max_duration_ms` | 900000 | HTTP stream duration equals the shared timeout; session limits are at least that timeout |
 | `cleanup_timeout_ms` | 60000 | Hard bound for transport close and case finalization |
 | `input_gap_ms` | 100 | Maximum replay gap after a proven completion barrier |
 | `preserve_input_timing` | false | Preserve original input gaps for time-sensitive behavior |
 | `max_message_bytes` | 8388608 | Bound one decoded message |
 | `max_messages` | 100000 | Bound observed messages |
 | `max_total_bytes` | 67108864 | Bound decoded input/output evidence |
+
+Set the shared timeout under `recorder.http_gateway`, rather than setting a
+separate streaming request timeout. The runtime resolves the interaction request
+budget from that value, including a `record --request-timeout-seconds` override.
+HTTP streams use the shared timeout as their absolute duration limit, so the
+previous 600-second default cannot truncate a 900-second request. Socket.IO and
+WebSocket sessions may retain a longer explicit interaction duration. Resolved
+policies are saved in new recordings; Replay retains the explicit budgets and
+deadline precedence in historical input programs.
 
 Engine.IO ping/pong, upgrade controls, WebSocket ping/pong and SSE comments do not
 extend business idle. A business event named `heartbeat` receives ordinary
@@ -150,6 +161,16 @@ stream cases follow request boundaries regardless of HTTP connection reuse. The
 10-second business-idle limit governs the primary interaction, not a separate
 dependency quiet period.
 
+An unfinished primary request that reaches its timeout fails the case; that
+primary reason takes precedence over dependency errors caused by closing the
+stream. A failure that closes global recording admission also wakes the recording
+supervisor. The supervisor stops Source, closes retained dependency connections
+with explicit engine-cleanup attribution, preserves admitted ownership through
+evidence persistence, finalizes the recording and exits with an error when cases
+failed. Closed admission cannot leave the recording service indefinitely running
+and sending every later request to fallback. Normal EOF and fully observed client
+cancellation do not stop the recording service.
+
 Engine business-idle closure, client closure and server EOF are distinct observed
 end reasons and are compared during Replay. WebSocket close codes and reasons
 are compared too. If the client or server closes first, recording retains that
@@ -165,7 +186,7 @@ HTTP dependency retains its reservation through body EOF, drop or error. Its
 headers alone cannot release the reservation. The interaction's 60-second
 `cleanup_timeout_ms` bounds the whole close/finalization path; it adds no normal
 wait beyond the configured window and active work. Failure to finish this path
-fails the case and closes admission.
+fails the case and closes admission, causing the recording service to shut down.
 
 Replay uses the existing case `end` lifecycle and
 `project.replay.case_dependency_post_response_window_ms` (default 10 ms).
