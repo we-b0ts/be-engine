@@ -397,7 +397,7 @@ struct ReplayState {
     root_dir: PathBuf,
     cases: BTreeMap<String, ReplayCase>,
     active_case_id: Option<String>,
-    api_origin_tails: control::api_origin::CaseTails,
+    dependency_tails: control::dependency_tail::CaseTails,
     case_dependency_post_response_window: std::time::Duration,
     global_path: Option<PathBuf>,
     regular_global: BTreeMap<String, report::global_evidence::regular::RegularBaseline>,

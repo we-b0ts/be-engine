@@ -22,6 +22,16 @@ impl AppState {
         request_timeout: Duration,
     ) {
         let idle = Duration::from_millis(self.config().recording.api_origin_dependency_idle_ms);
+        // Response headers may declare a stream only after dependencies have
+        // started. Capture their request lifetimes from primary admission.
+        // Explicit Accept and response-only adoption use the same HTTP budget;
+        // interaction max_duration separately limits primary interaction I/O.
+        self.inner.active_cases.configure_stream_tail(
+            case_id,
+            idle,
+            started,
+            Duration::from_millis(self.config().http_gateway.request_timeout_ms),
+        );
         if idle.is_zero() {
             return;
         }
@@ -46,9 +56,7 @@ impl AppState {
         &self,
         request: DependencyRequest<'_>,
     ) -> DependencyTargets {
-        self.inner
-            .active_cases
-            .current_targets_for_request(&request)
+        self.capture_typed_dependency_request(request)
     }
 
     pub(crate) fn try_reserve_active_case(
@@ -236,6 +244,35 @@ impl AppState {
             .active_cases
             .drain_case_dependencies(case_id, post_response_window, timeout)
             .await;
+        let stream_tail_report = self.inner.active_cases.stream_tail_report(case_id);
+        let has_stream_tail = stream_tail_report.is_some();
+        if let Some((case, mut report)) = stream_tail_report {
+            let inventory_complete = report["inventory_complete"] == true;
+            report["outcome"] = match result {
+                DependencyDrainResult::Drained => "quiet",
+                DependencyDrainResult::TimedOut => "dependency_drain_timeout",
+                DependencyDrainResult::ObservationTimedOut => "request_deadline",
+            }
+            .into();
+            if let Err(error) = self
+                .recorder()
+                .write_case_json(&case, "dependency-tail-observation.json", &report)
+                .await
+            {
+                self.begin_case_quiescing();
+                return Some(CaseInvalidation::new(
+                    "recording_observation_failure",
+                    format!("failed to persist dependency tail observation: {error}"),
+                ));
+            }
+            if !inventory_complete {
+                self.begin_case_quiescing();
+                return Some(CaseInvalidation::new(
+                    "dependency_tail_observation_limit",
+                    "dependency tail inventory exceeded its exchange bound; observation is incomplete",
+                ));
+            }
+        }
         if let Some((case, mut report)) = self.inner.active_cases.observation_report(case_id) {
             let inventory_complete = report["inventory_complete"] == true;
             report["outcome"] = match result {
@@ -246,6 +283,9 @@ impl AppState {
             .into();
             if !inventory_complete {
                 report["outcome"] = "inventory_limit".into();
+            }
+            if has_stream_tail {
+                report["observation_mode"] = "primary_stream_tail".into();
             }
             if let Err(error) = self
                 .recorder()
@@ -264,6 +304,19 @@ impl AppState {
                     "API-origin selected dependency inventory exceeded 100000 exchanges; observation is incomplete",
                 ));
             }
+        }
+        if has_stream_tail {
+            return match result {
+                DependencyDrainResult::Drained => None,
+                DependencyDrainResult::ObservationTimedOut => Some(CaseInvalidation::new(
+                    "dependency_tail_observation_timeout",
+                    "dependency tail reached the absolute request deadline; admitted requests were preserved until completion",
+                )),
+                DependencyDrainResult::TimedOut => Some(CaseInvalidation::new(
+                    "dependency_drain_timeout",
+                    "dependency evidence persistence exceeded its cleanup budget; case ownership was retained until persistence completed",
+                )),
+            };
         }
         match result {
             DependencyDrainResult::Drained => None,

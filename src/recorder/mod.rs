@@ -47,7 +47,7 @@ pub(crate) use case::{
 pub use event::*;
 pub(crate) use summary::{
     SourceProcessTrafficObservation, load_pre_readiness_traffic_summary,
-    load_source_process_traffic_summary,
+    load_source_process_traffic_summary, should_append_case_dependency,
 };
 
 struct RecorderOptions {

@@ -138,6 +138,7 @@ impl Capture {
         if bytes.is_empty() {
             return;
         }
+        self.context.targets.note_stream_tail_activity();
         self.received = self.received.saturating_add(bytes.len());
         let limit = self.context.state.config().recording.max_body_bytes;
         if self.error.is_some() {

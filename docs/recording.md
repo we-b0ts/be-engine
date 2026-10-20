@@ -152,9 +152,12 @@ streams additionally require `recorder.http_gateway.record_raw_streaming: true`.
 Socket.IO supports polling, direct WebSocket and polling upgrade. One connection
 owns one case and one recording slot across authentication and multiple events.
 The default business idle is 10 seconds and the activity limit is 10 minutes.
-Normal closure keeps Source running and uses the existing dependency window:
-100 ms of additional admission, then a bounded drain of accepted exchanges
-(default 5000 ms). Closing and finalization together have a 60-second hard limit.
+Normal closure keeps Source running. Primary HTTP streams retain their case for
+the [dependency tail](recording-stream-dependency-tail.md), including when the
+client cancels before business completion. The default idle window is 60 seconds,
+bounded by the original request budget. The 5-second writer drain begins after
+live dependency requests finish. Socket.IO retains its existing dependency window
+and transport cleanup policy.
 Protocol heartbeats do not reset business idle. An unfinished request times out
 explicitly and an activity-limit capture is incomplete.
 

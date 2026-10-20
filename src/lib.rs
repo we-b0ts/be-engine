@@ -53,6 +53,7 @@ mod recording_completion;
 mod recording_control;
 mod recording_network;
 mod recording_runtime;
+mod recording_stream_tail;
 mod recording_upstream;
 mod redis;
 mod replay;
@@ -663,17 +664,19 @@ impl AppState {
         let global_attribution = probe_attribution.or_else(|| {
             (!suppress_default_global)
                 .then(|| {
-                    background_match.as_ref().map(|matched| {
-                        crate::recorder::GlobalDependencyAttribution {
+                    targets
+                        .process_owned_rule
+                        .as_deref()
+                        .or_else(|| background_match.as_ref().map(|matched| matched.rule_name()))
+                        .map(|rule_name| crate::recorder::GlobalDependencyAttribution {
                             reason: "background_rule",
                             phase: if targets.bootstrap_open {
                                 "bootstrap"
                             } else {
                                 "runtime"
                             },
-                            matched_by: matched.rule_name().to_string(),
-                        }
-                    })
+                            matched_by: rule_name.to_string(),
+                        })
                 })
                 .flatten()
         });
@@ -708,6 +711,12 @@ impl AppState {
             &targets,
             global_attribution.is_none(),
         );
+        self.inner.active_cases.observe_stream_tail_event(
+            &event,
+            &targets,
+            global_attribution.is_none(),
+        );
+        let target_case_ids: Vec<_> = targets.cases.iter().map(|(case, _)| case.id).collect();
         if let Err(err) = self.recorder().try_record_event(
             event,
             targets,
@@ -719,14 +728,27 @@ impl AppState {
                 event_type,
                 "failed to enqueue recorder event"
             );
-            if let Some(case) =
+            let invalidation = CaseInvalidation::new(
+                "recording_writer_failure",
+                format!("failed to enqueue {event_type} recorder event: {err}"),
+            );
+            let invalidated = if target_case_ids.is_empty() {
                 self.inner
                     .active_cases
-                    .invalidate_current_case(CaseInvalidation::new(
-                        "recording_writer_failure",
-                        format!("failed to enqueue {event_type} recorder event: {err}"),
-                    ))
-            {
+                    .invalidate_current_case(invalidation)
+                    .into_iter()
+                    .collect()
+            } else {
+                target_case_ids
+                    .into_iter()
+                    .filter_map(|id| {
+                        self.inner
+                            .active_cases
+                            .invalidate_case(id, invalidation.clone())
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for case in invalidated {
                 warn!(
                     case_id = %case.id,
                     rule = %case.rule_name,

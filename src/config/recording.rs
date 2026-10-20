@@ -24,7 +24,8 @@ pub struct RecordingConfig {
     pub post_ready_max_wait_ms: u64,
     #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
-    /// Sliding idle window for dependencies selected by matching API-origin rules; 0 disables it.
+    /// Idle window for primary stream tails and API-origin selected dependencies.
+    /// Zero removes the idle wait; stream tails still retain unfinished requests.
     pub api_origin_dependency_idle_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
     pub shutdown_case_drain_timeout_ms: u64,
