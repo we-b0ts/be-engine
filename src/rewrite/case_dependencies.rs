@@ -280,7 +280,16 @@ fn detail(
                 .as_str()
                 .or_else(|| request["uri"].as_str())
                 .context("HTTP dependency Case has no API route")?;
-            let route = crate::recording_api::identity(route).to_string();
+            let route = crate::recording_api::identity(route);
+            let route = if route.starts_with("MOTAN ") {
+                route.to_owned()
+            } else {
+                route
+                    .parse::<hyper::Uri>()
+                    .context("HTTP dependency Case has an invalid API route")?
+                    .path()
+                    .to_owned()
+            };
             RewriteCaseDependencyProtocolDetail::Http {
                 omitted_exchanges: builder.event_count.saturating_sub(builder.http.len()),
                 exchanges: builder.http,

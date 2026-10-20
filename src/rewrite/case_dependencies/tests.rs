@@ -31,7 +31,7 @@ fn http_targets_include_source_metadata_and_route_to_current_request_evidence() 
     let detail = serde_json::to_value(
         query(RewriteCaseDependenciesOptions {
             target_id: Some(id.into()),
-            ..options
+            ..options.clone()
         })
         .unwrap(),
     )
@@ -43,6 +43,32 @@ fn http_targets_include_source_metadata_and_route_to_current_request_evidence() 
     for private in ["private-token", "private-body", "secret=value"] {
         assert!(!summary.to_string().contains(private));
         assert!(!detail.to_string().contains(private));
+    }
+    for (request, expected_route) in [
+        (
+            serde_json::json!({"method":"POST","uri":"http://primary.test/api/123?access_token=private-primary-token"}),
+            "/api/123",
+        ),
+        (
+            serde_json::json!({"method":"MOTAN","uri":"/service/method","api_pattern":"MOTAN /service/method"}),
+            "MOTAN /service/method",
+        ),
+    ] {
+        std::fs::write(options.case_dir.join("request.json"), request.to_string()).unwrap();
+        let detail = serde_json::to_value(
+            query(RewriteCaseDependenciesOptions {
+                target_id: Some(id.into()),
+                ..options.clone()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            detail["request_evidence_command"]["argv"][5],
+            expected_route
+        );
+        assert!(!detail.to_string().contains("private-primary-token"));
+        assert!(!detail.to_string().contains("primary.test"));
     }
 }
 
