@@ -226,7 +226,16 @@ The gateway SDK accepts this lease value as well as an externally managed plain
 URL. Every 10 seconds the app renews the lease only if its complete value still
 matches. A live second recorder cannot overwrite it. On shutdown the app deletes
 only its own value; after a crash TTL expiry allows a replacement to register.
-Loss of registration stops admission and initiates graceful shutdown.
+After readiness, the first address refresh runs immediately and later refreshes
+run every 10 seconds. A missing registration is recreated with `SET NX`, without
+overwriting another owner. Initial registration failure, renewal errors, expiry
+and replacement never stop HTTP admission, Recorder, Source or an active request.
+The service logs discovery failures and retries on the next refresh; the existing
+200 ms Redis operation timeout remains unchanged. Gateways use their fallback
+when discovery is unavailable. Request reservation checks and renewal retain
+their independent ownership rules below.
+On normal or recoverable error shutdown, token-checked unregistration is
+best-effort. Failed unregistration and uncatchable exits rely on address TTL.
 
 For an incoming request the adapter validates the reserved scope/token headers
 and checks token ownership with Redis GET. It removes both headers before

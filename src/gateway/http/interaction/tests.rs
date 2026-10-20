@@ -182,8 +182,10 @@ async fn replay_case(case: &Path, target: SocketAddr) -> OutputObservation {
     .unwrap();
     assert!(
         report.passed,
-        "Source recording did not self-replay: {:?}",
-        report.differences
+        "Source recording did not self-replay: {:?}; actual end: {:?}; actual events: {}",
+        report.differences,
+        replay.observation.end,
+        replay.observation.events.len()
     );
     replay.observation
 }

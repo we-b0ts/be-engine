@@ -21,8 +21,8 @@ use tokio::{
 };
 use tracing::{info, warn};
 
-/// Initializes Recorder and Source, registers only after readiness, and serves
-/// until shutdown or loss of either the Source process or registration lease.
+/// Initializes Recorder and Source, advertises after readiness, and serves
+/// independently of best-effort address registration.
 pub async fn run(options: RecordOptions) -> Result<()> {
     ensure!(
         crate::local_interception::effective_uid() != crate::TRAFFIC_PROCESS_UID,
@@ -143,19 +143,12 @@ async fn run_prepared(
         }
         let listener = TcpListener::bind(options.listen).await?;
         adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped)));
-        // Cleanup always tries token-checked unregister, even if SET timed out.
-        tokio::select! {
-            registered = coordination.register() => registered?,
-            error = forwards.failure() => return Err(error),
-            signal = &mut shutdown => { signal?; return Ok(()); }
-        }
         relay.open();
         info!(listen = %options.listen, run_id = %state.recorder().run_dir.file_name().unwrap().to_string_lossy(),
             manifest = %state.recorder().run_dir.join("recording-run.json").display(),
             coordination = ?options.coordination, "recording ready; waiting for requests");
         let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        heartbeat.tick().await;
         loop {
             tokio::select! {
                 signal = &mut shutdown => { signal?; break Ok(()); }
@@ -167,12 +160,13 @@ async fn run_prepared(
                 status = source.wait() => break Err(anyhow::anyhow!("Source exited: {}", status?)),
                 result = &mut recorder => { recorder_finished = true; result.context("Recorder task failed")??; break Err(anyhow::anyhow!("Recorder stopped unexpectedly")); }
                 result = adapter.as_mut().unwrap() => { adapter_finished = true; result.context("adapter task failed")??; break Err(anyhow::anyhow!("adapter stopped unexpectedly")); }
-                _ = heartbeat.tick() => { coordination.renew().await?; }
+                _ = heartbeat.tick() => { coordination.refresh_registration().await; }
             }
         }
     }.await;
     relay.close();
     state.close_interactions();
+    // An unacknowledged registration may still have succeeded in Redis.
     if let Err(error) = coordination.unregister().await {
         warn!(%error, "recorder unregister failed; address TTL will expire");
     }

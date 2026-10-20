@@ -18,6 +18,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod coordination;
 mod direct;
 mod policy;
 mod project;
