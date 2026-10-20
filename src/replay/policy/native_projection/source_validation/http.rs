@@ -53,6 +53,25 @@ pub(super) fn validate(
     let body = crate::replay::http_witness_value(&raw, Surface::DependencyRequest)?
         .context("Source HTTP request body missing")?;
     let source_time = started(event)?;
+    if let Some(prepared) = runtime.request_contracts.prepare_http_body(
+        case.id,
+        &target,
+        method,
+        &super::super::super::pattern::uri_path(uri),
+        &body,
+        &body,
+        crate::replay::assertion::RequestTimes {
+            source: source_time,
+            target: source_time,
+        },
+    ) {
+        let prepared = prepared?;
+        ensure!(
+            prepared.source == prepared.actual,
+            "Source HTTP field comparison changed values"
+        );
+        runtime.request_contracts.commit(prepared.decision);
+    }
     coverage.references(
         runtime
             .dynamic_values

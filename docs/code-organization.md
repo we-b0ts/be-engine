@@ -970,6 +970,13 @@ explicit repository-wide audit.
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
 
+- `replay/policy/request_contract/http_body` validates explicitly selected HTTP
+  JSON random fields and HMAC JWTs, then supplies private comparison copies to
+  ordinary HTTP matching. `request_contract/jwt` shares authenticated-claim
+  validation and staged nonce bindings with Redis; `signing_keys` resolves their
+  immutable startup inputs for Replay and Source preflight. The protocol owner
+  retains strict remainder comparison, independent witnesses and finite delivery.
+
 
 ## Unified policy responsibilities
 

@@ -52,11 +52,10 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
 fn validate_body_codecs(value: &[CompiledRule], native: &[CompiledNativeRule]) -> Result<()> {
     let mut codecs = value
         .iter()
-        .filter(|compiled| {
-            compiled.rule.surface == Surface::ApiResponse && compiled.rule.slot == Slot::Body
-        })
+        .filter(|compiled| compiled.rule.slot == Slot::Body)
         .map(|compiled| {
             (
+                compiled.rule.surface,
                 selector(&compiled.rule.selector),
                 compiled.rule.when.clone(),
                 compiled.rule.codec.clone(),
@@ -65,24 +64,33 @@ fn validate_body_codecs(value: &[CompiledRule], native: &[CompiledNativeRule]) -
         .collect::<Vec<_>>();
     for compiled in native {
         let codec = match &compiled.rule.effect {
-            crate::policy::NativeEffect::ResponseBody(effect) => effect.value_codec()?,
-            crate::policy::NativeEffect::ResponseGenerated(_) => Some(Codec::Json),
+            crate::policy::NativeEffect::ResponseBody(effect) => effect
+                .value_codec()?
+                .map(|codec| (Surface::ApiResponse, codec)),
+            crate::policy::NativeEffect::ResponseGenerated(_) => {
+                Some((Surface::ApiResponse, Codec::Json))
+            }
             crate::policy::NativeEffect::ResponseJwt(effect) if effect.location.is_none() => {
-                Some(Codec::Json)
+                Some((Surface::ApiResponse, Codec::Json))
+            }
+            crate::policy::NativeEffect::HttpRequest(effect) if !effect.json.is_empty() => {
+                Some((Surface::DependencyRequest, Codec::Json))
             }
             _ => None,
         };
-        if let Some(codec) = codec {
+        if let Some((surface, codec)) = codec {
             codecs.push((
+                surface,
                 compiled.rule.selector.clone(),
                 compiled.rule.when.clone(),
                 codec,
             ));
         }
     }
-    for (index, (scope, when, codec)) in codecs.iter().enumerate() {
-        for (other_scope, other_when, other_codec) in &codecs[..index] {
-            if !scopes_overlap(scope, other_scope)?
+    for (index, (surface, scope, when, codec)) in codecs.iter().enumerate() {
+        for (other_surface, other_scope, other_when, other_codec) in &codecs[..index] {
+            if surface != other_surface
+                || !scopes_overlap(scope, other_scope)?
                 || crate::policy::compiler::disjoint_conditions(when.as_ref(), other_when.as_ref())
             {
                 continue;

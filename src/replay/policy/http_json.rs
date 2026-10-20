@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HttpJsonRules {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) fields: BTreeMap<String, crate::policy::native::HttpJsonField>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) unordered: Vec<HttpUnorderedField>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -16,7 +18,7 @@ pub(super) struct HttpJsonRules {
 
 impl HttpJsonRules {
     pub(super) fn is_empty(&self) -> bool {
-        self.unordered.is_empty() && self.time.is_empty()
+        self.fields.is_empty() && self.unordered.is_empty() && self.time.is_empty()
     }
 }
 

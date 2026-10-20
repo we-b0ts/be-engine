@@ -13,6 +13,8 @@ mod concurrency_transaction;
 mod dependency_transaction;
 #[path = "transaction_header.rs"]
 mod header_transaction;
+#[path = "transaction_http_body_jwt.rs"]
+mod http_body_jwt_transaction;
 #[path = "transaction_mysql_candidates.rs"]
 mod mysql_candidates_transaction;
 #[path = "transaction_native.rs"]

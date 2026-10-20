@@ -259,8 +259,28 @@ pub struct HttpRequestEffect {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
     pub query: BTreeMap<String, Proven<GeneratedValue>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
+    pub json: BTreeMap<String, Proven<HttpJsonField>>,
     #[serde(default)]
     pub multipart_boundary: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HttpJsonField {
+    Random {
+        format: RandomEncoding,
+        length: usize,
+    },
+    Jwt {
+        algorithm: SignatureAlgorithm,
+        signing_key: StartupKey,
+        #[serde(skip)]
+        anchor: crate::policy::TimeAnchor,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        nonces: Vec<Proven<NonceClaim>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

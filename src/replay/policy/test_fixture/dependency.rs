@@ -216,6 +216,7 @@ pub(super) fn convert(
                         n::NativeEffect::HttpRequest(n::HttpRequestEffect {
                             headers,
                             query,
+                            json: Default::default(),
                             multipart_boundary: http.multipart.is_some(),
                         }),
                         &rule.source_evidence,

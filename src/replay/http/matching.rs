@@ -104,6 +104,47 @@ impl ReplayState {
                     });
                     continue;
                 }
+                let body_contract = if exchange.source == ReplaySource::Case
+                    && exchange.shared_origin.is_none()
+                    && let (Some(policy), Some(case)) =
+                        (&self.replay_policy, active_case_id.as_deref())
+                    && let Ok(source_body) = decode_body(&exchange.record.request_body)
+                {
+                    policy.request_contracts.prepare_http_body(
+                        case,
+                        target,
+                        method.as_str(),
+                        &uri_path_only(&exchange.record.uri),
+                        &source_body,
+                        body,
+                        crate::replay::assertion::RequestTimes {
+                            source: request_headers::time_reference::source(&exchange.record),
+                            target: Some(request_started_at),
+                        },
+                    )
+                } else {
+                    None
+                };
+                let body_contract = match body_contract {
+                    Some(Ok(value)) => Some(value),
+                    Some(Err(error)) => {
+                        closest_mismatch.get_or_insert_with(|| {
+                            format!("HTTP JSON request field contract failed: {error:#}")
+                        });
+                        continue;
+                    }
+                    None => None,
+                };
+                let body_exchange = body_contract.as_ref().map(|value| {
+                    let mut copy = exchange.clone();
+                    copy.record.request_body.encoding = "base64".into();
+                    copy.record.request_body.data = STANDARD.encode(&value.source);
+                    copy
+                });
+                let exchange = body_exchange.as_ref().unwrap_or(exchange);
+                let body = body_contract
+                    .as_ref()
+                    .map_or(body, |value| value.actual.as_slice());
                 let normalized = if exchange.source == ReplaySource::Case
                     && exchange.shared_origin.is_none()
                 {
@@ -184,6 +225,11 @@ impl ReplayState {
                 } else {
                     DependencyRuleDecision::default()
                 };
+                if let Some(body_contract) = &body_contract {
+                    policy_decision
+                        .value_contracts
+                        .push(body_contract.decision.clone());
+                }
                 let mut ignored_query_params = self.http_ignore_query_params.clone();
                 ignored_query_params.extend(policy_decision.dynamic_query_params.iter().cloned());
                 if exchange.shared_origin.is_some() {

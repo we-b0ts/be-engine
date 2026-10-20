@@ -14,7 +14,7 @@ mod strict_map;
 
 pub use capability::*;
 pub use compiler::*;
-pub use native::{NativeEffect, NativeMatch, NativeRule, PolicyRule};
+pub use native::{HttpJsonField, NativeEffect, NativeMatch, NativeRule, PolicyRule};
 pub use native_compile::*;
 pub use schema::*;
 

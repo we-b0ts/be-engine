@@ -7,29 +7,7 @@ impl RequestContracts {
         target_root: &Path,
         requests: &BTreeMap<String, (PathBuf, Value)>,
     ) -> Result<Self> {
-        let mut keys = BTreeMap::new();
-        for rule in rules {
-            if let Some(super::super::redis_value::RedisSelector::Requests(selector)) = &rule.redis
-            {
-                for command in &selector.commands {
-                    for argument in command.argument_values.values() {
-                        if let config::ArgumentRule::Json(json) = argument {
-                            for (pointer, field) in &json.json {
-                                if let config::JsonField::Jwt(field) = field {
-                                    keys.insert(
-                                        (rule.id.clone(), pointer.clone()),
-                                        crate::request_rules::keys::ResolvedSigningKey::resolve(
-                                            target_root,
-                                            &field.jwt.signing_key_source,
-                                        )?,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let keys = signing_keys::resolve(rules, || Ok(target_root.to_owned()))?;
         let mut state = State::default();
         for (id, (dir, request)) in requests {
             let recorded = request["timestamp"].as_str().map(str::parse).transpose()?;

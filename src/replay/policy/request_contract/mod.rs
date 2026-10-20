@@ -1,13 +1,16 @@
 //! Dependency request contracts: comparison copies, protected witnesses and case-local state.
 pub(crate) mod config;
 pub(in crate::replay::policy) mod evidence;
+mod http_body;
 mod http_json;
 mod http_value;
+mod jwt;
 pub(in crate::replay::policy) mod key;
 mod memcached;
 mod mysql;
 mod mysql_selection;
 pub(in crate::replay::policy) mod native_projection;
+mod signing_keys;
 mod value_decision;
 pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
@@ -119,31 +122,8 @@ impl RequestContracts {
         policy: &Path,
         cases: &BTreeMap<String, ReplayCase>,
     ) -> Result<Self> {
-        let mut root = None;
-        let mut keys = BTreeMap::new();
-        for rule in rules {
-            if let Some(super::redis_value::RedisSelector::Requests(selector)) = &rule.redis {
-                for command in &selector.commands {
-                    for field in command.argument_values.values() {
-                        if let config::ArgumentRule::Json(json) = field {
-                            for (pointer, field) in &json.json {
-                                if let config::JsonField::Jwt(field) = field {
-                                    keys.insert(
-                                        (rule.id.clone(), pointer.clone()),
-                                        crate::request_rules::keys::ResolvedSigningKey::resolve(
-                                            root.get_or_insert(
-                                                crate::config::resolve_unified_policy_root(policy)?,
-                                            ),
-                                            &field.jwt.signing_key_source,
-                                        )?,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let keys =
+            signing_keys::resolve(rules, || crate::config::resolve_unified_policy_root(policy))?;
         let mut state = State::default();
         for (id, case) in cases {
             if !case.dir.join("request.json").is_file() {
@@ -400,10 +380,9 @@ pub(in crate::replay::policy) fn is_request_rule(rule: &ReplayDependencyRule) ->
     matches!(
         rule.redis,
         Some(super::redis_value::RedisSelector::Requests(_))
-    ) || rule
-        .http
-        .as_ref()
-        .is_some_and(|h| h.multipart.is_some() || !h.json.time.is_empty())
+    ) || rule.http.as_ref().is_some_and(|h| {
+        h.multipart.is_some() || !h.json.time.is_empty() || !h.json.fields.is_empty()
+    })
 }
 pub(in crate::replay::policy) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
     if !is_request_rule(rule) {
@@ -430,6 +409,11 @@ pub(in crate::replay::policy) fn validate(rule: &ReplayDependencyRule) -> Result
             ensure!(
                 http.json.is_empty() && http.query.is_empty() && http.headers.is_empty(),
                 "multipart contracts cannot carry another HTTP normalization"
+            );
+        } else if !http.json.fields.is_empty() {
+            ensure!(
+                http.json.time.is_empty() && http.json.unordered.is_empty(),
+                "HTTP generated body fields use separate nonoverlapping value rules for times and ordering"
             );
         } else {
             http_json::validate(http)?;
