@@ -354,9 +354,6 @@ impl Observation {
         reason: String,
         now_ms: u64,
     ) -> Result<InputAction> {
-        if let Some(decoder) = &self.stream_decoder {
-            decoder.validate_boundary()?;
-        }
         let completed = self
             .close_barrier
             .as_ref()
@@ -408,13 +405,40 @@ impl Observation {
                 .all(|id| self.lifecycle.is_pending(*id)),
             "Socket.IO protocol and lifecycle pending identities disagree"
         );
-        if let Some(decoder) = &self.stream_decoder {
-            decoder.validate_boundary()?;
+        let partial_message = if let Some(decoder) = &self.stream_decoder {
+            if reason == EndReason::ClientClose {
+                decoder.partial_message()
+            } else {
+                decoder.validate_boundary()?;
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(partial) = &partial_message {
+            ensure!(
+                self.input
+                    .actions
+                    .last()
+                    .is_some_and(|action| matches!(action.action, InputActionKind::Close { .. })),
+                "partial stream observation requires a recorded client close input"
+            );
+            let length = partial.decode()?.len();
+            let complete_bytes = self.output.iter().try_fold(0_usize, |total, event| {
+                Ok::<_, anyhow::Error>(total.saturating_add(event.message.decode()?.len()))
+            })?;
+            ensure!(
+                length <= self.policy.max_message_bytes
+                    && self.output.len() < self.policy.max_messages
+                    && complete_bytes.saturating_add(length) <= self.policy.max_total_bytes,
+                "cancelled stream prefix exceeds observation budget"
+            );
         }
         self.input.validate()?;
         let mut end = self
             .lifecycle
             .end_observation(reason, now_ms, transport_clean);
+        end.partial_message = partial_message;
         if reason != EndReason::BusinessIdle {
             end.close = self.close.clone();
         }
@@ -639,8 +663,14 @@ mod tests {
             .stream_bytes(b"event: done\ndata: ok\n\ndata: unfinished", 1)
             .unwrap();
         assert!(partial.pending().is_empty());
-        assert!(partial.client_close(None, String::new(), 2).is_err());
-        assert!(partial.finish(EndReason::ClientClose, 2, true).is_err());
+        partial.client_close(None, String::new(), 2).unwrap();
+        let (_, output) = partial.finish(EndReason::ClientClose, 2, true).unwrap();
+        assert!(output.end.clean);
+        assert_eq!(
+            output.end.partial_message.unwrap().decode().unwrap(),
+            b"data: unfinished"
+        );
+        assert!(partial.finish(EndReason::ServerEof, 2, true).is_err());
     }
     #[test]
     fn timing_sensitive_profile_retains_the_serial_input_interval() {

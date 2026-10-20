@@ -131,6 +131,7 @@ impl InteractionLifecycle {
             clean: transport_clean
                 && success_reason
                 && (self.pending.is_empty() || reason == EndReason::ClientClose),
+            partial_message: None,
             close: None,
         }
     }

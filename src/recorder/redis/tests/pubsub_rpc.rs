@@ -23,7 +23,16 @@ async fn receive(client: &mut TcpStream, expected: &[u8]) {
 }
 
 #[tokio::test]
-async fn rpc_callback_retains_publish_case_across_connections_and_case_changes() {
+async fn rpc_callback_retains_publish_case_across_connections_while_admitted() {
+    exercise_rpc(false).await;
+}
+
+#[tokio::test]
+async fn unanswered_rpc_does_not_block_drain_and_late_callback_cannot_reopen_case() {
+    exercise_rpc(true).await;
+}
+
+async fn exercise_rpc(close_origin: bool) {
     let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
     let (mut subscriber, proxy_sub) = tcp_pair().await;
     let (mut redis_sub, upstream_sub) = tcp_pair().await;
@@ -42,8 +51,10 @@ async fn rpc_callback_retains_publish_case_across_connections_and_case_changes()
     .await;
 
     let first = test_case("rpc-origin");
-    let guard = state.try_reserve_active_case(first.clone()).unwrap();
-    state.activate_case_dependencies(&guard).unwrap();
+    let mut guard = Some(state.try_reserve_active_case(first.clone()).unwrap());
+    state
+        .activate_case_dependencies(guard.as_ref().unwrap())
+        .unwrap();
     let (mut publisher, proxy_pub) = tcp_pair().await;
     let (mut redis_pub, upstream_pub) = tcp_pair().await;
     let pub_task = spawn_handler(
@@ -61,12 +72,35 @@ async fn rpc_callback_retains_publish_case_across_connections_and_case_changes()
         b":1\r\n",
     )
     .await;
-    // Model delayed delivery after HTTP ownership has moved: retained admission
-    // belongs to the request, not whichever case is active when the push arrives.
-    drop(guard);
+    state.recorder().flush_all_dependency_files().await.unwrap();
+    // PUBLISH has completed. Correlation metadata must not keep a command in flight.
+    assert_eq!(
+        state
+            .inner
+            .active_cases
+            .dependency_activity(first.id)
+            .unwrap()
+            .0,
+        0
+    );
     let second = test_case("unrelated");
-    let second_guard = state.try_reserve_active_case(second.clone()).unwrap();
-    state.activate_case_dependencies(&second_guard).unwrap();
+    let _second_guard = if close_origin {
+        assert_eq!(
+            state
+                .inner
+                .active_cases
+                .drain_case_dependencies(first.id, Duration::ZERO, Duration::from_millis(30))
+                .await,
+            crate::active_case::DependencyDrainResult::Drained
+        );
+        state.recorder().publish_case(&first).await.unwrap();
+        drop(guard.take());
+        let next = state.try_reserve_active_case(second.clone()).unwrap();
+        state.activate_case_dependencies(&next).unwrap();
+        Some(next)
+    } else {
+        None
+    };
     let unrelated = encode_array(&[b"message", b"custom.bus", &ack(99)]);
     redis_sub.write_all(&unrelated).await.unwrap();
     receive(&mut subscriber, &unrelated).await;
@@ -93,16 +127,44 @@ async fn rpc_callback_retains_publish_case_across_connections_and_case_changes()
         .recorder()
         .case_staging_dir(&first)
         .join("dependencies.jsonl");
+    let original = if close_origin {
+        assert!(
+            !original.parent().unwrap().exists(),
+            "late callback recreated finalized staging"
+        );
+        state.recorder().case_dir(&first).join("dependencies.jsonl")
+    } else {
+        original
+    };
     let raw = tokio::fs::read_to_string(original).await.unwrap();
     let events: Vec<Value> = raw
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     let request = events.iter().find(|e| e["command"] == "PUBLISH").unwrap();
-    let reply = events
-        .iter()
-        .find(|e| e["event_type"] == "redis_pub_sub_push")
-        .unwrap();
+    let global =
+        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
+            .await
+            .unwrap();
+    let global_events: Vec<Value> = global
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    if close_origin {
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["event_type"] == "redis_pub_sub_push")
+        );
+    }
+    let reply = if close_origin {
+        &global_events
+    } else {
+        &events
+    }
+    .iter()
+    .find(|e| e["event_type"] == "redis_pub_sub_push" && e.get("rpc_request").is_some())
+    .unwrap();
     assert_eq!(
         reply["rpc_request"]["connection_id"],
         request["connection_id"]
@@ -174,4 +236,95 @@ async fn generic_binary_pubsub_capture_is_semantic_evidence_with_no_rpc_adapter(
             .unwrap(),
         notification
     );
+}
+
+#[tokio::test]
+async fn idle_rpc_publisher_and_callback_are_global_without_collecting_ordinary_idle_publish() {
+    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    assert!(state.inner.active_cases.close_bootstrap());
+    let (mut subscriber, proxy_sub) = tcp_pair().await;
+    let (mut redis_sub, upstream_sub) = tcp_pair().await;
+    let sub_task = spawn_handler(
+        proxy_sub,
+        upstream_sub,
+        state.clone(),
+        redis_sub.peer_addr().unwrap(),
+    );
+    forward_test_exchange(
+        &mut subscriber,
+        &mut redis_sub,
+        &encode_array(&[b"SUBSCRIBE", b"custom.bus"]),
+        b"*3\r\n$9\r\nsubscribe\r\n$10\r\ncustom.bus\r\n:1\r\n",
+    )
+    .await;
+    let (mut publisher, proxy_pub) = tcp_pair().await;
+    let (mut redis_pub, upstream_pub) = tcp_pair().await;
+    let pub_task = spawn_handler(
+        proxy_pub,
+        upstream_pub,
+        state.clone(),
+        redis_pub.peer_addr().unwrap(),
+    );
+    forward_test_exchange(
+        &mut publisher,
+        &mut redis_pub,
+        &encode_array(&[b"PUBLISH", b"custom.bus", b"ordinary-message"]),
+        b":1\r\n",
+    )
+    .await;
+    let payload = serde_json::to_vec(&json!({"method":"emit","event":"custom:rpc","data":[],
+        "binary":false,"namespace":"/rpc","room":"peer","skip_sid":null,
+        "callback":["peer","/rpc",1],"host_id":HOST}))
+    .unwrap();
+    forward_test_exchange(
+        &mut publisher,
+        &mut redis_pub,
+        &encode_array(&[b"PUBLISH", b"custom.bus", &payload]),
+        b":1\r\n",
+    )
+    .await;
+    let reply = encode_array(&[b"message", b"custom.bus", &ack(1)]);
+    redis_sub.write_all(&reply).await.unwrap();
+    receive(&mut subscriber, &reply).await;
+    drop(subscriber);
+    drop(publisher);
+    drop(redis_sub);
+    drop(redis_pub);
+    tokio::time::timeout(Duration::from_secs(2), sub_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), pub_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    state.recorder().flush_all_dependency_files().await.unwrap();
+    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
+        .await
+        .unwrap();
+    let events: Vec<Value> = raw
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let publishes: Vec<_> = events
+        .iter()
+        .filter(|event| event["command"] == "PUBLISH")
+        .collect();
+    assert_eq!(publishes.len(), 1);
+    let request = publishes[0];
+    assert_eq!(request["sequence"], 2);
+    assert_eq!(request["rpc_callback_capture"], "bounded_window");
+    assert_eq!(request["global_dependency_reason"], "rpc_publisher");
+    let callback = events
+        .iter()
+        .find(|event| event["event_type"] == "redis_pub_sub_push")
+        .unwrap();
+    assert_eq!(
+        callback["rpc_request"]["connection_id"],
+        request["connection_id"]
+    );
+    assert_eq!(callback["rpc_request"]["sequence"], request["sequence"]);
+    assert!(callback["rpc_request"].get("case_id").is_none());
 }

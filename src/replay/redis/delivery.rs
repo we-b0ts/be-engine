@@ -187,9 +187,13 @@ pub(super) async fn deliver_redis_exchange(
         }
     }
     if let Some(push) = matched.rpc_push {
+        let detached = state.redis.pubsub.rpc_is_detached(matched);
         let delivery = state.redis.pubsub.rpc_delivery(matched);
         match delivery {
             Ok((delay, delivery)) => {
+                if detached {
+                    state.redis.complete_exchange(matched);
+                }
                 drop(state);
                 pubsub::schedule(state_ref.clone(), delay, delivery, None);
             }

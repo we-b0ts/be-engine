@@ -54,28 +54,41 @@ framing; the adapter owns `method: emit` plus callback identity and
 `method: callback` matching. It does not run Socket.IO/Engine.IO connections,
 WebSocket transport, application handlers, or device commands.
 
-At PUBLISH admission, Recorder retains the original case reservation and the
-adapter's publisher host, SID, namespace, and callback ID. A matching callback
-on another subscribed connection carries a reference to that exact PUBLISH and
-keeps its case ownership even when unrelated HTTP work starts. Channel and
-endpoint must match; Redis Pub/Sub itself is independent of logical database.
-Other publishers' callbacks remain ordinary notifications. Only successfully
-forwarded pushes become replay evidence.
+At PUBLISH admission, Recorder retains attribution metadata and the adapter's
+publisher host, SID, namespace, and callback ID. The completed Redis command
+releases its dependency reservation without waiting for an application callback.
+A matching callback on another subscribed connection keeps the original Case
+only while that Case still accepts dependencies. A later callback is Global
+evidence with the original publisher Case ID and exact connection/sequence
+reference; it cannot reopen that Case or attach to unrelated HTTP work. Idle RPC
+publishers are also retained as explicit Global protocol evidence. This does not
+collect arbitrary idle PUBLISH traffic. Channel and endpoint must match; Redis
+Pub/Sub itself is independent of logical database. Other publishers' callbacks
+remain ordinary notifications. Only successfully forwarded pushes become replay
+evidence.
 
-Replay requires exactly one complete callback for a successful recorded RPC
-PUBLISH. Missing, duplicate, orphan, unsafe, truncated, or inconsistent callback
-evidence fails loading. Historical recordings that did not retain callbacks
-must be refreshed; expected HTTP responses never supply missing ACKs.
+New RPC PUBLISH records carry `rpc_callback_capture: bounded_window`. A sealed
+observation window may contain no callback: Replay consumes the finite PUBLISH
+and its recorded Redis response, without synthesizing an RPC reply or declaring
+the application's task complete. Historical records without that marker still
+require exactly one captured callback. Missing historical evidence, duplicate or
+orphan references, unsafe/truncated payloads, inconsistent identities, and a
+publisher from another Case fail loading. Expected HTTP responses never supply
+missing ACKs.
 
 The target must issue its genuine PUBLISH and subscribe calls. Matching retains
 the endpoint/session, channel, event, room, namespace, complete command data and
 every non-identity field. Only protocol-generated UUID-v4 hex publisher IDs and
 positive callback counters are translated, with session-wide bijective bindings.
-The recorded callback result stays unchanged. A call is consumed only after its
-callback reaches the confirmed subscriber. Subscriber routing is checked at
+The recorded callback result stays unchanged. A Case-owned callback keeps its
+publisher pending until it reaches the confirmed subscriber. A late Global
+callback has its own finite delivery obligation; its PUBLISH completes when the
+recorded Redis response is delivered and is never consumed twice. Subscriber routing is checked at
 callback delivery, so a subscription established while an RPC is pending is
 valid when it is ready before the recorded ACK deadline. Missing/ambiguous subscribers, queue
-failures, disconnects, or case changes leave required evidence dirty.
+failures and disconnects leave required evidence dirty. Case-owned callbacks
+cannot escape their active Case. An exact late Global callback may arrive after
+its publisher Case has ended; it never completes or dirties a later Case.
 
 Explicit Source-backed request contracts may select generated RPC application
 fields, including per-element times and bounded signed-URL query values. They
@@ -84,13 +97,15 @@ request evidence, callback bindings and result delivery remain with their
 existing owners. See [Generated Redis request values](redis-generated-requests.md).
 
 The adapter accepts JSON RPC envelopes up to 1 MiB. Capture retains at most
-4096 outstanding calls and expires abandoned reservations after 610 seconds.
+4096 correlation records and expires abandoned metadata after 610 seconds;
+those records hold no in-flight reservation.
 Global notifications use a paged disk index and one ordered scheduler per
 confirmed subscription; their recorded message count has no fixed ceiling.
 Replay accepts at most 4096 active subscriptions, with a 256-message delivery
 queue per connection and a bounded socket write deadline.
-Calls without captured ACKs (including source RPC timeouts) require new complete
-evidence; absence alone is not a timeout-response fixture.
+Legacy calls without captured ACKs require fresh recording. The new bounded
+window marker permits observed absence while retaining the actual Redis response;
+absence alone is never a synthesized timeout-response fixture.
 
 ## Validation
 

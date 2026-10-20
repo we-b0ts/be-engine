@@ -246,6 +246,10 @@ pub struct EndObservation {
     /// The observed lifecycle ended without capture/transport corruption.
     /// An observed client cancellation may retain pending business identities.
     pub clean: bool,
+    /// Exact unfinished framed-message bytes observed at an explicit client close.
+    /// This suffix is not a completed business message or a successful EOF.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_message: Option<WireMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<CloseObservation>,
 }

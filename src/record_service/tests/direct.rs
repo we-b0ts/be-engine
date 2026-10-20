@@ -205,6 +205,14 @@ fn configured_include_and_exclude_rules_apply_before_source_dispatch_in_direct_m
             StatusCode::NO_CONTENT
         );
         upstream.await.unwrap();
+        assert!(
+            state
+                .inner
+                .active_cases
+                .wait_for_no_active_case(Duration::from_secs(2))
+                .await,
+            "the streamed response must finish case publication before shutdown"
+        );
         gateway.abort();
         let _ = gateway.await;
         state.recorder().finish_run().await.unwrap();

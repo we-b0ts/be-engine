@@ -716,8 +716,11 @@ later matching requests use the configured fallback strategy without creating
 a case. Failed cases do not consume the limit, and restarting Recorder starts
 a new run with fresh counts.
 
-After an upstream HTTP response completes, Recorder continues accepting new
-case dependencies for the fixed
+HTTP responses forward incrementally, and case-owned dependency collection and
+publication continue independently after response completion. Matching API-origin
+rules enable [selected dependency observation](recording-api-origin-tail.md),
+with a sliding idle interval and an absolute request deadline. Other requests
+continue accepting new case dependencies for the fixed
 `recording.case_dependency_post_response_window_ms` interval. This captures
 synchronous server-side after-hooks that start dependencies only after writing
 the response; set it to `0` when the target completes all relevant work before
@@ -731,8 +734,10 @@ fails the case instead of publishing incomplete dependency evidence. Matching
 requests continue to use the fallback upstream while the previous case drains.
 
 If a matched HTTP gateway request reaches `http_gateway.request_timeout_ms`
-while waiting for response headers or an ordinary response body, its client
-receives HTTP 504 and the case enters timeout recovery. Recorder retains the
+while waiting for response headers, its client receives HTTP 504 and the case
+enters timeout recovery. If headers have already been forwarded, response-body
+timeout terminates the downstream body while retaining its original status.
+Recorder retains the
 upstream HTTP operation and the active-case slot, then shuts down the dependency
 connections open at that moment. This covers MySQL (including TLS), Redis,
 Memcached, Kafka, Motan, HTTP/HTTPS proxy connections and raw TCP forwarding.

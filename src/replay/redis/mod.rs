@@ -83,6 +83,8 @@ pub(super) struct RecordedExchange {
     args: Vec<RecordedCapture>,
     response_kind: String,
     response: RecordedCapture,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rpc_callback_capture: Option<String>,
     #[serde(default)]
     outcome: DependencyExchangeOutcome,
     #[serde(default)]
@@ -199,6 +201,39 @@ pub(super) struct RedisReplayEvents {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn case_wire_exchange_indices(
+        &self,
+        case_id: &str,
+        selected: &BTreeSet<(Uuid, u64)>,
+    ) -> Result<BTreeMap<(Uuid, u64), usize>> {
+        let mut indices = BTreeMap::new();
+        for (index, exchange) in self.exchanges.iter().enumerate() {
+            let key = (exchange.record.connection_id, exchange.record.sequence);
+            if exchange.source == ReplaySource::Case
+                && exchange.case_id.as_deref() == Some(case_id)
+                && selected.contains(&key)
+            {
+                ensure!(
+                    indices.insert(key, index).is_none(),
+                    "API-origin Redis reference is ambiguous in its Case semantic dependencies"
+                );
+            }
+        }
+        ensure!(
+            indices.len() == selected.len(),
+            "API-origin Redis reference is absent from its Case semantic dependencies"
+        );
+        Ok(indices)
+    }
+
+    pub(in crate::replay) fn exchange_status(&self, index: usize) -> Option<ReplayExchangeStatus> {
+        self.exchanges.get(index).map(|exchange| exchange.status)
+    }
+
+    pub(in crate::replay) fn case_has_runtime_failure(&self, case_id: &str) -> bool {
+        self.events.dirty_case_ids.contains(case_id)
+    }
+
     pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
         self.exchanges.iter().any(|e| {
             e.source == ReplaySource::Case

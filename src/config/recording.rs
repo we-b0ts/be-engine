@@ -24,6 +24,8 @@ pub struct RecordingConfig {
     pub post_ready_max_wait_ms: u64,
     #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
+    /// Sliding idle window for dependencies selected by matching API-origin rules; 0 disables it.
+    pub api_origin_dependency_idle_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
     pub shutdown_case_drain_timeout_ms: u64,
     pub encrypt_request_headers: Vec<String>,
@@ -250,6 +252,7 @@ impl Default for RecordingConfig {
             post_ready_settle_ms: 15_000,
             post_ready_max_wait_ms: 180_000,
             case_dependency_post_response_window_ms: 100,
+            api_origin_dependency_idle_ms: 60_000,
             case_dependency_drain_timeout_ms: 5_000,
             shutdown_case_drain_timeout_ms: 5_000,
             encrypt_request_headers: Vec::new(),

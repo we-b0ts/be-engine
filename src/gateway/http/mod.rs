@@ -17,17 +17,17 @@ use crate::AppState;
 use crate::access_policy::AccessDecision;
 use crate::config::{HttpGatewayConfig, HttpGatewayFallbackMode};
 use crate::http::access::classify_method;
-use crate::http::rewrite::{self, RewriteInput};
 use crate::recorder::http::case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
 use crate::recorder::{
     CaseContext, HeaderMapSnapshot, HttpExchangeEvent, PrimaryCaseDescriptor, ProxyErrorEvent,
-    RecorderEvent, capture_body, capture_case_body, redact_headers,
+    RecorderEvent, capture_body, capture_case_body,
 };
 use crate::recording_control::RecordingListener;
 
 mod admission;
 pub(crate) mod interaction;
 mod lifecycle;
+mod ordinary;
 mod ready;
 mod recovery;
 mod response;
@@ -39,8 +39,7 @@ pub(crate) mod transport;
 use admission::try_admit_case;
 use rules::{RuleDecision, evaluate_request, request_authority, resolve_case_group};
 use transport::{
-    GatewayBody, build_downstream_response, build_fixed_response, build_upstream_request,
-    build_upstream_uri, simple_response,
+    GatewayBody, build_fixed_response, build_upstream_request, build_upstream_uri, simple_response,
 };
 
 pub async fn run(state: AppState) -> Result<()> {
@@ -286,6 +285,20 @@ async fn handle_gateway_request(
         }
     }
 
+    if let Some(case) = &case {
+        state.configure_case_observation(
+            case.id,
+            &method,
+            &original_uri,
+            &request_body,
+            started,
+            Duration::from_millis(config.request_timeout_ms),
+        );
+        state
+            .inner
+            .active_cases
+            .register_interaction_publication(case.id);
+    }
     let case_guard = case_guard.map(std::sync::Arc::new);
     let stream_guard = case_guard.clone();
     let lifecycle_state = state.clone();
@@ -393,16 +406,15 @@ async fn handle_gateway_request(
             state.client(),
             outbound,
             request_timeout,
-            config.record_streaming && config.record_raw_streaming,
             timeout_recovery.as_mut(),
         )
         .await;
 
         let response::AcquiredResponse {
             status,
-            headers: mut response_headers,
-            body: mut body_bytes,
-            stream,
+            headers: response_headers,
+            body: response_body,
+            deadline,
         } = match upstream_response {
             Ok(response) => response,
             Err(err) => {
@@ -442,7 +454,11 @@ async fn handle_gateway_request(
                 .await;
             }
         };
-        if let Some(stream) = stream {
+        if response::is_interaction(
+            &response_headers,
+            config.record_streaming && config.record_raw_streaming,
+        ) {
+            let stream = response_body;
             if let (Some(case), Some(guard)) = (case.clone(), stream_guard) {
                 return interaction::adopt_response(
                     state,
@@ -468,128 +484,31 @@ async fn handle_gateway_request(
             *response.headers_mut() = response_headers;
             return response;
         }
-        let mut discovered_tcp_targets = Vec::new();
-        match rewrite::apply(
-            &state.config().http_response_rewrite,
-            state.dns_registry(),
-            state.kubectl_proxy_manager(),
-            state.ca().ca_cert_pem_ref(),
-            state.config().recording.decoded_body_limit(),
-            RewriteInput {
-                method: &method,
-                uri: &original_uri,
-                authority: authority.as_deref(),
-                status,
-                headers: &response_headers,
-                body: &body_bytes,
+        ordinary::forward(
+            ordinary::CaptureContext {
+                state,
+                id,
+                client_addr,
+                method,
+                original_uri,
+                authority,
+                request_headers: request_headers_for_record,
+                request_body,
+                started,
+                request_started_at,
+                matched_rule: matched_rule_name,
+                case,
+                request_record: case_request_record,
+                upstream: upstream_base,
+                guard: stream_guard,
             },
+            status,
+            response_headers,
+            response_body,
+            deadline,
+            timeout_recovery,
         )
         .await
-        {
-            Ok(Some(rewritten)) => {
-                response_headers = rewritten.headers;
-                body_bytes = rewritten.body;
-                discovered_tcp_targets = rewritten.discovered_tcp_targets;
-            }
-            Ok(None) => {}
-            Err(err) => {
-                return record_gateway_error(GatewayErrorContext {
-                    state,
-                    id,
-                    client_addr,
-                    method,
-                    original_uri,
-                    authority,
-                    request_headers: request_headers_for_record,
-                    request_body,
-                    started,
-                    request_started_at,
-                    matched_rule: matched_rule_name.clone(),
-                    case,
-                    should_record,
-                    target: Some(upstream_base.clone()),
-                    err,
-                })
-                .await;
-            }
-        }
-        let response_headers_for_record =
-            redact_headers(&response_headers, &state.config().recording.redact_headers);
-
-        if should_record {
-            let event = HttpExchangeEvent {
-                outcome: crate::DependencyExchangeOutcome::Response,
-                id,
-                timestamp: Utc::now(),
-                request_started_at,
-                client_addr: client_addr.clone(),
-                scheme: "http_gateway".to_string(),
-                method: method.to_string(),
-                uri: original_uri.to_string(),
-                authority: authority.clone(),
-                request_headers: with_gateway_headers(
-                    request_headers_for_record.clone(),
-                    matched_rule_name.as_deref(),
-                    &upstream_base,
-                ),
-                request_body: capture_body(&request_body, state.config().recording.max_body_bytes),
-                response_status: Some(status.as_u16()),
-                response_headers: Some(response_headers_for_record.clone()),
-                response_body: Some(capture_body(
-                    &body_bytes,
-                    state.config().recording.max_body_bytes,
-                )),
-                response_stream: None,
-                discovered_tcp_targets,
-                duration_ms: started.elapsed().as_millis(),
-                error: None,
-            };
-            if let Err(err) = state
-                .recorder()
-                .record(RecorderEvent::HttpExchange(event))
-                .await
-            {
-                warn!(error = %err, "failed to record HTTP gateway exchange");
-            }
-        }
-
-        let drain_invalidation = if let Some(case) = &case {
-            state.drain_active_case_dependencies(case.id).await
-        } else {
-            None
-        };
-        if let (Some(case), Some(request_record)) = (&case, case_request_record)
-            && let Err(err) = finalize_http_case(
-                state.recorder(),
-                case,
-                request_record,
-                CaseResponseRecord {
-                    timestamp: Utc::now(),
-                    matched_rule: matched_rule_name.clone(),
-                    upstream: upstream_base.clone(),
-                    status: Some(status.as_u16()),
-                    headers: Some(response_headers_for_record.clone()),
-                    body: Some(capture_case_body(
-                        &body_bytes,
-                        state.config().recording.max_body_bytes,
-                        state.config().recording.decoded_body_limit(),
-                        Some(&response_headers),
-                    )),
-                    duration_ms: started.elapsed().as_millis(),
-                    error: None,
-                    sse_observation: None,
-                    interaction: None,
-                },
-                state
-                    .active_case_invalidation(case.id)
-                    .or(drain_invalidation),
-            )
-            .await
-        {
-            warn!(error = %err, case_id = %case.id, "failed to finalize HTTP gateway case");
-        }
-
-        build_downstream_response(status, &response_headers, body_bytes)
     };
 
     match (case_guard, active_case_id) {

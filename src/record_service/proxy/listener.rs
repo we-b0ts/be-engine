@@ -19,6 +19,10 @@ pub(in crate::record_service) async fn serve<R: Redis + Clone + 'static>(
                 let relay = relay.clone();
                 let mut stopping = stop.clone();
                 tasks.spawn(async move {
+                    let observation = match crate::http::termination::ClientTermination::with_control(&stream) {
+                        Ok(observation) => observation,
+                        Err(error) => { warn!(%error, "failed to observe recording service client"); return; }
+                    };
                     let transports = TransportTasks::default();
                     let mut case_cancel = transports.cancellation();
                     let request_transports = transports.clone();
@@ -31,12 +35,13 @@ pub(in crate::record_service) async fn serve<R: Redis + Clone + 'static>(
                             Ok::<_, Infallible>(result.unwrap_or_else(|_| response(StatusCode::BAD_GATEWAY, "recording request task failed")))
                         }
                     });
-                    let connection = hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(stream), service).with_upgrades();
+                    let connection = hyper::server::conn::http1::Builder::new().half_close(true).serve_connection(TokioIo::new(stream), service).with_upgrades();
                     tokio::pin!(connection);
                     tokio::select! {
                         result = &mut connection => { if let Err(error) = result { warn!(%error, "recording service HTTP connection ended"); } }
                         _ = stopping.changed() => { connection.as_mut().graceful_shutdown(); let _ = connection.await; }
                         _ = transport::cancelled(&mut case_cancel) => {}
+                        _ = observation.wait_for_cancellation() => {}
                     }
                     transports.finish().await;
                 });

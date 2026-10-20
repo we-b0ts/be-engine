@@ -1,5 +1,8 @@
 # Standalone Source recording
 
+See [API-origin dependency observation](recording-api-origin-tail.md) for
+immediate HTTP response forwarding and rule-scoped asynchronous recording tails.
+
 `traffic-e2e record` is the single standalone Source recording service.
 It starts a co-located Source as UID/GID 998, starts Recorder, and optionally registers a
 reachable HTTP address in coordination Redis after readiness and the existing

@@ -62,8 +62,11 @@ pub(super) fn observe(
             reference: RedisRpcRequestRef {
                 connection_id,
                 sequence,
+                case_id: targets.cases.first().map(|(case, _)| case.id),
             },
-            targets: targets.clone(),
+            // Callback correlation outlives the completed PUBLISH command. Keep
+            // its identity without holding dependency drain open until expiry.
+            targets: targets.attribution_only(),
             started: Instant::now(),
         },
     );
@@ -93,7 +96,7 @@ pub(in crate::recorder::redis) fn take(
     state: &AppState,
     context: &ConnectionContext,
     push: &RedisPubSubPush,
-) -> Option<(RedisRpcRequestRef, DependencyTargets, u64)> {
+) -> Option<(RedisRpcRequestRef, Option<DependencyTargets>, u64)> {
     if state
         .recorder()
         .redis_rpc
@@ -114,7 +117,7 @@ pub(in crate::recorder::redis) fn take(
         .remove(&key(context, push.channel.clone(), identity))?;
     Some((
         pending.reference,
-        pending.targets,
+        state.inner.active_cases.reacquire_targets(&pending.targets),
         pending.started.elapsed().as_millis() as u64,
     ))
 }

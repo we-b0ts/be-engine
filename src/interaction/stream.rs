@@ -79,6 +79,7 @@ pub struct StreamDecoder {
     protocol: Protocol,
     limit: usize,
     buffer: Vec<u8>,
+    pending_wire: Vec<u8>,
     sse: SseState,
     skip_lf: bool,
     first_line: bool,
@@ -108,6 +109,7 @@ impl StreamDecoder {
             protocol,
             limit: max_message_bytes,
             buffer: Vec::new(),
+            pending_wire: Vec::new(),
             sse: SseState::default(),
             skip_lf: false,
             first_line: true,
@@ -136,6 +138,9 @@ impl StreamDecoder {
                 }
                 if self.buffer[0] == b'\n' {
                     self.buffer.remove(0);
+                    if !self.pending_wire.is_empty() {
+                        self.pending_wire.push(b'\n');
+                    }
                 }
                 self.skip_lf = false;
             }
@@ -148,15 +153,30 @@ impl StreamDecoder {
             ensure!(end <= self.limit, "stream line exceeds configured limit");
             let delimiter = self.buffer[end];
             let mut line: Vec<_> = self.buffer.drain(..=end).collect();
+            let starts_message = self.pending_wire.is_empty();
+            self.pending_wire.extend_from_slice(&line);
             line.pop();
             if self.protocol == Protocol::Ndjson && line.last() == Some(&b'\r') {
                 line.pop();
             }
             self.skip_lf = self.protocol == Protocol::Sse && delimiter == b'\r';
+            let standalone_heartbeat = starts_message
+                && (line.starts_with(b":")
+                    || (self.first_line
+                        && line
+                            .strip_prefix(b"\xef\xbb\xbf")
+                            .is_some_and(|text| text.starts_with(b":"))));
             self.line(&line, &mut messages)?;
+            if self.protocol == Protocol::Ndjson || line.is_empty() || standalone_heartbeat {
+                self.pending_wire.clear();
+            }
+            ensure!(
+                self.pending_wire.len() <= self.limit,
+                "unfinished stream message exceeds configured limit"
+            );
         }
         ensure!(
-            self.buffer.len() <= self.limit,
+            self.pending_wire.len().saturating_add(self.buffer.len()) <= self.limit,
             "stream line exceeds configured limit"
         );
         Ok(messages)
@@ -177,6 +197,16 @@ impl StreamDecoder {
             );
         }
         Ok(messages)
+    }
+
+    /// Keep transport cancellation separate from successful logical framing.
+    pub fn partial_message(&self) -> Option<WireMessage> {
+        if self.pending_wire.is_empty() && self.buffer.is_empty() && self.sse.data.is_empty() {
+            return None;
+        }
+        let mut bytes = self.pending_wire.clone();
+        bytes.extend_from_slice(&self.buffer);
+        Some(WireMessage::binary(&bytes))
     }
 
     pub fn validate_boundary(&self) -> Result<()> {
@@ -314,5 +344,56 @@ mod tests {
         assert!(decoder.feed(b"not-json\n").is_err());
         let mut decoder = StreamDecoder::new(Protocol::Ndjson, 64).unwrap();
         assert!(decoder.feed(b"{\"id\":1,\"id\":2}\n").is_err());
+    }
+
+    #[test]
+    fn cancelled_prefix_retains_exact_wire_bytes_across_all_chunk_boundaries() {
+        let complete = b"data: first\r\n\r\n";
+        let partial = b"event: update\r\n: keepalive\r\ndata: \xe4\xbd";
+        for split in 0..=partial.len() {
+            let mut decoder = StreamDecoder::new(Protocol::Sse, 1024).unwrap();
+            assert_eq!(decoder.feed(complete).unwrap().len(), 1);
+            let mut comments = decoder.feed(&partial[..split]).unwrap();
+            comments.extend(decoder.feed(&partial[split..]).unwrap());
+            assert!(comments.iter().all(|message| message.heartbeat));
+            assert_eq!(
+                decoder.partial_message().unwrap().decode().unwrap(),
+                partial
+            );
+            assert!(decoder.validate_boundary().is_err());
+            assert!(
+                decoder.finish().is_err(),
+                "EOF cannot certify a cancelled prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn ndjson_cancelled_suffix_is_not_parsed_as_a_completed_record() {
+        let mut decoder = StreamDecoder::new(Protocol::Ndjson, 1024).unwrap();
+        assert_eq!(
+            decoder.feed(b"{\"done\":1}\n{\"pending\":").unwrap().len(),
+            1
+        );
+        assert_eq!(
+            decoder.partial_message().unwrap().decode().unwrap(),
+            b"{\"pending\":"
+        );
+    }
+
+    #[test]
+    fn client_close_keeps_metadata_only_suffixes_and_bounds_unfinished_wire() {
+        for prefix in [b"event: delta\n".as_slice(), b"id: 7\r\n"] {
+            let mut decoder = StreamDecoder::new(Protocol::Sse, 64).unwrap();
+            assert!(decoder.feed(prefix).unwrap().is_empty());
+            // Normal SSE EOF may discard a metadata-only event. A client close
+            // still retains exactly what was observed for independent comparison.
+            decoder.validate_boundary().unwrap();
+            assert_eq!(decoder.partial_message().unwrap().decode().unwrap(), prefix);
+            decoder.finish().unwrap();
+        }
+        let mut decoder = StreamDecoder::new(Protocol::Sse, 8).unwrap();
+        decoder.feed(b"data: x\n").unwrap();
+        assert!(decoder.feed(b"y").is_err());
     }
 }

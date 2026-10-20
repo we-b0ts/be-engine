@@ -7,6 +7,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         &self,
         mut request: Request<Incoming>,
     ) -> Response<RelayBody> {
+        let deadline = tokio::time::Instant::now() + self.timeout;
         let ticket = if self.reservations.is_some() {
             match AdmissionTicket::from_headers(request.headers()) {
                 Ok(Some(ticket)) if ticket.scope() == self.scope => Some(ticket),
@@ -34,7 +35,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         }
         let (mut parts, body) = request.into_parts();
         let body =
-            match tokio::time::timeout(self.timeout, Limited::new(body, self.max_body).collect())
+            match tokio::time::timeout_at(deadline, Limited::new(body, self.max_body).collect())
                 .await
             {
                 Ok(Ok(body)) => body.to_bytes(),
@@ -53,13 +54,21 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             }
         };
         remove_hop_headers(&mut parts.headers);
+        parts.headers.insert(
+            hyper::header::TE,
+            hyper::header::HeaderValue::from_static("trailers"),
+        );
+        parts.headers.insert(
+            hyper::header::CONNECTION,
+            hyper::header::HeaderValue::from_static("TE"),
+        );
         if !self.ready.load(Ordering::SeqCst) {
             self.release(&ticket).await;
             return response(StatusCode::NOT_FOUND, "recorder unavailable");
         }
         let transports = parts.extensions.remove::<transport::TransportTasks>();
         let request = Request::from_parts(parts, full(body));
-        let operation = tokio::time::timeout(self.timeout, async {
+        let operation = tokio::time::timeout_at(deadline, async {
             let response = match self.client.request(request).await {
                 Ok(response) => response,
                 Err(error) if error.is_connect() => return Ok(None),
@@ -72,6 +81,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
                         permit.take().expect("relay admission"),
                         ticket.clone(),
                         transports,
+                        deadline,
                     ),
                     true,
                 )));

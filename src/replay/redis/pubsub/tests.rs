@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 mod compact_evidence;
 mod request_contracts;
+mod rpc_coverage;
 mod scale;
 mod subscription_evidence;
 

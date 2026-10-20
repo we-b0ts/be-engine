@@ -391,12 +391,23 @@ async fn client_close_with_unfinished_business_records_a_complete_cancellation()
 }
 
 #[tokio::test]
-async fn client_close_does_not_accept_a_partial_message_after_done() {
-    let error = observe_client_close("data: [DONE]\n\ndata: unfinished", 50, 300, false)
+async fn client_close_preserves_exact_partial_message_after_done() {
+    let actual = observe_client_close("data: [DONE]\n\ndata: unfinished", 50, 300, false)
         .await
-        .err()
         .unwrap();
-    assert!(format!("{error:#}").contains("partial message"));
+    assert!(actual.observation.end.clean);
+    assert_eq!(actual.observation.end.reason, EndReason::ClientClose);
+    assert!(actual.observation.end.pending.is_empty());
+    assert_eq!(
+        actual
+            .observation
+            .end
+            .partial_message
+            .unwrap()
+            .decode()
+            .unwrap(),
+        b"data: unfinished"
+    );
 }
 
 #[tokio::test]

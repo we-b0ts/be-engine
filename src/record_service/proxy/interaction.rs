@@ -25,6 +25,11 @@ struct Sessions {
     sids: HashMap<String, Uuid>,
 }
 
+struct FiniteDelivery {
+    finished: tokio::sync::oneshot::Receiver<()>,
+    deadline: tokio::time::Instant,
+}
+
 struct CaseLease {
     case_id: Uuid,
     cancel: watch::Sender<bool>,
@@ -133,6 +138,16 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             }
         };
         wire::remove_hop_headers_with_upgrade(&mut parts.headers, upgrade);
+        if !upgrade {
+            parts.headers.insert(
+                hyper::header::TE,
+                hyper::header::HeaderValue::from_static("trailers"),
+            );
+            parts.headers.insert(
+                hyper::header::CONNECTION,
+                hyper::header::HeaderValue::from_static("TE"),
+            );
+        }
         let body = Limited::new(body, self.max_body).boxed_unsync();
         // Only the response head is bounded here. The inner interaction owner
         // enforces its business-idle, pending-work, duration and cleanup limits.
@@ -177,7 +192,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             .and_then(|v| v.parse::<Uuid>().ok());
         if let Some((permit, ticket)) = fresh.take() {
             if let Some(case_id) = case_id {
-                lease = Some(self.start_interaction_lease(case_id, permit, ticket));
+                lease = Some(self.start_interaction_lease(case_id, permit, ticket, None));
             } else {
                 // The inner Recorder rejected admission before creating a case.
                 self.release(&ticket).await;
@@ -245,7 +260,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             Response::from_parts(parts, full(Bytes::new()))
         } else {
             let (mut parts, body) = upstream.into_parts();
-            wire::remove_hop_headers_with_upgrade(&mut parts.headers, false);
+            wire::remove_response_hop_headers(&mut parts.headers);
             Response::from_parts(parts, transport::body(body, cancel))
         }
     }
@@ -287,6 +302,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         permit: OwnedSemaphorePermit,
         ticket: Option<AdmissionTicket>,
         transports: Option<TransportTasks>,
+        deadline: tokio::time::Instant,
     ) -> Response<RelayBody> {
         let Some(case_id) = upstream
             .headers()
@@ -297,14 +313,29 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             self.interaction_transport_failure(None);
             return response(StatusCode::BAD_GATEWAY, "invalid recorder stream ownership");
         };
-        let lease = self.start_interaction_lease(case_id, permit, ticket);
+        let finite = upstream
+            .headers()
+            .get(wire::FINITE_RESPONSE)
+            .is_some_and(|value| value == "1");
+        let (body_finished, finished) = tokio::sync::oneshot::channel();
+        let lease = self.start_interaction_lease(
+            case_id,
+            permit,
+            ticket,
+            finite.then_some(FiniteDelivery { finished, deadline }),
+        );
         if let Some(transports) = transports {
             lease.track(&transports);
         }
         let (mut parts, body) = upstream.into_parts();
         wire::strip_private(&mut parts.headers);
-        wire::remove_hop_headers(&mut parts.headers);
-        Response::from_parts(parts, transport::body(body, Some(lease.cancel.subscribe())))
+        wire::remove_response_hop_headers(&mut parts.headers);
+        let body = if finite {
+            transport::finite_body(body, Some(lease.cancel.subscribe()), body_finished)
+        } else {
+            transport::body(body, Some(lease.cancel.subscribe()))
+        };
+        Response::from_parts(parts, body)
     }
 
     pub(super) async fn with_pending_renewal<F: std::future::Future>(
@@ -347,6 +378,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         case_id: Uuid,
         permit: OwnedSemaphorePermit,
         ticket: Option<AdmissionTicket>,
+        delivery: Option<FiniteDelivery>,
     ) -> Arc<CaseLease> {
         let interaction = self.interactions.as_ref().unwrap().clone();
         let (cancel, _) = watch::channel(false);
@@ -364,29 +396,63 @@ impl<R: Redis + Clone + 'static> Relay<R> {
         let owned = lease.clone();
         let relay = self.clone();
         tokio::spawn(async move {
+            let finite = delivery.is_some();
             let completed = interaction.state.wait_for_interaction_case(case_id);
-            tokio::pin!(completed);
-            if let (Some(reservations), Some(ticket)) = (&relay.reservations, &ticket) {
-                let mut timer = tokio::time::interval(reservations.reservation_ttl() / 3);
-                timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                timer.tick().await;
-                loop {
-                    tokio::select! {
-                        _ = &mut completed => break,
-                        _ = timer.tick() => {
-                            if !matches!(reservations.renew(ticket).await, Ok(true)) {
-                                relay.interaction_transport_failure(Some(case_id));
-                                owned.close();
-                                completed.await;
-                                break;
-                            }
+            let delivery_deadline = delivery.as_ref().map(|delivery| delivery.deadline);
+            let delivered = async {
+                if let Some(delivery) = delivery {
+                    let _ = delivery.finished.await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            };
+            let deadline = async {
+                if let Some(deadline) = delivery_deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            };
+            tokio::pin!(completed, delivered, deadline);
+            let mut publication_done = false;
+            let mut delivery_done = !finite;
+            let renewal_period = relay
+                .reservations
+                .as_ref()
+                .map_or(Duration::from_secs(1), |reservations| {
+                    reservations.reservation_ttl() / 3
+                });
+            let mut timer = tokio::time::interval(renewal_period);
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            timer.tick().await;
+            loop {
+                if publication_done && delivery_done {
+                    break;
+                }
+                tokio::select! {
+                    _ = &mut completed, if !publication_done => publication_done = true,
+                    _ = &mut delivered, if !delivery_done => delivery_done = true,
+                    _ = &mut deadline, if !delivery_done => {
+                        // Only downstream delivery expires here. The Source
+                        // owner and its case tail continue independently.
+                        owned.close();
+                        delivery_done = true;
+                    },
+                    _ = timer.tick(), if relay.reservations.is_some() && ticket.is_some() => {
+                        let reservations = relay.reservations.as_ref().expect("renewal provider");
+                        let ticket = ticket.as_ref().expect("renewal ticket");
+                        if !matches!(reservations.renew(ticket).await, Ok(true)) {
+                            relay.interaction_transport_failure(Some(case_id));
+                            owned.close();
+                            interaction.state.wait_for_interaction_case(case_id).await;
+                            break;
                         }
                     }
                 }
-            } else {
-                completed.await;
             }
-            owned.close();
+            if !finite {
+                owned.close();
+            }
             relay.release(&ticket).await;
             let mut sessions = interaction
                 .sessions

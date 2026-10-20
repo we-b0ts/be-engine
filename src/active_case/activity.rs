@@ -105,7 +105,7 @@ impl DependencyActivity {
             };
             let now = Instant::now();
             if in_flight == 0 && now >= quiet_at {
-                return true;
+                return quiet_at <= deadline;
             }
             if now >= deadline {
                 return false;

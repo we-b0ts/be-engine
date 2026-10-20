@@ -32,7 +32,9 @@ where
         timeout = &mut timeout_response => {
             if timeout.is_ok() {
                 downstream.complete();
-                return simple_response(StatusCode::GATEWAY_TIMEOUT, &format!("gateway upstream request timed out after {timeout_ms} ms"));
+                let mut response = simple_response(StatusCode::GATEWAY_TIMEOUT, &format!("gateway upstream request timed out after {timeout_ms} ms"));
+                super::ordinary::mark_admitted_case(case_id, &mut response);
+                return response;
             }
             request.await
         }
@@ -82,28 +84,31 @@ impl Drop for DownstreamRequest {
         if self.completed {
             return;
         }
-        let recorder_phase = self.state.recording_lifecycle_phase();
-        let elapsed_ms = self.started.elapsed().as_millis();
-        let invalidation = CaseInvalidation::new(
-            "downstream_disconnected",
-            "downstream connection ended before the matched upstream request completed",
-        )
-        .with_context(CaseInvalidationContext {
-            category: "client_or_network_disconnect".to_string(),
+        downstream_disconnected(&self.state, self.case_id, self.started);
+    }
+}
+
+pub(super) fn downstream_disconnected(state: &AppState, case_id: Uuid, started: Instant) {
+    let recorder_phase = state.recording_lifecycle_phase();
+    let elapsed_ms = started.elapsed().as_millis();
+    let invalidation = CaseInvalidation::new(
+        "downstream_disconnected",
+        "downstream connection ended before the matched upstream request completed",
+    )
+    .with_context(CaseInvalidationContext {
+        category: "client_or_network_disconnect".to_string(),
+        elapsed_ms,
+        recorder_phase: recorder_phase.to_string(),
+    });
+    if state
+        .invalidate_active_case(case_id, invalidation)
+        .is_some()
+    {
+        warn!(
+            %case_id,
             elapsed_ms,
-            recorder_phase: recorder_phase.to_string(),
-        });
-        if self
-            .state
-            .invalidate_active_case(self.case_id, invalidation)
-            .is_some()
-        {
-            warn!(
-                case_id = %self.case_id,
-                elapsed_ms,
-                recorder_phase,
-                "downstream disconnected; matched request will continue to preserve dependency isolation"
-            );
-        }
+            recorder_phase,
+            "downstream disconnected; matched request will continue to preserve dependency isolation"
+        );
     }
 }

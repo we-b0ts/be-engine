@@ -525,3 +525,91 @@ fn renewal_failure_returning_after_case_completion_preserves_service_and_next_ca
         upstream.await.unwrap();
     });
 }
+
+#[test]
+fn finite_response_reservation_renews_until_both_publication_and_body_end() {
+    runtime().block_on(async {
+        for body_first in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let state = state(&temp).await;
+            let case = case();
+            let mut guard = Some(state.try_reserve_active_case(case.clone()).unwrap());
+            state.activate_case_dependencies(guard.as_ref().unwrap()).unwrap();
+            let inner = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let fixture = RenewalFixture::new(state, inner.local_addr().unwrap()).await;
+            let (finish, finished) = oneshot::channel();
+            let upstream = tokio::spawn(async move {
+                let (mut socket, _) = inner.accept().await.unwrap();
+                head(&mut socket).await;
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n{}: {}\r\n{}: 1\r\n\r\nD\r\ndata: first\n\n\r\n", wire::CASE_ID, case.id, wire::FINITE_RESPONSE).as_bytes()).await.unwrap();
+                finished.await.unwrap();
+                socket.write_all(b"0\r\n\r\n").await.unwrap();
+            });
+            let mut response = fixture.request(TOKEN).await;
+            first_frame(&mut response).await;
+            let pending_body = if body_first {
+                finish.send(()).unwrap();
+                response.into_body().collect().await.unwrap();
+                None
+            } else {
+                drop(guard.take());
+                Some((response, finish))
+            };
+            let renewals = fixture.redis.renewals();
+            fixture.redis.wait_for_renewals(renewals + 3).await;
+            assert_eq!(fixture.relay.slot.available_permits(), 0);
+            assert_eq!(fixture.redis.token().as_deref(), Some(TOKEN));
+            assert_eq!(fixture.redis.state.lock().unwrap().completions, 0);
+            if let Some((response, finish)) = pending_body {
+                finish.send(()).unwrap();
+                response.into_body().collect().await.unwrap();
+            } else {
+                drop(guard.take());
+            }
+            fixture.drained().await;
+            assert!(fixture.relay.ready.load(Ordering::SeqCst));
+            {
+                let stats = fixture.redis.state.lock().unwrap();
+                assert_eq!(stats.completions, 1);
+                assert_eq!(stats.deletions, 1);
+            }
+            upstream.await.unwrap();
+        }
+    });
+}
+
+#[test]
+fn early_synthetic_timeout_response_keeps_reservation_until_source_case_recovery_finishes() {
+    runtime().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let state = state(&temp).await;
+        let case = case();
+        let guard = state.try_reserve_active_case(case.clone()).unwrap();
+        state.activate_case_dependencies(&guard).unwrap();
+        let inner = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fixture = RenewalFixture::new(state, inner.local_addr().unwrap()).await;
+        let upstream = tokio::spawn(async move {
+            let (mut socket, _) = inner.accept().await.unwrap();
+            head(&mut socket).await;
+            socket.write_all(format!("HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n{}: {}\r\n{}: 1\r\n\r\n", wire::CASE_ID, case.id, wire::FINITE_RESPONSE).as_bytes()).await.unwrap();
+        });
+        let response = fixture.request(TOKEN).await;
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert!(response.headers().get(wire::CASE_ID).is_none());
+        assert!(response.headers().get(wire::FINITE_RESPONSE).is_none());
+        response.into_body().collect().await.unwrap();
+        let renewals = fixture.redis.renewals();
+        fixture.redis.wait_for_renewals(renewals + 3).await;
+        assert_eq!(fixture.relay.slot.available_permits(), 0);
+        assert_eq!(fixture.redis.token().as_deref(), Some(TOKEN));
+        assert_eq!(fixture.redis.state.lock().unwrap().completions, 0);
+        drop(guard);
+        fixture.drained().await;
+        {
+            let stats = fixture.redis.state.lock().unwrap();
+            assert_eq!(stats.completions, 1);
+            assert_eq!(stats.deletions, 1);
+        }
+        upstream.await.unwrap();
+    });
+}

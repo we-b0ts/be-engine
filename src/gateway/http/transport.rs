@@ -58,6 +58,9 @@ pub(crate) fn build_upstream_request(
         HostHeaderPolicy::Replace
     };
     append_end_to_end_headers(source_headers, headers, host_policy);
+    // This hop can forward trailer frames; negotiate them independently.
+    headers.insert(hyper::header::TE, HeaderValue::from_static("trailers"));
+    headers.insert(hyper::header::CONNECTION, HeaderValue::from_static("TE"));
     if !preserve_host && let Some(authority) = uri.authority() {
         headers.insert(HOST, authority.as_str().parse()?);
     }

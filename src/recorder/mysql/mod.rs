@@ -314,6 +314,7 @@ pub(crate) async fn handle_connected_mysql(
     let c2s_route_name = route_name.clone();
     let c2s_target_host = target_host.clone();
     let c2s_target_addr = target_addr.clone();
+    let c2s_username = login.username.clone();
     let c2s_target = target_addr
         .clone()
         .or_else(|| target_host.clone())
@@ -341,7 +342,6 @@ pub(crate) async fn handle_connected_mysql(
             if c2s_authenticated.load(Ordering::SeqCst)
                 && let Some(command) = parse_client_command(&packet)
             {
-                let dependency_ownership = c2s_state.capture_dependency_targets();
                 let (prepared_sql, current_database) = {
                     let tracker = c2s_query_tracker.lock().await;
                     let prepared_sql = if command.command_name == "COM_STMT_EXECUTE" {
@@ -353,6 +353,17 @@ pub(crate) async fn handle_connected_mysql(
                     };
                     (prepared_sql, tracker.database().map(ToOwned::to_owned))
                 };
+                let dependency_ownership = c2s_state.capture_dependency_request(
+                    crate::recorder::api_origin_observation::DependencyRequest::Mysql {
+                        connection_id: c2s_connection_id,
+                        target_host: c2s_target_host.as_deref(),
+                        target_port,
+                        database: current_database.as_deref(),
+                        username: c2s_username.as_deref(),
+                        command: &command.command_name,
+                        sql: command.query.as_deref().or(prepared_sql.as_deref()),
+                    },
+                );
                 let analysis = analyze_command(&command, prepared_sql.as_deref());
                 let access = evaluate_mysql_access(
                     c2s_state.config().recording.access_policy,

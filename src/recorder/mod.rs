@@ -16,6 +16,7 @@ use crate::recording_completion::ExplicitApiCaseLimits;
 use crate::recording_network::RecordedEndpoint;
 use crate::request_headers::RequestHeaderCapture;
 
+pub(crate) mod api_origin_observation;
 pub(crate) mod background;
 mod capture;
 mod capture_health;

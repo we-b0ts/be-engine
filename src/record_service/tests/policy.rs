@@ -186,6 +186,14 @@ fn loaded_policy_groups_team_ids_and_shares_the_case_limit() {
             let status = response.status();
             let body = response.into_body().collect().await.unwrap().to_bytes();
             assert_eq!(status, expected_status, "{request_path}: {body:?}");
+            assert!(
+                state
+                    .inner
+                    .active_cases
+                    .wait_for_no_active_case(Duration::from_secs(2))
+                    .await,
+                "{request_path}: case publication must finish before the next admission"
+            );
         }
         source.await.unwrap();
         gateway.abort();

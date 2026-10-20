@@ -634,6 +634,7 @@ mod tests {
             100
         );
         assert_eq!(config.recording.case_dependency_drain_timeout_ms, 5_000);
+        assert_eq!(config.recording.api_origin_dependency_idle_ms, 60_000);
         assert_eq!(
             config.recording.access_policy,
             RecordingAccessPolicy::Unrestricted

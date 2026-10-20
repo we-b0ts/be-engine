@@ -357,6 +357,7 @@ impl ReplayRuntime {
             root_dir,
             cases,
             active_case_id,
+            api_origin_tails: control::api_origin::CaseTails::default(),
             case_dependency_post_response_window: lifecycle.case_dependency_post_response_window,
             global_path,
             regular_global: BTreeMap::new(),
@@ -416,6 +417,9 @@ impl ReplayRuntime {
         let initial_case = runtime.state.lock().await.active_case_id.clone();
         if let Some(case_id) = initial_case {
             deferred::prepare_case(runtime.state.clone(), &case_id).await?;
+            control::api_origin::prepare(&runtime.state, &case_id).await?;
+            let mut state = runtime.state.lock().await;
+            control::api_origin::activate(&mut state, &case_id)?;
         }
         Ok(runtime)
     }

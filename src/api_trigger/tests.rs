@@ -498,6 +498,7 @@ async fn recorder_keeps_active_case_calls_and_retains_idle_candidates_without_sn
     state.activate_case_dependencies(&guard).unwrap();
     let event = || {
         RecorderEvent::RedisExchange(RedisExchangeEvent {
+            rpc_callback_capture: None,
             id: Uuid::new_v4(),
             connection_id: Uuid::new_v4(),
             sequence: 1,

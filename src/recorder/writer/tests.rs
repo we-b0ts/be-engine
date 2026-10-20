@@ -52,6 +52,7 @@ async fn summary_counts_snapshot_hits_filtered_from_global_dependencies() {
 
 fn redis_exchange(cache_snapshot_hit: bool) -> RecorderEvent {
     RecorderEvent::RedisExchange(RedisExchangeEvent {
+        rpc_callback_capture: None,
         id: Uuid::new_v4(),
         connection_id: Uuid::new_v4(),
         sequence: 1,

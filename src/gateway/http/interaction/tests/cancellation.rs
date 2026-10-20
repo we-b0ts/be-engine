@@ -198,3 +198,64 @@ async fn primary_http_client_fin_preserves_delayed_complete_stream() {
     source.await.unwrap();
     recording.abort();
 }
+
+#[tokio::test]
+async fn cancelling_within_sse_message_preserves_private_prefix_and_self_replays() {
+    let temp = tempdir().unwrap();
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut settings = config(temp.path(), upstream.local_addr().unwrap());
+    settings.http_gateway.interaction.request_timeout_ms = 10_000;
+    settings.http_gateway.interaction.max_duration_ms = 30_000;
+    let state = AppState::new(settings).await.unwrap();
+    const PREFIX: &str = "data: first\n\ndata: unfinished\n";
+    let source = tokio::spawn(async move {
+        let (mut socket, _) = upstream.accept().await.unwrap();
+        read_head(&mut socket).await;
+        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{PREFIX}\r\n", PREFIX.len()).as_bytes()).await.unwrap();
+        let mut rest = Vec::new();
+        socket.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty());
+    });
+    let (address, recording) = gateway(state.clone()).await;
+    timeout(Duration::from_secs(3), async {
+        let client = primary_client(address, PREFIX).await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        crate::dependency::termination::ConnectionControl::new(&client).unwrap().reset().unwrap();
+        source.await.unwrap();
+        let case = published(&state).await;
+        let expected_path = case.join("expected-response.json");
+        let mut expected: Value = serde_json::from_slice(&std::fs::read(&expected_path).unwrap()).unwrap();
+        assert!(expected["interaction"]["end"]["partial_message"]["data"].as_str().unwrap().starts_with("traffic-e2e:enc:"));
+        crate::interaction::private::decrypt_output(&mut expected, &expected_path).unwrap();
+        let output: OutputObservation = serde_json::from_value(expected["interaction"].clone()).unwrap();
+        assert_eq!(output.end.partial_message.unwrap().decode().unwrap(), b"data: unfinished\n");
+        assert!(output.end.clean);
+        assert_eq!(output.end.pending, vec![0]);
+        assert!(!*state.inner.interactions.source_stop.borrow());
+
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = target.local_addr().unwrap();
+        let target = tokio::spawn(async move {
+            let (mut socket, _) = target.accept().await.unwrap();
+            read_head(&mut socket).await;
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{PREFIX}\r\n", PREFIX.len()).as_bytes()).await.unwrap();
+            let error = socket.read_to_end(&mut Vec::new()).await.unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+        });
+        let actual = replay_case(&case, address).await;
+        assert_eq!(actual.end.partial_message.unwrap().decode().unwrap(), b"data: unfinished\n");
+        target.await.unwrap();
+        let actual_path = case.join("test-actual.json");
+        let mut altered: Value = serde_json::from_slice(&std::fs::read(&actual_path).unwrap()).unwrap();
+        altered["interaction"]["end"]["partial_message"] = serde_json::to_value(crate::interaction::model::WireMessage::binary(b"data: different\n")).unwrap();
+        std::fs::write(&actual_path, serde_json::to_vec(&altered).unwrap()).unwrap();
+        let report = crate::replay::assert_recorded_response(crate::replay::ResponseAssertionOptions {
+            case_id: "different-partial-prefix".into(),
+            request: case.join("request.json"), expected_response: expected_path,
+            actual_response: actual_path, policy: case.join("test-policy.yaml"),
+        }).unwrap();
+        assert!(!report.passed);
+        assert!(report.differences.iter().any(|difference| difference.pointer == "$interaction/end/partial_message"));
+    }).await.expect("mid-message cancellation must publish without waiting for Source business completion");
+    recording.abort();
+}

@@ -647,6 +647,7 @@ mod tests {
         outcome: DependencyExchangeOutcome,
     ) -> RedisExchangeEvent {
         RedisExchangeEvent {
+            rpc_callback_capture: None,
             id: Uuid::new_v4(),
             connection_id,
             sequence,
