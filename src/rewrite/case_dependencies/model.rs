@@ -56,6 +56,11 @@ pub struct RewriteCaseDependencyTarget {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "detail_kind", rename_all = "snake_case")]
 pub enum RewriteCaseDependencyProtocolDetail {
+    Http {
+        exchanges: Vec<Value>,
+        omitted_exchanges: usize,
+        request_evidence_command: RewriteCommandSpec,
+    },
     Mysql {
         operations: Vec<RewriteMysqlOperationDetail>,
     },

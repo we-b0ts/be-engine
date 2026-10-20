@@ -909,6 +909,14 @@ explicit repository-wide audit.
   and offline re-verification for every structured response-body codec.
 
 - `replay/http/recording` owns bounded standard-run HTTP evidence traversal;
+  `replay/http/diagnosis` owns read-only published HTTP request queries and
+  protocol envelope projection; its `observations` child selects authenticated
+  identities before expanding one requested pair. `rewrite/evidence/http_requests`
+  binds query cursors to the API issue and published report and returns commands.
+  `value_contract/json/diagnosis` owns bounded original-value difference display;
+  rule-aware residuals come from the existing runtime value-contract comparator.
+  `policy_evidence` retains authenticated independent Target reads, including
+  orphan requests, without turning candidate associations into successful matches.
   `replay/http/selector` owns exact dependency endpoint selection, and
   `replay/http/identity` owns request fingerprints and canonical JSON identity.
   `replay/http/cross_case` owns finite HTTP sharing and

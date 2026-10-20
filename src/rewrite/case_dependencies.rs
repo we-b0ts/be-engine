@@ -67,6 +67,7 @@ struct DetailBuilder {
     redis: BTreeMap<String, RedisOperationBuilder>,
     memcached: BTreeMap<String, MemcachedOperationBuilder>,
     mysql: BTreeMap<String, mysql::OperationBuilder>,
+    http: Vec<Value>,
 }
 
 #[derive(Default)]
@@ -176,7 +177,7 @@ pub fn query(options: RewriteCaseDependenciesOptions) -> Result<RewriteCaseDepen
     let case_dir = resolve_case_dir(&target_root, &options.case_dir)?;
     let dependencies = resolve_dependencies(&case_dir)?;
     match options.target_id {
-        Some(target_id) => detail(&case_dir, &dependencies, &target_id),
+        Some(target_id) => detail(&target_root, &case_dir, &dependencies, &target_id),
         None => summary(&target_root, &case_dir, &dependencies),
     }
 }
@@ -240,6 +241,7 @@ fn summary(
 }
 
 fn detail(
+    target_root: &Path,
     case_dir: &Path,
     dependencies: &Path,
     requested_target_id: &str,
@@ -271,6 +273,24 @@ fn detail(
         format!("case has no dependency target with id {requested_target_id:?}")
     })?;
     let protocol_detail = match identity.protocol.as_str() {
+        "http" => {
+            let request: Value =
+                serde_json::from_slice(&std::fs::read(case_dir.join("request.json"))?)?;
+            let route = request["api_pattern"]
+                .as_str()
+                .or_else(|| request["uri"].as_str())
+                .context("HTTP dependency Case has no API route")?;
+            let route = crate::recording_api::identity(route).to_string();
+            RewriteCaseDependencyProtocolDetail::Http {
+                omitted_exchanges: builder.event_count.saturating_sub(builder.http.len()),
+                exchanges: builder.http,
+                request_evidence_command: super::action::command(
+                    target_root,
+                    vec!["evidence".into(), "--api".into(), route],
+                    Vec::new(),
+                ),
+            }
+        }
         "mysql" => RewriteCaseDependencyProtocolDetail::Mysql {
             operations: mysql::finish(builder.mysql),
         },
@@ -313,6 +333,12 @@ impl DetailBuilder {
         );
         increment(&mut self.commands, command);
         match protocol {
+            "http" if self.http.len() < MAX_REPRESENTATIVES => {
+                if let Some(summary) = crate::replay::http_request_diagnosis::source_summary(event)?
+                {
+                    self.http.push(summary);
+                }
+            }
             "mysql" if json_str(event, "event_type") == Some("mysql_exchange") => {
                 self.mysql
                     .entry(command.to_string())
@@ -519,6 +545,14 @@ pub(super) fn read_events(path: &Path, mut visit: impl FnMut(&Value) -> Result<(
 }
 
 fn target_identity(event: &Value) -> Option<TargetIdentity> {
+    if event["event_type"] == "http_exchange" {
+        let summary = crate::replay::http_request_diagnosis::source_summary(event).ok()??;
+        return Some(TargetIdentity {
+            protocol: "http".into(),
+            host: summary["host"].as_str()?.into(),
+            port: summary["port"].as_u64()?,
+        });
+    }
     let protocol = event_protocol(json_str(event, "event_type")?)?;
     let host = json_str(event, "target_host")?.to_string();
     let port = json_u64(event, "target_port")?;

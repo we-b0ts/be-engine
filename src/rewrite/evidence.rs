@@ -18,6 +18,7 @@ use crate::{
 };
 
 mod access;
+mod http_requests;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod mysql_diagnosis;
 mod overview;
@@ -40,6 +41,7 @@ const QUERY_POLICY_APPLICABILITY: &str = "policy_applicability";
 const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
 const QUERY_TARGET_RUNTIME_DIAGNOSTICS: &str = "target_runtime_diagnostics";
 const QUERY_UNIFIED_RULE_CANDIDATES: &str = "unified_rule_candidates";
+const QUERY_HTTP_REQUESTS: &str = "http_request_differences";
 
 pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
     let Some(issue) = &state.active_issue else {
@@ -66,6 +68,7 @@ pub(super) fn accepts_query(state: &RewriteState, requested_id: &str) -> bool {
     state.active_issue.as_ref().is_some_and(|issue| {
         requested_id == overview::api_query_id(state, issue)
             || requested_query(state, issue, requested_id).is_some()
+            || http_requests::parse(state, issue, requested_id).is_some()
     })
 }
 
@@ -105,15 +108,24 @@ pub(super) fn query(
             requested_id,
         );
     }
-    let requested = requested_query(state, issue, requested_id).with_context(|| {
-        format!(
-            "evidence query is stale or is not valid for active issue {}",
-            issue.id
-        )
-    })?;
+    let requested = requested_query(state, issue, requested_id)
+        .or_else(|| {
+            http_requests::parse(state, issue, requested_id).map(|_| (QUERY_HTTP_REQUESTS, 0))
+        })
+        .with_context(|| {
+            format!(
+                "evidence query is stale or is not valid for active issue {}",
+                issue.id
+            )
+        })?;
     let (kind, offset) = requested;
-    let (mut facts, does_not_prove, mut next_step) =
-        facts(target_root, state, issue, kind, offset)?;
+    let (mut facts, does_not_prove, mut next_step) = if kind == QUERY_HTTP_REQUESTS {
+        (http_requests::facts(target_root, state, issue, requested_id)?,
+            vec!["Retained candidates and raw body differences do not prove a successful match, response causality, or authorization for a rule.".into()],
+            "Follow candidates_query, differences_query, and source_body_query/target_body_query. Body pages return exact captured bytes; concatenate them by offset and verify sha256. Runtime rule traces retain their original policy fingerprint; unavailable historical traces require fresh Replay.".into())
+    } else {
+        facts(target_root, state, issue, kind, offset)?
+    };
     if let Some(refresh) = policy_freshness::attach(target_root, state, issue, kind, &mut facts)? {
         next_step = refresh;
     }
@@ -301,6 +313,8 @@ fn facts(
             facts["dynamic_capture_candidates"] = crate::e2e_run::query_dynamic_capture_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             facts["http_header_timestamp_candidates"] = serde_json::to_value(rule_guidance::http_header_timestamp_candidates(&facts))?;
             if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")) {
+                facts["http_request_differences_command"] = serde_json::to_value(super::action::command(target_root,
+                    vec!["evidence".into(), query_id(state, issue, QUERY_HTTP_REQUESTS)], Vec::new()))?;
                 facts["http_unordered_candidates"] = crate::e2e_run::query_http_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["redis_lock_candidates"] = crate::e2e_run::query_redis_lock_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["redis_unordered_candidates"] = crate::e2e_run::query_redis_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
@@ -645,6 +659,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         issue.kind,
         RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
     ) {
+        queries.push((QUERY_HTTP_REQUESTS, "Inspect failed HTTP dependency requests, exact Source/Target body differences, and complete protected body pages"));
         queries.push((QUERY_UNIFIED_RULE_CANDIDATES,"Discover bounded typed rule drafts from complete observed JSON differences, or enter a Source-proven field"));
     }
     queries

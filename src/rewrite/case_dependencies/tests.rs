@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn http_targets_include_source_metadata_and_route_to_current_request_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let case = temp
+        .path()
+        .join(".traffic-e2e/local/artifacts/run/api/case-http");
+    std::fs::create_dir_all(&case).unwrap();
+    std::fs::write(
+        case.join("request.json"),
+        r#"{"method":"POST","uri":"/api/123","api_pattern":"/api/*"}"#,
+    )
+    .unwrap();
+    let event = serde_json::json!({"event_type":"http_exchange","id":"source-http",
+        "scheme":"https","authority":"service.test:443","method":"POST","uri":"/dependency?secret=value",
+        "request_headers":{"authorization":["private-token"]},
+        "request_body":{"encoding":"utf8","data":"private-body","original_len":12,"truncated":false},
+        "response_status":200,"response_headers":{},"response_body":null,"error":null});
+    std::fs::write(case.join("dependencies.jsonl"), event.to_string()).unwrap();
+    let options = RewriteCaseDependenciesOptions {
+        target_root: temp.path().into(),
+        case_dir: case,
+        target_id: None,
+    };
+    let summary = serde_json::to_value(query(options.clone()).unwrap()).unwrap();
+    assert_eq!(summary["targets_total"], 1);
+    assert_eq!(summary["targets"][0]["protocol"], "http");
+    assert_eq!(summary["targets"][0]["target"], "service.test:443");
+    let id = summary["targets"][0]["target_id"].as_str().unwrap();
+    let detail = serde_json::to_value(
+        query(RewriteCaseDependenciesOptions {
+            target_id: Some(id.into()),
+            ..options
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(detail["detail_kind"], "http");
+    assert_eq!(detail["exchanges"][0]["path"], "/dependency");
+    assert_eq!(detail["exchanges"][0]["body_original_len"], 12);
+    assert_eq!(detail["request_evidence_command"]["argv"][5], "/api/*");
+    for private in ["private-token", "private-body", "secret=value"] {
+        assert!(!summary.to_string().contains(private));
+        assert!(!detail.to_string().contains(private));
+    }
+}
+
+#[test]
 fn summary_stays_bounded_and_detail_returns_decoded_keys() {
     let temp = tempfile::tempdir().unwrap();
     let target_root = temp.path();

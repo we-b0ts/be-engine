@@ -60,6 +60,7 @@ pub(crate) use http::contracts::{
 };
 pub(crate) use http::cross_case as http_cross_case;
 pub use http::cross_case::HttpCrossCaseSelector;
+pub(crate) use http::diagnosis as http_request_diagnosis;
 #[cfg(test)]
 pub(crate) use http::tests::{
     snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,

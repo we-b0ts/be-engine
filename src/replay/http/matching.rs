@@ -59,6 +59,8 @@ impl ReplayState {
             crate::replay::policy::dynamic_values::DynamicDecision::default();
         let mut matching_request_decision = None;
         let mut closest_mismatch = None;
+        let mut body_comparisons = Vec::new();
+        let mut omitted_body_comparisons = 0;
         let mut target_fingerprint = None;
         'sources: for source in [ReplaySource::Case, ReplaySource::Global] {
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
@@ -266,6 +268,7 @@ impl ReplayState {
                     mismatch = None;
                 }
                 let mut request_decision = None;
+                let mut body_comparison = None;
                 if (mismatch.is_none()
                     || mismatch.as_deref()
                         == Some("HTTP request body did not match the recorded body"))
@@ -284,6 +287,7 @@ impl ReplayState {
                             started_at: request_started_at,
                         },
                         &policy_decision.dynamic_query_params,
+                        &mut body_comparison,
                     )
                 {
                     match result {
@@ -294,6 +298,13 @@ impl ReplayState {
                         Err(error) => {
                             mismatch = Some(format!("HTTP body value contract failed: {error:#}"))
                         }
+                    }
+                }
+                if let Some(comparison) = body_comparison {
+                    if body_comparisons.len() < 64 {
+                        body_comparisons.push(comparison);
+                    } else {
+                        omitted_body_comparisons += 1;
                     }
                 }
                 if exchange.source == ReplaySource::Case
@@ -450,6 +461,27 @@ impl ReplayState {
                 .last_mut()
                 .unwrap()
                 .unordered_json = Some(evidence);
+            self.http_events
+                .unmatched
+                .last_mut()
+                .unwrap()
+                .target_observation_id = observation_id.map(|id| {
+                crate::policy_evidence::target_observation_id(
+                    &id.to_string(),
+                    crate::policy::Surface::DependencyRequest,
+                    crate::policy_evidence::TargetRole::IndependentTargetObservation,
+                )
+            });
+            self.http_events
+                .unmatched
+                .last_mut()
+                .unwrap()
+                .body_comparisons = body_comparisons;
+            self.http_events
+                .unmatched
+                .last_mut()
+                .unwrap()
+                .omitted_body_comparisons = omitted_body_comparisons;
             return Err(HttpReplayMatchError::BadGateway(reason));
         };
         let mut exchange = self.http_exchanges[index].clone();
@@ -476,6 +508,9 @@ impl ReplayState {
                 method: method.to_string(),
                 uri: uri_path_only(&uri.to_string()),
                 reason: reason.clone(),
+                target_observation_id: None,
+                body_comparisons: Vec::new(),
+                omitted_body_comparisons: 0,
                 request_fingerprint: None,
                 unordered_json: None,
             });

@@ -272,6 +272,9 @@ impl ReplayState {
                     method: detail.method,
                     uri: detail.uri,
                     reason: error.to_string(),
+                    target_observation_id: None,
+                    body_comparisons: Vec::new(),
+                    omitted_body_comparisons: 0,
                     request_fingerprint: None,
                     unordered_json: None,
                 });

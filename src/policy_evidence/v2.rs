@@ -5,6 +5,7 @@ use hmac::{Hmac, Mac};
 use std::collections::BTreeSet;
 
 mod reader;
+pub(crate) use reader::read_target;
 pub(super) use reader::{read, verify};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

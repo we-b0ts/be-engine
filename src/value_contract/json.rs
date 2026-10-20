@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use super::time::{self, ClockPair, TimeError};
 use crate::policy::{FieldContract, TimeAnchor, TimeRelation, TimestampFormat};
+pub(crate) mod diagnosis;
 mod native;
 pub(crate) use native::{LeafContext, LeafObservations, NativeField, NonceIdentity, VerifiedField};
 
