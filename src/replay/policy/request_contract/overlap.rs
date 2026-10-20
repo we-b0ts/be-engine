@@ -131,6 +131,7 @@ pub(in crate::replay::policy) fn validate(
                         target,
                         method,
                         path,
+                        json_pointer,
                         ..
                     },
                 ) => {
@@ -141,6 +142,12 @@ pub(in crate::replay::policy) fn validate(
                         && rule.target.port == Some(target.port)
                         && a.method == *method
                         && crate::path_pattern::path_patterns_overlap(&a.path, path)
+                        && (a.json.fields.is_empty()
+                            || json_pointer.as_ref().is_some_and(|pointer| {
+                                a.json.fields.keys().any(|owned| {
+                                    super::super::response_locations_overlap(pointer, owned)
+                                })
+                            }))
                 }
                 _ => false,
             };

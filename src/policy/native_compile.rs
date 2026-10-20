@@ -7,6 +7,7 @@ use serde::Serialize;
 use super::native::*;
 use super::{Proof, Protocol, SourceCondition, TimestampFormat, compiler};
 
+mod http_request;
 pub(crate) mod ownership;
 mod response;
 mod source;
@@ -350,26 +351,7 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
             effect.value_codec()?;
             Ok(())
         }
-        NativeEffect::HttpRequest(effect) => {
-            resource(selector, Protocol::Http)?;
-            ensure!(
-                selector.operation.is_some() && selector.path.is_some(),
-                "HTTP request effect requires method and path"
-            );
-            ensure!(
-                !effect.headers.is_empty() || !effect.query.is_empty() || effect.multipart_boundary,
-                "HTTP request effect has no contract"
-            );
-            for (name, time) in &effect.headers {
-                hyper::header::HeaderName::from_bytes(name.as_bytes())?;
-                proven(time, validate_time)?;
-            }
-            for (name, value) in &effect.query {
-                text(name, "query parameter", 128)?;
-                proven(value, validate_generated_value)?;
-            }
-            Ok(())
-        }
+        NativeEffect::HttpRequest(effect) => http_request::validate(selector, effect),
         NativeEffect::MysqlValues(effect) => {
             resource(selector, Protocol::Mysql)?;
             ensure!(

@@ -8,6 +8,7 @@ mod compact_evidence;
 mod request_contracts;
 mod rpc_coverage;
 mod scale;
+mod subscriber_generations;
 mod subscription_evidence;
 
 const SOURCE: &str = "30b6569f34c2486dafd3bf29b09a071f";

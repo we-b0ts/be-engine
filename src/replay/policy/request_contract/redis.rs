@@ -314,11 +314,6 @@ impl RequestContracts {
         config: &JwtContract,
         decision: &mut Decision,
     ) -> Result<()> {
-        let key = self
-            .keys
-            .get(&(rule.into(), pointer.into()))
-            .context("request JWT signing key is unavailable")?
-            .bytes();
         let a = super::time::timestamp(
             source_document
                 .pointer(&config.relative_to)
@@ -331,38 +326,19 @@ impl RequestContracts {
                 .context("target JWT time anchor missing")?,
             anchor_contract,
         )?;
-        let validated = crate::request_rules::jwt::contract::compare(
+        self.compare_jwt(
             source,
             actual,
-            crate::request_rules::jwt::contract::Contract {
+            jwt::JwtContext {
+                case,
+                rule,
+                pointer,
                 algorithm: config.algorithm,
-                key,
                 anchors: [a, b],
                 tolerance: (config::tolerance(&config.tolerance)? * 1e9).round() as i128,
                 dynamic_claims: &config.dynamic_claims,
             },
+            decision,
         )
-        .map_err(|error| anyhow::anyhow!("JWT contract failed: {error:?}"))?;
-        decision.time_validations += validated.time_validations;
-        for nonce in validated.nonces {
-            let claim = &nonce.claim;
-            let a = nonce.source;
-            let b = nonce.target;
-            let key = (case.into(), rule.into(), format!("{pointer}{claim}"));
-            let state = self.state.lock().expect("request contracts");
-            if let Some(bindings) = state.nonces.get(&key) {
-                ensure!(
-                    (bindings.contains_key(&a) || bindings.len() < 256)
-                        && bindings
-                            .iter()
-                            .all(|(left, right)| (left != &a || right == &b)
-                                && (right != &b || left == &a)),
-                    "JWT nonce binding is inconsistent"
-                );
-            }
-            drop(state);
-            decision.nonces.push((key, a, b));
-        }
-        Ok(())
     }
 }

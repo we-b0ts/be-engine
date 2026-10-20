@@ -13,6 +13,7 @@ pub(super) struct Bindings {
     requests: HashMap<RequestKey, usize>,
     wire_references: std::collections::HashSet<(Uuid, u64)>,
     publishers: std::collections::HashSet<(Uuid, u64)>,
+    callback_subscriptions: std::collections::HashSet<(Uuid, u64)>,
     unlinked: HashMap<Scope, usize>,
 }
 impl Bindings {
@@ -124,12 +125,24 @@ impl PubSubState {
             "RPC callback identity mismatch"
         );
         push.linked = true;
+        self.bindings
+            .callback_subscriptions
+            .insert((push.record.connection_id, push.record.subscription_sequence));
         *self
             .bindings
             .unlinked
             .get_mut(&scope)
             .expect("indexed RPC scope") -= 1;
         Ok(Some(index))
+    }
+
+    pub(in crate::replay::redis) fn is_callback_subscription(
+        &self,
+        exchange: &ReplayExchange,
+    ) -> bool {
+        self.bindings
+            .callback_subscriptions
+            .contains(&(exchange.record.connection_id, exchange.record.sequence))
     }
 
     pub(in crate::replay) fn validate_links(

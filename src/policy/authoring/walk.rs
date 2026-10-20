@@ -16,6 +16,7 @@ enum Shape {
     Plaintext,
     SequenceArgument,
     SequenceField,
+    HttpJsonField,
     SequenceCommand,
     IdentityCapture,
     PathSegment,
@@ -206,6 +207,7 @@ impl Walker<'_> {
             "http_request" => {
                 self.field_map(map, "headers", Shape::Time, parent, 0)?;
                 self.field_map(map, "query", Shape::GeneratedValue, parent, 0)?;
+                self.field_map(map, "json", Shape::HttpJsonField, parent, 0)?;
             }
             "mysql_values" => {
                 self.field_map(map, "values", Shape::SqlValue, parent, 0)?;
@@ -259,6 +261,7 @@ impl Walker<'_> {
                 self.list(map, "nonces", Shape::Leaf, true, parent, depth)?;
                 self.field_map(map, "query", Shape::SequenceField, parent, depth)?;
             }
+            Shape::HttpJsonField => self.list(map, "nonces", Shape::Leaf, true, parent, depth)?,
             Shape::SequenceCommand => {
                 self.one(map, "script", Shape::Leaf, true, parent, depth)?;
                 self.field_map(map, "arguments", Shape::SequenceArgument, parent, depth)?;

@@ -67,7 +67,12 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                     },
                 ),
                 headers,
-                json: super::super::http_json::HttpJsonRules::default(),
+                json: super::super::http_json::HttpJsonRules {
+                    fields: effect.json.iter().map(|(pointer, field)| {
+                        (pointer.clone(), field.contract.clone())
+                    }).collect(),
+                    ..Default::default()
+                },
                 method: selector
                     .operation
                     .clone()

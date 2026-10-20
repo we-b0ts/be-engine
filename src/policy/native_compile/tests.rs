@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+mod http_request;
 mod redis_sequence;
 use crate::policy::{Database, Endpoint, Resource};
 

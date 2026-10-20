@@ -73,6 +73,7 @@ fn dependency_and_native_selectors_share_literal_http_paths_without_widening_pat
                 },
             )]),
             query: Default::default(),
+            json: Default::default(),
             multipart_boundary: false,
         }),
         proof: value.proof.clone(),

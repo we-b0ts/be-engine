@@ -270,6 +270,9 @@ is unclear.
   evidence, subscription routing and delivery; its `adapter` child owns
   Socket.IO Redis-adapter identity correlation, while `subscription_evidence`
   resolves exact recording-level anchors and canonical single-use aliases.
+  The adapter retains subscription anchors required by linked RPC callbacks;
+  command matching applies their preference within the existing ownership scope
+  without bypassing source-lane order, session eligibility or connection claims.
   Payload semantics remain with
   the application. Source acquisition and Replay do not consume HTTP oracles.
   The RPC adapter supplies protocol-identity comparison copies to request policy;
@@ -966,6 +969,13 @@ explicit repository-wide audit.
   failed and client-termination exchanges remain blockers; final success and
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
+
+- `replay/policy/request_contract/http_body` validates explicitly selected HTTP
+  JSON random fields and HMAC JWTs, then supplies private comparison copies to
+  ordinary HTTP matching. `request_contract/jwt` shares authenticated-claim
+  validation and staged nonce bindings with Redis; `signing_keys` resolves their
+  immutable startup inputs for Replay and Source preflight. The protocol owner
+  retains strict remainder comparison, independent witnesses and finite delivery.
 
 
 ## Unified policy responsibilities

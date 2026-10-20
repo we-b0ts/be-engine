@@ -3,7 +3,7 @@ use super::*;
 mod request;
 use crate::replay::command_matching::{
     CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic, preferred_match,
-    unmatched_diagnostic,
+    preferred_match_with_priority, unmatched_diagnostic,
 };
 use crate::replay::report::command::CommandMatchDiagnostic;
 
@@ -154,24 +154,33 @@ impl RedisReplayState {
                 }
             }
         }
-        let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
-            (exchange.status.is_available()
-                || (exchange.reusable_snapshot && exchange.status != ReplayExchangeStatus::Failed))
-                && self
-                    .connection_scopes
-                    .matches(exchange, active_case_id, connection)
-                && target_matches(
-                    target,
-                    &exchange.record.target_host,
-                    exchange.record.target_port,
-                )
-                && exchange.record.resp_version == resp_version
-                && exchange.record.database == database
-                && normalize_optional(username)
-                    == normalize_optional(exchange.record.username.as_deref())
-                && exchange.record.command.eq_ignore_ascii_case(command)
-                && self.arguments_match(exchange, args)
-        });
+        let matched = preferred_match_with_priority(
+            &self.exchanges,
+            active_case_id,
+            |exchange| {
+                (exchange.status.is_available()
+                    || (exchange.reusable_snapshot
+                        && exchange.status != ReplayExchangeStatus::Failed))
+                    && self
+                        .connection_scopes
+                        .matches(exchange, active_case_id, connection)
+                    && target_matches(
+                        target,
+                        &exchange.record.target_host,
+                        exchange.record.target_port,
+                    )
+                    && exchange.record.resp_version == resp_version
+                    && exchange.record.database == database
+                    && normalize_optional(username)
+                        == normalize_optional(exchange.record.username.as_deref())
+                    && exchange.record.command.eq_ignore_ascii_case(command)
+                    && self.arguments_match(exchange, args)
+            },
+            |exchange| {
+                !matches!(command, "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE")
+                    || self.pubsub.is_callback_subscription(exchange)
+            },
+        );
         let index = match matched {
             PreferredMatch::Matched(index) => index,
             PreferredMatch::LaneBlocked { candidate, blocker } => {

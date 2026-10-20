@@ -76,6 +76,14 @@ orphan references, unsafe/truncated payloads, inconsistent identities, and a
 publisher from another Case fail loading. Expected HTTP responses never supply
 missing ACKs.
 
+When several recorded subscription generations match the same Target command,
+Replay prefers exact subscription anchors required by linked RPC callbacks
+within the same Case or Global ownership scope. This preference uses captured
+protocol evidence and preserves session identity, exclusive connection claims,
+lane predecessors, and single consumption. An unrelated earlier or later
+subscription stays unused; Replay does not merge generations or redirect a
+callback to a different confirmed anchor.
+
 The target must issue its genuine PUBLISH and subscribe calls. Matching retains
 the endpoint/session, channel, event, room, namespace, complete command data and
 every non-identity field. Only protocol-generated UUID-v4 hex publisher IDs and

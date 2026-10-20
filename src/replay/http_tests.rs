@@ -14,6 +14,8 @@ use super::*;
 use crate::replay::{MysqlReplayConfig, ReplayAllowedUnusedHttpConfig, ReplayRuntime};
 #[path = "http_tests/dynamic_values.rs"]
 mod dynamic_values;
+#[path = "http_tests/http_body_jwt.rs"]
+mod http_body_jwt;
 #[path = "http_tests/json_request_time.rs"]
 mod json_request_time;
 #[path = "http_tests/request_contracts.rs"]
