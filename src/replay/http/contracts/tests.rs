@@ -259,6 +259,18 @@ async fn body_contract_rejects_unselected_fields_and_retains_the_failed_target_p
     let state = runtime.state.lock().await;
     let report = serde_json::to_value(state.snapshot_report()).unwrap();
     assert_eq!(report["matched_http_exchange_count"], 0);
+    let failure = &report["unmatched_http_requests"][0];
+    assert!(failure["target_observation_id"].is_string());
+    assert_eq!(
+        failure["body_comparisons"][0]["selected_rule_ids"][0],
+        "http-request"
+    );
+    assert_eq!(failure["body_comparisons"][0]["passed"], false);
+    assert_eq!(
+        failure["body_comparisons"][0]["comparison"]["differences"][0]["pointer"],
+        "/stable"
+    );
+    assert!(!failure.to_string().contains("target-token"));
     let manifest = state
         .replay_policy
         .as_ref()

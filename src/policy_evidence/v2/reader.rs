@@ -260,6 +260,32 @@ pub(in crate::policy_evidence) fn read(
         target,
     ))
 }
+pub(crate) fn read_target(
+    path: &Path,
+    manifest: &WitnessManifest,
+    index: usize,
+    context: &Path,
+) -> Result<Vec<u8>> {
+    let graph = manifest.graph().context("missing observation graph")?;
+    let target = graph
+        .targets
+        .get(index)
+        .context("Target observation is missing")?;
+    target.metadata.validate()?;
+    let blob = graph
+        .blobs
+        .get(target.blob)
+        .context("Target payload is missing")?;
+    let key = graph.key(context)?;
+    authenticate(
+        &key,
+        "target",
+        &(&graph.session_id, &target.id, &target.metadata, blob),
+        &target.authentication,
+    )?;
+    read_blob(path, &graph.session_id, blob, context)
+}
+
 fn read_blob(path: &Path, session_id: &str, blob: &BlobRef, context: &Path) -> Result<Vec<u8>> {
     if let Some(source) = &blob.source {
         let payload = source.read(context)?;

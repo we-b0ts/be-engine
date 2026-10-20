@@ -109,6 +109,7 @@ pub(super) fn preview_request(
     exchange: &ReplayHttpExchange,
     actual: &RequestView<'_>,
     validated_query_params: &[String],
+    diagnostic: &mut Option<Value>,
 ) -> Option<Result<crate::replay::policy::request_contract::Decision>> {
     if exchange.source != ReplaySource::Case || exchange.shared_origin.is_some() {
         return None;
@@ -143,6 +144,15 @@ pub(super) fn preview_request(
         );
         let comparison =
             crate::replay::contract_value::compare(&source, actual.body, &rules, clocks)?;
+        *diagnostic = Some(serde_json::json!({
+            "source_exchange_id":exchange.record.id,
+            "selected_rule_ids":rules.iter().map(|rule| &rule.rule.id).collect::<Vec<_>>(),
+            "comparison":comparison,
+            "passed":comparison.passed(),
+            "source_comparison_body_sha256":crate::policy_evidence::digest(&source),
+            "target_comparison_body_sha256":crate::policy_evidence::digest(actual.body),
+            "origin":"runtime_shared_value_contract_comparator"
+        }));
         anyhow::ensure!(
             comparison.passed(),
             "HTTP request body contract failed: {:?}",

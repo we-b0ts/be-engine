@@ -1,4 +1,5 @@
 pub(in crate::replay) mod contracts;
+pub(crate) mod diagnosis;
 mod matching;
 pub(in crate::replay) mod multipart;
 mod report_inventory;
@@ -197,6 +198,11 @@ pub(super) struct HttpRequestReport {
     method: String,
     uri: String,
     reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_observation_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    body_comparisons: Vec<Value>,
+    omitted_body_comparisons: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     request_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -466,6 +472,9 @@ impl ReplayState {
             method: method.to_string(),
             uri: uri_path_only(&uri.to_string()),
             reason,
+            target_observation_id: None,
+            body_comparisons: Vec::new(),
+            omitted_body_comparisons: 0,
             request_fingerprint: None,
             unordered_json: Some(Default::default()),
         });

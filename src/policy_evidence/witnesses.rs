@@ -138,6 +138,23 @@ impl<'a> Iterator for WitnessEntries<'a> {
 }
 
 impl<'a> WitnessEntry<'a> {
+    pub(crate) fn target_observation_id(&self) -> Option<&'a str> {
+        match self {
+            Self::Legacy(witness) => witness.target_observation_id.as_deref(),
+            Self::Observation {
+                graph,
+                association,
+                group,
+                ..
+            } => {
+                let index = association
+                    .map(|a| a.target)
+                    .or_else(|| group.map(|g| g.target))?;
+                graph.targets.get(index).map(|target| target.id.as_str())
+            }
+        }
+    }
+
     pub(crate) fn metadata(&self) -> &WitnessMetadata {
         match self {
             Self::Legacy(witness) => &witness.metadata,

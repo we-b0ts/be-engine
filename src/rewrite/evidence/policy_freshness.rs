@@ -11,7 +11,10 @@ pub(super) fn attach(
 ) -> Result<Option<String>> {
     if !matches!(
         query,
-        QUERY_DIRTY_CLUSTERS | QUERY_REPRESENTATIVES | QUERY_UNIFIED_RULE_CANDIDATES
+        QUERY_DIRTY_CLUSTERS
+            | QUERY_REPRESENTATIVES
+            | QUERY_UNIFIED_RULE_CANDIDATES
+            | QUERY_HTTP_REQUESTS
     ) || !matches!(
         issue.kind,
         RewriteIssueKind::Response | RewriteIssueKind::Replay | RewriteIssueKind::Dependency

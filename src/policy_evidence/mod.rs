@@ -15,13 +15,15 @@ mod source;
 mod storage;
 mod store;
 pub(crate) use source::SourceRecord;
+pub(crate) use store::target_key as target_observation_id;
 pub(crate) use store::{AssociationOutcome, ObservationRetention, WitnessStore};
 mod publication;
 pub(crate) use publication::stage;
 mod v2;
+pub(crate) use v2::read_target;
 pub(crate) use v2::{ObservationGraph, TargetMetadata};
 mod witnesses;
-pub(crate) use witnesses::WitnessEntries;
+pub(crate) use witnesses::{WitnessEntries, WitnessEntry};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ClockPair {

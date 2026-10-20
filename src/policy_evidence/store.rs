@@ -671,7 +671,7 @@ impl State {
         Ok(Some(index))
     }
 }
-fn target_key(id: &str, surface: Surface, role: TargetRole) -> String {
+pub(crate) fn target_key(id: &str, surface: Surface, role: TargetRole) -> String {
     format!("{id}:{surface:?}:{role:?}")
 }
 fn snapshot(state: &State) -> WitnessManifest {
