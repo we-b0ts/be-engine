@@ -359,7 +359,8 @@ is unclear.
   only; administrator behavior remains in the library owner for that contract.
 - `record_service` owns the standalone Source/Recorder supervision and recording
   lifecycle. Its `options` child projects optional Recorder configuration while
-  retaining HTTP rules; `coordination` owns optional Redis discovery/leases;
+  retaining HTTP rules; `coordination` owns optional Redis discovery/leases and
+  best-effort address refresh independently of Source and request supervision;
   `proxy` owns direct or reservation-aware request forwarding and completion;
   `source` owns fixed-identity process startup, trust, isolation and cleanup.
   Redis primitives stay in the gateway SDK. CLI bootstrap initializes encryption

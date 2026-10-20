@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use brz_http_gateway::redis_admission::{RecorderRegistration, RedisAdmissionProvider};
 use brz_redis::{RedisService, RedisServiceOptions};
 use std::time::Duration;
+use tracing::{info, warn};
 
 pub(super) struct Coordination {
     registration: Option<RecorderRegistration<RedisService>>,
@@ -45,24 +46,22 @@ impl Coordination {
         })
     }
 
-    pub(super) async fn register(&self) -> Result<()> {
-        if let Some(registration) = &self.registration {
-            ensure!(
-                registration.register().await?,
-                "another recorder already owns the discovery key"
-            );
+    /// Discovery is best-effort and never changes request or Source ownership.
+    pub(super) async fn refresh_registration(&self) {
+        let Some(registration) = &self.registration else {
+            return;
+        };
+        match registration.renew().await {
+            Ok(true) => {}
+            Ok(false) => match registration.register().await {
+                Ok(true) => info!("recorder address registered"),
+                Ok(false) => {
+                    warn!("recorder address belongs to another owner; registration will retry")
+                }
+                Err(error) => warn!(%error, "recorder address registration failed; will retry"),
+            },
+            Err(error) => warn!(%error, "recorder address renewal failed; will retry"),
         }
-        Ok(())
-    }
-
-    pub(super) async fn renew(&self) -> Result<()> {
-        if let Some(registration) = &self.registration {
-            ensure!(
-                registration.renew().await?,
-                "recorder registration was lost"
-            );
-        }
-        Ok(())
     }
 
     pub(super) async fn unregister(&self) -> Result<()> {

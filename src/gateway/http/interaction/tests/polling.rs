@@ -185,9 +185,10 @@ async fn polling_request(
 async fn polling_and_upgrade_record_as_one_case_and_replay_with_a_new_sid() {
     let temp = tempdir().unwrap();
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let state = AppState::new(config(temp.path(), upstream.local_addr().unwrap()))
-        .await
-        .unwrap();
+    let mut settings = config(temp.path(), upstream.local_addr().unwrap());
+    // Leave scheduling room for the polling/probe/upgrade round trips in the full suite.
+    settings.http_gateway.interaction.business_idle_ms = 500;
+    let state = AppState::new(settings).await.unwrap();
     let (source_stop, source) = spawn_peer(upstream, "recorded-source-sid");
     let (address, recording) = gateway(state.clone()).await;
     let client = Client::builder(TokioExecutor::new()).build_http();
