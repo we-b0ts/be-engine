@@ -2,8 +2,15 @@
 
 Enable `recorder.http_gateway.record_streaming` in project YAML. The existing
 recording route rules, API patterns and per-API case limits still apply. Primary
-SSE and NDJSON responses are discovered from response Content-Type; an SSE/NDJSON
-Accept header also selects streaming before dispatch. Raw
+SSE and NDJSON responses are selected by the actual response Content-Type.
+An Accept offer such as `application/json, text/event-stream` permits either
+response; JSON responses (including errors) and non-stream empty responses retain
+ordinary HTTP recording, including their status, headers and body. Protocol
+selection never resends the request or sends an already executed POST to fallback.
+Response-header waits use
+the ordinary HTTP request timeout; established streams use the interaction
+lifecycle budgets. When streaming recording is disabled, requests explicitly
+offering SSE or NDJSON still use the configured pre-dispatch fallback. Raw
 `application/octet-stream` recording additionally requires
 `recorder.http_gateway.record_raw_streaming: true`. Binary downloads otherwise
 retain ordinary HTTP recording and lifecycle behavior.

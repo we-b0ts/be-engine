@@ -373,10 +373,9 @@ async fn sse_first_event_forwards_before_eof_and_ndjson_autodetection_self_repla
         });
         let (address, recording) = gateway(state.clone()).await;
         let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
-        let mut request = Request::builder().uri(format!("http://{address}/events"));
-        if protocol == Protocol::Sse {
-            request = request.header("accept", content);
-        }
+        let request = Request::builder()
+            .uri(format!("http://{address}/events"))
+            .header("accept", format!("application/json, {content}"));
         let response = client
             .request(request.body(Full::new(Bytes::new())).unwrap())
             .await
