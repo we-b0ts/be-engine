@@ -46,7 +46,7 @@ pub(in crate::recorder::redis) fn capture(
 ) -> Result<CapturedPush> {
     let pending = super::super::rpc::take(state, context, push);
     let (reference, targets, duration_ms) = match pending {
-        Some((reference, targets, elapsed)) => (Some(reference), Some(targets), elapsed),
+        Some((reference, targets, elapsed)) => (Some(reference), targets, elapsed),
         None => (None, None, elapsed_ms),
     };
     let response = capture_body(&bytes, state.config().recording.max_body_bytes);

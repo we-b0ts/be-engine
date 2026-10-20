@@ -106,7 +106,32 @@ async fn isolation(body_timeout: bool) {
         .await
         .unwrap()
         .unwrap();
-    assert!(response.starts_with("HTTP/1.1 504"), "{response}");
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("x-traffic-e2e-finite-response: 1")
+    );
+    let case_id = response
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("x-traffic-e2e-case-id")
+                .then(|| value.trim().parse::<uuid::Uuid>().unwrap())
+        })
+        .expect("an early response must identify its still-owned case to the lease relay");
+    assert!(state.inner.active_cases.has_case(case_id));
+    if body_timeout {
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "headers already forwarded: {response}"
+        );
+        assert!(
+            !response.ends_with("done"),
+            "timed-out body must remain incomplete"
+        );
+    } else {
+        assert!(response.starts_with("HTTP/1.1 504"), "{response}");
+    }
     // No Source completion yet; a new case cannot be admitted.
     assert!(get(addr, "/record/new").await.ends_with("busy"));
     continue_tx.send(()).unwrap();
@@ -130,6 +155,13 @@ async fn isolation(body_timeout: bool) {
             .ends_with("fresh")
     );
     source.await.unwrap();
+    assert!(
+        state
+            .inner
+            .active_cases
+            .wait_for_no_active_case(Duration::from_secs(3))
+            .await
+    );
     state.recorder().flush_traffic().await.unwrap();
     let run = state.recorder().run_dir.as_ref();
     let old = only_case(&run.join("failed/record-old"));

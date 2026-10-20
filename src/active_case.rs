@@ -8,10 +8,12 @@ use crate::recorder::{CaseContext, CaseInvalidation};
 
 mod activity;
 mod interaction;
+mod observation;
 mod recovery;
 
 use activity::{DependencyActivity, DependencyReservation};
 pub(crate) use interaction::InteractionPublication;
+use observation::{CaseObservation, SelectedRequest};
 
 #[derive(Clone)]
 pub(crate) struct ActiveCaseRegistry {
@@ -37,6 +39,7 @@ struct ActiveCaseRegistration {
     dependencies: Arc<DependencyActivity>,
     recovering: bool,
     source_completed: bool,
+    observation: Option<Arc<CaseObservation>>,
 }
 
 pub(crate) struct ActiveCaseGuard {
@@ -61,6 +64,7 @@ pub(crate) enum ActiveCaseActivationError {
 pub(crate) enum DependencyDrainResult {
     Drained,
     TimedOut,
+    ObservationTimedOut,
 }
 
 #[derive(Clone)]
@@ -69,6 +73,7 @@ pub(crate) struct DependencyTargets {
     pub(crate) bootstrap_open: bool,
     pub(crate) ambiguous_active_cases: usize,
     _reservations: Vec<DependencyReservation>,
+    selected: Vec<SelectedRequest>,
 }
 
 impl Drop for ActiveCaseGuard {
@@ -128,6 +133,7 @@ impl ActiveCaseRegistry {
             dependencies: Arc::new(DependencyActivity::default()),
             recovering: false,
             source_completed: false,
+            observation: None,
         });
         self.active_count.send_replace(state.active.len());
         Ok(ActiveCaseGuard {
@@ -297,6 +303,9 @@ impl ActiveCaseRegistry {
                 .drain_recovering_case(case_id, post_response_window, timeout)
                 .await;
         }
+        if let Some(result) = self.drain_observation(case_id, timeout).await {
+            return result;
+        }
         if !post_response_window.is_zero() {
             tokio::time::sleep(post_response_window).await;
         }
@@ -323,6 +332,20 @@ impl ActiveCaseRegistry {
     }
 
     pub(crate) fn current_targets_for_event(&self) -> DependencyTargets {
+        self.targets_for_request(None)
+    }
+
+    pub(crate) fn current_targets_for_request(
+        &self,
+        request: &crate::recorder::api_origin_observation::DependencyRequest<'_>,
+    ) -> DependencyTargets {
+        self.targets_for_request(Some(request))
+    }
+
+    fn targets_for_request(
+        &self,
+        request: Option<&crate::recorder::api_origin_observation::DependencyRequest<'_>>,
+    ) -> DependencyTargets {
         let state = self.state.lock().expect("active case registry poisoned");
         let active_count = state.active.len();
         let (cases, ambiguous_active_cases, mut reservations) = match state.active.as_slice() {
@@ -339,11 +362,21 @@ impl ActiveCaseRegistry {
         if bootstrap_open {
             reservations.push(state.bootstrap_dependencies.reserve());
         }
+        let selected = match (request, state.active.as_slice()) {
+            (Some(request), [case]) if case.accepting_dependencies => case
+                .observation
+                .as_ref()
+                .and_then(|observation| observation.select(request))
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
+        };
         DependencyTargets {
             bootstrap_open,
             cases,
             ambiguous_active_cases,
             _reservations: reservations,
+            selected,
         }
     }
 }
@@ -539,6 +572,7 @@ mod tests {
                 dependencies: Arc::new(DependencyActivity::default()),
                 recovering: false,
                 source_completed: false,
+                observation: None,
             });
             state.active.push(ActiveCaseRegistration {
                 case: second,
@@ -547,6 +581,7 @@ mod tests {
                 dependencies: Arc::new(DependencyActivity::default()),
                 recovering: false,
                 source_completed: false,
+                observation: None,
             });
         }
 

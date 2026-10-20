@@ -196,6 +196,10 @@ pub struct RedisExchangeEvent {
     pub args: Vec<BodyCapture>,
     pub response_kind: String,
     pub response: BodyCapture,
+    /// A completed capture window may contain no RPC callback. Legacy evidence
+    /// without this marker cannot establish that bounded observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpc_callback_capture: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_snapshot_rule: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -228,6 +232,8 @@ pub struct RedisPubSubPushEvent {
 pub struct RedisRpcRequestRef {
     pub connection_id: Uuid,
     pub sequence: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize)]

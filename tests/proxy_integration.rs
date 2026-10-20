@@ -263,7 +263,7 @@ async fn http_gateway_applies_manual_and_runtime_api_excludes_before_recording()
     let fallback_response = raw_http_get(gateway_addr, "/recording/two").await;
     assert!(fallback_response.contains("fallback"));
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_http_cases(&temp.path().join("recordings"), &[("apis/record", 1)], 1, 0).await;
     handle.abort();
     recorder.flush_traffic().await.unwrap();
 
@@ -374,7 +374,13 @@ async fn http_gateway_allows_only_one_active_matched_case() {
     let first_response = first.await.unwrap();
     assert!(first_response.contains("matched"));
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[("apis/record-one", 1)],
+        1,
+        0,
+    )
+    .await;
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
@@ -470,7 +476,13 @@ async fn http_gateway_keeps_matched_case_active_after_downstream_disconnect() {
     .expect("second request should be sent to fallback");
     assert!(second_response.contains("fallback"));
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[("failed/record-one", 1)],
+        0,
+        1,
+    )
+    .await;
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
@@ -543,6 +555,13 @@ async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
             .await
             .contains("matched")
     );
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[("apis/record-default-wildcard", 1)],
+        1,
+        0,
+    )
+    .await;
     assert!(
         raw_http_get(gateway_addr, "/record/default/two")
             .await
@@ -553,18 +572,47 @@ async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
             .await
             .contains("matched")
     );
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[
+            ("apis/record-default-wildcard", 1),
+            ("apis/record-override-wildcard", 1),
+        ],
+        2,
+        0,
+    )
+    .await;
     assert!(
         raw_http_get(gateway_addr, "/record/override/two")
             .await
             .contains("matched")
     );
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[
+            ("apis/record-default-wildcard", 1),
+            ("apis/record-override-wildcard", 2),
+        ],
+        3,
+        0,
+    )
+    .await;
     assert!(
         raw_http_get(gateway_addr, "/record/override/three")
             .await
             .contains("fallback")
     );
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[
+            ("apis/record-default-wildcard", 1),
+            ("apis/record-override-wildcard", 2),
+        ],
+        3,
+        0,
+    )
+    .await;
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
@@ -616,7 +664,13 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     let response = raw_http_get(gateway_addr, "/api/users/list").await;
     assert!(response.contains("Content-Encoding: gzip"));
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[("apis/api-users-list", 1)],
+        1,
+        0,
+    )
+    .await;
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
@@ -763,7 +817,16 @@ async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
         Some(traffic_e2e::FakeDnsUpstreamProtocol::Http)
     );
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[(
+            format!("apis/api-v2-k8s-{cluster_id}-user_config").as_str(),
+            1,
+        )],
+        1,
+        0,
+    )
+    .await;
     handle.abort();
     proxy_listener.abort();
 
@@ -824,7 +887,13 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
     let response = raw_http_get(gateway_addr, "/api/users/list").await;
     assert!(response.contains(r#"{"ok":true"#));
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_http_cases(
+        &temp.path().join("recordings"),
+        &[("failed/api-users-list", 1)],
+        0,
+        1,
+    )
+    .await;
     handle.abort();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
@@ -1216,6 +1285,49 @@ async fn wait_for_port(addr: SocketAddr) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("port {addr} did not open");
+}
+
+async fn wait_for_http_cases(
+    recordings: &Path,
+    groups: &[(&str, usize)],
+    published: u64,
+    failed: u64,
+) {
+    let run = only_recording_run_dir(recordings);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let complete = groups.iter().all(|(group, expected)| {
+                let Ok(cases) = std::fs::read_dir(run.join(group)) else {
+                    return false;
+                };
+                let marker = if group.starts_with("failed/") {
+                    "recording-error.json"
+                } else {
+                    "expected-response.json"
+                };
+                cases
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.path().join(marker).is_file())
+                    .count()
+                    == *expected
+            });
+            let report = std::fs::read(run.join("recording-run.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+            if complete
+                && report.is_some_and(|report| {
+                    report["published_cases"] == published && report["failed_cases"] == failed
+                })
+            {
+                // Publication and slot release finish in the owner's next poll.
+                tokio::task::yield_now().await;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("ordinary HTTP case did not finish asynchronous publication");
 }
 
 fn only_recording_run_dir(recordings_dir: &Path) -> PathBuf {

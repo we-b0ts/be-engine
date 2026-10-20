@@ -281,6 +281,14 @@ pub(crate) async fn handle(
             return simple_response(StatusCode::BAD_REQUEST, "interaction input incomplete");
         }
     };
+    state.configure_case_observation(
+        case.id,
+        &method,
+        &uri,
+        &body,
+        started,
+        std::time::Duration::from_millis(config.interaction.max_duration_ms),
+    );
     let (close, _) = watch::channel(None);
     let session = Arc::new(Session {
         state: state.clone(),

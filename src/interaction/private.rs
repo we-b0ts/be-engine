@@ -194,6 +194,13 @@ pub(crate) fn protect_output(response: &mut Value, path: &Path) -> Result<()> {
         response["headers"] = json!({});
     }
     visit_events(response, |data, label| protect_string(data, &cipher, label))?;
+    if let Some(data) = response.pointer_mut("/interaction/end/partial_message/data") {
+        protect_string(
+            data,
+            &cipher,
+            &format!("interaction-output/v1/{role}/partial-message"),
+        )?;
+    }
     if let Some(reason) = response.pointer_mut("/interaction/end/close/reason") {
         protect_string(
             reason,
@@ -242,6 +249,13 @@ pub(crate) fn decrypt_output(response: &mut Value, path: &Path) -> Result<bool> 
     visit_events(response, |data, label| {
         decrypt_string(data, &cipher, label).map(|_| ())
     })?;
+    if let Some(data) = response.pointer_mut("/interaction/end/partial_message/data") {
+        decrypt_string(
+            data,
+            &cipher,
+            &format!("interaction-output/v1/{role}/partial-message"),
+        )?;
+    }
     if let Some(reason) = response.pointer_mut("/interaction/end/close/reason") {
         decrypt_string(
             reason,
@@ -445,5 +459,20 @@ mod tests {
         if std::env::var(crate::request_headers::ENCRYPTION_KEY_ENV).is_err() {
             assert!(decrypt_request(&mut request, &unrelated.path().join("request.json")).is_err());
         }
+    }
+
+    #[test]
+    fn cancelled_partial_message_is_authenticated_private_output() {
+        let (_project, path) = project();
+        let original = json!({"headers":{},"interaction":{"events":[],"end":{
+            "reason":"client_close", "partial_message":{"kind":"binary","data":"cGFydGlhbC1zZWNyZXQ="}}}});
+        let mut protected = original.clone();
+        protect_output(&mut protected, &path).unwrap();
+        assert!(!protected.to_string().contains("cGFydGlhbC1zZWNyZXQ="));
+        let mut tampered = protected.clone();
+        tampered["interaction"]["end"]["partial_message"]["data"] = json!("cGFydGlhbC1zZWNyZXQ=");
+        assert!(decrypt_output(&mut tampered, &path).is_err());
+        decrypt_output(&mut protected, &path).unwrap();
+        assert_eq!(protected["interaction"], original["interaction"]);
     }
 }

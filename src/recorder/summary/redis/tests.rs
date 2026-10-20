@@ -14,6 +14,7 @@ fn capture(value: &str) -> BodyCapture {
 
 fn exchange() -> RedisExchangeEvent {
     RedisExchangeEvent {
+        rpc_callback_capture: None,
         id: uuid::Uuid::new_v4(),
         connection_id: uuid::Uuid::new_v4(),
         sequence: 1,

@@ -23,6 +23,15 @@ pub(super) fn validate_input(
     match (input, expected) {
         (Some(input), Some(output)) => {
             input.validate()?;
+            if let Some(partial) = partial_message(output)? {
+                ensure!(
+                    input.actions.iter().any(|action| matches!(
+                        action.action,
+                        crate::interaction::model::InputActionKind::Close { .. }
+                    )) && partial.len() <= input.policy.max_message_bytes,
+                    "partial Source stream requires a bounded recorded client close input"
+                );
+            }
             ensure!(
                 input.protocol == output.protocol,
                 "Source interaction input/output protocols disagree"
@@ -72,6 +81,9 @@ pub(super) fn compare(
     if expected.end.close != actual.end.close {
         mismatch(report, "$interaction/end/close");
     }
+    if partial_message(expected)? != partial_message(actual)? {
+        mismatch(report, "$interaction/end/partial_message");
+    }
     let expected_events = comparable(expected)?;
     let actual_events = comparable(actual)?;
     if expected_events.len() != actual_events.len() {
@@ -83,6 +95,21 @@ pub(super) fn compare(
         }
     }
     Ok(())
+}
+
+fn partial_message(observation: &OutputObservation) -> Result<Option<Vec<u8>>> {
+    let Some(message) = &observation.end.partial_message else {
+        return Ok(None);
+    };
+    ensure!(
+        observation.end.reason == crate::interaction::model::EndReason::ClientClose
+            && matches!(observation.protocol, Protocol::Sse | Protocol::Ndjson)
+            && message.kind == MessageKind::Binary,
+        "partial stream message requires binary evidence of a framed HTTP client close"
+    );
+    let bytes = message.decode()?;
+    ensure!(!bytes.is_empty(), "partial stream message cannot be empty");
+    Ok(Some(bytes))
 }
 
 fn comparable(observation: &OutputObservation) -> Result<Vec<WireMessage>> {
@@ -186,6 +213,7 @@ mod tests {
                 offset_ms: 100,
                 pending: Vec::new(),
                 clean: true,
+                partial_message: None,
                 close: None,
             },
         }
@@ -213,5 +241,24 @@ mod tests {
             normalize_transport_identity(&WireMessage::text("42[\"event\",{\"sid\":\"target\"}]"))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn partial_stream_prefix_is_exact_and_never_a_successful_eof() {
+        let mut expected = output(Protocol::Sse, &[]);
+        expected.end.reason = EndReason::ClientClose;
+        expected.end.partial_message = Some(WireMessage::binary(b"data: prefix"));
+        let mut actual = expected.clone();
+        assert_eq!(
+            partial_message(&expected).unwrap(),
+            partial_message(&actual).unwrap()
+        );
+        actual.end.partial_message = Some(WireMessage::binary(b"data: different"));
+        assert_ne!(
+            partial_message(&expected).unwrap(),
+            partial_message(&actual).unwrap()
+        );
+        actual.end.reason = EndReason::ServerEof;
+        assert!(partial_message(&actual).is_err());
     }
 }

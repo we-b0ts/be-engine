@@ -48,6 +48,7 @@ pub mod record_service;
 mod recorded_request;
 mod recorder;
 mod recording_api;
+mod recording_case;
 mod recording_completion;
 mod recording_control;
 mod recording_network;
@@ -73,7 +74,6 @@ mod verification_progress;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use hyper_util::client::legacy::Client;
@@ -84,7 +84,7 @@ use uuid::Uuid;
 use crate::access_policy::{AccessDecision, OperationClass, decide};
 use crate::active_case::{
     ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection,
-    DependencyDrainResult, DependencyTargets,
+    DependencyTargets,
 };
 use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
@@ -92,8 +92,9 @@ use crate::recorder::CaseInvalidation;
 use crate::recorder::background::BackgroundDependencyMatcher;
 use crate::recorder::cache_snapshot::{CacheSnapshotReservation, CacheSnapshotStore};
 use crate::recorder::connections::DependencyConnections;
+#[cfg(test)]
 use crate::recorder::readiness::PostReadyWaitOutcome;
-use crate::recording_control::{RecordingLifecycle, RecordingListener};
+use crate::recording_control::RecordingLifecycle;
 
 /// Numeric UID used by every containerized process whose dependency traffic is intercepted.
 pub const TRAFFIC_PROCESS_UID: u32 = 998;
@@ -594,216 +595,6 @@ impl AppState {
         self.inner.upstream_tls_config.clone()
     }
 
-    pub(crate) fn try_reserve_active_case(
-        &self,
-        case: CaseContext,
-    ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
-        self.inner.active_cases.try_reserve(case)
-    }
-
-    pub(crate) async fn close_bootstrap(&self, reason: &'static str) -> Result<bool> {
-        let closed = self.inner.active_cases.close_bootstrap();
-        if !closed {
-            return Ok(false);
-        }
-        info!(reason, "bootstrap dependency window closed");
-        self.seal_bootstrap_dependencies(reason).await?;
-        if !self.inner.active_cases.enable_case_matching() {
-            return Ok(false);
-        }
-        self.inner.recording_lifecycle.mark_source_ready();
-        Ok(true)
-    }
-
-    pub(crate) async fn seal_bootstrap_dependencies(&self, reason: &'static str) -> Result<()> {
-        if self.inner.active_cases.is_bootstrap_sealed() {
-            return Ok(());
-        }
-        self.inner
-            .active_cases
-            .wait_for_bootstrap_dependencies()
-            .await;
-        if let Err(error) = self.recorder().seal_bootstrap_dependencies().await {
-            self.inner.recording_lifecycle.mark_failed(&error);
-            return Err(error).context("failed to seal bootstrap dependencies");
-        }
-        self.inner.active_cases.mark_bootstrap_sealed();
-        info!(reason, "bootstrap dependencies sealed");
-        Ok(())
-    }
-
-    pub(crate) fn activate_case_dependencies(
-        &self,
-        guard: &ActiveCaseGuard,
-    ) -> Result<(), ActiveCaseActivationError> {
-        guard.activate_dependencies()
-    }
-
-    pub(crate) fn is_bootstrap_open(&self) -> bool {
-        self.inner.active_cases.is_bootstrap_open()
-    }
-
-    pub(crate) fn has_background_initial_loads(&self) -> bool {
-        self.inner.process_owned_dependencies.has_initial_loads()
-    }
-
-    pub(crate) async fn wait_for_background_initial_loads(&self) -> Result<()> {
-        self.inner
-            .process_owned_dependencies
-            .ensure_resources_resolved()?;
-        self.inner
-            .process_owned_dependencies
-            .wait_for_initial_loads()
-            .await;
-        Ok(())
-    }
-
-    pub(crate) fn record_redis_cache_request(&self) {
-        self.inner
-            .process_owned_dependencies
-            .record_redis_cache_request();
-    }
-
-    pub(crate) async fn wait_for_post_ready_admission(
-        &self,
-        ready_at: tokio::time::Instant,
-    ) -> Result<PostReadyWaitOutcome> {
-        let maximum_wait = self.config().recording.post_ready_max_wait();
-        let maximum_deadline = ready_at + maximum_wait;
-        if tokio::time::timeout_at(maximum_deadline, self.wait_for_background_initial_loads())
-            .await
-            .is_err()
-        {
-            return Ok(PostReadyWaitOutcome::MaximumWaitElapsed);
-        }
-        Ok(self
-            .inner
-            .process_owned_dependencies
-            .wait_for_redis_cache_quiet_period(
-                ready_at,
-                self.config().recording.post_ready_quiet_period(),
-                maximum_wait,
-            )
-            .await)
-    }
-
-    pub(crate) fn begin_case_quiescing(&self) -> bool {
-        self.inner.active_cases.begin_quiescing()
-    }
-
-    pub(crate) fn recording_lifecycle_phase(&self) -> &'static str {
-        if self.inner.active_cases.is_quiescing() {
-            "quiescing"
-        } else {
-            "running"
-        }
-    }
-
-    pub(crate) fn mark_recording_listener_ready(&self, listener: RecordingListener) {
-        self.inner.recording_lifecycle.mark_listener_ready(listener);
-    }
-
-    pub(crate) async fn mark_recording_upstream_ready(
-        &self,
-        listener: RecordingListener,
-        reason: &'static str,
-    ) -> Result<bool> {
-        if !self.inner.recording_lifecycle.mark_upstream_ready(listener) {
-            return Ok(false);
-        }
-        let ready_at = tokio::time::Instant::now();
-        if self.has_background_initial_loads()
-            || !self.config().recording.post_ready_quiet_period().is_zero()
-        {
-            info!(
-                reason,
-                post_ready_quiet_ms = self
-                    .config()
-                    .recording
-                    .post_ready_quiet_period()
-                    .as_millis(),
-                post_ready_max_wait_ms = self.config().recording.post_ready_max_wait_ms,
-                waits_for_background_initial_load = self.has_background_initial_loads(),
-                "all enabled upstreams ready; waiting for case admission prerequisites"
-            );
-        }
-        let wait_outcome = self
-            .wait_for_post_ready_admission(ready_at)
-            .await
-            .context("post-ready process-owned dependency observation failed with the source")?;
-        if wait_outcome == PostReadyWaitOutcome::MaximumWaitElapsed {
-            warn!(
-                post_ready_max_wait_ms = self.config().recording.post_ready_max_wait_ms,
-                "post-ready process-owned dependency observation reached its hard limit; continuing recording"
-            );
-        }
-        self.close_bootstrap(reason).await
-    }
-
-    pub(crate) async fn wait_for_active_case_shutdown_drain(&self) -> bool {
-        self.inner
-            .active_cases
-            .wait_for_no_active_case(Duration::from_millis(
-                self.config().recording.shutdown_case_drain_timeout_ms,
-            ))
-            .await
-    }
-
-    pub(crate) fn active_case_invalidation(&self, case_id: Uuid) -> Option<CaseInvalidation> {
-        self.inner.active_cases.invalidation_for(case_id)
-    }
-
-    pub(crate) fn invalidate_active_case(
-        &self,
-        case_id: Uuid,
-        invalidation: CaseInvalidation,
-    ) -> Option<CaseContext> {
-        self.inner
-            .active_cases
-            .invalidate_case(case_id, invalidation)
-    }
-
-    pub(crate) async fn drain_active_case_dependencies(
-        &self,
-        case_id: Uuid,
-    ) -> Option<CaseInvalidation> {
-        let post_response_window = Duration::from_millis(
-            self.config()
-                .recording
-                .case_dependency_post_response_window_ms,
-        );
-        let timeout =
-            Duration::from_millis(self.config().recording.case_dependency_drain_timeout_ms);
-        let result = self
-            .inner
-            .active_cases
-            .drain_case_dependencies(case_id, post_response_window, timeout)
-            .await;
-        match result {
-            DependencyDrainResult::Drained => None,
-            DependencyDrainResult::TimedOut => {
-                warn!(
-                    case_id = %case_id,
-                    post_response_window_ms = post_response_window.as_millis(),
-                    timeout_ms = timeout.as_millis(),
-                    "recording case in-flight dependency drain timed out"
-                );
-                Some(CaseInvalidation::new(
-                    "dependency_drain_timeout",
-                    format!(
-                        "case dependencies accepted during the {} ms post-response window did not complete within {} ms after dependency admission closed",
-                        post_response_window.as_millis(),
-                        timeout.as_millis()
-                    ),
-                ))
-            }
-        }
-    }
-
-    pub(crate) fn capture_dependency_targets(&self) -> DependencyTargets {
-        self.inner.active_cases.current_targets_for_event()
-    }
-
     pub(crate) fn dependency_connections(&self) -> &DependencyConnections {
         &self.inner.dependency_connections
     }
@@ -896,7 +687,27 @@ impl AppState {
                     matched_by: name.to_string(),
                 })
         });
+        // A later callback can reference an idle RPC publisher. Preserve that
+        // finite protocol witness alongside the callback even without a Case.
+        let global_attribution = global_attribution.or_else(|| {
+            (targets.cases.is_empty()
+                && !suppress_default_global
+                && !targets.bootstrap_open
+                && targets.ambiguous_active_cases == 0
+                && matches!(&event, RecorderEvent::RedisExchange(exchange)
+                    if exchange.rpc_callback_capture.as_deref() == Some("bounded_window")))
+            .then(|| crate::recorder::GlobalDependencyAttribution {
+                reason: "rpc_publisher",
+                phase: "runtime",
+                matched_by: "socketio_rpc_protocol".to_owned(),
+            })
+        });
         let event_type = event.kind();
+        self.inner.active_cases.observe_dependency_event(
+            &event,
+            &targets,
+            global_attribution.is_none(),
+        );
         if let Err(err) = self.recorder().try_record_event(
             event,
             targets,

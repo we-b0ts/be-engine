@@ -121,6 +121,17 @@ stream comparison concatenates observed bytes. Missing, extra or reordered
 business outputs fail, and incomplete closure cannot pass even if both bodies
 match. Protocol heartbeat schedules may differ.
 
+An observed HTTP client cancellation may interrupt an SSE event or NDJSON record.
+The recorder retains complete semantic messages and the exact bounded unfinished
+wire suffix in `interaction.end.partial_message`, using binary encoding. This
+field is authenticated and encrypted with the other output evidence. It is valid
+only with a recorded `client_close` input; pending response identities remain
+pending. Replay follows that input's cancellation time and independently captures
+Target's suffix. Assertions compare the suffix bytes exactly, so missing or changed
+partial output fails. This does not admit a partial message at normal server EOF,
+business-idle closure, a transport error, or a capture-budget limit. Existing failed
+recordings are immutable and require fresh recording to acquire this evidence.
+
 Only a Source-proven serial input gap can be compressed to `min(gap,100ms)`;
 Replay waits for the corresponding **actual Target** completion first. Overlap
 timing and dependency response delays remain intact. The final business idle
@@ -234,3 +245,14 @@ ordinary JSON response cannot be interpreted as an empty successful SSE stream.
 HTTP request streaming uploads,
 HTTP/2 bidirectional streaming and cross-request MCP session grouping are outside
 this first adapter. Ordinary HTTP body handling is unchanged.
+
+Socket.IO Redis-adapter callback correlation does not keep a completed Redis
+PUBLISH in flight until the callback arrives. A callback inside the original
+Case's admission window retains that Case; a later callback is Global evidence
+with its original publisher Case and exact connection/sequence reference. Replay
+links it only to that publisher, validates the endpoint/channel/session/envelope,
+and consumes the callback once. Newly recorded RPC PUBLISH exchanges carry
+`rpc_callback_capture: bounded_window`: a sealed window with no callback replays
+only the recorded PUBLISH response and emits no fabricated callback. The marker
+is a bounded capture contract, not proof that a callback can never arrive. Legacy
+RPC recordings without callback evidence still require fresh recording.

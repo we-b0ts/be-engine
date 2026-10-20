@@ -2,6 +2,8 @@
 
 use super::*;
 
+pub(super) const FINITE_RESPONSE: &str = "x-traffic-e2e-finite-response";
+
 pub(super) const CASE_ID: &str = "x-traffic-e2e-case-id";
 pub(super) const SESSION_ID: &str = "x-traffic-e2e-session-id";
 
@@ -19,6 +21,7 @@ pub(super) fn response(status: StatusCode, message: &'static str) -> Response<Re
 }
 
 pub(super) fn strip_private(headers: &mut hyper::HeaderMap) {
+    headers.remove(FINITE_RESPONSE);
     headers.remove(CASE_ID);
     headers.remove(SESSION_ID);
 }
@@ -47,6 +50,18 @@ pub(super) fn is_interaction(request: &Request<Incoming>) -> bool {
 
 pub(super) fn remove_hop_headers(headers: &mut hyper::HeaderMap) {
     remove_hop_headers_with_upgrade(headers, false);
+}
+
+pub(super) fn remove_response_hop_headers(headers: &mut hyper::HeaderMap) {
+    let trailers = headers
+        .get_all(hyper::header::TRAILER)
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    remove_hop_headers(headers);
+    for trailer in trailers {
+        headers.append(hyper::header::TRAILER, trailer);
+    }
 }
 
 pub(super) fn remove_hop_headers_with_upgrade(headers: &mut hyper::HeaderMap, upgrade: bool) {

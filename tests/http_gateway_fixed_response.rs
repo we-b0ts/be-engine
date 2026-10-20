@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::Path;
 use std::time::Duration;
 
 use tempfile::tempdir;
@@ -107,17 +108,21 @@ async fn exact_exclusion_returns_fixed_404_and_records_other_paths_and_methods()
         .path();
     assert!(!run_dir.join("apis").exists());
     assert!(!run_dir.join("staging").exists());
-    for (method, path) in [
+    for (index, (method, path)) in [
         ("GET", "/api/jobs/42"),
         ("GET", "/api/jobs/"),
         ("GET", "/api/jobs-archive"),
         ("POST", "/api/jobs"),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let response = raw_http_request(gateway_addr, method, path, "", "").await;
         assert!(
             response.contains("200 OK") && response.ends_with("matched"),
             "{response}"
         );
+        wait_for_case_counts(&run_dir, index + 1, 0).await;
     }
     let published_count: usize = std::fs::read_dir(run_dir.join("apis"))
         .unwrap()
@@ -327,6 +332,7 @@ async fn disabled_streaming_uses_fixed_fallback_before_dispatch_and_keeps_case_c
     )
     .await;
     assert!(response.contains("200 OK"), "{response}");
+    wait_for_case_counts(&run_dir, 1, 0).await;
     assert!(run_dir.join("apis/api-mcp-knowledge-sse").is_dir());
     normal_source.await.unwrap();
     gateway.abort();
@@ -447,6 +453,26 @@ async fn wait_for_port(addr: SocketAddr) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("port {addr} did not open");
+}
+
+async fn wait_for_case_counts(run_dir: &Path, published: usize, failed: usize) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let report = std::fs::read(run_dir.join("recording-run.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+            if report.is_some_and(|report| {
+                report["published_cases"] == published && report["failed_cases"] == failed
+            }) {
+                // Publication and admission release finish in the owner's next poll.
+                tokio::task::yield_now().await;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("ordinary HTTP case must finish asynchronous publication");
 }
 
 fn free_addr() -> SocketAddr {

@@ -144,7 +144,15 @@ pub(super) async fn execute(
             }
         }
     };
-    decoder.validate_boundary()?;
+    let partial_message = if reason == EndReason::ClientClose {
+        decoder.partial_message()
+    } else {
+        decoder.validate_boundary()?;
+        None
+    };
+    if let Some(partial) = &partial_message {
+        lifecycle.record_message(partial.decode()?.len())?;
+    }
     if reason == EndReason::ClientClose {
         // HTTP/1 FIN permits the server to finish its response. This semantic
         // cancellation needs a connection end on its own dedicated transport.
@@ -152,6 +160,7 @@ pub(super) async fn execute(
     }
     drop(body);
     let mut end = lifecycle.end_observation(reason, elapsed_ms(started), transport_clean);
+    end.partial_message = partial_message;
     if reason == EndReason::ClientClose {
         end.close = Some(CloseObservation {
             code: None,

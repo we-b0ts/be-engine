@@ -84,6 +84,7 @@ fn redis_get_rule() -> BackgroundDependencyRuleConfig {
 
 fn redis_event(port: u16, command: &str, key: &[u8]) -> RecorderEvent {
     RecorderEvent::RedisExchange(RedisExchangeEvent {
+        rpc_callback_capture: None,
         id: Uuid::new_v4(),
         connection_id: Uuid::new_v4(),
         sequence: 1,

@@ -68,6 +68,11 @@ pub(super) async fn record_exchange(
         )
         && response_kind == RedisFrameKind::Array
         && outcome == DependencyExchangeOutcome::Response;
+    let rpc_callback_capture =
+        crate::redis::socketio_rpc::request(&pending.command.name, &pending.command.args)
+            .ok()
+            .flatten()
+            .map(|_| "bounded_window".to_owned());
     let event = RecorderEvent::RedisExchange(RedisExchangeEvent {
         id: Uuid::new_v4(),
         connection_id,
@@ -86,6 +91,7 @@ pub(super) async fn record_exchange(
         args,
         response_kind: response_kind.as_str().to_string(),
         response,
+        rpc_callback_capture,
         cache_snapshot_rule: pending.cache_snapshot_rule,
         cache_snapshot_hit: pending.cache_snapshot_hit,
         session_setup: pending.session_setup,

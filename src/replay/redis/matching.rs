@@ -36,7 +36,7 @@ impl RedisReplayState {
         }
         let mut rpc_exchange;
         let rpc_comparison;
-        let (exchange, args) = if exchange.rpc_push.is_some() {
+        let (exchange, args) = if self.pubsub.is_rpc_source(exchange) {
             let Some(comparison) = self.pubsub.comparison_args(exchange, args) else {
                 return false;
             };
@@ -44,6 +44,7 @@ impl RedisReplayState {
             rpc_exchange = exchange.clone();
             rpc_exchange.args = rpc_comparison.source.clone();
             rpc_exchange.rpc_push = None;
+            rpc_exchange.record.rpc_callback_capture = None;
             (&rpc_exchange, rpc_comparison.actual.as_slice())
         } else {
             (exchange, args)
@@ -341,7 +342,7 @@ impl RedisReplayState {
         }
         let mut rpc_exchange;
         let rpc_comparison;
-        let (comparison_exchange, comparison_args) = if exchange.rpc_push.is_some() {
+        let (comparison_exchange, comparison_args) = if self.pubsub.is_rpc_source(exchange) {
             rpc_comparison = self
                 .pubsub
                 .comparison_args(exchange, args)
@@ -349,6 +350,7 @@ impl RedisReplayState {
             rpc_exchange = exchange.clone();
             rpc_exchange.args = rpc_comparison.source.clone();
             rpc_exchange.rpc_push = None;
+            rpc_exchange.record.rpc_callback_capture = None;
             (&rpc_exchange, rpc_comparison.actual.as_slice())
         } else {
             (exchange, args)

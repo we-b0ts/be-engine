@@ -11,6 +11,8 @@ pub(super) struct Bindings {
     callback_targets: HashMap<(Realm, rpc::Identity), rpc::Identity>,
     host_targets: HashMap<(Realm, String), String>,
     requests: HashMap<RequestKey, usize>,
+    wire_references: std::collections::HashSet<(Uuid, u64)>,
+    publishers: std::collections::HashSet<(Uuid, u64)>,
     unlinked: HashMap<Scope, usize>,
 }
 impl Bindings {
@@ -22,7 +24,20 @@ impl Bindings {
         index: usize,
     ) -> Result<()> {
         if let Some(request) = &record.rpc_request {
-            let scope = (source == ReplaySource::Case, case_id.map(str::to_owned));
+            let scope = if let Some(origin) = &request.case_id {
+                ensure!(
+                    source == ReplaySource::Global || case_id == Some(origin.as_str()),
+                    "RPC callback original case differs from its Case storage"
+                );
+                (true, Some(origin.clone()))
+            } else {
+                (source == ReplaySource::Case, case_id.map(str::to_owned))
+            };
+            ensure!(
+                self.wire_references
+                    .insert((request.connection_id, request.sequence)),
+                "duplicate Redis RPC callback reference"
+            );
             let key = (scope.clone(), request.connection_id, request.sequence);
             ensure!(
                 !self.requests.contains_key(&key),
@@ -42,17 +57,58 @@ impl PubSubState {
         case_id: Option<&str>,
         args: &[Vec<u8>],
     ) -> Result<Option<usize>> {
+        ensure!(
+            record
+                .rpc_callback_capture
+                .as_deref()
+                .is_none_or(|value| value == "bounded_window"),
+            "unsupported Redis RPC callback capture contract"
+        );
         if record.response_kind == "error" || record.outcome != DependencyExchangeOutcome::Response
         {
             return Ok(None);
         }
         let Some(request) = rpc::request(&record.command, args)? else {
+            ensure!(
+                record.rpc_callback_capture.is_none(),
+                "RPC capture marker requires a supported RPC request"
+            );
             return Ok(None);
         };
+        ensure!(
+            self.bindings
+                .publishers
+                .insert((record.connection_id, record.sequence)),
+            "duplicate Redis RPC publisher wire identity"
+        );
         let scope = (source == ReplaySource::Case, case_id.map(str::to_owned));
-        let index = *self.bindings.requests.get(&(scope.clone(), record.connection_id, record.sequence))
-            .context("Redis Pub/Sub RPC callback evidence missing; refresh the recording with callback capture enabled")?;
+        let index = self
+            .bindings
+            .requests
+            .get(&(scope.clone(), record.connection_id, record.sequence))
+            .copied();
+        let Some(index) = index else {
+            ensure!(
+                !self
+                    .bindings
+                    .wire_references
+                    .contains(&(record.connection_id, record.sequence)),
+                "RPC callback original scope differs from its publisher"
+            );
+            ensure!(
+                record.rpc_callback_capture.as_deref() == Some("bounded_window"),
+                "Redis Pub/Sub RPC callback evidence missing; refresh the recording with callback capture enabled"
+            );
+            // A sealed modern window may contain no callback. Retain the finite
+            // PUBLISH and its real Redis response; synthesize no RPC reply.
+            return Ok(None);
+        };
         let push = &mut self.pushes[index];
+        ensure!(
+            push.source == source
+                || record.rpc_callback_capture.as_deref() == Some("bounded_window"),
+            "cross-scope RPC callback requires a bounded-window publisher"
+        );
         ensure!(!push.linked, "duplicate Redis RPC callback reference");
         ensure!(
             normalize_host(&push.record.target_host) == normalize_host(&record.target_host)
@@ -89,12 +145,19 @@ impl PubSubState {
         Ok(())
     }
 
+    pub(in crate::replay::redis) fn is_rpc_source(&self, exchange: &ReplayExchange) -> bool {
+        exchange.rpc_push.is_some()
+            || exchange.record.rpc_callback_capture.as_deref() == Some("bounded_window")
+    }
+
     pub(in crate::replay::redis) fn matches(
         &self,
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<bool> {
-        exchange.rpc_push?;
+        if !self.is_rpc_source(exchange) {
+            return None;
+        }
         Some(
             self.compatible_request(exchange, args)
                 .is_some_and(|(source, actual)| source.matches(&actual)),
@@ -123,7 +186,9 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<(rpc::Request, rpc::Request)> {
-        exchange.rpc_push?;
+        if !self.is_rpc_source(exchange) {
+            return None;
+        }
         let source = rpc::request(&exchange.record.command, &exchange.args)
             .ok()
             .flatten()?;
@@ -170,7 +235,9 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<Vec<u8>> {
-        let index = exchange.rpc_push?;
+        if !self.is_rpc_source(exchange) {
+            return None;
+        }
         let source = rpc::request(&exchange.record.command, &exchange.args)
             .ok()
             .flatten()?;
@@ -200,6 +267,7 @@ impl PubSubState {
         self.bindings
             .hosts
             .insert((realm, source.identity.host), actual.identity.host.clone());
+        let index = exchange.rpc_push?;
         let raw = self.pushes[index].bytes().ok()?;
         let frame = redis_command(&bytes::Bytes::copy_from_slice(&raw)).expect("validated push");
         let mut parts = frame.args;
@@ -215,6 +283,14 @@ impl PubSubState {
         let mut values = vec![name.as_bytes()];
         values.extend(parts.iter().map(Vec::as_slice));
         Some(crate::redis::encode_array(&values))
+    }
+
+    pub(in crate::replay::redis) fn rpc_is_detached(&self, matched: &MatchedRedisExchange) -> bool {
+        // Link admission already proved this exact publisher and callback. The
+        // Target may issue a Global request while any API happens to be active.
+        matched
+            .rpc_push
+            .is_some_and(|index| self.pushes[index].source == ReplaySource::Global)
     }
 
     pub(in crate::replay::redis) fn rpc_delivery(

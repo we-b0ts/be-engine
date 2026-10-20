@@ -15,8 +15,8 @@ use crate::ProxyClient;
 pub(super) struct AcquiredResponse {
     pub(super) status: StatusCode,
     pub(super) headers: HeaderMap,
-    pub(super) body: Bytes,
-    pub(super) stream: Option<Incoming>,
+    pub(super) body: Incoming,
+    pub(super) deadline: Instant,
 }
 
 /// An offer is only an admission/encoding hint, never a response declaration.
@@ -53,7 +53,6 @@ pub(super) async fn acquire(
     client: &ProxyClient,
     request: Request<Full<Bytes>>,
     request_timeout: Duration,
-    raw_streaming: bool,
     mut recovery: Option<&mut TimeoutRecovery>,
 ) -> Result<AcquiredResponse> {
     let deadline = Instant::now() + request_timeout;
@@ -78,43 +77,42 @@ pub(super) async fn acquire(
             return Err(elapsed.into());
         }
     };
-    let status = response.status();
-    let headers = response.headers().clone();
-    if super::interaction::response_protocol(&headers).is_some_and(|protocol| {
-        protocol != crate::interaction::model::Protocol::RawStream || raw_streaming
-    }) {
-        return Ok(AcquiredResponse {
-            status,
-            headers,
-            body: Bytes::new(),
-            stream: Some(response.into_body()),
-        });
-    }
-    let body = {
-        let mut response_body = response.into_body();
-        match timeout_at(deadline, (&mut response_body).collect()).await {
-            Ok(body) => body
-                .context("failed to read gateway upstream response body")?
-                .to_bytes(),
-            Err(elapsed) => {
-                if let Some(recovery) = recovery.as_mut() {
-                    recovery.begin().await;
-                    let result = drain_body(&mut response_body).await;
-                    recovery.source_finished(&result).await;
-                }
-                return Err(elapsed.into());
-            }
-        }
-    };
+    let (parts, body) = response.into_parts();
     Ok(AcquiredResponse {
-        status,
-        headers,
+        status: parts.status,
+        headers: parts.headers,
         body,
-        stream: None,
+        deadline,
     })
 }
 
-async fn drain_body(body: &mut Incoming) -> Result<()> {
+pub(super) async fn collect_body(
+    body: &mut Incoming,
+    deadline: Instant,
+    recovery: Option<&mut TimeoutRecovery>,
+) -> Result<Bytes> {
+    match timeout_at(deadline, (&mut *body).collect()).await {
+        Ok(result) => Ok(result
+            .context("failed to read gateway upstream response body")?
+            .to_bytes()),
+        Err(elapsed) => {
+            if let Some(recovery) = recovery {
+                recovery.begin().await;
+                let result = drain_body(body).await;
+                recovery.source_finished(&result).await;
+            }
+            Err(elapsed.into())
+        }
+    }
+}
+
+pub(super) fn is_interaction(headers: &HeaderMap, raw_streaming: bool) -> bool {
+    super::interaction::response_protocol(headers).is_some_and(|protocol| {
+        protocol != crate::interaction::model::Protocol::RawStream || raw_streaming
+    })
+}
+
+pub(super) async fn drain_body(body: &mut Incoming) -> Result<()> {
     // The response is already a timeout. Observe completion without retaining
     // late response bytes, including potentially unbounded event streams.
     while let Some(frame) = body.frame().await {

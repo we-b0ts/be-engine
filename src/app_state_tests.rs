@@ -210,6 +210,7 @@ fn motan_dependency(group: &str, interface_name: &str, method_name: &str) -> Rec
 
 fn redis_dependency(host: &str, port: u16, key: &str) -> RecorderEvent {
     RecorderEvent::RedisExchange(RedisExchangeEvent {
+        rpc_callback_capture: None,
         id: Uuid::new_v4(),
         connection_id: Uuid::new_v4(),
         sequence: 1,
@@ -243,6 +244,7 @@ fn redis_dependency(host: &str, port: u16, key: &str) -> RecorderEvent {
 
 fn redis_get_dependency(host: &str, port: u16, key: &str) -> RecorderEvent {
     RecorderEvent::RedisExchange(RedisExchangeEvent {
+        rpc_callback_capture: None,
         id: Uuid::new_v4(),
         connection_id: Uuid::new_v4(),
         sequence: 1,

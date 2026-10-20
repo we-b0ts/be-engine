@@ -147,21 +147,37 @@ async fn run(
         .lock()
         .expect("interaction observation poisoned")
         .finish(reason, session.now(), transport_clean)?;
-    // Preserve the same post-response attribution window and in-flight drain
-    // used by finite HTTP cases. Background traffic keeps its existing policy.
-    let drain = match tokio::time::timeout_at(
-        cleanup_deadline,
+    let primary_clean = output.end.clean;
+    let observation_deadline = session
+        .state
+        .inner
+        .active_cases
+        .observation_deadline(session.case.id);
+    // Transport cleanup keeps its own short budget. API-origin observation has
+    // the primary request's absolute deadline and the same bounded writer drain.
+    let drain = if observation_deadline.is_some() {
+        // This operation owns both its absolute observation limit and the
+        // bounded drain measured from actual admission closure. An outer timer
+        // must not cancel its close/report/publication handoff between phases.
         session
             .state
-            .drain_active_case_dependencies(session.case.id),
-    )
-    .await
-    {
-        Ok(drain) => drain,
-        Err(_) => Some(CaseInvalidation::new(
-            "interaction_cleanup_timeout",
-            "interaction dependency collection exceeded the cleanup deadline",
-        )),
+            .drain_active_case_dependencies(session.case.id)
+            .await
+    } else {
+        match tokio::time::timeout_at(
+            cleanup_deadline,
+            session
+                .state
+                .drain_active_case_dependencies(session.case.id),
+        )
+        .await
+        {
+            Ok(drain) => drain,
+            Err(_) => Some(CaseInvalidation::new(
+                "interaction_cleanup_timeout",
+                "interaction dependency collection exceeded the cleanup deadline",
+            )),
+        }
     };
     let invalidation = session
         .state
@@ -180,12 +196,14 @@ async fn run(
     }
     if !output.end.clean {
         session.state.begin_case_quiescing();
-        session
-            .state
-            .inner
-            .interactions
-            .source_stop
-            .send_replace(true);
+        if observation_deadline.is_none() || !primary_clean || !transport_clean {
+            session
+                .state
+                .inner
+                .interactions
+                .source_stop
+                .send_replace(true);
+        }
     }
     let response = session
         .response

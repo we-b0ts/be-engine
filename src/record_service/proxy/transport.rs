@@ -80,17 +80,38 @@ pub(super) async fn cancelled(cancel: &mut watch::Receiver<bool>) {
 }
 
 pub(super) fn body(body: Incoming, cancel: Option<watch::Receiver<bool>>) -> RelayBody {
-    let stream =
-        futures_util::stream::unfold((body, cancel), |(mut body, mut cancel)| async move {
+    response_body(body, cancel, None)
+}
+
+pub(super) fn finite_body(
+    body: Incoming,
+    cancel: Option<watch::Receiver<bool>>,
+    finished: tokio::sync::oneshot::Sender<()>,
+) -> RelayBody {
+    response_body(body, cancel, Some(finished))
+}
+
+fn response_body(
+    body: Incoming,
+    cancel: Option<watch::Receiver<bool>>,
+    finished: Option<tokio::sync::oneshot::Sender<()>>,
+) -> RelayBody {
+    let finite = finished.is_some();
+    let stream = futures_util::stream::unfold(
+        (body, cancel, finished),
+        move |(mut body, mut cancel, finished)| async move {
             let frame = if let Some(cancel) = &mut cancel {
                 tokio::select! {
-                    frame = body.frame() => frame,
-                    _ = cancelled(cancel) => None,
+                    frame = body.frame() => frame.map(|frame| frame.map_err(|error| Box::new(error) as RelayError)),
+                    _ = cancelled(cancel) => finite.then(|| Err(Box::new(std::io::Error::other("finite response delivery cancelled")) as RelayError)),
                 }
             } else {
-                body.frame().await
+                body.frame()
+                    .await
+                    .map(|frame| frame.map_err(|error| Box::new(error) as RelayError))
             };
-            frame.map(|frame| (frame.map_err(|e| Box::new(e) as RelayError), (body, cancel)))
-        });
+            frame.map(|frame| (frame, (body, cancel, finished)))
+        },
+    );
     http_body_util::StreamBody::new(stream).boxed_unsync()
 }

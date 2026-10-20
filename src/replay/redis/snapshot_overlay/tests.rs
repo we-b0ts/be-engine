@@ -39,6 +39,7 @@ fn capture(data: &str) -> RecordedCapture {
 
 fn record(reason: Option<&str>, response: &str) -> RecordedExchange {
     RecordedExchange {
+        rpc_callback_capture: None,
         id: None,
         timestamp: None,
         request_started_at: None,

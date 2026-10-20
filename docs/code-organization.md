@@ -44,8 +44,14 @@ is unclear.
   framing, completion correlation and monotonic case decisions. They do not read
   expected evidence, persist recordings or own dependency cleanup.
   `gateway/http/interaction` owns primary transport forwarding, session admission,
-  recording and close orchestration. `active_case` retains dependency attribution
-  through the existing fixed post-response window and accepted in-flight drain;
+  recording and close orchestration. Its `ordinary` child forwards finite HTTP
+  frames independently of case-owned capture, drain and publication.
+  `active_case` retains dependency attribution through the fixed post-response
+  window or API-origin selected-activity observation and accepted in-flight drain;
+  its `observation` child owns race-safe selected request reservations and the
+  absolute tail deadline. `recorder/api_origin_observation` owns online origin,
+  selector and captured-identity matching without changing dependency ownership.
+  `recording_case` wires these case lifecycle operations into application state;
   its `interaction` child owns the lease/publication barrier. `record_service/proxy` owns
   external admission lease scheduling and transparent ingress transport; the
   gateway SDK owns atomic Redis reservation operations. `interaction/replay`
@@ -256,8 +262,10 @@ is unclear.
   `recorder/redis/pubsub` owns confirmed subscription state and its `capture`
   child persists generic frames; its `evidence` child retains subscription
   confirmations and same-command Global mirrors without changing Case ownership.
-  `recorder/redis/rpc` retains RPC admission
-  across connections independently of application events. `recorder/redis/events`
+  `recorder/redis/rpc` retains RPC attribution across connections without
+  extending a completed PUBLISH's in-flight lifetime. A callback reacquires
+  its original Case only while admission remains open; later callbacks retain
+  exact publisher references in Global evidence. `recorder/redis/events`
   projects connection/exchange records. `replay/redis/pubsub` owns finite push
   evidence, subscription routing and delivery; its `adapter` child owns
   Socket.IO Redis-adapter identity correlation, while `subscription_evidence`

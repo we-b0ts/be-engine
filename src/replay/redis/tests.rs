@@ -30,6 +30,7 @@ fn cache_snapshot_seed_can_satisfy_repeated_logical_reads() {
     state
         .register_exchange(
             RecordedExchange {
+                rpc_callback_capture: None,
                 id: None,
                 timestamp: None,
                 request_started_at: None,
@@ -94,6 +95,7 @@ fn subscription_confirmation_registers_and_matches() {
     state
         .register_exchange(
             RecordedExchange {
+                rpc_callback_capture: None,
                 id: None,
                 timestamp: None,
                 request_started_at: None,
@@ -152,6 +154,7 @@ fn malformed_subscription_confirmation_is_rejected() {
     let error = state
         .register_exchange(
             RecordedExchange {
+                rpc_callback_capture: None,
                 id: None,
                 timestamp: None,
                 request_started_at: None,

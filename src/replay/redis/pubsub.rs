@@ -37,6 +37,8 @@ pub(in crate::replay) struct RecordedPush {
 pub(in crate::replay) struct RequestRef {
     pub(super) connection_id: Uuid,
     pub(super) sequence: u64,
+    #[serde(default)]
+    pub(super) case_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -401,7 +403,7 @@ impl PubSubState {
 pub(super) fn schedule(
     state: Arc<Mutex<ReplayState>>,
     delay: u64,
-    delivery: Delivery,
+    mut delivery: Delivery,
     sender: Option<mpsc::Sender<Delivery>>,
 ) {
     let weak = Arc::downgrade(&state);
@@ -420,17 +422,23 @@ pub(super) fn schedule(
             return;
         };
         let mut replay = state.lock().await;
+        let detached = delivery
+            .matched
+            .as_ref()
+            .is_some_and(|matched| replay.redis.pubsub.rpc_is_detached(matched));
         if closed
             || replay.finalized_at.is_some()
             || delivery
                 .matched
                 .as_ref()
-                .is_some_and(|m| m.report.case_id != replay.active_case_id)
+                .is_some_and(|m| !detached && m.report.case_id != replay.active_case_id)
         {
             replay.redis.pubsub.fail(delivery.push);
             if let Some(matched) = &delivery.matched {
-                replay.redis.fail_exchange(
+                fail_rpc_delivery(
+                    &mut replay.redis,
                     matched,
+                    detached,
                     "RPC callback subscriber closed or case ended".into(),
                 );
             }
@@ -446,22 +454,52 @@ pub(super) fn schedule(
                 Ok(sender) => sender,
                 Err(error) => {
                     replay.redis.pubsub.fail(delivery.push);
-                    replay.redis.fail_exchange(
+                    fail_rpc_delivery(
+                        &mut replay.redis,
                         delivery.matched.as_ref().expect("RPC delivery"),
+                        detached,
                         error.to_string(),
                     );
                     return;
                 }
             },
         };
+        let origin = delivery.matched.clone();
+        // A late Global callback cannot complete or dirty an already completed
+        // publisher Case when the subscriber writer eventually flushes it.
+        if detached {
+            delivery.matched = None;
+        }
         if sender.try_send(delivery.clone()).is_err() {
             replay.redis.pubsub.fail(delivery.push);
-            if let Some(matched) = &delivery.matched {
-                replay.redis.fail_exchange(
+            if let Some(matched) = &origin {
+                fail_rpc_delivery(
+                    &mut replay.redis,
                     matched,
+                    detached,
                     "Redis Pub/Sub subscriber unavailable or queue full".into(),
                 );
             }
         }
     });
+}
+
+fn fail_rpc_delivery(
+    redis: &mut RedisReplayState,
+    matched: &MatchedRedisExchange,
+    detached: bool,
+    reason: String,
+) {
+    if detached {
+        redis.events.unsafe_events.push(CommandRequestReport {
+            case_id: None,
+            target: matched.report.target.clone(),
+            command: "PUBSUB_PUSH".into(),
+            request_fingerprint: None,
+            reason,
+            diagnostic: None,
+        });
+    } else {
+        redis.fail_exchange(matched, reason);
+    }
 }
