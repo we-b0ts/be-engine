@@ -466,3 +466,22 @@ fn http_client_close_rejects_socket_inputs_or_transformed_timing() {
     transcript.actions = vec![close_action(50), close_action(60)];
     assert!(client_close_timing(&transcript).is_err());
 }
+
+#[tokio::test]
+async fn subscription_input_cannot_bypass_post_response_completion() {
+    let mut profile = policy();
+    profile.stream_terminal = None;
+    let mut input = InputTranscript::new(Protocol::Sse, profile);
+    input.http_stream_mode = crate::interaction::model::HttpStreamMode::Subscription;
+    let client = Client::builder(TokioExecutor::new()).build_http();
+    let request = Request::builder()
+        .method("POST")
+        .uri("http://127.0.0.1:1/events")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let error = execute(&client, request, &input, Duration::from_secs(1), 1_024)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("requires a GET request"));
+}

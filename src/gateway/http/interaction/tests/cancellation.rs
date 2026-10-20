@@ -38,6 +38,7 @@ async fn cancelling_silent_primary_sse_closes_upstream_and_fails_without_publica
         let response = client
             .request(
                 Request::builder()
+                    .method("POST")
                     .uri(format!("http://{address}/events"))
                     .header("accept", "text/event-stream")
                     .body(Full::new(Bytes::new()))

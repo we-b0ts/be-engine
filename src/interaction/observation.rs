@@ -7,8 +7,9 @@ use anyhow::{Result, ensure};
 use super::{
     lifecycle::{InteractionLifecycle, LifecycleDecision},
     model::{
-        AckReference, CloseObservation, EndReason, InputAction, InputActionKind, InputTranscript,
-        MessageKind, OutputEvent, OutputObservation, Protocol, TRANSCRIPT_VERSION, WireMessage,
+        AckReference, CloseObservation, EndReason, HttpStreamMode, InputAction, InputActionKind,
+        InputTranscript, MessageKind, OutputEvent, OutputObservation, Protocol, TRANSCRIPT_VERSION,
+        WireMessage,
     },
     policy::InteractionPolicy,
     socketio::{
@@ -20,6 +21,9 @@ use super::{
 
 const CLIENT_BINARY_PENDING: u64 = u64::MAX - 1;
 const SERVER_BINARY_PENDING: u64 = u64::MAX - 2;
+
+#[cfg(test)]
+mod subscription_tests;
 
 /// One fresh physical session. Its expected outputs are never part of its input program.
 pub struct Observation {
@@ -63,13 +67,34 @@ impl Observation {
     }
 
     pub fn new(protocol: Protocol, policy: InteractionPolicy) -> Result<Self> {
+        Self::with_http_stream_mode(protocol, policy, HttpStreamMode::Response)
+    }
+
+    pub fn new_sse_subscription(policy: InteractionPolicy, now_ms: u64) -> Result<Self> {
+        let mut observation =
+            Self::with_http_stream_mode(Protocol::Sse, policy, HttpStreamMode::Subscription)?;
+        // Header acquisition is not subscription business silence.
+        observation.lifecycle.activity(now_ms);
+        Ok(observation)
+    }
+
+    fn with_http_stream_mode(
+        protocol: Protocol,
+        policy: InteractionPolicy,
+        mode: HttpStreamMode,
+    ) -> Result<Self> {
         policy.validate()?;
         ensure!(
             protocol != Protocol::WebSocket || policy.stream_terminal.is_some(),
             "generic WebSocket requires an explicit terminal completion rule"
         );
         let mut lifecycle = InteractionLifecycle::new(policy.clone(), 0)?;
-        lifecycle.begin(0, 0)?;
+        if mode == HttpStreamMode::Response {
+            lifecycle.begin(0, 0)?;
+        }
+        let mut input = InputTranscript::new(protocol, policy.clone());
+        input.http_stream_mode = mode;
+        input.validate()?;
         let stream_decoder = if matches!(
             protocol,
             Protocol::Sse | Protocol::Ndjson | Protocol::RawStream
@@ -85,7 +110,7 @@ impl Observation {
             server_decoder: SocketIoDecoder::new(policy.max_message_bytes),
             stream_decoder,
             close_barrier: None,
-            input: InputTranscript::new(protocol, policy.clone()),
+            input,
             policy,
             lifecycle,
             output: Vec::new(),

@@ -7,8 +7,7 @@ An Accept offer such as `application/json, text/event-stream` permits either
 response; JSON responses (including errors) and non-stream empty responses retain
 ordinary HTTP recording, including their status, headers and body. Protocol
 selection never resends the request or sends an already executed POST to fallback.
-Response-header waits use
-the ordinary HTTP request timeout; established streams use the interaction
+Response-header waits use the ordinary HTTP request timeout; established streams use the interaction
 lifecycle budgets. When streaming recording is disabled, requests explicitly
 offering SSE or NDJSON still use the configured pre-dispatch fallback. Raw
 `application/octet-stream` recording additionally requires
@@ -73,8 +72,19 @@ pending. `require_ack: true` additionally requires its ACK. Unknown completion o
 ambiguous correlation fails capture. These profiles establish case boundaries;
 they do not relax output equality or authorize dependency matching exceptions.
 
-Finite HTTP streams complete at EOF. Long-lived streams need an explicit
-`stream_terminal` profile (`sse_event`, `text` or `json`) before idle can succeed:
+GET SSE responses without an explicit `stream_terminal` rule are subscriptions.
+Their open HTTP connection does not create a pending business request. The
+business-idle window starts when response headers arrive, and complete business
+events reset it; SSE comment heartbeats do not. A silent or heartbeat-only
+subscription closes normally after the default 10 seconds, publishes its bounded
+observation and releases the recording slot while Source keeps running. Its end
+reason is `business_idle`, not server EOF or proof that future events cannot
+arrive. Partial messages still fail capture.
+
+Other HTTP streams, including POST responses and GET responses with an explicit
+terminal rule, retain pending response completion. Finite responses complete at
+EOF. Long-lived response streams need an explicit `stream_terminal` profile
+(`sse_event`, `text` or `json`) before idle can succeed:
 
 ```yaml
 interaction:
@@ -90,6 +100,10 @@ Socket.IO adapter for correlated, concurrent exchanges.
 ## Evidence and replay
 
 `request.json.interaction` contains a versioned input program and resolved policy.
+New GET SSE subscription inputs carry `http_stream_mode: subscription`; replay
+uses this recorded mode and independently observes Target business silence.
+Inputs without this field retain response-completion semantics, and replay does
+not infer a subscription from expected outputs or reinterpret older recordings.
 `expected-response.json.interaction` contains Source output events and closure.
 The runner independently writes `actual-response-*.json.interaction`. HTTP method
 and route identity preserve existing grouping, `prepare`, `run-api`, `run` and

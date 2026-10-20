@@ -360,13 +360,23 @@ pub(super) async fn adopt_response(
     let protocol =
         response_protocol(&response_headers).expect("response stream protocol was classified");
     let policy = state.config().http_gateway.interaction.clone();
+    let observation = if method == hyper::Method::GET
+        && protocol == Protocol::Sse
+        && policy.stream_terminal.is_none()
+    {
+        Observation::new_sse_subscription(
+            policy,
+            started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+        )
+    } else {
+        Observation::new(protocol, policy)
+    }
+    .expect("validated stream policy");
     let (close, _) = watch::channel(None);
     let session = Arc::new(Session {
         state: state.clone(),
         case,
-        observation: Mutex::new(
-            Observation::new(protocol, policy).expect("validated stream policy"),
-        ),
+        observation: Mutex::new(observation),
         started,
         close,
         changed: Notify::new(),
