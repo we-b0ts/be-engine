@@ -18,6 +18,8 @@ mod dynamic_values;
 mod json_request_time;
 #[path = "http_tests/request_contracts.rs"]
 mod request_contracts;
+#[path = "http_tests/server_termination.rs"]
+mod server_termination;
 
 #[test]
 fn ignored_query_values_are_still_required_on_both_requests() {

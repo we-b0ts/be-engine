@@ -1,4 +1,5 @@
 use super::*;
+mod control;
 mod request;
 
 #[derive(Debug, Default)]
@@ -166,6 +167,11 @@ impl ReplayState {
                 if exchange.source != source
                     || !exchange.status.is_available()
                     || exchange.record.command != command
+                    || exchange.record.outcome != crate::DependencyExchangeOutcome::Response
+                    || !matches!(
+                        exchange.record.response.status.as_str(),
+                        "ok" | "resultset" | "stmt_prepare"
+                    )
                 {
                     continue;
                 }

@@ -13,7 +13,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::dependency::DependencyExchangeOutcome;
-use crate::dependency::termination::ConnectionTermination;
+use crate::dependency::TerminationSide;
+use crate::dependency::termination::{ConnectionControl, ConnectionTermination, ObservedIo};
 use crate::motan::{Frame, RequestIdentity, read_frame, response_status};
 use crate::recorder::{
     MotanConnectionEvent, MotanExchangeEvent, ProxyErrorEvent, RecorderEvent, capture_body,
@@ -46,15 +47,17 @@ pub(crate) async fn handle_connected(
     context: ConnectionContext,
 ) -> Result<()> {
     let connection_id = Uuid::new_v4();
-    let _connection = state
-        .dependency_connections()
-        .register("motan", &[&client, &upstream])?;
+    let termination = ConnectionTermination::default();
+    let _connection = state.dependency_connections().register_observed(
+        "motan",
+        &[&client, &upstream],
+        &termination,
+    )?;
     let started = Instant::now();
     let pending = Arc::new(Mutex::new(HashMap::<u64, PendingRequest>::new()));
     let requests_ended = Arc::new(Notify::new());
     let responses_ended = Arc::new(Notify::new());
     let replay_safe = Arc::new(AtomicBool::new(true));
-    let termination = ConnectionTermination::default();
     record_connection(
         &state,
         connection_id,
@@ -69,8 +72,14 @@ pub(crate) async fn handle_connected(
     .await?;
 
     let max_frame_bytes = state.config().recording.max_body_bytes.saturating_add(32);
-    let (mut client_read, client_write) = client.into_split();
-    let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let client_control = ConnectionControl::new(&client)?;
+    let upstream_control = ConnectionControl::new(&upstream)?;
+    let (client_read, client_write) = client.into_split();
+    let (upstream_read, mut upstream_write) = upstream.into_split();
+    let mut client_read =
+        ObservedIo::new(client_read, termination.clone(), TerminationSide::Client);
+    let mut upstream_read =
+        ObservedIo::new(upstream_read, termination.clone(), TerminationSide::Server);
     let client_write = Arc::new(Mutex::new(client_write));
 
     let request_pending = pending.clone();
@@ -83,6 +92,7 @@ pub(crate) async fn handle_connected(
             let mut bytes = 0_u64;
             let mut sequence = 0_u64;
             loop {
+                let before = client_read.bytes_read();
                 let frame = tokio::select! {
                     _ = response_ended_for_requests.notified() => None,
                     frame = read_frame(&mut client_read, max_frame_bytes) => Some(frame),
@@ -96,7 +106,12 @@ pub(crate) async fn handle_connected(
                         request_termination.observe_client_eof();
                         break;
                     }
-                    Err(error) if request_termination.observe_client_error(&error) => break,
+                    Err(error)
+                        if client_read.bytes_read() == before
+                            && request_termination.observe_client_error(&error) =>
+                    {
+                        break;
+                    }
                     Err(error) => return Err(error),
                 };
                 if !frame.request {
@@ -134,11 +149,24 @@ pub(crate) async fn handle_connected(
                     return Err(error);
                 }
             }
-            let _ = upstream_write.shutdown().await;
+            if request_termination
+                .connection_end(TerminationSide::Client)
+                .is_some()
+            {
+                let _ = upstream_control.reset();
+            } else {
+                let _ = upstream_write.shutdown().await;
+            }
             Ok::<u64, anyhow::Error>(bytes)
         }
         .await;
-        request_ended.notify_one();
+        if result.is_err()
+            || request_termination
+                .connection_end(TerminationSide::Client)
+                .is_some()
+        {
+            request_ended.notify_one();
+        }
         result
     });
 
@@ -154,6 +182,8 @@ pub(crate) async fn handle_connected(
         let result = async {
             let mut bytes = 0_u64;
             loop {
+                upstream_read.begin_capture(max_frame_bytes);
+                let before = upstream_read.bytes_read();
                 let frame = tokio::select! {
                     _ = request_ended_for_responses.notified() => None,
                     frame = read_frame(&mut upstream_read, max_frame_bytes) => Some(frame),
@@ -167,7 +197,12 @@ pub(crate) async fn handle_connected(
                         response_termination.observe_server_eof();
                         break;
                     }
-                    Err(error) if response_termination.observe_server_error(&error) => break,
+                    Err(error)
+                        if upstream_read.bytes_read() == before
+                            && response_termination.observe_server_error(&error) =>
+                    {
+                        break;
+                    }
                     Err(error) => return Err(error),
                 };
                 if frame.request {
@@ -186,6 +221,7 @@ pub(crate) async fn handle_connected(
                         ),
                     )
                     .await?;
+                    upstream_read.begin_capture(0);
                     response_client_write
                         .lock()
                         .await
@@ -193,9 +229,17 @@ pub(crate) async fn handle_connected(
                         .await?;
                     continue;
                 };
-                let outcome = if response_termination.client_ended_first() {
+                let outcome = if response_termination.snapshot().is_some_and(|observed| {
+                    observed.termination.side == TerminationSide::Client
+                        && observed.termination.kind == crate::dependency::TerminationKind::Reset
+                }) {
+                    if !response_pending.lock().await.is_empty() {
+                        response_safe.store(false, Ordering::Release);
+                        record_proxy_error(&response_state, &response_context, "multiple in-flight Motan requests share a termination; batch replay is unsupported".into()).await?;
+                    }
                     DependencyExchangeOutcome::ClientTerminated
                 } else {
+                    upstream_read.begin_capture(0);
                     match response_client_write
                         .lock()
                         .await
@@ -204,18 +248,27 @@ pub(crate) async fn handle_connected(
                     {
                         Ok(()) => DependencyExchangeOutcome::Response,
                         Err(error) if response_termination.observe_client_io_error(&error) => {
+                            response_safe.store(false, Ordering::Release);
+                            record_proxy_error(
+                                &response_state,
+                                &response_context,
+                                "Motan response write failed after an unknown delivery prefix"
+                                    .into(),
+                            )
+                            .await?;
                             DependencyExchangeOutcome::ClientTerminated
                         }
                         Err(error) => return Err(error.into()),
                     }
                 };
+                let terminal = response_termination.outcome_since(request.started);
                 record_exchange(
                     &response_state,
                     connection_id,
                     &response_context,
                     request,
-                    Some(&frame),
-                    outcome,
+                    (outcome == DependencyExchangeOutcome::Response).then_some(&frame),
+                    (outcome, terminal),
                     max_frame_bytes,
                 )
                 .await?;
@@ -223,11 +276,40 @@ pub(crate) async fn handle_connected(
                     break;
                 }
             }
-            let _ = response_client_write.lock().await.shutdown().await;
             Ok::<u64, anyhow::Error>(bytes)
         }
         .await;
-        response_ended.notify_one();
+        if result.is_err() && !response_termination.engine_stopped() {
+            response_safe.store(false, Ordering::Release);
+            let mut writer = response_client_write.lock().await;
+            let _ = crate::dependency::termination::forward_captured(
+                &mut upstream_read,
+                &mut *writer,
+                &response_termination,
+                TerminationSide::Server,
+            )
+            .await;
+        }
+        if let Some(observed) = response_termination
+            .connection_end(TerminationSide::Server)
+            .or_else(|| response_termination.observed(TerminationSide::Server))
+        {
+            match observed.termination.kind {
+                crate::dependency::TerminationKind::Reset => {
+                    let _ = client_control.reset();
+                }
+                crate::dependency::TerminationKind::Eof => {
+                    let _ = response_client_write.lock().await.shutdown().await;
+                }
+                crate::dependency::TerminationKind::Cancelled => {}
+            }
+        }
+        if response_termination
+            .connection_end(TerminationSide::Server)
+            .is_some()
+        {
+            response_ended.notify_one();
+        }
         result
     });
 
@@ -254,15 +336,30 @@ pub(crate) async fn handle_connected(
         .drain()
         .map(|(_, request)| request)
         .collect::<Vec<_>>();
-    if termination.client_ended_first() {
+    if incomplete.len() > 1 && termination.outcome_since(started).is_some() {
+        replay_safe.store(false, Ordering::Release);
+        record_proxy_error(
+            &state,
+            &context,
+            "multiple in-flight Motan requests share a termination; batch replay is unsupported"
+                .into(),
+        )
+        .await?;
+    }
+    if error.is_none() && termination.outcome_since(started).is_some() {
         for request in incomplete {
+            let terminal = termination.outcome_since(request.started);
+            if terminal.is_none() {
+                replay_safe.store(false, Ordering::Release);
+                record_proxy_error(&state, &context, "Motan request began after the recorded termination; post-terminal capture is unsupported".into()).await?;
+            }
             record_exchange(
                 &state,
                 connection_id,
                 &context,
                 request,
                 None,
-                DependencyExchangeOutcome::ClientTerminated,
+                (DependencyExchangeOutcome::ClientTerminated, terminal),
                 max_frame_bytes,
             )
             .await?;
@@ -272,7 +369,12 @@ pub(crate) async fn handle_connected(
         record_proxy_error(
             &state,
             &context,
-            "Motan connection closed with incomplete requests".to_string(),
+            if termination.engine_stopped() {
+                "engine cleanup interrupted Motan capture"
+            } else {
+                "Motan connection closed with incomplete requests"
+            }
+            .to_string(),
         )
         .await?;
     }
@@ -302,9 +404,18 @@ async fn record_exchange(
     context: &ConnectionContext,
     request: PendingRequest,
     response: Option<&Frame>,
-    outcome: DependencyExchangeOutcome,
+    completion: (
+        DependencyExchangeOutcome,
+        Option<(DependencyExchangeOutcome, u128)>,
+    ),
     max_frame_bytes: usize,
 ) -> Result<()> {
+    let (requested_outcome, terminal) = completion;
+    let (outcome, duration_ms) = if requested_outcome == DependencyExchangeOutcome::Response {
+        (requested_outcome, request.started.elapsed().as_millis())
+    } else {
+        terminal.unwrap_or((requested_outcome, request.started.elapsed().as_millis()))
+    };
     let request_capture = capture_body(&request.frame.raw, max_frame_bytes);
     let response_capture = capture_body(
         response.map_or(&[][..], |frame| frame.raw.as_ref()),
@@ -314,7 +425,7 @@ async fn record_exchange(
     let command = request.identity.command();
     let replay_safe = !request_capture.truncated
         && !response_capture.truncated
-        && (outcome.is_client_terminated() || response.is_some());
+        && (outcome.termination().is_some() || response.is_some());
     record_event(
         state,
         RecorderEvent::MotanExchange(MotanExchangeEvent {
@@ -337,12 +448,21 @@ async fn record_exchange(
             command,
             request: request_capture,
             response_status: response
-                .map_or("client_terminated", response_status)
+                .map_or_else(
+                    || {
+                        if outcome.is_server_terminated() {
+                            "server_terminated"
+                        } else {
+                            "client_terminated"
+                        }
+                    },
+                    response_status,
+                )
                 .to_string(),
             response: response_capture,
             heartbeat,
             outcome,
-            duration_ms: request.started.elapsed().as_millis(),
+            duration_ms,
             replay_safe,
             parse_warnings: Vec::new(),
         }),

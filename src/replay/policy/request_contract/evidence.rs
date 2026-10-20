@@ -362,7 +362,9 @@ pub(in crate::replay::policy) fn verify_capture(
             .filter(|line| !line.is_empty())
         {
             let event: Value = serde_json::from_slice(line)?;
-            if event["outcome"].as_str().is_some_and(|s| s != "response")
+            if event
+                .get("outcome")
+                .is_some_and(|outcome| outcome != "response")
                 || event
                     .get("global_dependency_reason")
                     .is_some_and(|v| !v.is_null())

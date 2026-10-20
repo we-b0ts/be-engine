@@ -296,7 +296,7 @@ async fn fetch_response(
         )?));
     };
     let timing = reservation.timing;
-    if timing.outcome() == DependencyExchangeOutcome::ClientTerminated {
+    if timing.outcome().termination().is_some() {
         return Ok(KafkaReplayPlan::exchange(
             None,
             timing,

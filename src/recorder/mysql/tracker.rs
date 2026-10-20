@@ -1,4 +1,6 @@
+use crate::dependency::termination::ObservedTermination;
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use anyhow::{Result, bail, ensure};
 
@@ -24,12 +26,14 @@ pub(super) struct MysqlQueryTracker {
 struct PendingRequest {
     query_sequence: u64,
     payload_bytes: usize,
+    started: Instant,
 }
 
 #[derive(Default)]
 pub(super) struct MysqlQueryCompletion {
     response: Option<MysqlResponseEvent>,
     exchange: Option<MysqlExchangeEvent>,
+    started: Option<Instant>,
 }
 
 impl MysqlQueryTracker {
@@ -49,6 +53,10 @@ impl MysqlQueryTracker {
 
     pub(super) fn database(&self) -> Option<&str> {
         self.semantic.database()
+    }
+
+    pub(super) fn pending_len(&self) -> usize {
+        self.pending_requests.len()
     }
 
     pub(super) fn prepared_sql_for_packet(&self, packet: &MysqlPacket) -> Option<&str> {
@@ -89,6 +97,10 @@ impl MysqlQueryTracker {
         self.pending_requests.push_back(PendingRequest {
             query_sequence,
             payload_bytes: packet.payload.len(),
+            started: self
+                .semantic
+                .pending_started_at()
+                .expect("started MySQL semantic exchange"),
         });
         self.pending_query_bytes = pending_query_bytes;
         self.ensure_aligned()?;
@@ -118,13 +130,17 @@ impl MysqlQueryTracker {
         self.complete(response, exchange)
     }
 
+    pub(super) fn observe_delivery(&mut self, packet: &MysqlPacket) {
+        self.semantic.observe_delivery(packet);
+    }
+
     pub(super) fn finish_active(&mut self, status: &str) -> Result<MysqlQueryCompletion> {
         if let Err(error) = self.server_message.finish() {
             self.semantic.observe_parse_warning(error.to_string());
         }
         let response = self.response.finish_active(status);
         let exchange = match response.as_ref() {
-            Some(response) if status != "client_terminated" => {
+            Some(response) if !matches!(status, "client_terminated" | "server_terminated") => {
                 self.semantic.finish_from_response(response)
             }
             Some(response) => self.semantic.finish_active(
@@ -152,7 +168,7 @@ impl MysqlQueryTracker {
         response: Option<MysqlResponseEvent>,
         exchange: Option<MysqlExchangeEvent>,
     ) -> Result<MysqlQueryCompletion> {
-        let completion = MysqlQueryCompletion::new(response, exchange);
+        let mut completion = MysqlQueryCompletion::new(response, exchange);
         let (response_sequence, exchange_sequence) = completion.sequences();
         match (response_sequence, exchange_sequence) {
             (None, None) => {}
@@ -163,6 +179,7 @@ impl MysqlQueryTracker {
                     .pending_requests
                     .pop_front()
                     .ok_or_else(|| anyhow::anyhow!("MySQL completion has no pending request"))?;
+                completion.started = Some(pending.started);
                 ensure!(
                     pending.query_sequence == response_sequence,
                     "MySQL FIFO sequence mismatch: pending={}, response={response_sequence}",
@@ -199,11 +216,90 @@ impl MysqlQueryTracker {
 
 impl MysqlQueryCompletion {
     fn new(response: Option<MysqlResponseEvent>, exchange: Option<MysqlExchangeEvent>) -> Self {
-        Self { response, exchange }
+        Self {
+            response,
+            exchange,
+            started: None,
+        }
     }
 
     pub(super) fn is_empty(&self) -> bool {
         self.response.is_none() && self.exchange.is_none()
+    }
+
+    pub(super) fn mark_delivered(&mut self) {
+        if let Some(exchange) = self.exchange.as_mut() {
+            exchange.response.wire_prefix.clear();
+        }
+    }
+
+    pub(super) fn mark_terminated(&mut self, observed: ObservedTermination) {
+        if self.started.is_some_and(|started| observed.at < started) {
+            self.mark_capture_error("MySQL request began after the recorded termination; post-terminal capture is unsupported");
+            return;
+        }
+        self.mark_client_terminated();
+        if let Some(exchange) = self.exchange.as_mut() {
+            exchange.outcome = DependencyExchangeOutcome::Terminated(observed.termination);
+            if exchange
+                .response
+                .wire_prefix
+                .iter()
+                .any(|prefix| prefix.packet.truncated)
+            {
+                exchange
+                    .parse_warnings
+                    .push("delivered MySQL packet prefix exceeds recording limit".into());
+            }
+            exchange.response.status = if exchange.outcome.is_server_terminated() {
+                "server_terminated"
+            } else {
+                "client_terminated"
+            }
+            .into();
+            if let Some(started) = self.started {
+                exchange.duration_ms = observed.at.duration_since(started).as_millis();
+            }
+            if exchange
+                .response
+                .wire_prefix
+                .iter()
+                .any(|prefix| prefix.offset_ms > exchange.duration_ms)
+            {
+                exchange.parse_warnings.push(
+                    "bidirectional half-close sequence requires multiple termination observations"
+                        .into(),
+                );
+            }
+        }
+    }
+
+    pub(super) fn mark_capture_error(&mut self, reason: &str) {
+        if let Some(exchange) = self.exchange.as_mut() {
+            exchange.parse_warnings.push(reason.to_owned());
+        }
+    }
+
+    pub(super) fn mark_engine_cleanup(&mut self) {
+        if let Some(exchange) = self.exchange.as_mut() {
+            exchange
+                .parse_warnings
+                .push("engine cleanup interrupted MySQL capture".into());
+        }
+    }
+
+    pub(super) fn mark_unsupported_batch(&mut self) {
+        if let Some(exchange) = self.exchange.as_mut() {
+            exchange.parse_warnings.push("multiple in-flight MySQL commands share a termination; batch replay is unsupported".into());
+        }
+    }
+
+    pub(super) fn reject_partial_write(&mut self) {
+        if let Some(exchange) = self.exchange.as_mut() {
+            exchange
+                .parse_warnings
+                .push("MySQL response write failed after an unknown delivery prefix".into());
+        }
     }
 
     pub(super) fn mark_client_terminated(&mut self) {

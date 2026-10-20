@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub(super) const VERSION: u32 = 2;
+pub(super) const VERSION: u32 = 3;
 pub(crate) const FRAGMENT: &str = ".dependency-index.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

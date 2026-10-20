@@ -10,6 +10,7 @@ pub(super) struct MemcachedDependencySummary {
     unsafe_exchanges: usize,
     errors: usize,
     client_terminated: usize,
+    server_terminated: usize,
     no_response: usize,
     quiet: usize,
     noreply: usize,
@@ -56,13 +57,16 @@ impl MemcachedSummaryBuilder {
         if json_bool(value, "noreply").unwrap_or(false) {
             self.summary.noreply += 1;
         }
-        if json_str(value, "outcome") == Some("client_terminated") {
+        if super::termination::client_terminated(value) {
             self.summary.client_terminated += 1;
+        }
+        if super::termination::server_terminated(value) {
+            self.summary.server_terminated += 1;
         }
         let command = json_str(value, "command");
         let status = json_str(value, "response_status").map(normalize_response_status);
         increment_string(&mut self.summary.commands, command);
-        increment_string(&mut self.summary.outcomes, json_str(value, "outcome"));
+        increment_string(&mut self.summary.outcomes, super::termination::label(value));
         increment_string(&mut self.summary.response_statuses, status.as_deref());
         increment_string(
             &mut self.summary.wire_protocols,

@@ -82,7 +82,7 @@ pub(super) fn record_kafka_fetch_summary(summary: &mut KafkaDependencySummary, v
 }
 
 fn record_outcome(summary: &mut KafkaDependencySummary, value: &Value) {
-    let outcome = json_str(value, "outcome").unwrap_or("response");
+    let outcome = super::termination::label(value).unwrap_or("response");
     *summary.outcomes.entry(outcome.to_string()).or_default() += 1;
 }
 

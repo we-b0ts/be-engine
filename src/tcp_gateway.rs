@@ -5,19 +5,18 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use chrono::Utc;
-use http_body_util::{BodyExt, Full};
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
-use hyper::client::conn::http1;
 use hyper::header::HOST;
 use hyper::service::service_fn;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
-use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_rustls::TlsAcceptor;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::AppState;
 use crate::access_policy::AccessDecision;
 use crate::active_case::DependencyTargets;
 use crate::dns_mock::{FakeDnsEntry, FakeDnsUpstreamProtocol};
@@ -31,7 +30,6 @@ use crate::recorder::{
     HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
     TcpGatewayConnectionEvent, capture_body, redact_headers,
 };
-use crate::{AppState, ProxyClient};
 
 mod connection;
 mod detection;
@@ -72,8 +70,15 @@ async fn serve_http_connection(
     state: AppState,
 ) -> Result<()> {
     let upstream_addr = upstream_addr(&state, &entry, fake_addr.port())?;
-    let client = DependencyIo::new(client, state.dependency_connections(), "http")?;
-    let termination = ClientTermination::default();
+    let termination = ClientTermination::with_control(&client)?;
+    let client = DependencyIo::new_observed(
+        client,
+        state.dependency_connections(),
+        "http",
+        termination.connection_observation(),
+    )?;
+    let _registration = client.registration();
+    let owner = termination.clone();
     let io = TokioIo::new(ObservedClientIo::new(client, termination.clone()));
     let service = service_fn(move |req| {
         let state = state.clone();
@@ -96,13 +101,21 @@ async fn serve_http_connection(
         }
     });
 
-    hyper::server::conn::http1::Builder::new()
-        .preserve_header_case(true)
-        .title_case_headers(true)
-        .serve_connection(io, service)
-        .await
-        .context("failed to serve fake-IP HTTP gateway connection")?;
-    Ok(())
+    let result = owner
+        .serve(
+            hyper::server::conn::http1::Builder::new()
+                .half_close(true)
+                .preserve_header_case(true)
+                .title_case_headers(true)
+                .serve_connection(io, service),
+        )
+        .await;
+    if owner.server_write_half_closed() {
+        owner.retain_read_half().await?;
+        Ok(())
+    } else {
+        result.context("failed to serve fake-IP HTTP gateway connection")
+    }
 }
 
 async fn serve_https_mitm_connection(
@@ -119,7 +132,15 @@ async fn serve_https_mitm_connection(
         .server_config_for_host(&entry.domain)
         .with_context(|| format!("failed to create MITM certificate for {}", entry.domain))?;
     let acceptor = TlsAcceptor::from(server_config);
-    let client = DependencyIo::new(client, state.dependency_connections(), "https")?;
+    let termination = ClientTermination::with_control(&client)?;
+    let client = DependencyIo::new_observed(
+        client,
+        state.dependency_connections(),
+        "https",
+        termination.connection_observation(),
+    )?;
+    let _registration = client.registration();
+    let owner = termination.clone();
     let tls = match acceptor.accept(client).await {
         Ok(tls) => tls,
         Err(err) => {
@@ -145,7 +166,6 @@ async fn serve_https_mitm_connection(
         }
     };
 
-    let termination = ClientTermination::default();
     let io = TokioIo::new(ObservedClientIo::new(tls, termination.clone()));
     let service = service_fn(move |req| {
         let state = state.clone();
@@ -172,13 +192,21 @@ async fn serve_https_mitm_connection(
         }
     });
 
-    hyper::server::conn::http1::Builder::new()
-        .preserve_header_case(true)
-        .title_case_headers(true)
-        .serve_connection(io, service)
-        .await
-        .context("failed to serve fake-IP HTTPS MITM connection")?;
-    Ok(())
+    let result = owner
+        .serve(
+            hyper::server::conn::http1::Builder::new()
+                .half_close(true)
+                .preserve_header_case(true)
+                .title_case_headers(true)
+                .serve_connection(io, service),
+        )
+        .await;
+    if owner.server_write_half_closed() {
+        owner.retain_read_half().await?;
+        Ok(())
+    } else {
+        result.context("failed to serve fake-IP HTTPS MITM connection")
+    }
 }
 
 async fn handle_http_request(
@@ -343,9 +371,10 @@ async fn handle_http_request(
         started,
         termination.clone(),
     );
+    let capture_context = pending.context();
     pending
         .run(async {
-            match send_upstream(state.client(), outbound).await {
+            match crate::http::client::send_observed(state.client(), outbound, started).await {
                 Ok(upstream_response) => {
                     if stream::is_stream(upstream_response.headers()) {
                         return stream::response(
@@ -475,6 +504,11 @@ async fn handle_http_request(
                     build_downstream_response(status, &response_headers, body_bytes)
                 }
                 Err(err) => {
+                    if let Some(observed) = err.termination
+                        && capture_context.forward_server_termination(observed)
+                    {
+                        return crate::recorder::http::dependency::closed_response();
+                    }
                     record_http_error(HttpErrorContext {
                         targets: targets.clone(),
                         state,
@@ -677,19 +711,25 @@ async fn handle_https_request(
         started,
         termination.clone(),
     );
+    let capture_context = pending.context();
     pending
         .run(async {
             let upstream_response = if plain_http_upstream {
-                send_upstream(state.client(), outbound)
-                    .await
-                    .map_err(anyhow::Error::from)
+                crate::http::client::send_observed(state.client(), outbound, started).await
             } else {
                 let server_name = entry
                     .upstream_authority
                     .as_deref()
                     .and_then(|authority| authority.split(':').next())
                     .unwrap_or(&entry.domain);
-                send_https_upstream(&state, upstream_addr, server_name, outbound).await
+                crate::http::client::send_https_observed(
+                    state.upstream_tls_config(),
+                    upstream_addr,
+                    server_name,
+                    outbound,
+                    started,
+                )
+                .await
             };
             match upstream_response {
                 Ok(upstream_response) => {
@@ -821,6 +861,11 @@ async fn handle_https_request(
                     build_downstream_response(status, &response_headers, body_bytes)
                 }
                 Err(err) => {
+                    if let Some(observed) = err.termination
+                        && capture_context.forward_server_termination(observed)
+                    {
+                        return crate::recorder::http::dependency::closed_response();
+                    }
                     record_http_error(HttpErrorContext {
                         targets: targets.clone(),
                         state,
@@ -844,44 +889,6 @@ async fn handle_https_request(
             }
         })
         .await
-}
-
-async fn send_upstream(
-    client: &ProxyClient,
-    request: Request<Full<Bytes>>,
-) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
-    client.request(request).await
-}
-
-async fn send_https_upstream(
-    state: &AppState,
-    upstream_addr: SocketAddr,
-    server_name: &str,
-    request: Request<Full<Bytes>>,
-) -> Result<Response<Incoming>> {
-    let stream = TcpStream::connect(upstream_addr)
-        .await
-        .with_context(|| format!("failed to connect HTTPS upstream {upstream_addr}"))?;
-    stream.set_nodelay(true)?;
-    let connector = TlsConnector::from(state.upstream_tls_config());
-    let server_name = ServerName::try_from(server_name.to_string())
-        .with_context(|| format!("invalid HTTPS upstream server name {server_name}"))?;
-    let tls = connector
-        .connect(server_name, stream)
-        .await
-        .with_context(|| format!("failed TLS handshake with HTTPS upstream {upstream_addr}"))?;
-    let (mut sender, connection) = http1::handshake(TokioIo::new(tls))
-        .await
-        .context("failed HTTP/1.1 handshake with HTTPS upstream")?;
-    tokio::spawn(async move {
-        if let Err(err) = connection.await {
-            warn!(error = %err, "fake-IP HTTPS upstream connection ended with error");
-        }
-    });
-    sender
-        .send_request(request)
-        .await
-        .context("failed to send fake-IP HTTPS upstream request")
 }
 
 fn request_authority(uri: &Uri, headers: &HeaderMap) -> Option<String> {

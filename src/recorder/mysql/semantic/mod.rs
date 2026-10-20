@@ -9,7 +9,7 @@ use crate::DependencyExchangeOutcome;
 use crate::mysql::wire::{ClientCommand, MysqlPacket};
 use crate::recorder::{
     MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse, MysqlResponseEvent, MysqlValue,
-    capture_body,
+    MysqlWirePrefixPacket, capture_body,
 };
 
 mod decode;
@@ -17,6 +17,8 @@ mod decode;
 mod tests;
 
 use decode::*;
+
+const MAX_TERMINATION_PREFIX_PACKETS: usize = 4096;
 
 const MYSQL_TYPE_DECIMAL: u8 = 0;
 const MYSQL_TYPE_TINY: u8 = 1;
@@ -100,6 +102,8 @@ struct ActiveExchange {
     params: Option<Vec<MysqlValue>>,
     started: Instant,
     packets: Vec<MysqlPacket>,
+    wire_prefix: Vec<MysqlWirePrefixPacket>,
+    wire_prefix_bytes: usize,
     parse_warnings: Vec<String>,
 }
 
@@ -140,11 +144,17 @@ impl MysqlSemanticTracker {
             params,
             started: Instant::now(),
             packets: Vec::new(),
+            wire_prefix: Vec::new(),
+            wire_prefix_bytes: 0,
             parse_warnings: {
                 parse_warnings.shrink_to_fit();
                 parse_warnings
             },
         });
+    }
+
+    pub(crate) fn pending_started_at(&self) -> Option<Instant> {
+        self.pending.back().map(|active| active.started)
     }
 
     pub(crate) fn observe_no_response_command(
@@ -164,6 +174,30 @@ impl MysqlSemanticTracker {
     pub(crate) fn observe_packet(&mut self, packet: &MysqlPacket) {
         if let Some(active) = self.pending.front_mut() {
             active.packets.push(packet.clone());
+        }
+    }
+
+    pub(crate) fn observe_delivery(&mut self, packet: &MysqlPacket) {
+        if let Some(active) = self.pending.front_mut() {
+            if active
+                .wire_prefix
+                .last()
+                .is_some_and(|prefix| prefix.packet.truncated)
+            {
+                return;
+            }
+            let remaining = if active.wire_prefix.len() < MAX_TERMINATION_PREFIX_PACKETS {
+                self.max_value_bytes
+                    .saturating_sub(active.wire_prefix_bytes)
+            } else {
+                0
+            };
+            let captured = capture_body(&packet.to_wire_bytes(), remaining);
+            active.wire_prefix_bytes = active.wire_prefix_bytes.saturating_add(captured.stored_len);
+            active.wire_prefix.push(MysqlWirePrefixPacket {
+                offset_ms: active.started.elapsed().as_millis(),
+                packet: captured,
+            });
         }
     }
 
@@ -325,6 +359,7 @@ impl MysqlSemanticTracker {
         error_message: Option<String>,
     ) -> MysqlExchangeResponse {
         let mut response = MysqlExchangeResponse {
+            wire_prefix: std::mem::take(&mut active.wire_prefix),
             server_status: None,
             status: status.to_string(),
             error_code,
@@ -338,7 +373,7 @@ impl MysqlSemanticTracker {
         };
 
         if active.packets.is_empty() {
-            if status != "client_terminated" {
+            if !matches!(status, "client_terminated" | "server_terminated") {
                 active
                     .parse_warnings
                     .push("no server response packets were captured".to_string());
@@ -371,7 +406,7 @@ impl MysqlSemanticTracker {
                     &mut active.parse_warnings,
                 );
             }
-            "error" | "eof" | "incomplete" | "client_terminated" => {}
+            "error" | "eof" | "incomplete" | "client_terminated" | "server_terminated" => {}
             _ => {
                 active
                     .parse_warnings

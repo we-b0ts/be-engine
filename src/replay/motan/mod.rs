@@ -31,7 +31,10 @@ use super::{
 
 mod auth;
 mod evidence;
+mod incoming;
 mod report_inventory;
+mod termination;
+use termination::wait_for_connection_close;
 
 use auth::Authentication;
 
@@ -43,6 +46,7 @@ struct PendingRequest {
     identity: RequestIdentity,
     request_match: Option<RequestMatch>,
     lane_wait_deadline: Instant,
+    started: Instant,
 }
 
 enum IncomingEvent {
@@ -140,6 +144,7 @@ struct HeartbeatTemplate {
 #[derive(Debug, Clone)]
 struct MatchedExchange {
     index: usize,
+    duration_ms: u64,
     connection_id: Uuid,
     response: Vec<u8>,
     timing: ReplayExchangeTiming,
@@ -274,11 +279,17 @@ impl MotanReplayState {
             ));
         }
         let request_match = RequestMatch::from_frame(&request_frame)?;
-        let response = if record.outcome.is_client_terminated() {
+        let response = if record.outcome.termination().is_some() {
             Vec::new()
         } else {
             record.response.decode()?
         };
+        anyhow::ensure!(
+            !record.outcome.termination().is_some_and(
+                |termination| termination.scope == crate::dependency::TerminationScope::Stream
+            ),
+            "Motan native termination cannot have stream scope"
+        );
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
         let exchange_index = self.exchanges.len();
         self.case_exchange_index
@@ -405,6 +416,7 @@ impl MotanReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedExchange {
+            duration_ms: exchange.record.duration_ms,
             index,
             connection_id: exchange.record.connection_id,
             response,
@@ -493,29 +505,12 @@ pub(super) async fn handle_connection(
         port: target.port,
     };
     state.lock().await.motan.events.connections += 1;
+    let control = crate::dependency::termination::ConnectionControl::new(&stream)?;
     let (reader, mut writer) = stream.into_split();
     let (incoming_sender, mut incoming) = mpsc::channel(INCOMING_FRAME_QUEUE_CAPACITY);
-    let reader_task = tokio::spawn(async move {
-        let mut reader = reader;
-        let closed = loop {
-            match read_frame(&mut reader, 64 * 1024 * 1024).await {
-                Ok(Some(frame)) => {
-                    if incoming_sender
-                        .send(IncomingEvent::Frame(frame))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                Ok(None) => break Ok(()),
-                Err(error) => break Err(error),
-            }
-        };
-        let _ = incoming_sender.send(IncomingEvent::Closed(closed)).await;
-    });
+    let reader_task = tokio::spawn(incoming::read(reader, incoming_sender));
 
-    let result = drive_connection(&mut writer, &target_key, &state, &mut incoming).await;
+    let result = drive_connection(&mut writer, &target_key, &state, &mut incoming, &control).await;
     reader_task.abort();
     result
 }
@@ -525,6 +520,7 @@ async fn drive_connection(
     target: &TargetKey,
     state: &Arc<Mutex<ReplayState>>,
     incoming: &mut mpsc::Receiver<IncomingEvent>,
+    control: &crate::dependency::termination::ConnectionControl,
 ) -> Result<()> {
     let mut connection_binding = CaseConnectionBinding::default();
     let mut lane_progress = state.lock().await.motan.lane_progress.subscribe();
@@ -591,17 +587,57 @@ async fn drive_connection(
             let request = pending
                 .remove(index)
                 .expect("matched Motan pending-request index disappeared");
+            if matched.timing.outcome().is_server_terminated() {
+                let ready = if pending.is_empty() {
+                    termination::await_server_end(
+                        incoming,
+                        request.started + std::time::Duration::from_millis(matched.duration_ms),
+                    )
+                    .await
+                } else {
+                    Err(anyhow!(
+                        "Target pipelined another Motan request before recorded termination; native termination batch replay is unsupported"
+                    ))
+                };
+                if let Err(error) = ready {
+                    state.lock().await.motan.fail(&matched, error.to_string());
+                    termination::retain(incoming).await;
+                    return Err(error);
+                }
+                match matched
+                    .timing
+                    .terminate_server_at(writer, control, request.started)
+                    .await
+                {
+                    Ok(()) => {
+                        state.lock().await.motan.complete(&matched);
+                        if let Err(error) = wait_for_connection_close(incoming, None).await {
+                            state.lock().await.motan.fail(&matched, error.to_string());
+                            termination::retain(incoming).await;
+                        }
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        state.lock().await.motan.fail(&matched, error.to_string());
+                        return Err(error);
+                    }
+                }
+            }
             if matched.timing.outcome().is_client_terminated() {
                 if !pending.is_empty() {
                     let error = anyhow!(
                         "client sent another dependency request instead of terminating the connection"
                     );
                     state.lock().await.motan.fail(&matched, error.to_string());
+                    termination::retain(incoming).await;
                     return Err(error);
                 }
                 match matched
                     .timing
-                    .await_client_termination_signal(wait_for_connection_close(incoming))
+                    .await_client_termination_signal_at(
+                        wait_for_connection_close(incoming, matched.timing.outcome().termination()),
+                        request.started,
+                    )
                     .await
                 {
                     Ok(_) => {
@@ -610,6 +646,7 @@ async fn drive_connection(
                     }
                     Err(error) => {
                         state.lock().await.motan.fail(&matched, error.to_string());
+                        termination::retain(incoming).await;
                         return Err(error);
                     }
                 }
@@ -709,6 +746,7 @@ async fn enqueue_request(
         identity,
         request_match,
         lane_wait_deadline: Instant::now() + LANE_BLOCK_WAIT_TIMEOUT,
+        started: Instant::now(),
     });
     Ok(())
 }
@@ -718,25 +756,6 @@ async fn receive_frame(incoming: &mut mpsc::Receiver<IncomingEvent>) -> Result<O
         Some(IncomingEvent::Frame(frame)) => Ok(Some(frame)),
         Some(IncomingEvent::Closed(result)) => result.map(|()| None),
         None => Ok(None),
-    }
-}
-
-async fn wait_for_connection_close(incoming: &mut mpsc::Receiver<IncomingEvent>) -> Result<()> {
-    match incoming.recv().await {
-        Some(IncomingEvent::Frame(_)) => Err(anyhow!(
-            "client sent another dependency request instead of terminating the connection"
-        )),
-        Some(IncomingEvent::Closed(Err(error)))
-            if error.chain().any(|cause| {
-                cause
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|error| is_connection_termination(error.kind()))
-            }) =>
-        {
-            Ok(())
-        }
-        Some(IncomingEvent::Closed(result)) => result,
-        None => Ok(()),
     }
 }
 

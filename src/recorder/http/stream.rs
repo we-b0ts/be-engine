@@ -1,33 +1,27 @@
 //! Bounded, incremental HTTP dependency capture with body-lifetime ownership.
 
 use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
-use crate::http::{
-    rewrite::{self, RewriteInput},
-    termination::ClientTermination,
-};
-use crate::recorder::{HttpExchangeEvent, RecorderEvent, redact_headers};
-use crate::{AppState, active_case::DependencyTargets};
+use crate::http::rewrite::{self, RewriteInput};
+use crate::recorder::{RecorderEvent, redact_headers};
 use bytes::Bytes;
 use chrono::Utc;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{HeaderMap, Method, Response, StatusCode, Uri, body::Incoming};
-use std::time::Instant;
 type ProxyBody = BoxBody<Bytes, std::io::Error>;
+#[cfg(test)]
+mod tests;
 use crate::http::stream::{ResponseChunk, ResponseStream};
+use crate::http::termination::PrefixDelivery;
 use crate::recorder::CaseInvalidation;
 use http_body::{Body, Frame};
 use std::{
+    future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context as TaskContext, Poll},
 };
 
-pub(crate) struct CaptureContext {
-    pub state: AppState,
-    pub targets: DependencyTargets,
-    pub event: HttpExchangeEvent,
-    pub started: Instant,
-    pub termination: ClientTermination,
-}
+pub(crate) use super::dependency::HttpCaptureContext as CaptureContext;
 
 pub(crate) fn is_stream(headers: &HeaderMap) -> bool {
     headers
@@ -54,6 +48,10 @@ pub(crate) fn response(
     upstream: Response<Incoming>,
     mut context: CaptureContext,
 ) -> Response<ProxyBody> {
+    let upstream_termination = upstream
+        .extensions()
+        .get::<crate::http::client::UpstreamTermination>()
+        .cloned();
     let (mut parts, body) = upstream.into_parts();
     context.event.response_status = Some(parts.status.as_u16());
     context.event.response_headers = Some(redact_headers(
@@ -77,6 +75,7 @@ pub(crate) fn response(
             .iter()
             .any(|rule| rewrite::matches(rule, &input));
     let mut capture = Capture::new(context);
+    capture.upstream = upstream_termination;
     if requires_rewrite {
         capture.finish(false, Some("HTTP response rewrite requires a complete body and cannot be applied to a dependency stream".into()));
         return simple_response(
@@ -89,7 +88,15 @@ pub(crate) fn response(
     // EOF is part of this stream's evidence, even when the upstream knew length.
     headers.remove(hyper::header::CONTENT_LENGTH);
     parts.headers = headers;
-    Response::from_parts(parts, CaptureBody { body, capture }.boxed())
+    Response::from_parts(
+        parts,
+        CaptureBody {
+            body,
+            capture,
+            ending: None,
+        }
+        .boxed(),
+    )
 }
 
 struct Capture {
@@ -99,17 +106,21 @@ struct Capture {
     stream: ResponseStream,
     error: Option<String>,
     finished: bool,
+    upstream: Option<crate::http::client::UpstreamTermination>,
+    prefix: Arc<PrefixDelivery>,
 }
 
 impl Capture {
     fn new(context: CaptureContext) -> Self {
+        let prefix = Arc::new(PrefixDelivery::new(context.termination.delivery()));
+        prefix.queued();
         let headers_ms = context.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         Self {
             context,
             payload: Vec::new(),
             received: 0,
             stream: ResponseStream {
-                version: 1,
+                version: 2,
                 headers_ms,
                 chunks: Vec::new(),
                 end_ms: headers_ms,
@@ -118,6 +129,8 @@ impl Capture {
             },
             error: None,
             finished: false,
+            upstream: None,
+            prefix,
         }
     }
 
@@ -138,6 +151,7 @@ impl Capture {
         }
         let start = self.payload.len();
         self.payload.extend_from_slice(bytes);
+        self.prefix.queued();
         self.stream.chunks.push(ResponseChunk {
             at_ms: self
                 .context
@@ -159,22 +173,69 @@ impl Capture {
         }
     }
 
+    fn server_end(&self) -> Option<crate::dependency::termination::ObservedTermination> {
+        self.upstream
+            .as_ref()?
+            .observed_since(self.context.started)
+            .filter(|observed| self.context.accepts_server(*observed))
+    }
+
     fn finish(&mut self, eof: bool, error: Option<String>) {
         if self.finished {
             return;
         }
         self.finished = true;
-        self.error = self.error.take().or(error);
-        self.stream.complete = eof && self.error.is_none();
-        self.stream.end_ms = self
-            .context
-            .started
-            .elapsed()
-            .as_millis()
-            .min(u64::MAX as u128) as u64;
+        let capture_error = self.error.take();
+        // Body drop alone is not proof of cancellation. Only the independently
+        // observed downstream termination can complete a cancelled capture.
+        let client = (!eof)
+            .then(|| self.context.termination.cancelled())
+            .flatten();
+        let server = (!eof && capture_error.is_none())
+            .then(|| self.server_end())
+            .flatten()
+            .filter(|observed| self.context.accepts_server(*observed));
+        let terminated = server.or(client);
+        self.error = capture_error.or(error);
+        if server.is_none()
+            && client.is_some()
+            && !self.prefix.is_complete()
+            && self.error.is_none()
+        {
+            self.error =
+                Some("HTTP response prefix was not flushed before client cancellation".into());
+        }
+        if let Some(observed) = server {
+            match self.prefix.is_complete().then(|| {
+                self.context
+                    .termination
+                    .propagate_server(observed.termination)
+            }) {
+                None => {
+                    self.error = Some(
+                        "HTTP response prefix was not flushed before server termination".into(),
+                    )
+                }
+                Some(Ok(())) => self.error = None,
+                Some(Err(error)) => {
+                    self.error = Some(format!(
+                        "failed to forward HTTP server termination: {error}"
+                    ))
+                }
+            }
+        }
+        let duration = terminated.map_or_else(
+            || self.context.started.elapsed(),
+            |observed| observed.at.saturating_duration_since(self.context.started),
+        );
+        self.stream.complete = (eof || terminated.is_some()) && self.error.is_none();
+        self.stream.end_ms = duration.as_millis().min(u64::MAX as u128) as u64;
         let mut event = self.context.event.clone();
         event.timestamp = Utc::now();
-        event.duration_ms = self.context.started.elapsed().as_millis();
+        event.duration_ms = duration.as_millis();
+        if let Some(observed) = terminated {
+            event.outcome = crate::DependencyExchangeOutcome::Terminated(observed.termination);
+        }
         event.response_body = Some(crate::recorder::capture_body_with_original_len(
             &self.payload,
             self.received,
@@ -182,10 +243,9 @@ impl Capture {
         event.response_stream = Some(self.stream.clone());
         event.error = self.error.clone();
         if !self.stream.complete {
-            let reason = event
-                .error
-                .as_deref()
-                .unwrap_or("HTTP dependency stream ended without complete EOF evidence");
+            let reason = event.error.as_deref().unwrap_or(
+                "HTTP dependency stream ended without EOF or observed client termination",
+            );
             self.invalidate(reason);
         }
         self.context.state.record_event_for_targets(
@@ -200,18 +260,24 @@ impl Drop for Capture {
         if self.finished {
             return;
         }
-        let error = if self.context.termination.observed_at().is_some() {
-            "HTTP dependency client terminated after response headers; partial stream replay is unsupported"
+        let error = if self.context.termination.cancelled_at().is_some() {
+            None
         } else {
-            "HTTP dependency response body was dropped before EOF"
+            Some("HTTP dependency response body was dropped before EOF without observed client termination".into())
         };
-        self.finish(false, Some(error.into()));
+        self.finish(false, error);
     }
 }
 
 struct CaptureBody {
     body: Incoming,
     capture: Capture,
+    ending: Option<PendingServerEnd>,
+}
+
+struct PendingServerEnd {
+    flush: Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + Sync>>,
+    error: Option<std::io::Error>,
 }
 
 impl Body for CaptureBody {
@@ -223,6 +289,20 @@ impl Body for CaptureBody {
         cx: &mut TaskContext<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
         let this = self.get_mut();
+        if let Some(ending) = &mut this.ending {
+            match ending.flush.as_mut().poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(result) => {
+                    let error = ending.error.take().expect("pending upstream termination");
+                    this.ending = None;
+                    if let Err(flush_error) = result {
+                        this.capture.error = Some(flush_error.to_string());
+                    }
+                    this.capture.finish(false, Some(error.to_string()));
+                    return Poll::Ready(Some(Err(error)));
+                }
+            }
+        }
         match Pin::new(&mut this.body).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 if let Some(bytes) = frame.data_ref() {
@@ -241,6 +321,25 @@ impl Body for CaptureBody {
                 Poll::Ready(None)
             }
             Poll::Ready(Some(Err(error))) => {
+                if this.capture.error.is_none() && this.capture.server_end().is_some() {
+                    let prefix = this.capture.prefix.clone();
+                    let budget = std::time::Duration::from_millis(
+                        this.capture
+                            .context
+                            .state
+                            .config()
+                            .recording
+                            .case_dependency_drain_timeout_ms,
+                    );
+                    this.ending = Some(PendingServerEnd {
+                        flush: Box::pin(async move {
+                            tokio::time::timeout(budget, prefix.wait()).await.map_err(|_| std::io::Error::other("HTTP response prefix flush exceeded dependency cleanup budget"))
+                        }),
+                        error: Some(std::io::Error::other(error)),
+                    });
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
                 this.capture.finish(
                     false,
                     Some(format!("HTTP dependency stream read failed: {error}")),

@@ -134,7 +134,7 @@ async fn replay_case(case: &Path, target: SocketAddr) -> OutputObservation {
         serde_json::from_value(request_json["interaction"].clone()).unwrap();
     let origin = format!("http://{target}");
     let request = Request::builder()
-        .method("GET")
+        .method(request_json["method"].as_str().unwrap())
         .uri(
             crate::recorded_request::target_uri(&origin, request_json["uri"].as_str().unwrap())
                 .unwrap(),

@@ -5,6 +5,8 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+mod cancellation;
+
 #[tokio::test]
 async fn dependency_stream_capture_delivers_incrementally_and_holds_case_dependency_until_eof() {
     tokio::time::timeout(Duration::from_secs(5), capture_stream())

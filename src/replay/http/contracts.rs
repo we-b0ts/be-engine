@@ -162,6 +162,7 @@ pub(super) fn materialize_response(
         || exchange.source != ReplaySource::Case
         || exchange.shared_origin.is_some()
         || exchange.record.outcome.is_client_terminated()
+        || exchange.record.outcome.is_server_terminated()
     {
         return Ok(decision);
     }

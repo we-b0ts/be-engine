@@ -445,6 +445,7 @@ async fn mysql_recorder_retains_idle_candidates_and_keeps_active_calls_case_owne
             params: None,
             server_status_before: None,
             response: MysqlExchangeResponse {
+                wire_prefix: Vec::new(),
                 server_status: None,
                 status: "resultset".into(),
                 error_code: None,

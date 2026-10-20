@@ -145,6 +145,7 @@ pub(super) struct ReplayHttpBlackhole {
 
 enum HttpReplayMatchError {
     ClientTerminated(Box<termination::PendingHttpTermination>),
+    ServerTerminated(Box<termination::PendingHttpTermination>),
     Blackhole,
     BadGateway(String),
 }
@@ -516,7 +517,7 @@ impl ReplayState {
 impl ReplayHttpExchange {
     fn is_repeatable_preflight_probe(&self) -> bool {
         self.source == ReplaySource::Global
-            && !self.record.outcome.is_client_terminated()
+            && self.record.outcome == crate::DependencyExchangeOutcome::Response
             && self.record.global_dependency_reason.as_deref() == Some("preflight_probe")
             && self.record.global_dependency_phase.as_deref() == Some("runtime")
             && matches!(

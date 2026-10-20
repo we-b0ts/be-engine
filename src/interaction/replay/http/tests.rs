@@ -236,13 +236,14 @@ async fn observe_close_action(
         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:X}\r\n{data}\r\n{tail}", data.len()).as_bytes()).await.unwrap();
         if !server_eof {
             let mut buffer = [0; 1];
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(1), socket.read(&mut buffer))
-                    .await
-                    .expect("Target body was not cancelled")
-                    .unwrap(),
-                0
-            );
+            let ended = tokio::time::timeout(Duration::from_secs(1), socket.read(&mut buffer))
+                .await
+                .expect("Target body was not cancelled");
+            match ended {
+                Ok(0) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+                other => panic!("Target stream did not end: {other:?}"),
+            }
         }
     });
     let mut policy = policy();
@@ -379,12 +380,12 @@ async fn engine_idle_before_recorded_client_close_is_still_business_idle() {
 }
 
 #[tokio::test]
-async fn client_close_with_unfinished_business_remains_incomplete() {
+async fn client_close_with_unfinished_business_records_a_complete_cancellation() {
     let actual = observe_client_close("data: working\n\n", 50, 300, false)
         .await
         .unwrap();
     assert_eq!(actual.observation.end.reason, EndReason::ClientClose);
-    assert!(!actual.observation.end.clean);
+    assert!(actual.observation.end.clean);
     assert_eq!(actual.observation.end.pending, vec![0]);
     assert_eq!(actual.observation.end.close.as_ref().unwrap().code, None);
 }

@@ -710,3 +710,5 @@ fn stmt_execute_string_param(statement_id: u32, value: &str) -> Vec<u8> {
     payload.extend_from_slice(value.as_bytes());
     payload
 }
+
+mod termination;

@@ -99,7 +99,7 @@ pub(super) async fn write_push(
     bytes: &mut u64,
     payload: &[u8],
 ) -> Result<bool> {
-    if !*client_open || termination.client_ended_first() {
+    if !*client_open {
         *client_open = false;
         return Ok(false);
     }

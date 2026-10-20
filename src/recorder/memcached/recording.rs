@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::DependencyExchangeOutcome;
+use crate::dependency::TerminationSide;
+use crate::dependency::termination::ConnectionTermination;
 use crate::memcached::MemcachedWireProtocol;
 use crate::recorder::{
     MemcachedConnectionEvent, MemcachedExchangeEvent, RecorderEvent, capture_body,
@@ -21,22 +23,44 @@ pub(super) async fn finish_pending(
     context: &ConnectionContext,
     wire_protocol: MemcachedWireProtocol,
     pending: &Arc<Mutex<VecDeque<PendingMemcachedExchange>>>,
-    client_terminated: bool,
+    termination: &ConnectionTermination,
     max_frame_bytes: usize,
 ) -> Result<bool> {
     let exchanges = pending.lock().await.drain(..).collect::<Vec<_>>();
+    let multiple_pending = exchanges
+        .iter()
+        .filter(|exchange| !exchange.request.quiet && !exchange.request.noreply)
+        .count()
+        > 1;
     let mut replay_safe = true;
     for mut exchange in exchanges {
         let no_response = exchange.request.quiet || exchange.request.noreply;
-        if !no_response && !client_terminated {
+        let observed = termination
+            .snapshot()
+            .filter(|_| !termination.engine_stopped())
+            .filter(|observed| observed.termination.side != TerminationSide::Engine)
+            .filter(|observed| observed.at >= exchange.started);
+        if !no_response && observed.is_none() {
             exchange.replay_safe = false;
-            exchange
-                .warnings
-                .push("connection closed before Memcached response".to_string());
+            exchange.warnings.push(
+                if termination.engine_stopped() {
+                    "engine cleanup interrupted Memcached capture"
+                } else if termination.peer_snapshot().is_some_and(|end| end.at < exchange.started) {
+                    "Memcached request began after the recorded termination; post-terminal capture is unsupported"
+                } else {
+                    "connection closed before Memcached response"
+                }
+                .to_string(),
+            );
             replay_safe = false;
         }
-        if client_terminated && !no_response {
-            exchange.response_frames.clear();
+        if !no_response {
+            exchange.termination = observed;
+            if multiple_pending && observed.is_some() {
+                exchange.replay_safe = false;
+                exchange.warnings.push("multiple in-flight Memcached requests share a termination; batch replay is unsupported".into());
+                replay_safe = false;
+            }
         }
         record_exchange(
             state,
@@ -47,8 +71,8 @@ pub(super) async fn finish_pending(
             no_response,
             if no_response {
                 DependencyExchangeOutcome::NoResponse
-            } else if client_terminated {
-                DependencyExchangeOutcome::ClientTerminated
+            } else if let Some(observed) = observed {
+                DependencyExchangeOutcome::Terminated(observed.termination)
             } else {
                 DependencyExchangeOutcome::Response
             },
@@ -65,11 +89,27 @@ pub(super) async fn record_exchange(
     connection_id: Uuid,
     context: &ConnectionContext,
     wire_protocol: MemcachedWireProtocol,
-    pending: PendingMemcachedExchange,
+    mut pending: PendingMemcachedExchange,
     no_response: bool,
-    outcome: DependencyExchangeOutcome,
+    mut outcome: DependencyExchangeOutcome,
     max_frame_bytes: usize,
 ) -> Result<()> {
+    if pending
+        .termination
+        .is_some_and(|observed| observed.at < pending.started)
+    {
+        pending.termination = None;
+        outcome = DependencyExchangeOutcome::Response;
+        pending.replay_safe = false;
+        pending.warnings.push("Memcached request began after the recorded termination; post-terminal capture is unsupported".into());
+    }
+    let outcome = pending.termination.map_or(outcome, |observed| {
+        DependencyExchangeOutcome::Terminated(observed.termination)
+    });
+    let duration_ms = pending.termination.map_or_else(
+        || pending.started.elapsed().as_millis(),
+        |observed| observed.at.duration_since(pending.started).as_millis(),
+    );
     let request = pending.request;
     let key = request
         .key
@@ -98,6 +138,16 @@ pub(super) async fn record_exchange(
         && extras.as_ref().is_none_or(|capture| !capture.truncated)
         && args.iter().all(|capture| !capture.truncated)
         && response_frames.iter().all(|capture| !capture.truncated);
+    let prefix_safe = outcome.termination().is_none()
+        || pending.response_frame_offsets_ms.len() == response_frames.len()
+            && pending
+                .response_frame_offsets_ms
+                .windows(2)
+                .all(|pair| pair[0] <= pair[1])
+            && pending
+                .response_frame_offsets_ms
+                .iter()
+                .all(|offset| *offset <= duration_ms);
     let response_status = if no_response {
         "no_response".to_string()
     } else if wire_protocol == MemcachedWireProtocol::Binary {
@@ -140,10 +190,11 @@ pub(super) async fn record_exchange(
             quiet: request.quiet,
             response_status,
             response_frames,
+            response_frame_offsets_ms: pending.response_frame_offsets_ms,
             no_response,
             outcome,
-            duration_ms: pending.started.elapsed().as_millis(),
-            replay_safe: pending.replay_safe && captures_safe,
+            duration_ms,
+            replay_safe: pending.replay_safe && captures_safe && prefix_safe,
             parse_warnings: pending.warnings,
         }),
     )

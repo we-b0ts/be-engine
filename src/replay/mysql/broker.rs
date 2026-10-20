@@ -7,6 +7,7 @@ pub(in crate::replay) async fn handle_connection(
     state: Arc<Mutex<ReplayState>>,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
+    let control = crate::dependency::termination::ConnectionControl::new(&tcp_stream)?;
     write_packet_and_flush(&mut tcp_stream, handshake_packet(1)).await?;
     let first_login_packet = read_packet(&mut tcp_stream)
         .await
@@ -51,6 +52,8 @@ pub(in crate::replay) async fn handle_connection(
     )
     .await?;
     let mut session = ReplaySession {
+        control,
+        request_started: tokio::time::Instant::now(),
         target,
         database: login.database,
         username: login.username,
@@ -62,12 +65,41 @@ pub(in crate::replay) async fn handle_connection(
         let Some(packet) = read_packet(&mut stream).await? else {
             break;
         };
+        session.request_started = tokio::time::Instant::now();
         let Some(command) = parse_client_command(&packet) else {
             continue;
         };
         match command.command_name.as_str() {
             "COM_QUIT" => break,
             "COM_PING" | "COM_INIT_DB" => {
+                let matched = {
+                    let mut state = state.lock().await;
+                    state.match_mysql_control(
+                        &session.identity(),
+                        &command.command_name,
+                        command.query.as_deref(),
+                    )
+                };
+                if let Some(matched) = matched {
+                    let successful = matched.record.outcome
+                        == crate::DependencyExchangeOutcome::Response
+                        && matched.record.response.status == "ok";
+                    let directive = deliver_matched(
+                        &mut stream,
+                        state.clone(),
+                        &mut session,
+                        matched,
+                        ResultRowEncoding::Text,
+                    )
+                    .await?;
+                    if directive == SessionDirective::ClientTerminated {
+                        break;
+                    }
+                    if command.command_name == "COM_INIT_DB" && successful {
+                        session.database = command.query.clone();
+                    }
+                    continue;
+                }
                 if command.command_name == "COM_INIT_DB" {
                     session.database = command.query.clone();
                 }

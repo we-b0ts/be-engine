@@ -91,6 +91,30 @@ impl Recorder {
                 .get("event_type")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
+            if let Some(outcome) = value.get("outcome") {
+                let validation =
+                    serde_json::from_value::<crate::DependencyExchangeOutcome>(outcome.clone())
+                        .map_err(anyhow::Error::from)
+                        .and_then(crate::DependencyExchangeOutcome::validate);
+                if let Err(error) = validation {
+                    return Ok(Some(format!(
+                        "{event_type} has invalid transport termination evidence: {error}"
+                    )));
+                }
+            }
+            if event_type == "mysql_exchange" {
+                let terminated = value
+                    .get("outcome")
+                    .is_some_and(|outcome| outcome.is_object());
+                if value["response"]["status"] == "incomplete"
+                    || terminated
+                        && value["parse_warnings"]
+                            .as_array()
+                            .is_some_and(|warnings| !warnings.is_empty())
+                {
+                    return Ok(Some("mysql_exchange contains incomplete or unsupported transport capture evidence".into()));
+                }
+            }
             if matches!(
                 event_type,
                 "redis_connection"
@@ -202,6 +226,63 @@ mod tests {
         MotanExchangeEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent,
         RedisExchangeEvent, capture_body,
     };
+
+    #[tokio::test]
+    async fn mysql_peer_failure_can_publish_while_interrupted_capture_cannot() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        for (status, warning, peer_end, unsafe_capture) in [
+            ("server_terminated", None, true, false),
+            (
+                "server_terminated",
+                Some("unsupported pending batch"),
+                true,
+                true,
+            ),
+            (
+                "incomplete",
+                Some("engine cleanup interrupted capture"),
+                false,
+                true,
+            ),
+            ("error", None, false, false),
+        ] {
+            let case = CaseContext {
+                id: Uuid::new_v4(),
+                rule_name: "api".into(),
+                uri_group: None,
+            };
+            let mut exchange = mysql_exchange(Uuid::new_v4(), 1, "COM_QUERY", Some("SELECT value"));
+            exchange.response.status = status.into();
+            if peer_end {
+                exchange.outcome =
+                    DependencyExchangeOutcome::Terminated(crate::DependencyTermination {
+                        side: crate::TerminationSide::Server,
+                        kind: crate::TerminationKind::Reset,
+                        scope: crate::TerminationScope::Connection,
+                    });
+            }
+            if let Some(warning) = warning {
+                exchange.parse_warnings.push(warning.into());
+            }
+            recorder
+                .append_case_dependency(
+                    &case,
+                    &RecorderEvent::MysqlExchange(exchange),
+                    "active_window",
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                recorder
+                    .case_dependency_safety_issue(&case)
+                    .await
+                    .unwrap()
+                    .is_some(),
+                unsafe_capture
+            );
+        }
+    }
 
     #[tokio::test]
     async fn mysql_ping_preserves_semantic_evidence_while_probe_queries_stay_debug_only() {
@@ -541,6 +622,7 @@ mod tests {
             params: None,
             server_status_before: None,
             response: MysqlExchangeResponse {
+                wire_prefix: Vec::new(),
                 server_status: None,
                 status: "ok".to_string(),
                 error_code: None,

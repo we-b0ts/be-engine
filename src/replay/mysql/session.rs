@@ -1,4 +1,6 @@
 pub(in crate::replay) struct ReplaySession {
+    pub(in crate::replay) control: crate::dependency::termination::ConnectionControl,
+    pub(in crate::replay) request_started: tokio::time::Instant,
     pub(in crate::replay) target: Option<TargetKey>,
     pub(in crate::replay) database: Option<String>,
     pub(in crate::replay) username: Option<String>,
@@ -57,17 +59,42 @@ pub(in crate::replay) enum SessionDirective {
     ClientTerminated,
 }
 
-async fn deliver_matched(
+pub(super) async fn deliver_matched(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     state: Arc<Mutex<ReplayState>>,
     session: &mut ReplaySession,
     mut matched: MatchedExchange,
     row_encoding: ResultRowEncoding,
 ) -> Result<SessionDirective> {
-    if matched.timing.outcome().is_client_terminated() {
-        match matched.timing.await_client_termination(stream).await {
+    if matched.timing.outcome().is_client_terminated()
+        || matched.timing.outcome().is_server_terminated()
+    {
+        let result = super::termination::deliver(
+            stream,
+            &matched,
+            &session.control,
+            session.request_started,
+            row_encoding,
+        )
+        .await;
+        match result {
             Ok(_) => {
                 state.lock().await.complete_exchange(&matched);
+                if matched.timing.outcome().termination().is_some_and(|end| {
+                    end.side == crate::dependency::TerminationSide::Server
+                        && end.kind == crate::dependency::TerminationKind::Eof
+                }) {
+                    let mut probe = [0_u8; 1];
+                    if matches!(tokio::io::AsyncReadExt::read(stream, &mut probe).await, Ok(count) if count > 0)
+                    {
+                        state.lock().await.fail_exchange(
+                            &matched,
+                            &session.identity(),
+                            "client sent another MySQL request after recorded server EOF",
+                        );
+                        super::super::exchange::retain_connection(stream).await;
+                    }
+                }
                 return Ok(SessionDirective::ClientTerminated);
             }
             Err(error) => {
@@ -75,6 +102,7 @@ async fn deliver_matched(
                     .lock()
                     .await
                     .fail_exchange(&matched, &session.identity(), &error.to_string());
+                super::super::exchange::retain_connection(stream).await;
                 return Err(error);
             }
         }

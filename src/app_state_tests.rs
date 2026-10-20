@@ -542,6 +542,7 @@ async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned
             params: None,
             server_status_before: None,
             response: MysqlExchangeResponse {
+                wire_prefix: Vec::new(),
                 server_status: None,
                 status: "resultset".into(),
                 error_code: None,

@@ -10,6 +10,7 @@ pub(super) struct MotanDependencySummary {
     exchanges: usize,
     unsafe_events: usize,
     client_terminated: usize,
+    server_terminated: usize,
     exceptions: usize,
     targets: BTreeMap<String, usize>,
     methods: BTreeMap<String, usize>,
@@ -61,8 +62,9 @@ impl MotanSummaryBuilder {
                 .entry(version.to_string())
                 .or_default() += 1;
         }
-        match value.get("outcome").and_then(Value::as_str) {
+        match super::termination::label(value) {
             Some("client_terminated") => self.summary.client_terminated += 1,
+            Some("server_terminated") => self.summary.server_terminated += 1,
             _ if value.get("response_status").and_then(Value::as_str) == Some("exception") => {
                 self.summary.exceptions += 1;
             }

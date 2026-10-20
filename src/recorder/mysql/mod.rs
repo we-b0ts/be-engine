@@ -15,7 +15,8 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::MysqlRouteConfig;
 use crate::access_policy::{AccessDecision, MysqlAccessContext, evaluate_mysql_access};
-use crate::dependency::termination::ConnectionTermination;
+use crate::dependency::TerminationSide;
+use crate::dependency::termination::{ConnectionControl, ConnectionTermination, ObservedIo};
 use crate::mysql::access::analyze_command;
 use crate::mysql::wire::{
     MysqlPacket, ServerPacketInfo, clear_client_compression_capability,
@@ -159,8 +160,8 @@ async fn handle_mysql_connection(
 }
 
 pub(crate) async fn handle_connected_mysql(
-    mut client: TcpStream,
-    mut upstream: TcpStream,
+    client: TcpStream,
+    upstream: TcpStream,
     state: AppState,
     context: MysqlConnectionContext,
 ) -> Result<()> {
@@ -170,9 +171,16 @@ pub(crate) async fn handle_connected_mysql(
     upstream
         .set_nodelay(true)
         .context("failed to enable TCP_NODELAY for MySQL recording upstream")?;
-    let _connection = state
-        .dependency_connections()
-        .register("mysql", &[&client, &upstream])?;
+    let termination = ConnectionTermination::default();
+    let _connection = state.dependency_connections().register_observed(
+        "mysql",
+        &[&client, &upstream],
+        &termination,
+    )?;
+    let client_control = ConnectionControl::new(&client)?;
+    let upstream_control = ConnectionControl::new(&upstream)?;
+    let mut client = ObservedIo::new(client, termination.clone(), TerminationSide::Client);
+    let mut upstream = ObservedIo::new(upstream, termination.clone(), TerminationSide::Server);
     let connection_id = Uuid::new_v4();
     let started = Instant::now();
     let route_name = context.route_name.clone();
@@ -287,9 +295,12 @@ pub(crate) async fn handle_connected_mysql(
         },
     )));
     let dependency_ownerships = QueryDependencyOwnerships::default();
-    let termination = ConnectionTermination::default();
-    let (mut client_read, client_write) = tokio::io::split(client);
-    let (mut upstream_read, mut upstream_write) = tokio::io::split(upstream);
+    let (client_read, client_write) = tokio::io::split(client);
+    let (upstream_read, mut upstream_write) = tokio::io::split(upstream);
+    let mut client_read =
+        ObservedIo::new(client_read, termination.clone(), TerminationSide::Client);
+    let mut upstream_read =
+        ObservedIo::new(upstream_read, termination.clone(), TerminationSide::Server);
     let client_write = Arc::new(Mutex::new(client_write));
 
     let c2s_state = state.clone();
@@ -311,13 +322,19 @@ pub(crate) async fn handle_connected_mysql(
     let client_to_server = tokio::spawn(async move {
         let mut bytes = 0_u64;
         loop {
+            let before = client_read.bytes_read();
             let packet = match read_packet(&mut client_read).await {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
                     c2s_termination.observe_client_eof();
                     break;
                 }
-                Err(error) if c2s_termination.observe_client_io_error(&error) => break,
+                Err(error)
+                    if client_read.bytes_read() == before
+                        && c2s_termination.observe_client_io_error(&error) =>
+                {
+                    break;
+                }
                 Err(error) => return Err(error.into()),
             };
             bytes += packet.encoded_len() as u64;
@@ -381,10 +398,6 @@ pub(crate) async fn handle_connected_mysql(
                 let sequence = c2s_query_sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 c2s_dependency_ownerships.insert(sequence, dependency_ownership);
                 let expects_server_response = command.expects_server_response();
-                let closes_connection = command.command_name == "COM_QUIT";
-                if closes_connection {
-                    c2s_termination.observe_client_eof();
-                }
                 {
                     let mut tracker = c2s_query_tracker.lock().await;
                     if expects_server_response {
@@ -422,7 +435,14 @@ pub(crate) async fn handle_connected_mysql(
             // be rustls, whose write completion does not imply TCP delivery.
             write_packet(&mut upstream_write, &packet).await?;
         }
-        let _ = upstream_write.shutdown().await;
+        if c2s_termination
+            .connection_end(TerminationSide::Client)
+            .is_some()
+        {
+            let _ = upstream_control.reset();
+        } else {
+            let _ = upstream_write.shutdown().await;
+        }
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -433,86 +453,170 @@ pub(crate) async fn handle_connected_mysql(
     let s2c_client_write = client_write.clone();
     let s2c_termination = termination.clone();
     let server_to_client = tokio::spawn(async move {
-        let mut bytes = 0_u64;
-        loop {
-            let packet = match read_packet(&mut upstream_read).await {
-                Ok(Some(packet)) => packet,
-                Ok(None) => {
-                    s2c_termination.observe_server_eof();
-                    break;
+        let result = async {
+            let mut bytes = 0_u64;
+            loop {
+                upstream_read.begin_capture(0x00ff_ffff + 4);
+                let before = upstream_read.bytes_read();
+                let packet = match read_packet(&mut upstream_read).await {
+                    Ok(Some(packet)) => packet,
+                    Ok(None) => {
+                        s2c_termination.observe_server_eof();
+                        break;
+                    }
+                    Err(error)
+                        if upstream_read.bytes_read() == before
+                            && s2c_termination
+                                .observe_io_error(TerminationSide::Server, &error) =>
+                    {
+                        break;
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                bytes += packet.encoded_len() as u64;
+                let authenticating = !s2c_authenticated.load(Ordering::SeqCst);
+                if authenticating && parse_server_packet(&packet).kind == "ok" {
+                    s2c_authenticated.store(true, Ordering::SeqCst);
                 }
-                Err(error) => {
-                    let error = anyhow::Error::from(error);
-                    s2c_termination.observe_server_error(&error);
-                    return Err(error);
-                }
-            };
-            bytes += packet.encoded_len() as u64;
-            let authenticating = !s2c_authenticated.load(Ordering::SeqCst);
-            if authenticating && parse_server_packet(&packet).kind == "ok" {
-                s2c_authenticated.store(true, Ordering::SeqCst);
-            }
-            let mut completion = if s2c_authenticated.load(Ordering::SeqCst) {
-                s2c_query_tracker
-                    .lock()
-                    .await
-                    .observe_server_packet(&packet)?
-            } else {
-                Default::default()
-            };
-            if s2c_termination.client_ended_first() {
-                if completion.is_empty() {
-                    completion = s2c_query_tracker
+                let in_flight = s2c_query_tracker.lock().await.pending_len();
+                let mut completion = if s2c_authenticated.load(Ordering::SeqCst) {
+                    s2c_query_tracker
                         .lock()
                         .await
-                        .finish_active("client_terminated")?;
+                        .observe_server_packet(&packet)?
                 } else {
-                    completion.mark_client_terminated();
-                }
-                record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
-                break;
-            }
-            let response_complete = !completion.is_empty();
-            let write_result = {
-                let mut client_write = s2c_client_write.lock().await;
-                write_packet(&mut *client_write, &packet).await
-            };
-            match write_result {
-                Ok(()) => {
-                    if response_complete {
-                        record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion)
-                            .await?;
-                    }
-                }
-                Err(error) if s2c_termination.observe_client_io_error(&error) => {
+                    Default::default()
+                };
+                if s2c_termination.snapshot().is_some_and(|observed| {
+                    observed.termination.side == TerminationSide::Client
+                        && observed.termination.kind == crate::dependency::TerminationKind::Reset
+                }) {
                     if completion.is_empty() {
                         completion = s2c_query_tracker
                             .lock()
                             .await
                             .finish_active("client_terminated")?;
-                    } else {
-                        completion.mark_client_terminated();
+                    }
+                    if let Some(observed) = s2c_termination.snapshot() {
+                        completion.mark_terminated(observed);
+                    }
+                    if in_flight > 1 {
+                        completion.mark_unsupported_batch();
                     }
                     record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion)
                         .await?;
                     break;
                 }
-                Err(error) => return Err(error.into()),
+                let response_complete = !completion.is_empty();
+                upstream_read.begin_capture(0);
+                let write_result = {
+                    let mut client_write = s2c_client_write.lock().await;
+                    write_packet(&mut *client_write, &packet).await
+                };
+                match write_result {
+                    Ok(()) => {
+                        if response_complete {
+                            completion.mark_delivered();
+                            record_query_completion(
+                                &s2c_state,
+                                &s2c_dependency_ownerships,
+                                completion,
+                            )
+                            .await?;
+                        } else {
+                            s2c_query_tracker.lock().await.observe_delivery(&packet);
+                        }
+                    }
+                    Err(error) if s2c_termination.observe_client_io_error(&error) => {
+                        if completion.is_empty() {
+                            completion = s2c_query_tracker
+                                .lock()
+                                .await
+                                .finish_active("client_terminated")?;
+                        }
+                        if let Some(observed) = s2c_termination.snapshot() {
+                            completion.mark_terminated(observed);
+                        }
+                        completion.reject_partial_write();
+                        if in_flight > 1 {
+                            completion.mark_unsupported_batch();
+                        }
+                        record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion)
+                            .await?;
+                        break;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            let terminal = s2c_termination
+                .snapshot()
+                .filter(|_| !s2c_termination.engine_stopped())
+                .filter(|observed| observed.termination.side != TerminationSide::Engine);
+            let terminal_status = terminal.map_or("incomplete", |observed| {
+                if observed.termination.side == TerminationSide::Client {
+                    "client_terminated"
+                } else {
+                    "server_terminated"
+                }
+            });
+            let completions = s2c_query_tracker.lock().await.finish_all(terminal_status)?;
+            let multiple_pending = completions.len() > 1;
+            for mut completion in completions {
+                if multiple_pending && terminal.is_some() {
+                    completion.mark_unsupported_batch();
+                }
+                if s2c_termination.engine_stopped() {
+                    completion.mark_engine_cleanup();
+                }
+                if let Some(observed) = terminal {
+                    completion.mark_terminated(observed);
+                }
+                if !completion.is_empty() {
+                    record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion)
+                        .await?;
+                }
+            }
+            Ok::<u64, anyhow::Error>(bytes)
+        }
+        .await;
+        let capture_error = result
+            .as_ref()
+            .err()
+            .map(|error| format!("MySQL protocol capture failed: {error:#}"));
+        if capture_error.is_some() && !s2c_termination.engine_stopped() {
+            let mut writer = s2c_client_write.lock().await;
+            let _ = crate::dependency::termination::forward_captured(
+                &mut upstream_read,
+                &mut *writer,
+                &s2c_termination,
+                TerminationSide::Server,
+            )
+            .await;
+        }
+        if let Some(observed) = s2c_termination
+            .connection_end(TerminationSide::Server)
+            .or_else(|| s2c_termination.observed(TerminationSide::Server))
+        {
+            match observed.termination.kind {
+                crate::dependency::TerminationKind::Reset => {
+                    let _ = client_control.reset();
+                }
+                crate::dependency::TerminationKind::Eof => {
+                    let _ = s2c_client_write.lock().await.shutdown().await;
+                }
+                crate::dependency::TerminationKind::Cancelled => {}
             }
         }
-        let terminal_status = if s2c_termination.client_ended_first() {
-            "client_terminated"
-        } else {
-            "incomplete"
-        };
-        let completions = s2c_query_tracker.lock().await.finish_all(terminal_status)?;
-        for completion in completions {
-            if !completion.is_empty() {
-                record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
+        if let Some(error) = capture_error
+            && let Ok(completions) = s2c_query_tracker.lock().await.finish_all("incomplete")
+        {
+            for mut completion in completions {
+                completion.mark_capture_error(&error);
+                let _ = record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion)
+                    .await;
             }
         }
-        let _ = s2c_client_write.lock().await.shutdown().await;
-        Ok::<u64, anyhow::Error>(bytes)
+        result
     });
 
     let (c2s_result, s2c_result) = tokio::join!(client_to_server, server_to_client);
@@ -520,6 +624,13 @@ pub(crate) async fn handle_connected_mysql(
     let s2c_extra = s2c_result.context("server-to-client task panicked")??;
     client_to_server_bytes += c2s_extra;
     server_to_client_bytes += s2c_extra;
+
+    // A server FIN leaves the Source write direction open. Calls arriving after
+    // the response task ended have no exchange-relative termination evidence.
+    for mut completion in query_tracker.lock().await.finish_all("incomplete")? {
+        completion.mark_capture_error("MySQL request began after the response direction ended; post-terminal capture is unsupported");
+        record_query_completion(&state, &dependency_ownerships, completion).await?;
+    }
 
     record_connection(
         &state,

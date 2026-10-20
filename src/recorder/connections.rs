@@ -19,6 +19,7 @@ pub(crate) struct DependencyConnections(Arc<Mutex<HashMap<Uuid, Connection>>>);
 struct Connection {
     protocol: &'static str,
     sockets: Vec<StdTcpStream>,
+    termination: Option<crate::dependency::termination::ConnectionTermination>,
 }
 
 pub(crate) struct DependencyConnectionGuard {
@@ -40,6 +41,24 @@ impl DependencyConnections {
         protocol: &'static str,
         streams: &[&TcpStream],
     ) -> io::Result<DependencyConnectionGuard> {
+        self.register_inner(protocol, streams, None)
+    }
+
+    pub(crate) fn register_observed(
+        &self,
+        protocol: &'static str,
+        streams: &[&TcpStream],
+        termination: &crate::dependency::termination::ConnectionTermination,
+    ) -> io::Result<DependencyConnectionGuard> {
+        self.register_inner(protocol, streams, Some(termination.clone()))
+    }
+
+    fn register_inner(
+        &self,
+        protocol: &'static str,
+        streams: &[&TcpStream],
+        termination: Option<crate::dependency::termination::ConnectionTermination>,
+    ) -> io::Result<DependencyConnectionGuard> {
         let sockets = streams
             .iter()
             .map(|stream| stream.as_fd().try_clone_to_owned().map(StdTcpStream::from))
@@ -48,7 +67,14 @@ impl DependencyConnections {
         self.0
             .lock()
             .expect("dependency connections poisoned")
-            .insert(id, Connection { protocol, sockets });
+            .insert(
+                id,
+                Connection {
+                    protocol,
+                    sockets,
+                    termination,
+                },
+            );
         Ok(DependencyConnectionGuard {
             registry: self.clone(),
             id,
@@ -65,6 +91,9 @@ impl DependencyConnections {
         // Keep sockets alive through shutdown so OS descriptor reuse cannot affect
         // a newly opened connection. Registration also waits for this lock.
         for (id, connection) in connections.iter() {
+            if let Some(termination) = &connection.termination {
+                termination.observe_engine_stop();
+            }
             *report
                 .connections_by_protocol
                 .entry(connection.protocol)

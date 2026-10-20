@@ -90,10 +90,90 @@ async fn records_client_termination_as_a_replayable_timeout() {
 
     let events = traffic_events(&state).await;
     let exchange = event(&events, "motan_exchange");
-    assert_eq!(exchange["outcome"], "client_terminated");
+    assert_eq!(exchange["outcome"]["terminated"]["side"], "client");
     assert_eq!(exchange["response"]["original_len"], 0);
     assert_eq!(exchange["replay_safe"], true);
     assert!(exchange["duration_ms"].as_u64().unwrap() >= 30);
+}
+
+#[tokio::test]
+async fn records_server_eof_before_the_client_closes() {
+    let (state, _temp) = test_state().await;
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let handler = spawn_handler(
+        proxy_client,
+        proxy_upstream,
+        state.clone(),
+        upstream.peer_addr().unwrap(),
+    );
+    let request = request_frame(7, &["example.CardService", "getCard", "long"]);
+    client.write_all(&request).await.unwrap();
+    let mut forwarded = vec![0; request.len()];
+    upstream.read_exact(&mut forwarded).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    upstream.shutdown().await.unwrap();
+    let mut probe = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(200), client.read(&mut probe))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    drop(client);
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let events = traffic_events(&state).await;
+    let exchange = event(&events, "motan_exchange");
+    assert_eq!(exchange["outcome"]["terminated"]["side"], "server");
+    assert_eq!(exchange["outcome"]["terminated"]["kind"], "eof");
+    assert_eq!(exchange["replay_safe"], true);
+    assert!(exchange["duration_ms"].as_u64().unwrap() >= 20);
+}
+
+#[tokio::test]
+async fn forwards_response_after_client_write_half_is_closed() {
+    let (state, _temp) = test_state().await;
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let handler = spawn_handler(
+        proxy_client,
+        proxy_upstream,
+        state.clone(),
+        upstream.peer_addr().unwrap(),
+    );
+    let request = request_frame(7, &["example.CardService", "getCard", "long"]);
+    client.write_all(&request).await.unwrap();
+    let mut forwarded = vec![0; request.len()];
+    upstream.read_exact(&mut forwarded).await.unwrap();
+    client.shutdown().await.unwrap();
+    let mut probe = [0];
+    assert_eq!(upstream.read(&mut probe).await.unwrap(), 0);
+    let response = response_frame(7, b"after-half-close");
+    upstream.write_all(&response).await.unwrap();
+    let mut delivered = vec![0; response.len()];
+    tokio::time::timeout(
+        Duration::from_millis(200),
+        client.read_exact(&mut delivered),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(delivered, response);
+    drop(upstream);
+    drop(client);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let events = traffic_events(&state).await;
+    assert_eq!(event(&events, "motan_exchange")["outcome"], "response");
 }
 
 async fn test_state() -> (AppState, TempDir) {
@@ -184,3 +264,5 @@ fn frame(request_id: u64, request: bool, inner_flag: u8, body: &[u8]) -> Vec<u8>
     outer.extend_from_slice(&inner);
     outer
 }
+
+mod termination;

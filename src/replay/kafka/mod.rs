@@ -31,8 +31,10 @@ pub(super) async fn handle_connection(
         port: target.port,
     };
     state.lock().await.kafka.events.connections += 1;
+    let control = crate::dependency::termination::ConnectionControl::new(&stream)?;
 
     while let Some(payload) = read_frame(&mut stream, 64 * 1024 * 1024).await? {
+        let request_started = tokio::time::Instant::now();
         let decoded = decode_request(&payload)?;
         let active_case_id = state.lock().await.active_case_id.clone();
         if !replay_supports(decoded.api_key, decoded.header.request_api_version) {
@@ -59,7 +61,10 @@ pub(super) async fn handle_connection(
         if let Some(timing) = plan.timing() {
             match timing.outcome() {
                 DependencyExchangeOutcome::ClientTerminated => {
-                    match timing.await_client_termination(&mut stream).await {
+                    match timing
+                        .await_client_termination_at(&mut stream, request_started)
+                        .await
+                    {
                         Ok(_) => {
                             plan.commit(&state).await;
                             return Ok(());
@@ -67,9 +72,77 @@ pub(super) async fn handle_connection(
                         Err(error) => {
                             let reason = error.to_string();
                             plan.fail(&state, &target_key, reason).await;
+                            super::exchange::retain_connection(&mut stream).await;
                             return Err(error);
                         }
                     }
+                }
+                DependencyExchangeOutcome::Terminated(termination)
+                    if termination.side == crate::dependency::TerminationSide::Client =>
+                {
+                    match timing
+                        .await_client_termination_at(&mut stream, request_started)
+                        .await
+                    {
+                        Ok(_) => {
+                            plan.commit(&state).await;
+                            return Ok(());
+                        }
+                        Err(error) => {
+                            plan.fail(&state, &target_key, error.to_string()).await;
+                            super::exchange::retain_connection(&mut stream).await;
+                            return Err(error);
+                        }
+                    }
+                }
+                DependencyExchangeOutcome::Terminated(termination)
+                    if termination.side == crate::dependency::TerminationSide::Server =>
+                {
+                    let pending = timing
+                        .await_server_deadline(&mut stream, request_started, 64 * 1024 * 1024)
+                        .await;
+                    let pending = match pending {
+                        Ok(pending) if pending.is_empty() => pending,
+                        Ok(_) => {
+                            let error = anyhow::anyhow!(
+                                "Target pipelined another Kafka request before recorded server termination; native termination batch replay is unsupported"
+                            );
+                            plan.fail(&state, &target_key, error.to_string()).await;
+                            super::exchange::retain_connection(&mut stream).await;
+                            return Err(error);
+                        }
+                        Err(error) => {
+                            plan.fail(&state, &target_key, error.to_string()).await;
+                            super::exchange::retain_connection(&mut stream).await;
+                            return Err(error);
+                        }
+                    };
+                    debug_assert!(pending.is_empty());
+                    match timing
+                        .terminate_server_at(&mut stream, &control, request_started)
+                        .await
+                    {
+                        Ok(()) => {
+                            plan.commit(&state).await;
+                            if termination.kind == crate::dependency::TerminationKind::Eof {
+                                let mut probe = [0_u8; 1];
+                                if matches!(tokio::io::AsyncReadExt::read(&mut stream, &mut probe).await, Ok(count) if count > 0)
+                                {
+                                    state.lock().await.kafka.record_unsupported(active_case_id.as_deref(), &target_key, "after_server_eof".into(), "client sent another Kafka request after recorded server EOF".into());
+                                    super::exchange::retain_connection(&mut stream).await;
+                                }
+                            }
+                            return Ok(());
+                        }
+                        Err(error) => {
+                            plan.fail(&state, &target_key, error.to_string()).await;
+                            super::exchange::retain_connection(&mut stream).await;
+                            return Err(error);
+                        }
+                    }
+                }
+                DependencyExchangeOutcome::Terminated(_) => {
+                    anyhow::bail!("engine cleanup is not replayable Kafka peer termination")
                 }
                 DependencyExchangeOutcome::NoResponse => {
                     plan.commit(&state).await;

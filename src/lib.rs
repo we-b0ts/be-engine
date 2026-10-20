@@ -76,9 +76,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
 use rustls::{ClientConfig, RootCertStore};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -145,7 +143,10 @@ pub use config::{
     resolve_unified_policy_path,
 };
 pub use config::{KubernetesConfig, UpstreamRouteConfig, UpstreamTransportConfig};
-pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
+pub use dependency::{
+    DependencyExchangeOutcome, DependencyTermination, DiscoveredTcpTarget, TerminationKind,
+    TerminationScope, TerminationSide,
+};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
     DEFAULT_MAX_FAILED_CASES_PER_API, E2eApiRunResult, E2eCaseResponseDifference,
@@ -286,7 +287,7 @@ pub use startup::{
 pub use target_container::TargetImage;
 pub use tls::MitmCa;
 
-type ProxyClient = Client<HttpsConnector<HttpConnector>, http_body_util::Full<bytes::Bytes>>;
+type ProxyClient = Client<http::client::ObservedConnector, http_body_util::Full<bytes::Bytes>>;
 
 #[derive(Clone)]
 pub struct AppState {

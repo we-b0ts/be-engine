@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::http::stream::ResponseStream;
+use crate::http::termination::PrefixDelivery;
 use http_body::{Body, Frame};
 use http_body_util::combinators::BoxBody;
 use std::{
@@ -20,6 +21,8 @@ pub(super) async fn response(
     mut record: RecordedHttpExchange,
     started: tokio::time::Instant,
     state: Arc<Mutex<ReplayState>>,
+    client_prefix: Option<Arc<PrefixDelivery>>,
+    server_close: Option<termination::ServerClose>,
 ) -> Result<Response<DeliveryBody>> {
     let completion = DeliveryCompletion {
         state,
@@ -42,6 +45,13 @@ pub(super) async fn response(
     tokio::time::sleep_until(started + std::time::Duration::from_millis(stream.headers_ms)).await;
     let mut body = TimedBody::new(payload, stream.clone(), started);
     body.completion = Some(completion);
+    body.client_prefix = client_prefix;
+    body.server_close = server_close;
+    if body.stream.chunks.is_empty()
+        && let Some(delivered) = &body.client_prefix
+    {
+        delivered.queued();
+    }
     let mut response = Response::new(body.boxed());
     *response.status_mut() = status;
     *response.headers_mut() =
@@ -58,6 +68,8 @@ struct TimedBody {
     timer: Pin<Box<tokio::time::Sleep>>,
     finished: bool,
     completion: Option<DeliveryCompletion>,
+    client_prefix: Option<Arc<PrefixDelivery>>,
+    server_close: Option<termination::ServerClose>,
 }
 
 impl TimedBody {
@@ -76,6 +88,8 @@ impl TimedBody {
             )),
             finished: false,
             completion: None,
+            client_prefix: None,
+            server_close: None,
         }
     }
 }
@@ -89,6 +103,22 @@ impl Body for TimedBody {
         cx: &mut TaskContext<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
         let this = self.get_mut();
+        if this.next == this.stream.chunks.len()
+            && let Some(prefix) = &this.client_prefix
+        {
+            if this.server_close.is_some() {
+                if this.timer.as_mut().poll(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                this.server_close
+                    .take()
+                    .expect("server close")
+                    .after_prefix(prefix.clone());
+            }
+            // No synthetic EOF: Target must independently produce its recorded
+            // cancellation. The connection owner applies the bounded deadline.
+            return Poll::Pending;
+        }
         if this.finished {
             if let Some(completion) = &mut this.completion {
                 completion.finish(Ok(()));
@@ -101,6 +131,11 @@ impl Body for TimedBody {
         if let Some(chunk) = this.stream.chunks.get(this.next) {
             let bytes = this.payload.slice(chunk.start..chunk.end);
             this.next += 1;
+            if this.next == this.stream.chunks.len()
+                && let Some(delivered) = &this.client_prefix
+            {
+                delivered.queued();
+            }
             let next_ms = this
                 .stream
                 .chunks

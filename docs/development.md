@@ -3271,6 +3271,13 @@ consumes the exchange only after the SDK closes or resets the same connection
 near the recorded time; replay itself does not initiate that close. Intrinsic
 no-response commands remain `no_response` and are not treated as timeouts.
 
+New recordings additionally support structured `terminated` outcomes carrying
+the observed peer, mechanism and scope. Server EOF/reset is replayed as a server
+action; client termination requires Target's own action. Supported delivered
+response prefixes retain their original timing. Capture interruption and
+unsupported partial framing remain separate failures. See the
+[shared dependency termination contract](dependency-termination.md).
+
 HTTP and HTTPS dependencies also support `outcome: client_terminated` when a
 complete request was captured but the client closed or reset its connection
 while awaiting the buffered upstream response. This applies to the explicit
@@ -3288,8 +3295,10 @@ than the recorded `duration_ms`. A client that closes too early, too late, or
 never closes leaves the exchange dirty; the upper bound only limits cleanup,
 and engine-initiated cleanup is not successful client termination. This
 contract does not support a call-level timeout that leaves the connection
-open. HTTP termination evidence with missing timing, truncated request bytes,
-response bytes/headers, or a capture error is rejected. Legacy successful HTTP
+open. Legacy HTTP client-termination evidence with missing timing, truncated
+requests, response bytes/headers or capture errors is rejected. Version-2 HTTP
+stream evidence can retain response headers and a timed prefix before the
+recorded peer termination. Legacy successful HTTP
 records without `outcome` retain their response behavior; missing historical
 timeout exchanges cannot be recovered by upgrading Replay.
 

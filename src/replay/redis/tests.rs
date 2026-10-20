@@ -3,6 +3,7 @@ use crate::BackgroundDependencyRuleConfig;
 
 mod client_info;
 mod pooling_scope;
+mod termination;
 
 #[test]
 fn cache_snapshot_seed_can_satisfy_repeated_logical_reads() {

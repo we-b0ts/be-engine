@@ -175,22 +175,28 @@ business events into HTTP API origins. See
 [API-triggered process traffic](api-triggered-process-traffic.md) and
 [unified rule contracts](unified-rule-contracts.md) for policy authoring.
 
-Primary HTTP streams can record a client close after explicit business completion
-at a complete logical-message boundary. Replay sends that input cancellation at
-the corresponding actual Target completion plus the recorded post-completion
-gap, preserving that gap even when it is zero. It independently observes whether
-the client, server or engine actually closes first. Cancellation with pending
-business or a partial message remains incomplete. Finite server EOF and terminal followed by engine
-idle-close are also replayable. Socket.IO/WebSocket client close actions retain
-their close code and reason.
+Primary HTTP streams can record a client close at a complete logical-message
+boundary, including cancellation while business remains pending. The pending
+identities remain independent assertion evidence; cancellation does not fabricate
+business completion. Replay preserves the recorded client input timing unless
+an explicit terminal profile establishes a completion anchor. With that anchor,
+Replay waits for actual Target completion plus the full recorded gap, even when
+the gap is zero. Client, server and engine close origins remain distinct. Partial
+logical messages and engine-truncated capture remain unsupported. Socket.IO and
+WebSocket client close actions retain their close code and reason.
+For HTTP/1, TCP FIN alone closes only the request direction: the response may
+continue. An actual connection reset establishes cancellation; a pure FIN with
+an otherwise silent stream cannot prove that the client stopped receiving.
 
 HTTP dependency SSE/NDJSON/raw responses are captured incrementally on both the
-explicit proxy and fake-DNS transparent HTTP/HTTPS paths. Their semantic records
-retain one bounded payload plus timed byte ranges, header time, trailers and EOF.
-Replay preserves those delays and holds dependency delivery in flight until body
-completion. Incomplete dependency streams and full-body rewrite rules on streams
-fail explicitly. Client-cancelled dependency streams require a termination
-contract beyond this first complete-EOF adapter.
+explicit proxy and fake-DNS HTTP/HTTPS paths. Their semantic records retain one
+bounded payload plus timed byte ranges, header time and observed termination.
+Version 1 still requires complete EOF. Version 2 also supports response prefixes
+ending in a peer-origin EOF/reset or client cancellation. Replay preserves the
+timing and requires the real Target cancellation for client-origin endings;
+exhausting the recorded prefix never supplies a synthetic HTTP EOF. Buffered
+rewrites, lost evidence and engine-truncated streams fail explicitly. See the
+[shared termination contract](dependency-termination.md).
 
 Redis-coordinated sessions keep the same token-owned reservation through close
 and drain. Renewal never recreates a missing token or overwrites another owner.

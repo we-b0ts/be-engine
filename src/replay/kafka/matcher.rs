@@ -208,6 +208,15 @@ impl KafkaReplayState {
             DependencyExchangeOutcome::Response => "accepted",
             DependencyExchangeOutcome::ClientTerminated => "client_terminated",
             DependencyExchangeOutcome::NoResponse => "sent",
+            DependencyExchangeOutcome::Terminated(termination) => match termination.side {
+                crate::dependency::TerminationSide::Client => "client_terminated",
+                crate::dependency::TerminationSide::Server => "server_terminated",
+                crate::dependency::TerminationSide::Engine => {
+                    return Err(anyhow!(
+                        "engine cleanup cannot be Kafka termination evidence"
+                    ));
+                }
+            },
         };
         if !record.replay_safe || record.result != expected_result {
             return Err(anyhow!(
@@ -216,6 +225,12 @@ impl KafkaReplayState {
                 record.outcome
             ));
         }
+        anyhow::ensure!(
+            !record.outcome.termination().is_some_and(
+                |termination| termination.scope == crate::dependency::TerminationScope::Stream
+            ),
+            "Kafka native termination cannot have stream scope"
+        );
         let target = TargetKey {
             host: record.target_host,
             port: record.target_port,
@@ -249,6 +264,12 @@ impl KafkaReplayState {
         if !record.replay_safe || record.outcome == DependencyExchangeOutcome::NoResponse {
             return Err(anyhow!("Kafka fetch is not replay-safe response evidence"));
         }
+        anyhow::ensure!(
+            !record.outcome.termination().is_some_and(
+                |termination| termination.scope == crate::dependency::TerminationScope::Stream
+            ),
+            "Kafka native termination cannot have stream scope"
+        );
         let target = TargetKey {
             host: record.target_host,
             port: record.target_port,

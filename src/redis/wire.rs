@@ -98,9 +98,11 @@ where
             if reader.buffer.is_empty() {
                 return Ok(None);
             }
-            return Err(anyhow!(
-                "Redis connection closed with an incomplete RESP frame"
-            ));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Redis connection closed with an incomplete RESP frame",
+            )
+            .into());
         }
     }
 }

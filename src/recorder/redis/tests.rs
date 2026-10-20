@@ -10,6 +10,8 @@ use crate::{AppConfig, BackgroundDependencyRuleConfig, RecordingAccessPolicy};
 
 use super::*;
 
+mod termination;
+
 #[test]
 fn authentication_secrets_are_never_recorded() {
     let auth = RedisCommand {
@@ -443,7 +445,10 @@ async fn completed_exchange_accepts_abortive_client_close() {
     drop(client);
 
     let mut eof = [0_u8; 1];
-    assert_eq!(upstream.read(&mut eof).await.unwrap(), 0);
+    assert_eq!(
+        upstream.read(&mut eof).await.unwrap_err().kind(),
+        std::io::ErrorKind::ConnectionReset
+    );
     drop(upstream);
 
     let result = tokio::time::timeout(Duration::from_secs(1), handler)
@@ -487,7 +492,7 @@ async fn pending_exchange_records_client_termination_as_replay_safe() {
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|value| value["event_type"] == "redis_exchange")
         .unwrap();
-    assert_eq!(exchange["outcome"], "client_terminated");
+    assert_eq!(exchange["outcome"]["terminated"]["side"], "client");
     assert_eq!(exchange["response"]["original_len"], 0);
     assert_eq!(exchange["replay_safe"], true);
     assert!(exchange["duration_ms"].as_u64().unwrap() >= 50);
@@ -577,7 +582,14 @@ async fn partial_request_rejects_abortive_client_close() {
     drop(client);
 
     let mut forwarded = Vec::new();
-    upstream.read_to_end(&mut forwarded).await.unwrap();
+    assert_eq!(
+        upstream
+            .read_to_end(&mut forwarded)
+            .await
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::ConnectionReset
+    );
     assert_eq!(forwarded, b"*2\r\n$3\r\nGET\r\n$3\r\nke");
     drop(upstream);
 
