@@ -1,42 +1,11 @@
 //! Incremental HTTP forwarding; body ownership lasts through case finalization.
 
-use super::{
-    SessionRef,
-    body::LiveBody,
-    transport::{self, GatewayBody},
-};
+use super::{SessionRef, body::LiveBody, transport::GatewayBody};
 use crate::interaction::model::EndReason;
 use anyhow::{Context, Result, ensure};
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::{Request, Response};
+use http_body_util::BodyExt;
+use hyper::Response;
 use tokio::sync::mpsc;
-
-pub(super) async fn dispatch(
-    req: Request<Full<Bytes>>,
-    session: SessionRef,
-) -> Result<Response<GatewayBody>> {
-    let (parts, body) = req.into_parts();
-    let bytes = body.collect().await?.to_bytes();
-    let uri = transport::build_upstream_uri(&session.upstream, &parts.uri)?;
-    let mut outbound = transport::build_upstream_request(
-        &parts.method,
-        uri,
-        bytes,
-        &parts.headers,
-        session.state.config().http_gateway.preserve_host,
-    )?;
-    outbound.headers_mut().insert(
-        "accept-encoding",
-        hyper::header::HeaderValue::from_static("identity"),
-    );
-    let mut closing = session.close.subscribe();
-    let response = tokio::select! {
-        response = session.state.client().request(outbound) => response.context("stream upstream request failed")?,
-        _ = closing.changed() => anyhow::bail!("stream closed before response headers"),
-    };
-    forward(response, session).await
-}
 
 pub(super) async fn forward(
     response: Response<hyper::body::Incoming>,

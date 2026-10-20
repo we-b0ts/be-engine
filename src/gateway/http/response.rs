@@ -19,6 +19,36 @@ pub(super) struct AcquiredResponse {
     pub(super) stream: Option<Incoming>,
 }
 
+/// An offer is only an admission/encoding hint, never a response declaration.
+pub(super) fn offers_stream(headers: &HeaderMap) -> bool {
+    headers.get_all(hyper::header::ACCEPT).iter().any(|value| {
+        value.to_str().is_ok_and(|value| {
+            value.split(',').any(|range| {
+                matches!(
+                    range
+                        .split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "text/event-stream" | "application/x-ndjson" | "application/ndjson"
+                )
+            })
+        })
+    })
+}
+
+/// Preserve uncompressed framing without selecting the response protocol.
+pub(super) fn prefer_uncompressed_stream(request: &mut Request<Full<Bytes>>) {
+    if offers_stream(request.headers()) {
+        request.headers_mut().insert(
+            hyper::header::ACCEPT_ENCODING,
+            hyper::header::HeaderValue::from_static("identity"),
+        );
+    }
+}
+
 pub(super) async fn acquire(
     client: &ProxyClient,
     request: Request<Full<Bytes>>,

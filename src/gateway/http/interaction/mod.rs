@@ -119,6 +119,8 @@ pub(super) fn query(uri: &Uri, name: &str) -> Option<String> {
         .map(|(_, value)| value.into_owned())
 }
 
+/// Only upgrade/session protocols are fixed before dispatch. HTTP stream
+/// negotiation is resolved from the response Content-Type, not the Accept offer.
 pub(crate) fn request_protocol(req: &Request<Incoming>) -> Option<Protocol> {
     let socket = req
         .uri()
@@ -134,18 +136,7 @@ pub(crate) fn request_protocol(req: &Request<Incoming>) -> Option<Protocol> {
     if is_websocket(req) {
         return Some(Protocol::WebSocket);
     }
-    let accept = req
-        .headers()
-        .get("accept")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    if crate::http::sse::accepts_event_stream(req.headers()) {
-        Some(Protocol::Sse)
-    } else if accept.contains("application/x-ndjson") || accept.contains("application/ndjson") {
-        Some(Protocol::Ndjson)
-    } else {
-        None
-    }
+    None
 }
 
 pub(super) fn response_protocol(headers: &hyper::HeaderMap) -> Option<Protocol> {
@@ -462,16 +453,8 @@ async fn dispatch_full(
 ) -> Result<Response<GatewayBody>> {
     if is_websocket(&req) {
         websocket::dispatch(req, session, initial).await
-    } else if session
-        .observation
-        .lock()
-        .expect("interaction observation poisoned")
-        .protocol()
-        == Protocol::SocketIo
-    {
-        polling::dispatch(req, session, initial).await
     } else {
-        stream::dispatch(req, session).await
+        polling::dispatch(req, session, initial).await
     }
 }
 

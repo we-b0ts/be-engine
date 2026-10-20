@@ -177,13 +177,12 @@ async fn handle_gateway_request(
         &request_headers,
     ) {
         RuleDecision::Matched(_)
-            if !config.record_streaming
-                && crate::http::sse::accepts_event_stream(&request_headers) =>
+            if !config.record_streaming && response::offers_stream(&request_headers) =>
         {
             info!(
                 method = %method,
                 uri = %original_uri,
-                "HTTP gateway request declares SSE; streaming recording disabled, using fallback"
+                "HTTP gateway request offers a stream; streaming recording disabled, using fallback"
             );
             None
         }
@@ -344,7 +343,7 @@ async fn handle_gateway_request(
             }
         };
 
-        let outbound = match build_upstream_request(
+        let mut outbound = match build_upstream_request(
             &method,
             outbound_uri,
             request_body.clone(),
@@ -374,6 +373,9 @@ async fn handle_gateway_request(
             }
         };
 
+        if should_record && config.record_streaming {
+            response::prefer_uncompressed_stream(&mut outbound);
+        }
         let request_timeout = Duration::from_millis(config.request_timeout_ms);
         let upstream_response = response::acquire(
             state.client(),
