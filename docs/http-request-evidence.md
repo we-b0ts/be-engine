@@ -93,3 +93,5 @@ observation ID label Case/endpoint/method/path correlation as ambiguous evidence
 
 `backend-rewrite case dependencies` also includes HTTP(S) targets and bounded
 Source request metadata, with an `evidence --api` command for Replay details.
+For legacy Cases without an API pattern, this command selects the primary URI
+path and excludes its authority and query values. MOTAN API identities stay qualified.
