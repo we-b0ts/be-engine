@@ -73,12 +73,33 @@ pub(super) fn preferred_match<T>(
 where
     T: CommandExchangeScope,
 {
-    let case_match = match_in_scope(exchanges, ReplaySource::Case, active_case_id, &matches);
+    preferred_match_with_priority(exchanges, active_case_id, matches, |_| true)
+}
+
+/// Prefer protocol-required candidates within each ownership scope. A required
+/// candidate's lane barrier remains visible instead of selecting an unrelated
+/// eligible lane. Equal priorities retain recording order.
+pub(super) fn preferred_match_with_priority<T>(
+    exchanges: &[T],
+    active_case_id: Option<&str>,
+    matches: impl Fn(&T) -> bool,
+    priority: impl Fn(&T) -> bool,
+) -> PreferredMatch
+where
+    T: CommandExchangeScope,
+{
+    let case_match = match_in_scope(
+        exchanges,
+        ReplaySource::Case,
+        active_case_id,
+        &matches,
+        &priority,
+    );
     if matches!(case_match, PreferredMatch::Matched(_)) {
         return case_match;
     }
 
-    let global_match = match_in_scope(exchanges, ReplaySource::Global, None, &matches);
+    let global_match = match_in_scope(exchanges, ReplaySource::Global, None, &matches, &priority);
     if matches!(global_match, PreferredMatch::Matched(_)) {
         return global_match;
     }
@@ -130,20 +151,34 @@ fn match_in_scope<T>(
     source: ReplaySource,
     case_id: Option<&str>,
     matches: &impl Fn(&T) -> bool,
+    priority: &impl Fn(&T) -> bool,
 ) -> PreferredMatch
 where
     T: CommandExchangeScope,
 {
     let mut first_blocked = None;
+    let mut first_match = None;
+    let mut priority_blocked = None;
     for (index, exchange) in exchanges.iter().enumerate() {
         if !scope_matches(exchange, source, case_id) || !matches(exchange) {
             continue;
         }
         if let Some(blocker) = lane_blocker(exchanges, index) {
             first_blocked.get_or_insert((index, blocker));
-        } else {
+            if priority(exchange) {
+                priority_blocked.get_or_insert((index, blocker));
+            }
+        } else if priority(exchange) {
             return PreferredMatch::Matched(index);
+        } else {
+            first_match.get_or_insert(index);
         }
+    }
+    if let Some((candidate, blocker)) = priority_blocked {
+        return PreferredMatch::LaneBlocked { candidate, blocker };
+    }
+    if let Some(index) = first_match {
+        return PreferredMatch::Matched(index);
     }
     first_blocked.map_or(PreferredMatch::NotFound, |(candidate, blocker)| {
         PreferredMatch::LaneBlocked { candidate, blocker }

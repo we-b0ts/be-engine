@@ -270,6 +270,9 @@ is unclear.
   evidence, subscription routing and delivery; its `adapter` child owns
   Socket.IO Redis-adapter identity correlation, while `subscription_evidence`
   resolves exact recording-level anchors and canonical single-use aliases.
+  The adapter retains subscription anchors required by linked RPC callbacks;
+  command matching applies their preference within the existing ownership scope
+  without bypassing source-lane order, session eligibility or connection claims.
   Payload semantics remain with
   the application. Source acquisition and Replay do not consume HTTP oracles.
   The RPC adapter supplies protocol-identity comparison copies to request policy;
