@@ -11,7 +11,10 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::DependencyExchangeOutcome;
 use crate::access_policy::AccessDecision;
-use crate::dependency::termination::ConnectionTermination;
+use crate::dependency::TerminationSide;
+use crate::dependency::termination::{
+    ConnectionControl, ConnectionTermination, ObservedIo, ObservedTermination,
+};
 use crate::memcached::access::classify_request;
 use crate::memcached::{
     BinaryFrame, BufferedReader, MemcachedRequest, MemcachedWireProtocol,
@@ -42,9 +45,11 @@ struct PendingMemcachedExchange {
     sequence: u64,
     request: MemcachedRequest,
     response_frames: Vec<Vec<u8>>,
+    response_frame_offsets_ms: Vec<u128>,
     replay_safe: bool,
     warnings: Vec<String>,
     started: Instant,
+    termination: Option<ObservedTermination>,
 }
 
 pub(crate) async fn handle_connected(
@@ -55,9 +60,12 @@ pub(crate) async fn handle_connected(
     wire_protocol: MemcachedWireProtocol,
 ) -> Result<()> {
     let connection_id = Uuid::new_v4();
-    let _connection = state
-        .dependency_connections()
-        .register("memcached", &[&client, &upstream])?;
+    let termination = ConnectionTermination::default();
+    let _connection = state.dependency_connections().register_observed(
+        "memcached",
+        &[&client, &upstream],
+        &termination,
+    )?;
     let started = Instant::now();
     record_connection(
         &state,
@@ -80,6 +88,7 @@ pub(crate) async fn handle_connected(
                 state.clone(),
                 context.clone(),
                 connection_id,
+                termination,
             )
             .await
         }
@@ -90,6 +99,7 @@ pub(crate) async fn handle_connected(
                 state.clone(),
                 context.clone(),
                 connection_id,
+                termination,
             )
             .await
         }
@@ -123,6 +133,7 @@ async fn proxy_text(
     state: AppState,
     context: ConnectionContext,
     connection_id: Uuid,
+    termination: ConnectionTermination,
 ) -> Result<(u64, u64, bool)> {
     let max_frame_bytes = state.config().recording.max_body_bytes;
     let pending = Arc::new(Mutex::new(VecDeque::<PendingMemcachedExchange>::new()));
@@ -132,7 +143,8 @@ async fn proxy_text(
         context.client_addr.clone(),
         context.target_addr.clone(),
     ));
-    let termination = ConnectionTermination::default();
+    let client_control = ConnectionControl::new(&client)?;
+    let upstream_control = ConnectionControl::new(&upstream)?;
     let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
@@ -144,8 +156,16 @@ async fn proxy_text(
     let c2s_client_write = client_write.clone();
     let c2s_pending_drained = pending_drained.clone();
     let c2s_termination = termination.clone();
+    let c2s_upstream_control = upstream_control.clone();
     let c2s = tokio::spawn(async move {
-        let mut reader = BufferedReader::new(client_read, max_frame_bytes);
+        let mut reader = BufferedReader::new(
+            ObservedIo::new(
+                client_read,
+                c2s_termination.clone(),
+                TerminationSide::Client,
+            ),
+            max_frame_bytes,
+        );
         let mut sequence = 0_u64;
         let mut bytes = 0_u64;
         loop {
@@ -242,9 +262,11 @@ async fn proxy_text(
                 sequence,
                 request,
                 response_frames: Vec::new(),
+                response_frame_offsets_ms: Vec::new(),
                 replay_safe,
                 warnings,
                 started: Instant::now(),
+                termination: None,
             };
             if no_response {
                 upstream_write
@@ -269,7 +291,14 @@ async fn proxy_text(
                 bytes += raw.len() as u64;
             }
         }
-        let _ = upstream_write.shutdown().await;
+        if c2s_termination
+            .connection_end(TerminationSide::Client)
+            .is_some()
+        {
+            let _ = c2s_upstream_control.reset();
+        } else {
+            let _ = upstream_write.shutdown().await;
+        }
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -281,7 +310,14 @@ async fn proxy_text(
     let s2c_pending_drained = pending_drained.clone();
     let s2c_termination = termination.clone();
     let s2c = tokio::spawn(async move {
-        let mut reader = BufferedReader::new(upstream_read, max_frame_bytes);
+        let mut reader = BufferedReader::new(
+            ObservedIo::new(
+                upstream_read,
+                s2c_termination.clone(),
+                TerminationSide::Server,
+            ),
+            max_frame_bytes,
+        );
         let mut bytes = 0_u64;
         loop {
             let command = {
@@ -291,7 +327,7 @@ async fn proxy_text(
                     .map(|exchange| exchange.request.command.clone())
             };
             let Some(command) = command else {
-                if reader.inner.readable().await.is_err() {
+                if reader.inner.get_ref().readable().await.is_err() {
                     break;
                 }
                 if !s2c_pending.lock().await.is_empty() {
@@ -311,7 +347,7 @@ async fn proxy_text(
                     break;
                 }
                 let mut probe = [0_u8; 1];
-                match reader.inner.peek(&mut probe).await {
+                match reader.inner.get_mut().peek(&mut probe).await {
                     Ok(0) => {
                         s2c_termination.observe_server_eof();
                         break;
@@ -356,8 +392,12 @@ async fn proxy_text(
                     s2c_termination.observe_server_eof();
                     break;
                 }
+                Err(error)
+                    if reader.buffer.is_empty() && s2c_termination.observe_server_error(&error) =>
+                {
+                    break;
+                }
                 Err(error) => {
-                    s2c_termination.observe_server_error(&error);
                     s2c_capture_health.activate(
                         &s2c_state,
                         format!(
@@ -397,8 +437,16 @@ async fn proxy_text(
                 .expect("pending Memcached text request");
             s2c_pending_drained.notify_waiters();
             exchange.response_frames.push(response.to_vec());
-            if s2c_termination.client_ended_first() {
-                exchange.response_frames.clear();
+            if s2c_termination.snapshot().is_some_and(|observed| {
+                observed.termination.side == TerminationSide::Client
+                    && observed.termination.kind == crate::dependency::TerminationKind::Reset
+            }) {
+                exchange.response_frames.pop();
+                exchange.termination = s2c_termination.snapshot();
+                if !s2c_pending.lock().await.is_empty() {
+                    exchange.replay_safe = false;
+                    exchange.warnings.push("multiple in-flight Memcached requests share a termination; batch replay is unsupported".into());
+                }
                 record_exchange(
                     &s2c_state,
                     connection_id,
@@ -415,6 +463,9 @@ async fn proxy_text(
             match s2c_client_write.lock().await.write_all(&response).await {
                 Ok(()) => {
                     bytes += response.len() as u64;
+                    exchange
+                        .response_frame_offsets_ms
+                        .push(exchange.started.elapsed().as_millis());
                     record_exchange(
                         &s2c_state,
                         connection_id,
@@ -428,7 +479,15 @@ async fn proxy_text(
                     .await?;
                 }
                 Err(error) if s2c_termination.observe_client_io_error(&error) => {
-                    exchange.response_frames.clear();
+                    if let Some(observed) = s2c_termination.snapshot() {
+                        exchange.termination = Some(observed);
+                    }
+                    exchange.replay_safe = false;
+                    exchange
+                        .warnings
+                        .push("response write failed after an unknown delivery prefix".into());
+                    exchange.response_frames.pop();
+                    exchange.termination = s2c_termination.snapshot();
                     record_exchange(
                         &s2c_state,
                         connection_id,
@@ -445,7 +504,14 @@ async fn proxy_text(
                 Err(error) => return Err(error.into()),
             }
         }
-        let _ = s2c_client_write.lock().await.shutdown().await;
+        if s2c_termination
+            .connection_end(TerminationSide::Server)
+            .is_some()
+        {
+            let _ = client_control.reset();
+        } else {
+            let _ = s2c_client_write.lock().await.shutdown().await;
+        }
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -458,7 +524,7 @@ async fn proxy_text(
         &context,
         MemcachedWireProtocol::Text,
         &pending,
-        termination.client_ended_first(),
+        &termination,
         max_frame_bytes,
     )
     .await?;
@@ -474,6 +540,7 @@ async fn proxy_binary(
     state: AppState,
     context: ConnectionContext,
     connection_id: Uuid,
+    termination: ConnectionTermination,
 ) -> Result<(u64, u64, bool)> {
     let max_frame_bytes = state.config().recording.max_body_bytes;
     let pending = Arc::new(Mutex::new(VecDeque::<PendingMemcachedExchange>::new()));
@@ -483,7 +550,8 @@ async fn proxy_binary(
         context.client_addr.clone(),
         context.target_addr.clone(),
     ));
-    let termination = ConnectionTermination::default();
+    let client_control = ConnectionControl::new(&client)?;
+    let upstream_control = ConnectionControl::new(&upstream)?;
     let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
@@ -493,8 +561,16 @@ async fn proxy_binary(
     let c2s_context = context.clone();
     let c2s_client_write = client_write.clone();
     let c2s_termination = termination.clone();
+    let c2s_upstream_control = upstream_control.clone();
     let c2s = tokio::spawn(async move {
-        let mut reader = BufferedReader::new(client_read, max_frame_bytes);
+        let mut reader = BufferedReader::new(
+            ObservedIo::new(
+                client_read,
+                c2s_termination.clone(),
+                TerminationSide::Client,
+            ),
+            max_frame_bytes,
+        );
         let mut sequence = 0_u64;
         let mut bytes = 0_u64;
         loop {
@@ -618,14 +694,23 @@ async fn proxy_binary(
                     sequence,
                     request,
                     response_frames: Vec::new(),
+                    response_frame_offsets_ms: Vec::new(),
                     replay_safe: !sasl && !unknown,
                     warnings,
                     started: Instant::now(),
+                    termination: None,
                 });
             upstream_write.write_all(&frame.raw).await?;
             bytes += frame.raw.len() as u64;
         }
-        let _ = upstream_write.shutdown().await;
+        if c2s_termination
+            .connection_end(TerminationSide::Client)
+            .is_some()
+        {
+            let _ = c2s_upstream_control.reset();
+        } else {
+            let _ = upstream_write.shutdown().await;
+        }
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -636,7 +721,14 @@ async fn proxy_binary(
     let s2c_client_write = client_write.clone();
     let s2c_termination = termination.clone();
     let s2c = tokio::spawn(async move {
-        let mut reader = BufferedReader::new(upstream_read, max_frame_bytes);
+        let mut reader = BufferedReader::new(
+            ObservedIo::new(
+                upstream_read,
+                s2c_termination.clone(),
+                TerminationSide::Server,
+            ),
+            max_frame_bytes,
+        );
         let mut bytes = 0_u64;
         loop {
             let frame = match read_binary_frame(&mut reader).await {
@@ -645,8 +737,12 @@ async fn proxy_binary(
                     s2c_termination.observe_server_eof();
                     break;
                 }
+                Err(error)
+                    if reader.buffer.is_empty() && s2c_termination.observe_server_error(&error) =>
+                {
+                    break;
+                }
                 Err(error) => {
-                    s2c_termination.observe_server_error(&error);
                     s2c_capture_health.activate(
                         &s2c_state,
                         format!(
@@ -697,7 +793,7 @@ async fn proxy_binary(
                 .await?;
                 break;
             }
-            let (quiet_completed, completed) =
+            let (quiet_completed, mut completed) =
                 correlate_binary_response(&s2c_pending, &frame).await?;
             for exchange in quiet_completed {
                 record_exchange(
@@ -712,9 +808,17 @@ async fn proxy_binary(
                 )
                 .await?;
             }
-            if s2c_termination.client_ended_first() {
+            if s2c_termination.snapshot().is_some_and(|observed| {
+                observed.termination.side == TerminationSide::Client
+                    && observed.termination.kind == crate::dependency::TerminationKind::Reset
+            }) {
                 if let Some(mut exchange) = completed {
-                    exchange.response_frames.clear();
+                    exchange.response_frames.pop();
+                    exchange.termination = s2c_termination.snapshot();
+                    if !s2c_pending.lock().await.is_empty() {
+                        exchange.replay_safe = false;
+                        exchange.warnings.push("multiple in-flight Memcached requests share a termination; batch replay is unsupported".into());
+                    }
                     record_exchange(
                         &s2c_state,
                         connection_id,
@@ -726,12 +830,33 @@ async fn proxy_binary(
                         max_frame_bytes,
                     )
                     .await?;
+                } else if let Some(exchange) = s2c_pending
+                    .lock()
+                    .await
+                    .iter_mut()
+                    .find(|exchange| exchange.request.opaque == Some(frame.opaque))
+                {
+                    exchange.response_frames.pop();
                 }
                 break;
             }
             match s2c_client_write.lock().await.write_all(&frame.raw).await {
                 Ok(()) => {
                     bytes += frame.raw.len() as u64;
+                    if let Some(exchange) = completed.as_mut() {
+                        exchange
+                            .response_frame_offsets_ms
+                            .push(exchange.started.elapsed().as_millis());
+                    } else if let Some(exchange) = s2c_pending
+                        .lock()
+                        .await
+                        .iter_mut()
+                        .find(|exchange| exchange.request.opaque == Some(frame.opaque))
+                    {
+                        exchange
+                            .response_frame_offsets_ms
+                            .push(exchange.started.elapsed().as_millis());
+                    }
                     if let Some(exchange) = completed {
                         record_exchange(
                             &s2c_state,
@@ -747,8 +872,17 @@ async fn proxy_binary(
                     }
                 }
                 Err(error) if s2c_termination.observe_client_io_error(&error) => {
+                    s2c_capture_health.activate(
+                        &s2c_state,
+                        "Memcached response write failed after an unknown delivery prefix".into(),
+                    );
                     if let Some(mut exchange) = completed {
-                        exchange.response_frames.clear();
+                        exchange.termination = s2c_termination.snapshot();
+                        exchange.replay_safe = false;
+                        exchange
+                            .warnings
+                            .push("response write failed after an unknown delivery prefix".into());
+                        exchange.response_frames.pop();
                         record_exchange(
                             &s2c_state,
                             connection_id,
@@ -766,7 +900,14 @@ async fn proxy_binary(
                 Err(error) => return Err(error.into()),
             }
         }
-        let _ = s2c_client_write.lock().await.shutdown().await;
+        if s2c_termination
+            .connection_end(TerminationSide::Server)
+            .is_some()
+        {
+            let _ = client_control.reset();
+        } else {
+            let _ = s2c_client_write.lock().await.shutdown().await;
+        }
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -779,7 +920,7 @@ async fn proxy_binary(
         &context,
         MemcachedWireProtocol::Binary,
         &pending,
-        termination.client_ended_first(),
+        &termination,
         max_frame_bytes,
     )
     .await?;

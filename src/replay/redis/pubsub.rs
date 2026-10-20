@@ -229,7 +229,11 @@ impl PubSubState {
         matched: &MatchedRedisExchange,
         sender: mpsc::Sender<Delivery>,
     ) -> Result<Option<NotificationJob>> {
-        if matched.response.starts_with(b"-") || !is_pubsub_command(&command.name) {
+        if matched.response.starts_with(b"-")
+            || !is_pubsub_command(&command.name)
+            || matched.timing.outcome().termination().is_some()
+            || matched.timing.outcome().is_client_terminated()
+        {
             return Ok(None);
         }
         let kind = match command.name.as_str() {

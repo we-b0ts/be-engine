@@ -12,9 +12,11 @@ pub(super) async fn record_exchange(
     outcome: DependencyExchangeOutcome,
     max_frame_bytes: usize,
 ) -> Result<()> {
-    let subscription_replay_safe = if is_pubsub_command(&pending.command.name)
-        && pending.session.resp_version != 2
+    let subscription_replay_safe = if outcome.is_client_terminated()
+        || outcome.is_server_terminated()
     {
+        true
+    } else if is_pubsub_command(&pending.command.name) && pending.session.resp_version != 2 {
         pending
             .warnings
             .push("Redis Pub/Sub replay requires RESP2".to_string());
@@ -57,6 +59,7 @@ pub(super) async fn record_exchange(
         && args.iter().all(|argument| !argument.truncated)
         && (response_kind != RedisFrameKind::Other
             || outcome.is_client_terminated()
+            || outcome.is_server_terminated()
             || terminal_quit);
     let confirmed_subscription = replay_safe
         && matches!(
@@ -87,7 +90,11 @@ pub(super) async fn record_exchange(
         cache_snapshot_hit: pending.cache_snapshot_hit,
         session_setup: pending.session_setup,
         outcome,
-        duration_ms: pending.started.elapsed().as_millis(),
+        duration_ms: pending
+            .ended_at
+            .unwrap_or_else(Instant::now)
+            .saturating_duration_since(pending.started)
+            .as_millis(),
         replay_safe,
         parse_warnings: pending.warnings,
     });
@@ -134,4 +141,55 @@ pub(super) async fn record_connection(
         }),
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn record_termination(
+    state: &AppState,
+    connection_id: Uuid,
+    context: &ConnectionContext,
+    mut exchange: PendingRedisExchange,
+    response: &[u8],
+    termination: &ConnectionTermination,
+    healthy: bool,
+    max_frame_bytes: usize,
+) -> Result<bool> {
+    if let Some(key) = exchange.cache_snapshot_key.take() {
+        state
+            .abort_cache_snapshot(&key, "Redis snapshot fill ended before a response")
+            .await;
+    }
+    let terminal = termination.outcome_since(exchange.started);
+    let clean_quit = is_terminal_quit(&exchange.command) && healthy;
+    let prefix_timing_known =
+        response.is_empty() || terminal.is_some_and(|(outcome, _)| outcome.is_server_terminated());
+    let complete = healthy && prefix_timing_known && (terminal.is_some() || clean_quit);
+    exchange.replay_safe &= complete;
+    if !complete {
+        exchange.warnings.push(if termination.engine_stopped() {
+            "engine cleanup interrupted Redis capture".to_string()
+        } else if !prefix_timing_known {
+            "Redis client termination with response prefix lacks delivery timing; multi-stage half-close replay is unsupported".to_string()
+        } else {
+            "connection closed before Redis response".to_string()
+        });
+    }
+    exchange.ended_at = termination.snapshot().map(|observed| observed.at);
+    let outcome = if clean_quit {
+        DependencyExchangeOutcome::NoResponse
+    } else {
+        terminal.map_or(DependencyExchangeOutcome::Response, |(outcome, _)| outcome)
+    };
+    record_exchange(
+        state,
+        connection_id,
+        context,
+        exchange,
+        RedisFrameKind::Other,
+        response,
+        outcome,
+        max_frame_bytes,
+    )
+    .await?;
+    Ok(complete)
 }

@@ -810,6 +810,7 @@ fn mysql_exchange(
         params: None,
         server_status_before: None,
         response: MysqlExchangeResponse {
+            wire_prefix: Vec::new(),
             server_status: None,
             status: status.to_string(),
             error_code,

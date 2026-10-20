@@ -1,5 +1,6 @@
 use std::io;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -10,10 +11,11 @@ use super::{DependencyConnectionGuard, DependencyConnections};
 /// Keep registration with the transport, including HTTP CONNECT upgrades and TLS.
 pub(crate) struct DependencyIo {
     stream: TcpStream,
-    _registration: DependencyConnectionGuard,
+    registration: Arc<DependencyConnectionGuard>,
 }
 
 impl DependencyIo {
+    #[cfg(test)]
     pub(crate) fn new(
         stream: TcpStream,
         registry: &DependencyConnections,
@@ -22,8 +24,25 @@ impl DependencyIo {
         let registration = registry.register(protocol, &[&stream])?;
         Ok(Self {
             stream,
-            _registration: registration,
+            registration: Arc::new(registration),
         })
+    }
+
+    pub(crate) fn new_observed(
+        stream: TcpStream,
+        registry: &DependencyConnections,
+        protocol: &'static str,
+        termination: &crate::dependency::termination::ConnectionTermination,
+    ) -> io::Result<Self> {
+        let registration = registry.register_observed(protocol, &[&stream], termination)?;
+        Ok(Self {
+            stream,
+            registration: Arc::new(registration),
+        })
+    }
+
+    pub(crate) fn registration(&self) -> Arc<DependencyConnectionGuard> {
+        self.registration.clone()
     }
 }
 

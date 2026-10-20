@@ -125,7 +125,7 @@ impl RepresentativeRedisExchanges {
                 .transpose()?
                 .flatten(),
             response_kind: json_str(event, "response_kind").map(str::to_string),
-            outcome: json_str(event, "outcome").map(str::to_string),
+            outcome: outcome_label(event).map(str::to_string),
         };
         let identity = serde_json::to_string(&exchange)?;
         if self.seen.insert(identity) {
@@ -156,7 +156,7 @@ impl RepresentativeMemcachedExchanges {
             response_status: status.to_string(),
             response_classification: memcached_response_classification(event).to_string(),
             response_bytes,
-            outcome: json_str(event, "outcome").map(str::to_string),
+            outcome: outcome_label(event).map(str::to_string),
         };
         let identity = serde_json::to_string(&exchange)?;
         if self.seen.insert(identity) {
@@ -340,7 +340,7 @@ impl DetailBuilder {
 impl RedisOperationBuilder {
     fn record(&mut self, event: &Value) -> Result<()> {
         self.count += 1;
-        increment_optional(&mut self.outcomes, json_str(event, "outcome"));
+        increment_optional(&mut self.outcomes, outcome_label(event));
         increment_optional(&mut self.response_kinds, json_str(event, "response_kind"));
         let args = event
             .get("args")
@@ -359,7 +359,7 @@ impl RedisOperationBuilder {
 impl MemcachedOperationBuilder {
     fn record(&mut self, event: &Value) -> Result<()> {
         self.count += 1;
-        increment_optional(&mut self.outcomes, json_str(event, "outcome"));
+        increment_optional(&mut self.outcomes, outcome_label(event));
         let status = json_str(event, "response_status").unwrap_or("unknown");
         increment(&mut self.response_statuses, status);
         match memcached_response_classification(event) {
@@ -697,6 +697,12 @@ fn increment_optional(counts: &mut BTreeMap<String, usize>, value: Option<&str>)
     if let Some(value) = value {
         increment(counts, value);
     }
+}
+
+fn outcome_label(value: &Value) -> Option<&'static str> {
+    serde_json::from_value::<crate::DependencyExchangeOutcome>(value.get("outcome")?.clone())
+        .ok()
+        .map(crate::DependencyExchangeOutcome::label)
 }
 
 fn json_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {

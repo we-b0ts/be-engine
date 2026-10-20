@@ -112,7 +112,8 @@ impl InteractionLifecycle {
         LifecycleDecision::Continue
     }
 
-    /// A connection EOF with pending business is evidence of an incomplete case.
+    /// A client cancellation can be completely observed while business is pending.
+    /// Pending work remains evidence; cancellation must not fabricate completion.
     pub fn end_observation(
         &self,
         reason: EndReason,
@@ -127,7 +128,9 @@ impl InteractionLifecycle {
             reason,
             offset_ms: now_ms.saturating_sub(self.started_ms),
             pending: self.pending(),
-            clean: transport_clean && success_reason && self.pending.is_empty(),
+            clean: transport_clean
+                && success_reason
+                && (self.pending.is_empty() || reason == EndReason::ClientClose),
             close: None,
         }
     }

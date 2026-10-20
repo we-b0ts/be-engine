@@ -2912,6 +2912,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "toml",
+ "tower-service",
  "tracing",
  "tracing-subscriber",
  "url",

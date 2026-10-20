@@ -96,6 +96,14 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
         let state = state.clone();
         let config = config.clone();
         tokio::spawn(async move {
+            let termination =
+                match crate::http::termination::ClientTermination::with_control(&stream) {
+                    Ok(termination) => termination,
+                    Err(error) => {
+                        warn!(%error, "failed to observe HTTP gateway client");
+                        return;
+                    }
+                };
             let io = TokioIo::new(stream);
             let client_addr = Some(peer_addr.to_string());
             let service = service_fn(move |req| {
@@ -109,11 +117,15 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
                 }
             });
 
-            if let Err(err) = hyper::server::conn::http1::Builder::new()
-                .preserve_header_case(true)
-                .title_case_headers(true)
-                .serve_connection(io, service)
-                .with_upgrades()
+            if let Err(err) = termination
+                .serve(
+                    hyper::server::conn::http1::Builder::new()
+                        .half_close(true)
+                        .preserve_header_case(true)
+                        .title_case_headers(true)
+                        .serve_connection(io, service)
+                        .with_upgrades(),
+                )
                 .await
             {
                 warn!(error = %err, "HTTP gateway connection ended with error");

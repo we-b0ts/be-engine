@@ -52,6 +52,7 @@ fn event(port: u16, command: &str, key: &[u8]) -> RecorderEvent {
         quiet: false,
         response_status: "0".to_string(),
         response_frames: Vec::new(),
+        response_frame_offsets_ms: Vec::new(),
         no_response: false,
         outcome: DependencyExchangeOutcome::Response,
         duration_ms: 1,

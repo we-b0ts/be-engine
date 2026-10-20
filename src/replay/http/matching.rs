@@ -413,6 +413,7 @@ impl ReplayState {
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
         if !exchange.record.outcome.is_client_terminated()
+            && !exchange.record.outcome.is_server_terminated()
             && (exchange.record.error.is_some() || exchange.record.response_status.is_none())
         {
             self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
@@ -481,7 +482,17 @@ impl ReplayState {
             outcome: exchange.record.outcome,
             target_event_index: 0,
         };
-        if exchange.record.outcome.is_client_terminated() {
+        if exchange.record.outcome.is_server_terminated()
+            && exchange.record.response_stream.is_none()
+        {
+            self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Responding;
+            return Err(HttpReplayMatchError::ServerTerminated(Box::new(
+                termination::PendingHttpTermination::new(detail, &exchange.record),
+            )));
+        }
+        if exchange.record.outcome.is_client_terminated()
+            && exchange.record.response_stream.is_none()
+        {
             self.http_exchanges[index].status =
                 crate::replay::ReplayExchangeStatus::AwaitingClientTermination;
             return Err(HttpReplayMatchError::ClientTerminated(Box::new(
@@ -489,7 +500,11 @@ impl ReplayState {
             )));
         }
         if exchange.record.response_stream.is_some() {
-            self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Responding;
+            self.http_exchanges[index].status = if exchange.record.outcome.is_client_terminated() {
+                crate::replay::ReplayExchangeStatus::AwaitingClientTermination
+            } else {
+                crate::replay::ReplayExchangeStatus::Responding
+            };
             self.refresh_http_global_report(index);
             exchange.record.stream_delivery = Some(detail);
             return Ok(exchange.record);

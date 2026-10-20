@@ -22,6 +22,7 @@ pub(super) struct ProduceCompletion {
     pub(super) records: Vec<KafkaRecord>,
     pub(super) response: Option<ResponseKind>,
     pub(super) outcome: DependencyExchangeOutcome,
+    pub(super) duration_ms: Option<u128>,
 }
 
 pub(super) struct FetchCompletion {
@@ -31,6 +32,7 @@ pub(super) struct FetchCompletion {
     pub(super) topics: Vec<String>,
     pub(super) records: Vec<KafkaRecord>,
     pub(super) outcome: DependencyExchangeOutcome,
+    pub(super) duration_ms: Option<u128>,
 }
 
 pub(super) async fn record_produce_completion(
@@ -39,7 +41,9 @@ pub(super) async fn record_produce_completion(
     context: &KafkaConnectionContext,
     completion: ProduceCompletion,
 ) -> Result<()> {
-    let duration_ms = completion.started.elapsed().as_millis();
+    let duration_ms = completion
+        .duration_ms
+        .unwrap_or_else(|| completion.started.elapsed().as_millis());
     let response = match (completion.outcome, completion.response) {
         (DependencyExchangeOutcome::Response, Some(ResponseKind::Produce(response))) => {
             Some(response)
@@ -71,6 +75,11 @@ pub(super) async fn record_produce_completion(
             DependencyExchangeOutcome::Response => "error",
             DependencyExchangeOutcome::ClientTerminated => "client_terminated",
             DependencyExchangeOutcome::NoResponse => "sent",
+            DependencyExchangeOutcome::Terminated(termination) => match termination.side {
+                crate::dependency::TerminationSide::Client => "client_terminated",
+                crate::dependency::TerminationSide::Server => "server_terminated",
+                crate::dependency::TerminationSide::Engine => "engine_terminated",
+            },
         };
         let response_replay_safe =
             completion.outcome != DependencyExchangeOutcome::Response || error_code == Some(0);
@@ -119,7 +128,9 @@ pub(super) async fn record_fetch_completion(
     context: &KafkaConnectionContext,
     completion: FetchCompletion,
 ) -> Result<()> {
-    let duration_ms = completion.started.elapsed().as_millis();
+    let duration_ms = completion
+        .duration_ms
+        .unwrap_or_else(|| completion.started.elapsed().as_millis());
     record_event(
         state,
         RecorderEvent::KafkaFetch(KafkaFetchEvent {

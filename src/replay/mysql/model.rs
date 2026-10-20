@@ -102,6 +102,8 @@ pub(in crate::replay) struct RecordedMysqlExchange {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(in crate::replay) struct RecordedMysqlResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) wire_prefix: Vec<RecordedMysqlWirePrefixPacket>,
     #[serde(skip)]
     pub(in crate::replay) evidence: Option<crate::dependency_index::RecordRef>,
     #[serde(skip)]
@@ -118,6 +120,20 @@ pub(in crate::replay) struct RecordedMysqlResponse {
     pub(in crate::replay) rows: Vec<Vec<RecordedMysqlValue>>,
     #[serde(default)]
     pub(in crate::replay) rows_truncated: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub(in crate::replay) struct RecordedMysqlWirePrefixPacket {
+    pub(in crate::replay) offset_ms: u64,
+    pub(in crate::replay) packet: RecordedMysqlWireCapture,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub(in crate::replay) struct RecordedMysqlWireCapture {
+    pub(in crate::replay) encoding: String,
+    pub(in crate::replay) data: String,
+    #[serde(default)]
+    pub(in crate::replay) truncated: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -178,7 +194,8 @@ pub(in crate::replay) enum ResultRowEncoding {
 
 impl PartialEq for RecordedMysqlResponse {
     fn eq(&self, other: &Self) -> bool {
-        self.server_status == other.server_status
+        self.wire_prefix == other.wire_prefix
+            && self.server_status == other.server_status
             && self.status == other.status
             && self.error_code == other.error_code
             && self.error_message == other.error_message

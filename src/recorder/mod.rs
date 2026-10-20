@@ -290,6 +290,7 @@ pub(super) fn should_write_traffic_event(mode: TrafficJsonlMode, event: &Recorde
         TrafficJsonlMode::Errors => match event {
             RecorderEvent::HttpExchange(event) => {
                 event.outcome.is_client_terminated()
+                    || event.outcome.is_server_terminated()
                     || event.error.is_some()
                     || event.response_status.is_some_and(|status| status >= 500)
             }

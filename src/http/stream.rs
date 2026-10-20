@@ -24,12 +24,12 @@ pub struct ResponseChunk {
 impl ResponseStream {
     pub(crate) fn validate(&self, payload_len: usize) -> Result<()> {
         ensure!(
-            self.version == 1,
+            matches!(self.version, 1 | 2),
             "unsupported HTTP stream evidence version"
         );
         ensure!(
             self.complete,
-            "HTTP dependency stream was not captured through EOF"
+            "HTTP dependency stream capture is incomplete"
         );
         ensure!(
             self.chunks.len() <= 10_000,

@@ -489,7 +489,9 @@ impl RedisReplayState {
     ) -> Option<MatchedRedisExchange> {
         let index = match preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
-                && exchange.record.response_kind == "error"
+                && (exchange.record.response_kind == "error"
+                    || exchange.record.outcome.termination().is_some()
+                    || exchange.record.outcome.is_client_terminated())
                 && self
                     .connection_scopes
                     .matches(exchange, active_case_id, connection)

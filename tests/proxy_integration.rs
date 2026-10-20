@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -441,6 +442,23 @@ async fn http_gateway_keeps_matched_case_active_after_downstream_disconnect() {
         .await
         .unwrap();
     matched_request_rx.await.unwrap();
+    // A FIN only closes the request direction. This case requires an actual
+    // downstream cancellation while the upstream response is still pending.
+    let linger = libc::linger {
+        l_onoff: 1,
+        l_linger: 0,
+    };
+    // SAFETY: `first` owns this descriptor and `linger` matches SO_LINGER's layout.
+    let configured = unsafe {
+        libc::setsockopt(
+            first.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            std::ptr::from_ref(&linger).cast(),
+            std::mem::size_of_val(&linger) as libc::socklen_t,
+        )
+    };
+    assert_eq!(configured, 0, "{}", std::io::Error::last_os_error());
     drop(first);
     tokio::time::sleep(Duration::from_millis(50)).await;
 

@@ -218,3 +218,28 @@ fn endpoint_inventory_excludes_non_replayed_mysql_events_and_reserves_motan_ip()
     assert!(!persisted.contains("private-frame"));
     assert!(!persisted.contains("private-response"));
 }
+
+#[test]
+fn failed_mysql_ping_retains_an_endpoint_while_successful_ping_is_optional() {
+    let dir = recording();
+    let raw = [
+        serde_json::json!({"event_type":"mysql_exchange", "target_host":"healthy.test", "target_port":3306, "command":"COM_PING", "outcome":"response", "response":{"status":"ok"}}),
+        serde_json::json!({"event_type":"mysql_exchange", "target_host":"failed.test", "target_port":3306, "command":"COM_PING", "duration_ms":20, "outcome":{"terminated":{"side":"server","kind":"reset","scope":"connection"}}, "response":{"status":"server_terminated"}}),
+        serde_json::json!({"event_type":"mysql_exchange", "target_host":"error.test", "target_port":3306, "command":"COM_PING", "outcome":"response", "response":{"status":"error","error_code":2006}}),
+    ].into_iter().map(|value| value.to_string()).collect::<Vec<_>>().join("\n");
+    let file = write_case(dir.path(), "case", &raw);
+    let index = load_file(&file).unwrap();
+    assert_eq!(index.endpoints.len(), 2);
+    assert!(
+        index
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.host == "failed.test")
+    );
+    assert!(
+        index
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.host == "error.test")
+    );
+}

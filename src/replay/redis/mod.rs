@@ -51,7 +51,9 @@ use super::report::command::{
     CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
 };
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
+mod delivery;
 mod evidence;
+use delivery::deliver_redis_exchange;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedConnection {
@@ -259,6 +261,14 @@ impl RedisReplayState {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
+        record.outcome.validate()?;
+        ensure!(
+            record
+                .outcome
+                .termination()
+                .is_none_or(|end| end.scope != crate::dependency::TerminationScope::Stream),
+            "Redis termination must describe a TCP connection direction"
+        );
         validate_recorded_exchange(
             "redis_exchange",
             &record.command,
@@ -271,6 +281,14 @@ impl RedisReplayState {
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
         let response = record.response.decode()?;
+        ensure!(
+            record
+                .outcome
+                .termination()
+                .is_none_or(|end| end.side != crate::dependency::TerminationSide::Client)
+                || response.is_empty(),
+            "Redis client termination response prefix has no recorded delivery timing"
+        );
         validate_subscription_exchange(&record, &args, &response)?;
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
         ensure!(
@@ -442,6 +460,7 @@ pub(super) async fn handle_connection(
         port: target.port,
     };
     state.lock().await.redis.events.connections += 1;
+    let control = crate::dependency::termination::ConnectionControl::new(&stream)?;
     let mut reader = RedisBufferedReader::new(&mut stream, 64 * 1024 * 1024);
     let mut resp_version = 2_u8;
     let mut database = 0_i64;
@@ -498,6 +517,7 @@ pub(super) async fn handle_connection(
                 return Err(error);
             }
         };
+        let request_started = tokio::time::Instant::now();
         let command = match redis_command(&frame.raw) {
             Ok(command) => command,
             Err(error) => {
@@ -558,7 +578,16 @@ pub(super) async fn handle_connection(
             if matched.requires_binding {
                 connection_binding.bind(recorded_failure_case_id.as_deref(), matched.connection_id);
             }
-            if deliver_redis_exchange(&mut reader, &state, &matched).await? {
+            if deliver_redis_exchange(
+                &mut reader,
+                &state,
+                &matched,
+                &control,
+                request_started,
+                client_id,
+            )
+            .await?
+            {
                 break;
             }
             continue;
@@ -637,7 +666,16 @@ pub(super) async fn handle_connection(
                     &matched,
                     push_tx.clone(),
                 )?;
-                if deliver_redis_exchange(&mut reader, &state, &matched).await? {
+                if deliver_redis_exchange(
+                    &mut reader,
+                    &state,
+                    &matched,
+                    &control,
+                    request_started,
+                    client_id,
+                )
+                .await?
+                {
                     break;
                 }
                 if let Some(deliveries) = deliveries {
@@ -653,142 +691,6 @@ pub(super) async fn handle_connection(
         }
     }
     Ok(())
-}
-
-async fn deliver_redis_exchange(
-    reader: &mut RedisBufferedReader<&mut TcpStream>,
-    state: &Arc<Mutex<ReplayState>>,
-    matched: &MatchedRedisExchange,
-) -> Result<bool> {
-    if matched.timing.outcome().is_client_terminated() {
-        let result = if reader.buffer.is_empty() {
-            matched
-                .timing
-                .await_client_termination(&mut reader.inner)
-                .await
-                .map(|_| ())
-        } else {
-            Err(anyhow!(
-                "client sent another Redis request instead of terminating the connection"
-            ))
-        };
-        match result {
-            Ok(()) => {
-                state.lock().await.redis.complete_exchange(matched);
-                return Ok(true);
-            }
-            Err(error) => {
-                state
-                    .lock()
-                    .await
-                    .redis
-                    .fail_exchange(matched, error.to_string());
-                return Err(error);
-            }
-        }
-    }
-
-    matched.timing.delay_response().await;
-    let unified_rendered_at = chrono::Utc::now();
-    let unified_rendered = matched
-        .unified_delivery
-        .as_ref()
-        .map(|delivery| delivery.render(unified_rendered_at))
-        .transpose();
-    let unified_rendered = match unified_rendered {
-        Ok(rendered) => rendered,
-        Err(error) => {
-            state
-                .lock()
-                .await
-                .redis
-                .fail_exchange(matched, error.to_string());
-            return Err(error);
-        }
-    };
-    let rendered = matched
-        .response_time_shift
-        .as_ref()
-        .map(|shift| {
-            shift.render(
-                matched
-                    .request_started_at
-                    .context("Redis time shift requires the target dependency request start")?,
-            )
-        })
-        .transpose();
-    let rendered = match rendered {
-        Ok(value) => value,
-        Err(error) => {
-            state
-                .lock()
-                .await
-                .redis
-                .fail_exchange(matched, error.to_string());
-            return Err(error);
-        }
-    };
-    let response = unified_rendered.as_deref().unwrap_or_else(|| {
-        rendered
-            .as_ref()
-            .map_or(matched.response.as_slice(), |(bytes, _)| bytes.as_slice())
-    });
-    if let Err(error) = reader.inner.write_all(response).await {
-        state.lock().await.redis.fail_exchange(
-            matched,
-            format!("failed to deliver recorded Redis response: {error}"),
-        );
-        return Err(error.into());
-    }
-    let state_ref = state;
-    let mut state = state_ref.lock().await;
-    if let Some(delivery) = &matched.unified_delivery
-        && let Err(error) = state.redis.request_contracts.commit_redis_delivery(
-            delivery,
-            response,
-            unified_rendered_at,
-        )
-    {
-        state.redis.fail_exchange(matched, error.to_string());
-        return Err(error);
-    }
-    if let (Some(shift), Some((_, offset_milliseconds))) = (&matched.response_time_shift, rendered)
-    {
-        if let Some(policy) = state.replay_policy.as_mut() {
-            policy.commit_redis_value(matched.report.case_id.as_deref(), &shift.rule_ids);
-        }
-        for rule_id in &shift.rule_ids {
-            if state.redis.time_shifts.len() >= 1000 {
-                break;
-            }
-            state
-                .redis
-                .time_shifts
-                .push(time_shift::TimeShiftObservation {
-                    rule_id: rule_id.clone(),
-                    case_id: matched.report.case_id.clone(),
-                    connection_id: matched.connection_id,
-                    sequence: matched.report.sequence,
-                    offset_milliseconds,
-                });
-        }
-    }
-    if let Some(push) = matched.rpc_push {
-        let delivery = state.redis.pubsub.rpc_delivery(matched);
-        match delivery {
-            Ok((delay, delivery)) => {
-                drop(state);
-                pubsub::schedule(state_ref.clone(), delay, delivery, None);
-            }
-            Err(error) => {
-                state.redis.pubsub.fail(pubsub::PushId::Inline(push));
-                state.redis.fail_exchange(matched, error.to_string());
-            }
-        }
-    } else {
-        state.redis.complete_exchange(matched);
-    }
-    Ok(false)
 }
 
 async fn record_runtime_unsafe(
@@ -863,7 +765,7 @@ fn validate_subscription_exchange(
     args: &[Vec<u8>],
     response: &[u8],
 ) -> Result<()> {
-    if !is_pubsub_command(&record.command) {
+    if !is_pubsub_command(&record.command) || record.outcome.termination().is_some() {
         return Ok(());
     }
 

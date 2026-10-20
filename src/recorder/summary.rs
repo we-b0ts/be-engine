@@ -17,6 +17,7 @@ mod motan;
 mod pre_readiness;
 mod redis;
 mod source_process;
+mod termination;
 mod udp;
 use kafka::{
     KafkaDependencySummary, record_kafka_connection_summary, record_kafka_fetch_summary,
@@ -35,8 +36,8 @@ pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
     // of the business dependency summary. Never turn its sequence into a gap.
     !matches!(event, RecorderEvent::MysqlExchange(exchange) if exchange.command != "COM_PING" && is_debug_only_mysql_exchange(exchange))
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if redis::is_client_library_info_exchange(exchange))
-        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.session_setup && exchange.response_kind != "error" && exchange.replay_safe)
-        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "PING" && exchange.response_kind != "error" && exchange.replay_safe)
+        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.session_setup && exchange.outcome == crate::DependencyExchangeOutcome::Response && exchange.response_kind != "error" && exchange.replay_safe)
+        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "PING" && exchange.outcome == crate::DependencyExchangeOutcome::Response && exchange.response_kind != "error" && exchange.replay_safe)
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.cache_snapshot_hit)
 }
 
@@ -234,6 +235,7 @@ struct HttpDependencySummary {
     status_codes: BTreeMap<String, usize>,
     errors: usize,
     client_terminated: usize,
+    server_terminated: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -393,9 +395,11 @@ fn record_mysql_summary(summary: &mut MysqlDependencySummary, value: &Value) {
     let target_port = json_u64(value, "target_port");
     let database = json_str(value, "database").map(ToOwned::to_owned);
     let username = json_str(value, "username").map(ToOwned::to_owned);
-    let failed = status
-        .as_deref()
-        .is_some_and(|status| matches!(status, "error" | "incomplete" | "client_terminated"))
+    let failed = termination::client_terminated(value)
+        || termination::server_terminated(value)
+        || status
+            .as_deref()
+            .is_some_and(|status| matches!(status, "error" | "incomplete" | "client_terminated"))
         || error_code.is_some()
         || error_message.is_some();
 
@@ -495,8 +499,11 @@ fn mysql_dependency_identity_key(
 
 fn record_http_summary(summary: &mut HttpDependencySummary, value: &Value) {
     summary.calls += 1;
-    if json_str(value, "outcome") == Some("client_terminated") {
+    if termination::client_terminated(value) {
         summary.client_terminated += 1;
+    }
+    if termination::server_terminated(value) {
+        summary.server_terminated += 1;
     }
     if let Some(method) = json_str(value, "method") {
         *summary
@@ -542,7 +549,11 @@ fn record_proxy_error_summary(summary: &mut ProxyErrorSummary, value: &Value) {
 }
 
 fn is_debug_only_mysql_exchange(exchange: &crate::recorder::MysqlExchangeEvent) -> bool {
-    is_mysql_maintenance_exchange(exchange.command.as_str(), exchange.sql.as_deref())
+    if exchange.outcome != crate::DependencyExchangeOutcome::Response {
+        return false;
+    }
+    (is_mysql_maintenance_exchange(exchange.command.as_str(), exchange.sql.as_deref())
+        && (exchange.command != "COM_PING" || exchange.response.status == "ok"))
         || is_successful_stmt_prepare(exchange)
         || is_successful_mysql_session_setup(
             exchange.command.as_str(),
@@ -557,10 +568,16 @@ fn is_successful_stmt_prepare(exchange: &crate::recorder::MysqlExchangeEvent) ->
 }
 
 fn is_debug_only_mysql_exchange_value(value: &Value) -> bool {
-    is_mysql_maintenance_exchange(
+    if termination::outcome(value)
+        .is_some_and(|outcome| outcome != crate::DependencyExchangeOutcome::Response)
+    {
+        return false;
+    }
+    (is_mysql_maintenance_exchange(
         json_str(value, "command").unwrap_or_default(),
         json_str(value, "sql"),
-    ) || is_successful_stmt_prepare_value(value)
+    ) && (value["command"] != "COM_PING" || value["response"]["status"] == "ok"))
+        || is_successful_stmt_prepare_value(value)
         || is_successful_mysql_session_setup(
             json_str(value, "command").unwrap_or_default(),
             json_str(value, "sql"),

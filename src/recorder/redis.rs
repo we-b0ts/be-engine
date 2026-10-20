@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -13,7 +13,8 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::DependencyExchangeOutcome;
 use crate::access_policy::AccessDecision;
-use crate::dependency::termination::ConnectionTermination;
+use crate::dependency::termination::{ConnectionControl, ConnectionTermination, ObservedIo};
+use crate::dependency::{TerminationKind, TerminationSide};
 use crate::recorder::cache_snapshot::CacheSnapshotReservation;
 use crate::recorder::capture_health::{ConnectionCaptureHealth, RawTrafficDirection};
 use crate::recorder::{RecorderEvent, RedisConnectionEvent, RedisExchangeEvent, capture_body};
@@ -26,8 +27,10 @@ use crate::redis::{
 
 mod events;
 mod pubsub;
+mod writer;
+use writer::run_ordered_writer;
 pub(crate) mod rpc;
-use events::{record_connection, record_exchange};
+use events::{record_connection, record_exchange, record_termination};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
@@ -60,6 +63,7 @@ struct PendingRedisExchange {
     cache_snapshot_hit: bool,
     started: Instant,
     request_started_at: chrono::DateTime<Utc>,
+    ended_at: Option<Instant>,
 }
 
 struct SequencedRedisOutput {
@@ -70,7 +74,14 @@ struct SequencedRedisOutput {
 
 enum RedisOutput {
     Sequenced(Box<SequencedRedisOutput>),
-    PubSubPush { capture: Box<pubsub::CapturedPush> },
+    PubSubPush {
+        capture: Box<pubsub::CapturedPush>,
+    },
+    Terminated {
+        exchanges: Vec<PendingRedisExchange>,
+        response: Bytes,
+        reset: bool,
+    },
 }
 
 pub(crate) async fn handle_connected(
@@ -80,9 +91,14 @@ pub(crate) async fn handle_connected(
     context: ConnectionContext,
 ) -> Result<()> {
     let connection_id = Uuid::new_v4();
-    let _connection = state
-        .dependency_connections()
-        .register("redis", &[&client, &upstream])?;
+    let termination = ConnectionTermination::default();
+    let _connection = state.dependency_connections().register_observed(
+        "redis",
+        &[&client, &upstream],
+        &termination,
+    )?;
+    let client_control = ConnectionControl::new(&client)?;
+    let upstream_control = ConnectionControl::new(&upstream)?;
     let started = Instant::now();
     let session = Arc::new(Mutex::new(RedisSession {
         resp_version: 2,
@@ -97,7 +113,6 @@ pub(crate) async fn handle_connected(
         context.client_addr.clone(),
         context.target_addr.clone(),
     ));
-    let termination = ConnectionTermination::default();
     let opening_session = session.lock().await.clone();
     record_connection(
         &state,
@@ -115,7 +130,7 @@ pub(crate) async fn handle_connected(
 
     let max_frame_bytes = state.config().recording.max_body_bytes;
     let (client_read, client_write) = client.into_split();
-    let (upstream_read, mut upstream_write) = upstream.into_split();
+    let (upstream_read, upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
     // Apply backpressure to long-lived notification streams while the client
     // or recording writer is slower than the upstream. Ordering stays with the writer.
@@ -128,6 +143,8 @@ pub(crate) async fn handle_connected(
         connection_id,
         termination.clone(),
         max_frame_bytes,
+        client_control,
+        capture_health.clone(),
     ));
 
     let c2s_pending = pending.clone();
@@ -138,7 +155,19 @@ pub(crate) async fn handle_connected(
     let c2s_output = output_tx.clone();
     let c2s_termination = termination.clone();
     let c2s = tokio::spawn(async move {
-        let mut reader = BufferedReader::new(client_read, max_frame_bytes);
+        let mut reader = BufferedReader::new(
+            ObservedIo::new(
+                client_read,
+                c2s_termination.clone(),
+                TerminationSide::Client,
+            ),
+            max_frame_bytes,
+        );
+        let mut upstream_write = ObservedIo::new(
+            upstream_write,
+            c2s_termination.clone(),
+            TerminationSide::Server,
+        );
         let mut sequence = 0_u64;
         let mut bytes = 0_u64;
         loop {
@@ -161,11 +190,26 @@ pub(crate) async fn handle_connected(
                     break;
                 }
                 Err(error) => {
-                    // SO_LINGER=0 clients reset even after a complete exchange. Pending-response
-                    // and writer checks below still reject resets that interrupt data transfer.
-                    if is_abortive_close_between_frames(&reader, &error) {
-                        c2s_termination.observe_client_error(&error);
-                        break;
+                    if is_reset_error(&error) && c2s_termination.observe_client_error(&error) {
+                        if reader.buffer.is_empty() {
+                            upstream_control.reset()?;
+                            break;
+                        }
+                        c2s_capture_health.activate(
+                            &c2s_state,
+                            "Redis client reset with an incomplete request".to_string(),
+                        );
+                        let buffered = reader.buffer.split().freeze();
+                        let _ = c2s_capture_health
+                            .write_raw(
+                                &c2s_state,
+                                RawTrafficDirection::ClientToServer,
+                                &mut upstream_write,
+                                &buffered,
+                            )
+                            .await;
+                        upstream_control.reset()?;
+                        return Err(error);
                     }
                     c2s_capture_health.activate(
                         &c2s_state,
@@ -287,6 +331,7 @@ pub(crate) async fn handle_connected(
                 cache_snapshot_hit: false,
                 started: Instant::now(),
                 request_started_at: Utc::now(),
+                ended_at: None,
             };
             if let Some(key) = cache_snapshot_key {
                 match c2s_state.reserve_cache_snapshot(key.clone()).await? {
@@ -327,7 +372,15 @@ pub(crate) async fn handle_connected(
                 }
             }
             c2s_pending.lock().await.push_back(pending_exchange);
-            upstream_write.write_all(&frame.raw).await?;
+            if let Err(error) = upstream_write.write_all(&frame.raw).await {
+                if c2s_termination.snapshot().is_some_and(|observed| {
+                    observed.termination.side == TerminationSide::Server
+                        && observed.termination.kind == TerminationKind::Reset
+                }) {
+                    break;
+                }
+                return Err(error.into());
+            }
             bytes += frame.raw.len() as u64;
         }
         let _ = upstream_write.shutdown().await;
@@ -343,7 +396,16 @@ pub(crate) async fn handle_connected(
     let s2c_client_write = client_write.clone();
     let s2c_termination = termination.clone();
     let s2c = tokio::spawn(async move {
-        let mut reader = BufferedReader::new(upstream_read, max_frame_bytes);
+        let mut reader = BufferedReader::new(
+            ObservedIo::new(
+                upstream_read,
+                s2c_termination.clone(),
+                TerminationSide::Server,
+            ),
+            max_frame_bytes,
+        );
+        let mut terminal_response = Bytes::new();
+        let mut server_reset = false;
         let mut bytes = 0_u64;
         loop {
             let frame = match read_frame(&mut reader).await {
@@ -353,7 +415,11 @@ pub(crate) async fn handle_connected(
                     break;
                 }
                 Err(error) => {
-                    s2c_termination.observe_server_error(&error);
+                    if s2c_termination.observe_server_error(&error) {
+                        server_reset = is_reset_error(&error);
+                        terminal_response = reader.buffer.split().freeze();
+                        break;
+                    }
                     s2c_capture_health.activate(
                         &s2c_state,
                         format!("Redis server parse failed; switched to raw forwarding: {error}"),
@@ -503,6 +569,15 @@ pub(crate) async fn handle_connected(
                 .map_err(|_| anyhow!("Redis client response writer closed"))?;
             bytes += frame.raw.len() as u64;
         }
+        let exchanges = { s2c_pending.lock().await.drain(..).collect() };
+        s2c_output
+            .send(RedisOutput::Terminated {
+                exchanges,
+                response: terminal_response,
+                reset: server_reset,
+            })
+            .await
+            .map_err(|_| anyhow!("Redis client response writer closed before termination"))?;
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -511,12 +586,12 @@ pub(crate) async fn handle_connected(
     let transfer_result = async {
         let c2s_bytes = c2s_result.context("Redis client task panicked")??;
         let _upstream_bytes = s2c_result.context("Redis server task panicked")??;
-        let s2c_bytes = writer_result.context("Redis writer task panicked")??;
-        Ok::<_, anyhow::Error>((c2s_bytes, s2c_bytes))
+        let (s2c_bytes, writer_safe) = writer_result.context("Redis writer task panicked")??;
+        Ok::<_, anyhow::Error>((c2s_bytes, s2c_bytes, writer_safe))
     }
     .await;
-    let (c2s_bytes, s2c_bytes, mut transfer_error) = match transfer_result {
-        Ok((c2s_bytes, s2c_bytes)) => (c2s_bytes, s2c_bytes, None),
+    let (c2s_bytes, s2c_bytes, writer_safe, mut transfer_error) = match transfer_result {
+        Ok((c2s_bytes, s2c_bytes, writer_safe)) => (c2s_bytes, s2c_bytes, writer_safe, None),
         Err(error) => {
             let message = error.to_string();
             record_event(
@@ -532,48 +607,28 @@ pub(crate) async fn handle_connected(
                 }),
             )
             .await?;
-            (0, 0, Some(message))
+            (0, 0, false, Some(message))
         }
     };
     if transfer_error.is_none() {
         transfer_error = capture_health.reason();
     }
-    let client_terminated = termination.client_ended_first() && transfer_error.is_none();
-    let mut replay_safe = transfer_error.is_none();
+    let mut replay_safe = transfer_error.is_none()
+        && writer_safe
+        && !termination.engine_stopped()
+        && termination
+            .snapshot()
+            .is_none_or(|observed| observed.termination.side != TerminationSide::Engine);
     let mut incomplete = pending.lock().await;
     while let Some(exchange) = incomplete.pop_front() {
-        if let Some(key) = exchange.cache_snapshot_key.as_deref() {
-            state
-                .abort_cache_snapshot(key, "Redis snapshot fill ended before a response")
-                .await;
-        }
-        let clean_terminal_quit = is_terminal_quit(&exchange.command) && transfer_error.is_none();
-        let exchange_completed = client_terminated || clean_terminal_quit;
-        if !exchange_completed {
-            replay_safe = false;
-        }
-        record_exchange(
+        replay_safe &= record_termination(
             &state,
             connection_id,
             &context,
-            PendingRedisExchange {
-                replay_safe: exchange.replay_safe && exchange_completed,
-                warnings: if exchange_completed {
-                    exchange.warnings
-                } else {
-                    vec!["connection closed before Redis response".to_string()]
-                },
-                ..exchange
-            },
-            RedisFrameKind::Other,
+            exchange,
             b"",
-            if clean_terminal_quit {
-                DependencyExchangeOutcome::NoResponse
-            } else if client_terminated {
-                DependencyExchangeOutcome::ClientTerminated
-            } else {
-                DependencyExchangeOutcome::Response
-            },
+            &termination,
+            transfer_error.is_none(),
             max_frame_bytes,
         )
         .await?;
@@ -597,127 +652,6 @@ pub(crate) async fn handle_connected(
         return Err(anyhow!(error));
     }
     Ok(())
-}
-
-async fn run_ordered_writer(
-    client_write: Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,
-    mut output_rx: mpsc::Receiver<RedisOutput>,
-    state: AppState,
-    context: ConnectionContext,
-    connection_id: Uuid,
-    termination: ConnectionTermination,
-    max_frame_bytes: usize,
-) -> Result<u64> {
-    let mut next_sequence = 1_u64;
-    let mut buffered =
-        BTreeMap::<u64, (Bytes, Option<(PendingRedisExchange, RedisFrameKind)>)>::new();
-    let mut deferred_pushes = VecDeque::<Box<pubsub::CapturedPush>>::new();
-    let mut bytes = 0_u64;
-    let mut client_open = true;
-    while let Some(output) = output_rx.recv().await {
-        match output {
-            RedisOutput::Sequenced(output) => {
-                let SequencedRedisOutput {
-                    sequence,
-                    bytes: payload,
-                    completion,
-                } = *output;
-                buffered.insert(sequence, (payload, completion));
-                while let Some((payload, completion)) = buffered.remove(&next_sequence) {
-                    if client_open && !termination.client_ended_first() {
-                        match client_write.lock().await.write_all(&payload).await {
-                            Ok(()) => {
-                                bytes += payload.len() as u64;
-                                if let Some((exchange, response_kind)) = completion {
-                                    record_exchange(
-                                        &state,
-                                        connection_id,
-                                        &context,
-                                        exchange,
-                                        response_kind,
-                                        &payload,
-                                        DependencyExchangeOutcome::Response,
-                                        max_frame_bytes,
-                                    )
-                                    .await?;
-                                }
-                            }
-                            Err(error) if termination.observe_client_io_error(&error) => {
-                                client_open = false;
-                                if let Some((exchange, _)) = completion {
-                                    record_exchange(
-                                        &state,
-                                        connection_id,
-                                        &context,
-                                        exchange,
-                                        RedisFrameKind::Other,
-                                        b"",
-                                        DependencyExchangeOutcome::ClientTerminated,
-                                        max_frame_bytes,
-                                    )
-                                    .await?;
-                                }
-                            }
-                            Err(error) => return Err(error.into()),
-                        }
-                    } else if let Some((exchange, _)) = completion {
-                        client_open = false;
-                        record_exchange(
-                            &state,
-                            connection_id,
-                            &context,
-                            exchange,
-                            RedisFrameKind::Other,
-                            b"",
-                            DependencyExchangeOutcome::ClientTerminated,
-                            max_frame_bytes,
-                        )
-                        .await?;
-                    }
-                    next_sequence += 1;
-                }
-                if buffered.is_empty() {
-                    while let Some(push) = deferred_pushes.pop_front() {
-                        if pubsub::write_push(
-                            &client_write,
-                            &termination,
-                            &mut client_open,
-                            &mut bytes,
-                            &push.bytes,
-                        )
-                        .await?
-                        {
-                            push.record(&state).await?;
-                        }
-                    }
-                }
-            }
-            RedisOutput::PubSubPush { capture } => {
-                if buffered.is_empty() {
-                    if pubsub::write_push(
-                        &client_write,
-                        &termination,
-                        &mut client_open,
-                        &mut bytes,
-                        &capture.bytes,
-                    )
-                    .await?
-                    {
-                        capture.record(&state).await?;
-                    }
-                } else {
-                    deferred_pushes.push_back(capture);
-                }
-            }
-        }
-    }
-    if !buffered.is_empty() {
-        return Err(anyhow!("Redis response ordering ended with sequence gaps"));
-    }
-    if client_open {
-        let _ = client_write.lock().await.shutdown().await;
-    }
-    Ok(bytes)
 }
 
 async fn record_event(state: &AppState, event: RecorderEvent) -> Result<()> {
@@ -753,13 +687,18 @@ where
     Ok(copied)
 }
 
-fn is_abortive_close_between_frames<R>(reader: &BufferedReader<R>, error: &anyhow::Error) -> bool {
-    reader.buffer.is_empty()
-        && error.chain().any(|cause| {
-            cause
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset)
+fn is_reset_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::NotConnected
+            )
         })
+    })
 }
 
 fn redis_snapshot_key(

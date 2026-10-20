@@ -566,7 +566,7 @@ mod tests {
         assert!(close.after.is_empty());
         assert_eq!(close.gap_start_ms, None);
         assert!(
-            !pending
+            pending
                 .finish(EndReason::ClientClose, 1, true)
                 .unwrap()
                 .1
@@ -576,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn http_client_close_requires_completed_business_and_a_complete_frame_boundary() {
+    fn http_client_close_retains_pending_business_without_fabricating_a_barrier() {
         let policy = InteractionPolicy {
             stream_terminal: Some(StreamTerminal::SseEvent {
                 event: "done".into(),
@@ -589,7 +589,7 @@ mod tests {
         assert!(cancel.after.is_empty());
         assert_eq!(cancel.gap_start_ms, None);
         let (_, output) = pending.finish(EndReason::ClientClose, 2, true).unwrap();
-        assert!(!output.end.clean);
+        assert!(output.end.clean);
         assert_eq!(output.end.pending, vec![0]);
 
         let mut completed = Observation::new(Protocol::Sse, policy.clone()).unwrap();

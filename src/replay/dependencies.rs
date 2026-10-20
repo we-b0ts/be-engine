@@ -22,7 +22,25 @@ pub(super) enum DependencyRecord {
 }
 
 pub(crate) fn validate_index_record(value: &Value) -> Result<()> {
+    validate_outcome(value)?;
     let _: DependencyRecord = serde_json::from_value(value.clone())?;
+    Ok(())
+}
+
+fn validate_outcome(value: &Value) -> Result<()> {
+    if let Some(outcome) = value.get("outcome") {
+        let outcome = serde_json::from_value::<crate::DependencyExchangeOutcome>(outcome.clone())?;
+        outcome.validate()?;
+        if outcome.termination().is_some() {
+            anyhow::ensure!(
+                value
+                    .get("duration_ms")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|duration| duration <= 86_400_000),
+                "transport termination requires an explicit bounded request-relative duration_ms"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -81,7 +99,15 @@ pub(super) fn parse_dependency_records(
         if line.is_empty() {
             continue;
         }
-        let record: DependencyRecord = serde_json::from_str(line).with_context(|| {
+        let value: Value = serde_json::from_str(line)?;
+        validate_outcome(&value).with_context(|| {
+            format!(
+                "invalid dependency termination at line {} in {}",
+                line_index + 1,
+                path.display()
+            )
+        })?;
+        let record: DependencyRecord = serde_json::from_value(value).with_context(|| {
             format!(
                 "failed to parse dependency replay line {} in {}",
                 line_index + 1,
@@ -221,8 +247,10 @@ pub(super) fn register_dependency_records(
         let DependencyRecord::MysqlExchange(exchange) = record else {
             unreachable!("non-MySQL dependency records were handled above")
         };
-        if exchange.command == "COM_PING"
-            || exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare"
+        if exchange.outcome == crate::DependencyExchangeOutcome::Response
+            && (exchange.command == "COM_PING" && exchange.response.status == "ok"
+                || exchange.command == "COM_STMT_PREPARE"
+                    && exchange.response.status == "stmt_prepare")
         {
             // PING and PREPARE already contributed to session evidence above;
             // they do not create a required business exchange.

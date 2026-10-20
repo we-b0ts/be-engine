@@ -1,9 +1,9 @@
-//! Client closure is recorded only as success after complete business and framing.
+//! Observed client cancellation is replayable independently of business completion.
 
 use super::*;
 
 #[tokio::test]
-async fn cancelling_silent_primary_sse_closes_upstream_and_fails_without_publication() {
+async fn cancelling_primary_sse_records_pending_business_and_preserves_source() {
     let temp = tempdir().unwrap();
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut settings = config(temp.path(), upstream.local_addr().unwrap());
@@ -34,22 +34,10 @@ async fn cancelling_silent_primary_sse_closes_upstream_and_fails_without_publica
     let (address, recording) = gateway(state.clone()).await;
 
     timeout(Duration::from_secs(2), async {
-        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
-        let response = client
-            .request(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("http://{address}/events"))
-                    .header("accept", "text/event-stream")
-                    .body(Full::new(Bytes::new()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let mut body = response.into_body();
-        let frame = body.frame().await.unwrap().unwrap();
-        assert_eq!(frame.data_ref().unwrap().as_ref(), b"data: first\n\n");
-        drop(body);
+        let mut client = primary_client(address, "data: first\n\n").await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        crate::dependency::termination::ConnectionControl::new(&client).unwrap().reset().unwrap();
+        client.shutdown().await.ok();
 
         // Cancellation must close the upstream transport without waiting for data.
         source.await.unwrap();
@@ -61,30 +49,45 @@ async fn cancelling_silent_primary_sse_closes_upstream_and_fails_without_publica
                 .await,
             "cancelled case retained its ownership guard"
         );
-        state.recorder().flush_traffic().await.unwrap();
-        let run = &state.recorder().run_dir;
-        let mut cases = Vec::new();
-        find_cases(&run.join("apis"), &mut cases);
-        assert!(
-            cases.is_empty(),
-            "cancelled stream must never publish a case"
-        );
-
-        let errors = std::fs::read_to_string(run.join("errors.jsonl")).unwrap();
-        let errors: Vec<Value> = errors
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        assert_eq!(errors.len(), 1);
-        let detail_path = run.join(errors[0]["detail_path"].as_str().unwrap());
-        assert!(detail_path.starts_with(run.join("failed")));
-        let detail: Value = serde_json::from_slice(&std::fs::read(detail_path).unwrap()).unwrap();
-        assert_eq!(detail["reason"], "interaction_incomplete");
-        let report: Value =
-            serde_json::from_slice(&std::fs::read(run.join("recording-run.json")).unwrap())
+        let case = published(&state).await;
+        let expected: Value =
+            serde_json::from_slice(&std::fs::read(case.join("expected-response.json")).unwrap())
                 .unwrap();
-        assert_eq!(report["published_cases"], 0);
-        assert_eq!(report["failed_cases"], 1);
+        assert_eq!(expected["interaction"]["end"]["reason"], "client_close");
+        assert_eq!(expected["interaction"]["end"]["clean"], true);
+        assert_eq!(
+            expected["interaction"]["end"]["pending"],
+            serde_json::json!([0])
+        );
+        let input: Value = serde_json::from_slice(
+            &crate::request_headers::load_request_file(&case.join("request.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            input["interaction"]["actions"][0]["after"],
+            serde_json::json!([])
+        );
+        assert!(
+            input["interaction"]["actions"][0]
+                .get("gap_start_ms")
+                .is_none()
+        );
+        assert!(!*state.inner.interactions.source_stop.borrow());
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_address = target.local_addr().unwrap();
+        let target = tokio::spawn(async move {
+            let (mut socket, _) = target.accept().await.unwrap();
+            read_head(&mut socket).await;
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\nd\r\ndata: first\n\n\r\n").await.unwrap();
+            let mut rest = Vec::new();
+            assert_eq!(socket.read_to_end(&mut rest).await.unwrap_err().kind(), std::io::ErrorKind::ConnectionReset);
+            assert!(rest.is_empty());
+        });
+        let actual = replay_case(&case, target_address).await;
+        assert_eq!(actual.end.reason, crate::interaction::model::EndReason::ClientClose);
+        assert_eq!(actual.end.pending, vec![0]);
+        assert!(actual.end.clean);
+        target.await.unwrap();
     })
     .await
     .expect("client cancellation must finish before the 10-second request deadline");
@@ -121,12 +124,8 @@ async fn client_close_after_sse_done_records_close_input_and_preserves_source_se
     });
     let (address, recording) = gateway(state.clone()).await;
     timeout(Duration::from_secs(2), async {
-        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
-        let response = client.request(Request::builder().uri(format!("http://{address}/events")).header("accept", "text/event-stream").body(Full::new(Bytes::new())).unwrap()).await.unwrap();
-        let mut body = response.into_body();
-        let frame = body.frame().await.unwrap().unwrap();
-        assert_eq!(frame.data_ref().unwrap().as_ref(), b"event: done\ndata: ok\n\n");
-        drop(body);
+        let client = primary_client(address, "event: done\ndata: ok\n\n").await;
+        crate::dependency::termination::ConnectionControl::new(&client).unwrap().reset().unwrap();
         upstream_closed.await.unwrap();
         let case = published(&state).await;
         let input: Value = serde_json::from_slice(&crate::request_headers::load_request_file(&case.join("request.json")).unwrap()).unwrap();
@@ -144,5 +143,58 @@ async fn client_close_after_sse_done_records_close_input_and_preserves_source_se
         assert!(!source.is_finished(), "closing one stream must preserve the Source service");
     }).await.expect("a completed client-close case must publish promptly");
     source.abort();
+    recording.abort();
+}
+
+async fn primary_client(address: SocketAddr, first: &str) -> tokio::net::TcpStream {
+    let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+    client.write_all(format!("POST /events HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\nContent-Length: 0\r\n\r\n").as_bytes()).await.unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(client.read_u8().await.unwrap());
+    }
+    assert!(head.starts_with(b"HTTP/1.1 200"));
+    let mut length = Vec::new();
+    while !length.ends_with(b"\r\n") {
+        length.push(client.read_u8().await.unwrap());
+    }
+    let length = usize::from_str_radix(std::str::from_utf8(&length).unwrap().trim(), 16).unwrap();
+    assert_eq!(length, first.len());
+    let mut chunk = vec![0; length + 2];
+    client.read_exact(&mut chunk).await.unwrap();
+    assert_eq!(chunk, format!("{first}\r\n").as_bytes());
+    client
+}
+
+#[tokio::test]
+async fn primary_http_client_fin_preserves_delayed_complete_stream() {
+    let temp = tempdir().unwrap();
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut settings = config(temp.path(), upstream.local_addr().unwrap());
+    settings.http_gateway.interaction.business_idle_ms = 1_000;
+    let state = AppState::new(settings).await.unwrap();
+    let source = tokio::spawn(async move {
+        let (mut socket, _) = upstream.accept().await.unwrap();
+        read_head(&mut socket).await;
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nd\r\ndata: first\n\n\r\n0\r\n\r\n").await.unwrap();
+    });
+    let (address, recording) = gateway(state.clone()).await;
+    timeout(Duration::from_secs(3), async {
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        client.write_all(format!("GET /events HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        client.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        assert!(String::from_utf8_lossy(&response).contains("data: first\n\n"));
+        let case = published(&state).await;
+        let expected: Value = serde_json::from_slice(&std::fs::read(case.join("expected-response.json")).unwrap()).unwrap();
+        assert_eq!(expected["interaction"]["end"]["reason"], "server_eof");
+        assert_eq!(expected["interaction"]["end"]["clean"], true);
+        let input: Value = serde_json::from_slice(&crate::request_headers::load_request_file(&case.join("request.json")).unwrap()).unwrap();
+        assert_eq!(input["interaction"]["actions"], serde_json::json!([]));
+    }).await.unwrap();
+    source.await.unwrap();
     recording.abort();
 }

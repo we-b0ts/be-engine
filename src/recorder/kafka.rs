@@ -15,7 +15,8 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::access_policy::AccessDecision;
 use crate::dependency::DependencyExchangeOutcome;
-use crate::dependency::termination::ConnectionTermination;
+use crate::dependency::TerminationSide;
+use crate::dependency::termination::{ConnectionControl, ConnectionTermination, ObservedIo};
 use crate::kafka::access::{classify_api, rejection_response};
 use crate::kafka::{
     KafkaRecord, decode_request, decode_response, encode_response, read_frame, records_from_fetch,
@@ -64,15 +65,16 @@ pub(crate) async fn handle_connected(
     context: KafkaConnectionContext,
 ) -> Result<()> {
     let connection_id = Uuid::new_v4();
-    let _connection = state
-        .dependency_connections()
-        .register("kafka", &[&client, &upstream])?;
+    let termination = ConnectionTermination::default();
+    let _connection = state.dependency_connections().register_observed(
+        "kafka",
+        &[&client, &upstream],
+        &termination,
+    )?;
     let started = Instant::now();
     let pending = Arc::new(Mutex::new(HashMap::<i32, PendingRequest>::new()));
     let pending_changed = Arc::new(Notify::new());
-    let client_ended = Arc::new(Notify::new());
     let replay_safe = Arc::new(AtomicBool::new(true));
-    let termination = ConnectionTermination::default();
     record_connection(
         &state,
         connection_id,
@@ -91,8 +93,14 @@ pub(crate) async fn handle_connected(
         .recording
         .max_body_bytes
         .saturating_add(1024 * 1024);
-    let (mut client_read, client_write) = client.into_split();
-    let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let client_control = ConnectionControl::new(&client)?;
+    let upstream_control = ConnectionControl::new(&upstream)?;
+    let (client_read, client_write) = client.into_split();
+    let (upstream_read, mut upstream_write) = upstream.into_split();
+    let mut client_read =
+        ObservedIo::new(client_read, termination.clone(), TerminationSide::Client);
+    let mut upstream_read =
+        ObservedIo::new(upstream_read, termination.clone(), TerminationSide::Server);
     let client_write = Arc::new(Mutex::new(client_write));
 
     let request_pending = pending.clone();
@@ -101,22 +109,23 @@ pub(crate) async fn handle_connected(
     let request_context = context.clone();
     let request_client_write = client_write.clone();
     let request_pending_changed = pending_changed.clone();
-    let request_client_ended = client_ended.clone();
     let request_termination = termination.clone();
     let requests = tokio::spawn(async move {
         let mut bytes = 0_u64;
         let mut request_sequence = 0_u64;
         let mut produce_sequence = 0_u64;
         'requests: loop {
+            let before = client_read.bytes_read();
             let payload = match read_frame(&mut client_read, max_frame_bytes).await {
                 Ok(Some(payload)) => payload,
                 Ok(None) => {
                     request_termination.observe_client_eof();
-                    request_client_ended.notify_one();
                     break;
                 }
-                Err(error) if request_termination.observe_client_error(&error) => {
-                    request_client_ended.notify_one();
+                Err(error)
+                    if client_read.bytes_read() == before
+                        && request_termination.observe_client_error(&error) =>
+                {
                     break;
                 }
                 Err(error) => return Err(error),
@@ -280,7 +289,14 @@ pub(crate) async fn handle_connected(
                 return Err(error);
             }
         }
-        let _ = upstream_write.shutdown().await;
+        if request_termination
+            .connection_end(TerminationSide::Client)
+            .is_some()
+        {
+            let _ = upstream_control.reset();
+        } else {
+            let _ = upstream_write.shutdown().await;
+        }
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -290,26 +306,27 @@ pub(crate) async fn handle_connected(
     let response_context = context.clone();
     let response_client_write = client_write.clone();
     let response_pending_changed = pending_changed.clone();
-    let response_client_ended = client_ended.clone();
     let response_termination = termination.clone();
     let responses = tokio::spawn(async move {
+        let result = async {
         let mut bytes = 0_u64;
         let mut delivery_sequence = 0_u64;
         loop {
-            if response_termination.client_ended_first() {
-                break;
-            }
-            let read = tokio::select! {
-                _ = response_client_ended.notified() => break,
-                read = read_frame(&mut upstream_read, max_frame_bytes) => read,
-            };
+            upstream_read.begin_capture(max_frame_bytes.saturating_add(4));
+            let before = upstream_read.bytes_read();
+            let read = read_frame(&mut upstream_read, max_frame_bytes).await;
             let payload = match read {
                 Ok(Some(payload)) => payload,
                 Ok(None) => {
                     response_termination.observe_server_eof();
                     break;
                 }
-                Err(error) if response_termination.observe_server_error(&error) => break,
+                Err(error)
+                    if upstream_read.bytes_read() == before
+                        && response_termination.observe_server_error(&error) =>
+                {
+                    break;
+                }
                 Err(error) => return Err(error),
             };
             bytes += payload.len() as u64 + 4;
@@ -326,19 +343,30 @@ pub(crate) async fn handle_connected(
                     ),
                 )
                 .await?;
+                upstream_read.begin_capture(0);
+                write_frame(&mut *response_client_write.lock().await, &payload).await?;
                 continue;
             };
-            if response_termination.client_ended_first() {
-                record_client_terminated_request(
+            if response_termination.snapshot().is_some_and(|observed| {
+                observed.termination.side == TerminationSide::Client
+                    && observed.termination.kind == crate::dependency::TerminationKind::Reset
+            }) {
+                if !response_pending.lock().await.is_empty() {
+                    response_safe.store(false, Ordering::Release);
+                    record_proxy_error(&response_state, &response_context, "multiple in-flight Kafka requests share a termination; batch replay is unsupported".into()).await?;
+                }
+                record_terminated_request(
                     &response_state,
                     connection_id,
                     &mut delivery_sequence,
                     &response_context,
                     request,
+                    &response_termination,
                 )
                 .await?;
                 break;
             }
+            upstream_read.begin_capture(0);
             let write_result = {
                 let mut client_write = response_client_write.lock().await;
                 write_frame(&mut *client_write, &payload).await
@@ -361,12 +389,20 @@ pub(crate) async fn handle_connected(
                     }
                 }
                 Err(error) if response_termination.observe_client_error(&error) => {
-                    record_client_terminated_request(
+                    response_safe.store(false, Ordering::Release);
+                    record_proxy_error(
+                        &response_state,
+                        &response_context,
+                        "Kafka response write failed after an unknown delivery prefix".into(),
+                    )
+                    .await?;
+                    record_terminated_request(
                         &response_state,
                         connection_id,
                         &mut delivery_sequence,
                         &response_context,
                         request,
+                        &response_termination,
                     )
                     .await?;
                     break;
@@ -374,8 +410,34 @@ pub(crate) async fn handle_connected(
                 Err(error) => return Err(error),
             }
         }
-        let _ = response_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
+        }.await;
+        if result.is_err() && !response_termination.engine_stopped() {
+            response_safe.store(false, Ordering::Release);
+            let mut writer = response_client_write.lock().await;
+            let _ = crate::dependency::termination::forward_captured(
+                &mut upstream_read,
+                &mut *writer,
+                &response_termination,
+                TerminationSide::Server,
+            )
+            .await;
+        }
+        if let Some(observed) = response_termination
+            .connection_end(TerminationSide::Server)
+            .or_else(|| response_termination.observed(TerminationSide::Server))
+        {
+            match observed.termination.kind {
+                crate::dependency::TerminationKind::Reset => {
+                    let _ = client_control.reset();
+                }
+                crate::dependency::TerminationKind::Eof => {
+                    let _ = response_client_write.lock().await.shutdown().await;
+                }
+                crate::dependency::TerminationKind::Cancelled => {}
+            }
+        }
+        result
     });
 
     let (requests, responses) = tokio::join!(requests, responses);
@@ -400,16 +462,32 @@ pub(crate) async fn handle_connected(
         .drain()
         .map(|(_, request)| request)
         .collect::<Vec<_>>();
+    if incomplete.len() > 1 && termination.outcome_since(started).is_some() {
+        replay_safe.store(false, Ordering::Release);
+        record_proxy_error(
+            &state,
+            &context,
+            "multiple in-flight Kafka requests share a termination; batch replay is unsupported"
+                .into(),
+        )
+        .await?;
+    }
     if !incomplete.is_empty() {
-        if termination.client_ended_first() {
+        if error.is_none() && termination.outcome_since(started).is_some() {
             let mut delivery_sequence = 0;
             for request in incomplete {
-                record_client_terminated_request(
+                if termination.outcome_since(request.started).is_none() {
+                    replay_safe.store(false, Ordering::Release);
+                    record_proxy_error(&state, &context, "Kafka request began after the recorded termination; post-terminal capture is unsupported".into()).await?;
+                    continue;
+                }
+                record_terminated_request(
                     &state,
                     connection_id,
                     &mut delivery_sequence,
                     &context,
                     request,
+                    &termination,
                 )
                 .await?;
             }
@@ -418,7 +496,12 @@ pub(crate) async fn handle_connected(
             record_proxy_error(
                 &state,
                 &context,
-                "Kafka connection closed with incomplete requests".to_string(),
+                if termination.engine_stopped() {
+                    "engine cleanup interrupted Kafka capture"
+                } else {
+                    "Kafka connection closed with incomplete requests"
+                }
+                .to_string(),
             )
             .await?;
         }
@@ -467,6 +550,7 @@ async fn record_client_request_without_response(
             records,
             response: None,
             outcome: DependencyExchangeOutcome::NoResponse,
+            duration_ms: None,
         },
     )
     .await
@@ -498,6 +582,7 @@ async fn record_completed_response(
                     records,
                     response: Some(response),
                     outcome: DependencyExchangeOutcome::Response,
+                    duration_ms: None,
                 },
             )
             .await
@@ -517,6 +602,7 @@ async fn record_completed_response(
                     topics,
                     records,
                     outcome: DependencyExchangeOutcome::Response,
+                    duration_ms: None,
                 },
             )
             .await
@@ -525,13 +611,17 @@ async fn record_completed_response(
     }
 }
 
-async fn record_client_terminated_request(
+async fn record_terminated_request(
     state: &AppState,
     connection_id: Uuid,
     delivery_sequence: &mut u64,
     context: &KafkaConnectionContext,
     request: PendingRequest,
+    termination: &ConnectionTermination,
 ) -> Result<()> {
+    let (outcome, duration_ms) = termination
+        .outcome_since(request.started)
+        .ok_or_else(|| anyhow!("Kafka capture ended without peer termination evidence"))?;
     match request.kind {
         PendingKind::Produce {
             record_sequence,
@@ -548,7 +638,8 @@ async fn record_client_terminated_request(
                     started: request.started,
                     records,
                     response: None,
-                    outcome: DependencyExchangeOutcome::ClientTerminated,
+                    outcome,
+                    duration_ms: Some(duration_ms),
                 },
             )
             .await
@@ -565,7 +656,8 @@ async fn record_client_terminated_request(
                     started: request.started,
                     topics,
                     records: Vec::new(),
-                    outcome: DependencyExchangeOutcome::ClientTerminated,
+                    outcome,
+                    duration_ms: Some(duration_ms),
                 },
             )
             .await

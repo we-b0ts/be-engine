@@ -16,6 +16,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::AppState;
 use crate::access_policy::AccessDecision;
 use crate::active_case::DependencyTargets;
 use crate::http::access::classify_method;
@@ -28,9 +29,27 @@ use crate::recorder::{
     HttpExchangeEvent, ProxyErrorEvent, RecorderEvent, capture_body, redact_headers,
 };
 use crate::recording_control::RecordingListener;
-use crate::{AppState, ProxyClient};
 
 type ProxyBody = BoxBody<Bytes, std::io::Error>;
+
+#[derive(Clone)]
+struct ConnectionOwnership {
+    termination: ClientTermination,
+    _registration: std::sync::Arc<crate::recorder::connections::DependencyConnectionGuard>,
+}
+
+impl ConnectionOwnership {
+    async fn finish(self, result: Result<()>) -> Result<()> {
+        if self.termination.server_write_half_closed() {
+            self.termination
+                .retain_read_half()
+                .await
+                .context("failed to retain HTTP client read half")
+        } else {
+            result.context("HTTP proxy transport ended with an error")
+        }
+    }
+}
 
 use crate::recorder::http::stream;
 #[cfg(test)]
@@ -59,30 +78,45 @@ pub(crate) async fn run_with_listener(state: AppState, listener: TcpListener) ->
         stream
             .set_nodelay(true)
             .context("failed to enable TCP_NODELAY for HTTP proxy client")?;
-        let stream = DependencyIo::new(stream, state.dependency_connections(), "http_proxy")?;
+        let termination = ClientTermination::with_control(&stream)?;
+        let stream = DependencyIo::new_observed(
+            stream,
+            state.dependency_connections(),
+            "http_proxy",
+            termination.connection_observation(),
+        )?;
+        let ownership = ConnectionOwnership {
+            termination,
+            _registration: stream.registration(),
+        };
         let state = state.clone();
         tokio::spawn(async move {
-            let termination = ClientTermination::default();
-            let io = TokioIo::new(ObservedClientIo::new(stream, termination.clone()));
+            let io = TokioIo::new(ObservedClientIo::new(stream, ownership.termination.clone()));
+            let service_ownership = ownership.clone();
             let client_addr = Some(peer_addr.to_string());
             let service = service_fn(move |req| {
                 let state = state.clone();
                 let client_addr = client_addr.clone();
-                let termination = termination.clone();
+                let ownership = service_ownership.clone();
                 async move {
                     Ok::<_, Infallible>(
-                        handle_proxy_request(req, state, client_addr, termination).await,
+                        handle_proxy_request(req, state, client_addr, ownership).await,
                     )
                 }
             });
 
-            if let Err(err) = hyper::server::conn::http1::Builder::new()
-                .preserve_header_case(true)
-                .title_case_headers(true)
-                .serve_connection(io, service)
-                .with_upgrades()
-                .await
-            {
+            let result = ownership
+                .termination
+                .serve(
+                    hyper::server::conn::http1::Builder::new()
+                        .half_close(true)
+                        .preserve_header_case(true)
+                        .title_case_headers(true)
+                        .serve_connection(io, service)
+                        .with_upgrades(),
+                )
+                .await;
+            if let Err(err) = ownership.finish(result).await {
                 warn!(error = %err, "HTTP proxy connection ended with error");
             }
         });
@@ -93,19 +127,20 @@ async fn handle_proxy_request(
     req: Request<Incoming>,
     state: AppState,
     client_addr: Option<String>,
-    termination: ClientTermination,
+    ownership: ConnectionOwnership,
 ) -> Response<ProxyBody> {
     if req.method() == Method::CONNECT {
-        return handle_connect(req, state, client_addr).await;
+        return handle_connect(req, state, client_addr, ownership).await;
     }
 
-    forward_and_record(req, state, client_addr, "http", None, termination).await
+    forward_and_record(req, state, client_addr, "http", None, ownership.termination).await
 }
 
 async fn handle_connect(
     req: Request<Incoming>,
     state: AppState,
     client_addr: Option<String>,
+    ownership: ConnectionOwnership,
 ) -> Response<ProxyBody> {
     let authority = match connect_authority(req.uri()) {
         Some(authority) => authority,
@@ -118,9 +153,14 @@ async fn handle_connect(
         match hyper::upgrade::on(req).await {
             Ok(upgraded) => {
                 let target = authority.clone();
-                if let Err(err) =
-                    serve_mitm_connection(upgraded, authority, state.clone(), client_addr.clone())
-                        .await
+                if let Err(err) = serve_mitm_connection(
+                    upgraded,
+                    authority,
+                    state.clone(),
+                    client_addr.clone(),
+                    ownership,
+                )
+                .await
                 {
                     error!(error = %err, "HTTPS MITM connection failed");
                     let _ = state
@@ -151,6 +191,7 @@ async fn serve_mitm_connection(
     authority: String,
     state: AppState,
     client_addr: Option<String>,
+    ownership: ConnectionOwnership,
 ) -> Result<()> {
     let host = authority_host(&authority);
     let server_config = state.ca().server_config_for_host(&host)?;
@@ -160,7 +201,7 @@ async fn serve_mitm_connection(
         .await
         .with_context(|| format!("failed TLS handshake with client for {authority}"))?;
 
-    let termination = ClientTermination::default();
+    let termination = ownership.termination.clone();
     let io = TokioIo::new(ObservedClientIo::new(tls, termination.clone()));
     let service = service_fn(move |req| {
         let state = state.clone();
@@ -182,13 +223,17 @@ async fn serve_mitm_connection(
         }
     });
 
-    hyper::server::conn::http1::Builder::new()
-        .preserve_header_case(true)
-        .title_case_headers(true)
-        .serve_connection(io, service)
-        .await
-        .context("failed to serve decrypted HTTPS request")?;
-    Ok(())
+    let result = ownership
+        .termination
+        .serve(
+            hyper::server::conn::http1::Builder::new()
+                .half_close(true)
+                .preserve_header_case(true)
+                .title_case_headers(true)
+                .serve_connection(io, service),
+        )
+        .await;
+    ownership.finish(result).await
 }
 
 async fn forward_and_record(
@@ -344,9 +389,10 @@ async fn forward_and_record(
         started,
         termination.clone(),
     );
+    let capture_context = pending.context();
     pending
         .run(async {
-            match send_upstream(state.client(), outbound).await {
+            match crate::http::client::send_observed(state.client(), outbound, started).await {
                 Ok(upstream_response) => {
                     if stream::is_stream(upstream_response.headers()) {
                         return stream::response(
@@ -463,6 +509,11 @@ async fn forward_and_record(
                     build_downstream_response(status, &response_headers, body_bytes)
                 }
                 Err(err) => {
+                    if let Some(observed) = err.termination
+                        && capture_context.forward_server_termination(observed)
+                    {
+                        return crate::recorder::http::dependency::closed_response();
+                    }
                     record_http_error(HttpErrorContext {
                         targets: targets.clone(),
                         state,
@@ -483,13 +534,6 @@ async fn forward_and_record(
             }
         })
         .await
-}
-
-async fn send_upstream(
-    client: &ProxyClient,
-    request: Request<Full<Bytes>>,
-) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
-    client.request(request).await
 }
 
 struct HttpErrorContext {

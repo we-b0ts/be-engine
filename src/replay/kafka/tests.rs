@@ -199,6 +199,43 @@ async fn consumes_recorded_fetch_timeout_when_client_closes_on_schedule() {
 }
 
 #[tokio::test]
+async fn server_terminated_fetch_closes_at_the_recorded_time() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    write_case(
+        &case_dir,
+        serde_json::json!({
+            "event_type":"kafka_fetch", "connection_id":"00000000-0000-0000-0000-000000000005",
+            "sequence":1, "target_host":"kafka.internal", "target_port":9092, "topics":["payments"],
+            "outcome":{"terminated":{"side":"server", "kind":"eof", "scope":"write_half"}},
+            "duration_ms":50, "replay_safe":true
+        }),
+    )
+    .await;
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, report_path.clone()).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let payload = encode_request(ApiKey::Fetch, 11, fetch_request("payments"));
+    let started = tokio::time::Instant::now();
+    write_frame(&mut client, &payload).await.unwrap();
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            read_frame(&mut client, 64 * 1024 * 1024)
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .is_none()
+    );
+    assert!(started.elapsed() >= std::time::Duration::from_millis(45));
+    let report = wait_for_kafka_matches(&report_path, 1).await;
+    assert_eq!(report["kafka"]["matched"][0]["operation"], "fetch");
+    drop(client);
+    task.abort();
+}
+
+#[tokio::test]
 async fn wrong_produce_is_unmatched_and_not_accepted() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case");

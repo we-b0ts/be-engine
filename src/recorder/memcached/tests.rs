@@ -50,9 +50,11 @@ fn pending_binary_request(opaque: u32, opcode: u8, quiet: bool) -> PendingMemcac
             quiet,
         },
         response_frames: Vec::new(),
+        response_frame_offsets_ms: Vec::new(),
         replay_safe: true,
         warnings: Vec::new(),
         started: Instant::now(),
+        termination: None,
     }
 }
 
@@ -174,7 +176,7 @@ async fn pending_text_exchange_records_client_termination_as_replay_safe() {
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|value| value["event_type"] == "memcached_exchange")
         .unwrap();
-    assert_eq!(exchange["outcome"], "client_terminated");
+    assert_eq!(exchange["outcome"]["terminated"]["side"], "client");
     assert_eq!(exchange["response_frames"].as_array().unwrap().len(), 0);
     assert_eq!(exchange["replay_safe"], true);
     assert!(exchange["duration_ms"].as_u64().unwrap() >= 50);
@@ -444,3 +446,5 @@ async fn memcached_tcp_pair() -> (TcpStream, TcpStream) {
     let (server, _) = listener.accept().await.unwrap();
     (client.await.unwrap().unwrap(), server)
 }
+
+mod termination;

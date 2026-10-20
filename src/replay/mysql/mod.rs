@@ -15,6 +15,7 @@ mod session_setup;
 pub(in crate::replay) mod sql_match;
 #[cfg(test)]
 mod sqlx_tests;
+mod termination;
 #[cfg(test)]
 mod tests;
 pub(in crate::replay) mod time_shift;

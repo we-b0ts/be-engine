@@ -119,6 +119,15 @@ async fn records_successful_produce_as_semantic_event() {
 
 #[tokio::test]
 async fn records_client_terminated_produce_as_replay_safe_timeout() {
+    records_terminated_produce(false).await;
+}
+
+#[tokio::test]
+async fn records_server_terminated_produce_without_waiting_for_client_timeout() {
+    records_terminated_produce(true).await;
+}
+
+async fn records_terminated_produce(server_ended: bool) {
     let temp = tempfile::tempdir().unwrap();
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
@@ -179,9 +188,25 @@ async fn records_client_terminated_produce_as_replay_safe_timeout() {
         .unwrap();
     let _ = read_frame(&mut broker, 1024 * 1024).await.unwrap().unwrap();
     sleep(Duration::from_millis(30)).await;
-    drop(test_client);
-    sleep(Duration::from_millis(10)).await;
-    drop(broker);
+    if server_ended {
+        broker.shutdown().await.unwrap();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(200),
+                read_frame(&mut test_client, 1024 * 1024)
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none()
+        );
+        drop(test_client);
+        drop(broker);
+    } else {
+        drop(test_client);
+        sleep(Duration::from_millis(10)).await;
+        drop(broker);
+    }
 
     handler.await.unwrap().unwrap();
     state.recorder().flush_traffic().await.unwrap();
@@ -199,8 +224,18 @@ async fn records_client_terminated_produce_as_replay_safe_timeout() {
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
         .find(|value| value["event_type"] == "kafka_produce")
         .unwrap();
-    assert_eq!(produce["outcome"], "client_terminated");
-    assert_eq!(produce["result"], "client_terminated");
+    assert_eq!(
+        produce["outcome"]["terminated"]["side"],
+        if server_ended { "server" } else { "client" }
+    );
+    assert_eq!(
+        produce["result"],
+        if server_ended {
+            "server_terminated"
+        } else {
+            "client_terminated"
+        }
+    );
     assert_eq!(produce["replay_safe"], true);
     assert!(produce["duration_ms"].as_u64().unwrap() >= 30);
 }
@@ -232,3 +267,5 @@ fn test_record_batch() -> bytes::Bytes {
     .unwrap();
     encoded.freeze()
 }
+
+mod termination;

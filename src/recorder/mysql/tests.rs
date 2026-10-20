@@ -366,7 +366,7 @@ async fn pending_query_uses_uncompressed_framing_and_records_client_termination(
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|value| value["event_type"] == "mysql_exchange" && value["sql"] == sql)
         .unwrap();
-    assert_eq!(exchange["outcome"], "client_terminated");
+    assert_eq!(exchange["outcome"]["terminated"]["side"], "client");
     assert_eq!(exchange["response"]["status"], "client_terminated");
     assert!(exchange["parse_warnings"].as_array().unwrap().is_empty());
     assert!(exchange["duration_ms"].as_u64().unwrap() >= 50);
@@ -820,3 +820,5 @@ fn observe_payload(
     };
     tracker.observe_packet(&packet, Some(&packet))
 }
+
+mod termination;

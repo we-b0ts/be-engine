@@ -1,4 +1,5 @@
 use super::*;
+use rustls::pki_types::ServerName;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,23 +9,32 @@ use tokio_rustls::TlsConnector;
 
 #[tokio::test]
 async fn records_http_client_termination_with_original_case_ownership() {
-    capture_timeout(false, false).await;
+    capture_timeout(false, false, false).await;
 }
 
 #[tokio::test]
 async fn records_https_client_termination_with_original_case_ownership() {
-    capture_timeout(true, false).await;
+    capture_timeout(true, false, false).await;
 }
 
 #[tokio::test]
 async fn recorder_task_cancellation_is_not_a_client_timeout() {
-    capture_timeout(false, true).await;
+    capture_timeout(false, true, false).await;
+}
+
+#[tokio::test]
+async fn fake_ip_http_client_fin_preserves_delayed_response() {
+    capture_timeout(false, false, true).await;
+}
+#[tokio::test]
+async fn fake_ip_https_client_fin_preserves_delayed_response() {
+    capture_timeout(true, false, true).await;
 }
 
 trait TestStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> TestStream for T {}
 
-async fn capture_timeout(tls: bool, cancel_engine: bool) {
+async fn capture_timeout(tls: bool, cancel_engine: bool, half_close: bool) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempfile::tempdir().unwrap();
     let mut config = crate::AppConfig::default();
@@ -50,7 +60,16 @@ async fn capture_timeout(tls: bool, cancel_engine: bool) {
         let size = stream.read(&mut request).await.unwrap();
         assert!(String::from_utf8_lossy(&request[..size]).contains("POST /timeout"));
         sent.send(()).unwrap();
-        std::future::pending::<()>().await;
+        if half_close {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+            stream.shutdown().await.unwrap();
+        } else {
+            std::future::pending::<()>().await;
+        }
     });
     let entry = FakeDnsEntry {
         domain: "dependency.test".into(),
@@ -75,6 +94,7 @@ async fn capture_timeout(tls: bool, cancel_engine: bool) {
         }
     });
     let stream = TcpStream::connect(addr).await.unwrap();
+    let control = crate::dependency::termination::ConnectionControl::new(&stream).unwrap();
     let mut client: Box<dyn TestStream> = if tls {
         let mut roots = rustls::RootCertStore::empty();
         roots.add(state.ca().ca_cert_der()).unwrap();
@@ -117,11 +137,25 @@ async fn capture_timeout(tls: bool, cancel_engine: bool) {
             .is_err()
     );
     assert!(!drain.is_finished());
-    if cancel_engine {
+    if half_close {
+        control.shutdown_write().unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        assert!(response.ends_with(b"ok"));
+        tokio::time::timeout(Duration::from_secs(2), gateway)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    } else if cancel_engine {
         gateway.abort();
         assert!(gateway.await.unwrap_err().is_cancelled());
     } else {
-        client.shutdown().await.unwrap();
+        control.reset().unwrap();
         drop(client);
         let _ = tokio::time::timeout(Duration::from_secs(2), gateway)
             .await
@@ -140,7 +174,12 @@ async fn capture_timeout(tls: bool, cancel_engine: bool) {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(events.len(), 1);
-    if cancel_engine {
+    if half_close {
+        assert_eq!(events[0]["outcome"], "response");
+        assert_eq!(events[0]["response_status"], 200);
+        assert!(events[0]["error"].is_null());
+        assert!(state.active_case_invalidation(case.id).is_none());
+    } else if cancel_engine {
         assert_eq!(events[0]["outcome"], "response");
         assert!(
             events[0]["error"]
@@ -149,10 +188,16 @@ async fn capture_timeout(tls: bool, cancel_engine: bool) {
                 .contains("without observed client termination")
         );
     } else {
-        assert_eq!(events[0]["outcome"], "client_terminated");
+        assert!(
+            serde_json::from_value::<crate::DependencyExchangeOutcome>(
+                events[0]["outcome"].clone()
+            )
+            .unwrap()
+            .is_client_terminated()
+        );
         assert!(events[0]["error"].is_null());
     }
-    assert!(events[0]["response_status"].is_null());
+    assert_eq!(events[0]["response_status"].is_null(), !half_close);
     assert!(events[0]["duration_ms"].as_u64().unwrap() >= 70);
     assert_eq!(events[0]["request_body"]["original_len"], 4);
     upstream_task.abort();

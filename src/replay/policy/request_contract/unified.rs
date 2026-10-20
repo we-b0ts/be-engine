@@ -475,8 +475,8 @@ impl RequestContracts {
         // traffic, not just commands with a generic encoded value slot.
         self.record_unified_request(&context, &source, None);
         if matches!(context.command, "GET" | "HGET")
-            && event["outcome"]
-                .as_str()
+            && event
+                .get("outcome")
                 .is_none_or(|outcome| outcome == "response")
             && event["response_kind"] == "bulk_string"
         {
@@ -499,8 +499,8 @@ impl RequestContracts {
                 continue;
             }
             let payload = if surface == Surface::DependencyResponse {
-                let ordinary = event["outcome"]
-                    .as_str()
+                let ordinary = event
+                    .get("outcome")
                     .is_none_or(|outcome| outcome == "response");
                 if ordinary {
                     super::unified_response::redis_bulk_payload(&evidence::decode(

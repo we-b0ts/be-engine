@@ -56,3 +56,23 @@ async fn dropped_connection_is_removed_and_http_transport_keeps_registration() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn recovery_marks_engine_origin_before_socket_eof_is_observed() {
+    let registry = DependencyConnections::default();
+    let (mut peer, stream) = pair().await;
+    let termination = crate::dependency::termination::ConnectionTermination::default();
+    let _guard = registry
+        .register_observed("redis", &[&stream], &termination)
+        .unwrap();
+    termination.observe_client_eof();
+    registry.reset_open_connections();
+    assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+    termination.observe_server_eof();
+    assert!(termination.engine_stopped());
+    assert!(
+        termination
+            .outcome_since(std::time::Instant::now())
+            .is_none()
+    );
+}

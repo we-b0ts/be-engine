@@ -2,6 +2,8 @@ use super::*;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+mod cancellation;
+
 fn dependency() -> Value {
     serde_json::json!({
         "event_type":"http_exchange", "scheme":"http", "method":"POST", "uri":"/stream", "authority":"stream.test",
@@ -85,7 +87,10 @@ async fn exercise(cancel: bool) {
         );
     }
     if cancel {
-        client.shutdown().await.unwrap();
+        crate::dependency::termination::ConnectionControl::new(&client)
+            .unwrap()
+            .reset()
+            .unwrap();
         drop(client);
     } else {
         assert!(
@@ -133,7 +138,7 @@ fn incomplete_stream_evidence_and_payload_or_timing_tampering_are_rejected() {
     let original = dependency()["response_stream"].clone();
     for (field, value) in [
         ("complete", Value::Bool(false)),
-        ("version", Value::from(2)),
+        ("version", Value::from(3)),
         ("end_ms", Value::from(100)),
     ] {
         let mut invalid = original.clone();

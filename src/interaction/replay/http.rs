@@ -4,6 +4,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
 use hyper::Request;
 use tokio::time::{Duration, Instant, sleep_until};
+mod transport;
 
 use super::{HttpClient, ReplayResponse, elapsed_ms};
 use crate::http::response_headers;
@@ -17,7 +18,7 @@ use crate::interaction::{
 };
 
 pub(super) async fn execute(
-    client: &HttpClient,
+    _client: &HttpClient,
     request: Request<Full<Bytes>>,
     transcript: &InputTranscript,
     header_timeout: Duration,
@@ -51,7 +52,7 @@ pub(super) async fn execute(
         .min(Duration::from_millis(transcript.policy.max_duration_ms));
     let head_deadline = started + head_budget;
     let head_deadline = client_close.map_or(head_deadline, |close| close.min(head_deadline));
-    let response = tokio::time::timeout_at(head_deadline, client.request(request))
+    let (response, transport) = tokio::time::timeout_at(head_deadline, transport::request(request))
         .await
         .context("recorded stream response headers timed out")?
         .context("recorded stream request failed")?;
@@ -144,7 +145,11 @@ pub(super) async fn execute(
         }
     };
     decoder.validate_boundary()?;
-    // Dropping Incoming cancels the actual Target response before dependency draining.
+    if reason == EndReason::ClientClose {
+        // HTTP/1 FIN permits the server to finish its response. This semantic
+        // cancellation needs a connection end on its own dedicated transport.
+        transport.cancel()?;
+    }
     drop(body);
     let mut end = lifecycle.end_observation(reason, elapsed_ms(started), transport_clean);
     if reason == EndReason::ClientClose {

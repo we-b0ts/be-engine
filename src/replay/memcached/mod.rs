@@ -29,6 +29,8 @@ mod delivery;
 mod evidence;
 mod expiration;
 mod report_inventory;
+#[cfg(test)]
+mod termination_tests;
 use super::command_matching::{
     CommandExchangeScope, PreferredMatch, is_connection_independent_background,
     lane_blocked_diagnostic, preferred_match, unmatched_diagnostic,
@@ -71,6 +73,8 @@ pub(super) struct RecordedExchange {
     noreply: bool,
     #[serde(default)]
     response_frames: Vec<RecordedCapture>,
+    #[serde(default)]
+    response_frame_offsets_ms: Vec<u64>,
     no_response: bool,
     #[serde(default)]
     outcome: DependencyExchangeOutcome,
@@ -113,6 +117,7 @@ struct ReplayExchange {
 struct MatchedMemcachedExchange {
     index: usize,
     response_frames: Vec<Vec<u8>>,
+    response_frame_offsets_ms: Vec<u64>,
     timing: ReplayExchangeTiming,
     request_observed_at: DateTime<Utc>,
     request_opcode: Option<u8>,
@@ -260,6 +265,7 @@ impl MemcachedReplayState {
             .iter()
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
+        delivery::validate_termination(&record)?;
         let outcome = if record.no_response {
             DependencyExchangeOutcome::NoResponse
         } else {
@@ -409,6 +415,7 @@ impl MemcachedReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedMemcachedExchange {
+            response_frame_offsets_ms: exchange.record.response_frame_offsets_ms.clone(),
             index,
             response_frames,
             timing: exchange.timing,
@@ -531,10 +538,18 @@ pub(super) async fn handle_connection(
                         return Err(error);
                     }
                 };
+                let request_started = tokio::time::Instant::now();
                 let matched = match_memcached_request(&state, &target_key, wire, &request).await;
                 match matched {
                     Some(matched) => {
-                        if deliver_memcached_exchange(&mut reader, &state, &matched).await? {
+                        if deliver_memcached_exchange(
+                            &mut reader,
+                            &state,
+                            &matched,
+                            request_started,
+                        )
+                        .await?
+                        {
                             break;
                         }
                     }
@@ -583,6 +598,7 @@ pub(super) async fn handle_connection(
                         return Err(error);
                     }
                 };
+                let request_started = tokio::time::Instant::now();
                 let matched = match_memcached_request(&state, &target_key, wire, &request).await;
                 match matched {
                     Some(mut matched) => {
@@ -600,7 +616,14 @@ pub(super) async fn handle_connection(
                                 .fail_exchange(&matched, reason.to_string());
                             return Err(anyhow!(reason));
                         }
-                        if deliver_memcached_exchange(&mut reader, &state, &matched).await? {
+                        if deliver_memcached_exchange(
+                            &mut reader,
+                            &state,
+                            &matched,
+                            request_started,
+                        )
+                        .await?
+                        {
                             break;
                         }
                     }

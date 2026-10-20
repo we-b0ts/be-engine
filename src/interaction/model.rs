@@ -243,6 +243,8 @@ pub struct EndObservation {
     pub offset_ms: u64,
     #[serde(default)]
     pub pending: Vec<u64>,
+    /// The observed lifecycle ended without capture/transport corruption.
+    /// An observed client cancellation may retain pending business identities.
     pub clean: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<CloseObservation>,

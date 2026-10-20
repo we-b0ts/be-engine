@@ -272,6 +272,8 @@ pub struct MemcachedExchangeEvent {
     pub quiet: bool,
     pub response_status: String,
     pub response_frames: Vec<BodyCapture>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_frame_offsets_ms: Vec<u128>,
     pub no_response: bool,
     pub outcome: DependencyExchangeOutcome,
     pub duration_ms: u128,
@@ -529,7 +531,17 @@ pub struct MysqlExchangeEvent {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct MysqlWirePrefixPacket {
+    pub offset_ms: u128,
+    pub packet: BodyCapture,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct MysqlExchangeResponse {
+    /// Complete wire packets already delivered before transport termination.
+    /// These are dependency evidence, never a synthesized successful resultset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wire_prefix: Vec<MysqlWirePrefixPacket>,
     /// Protocol-41 OK or final resultset EOF status, when captured completely.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_status: Option<u16>,
