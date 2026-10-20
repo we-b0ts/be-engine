@@ -3,7 +3,7 @@
 use super::SessionRef;
 use crate::interaction::{lifecycle::LifecycleDecision, model::Protocol};
 use crate::recorder::http::case::{
-    CaseRequestRecord, CaseResponseRecord, finalize_interaction_http_case,
+    CaseRequestRecord, CaseResponseRecord, finalize_interaction_http_case, interaction_invalidation,
 };
 use crate::recorder::{CaseInvalidation, HeaderMapSnapshot, capture_case_body, redact_headers};
 use crate::{ActiveCaseGuard, AppState};
@@ -23,6 +23,27 @@ pub(super) struct RequestMeta {
     pub raw_headers: HeaderMap,
     pub body: Bytes,
     pub client_addr: Option<String>,
+}
+
+#[derive(Debug)]
+struct PrimaryFinalizationFailure(CaseInvalidation);
+
+impl std::fmt::Display for PrimaryFinalizationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0.message)
+    }
+}
+
+impl std::error::Error for PrimaryFinalizationFailure {}
+
+fn stop_failed_recording(session: &SessionRef) {
+    session.state.begin_case_quiescing();
+    session
+        .state
+        .inner
+        .interactions
+        .source_stop
+        .send_replace(true);
 }
 
 pub(super) fn spawn(
@@ -48,22 +69,35 @@ pub(super) fn spawn(
     tokio::spawn(async move {
         let _guard = guard;
         if let Err(error) = run(&session, meta, &publication).await {
-            session.state.begin_case_quiescing();
-            session
-                .state
-                .inner
-                .interactions
-                .source_stop
-                .send_replace(true);
+            let mut failure = error
+                .downcast_ref::<PrimaryFinalizationFailure>()
+                .map(|failure| failure.0.clone())
+                .unwrap_or_else(|| {
+                    CaseInvalidation::new(
+                        "interaction_finalization_failed",
+                        "interaction evidence could not be finalized",
+                    )
+                });
+            let detail = error
+                .chain()
+                .filter(|cause| !cause.is::<PrimaryFinalizationFailure>())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(": ");
+            failure
+                .message
+                .push_str(&format!("; finalization error: {detail}"));
             let _ = session
                 .state
                 .recorder()
-                .fail_case(
+                .fail_case_with_context(
                     &session.case,
-                    "interaction_finalization_failed",
-                    format!("{error:#}"),
+                    failure.reason,
+                    failure.message,
+                    failure.context,
                 )
                 .await;
+            stop_failed_recording(&session);
             tracing::warn!(%error, case_id = %session.case.id, "interaction finalization failed");
         }
         session
@@ -142,12 +176,26 @@ async fn run(
         }
         tokio::task::yield_now().await;
     }
-    let (input, mut output) = session
-        .observation
-        .lock()
-        .expect("interaction observation poisoned")
-        .finish(reason, session.now(), transport_clean)?;
-    let primary_clean = output.end.clean;
+    let (finished_observation, observed_at, pending) = {
+        let observation = session
+            .observation
+            .lock()
+            .expect("interaction observation poisoned");
+        let elapsed = session.now();
+        (
+            observation.finish(reason, elapsed, transport_clean),
+            elapsed,
+            observation.pending(),
+        )
+    };
+    if !finished_observation
+        .as_ref()
+        .is_ok_and(|(_, output)| output.end.clean)
+    {
+        // The supervisor stops Source, then keeps Recorder and this case guard
+        // alive until disconnect dependencies and failed evidence are written.
+        stop_failed_recording(session);
+    }
     let stream_tail_deadline = session
         .state
         .inner
@@ -198,23 +246,48 @@ async fn run(
                 )
             })
         });
+    // Even an unpublishable partial frame retains admitted dependencies until
+    // their evidence is written. A decoder failure cannot move staging early.
+    let (input, mut output) = match finished_observation {
+        Ok(finished) => finished,
+        Err(error) => {
+            let mut commit = publication.begin().await;
+            let mut failure = interaction_invalidation(
+                reason,
+                observed_at,
+                &pending,
+                commit.invalidation.clone(),
+                invalidation,
+            )
+            .unwrap_or_else(|| {
+                CaseInvalidation::new(
+                    "interaction_finalization_failed",
+                    "interaction evidence could not be finalized",
+                )
+            });
+            failure
+                .message
+                .push_str(&format!("; finalization error: {error:#}"));
+            let context = PrimaryFinalizationFailure(failure.clone());
+            let result = session
+                .state
+                .recorder()
+                .fail_case_with_context(
+                    &session.case,
+                    failure.reason,
+                    failure.message,
+                    failure.context,
+                )
+                .await;
+            commit.finalized = true;
+            return result.map_err(|error| error.context(context));
+        }
+    };
     if invalidation.is_some() {
         output.end.clean = false;
     }
     if !output.end.clean {
-        session.state.begin_case_quiescing();
-        // A failed stream case is not a Source liveness failure. Its tail has
-        // retained ownership until admitted dependency evidence is persisted.
-        if stream_tail_deadline.is_none()
-            && (observation_deadline.is_none() || !primary_clean || !transport_clean)
-        {
-            session
-                .state
-                .inner
-                .interactions
-                .source_stop
-                .send_replace(true);
-        }
+        stop_failed_recording(session);
     }
     let response = session
         .response

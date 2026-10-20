@@ -137,9 +137,9 @@ pub(super) async fn forward(
         // Body EOF is an external response boundary, not the tail/publication boundary.
         drop(sender);
         if timed_out && let Some(recovery) = &mut recovery {
-            recovery.begin().await;
-            let result = response::drain_body(&mut upstream).await;
-            recovery.source_finished(&result).await;
+            recovery
+                .observe_source_completion(response::drain_body(&mut upstream))
+                .await;
         }
         context
             .finish(status, headers, payload, Vec::new(), error, recovery)

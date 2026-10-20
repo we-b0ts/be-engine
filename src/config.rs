@@ -203,7 +203,7 @@ pub struct HttpGatewayConfig {
     pub interaction: crate::interaction::policy::InteractionPolicy,
     pub listen: SocketAddr,
     pub matched_upstream: String,
-    /// Deadline for ordinary HTTP requests, including the body.
+    /// Common deadline for ordinary HTTP and streaming requests, including the body.
     pub request_timeout_ms: u64,
     pub fallback_upstream: String,
     pub fallback_mode: HttpGatewayFallbackMode,
@@ -439,7 +439,7 @@ impl Default for HttpGatewayConfig {
                 .parse()
                 .expect("valid default HTTP gateway listen address"),
             matched_upstream: "http://127.0.0.1:8081".to_string(),
-            request_timeout_ms: 15_000,
+            request_timeout_ms: 900_000,
             fallback_upstream: "http://127.0.0.1:8082".to_string(),
             fallback_mode: HttpGatewayFallbackMode::Upstream,
             fixed_response: None,

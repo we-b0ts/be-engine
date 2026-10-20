@@ -409,8 +409,11 @@ async fn forward_and_record(
                     }
                     let status = upstream_response.status();
                     let mut response_headers = upstream_response.headers().clone();
-                    let mut body_bytes = match upstream_response.into_body().collect().await {
-                        Ok(collected) => collected.to_bytes(),
+                    let mut body_bytes = match capture_context
+                        .collect_response_body(upstream_response.into_body())
+                        .await
+                    {
+                        Ok(bytes) => bytes,
                         Err(err) => {
                             return record_http_error(HttpErrorContext {
                                 targets: targets.clone(),

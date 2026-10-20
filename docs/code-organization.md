@@ -52,6 +52,9 @@ is unclear.
   absolute tail deadline. Its `stream_tail` child owns primary-stream dependency
   request lifetimes, finite observation inventory and publication isolation,
   separately from writer reservations and API-origin selector proofs.
+  The registry publishes admission closure to standalone supervision, including
+  closure while a live dependency prevents case publication. Supervision stops
+  Source before draining those owned requests and their evidence.
   `recorder/api_origin_observation` owns online origin,
   selector and captured-identity matching without changing dependency ownership.
   `recording_case` wires these case lifecycle operations into application state;
@@ -389,6 +392,10 @@ is unclear.
   best-effort address refresh independently of Source and request supervision;
   `proxy` owns direct or reservation-aware request forwarding and completion;
   `source` owns fixed-identity process startup, trust, isolation and cleanup.
+  Global admission closure wakes supervision even before case publication;
+  confirmed Source exit permits engine-owned connection cleanup before the
+  remaining evidence is drained. HTTP timeout recovery keeps request ownership
+  through its bounded recovery period and supervised Source shutdown.
   Redis primitives stay in the gateway SDK. CLI bootstrap initializes encryption
   before starting Tokio threads. There is one public Source recording command.
   Its `kubernetes` child owns recording-startup Service discovery, ready barriers

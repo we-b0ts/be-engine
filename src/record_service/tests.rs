@@ -22,6 +22,7 @@ mod coordination;
 mod direct;
 mod policy;
 mod project;
+mod quiescing;
 mod readiness;
 mod sse;
 

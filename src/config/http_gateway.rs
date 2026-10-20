@@ -6,6 +6,22 @@ use hyper::{StatusCode, Uri};
 use serde::{Deserialize, Serialize};
 
 use super::HttpGatewayConfig;
+use crate::interaction::{model::Protocol, policy::InteractionPolicy};
+
+impl HttpGatewayConfig {
+    /// Materialize the gateway budget without changing recorded transcript policies.
+    pub fn interaction_policy(&self, protocol: Protocol) -> InteractionPolicy {
+        let mut policy = self.interaction.clone();
+        policy.request_timeout_ms = self.request_timeout_ms;
+        policy.max_duration_ms = match protocol {
+            Protocol::Sse | Protocol::Ndjson | Protocol::RawStream => self.request_timeout_ms,
+            Protocol::SocketIo | Protocol::WebSocket => {
+                policy.max_duration_ms.max(self.request_timeout_ms)
+            }
+        };
+        policy
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +42,7 @@ pub struct HttpGatewayFixedResponseConfig {
 
 pub(super) fn validate_config(config: &HttpGatewayConfig) -> Result<()> {
     config.interaction.validate()?;
+    config.interaction_policy(Protocol::Sse).validate()?;
     ensure!(
         !config.record_raw_streaming || config.record_streaming,
         "http_gateway.record_raw_streaming requires record_streaming"
@@ -134,6 +151,86 @@ fn is_managed_or_hop_by_hop_header(name: &HeaderName) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interaction::{
+        lifecycle::LifecycleDecision,
+        model::{EndReason, InputTranscript},
+        observation::Observation,
+    };
+
+    #[test]
+    fn http_streams_share_the_http_deadline_despite_legacy_interaction_budgets() {
+        let config: crate::AppConfig = serde_yaml::from_str(
+            "http_gateway:\n  request_timeout_ms: 900000\n  interaction:\n    request_timeout_ms: 120000\n    max_duration_ms: 600000\n",
+        )
+        .unwrap();
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        let config: crate::AppConfig = serde_yaml::from_str(&yaml).unwrap();
+        for protocol in [Protocol::Sse, Protocol::Ndjson, Protocol::RawStream] {
+            let policy = config.http_gateway.interaction_policy(protocol);
+            let observation = Observation::new(protocol, policy).unwrap();
+            assert_eq!(observation.decision(600_001), LifecycleDecision::Continue);
+            assert_eq!(observation.decision(899_999), LifecycleDecision::Continue);
+            assert_eq!(
+                observation.decision(900_000),
+                LifecycleDecision::Fail(EndReason::MaxDuration)
+            );
+        }
+        // Loading configuration never rewrites a historical policy value.
+        assert_eq!(config.http_gateway.interaction.request_timeout_ms, 120_000);
+        assert_eq!(config.http_gateway.interaction.max_duration_ms, 600_000);
+    }
+
+    #[test]
+    fn custom_http_timeout_also_bounds_subscriptions_without_pending_business() {
+        let config: crate::AppConfig =
+            serde_yaml::from_str("http_gateway:\n  request_timeout_ms: 731\n").unwrap();
+        let policy = config.http_gateway.interaction_policy(Protocol::Sse);
+        let subscription = Observation::new_sse_subscription(policy, 700).unwrap();
+        assert!(subscription.pending().is_empty());
+        assert_eq!(subscription.decision(730), LifecycleDecision::Continue);
+        assert_eq!(
+            subscription.decision(731),
+            LifecycleDecision::Fail(EndReason::MaxDuration)
+        );
+    }
+
+    #[test]
+    fn interactive_sessions_keep_longer_session_budgets_and_common_request_timeout() {
+        let config = HttpGatewayConfig {
+            interaction: InteractionPolicy {
+                request_timeout_ms: 120_000,
+                max_duration_ms: 1_800_000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for protocol in [Protocol::SocketIo, Protocol::WebSocket] {
+            let policy = config.interaction_policy(protocol);
+            assert_eq!(policy.request_timeout_ms, 900_000);
+            assert_eq!(policy.max_duration_ms, 1_800_000);
+        }
+    }
+
+    #[test]
+    fn historical_transcript_policies_keep_their_original_deadlines() {
+        let input = InputTranscript::new(
+            Protocol::Sse,
+            InteractionPolicy {
+                request_timeout_ms: 120_000,
+                max_duration_ms: 600_000,
+                ..Default::default()
+            },
+        );
+        let serialized = serde_json::to_string(&input).unwrap();
+        let restored: InputTranscript = serde_json::from_str(&serialized).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored, input);
+        let observation = Observation::new(restored.protocol, restored.policy).unwrap();
+        assert_eq!(
+            observation.decision(120_000),
+            LifecycleDecision::Fail(EndReason::RequestTimeout)
+        );
+    }
 
     #[test]
     fn validates_fixed_response_and_rejects_ambiguous_or_invalid_shapes() {
@@ -191,7 +288,7 @@ mod tests {
             HttpGatewayFallbackMode::FixedResponse
         );
         assert_eq!(config.http_gateway.fixed_response.unwrap().status, 200);
-        assert_eq!(config.http_gateway.request_timeout_ms, 15_000);
+        assert_eq!(config.http_gateway.request_timeout_ms, 900_000);
         assert!(!config.http_gateway.record_streaming);
     }
 

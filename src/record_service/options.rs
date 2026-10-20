@@ -202,7 +202,6 @@ impl RecordOptions {
         } else {
             let mut config = AppConfig::default();
             config.http_gateway.per_api_case_limits.default = usize::MAX;
-            config.http_gateway.request_timeout_ms = 30_000;
             config.recording.encrypt_request_headers =
                 vec!["authorization".to_owned(), "cookie".to_owned()];
             config.recording.redact_headers = vec!["proxy-authorization".to_owned()];

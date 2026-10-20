@@ -154,7 +154,10 @@ async fn run_prepared(
                 signal = &mut shutdown => { signal?; break Ok(()); }
                 error = forwards.failure() => break Err(error),
                 _ = state.wait_for_interaction_source_stop() => {
-                    process::stop_source(source).await?;
+                    break Ok(());
+                }
+                _ = state.inner.active_cases.wait_for_quiescing() => {
+                    warn!("recording admission closed; stopping Source and finalizing recording");
                     break Ok(());
                 }
                 status = source.wait() => break Err(anyhow::anyhow!("Source exited: {}", status?)),
@@ -178,6 +181,16 @@ async fn run_prepared(
     } else {
         Ok(())
     };
+    if source_cleanup.is_ok() && state.inner.active_cases.is_quiescing() {
+        // Source has exited and cannot start more work. End retained sockets as
+        // engine cleanup, so an upstream that never replies cannot strand drain.
+        let reset = state.dependency_connections().reset_open_connections();
+        if !reset.connections_by_protocol.is_empty() {
+            warn!(connections_by_protocol = ?reset.connections_by_protocol,
+                reset_errors = ?reset.errors,
+                "closed retained dependency connections after Source exit");
+        }
+    }
     if tokio::time::timeout(Duration::from_secs(60), relay.drain())
         .await
         .is_err()

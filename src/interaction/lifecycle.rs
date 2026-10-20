@@ -160,7 +160,15 @@ mod tests {
 
     #[test]
     fn overlapping_pending_requests_suppress_idle_and_timeout_independently() {
-        let mut lifecycle = InteractionLifecycle::new(InteractionPolicy::default(), 0).unwrap();
+        let mut lifecycle = InteractionLifecycle::new(
+            InteractionPolicy {
+                request_timeout_ms: 120_000,
+                max_duration_ms: 600_000,
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
         lifecycle.begin(1, 0).unwrap();
         lifecycle.begin(2, 5_000).unwrap();
         lifecycle.complete(1, 8_000).unwrap();
@@ -179,7 +187,14 @@ mod tests {
 
     #[test]
     fn eof_does_not_certify_pending_business_and_hard_duration_is_not_success() {
-        let mut lifecycle = InteractionLifecycle::new(InteractionPolicy::default(), 0).unwrap();
+        let mut lifecycle = InteractionLifecycle::new(
+            InteractionPolicy {
+                max_duration_ms: 600_000,
+                ..Default::default()
+            },
+            0,
+        )
+        .unwrap();
         lifecycle.begin(4, 0).unwrap();
         assert!(
             !lifecycle
