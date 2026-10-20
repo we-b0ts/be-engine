@@ -33,6 +33,7 @@ mod cancellation;
 mod content_type;
 mod polling;
 mod reuse;
+mod subscription;
 use crate::{
     AppConfig, AppState, HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig,
     HttpGatewayRuleConfig,

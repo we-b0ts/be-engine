@@ -20,6 +20,21 @@ pub enum Protocol {
     SocketIo,
 }
 
+/// Response streams await a result; subscriptions observe a bounded idle window.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpStreamMode {
+    #[default]
+    Response,
+    Subscription,
+}
+
+impl HttpStreamMode {
+    fn is_response(&self) -> bool {
+        *self == Self::Response
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageKind {
@@ -67,6 +82,8 @@ pub struct InputTranscript {
     pub version: u8,
     pub protocol: Protocol,
     pub policy: InteractionPolicy,
+    #[serde(default, skip_serializing_if = "HttpStreamMode::is_response")]
+    pub http_stream_mode: HttpStreamMode,
     #[serde(default)]
     pub actions: Vec<InputAction>,
 }
@@ -77,6 +94,7 @@ impl InputTranscript {
             version: TRANSCRIPT_VERSION,
             protocol,
             policy,
+            http_stream_mode: HttpStreamMode::Response,
             actions: Vec::new(),
         }
     }
@@ -88,6 +106,11 @@ impl InputTranscript {
             self.version
         );
         self.policy.validate()?;
+        ensure!(
+            self.http_stream_mode != HttpStreamMode::Subscription
+                || (self.protocol == Protocol::Sse && self.policy.stream_terminal.is_none()),
+            "HTTP subscription mode requires SSE without a response terminal rule"
+        );
         let mut previous = None;
         let mut seen = std::collections::BTreeSet::new();
         if matches!(
@@ -100,6 +123,10 @@ impl InputTranscript {
         }
         let mut offset = 0;
         for action in &self.actions {
+            ensure!(
+                self.http_stream_mode != HttpStreamMode::Subscription || action.after.is_empty(),
+                "HTTP subscription close cannot depend on a response completion"
+            );
             ensure!(
                 !self.policy.preserve_input_timing || !action.compressible_gap,
                 "timing-preserving interaction cannot contain compressed input gaps"

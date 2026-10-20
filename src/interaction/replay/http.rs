@@ -10,7 +10,7 @@ use crate::http::response_headers;
 use crate::interaction::{
     lifecycle::{InteractionLifecycle, LifecycleDecision},
     model::{
-        CloseObservation, EndReason, InputActionKind, InputTranscript, OutputEvent,
+        CloseObservation, EndReason, HttpStreamMode, InputActionKind, InputTranscript, OutputEvent,
         OutputObservation, TRANSCRIPT_VERSION,
     },
     stream::{StreamDecoder, StreamMessage},
@@ -23,6 +23,12 @@ pub(super) async fn execute(
     header_timeout: Duration,
     body_limit: usize,
 ) -> Result<ReplayResponse> {
+    transcript.validate()?;
+    let subscription = transcript.http_stream_mode == HttpStreamMode::Subscription;
+    ensure!(
+        !subscription || request.method() == hyper::Method::GET,
+        "HTTP subscription input requires a GET request"
+    );
     let close_timing = client_close_timing(transcript)?;
     let started = Instant::now();
     let mut client_close = close_timing
@@ -37,7 +43,9 @@ pub(super) async fn execute(
         })
         .transpose()?;
     let mut lifecycle = InteractionLifecycle::new(transcript.policy.clone(), 0)?;
-    lifecycle.begin(0, 0)?;
+    if !subscription {
+        lifecycle.begin(0, 0)?;
+    }
     let head_budget = header_timeout
         .min(Duration::from_millis(transcript.policy.request_timeout_ms))
         .min(Duration::from_millis(transcript.policy.max_duration_ms));
@@ -65,6 +73,9 @@ pub(super) async fn execute(
         "recorded stream requires an uncompressed Target response"
     );
     let headers = response_headers::snapshot_standard(response.headers());
+    if subscription {
+        lifecycle.activity(elapsed_ms(started));
+    }
     let mut body = response.into_body();
     let mut bytes = Vec::new();
     let mut events = Vec::new();
