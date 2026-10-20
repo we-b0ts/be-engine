@@ -62,8 +62,10 @@ impl DependencyTargets {
             cases: self.cases.clone(),
             bootstrap_open: self.bootstrap_open,
             ambiguous_active_cases: self.ambiguous_active_cases,
+            process_owned_rule: self.process_owned_rule.clone(),
             _reservations: Vec::new(),
             selected: Vec::new(),
+            stream_tail: Vec::new(),
         }
     }
 
@@ -185,8 +187,10 @@ impl ActiveCaseRegistry {
             cases,
             bootstrap_open,
             ambiguous_active_cases: 0,
+            process_owned_rule: original.process_owned_rule.clone(),
             _reservations: reservations,
             selected: Vec::new(),
+            stream_tail: Vec::new(),
         })
     }
 

@@ -18,7 +18,9 @@ recording:
 ```
 
 `api_origin_dependency_idle_ms` defaults to 60000. Zero disables this additional
-observation. APIs with no matching origin keep the ordinary fixed post-response
+observation for finite APIs. Primary HTTP streams instead use the independent
+[dependency tail](recording-stream-dependency-tail.md), even without an origin
+rule. Other APIs with no matching origin keep the ordinary fixed post-response
 window. The API-origin tail ends when its selected requests have completed and
 there has been no selected activity for the configured idle interval, starting
 no earlier than primary response completion. Its absolute deadline is the

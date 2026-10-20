@@ -215,13 +215,13 @@ impl RedisReplayState {
             {
                 ensure!(
                     indices.insert(key, index).is_none(),
-                    "API-origin Redis reference is ambiguous in its Case semantic dependencies"
+                    "dependency-tail Redis reference is ambiguous in its Case semantic dependencies"
                 );
             }
         }
         ensure!(
             indices.len() == selected.len(),
-            "API-origin Redis reference is absent from its Case semantic dependencies"
+            "dependency-tail Redis reference is absent from its Case semantic dependencies"
         );
         Ok(indices)
     }

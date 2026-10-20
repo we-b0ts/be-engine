@@ -11,6 +11,11 @@ pub(super) async fn forward(
     response: Response<hyper::body::Incoming>,
     session: SessionRef,
 ) -> Result<Response<GatewayBody>> {
+    session
+        .state
+        .inner
+        .active_cases
+        .enable_stream_tail(session.case.id);
     let mut closing = session.close.subscribe();
     let (parts, mut body) = response.into_parts();
     let rewrite_input = crate::http::rewrite::RewriteInput {

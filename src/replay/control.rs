@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use super::*;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
-pub(super) mod api_origin;
+pub(super) mod dependency_tail;
 mod interaction;
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READY_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
@@ -520,8 +520,8 @@ pub(super) async fn begin_case(
     if let Err(error) = deferred::prepare_case(state.clone(), case_id).await {
         return serde_json::json!({"ok": false, "error": format!("case dependency preparation failed: {error:#}")});
     }
-    if let Err(error) = api_origin::prepare(&state, case_id).await {
-        return serde_json::json!({"ok": false, "error": format!("API-origin dependency preparation failed: {error:#}")});
+    if let Err(error) = dependency_tail::prepare(&state, case_id).await {
+        return serde_json::json!({"ok": false, "error": format!("dependency-tail dependency preparation failed: {error:#}")});
     }
     let counter_start = match counter_reader {
         Some(reader) => Some(reader.sample().await),
@@ -543,8 +543,8 @@ pub(super) async fn begin_case(
             .or_insert(sample);
     }
     deferred::release_consumed_payloads(&mut state);
-    if let Err(error) = api_origin::activate(&mut state, case_id) {
-        return serde_json::json!({"ok": false, "error": format!("API-origin dependency activation failed: {error:#}")});
+    if let Err(error) = dependency_tail::activate(&mut state, case_id) {
+        return serde_json::json!({"ok": false, "error": format!("dependency-tail dependency activation failed: {error:#}")});
     }
     state.active_case_id = Some(case_id.to_string());
     if let Some(policy) = &mut state.replay_policy {
@@ -595,19 +595,19 @@ pub(super) async fn end_case(
             state.cases[case_id].dir.clone(),
         )
     };
-    let deadline = api_origin::deadline(&state, case_id).await;
+    let deadline = dependency_tail::deadline(&state, case_id).await;
     let cleanup = async {
         let interaction =
-            interaction::drain(&state, case_id, &case_dir, post_response_window).await?;
+            interaction::drain(&state, case_id, &case_dir, post_response_window, deadline).await?;
         if !interaction && !post_response_window.is_zero() {
             tokio::time::sleep(post_response_window).await;
         }
-        api_origin::drain(&state, case_id).await
+        dependency_tail::drain(&state, case_id).await
     };
     let cleanup = match deadline {
         Some(deadline) => tokio::time::timeout_at(deadline, cleanup)
             .await
-            .map_err(|_| anyhow!("API-origin absolute request budget expired during case cleanup; case ownership was retained"))
+            .map_err(|_| anyhow!("dependency-tail absolute request budget expired during case cleanup; case ownership was retained"))
             .and_then(|result| result),
         None => cleanup.await,
     };
@@ -632,7 +632,7 @@ pub(super) async fn end_case(
             .remove(case_id)
             .zip(state.egress_counter_reader.clone());
         state.active_case_id = None;
-        api_origin::end(&mut state, case_id);
+        dependency_tail::end(&mut state, case_id);
         if let Some(case) = state.cases.get_mut(case_id) {
             case.status = ReplayCaseStatus::Ended;
         }

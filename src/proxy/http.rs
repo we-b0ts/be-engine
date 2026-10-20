@@ -244,7 +244,6 @@ async fn forward_and_record(
     fallback_authority: Option<String>,
     termination: ClientTermination,
 ) -> Response<ProxyBody> {
-    let targets = state.capture_dependency_targets();
     let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
@@ -290,6 +289,8 @@ async fn forward_and_record(
                 .and_then(|value| value.to_str().ok())
                 .map(ToOwned::to_owned)
         });
+    let targets =
+        state.capture_http_dependency_request(&method, &original_uri, authority.as_deref());
 
     let request_body = match req.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),

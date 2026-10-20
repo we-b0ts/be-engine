@@ -148,12 +148,19 @@ async fn run(
         .expect("interaction observation poisoned")
         .finish(reason, session.now(), transport_clean)?;
     let primary_clean = output.end.clean;
-    let observation_deadline = session
+    let stream_tail_deadline = session
         .state
         .inner
         .active_cases
-        .observation_deadline(session.case.id);
-    // Transport cleanup keeps its own short budget. API-origin observation has
+        .stream_tail_deadline(session.case.id);
+    let observation_deadline = stream_tail_deadline.or_else(|| {
+        session
+            .state
+            .inner
+            .active_cases
+            .observation_deadline(session.case.id)
+    });
+    // Transport cleanup keeps its own short budget. Dependency observation has
     // the primary request's absolute deadline and the same bounded writer drain.
     let drain = if observation_deadline.is_some() {
         // This operation owns both its absolute observation limit and the
@@ -196,7 +203,11 @@ async fn run(
     }
     if !output.end.clean {
         session.state.begin_case_quiescing();
-        if observation_deadline.is_none() || !primary_clean || !transport_clean {
+        // A failed stream case is not a Source liveness failure. Its tail has
+        // retained ownership until admitted dependency evidence is persisted.
+        if stream_tail_deadline.is_none()
+            && (observation_deadline.is_none() || !primary_clean || !transport_clean)
+        {
             session
                 .state
                 .inner

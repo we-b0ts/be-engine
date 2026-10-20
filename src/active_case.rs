@@ -10,10 +10,12 @@ mod activity;
 mod interaction;
 mod observation;
 mod recovery;
+mod stream_tail;
 
 use activity::{DependencyActivity, DependencyReservation};
 pub(crate) use interaction::InteractionPublication;
 use observation::{CaseObservation, SelectedRequest};
+use stream_tail::{StreamTail, StreamTailRequest};
 
 #[derive(Clone)]
 pub(crate) struct ActiveCaseRegistry {
@@ -40,6 +42,7 @@ struct ActiveCaseRegistration {
     recovering: bool,
     source_completed: bool,
     observation: Option<Arc<CaseObservation>>,
+    stream_tail: Option<Arc<StreamTail>>,
 }
 
 pub(crate) struct ActiveCaseGuard {
@@ -72,8 +75,10 @@ pub(crate) struct DependencyTargets {
     pub(crate) cases: Vec<(CaseContext, &'static str)>,
     pub(crate) bootstrap_open: bool,
     pub(crate) ambiguous_active_cases: usize,
+    pub(crate) process_owned_rule: Option<String>,
     _reservations: Vec<DependencyReservation>,
     selected: Vec<SelectedRequest>,
+    stream_tail: Vec<StreamTailRequest>,
 }
 
 impl Drop for ActiveCaseGuard {
@@ -134,6 +139,7 @@ impl ActiveCaseRegistry {
             recovering: false,
             source_completed: false,
             observation: None,
+            stream_tail: None,
         });
         self.active_count.send_replace(state.active.len());
         Ok(ActiveCaseGuard {
@@ -274,7 +280,12 @@ impl ActiveCaseRegistry {
             .active
             .iter_mut()
             .find(|registration| registration.case.id == case_id)?;
-        if !registration.accepting_dependencies {
+        if !registration.accepting_dependencies
+            && !registration
+                .stream_tail
+                .as_ref()
+                .is_some_and(|tail| tail.is_enabled())
+        {
             return None;
         }
         if registration.invalidation.is_none() {
@@ -302,6 +313,9 @@ impl ActiveCaseRegistry {
             return self
                 .drain_recovering_case(case_id, post_response_window, timeout)
                 .await;
+        }
+        if let Some(result) = self.drain_stream_tail(case_id, timeout).await {
+            return result;
         }
         if let Some(result) = self.drain_observation(case_id, timeout).await {
             return result;
@@ -332,19 +346,34 @@ impl ActiveCaseRegistry {
     }
 
     pub(crate) fn current_targets_for_event(&self) -> DependencyTargets {
-        self.targets_for_request(None)
+        self.targets_for_request(None, false)
     }
 
+    #[cfg(test)]
+    #[cfg(test)]
     pub(crate) fn current_targets_for_request(
         &self,
         request: &crate::recorder::api_origin_observation::DependencyRequest<'_>,
     ) -> DependencyTargets {
-        self.targets_for_request(Some(request))
+        self.targets_for_request(Some(request), true)
+    }
+
+    pub(crate) fn current_targets_for_request_with_tail(
+        &self,
+        request: &crate::recorder::api_origin_observation::DependencyRequest<'_>,
+        track_tail: bool,
+    ) -> DependencyTargets {
+        self.targets_for_request(Some(request), track_tail)
+    }
+
+    pub(crate) fn current_targets_for_http_request(&self, track_tail: bool) -> DependencyTargets {
+        self.targets_for_request(None, track_tail)
     }
 
     fn targets_for_request(
         &self,
         request: Option<&crate::recorder::api_origin_observation::DependencyRequest<'_>>,
+        track_tail: bool,
     ) -> DependencyTargets {
         let state = self.state.lock().expect("active case registry poisoned");
         let active_count = state.active.len();
@@ -371,12 +400,23 @@ impl ActiveCaseRegistry {
                 .collect(),
             _ => Vec::new(),
         };
+        let stream_tail = match state.active.as_slice() {
+            [case] if track_tail && case.accepting_dependencies => case
+                .stream_tail
+                .as_ref()
+                .map(|tail| tail.reserve())
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
+        };
         DependencyTargets {
             bootstrap_open,
             cases,
             ambiguous_active_cases,
+            process_owned_rule: None,
             _reservations: reservations,
             selected,
+            stream_tail,
         }
     }
 }
@@ -573,6 +613,7 @@ mod tests {
                 recovering: false,
                 source_completed: false,
                 observation: None,
+                stream_tail: None,
             });
             state.active.push(ActiveCaseRegistration {
                 case: second,
@@ -582,6 +623,7 @@ mod tests {
                 recovering: false,
                 source_completed: false,
                 observation: None,
+                stream_tail: None,
             });
         }
 

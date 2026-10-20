@@ -72,6 +72,7 @@ impl Gateway {
             ..Default::default()
         }];
         config.recording.output_dir = recordings_dir(temp.path());
+        config.recording.api_origin_dependency_idle_ms = 30;
         config.dns_mock.registry_path = temp.path().join("dns.json");
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");

@@ -153,7 +153,7 @@ async fn missing_call_uses_the_begin_deadline_and_repeated_begin_cannot_extend_i
         begin_case(&command("begin"), state.clone()).await["ok"],
         true
     );
-    let original = state.lock().await.api_origin_tails.cases["case-a"]
+    let original = state.lock().await.dependency_tails.cases["case-a"]
         .as_ref()
         .unwrap()
         .deadline
@@ -164,7 +164,7 @@ async fn missing_call_uses_the_begin_deadline_and_repeated_begin_cannot_extend_i
         true
     );
     assert_eq!(
-        state.lock().await.api_origin_tails.cases["case-a"]
+        state.lock().await.dependency_tails.cases["case-a"]
             .as_ref()
             .unwrap()
             .deadline
@@ -189,7 +189,7 @@ async fn preparing_a_case_that_is_not_yet_admitted_does_not_start_its_budget() {
     let state = fixture.runtime.state.clone();
     prepare(&state, "case-a").await.unwrap();
     assert!(
-        state.lock().await.api_origin_tails.cases["case-a"]
+        state.lock().await.dependency_tails.cases["case-a"]
             .as_ref()
             .unwrap()
             .deadline
@@ -200,7 +200,7 @@ async fn preparing_a_case_that_is_not_yet_admitted_does_not_start_its_budget() {
         begin_case(&command("begin"), state.clone()).await["ok"],
         true
     );
-    let deadline = state.lock().await.api_origin_tails.cases["case-a"]
+    let deadline = state.lock().await.dependency_tails.cases["case-a"]
         .as_ref()
         .unwrap()
         .deadline
@@ -286,7 +286,7 @@ async fn reopening_an_ended_eager_case_uses_a_fresh_budget_without_waiving_unuse
         begin_case(&command("begin"), state.clone()).await["ok"],
         true
     );
-    let first_deadline = state.lock().await.api_origin_tails.cases["case-a"]
+    let first_deadline = state.lock().await.dependency_tails.cases["case-a"]
         .as_ref()
         .unwrap()
         .deadline
@@ -301,7 +301,7 @@ async fn reopening_an_ended_eager_case_uses_a_fresh_budget_without_waiving_unuse
         !state
             .lock()
             .await
-            .api_origin_tails
+            .dependency_tails
             .cases
             .contains_key("case-a")
     );
@@ -310,7 +310,7 @@ async fn reopening_an_ended_eager_case_uses_a_fresh_budget_without_waiving_unuse
         begin_case(&command("begin"), state.clone()).await["ok"],
         true
     );
-    let second_deadline = state.lock().await.api_origin_tails.cases["case-a"]
+    let second_deadline = state.lock().await.dependency_tails.cases["case-a"]
         .as_ref()
         .unwrap()
         .deadline

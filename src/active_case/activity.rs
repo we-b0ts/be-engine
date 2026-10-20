@@ -20,6 +20,12 @@ pub(super) struct DependencyReservation {
     activity: Arc<DependencyActivity>,
 }
 
+impl DependencyReservation {
+    pub(super) fn touch(&self) {
+        self.activity.touch();
+    }
+}
+
 impl Default for DependencyActivity {
     fn default() -> Self {
         Self {
@@ -33,6 +39,14 @@ impl Default for DependencyActivity {
 }
 
 impl DependencyActivity {
+    pub(super) fn touch(&self) {
+        self.state
+            .lock()
+            .expect("dependency activity poisoned")
+            .last_activity = Instant::now();
+        self.changed.notify_one();
+    }
+
     pub(super) fn snapshot(&self) -> (usize, Instant) {
         let state = self.state.lock().expect("dependency activity poisoned");
         (state.in_flight, state.last_activity)

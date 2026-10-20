@@ -719,9 +719,11 @@ a case. Failed cases do not consume the limit, and restarting Recorder starts
 a new run with fresh counts.
 
 HTTP responses forward incrementally, and case-owned dependency collection and
-publication continue independently after response completion. Matching API-origin
+publication continue independently after response completion. Primary HTTP
+streams use [case-owned dependency observation](recording-stream-dependency-tail.md)
+after normal EOF or client cancellation. Matching API-origin
 rules enable [selected dependency observation](recording-api-origin-tail.md),
-with a sliding idle interval and an absolute request deadline. Other requests
+with a sliding idle interval and an absolute request deadline. Other finite requests
 continue accepting new case dependencies for the fixed
 `recording.case_dependency_post_response_window_ms` interval. This captures
 synchronous server-side after-hooks that start dependencies only after writing

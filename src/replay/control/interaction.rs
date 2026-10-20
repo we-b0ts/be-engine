@@ -9,6 +9,7 @@ pub(super) async fn drain(
     case_id: &str,
     case_dir: &std::path::Path,
     post_response_window: Duration,
+    observation_deadline: Option<tokio::time::Instant>,
 ) -> Result<bool> {
     let started = tokio::time::Instant::now();
     let request = case_dir.join("request.json");
@@ -26,7 +27,11 @@ pub(super) async fn drain(
         return Ok(false);
     };
     transcript.validate()?;
-    let deadline = started + Duration::from_millis(transcript.policy.cleanup_timeout_ms);
+    // Closing the primary transport and waiting for its business dependencies
+    // have different budgets. New tail evidence retains the case until its
+    // absolute request deadline; legacy recordings keep the cleanup bound.
+    let deadline = observation_deadline
+        .unwrap_or_else(|| started + Duration::from_millis(transcript.policy.cleanup_timeout_ms));
     // The same fixed attribution window applies to ordinary and streaming cases.
     // Completion only waits for exchanges already delivering data; background
     // calls after this boundary remain subject to the existing Replay policy.

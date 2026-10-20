@@ -218,7 +218,6 @@ async fn handle_http_request(
     client_addr: Option<String>,
     termination: ClientTermination,
 ) -> Response<GatewayBody> {
-    let targets = state.capture_dependency_targets();
     let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
@@ -255,6 +254,8 @@ async fn handle_http_request(
         };
     let authority = request_authority(&original_uri, &request_headers)
         .or_else(|| Some(format!("{}:{}", entry.domain, fake_addr.port())));
+    let targets =
+        state.capture_http_dependency_request(&method, &original_uri, authority.as_deref());
 
     let request_body = match req.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -553,7 +554,6 @@ async fn handle_https_request(
         fallback_authority,
         termination,
     } = client;
-    let targets = state.capture_dependency_targets();
     let id = Uuid::new_v4();
     let started = Instant::now();
     let request_started_at = Utc::now();
@@ -590,6 +590,8 @@ async fn handle_https_request(
         };
     let authority =
         request_authority(&original_uri, &request_headers).or(Some(fallback_authority.clone()));
+    let targets =
+        state.capture_http_dependency_request(&method, &original_uri, authority.as_deref());
 
     let request_body = match req.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),

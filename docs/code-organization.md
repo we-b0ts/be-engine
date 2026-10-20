@@ -49,7 +49,10 @@ is unclear.
   `active_case` retains dependency attribution through the fixed post-response
   window or API-origin selected-activity observation and accepted in-flight drain;
   its `observation` child owns race-safe selected request reservations and the
-  absolute tail deadline. `recorder/api_origin_observation` owns online origin,
+  absolute tail deadline. Its `stream_tail` child owns primary-stream dependency
+  request lifetimes, finite observation inventory and publication isolation,
+  separately from writer reservations and API-origin selector proofs.
+  `recorder/api_origin_observation` owns online origin,
   selector and captured-identity matching without changing dependency ownership.
   `recording_case` wires these case lifecycle operations into application state;
   its `interaction` child owns the lease/publication barrier. `record_service/proxy` owns
@@ -58,7 +61,11 @@ is unclear.
   drives only recorded inputs against fresh Target connections; response assertion
   compares independent output observations. Replay control retains case identity
   and asynchronous dependency delivery ownership through the existing case-end
-  lifecycle. Normal interaction closure keeps Source and Target running;
+  lifecycle. Its `control/dependency_tail` child resolves finite immutable
+  exchange references, adapts legacy API-origin observation metadata, and waits
+  for real Target consumption within the absolute case budget. Protocol modules
+  retain their own exchange identities and termination validation.
+  Normal interaction closure keeps Source and Target running;
   process shutdown remains with the ordinary recording and run supervisors.
 
 - `policy/schema` owns the strict self-contained `traffic-policy/v1` document.

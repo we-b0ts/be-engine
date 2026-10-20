@@ -45,6 +45,7 @@ pub(super) use evidence::register_global_exchange;
 pub(in crate::replay) mod request_headers;
 mod selector;
 mod stream_delivery;
+mod tail;
 mod termination;
 mod transport;
 pub(crate) mod unordered;

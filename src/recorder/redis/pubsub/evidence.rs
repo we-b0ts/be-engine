@@ -8,6 +8,14 @@ pub(in crate::recorder::redis) async fn record_subscription(
     event: RecorderEvent,
     targets: DependencyTargets,
 ) -> anyhow::Result<()> {
+    state
+        .inner
+        .active_cases
+        .observe_dependency_event(&event, &targets, true);
+    state
+        .inner
+        .active_cases
+        .observe_stream_tail_event(&event, &targets, true);
     state.recorder().record(event.clone()).await?;
     for (case, matched_by) in &targets.cases {
         state

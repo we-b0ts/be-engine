@@ -1,6 +1,42 @@
 //! Runtime event classification is separate from process-rule schema validation.
 use super::*;
 
+impl BackgroundDependencyRuleConfig {
+    pub(crate) fn matches_http_request(
+        &self,
+        method: &str,
+        uri: &Uri,
+        authority: Option<&str>,
+    ) -> bool {
+        let Self::Http {
+            authorities,
+            methods,
+            path_prefixes,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        let Some(authority) = uri
+            .authority()
+            .map(|value| value.as_str())
+            .or(authority)
+            .and_then(normalize_authority)
+        else {
+            return false;
+        };
+        authorities
+            .iter()
+            .any(|candidate| normalize_authority(candidate).as_deref() == Some(&authority))
+            && methods
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(method))
+            && path_prefixes
+                .iter()
+                .any(|prefix| uri.path().starts_with(prefix))
+    }
+}
+
 pub(super) fn matches(rule: &BackgroundDependencyRuleConfig, event: &RecorderEvent) -> bool {
     if rule.trigger_source().is_some() {
         return false;
