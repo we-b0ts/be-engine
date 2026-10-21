@@ -4,6 +4,8 @@ use crate::policy::{Database, NativeEffect, Protocol};
 use crate::replay::report::command::CommandMatchDiagnostic;
 use serde::Serialize;
 
+mod diagnostic;
+pub(in crate::replay) use diagnostic::AppendMismatch;
 mod source;
 mod trace;
 pub(in crate::replay) use source::validate_source;
@@ -292,10 +294,15 @@ impl RedisReplayState {
         let to = from
             .checked_add(args[1].len())
             .context("append stream offset overflow")?;
-        ensure!(
-            profile.bytes.get(from..to) == Some(args[1].as_slice()),
-            "append stream bytes differ from the next Source prefix"
-        );
+        if profile.bytes.get(from..to) != Some(args[1].as_slice()) {
+            return Err(diagnostic::bytes_mismatch(
+                profile,
+                &self.exchanges,
+                &args[1],
+                self.request_observation_id,
+            )
+            .into());
+        }
         for (index, offset) in &profile.barriers {
             if *offset < to {
                 ensure!(
@@ -506,6 +513,11 @@ fn satisfies(exchange: &ReplayExchange) -> bool {
 }
 
 pub(super) fn diagnostic(error: anyhow::Error) -> CommandMatchDiagnostic {
+    if let Some(mismatch) = error.downcast_ref::<AppendMismatch>() {
+        return CommandMatchDiagnostic::RedisAppendStreamMismatch {
+            details: Box::new(mismatch.clone()),
+        };
+    }
     CommandMatchDiagnostic::EvidenceUnavailable {
         reason: format!("append stream rejected: {error:#}"),
     }

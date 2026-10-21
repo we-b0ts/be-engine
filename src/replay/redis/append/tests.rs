@@ -148,6 +148,81 @@ fn byte_mismatch_does_not_claim_any_prefix_and_unfinished_sources_remain_unused(
 }
 
 #[test]
+fn byte_mismatch_reports_the_validated_source_cursor_without_payloads() {
+    let events = [
+        event(1, "APPEND", &[b"content:1", b"ab"], b":2\r\n"),
+        event(2, "APPEND", &[b"content:1", b"cdef"], b":6\r\n"),
+    ];
+    let (_root, mut state) = state(&events, vec![rule()]);
+    let first = request(&mut state, "APPEND", &[b"content:1", b"abc"]).unwrap();
+    state.complete_exchange(&first);
+    let error = request(&mut state, "APPEND", &[b"content:1", b"dXf"]).unwrap_err();
+    assert!(matches!(
+        error,
+        CommandMatchDiagnostic::RedisAppendStreamMismatch { .. }
+    ));
+    let diagnostic = serde_json::to_value(error).unwrap();
+    assert_eq!(diagnostic["kind"], "redis_append_stream_mismatch");
+    assert_eq!(diagnostic["rule_id"], "append");
+    assert_eq!(diagnostic["source_offset"], 3);
+    assert_eq!(diagnostic["first_difference_offset"], 4);
+    assert_eq!(diagnostic["source_bytes_remaining"], 3);
+    assert_eq!(diagnostic["target_bytes"], 3);
+    assert_eq!(diagnostic["next_source"]["sequence"], 2);
+    assert_eq!(diagnostic["next_source"]["command"], "APPEND");
+    assert_eq!(diagnostic["next_source"]["case_id"], "case");
+    assert_eq!(
+        diagnostic["payload_fingerprint"],
+        crate::policy_evidence::digest(b"dXf")
+    );
+    assert!(!diagnostic.to_string().contains("dXf"));
+    assert!(!diagnostic.to_string().contains("content:1"));
+    assert_eq!(state.exchanges[1].status, ReplayExchangeStatus::Responding);
+    assert_eq!(state.append_streams.profiles[0].reserved, 3);
+    let rest = request(&mut state, "APPEND", &[b"content:1", b"def"]).unwrap();
+    state.complete_exchange(&rest);
+    assert!(state.snapshot().unused_case.is_empty());
+}
+
+#[test]
+fn byte_overrun_and_exhausted_source_are_mismatches_not_missing_evidence() {
+    let events = [event(1, "APPEND", &[b"content:1", b"ab"], b":2\r\n")];
+    let (_root, mut state) = state(&events, vec![rule()]);
+    let error = request(&mut state, "APPEND", &[b"content:1", b"abc"]).unwrap_err();
+    let diagnostic = serde_json::to_value(error).unwrap();
+    assert_eq!(diagnostic["kind"], "redis_append_stream_mismatch");
+    assert_eq!(diagnostic["source_offset"], 0);
+    assert_eq!(diagnostic["source_bytes_remaining"], 2);
+    assert_eq!(diagnostic["first_difference_offset"], 2);
+    assert_eq!(diagnostic["next_source"]["sequence"], 1);
+    assert_eq!(state.exchanges[0].status, ReplayExchangeStatus::Available);
+    let good = request(&mut state, "APPEND", &[b"content:1", b"ab"]).unwrap();
+    state.complete_exchange(&good);
+    assert!(state.append_streams.profiles[0].bytes.is_empty());
+    let error = request(&mut state, "APPEND", &[b"content:1", b"x"]).unwrap_err();
+    let diagnostic = serde_json::to_value(error).unwrap();
+    assert_eq!(diagnostic["kind"], "redis_append_stream_mismatch");
+    assert_eq!(diagnostic["source_offset"], 2);
+    assert_eq!(diagnostic["source_bytes_remaining"], 0);
+    assert_eq!(diagnostic["first_difference_offset"], 2);
+    assert!(diagnostic["next_source"].is_null());
+    assert_eq!(state.snapshot().matched_count, 1);
+}
+
+#[test]
+fn unavailable_append_source_evidence_keeps_its_original_classification() {
+    let error = diagnostic(anyhow::anyhow!("Source accesses overlap"));
+    let diagnostic = serde_json::to_value(error).unwrap();
+    assert_eq!(diagnostic["kind"], "evidence_unavailable");
+    assert!(
+        diagnostic["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Source accesses overlap")
+    );
+}
+
+#[test]
 fn reads_and_resets_fence_bytes_while_expiry_keeps_ordinary_finite_matching() {
     let events = [
         event(1, "APPEND", &[b"content:1", b"ab"], b":2\r\n"),

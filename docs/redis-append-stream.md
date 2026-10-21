@@ -70,3 +70,12 @@ fragments per Target call. `redis.append_streams` exposes at most 1000 audit row
 with Source connection/sequence/ranges, Target observation identity, returned
 length and payload/key fingerprints. `append_streams_omitted` counts omitted
 rows. Reports contain no stream bytes. Recording files remain unchanged.
+
+A rejected byte prefix is reported as `redis_append_stream_mismatch`, rather
+than missing Source evidence. It includes the rule, the Target observation and
+payload digest, the stream cursor, remaining Source bytes, the first differing
+absolute byte offset, and the next Source connection/sequence when bytes remain.
+Overruns and extra writes after the stream is exhausted use the same diagnostic;
+the failed request reserves no bytes. These facts locate the rejected write;
+earlier failed reads or writes may still be the cause. Source preparation and
+unsupported-evidence failures retain `evidence_unavailable`.

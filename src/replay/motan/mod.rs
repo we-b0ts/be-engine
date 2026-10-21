@@ -879,6 +879,9 @@ impl CommandExchangeScope for ReplayExchange {
 fn motan_unmatched_reason(diagnostic: &CommandMatchDiagnostic) -> String {
     match diagnostic {
         CommandMatchDiagnostic::EvidenceUnavailable { reason } => reason.clone(),
+        CommandMatchDiagnostic::RedisAppendStreamMismatch { .. } => {
+            "Redis APPEND stream bytes mismatch".into()
+        }
         CommandMatchDiagnostic::NoScopedCandidate => {
             "no available recorded Motan exchange exists in the current replay scope".to_string()
         }

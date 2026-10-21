@@ -46,6 +46,10 @@ pub(in crate::replay) enum CommandMatchDiagnostic {
     Mismatch {
         fields: Vec<String>,
     },
+    RedisAppendStreamMismatch {
+        #[serde(flatten)]
+        details: Box<crate::replay::redis::append::AppendMismatch>,
+    },
     LaneBlocked {
         candidate: Box<CommandExchangeRefReport>,
         blocked_by: Box<CommandExchangeRefReport>,
