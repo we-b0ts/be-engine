@@ -189,10 +189,12 @@ impl Walker<'_> {
             "identity" => {
                 self.one(map, "capture", Shape::IdentityCapture, false, parent, 0)?;
                 self.list(map, "references", Shape::Leaf, true, parent, 0)?;
+                self.list(map, "read_back", Shape::Leaf, true, parent, 0)?;
             }
             "redis_sequence" => {
                 self.one(map, "key", Shape::Leaf, true, parent, 0)?;
                 self.list(map, "commands", Shape::SequenceCommand, false, parent, 0)?;
+                self.list(map, "read_back", Shape::Leaf, true, parent, 0)?;
             }
             "response_jwt" => self.list(map, "nonces", Shape::Leaf, true, parent, 0)?,
             "response_header_date" => {

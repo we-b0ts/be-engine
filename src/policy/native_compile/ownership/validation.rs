@@ -8,6 +8,16 @@ use crate::policy::{
 
 pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRule]) -> Result<()> {
     validate_body_codecs(value, native)?;
+    let read_back = native
+        .iter()
+        .filter(|rule| !rule.rule.effect.redis_read_back().is_empty())
+        .map(|rule| rule.rule.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let delivery = value
+        .iter()
+        .filter(|rule| rule.rule.delivery.is_some())
+        .map(|rule| rule.rule.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     let mut claims = vec![];
     for compiled in value {
         claims.extend(value_claims(compiled)?);
@@ -37,6 +47,16 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
             {
                 continue;
             }
+            anyhow::ensure!(
+                claim.surface != ClaimSurface::DependencyResponse
+                    || !(read_back.contains(claim.rule_id.as_str())
+                        && delivery.contains(other.rule_id.as_str())
+                        || read_back.contains(other.rule_id.as_str())
+                            && delivery.contains(claim.rule_id.as_str())),
+                "Redis read_back cannot share a response with another delivery owner: {:?} / {:?}",
+                claim.rule_id,
+                other.rule_id
+            );
             let overlap = locations_overlap(&claim.location, &other.location);
             if overlap && !container_child(claim, other) && !container_child(other, claim) {
                 anyhow::bail!(

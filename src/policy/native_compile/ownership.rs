@@ -379,6 +379,27 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
         | NativeEffect::CaptureHttpResponse(_)
         | NativeEffect::ProcessOwned(_) => (),
     }
+    for entry in rule.effect.redis_read_back() {
+        let read = &entry.contract;
+        operation_override.set(Some(read.operation.as_str()));
+        if read.json_pointers.is_empty() {
+            add(
+                S::DependencyResponse,
+                L::Value,
+                OwnedLocation::Scalar,
+                false,
+            );
+        } else {
+            for pointer in &read.json_pointers {
+                let pointer = if read.operation == "LRANGE" {
+                    format!("/*{pointer}")
+                } else {
+                    pointer.clone()
+                };
+                add(S::DependencyResponse, L::Value, json(&pointer), false);
+            }
+        }
+    }
     claims
 }
 

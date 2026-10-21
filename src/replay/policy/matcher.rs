@@ -698,6 +698,7 @@ impl ReplayPolicyRuntime {
             expected_response: self.loaded.document.expected_response,
             dependency_rules,
             dynamic_bindings: self.dynamic_values.report(),
+            redis_read_backs: self.request_contracts.read_back_report(),
             key_bindings: self.request_contracts.key_binding_report(),
             dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
             request_contract_candidates: self.request_contracts.candidates(),

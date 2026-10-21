@@ -177,6 +177,16 @@ pub enum NativeEffect {
     FiniteSharing(FiniteSharingEffect),
 }
 
+impl NativeEffect {
+    pub(crate) fn redis_read_back(&self) -> &[Proven<RedisReadBack>] {
+        match self {
+            Self::Identity(effect) => &effect.read_back,
+            Self::RedisSequence(effect) => &effect.read_back,
+            _ => &[],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StartupKey {

@@ -25,6 +25,8 @@ mod interaction_transaction;
 mod mysql_candidates_transaction;
 #[path = "transaction_native.rs"]
 mod native_transaction;
+#[path = "transaction_read_back.rs"]
+mod read_back_transaction;
 #[path = "transaction_recovery.rs"]
 mod recovery_transaction;
 #[path = "transaction_scope.rs"]

@@ -55,6 +55,16 @@ Use `case-pattern` for pre-inventory capture catalog bootstrap. The Source-gap
 `route`/`recorder-capture` workflows below remain explicit acquisition owners and
 write the same unified policy atomically. They are not value relaxations.
 
+## Redis Read-back
+
+For Source-proven Redis write-then-read flows, update the existing `identity`
+or `redis_sequence` rule with `effect.read_back`; do not duplicate its capture
+or introduce a Target cache to compensate for a recorded generated ID. Require
+the worker's exact same-key write/read Source proof and selected fields. GET
+can return the matched SET value; LRANGE can return selected RPUSH/LSET JSON
+fields. Planning requires positive complete Source witnesses and Apply retains
+fresh Replay obligations. See [Redis read-back](../../../../../docs/redis-read-back.md).
+
 ## Recorder Capture
 
 Use this route only after the worker proves that source code consumes one exact

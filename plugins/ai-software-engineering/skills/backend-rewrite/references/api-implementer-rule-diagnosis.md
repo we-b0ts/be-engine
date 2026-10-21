@@ -27,6 +27,7 @@ on other endpoints, operations or surfaces.
 | Live elapsed duration that stops at terminal state | Source sibling `conditional` around `duration` | Terminal values and status stay exact; missing/wrong-type status rejects |
 | Expired recorded Redis/MySQL input | Explicit `dependency.response` time contract plus selected `delivery.rebase_time`, or typed SQL response effect | Raw Source bytes, sentinel values, protocol outcomes, finite inventory and signature dependencies |
 | Identity captured in SQL/Redis/HTTP and reused later | `effect.kind: identity` with capture, shape/lifetime and exact allowed reference resources | Bijection, case scope and atomic candidate decisions |
+| Redis reads back a generated ID or preserved timestamp after writing it | Add explicit `effect.read_back` to the existing `identity` / `redis_sequence` rule; see [schema](../../../../../docs/redis-read-back.md) | Successful matched write, same key/Case/resource, original Source causality, selected fields, finite reads and fresh Replay |
 | SET NX lock and conditional release | `effect.kind: redis_lock` with endpoint/database/user/key scope | Successful acquisition completion before reference, token equality, NX/TTL/script and finite consumption |
 | Script ARGV/time-key or INCRBY/EXPIRE chain | `effect.kind: redis_sequence` with Source-proven ordered commands | Script identity, numkeys, KEYS, stable ARGV, sequence closure and derived key relationships |
 | PUBLISH UUID and JSON times | Typed publisher identity plus disjoint shared time contracts | Channel, publisher bijection and atomic commit |
@@ -40,6 +41,10 @@ on other endpoints, operations or surfaces.
 | Missing Source acquisition or IP learned from a response | `capture_http`, `capture_breeze` or `capture_http_response` | Real new Recording and provenance of original/transformed response |
 
 For timezone-free timestamps, prove the fixed UTC offset from Source deployment.
+When Source uses Redis GET/LRANGE results, preserve that data flow. Return a
+read-back rule update and write/read proof if Replay returns recorded Source
+identities; do not replace the Redis read with a Target-local cache solely to
+compensate for that delivery difference.
 Different `clock_group` names require independent Source clock reads; omission
 retains rigid copy/precision checks. For SQL, return the exact SQL template,
 physical table bounds, parameter/value indices, database and authentication

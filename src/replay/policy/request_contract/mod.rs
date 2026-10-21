@@ -14,7 +14,9 @@ mod signing_keys;
 mod value_decision;
 pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
+mod read_back;
 mod redis;
+pub(in crate::replay) use read_back::{PreparedReadBack, RedisReadBackReport};
 mod unified_response;
 mod url;
 pub(in crate::replay) use unified_response::PreparedRedisDelivery;
@@ -56,6 +58,7 @@ type SequenceKey = (String, String, Vec<u8>);
 
 #[derive(Default)]
 struct State {
+    read_back: read_back::ReadBackState,
     key_bindings: BTreeMap<key::BindingScope, BTreeMap<String, String>>,
     key_binding_proofs: BTreeSet<KeyBindingReport>,
     key_binds: BTreeMap<String, usize>,
@@ -181,6 +184,7 @@ impl RequestContracts {
         state.key_bindings.retain(|scope, _| !scope.belongs_to(id));
         state.key_binding_proofs.retain(|proof| proof.case_id != id);
         state.candidates.retain(|c| c.case_id != id);
+        state.read_back.begin_case(id);
     }
     pub(in crate::replay) fn request_begin(&self, id: &str) -> Result<()> {
         let mut state = self.state.lock().expect("request contracts");

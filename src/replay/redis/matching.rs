@@ -309,6 +309,46 @@ impl RedisReplayState {
             }
         })?;
         let exchange = &self.exchanges[index];
+        let read_back_context = crate::replay::policy::request_contract::RedisRequestContext {
+            case: exchange.case_id.as_deref().unwrap_or_default(),
+            target,
+            database,
+            username,
+            command,
+            recorded_at: exchange.record.started_at(),
+            actual_at: self.request_observed_at,
+            connection_id: Some(exchange.record.connection_id),
+            sequence: Some(exchange.record.sequence),
+            observation_id: self.request_observation_id,
+        };
+        let read_back_eligible = exchange.source == ReplaySource::Case
+            && exchange.shared_rule_id.is_none()
+            && !exchange.reusable_snapshot
+            && !exchange.record.cache_snapshot_hit
+            && exchange.record.cache_snapshot_rule.is_none()
+            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response;
+        let (read_back, read_back_write) = if read_back_eligible {
+            (
+                self.request_contracts
+                    .prepare_redis_read_back(&read_back_context, &exchange.args, args, &response)
+                    .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                        reason: format!("read_back response failed: {error:#}"),
+                    })?,
+                self.request_contracts
+                    .preview_redis_read_back_write(
+                        &read_back_context,
+                        &exchange.args,
+                        args,
+                        &response,
+                        exchange.record.timestamp,
+                    )
+                    .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                        reason: format!("read_back write failed: {error:#}"),
+                    })?,
+            )
+        } else {
+            (None, Default::default())
+        };
         let unified_delivery = (exchange.record.outcome
             == crate::DependencyExchangeOutcome::Response)
             .then_some(exchange.case_id.as_deref())
@@ -333,6 +373,13 @@ impl RedisReplayState {
             .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: format!("response contract failed: {error:#}"),
             })?;
+        if read_back.is_some()
+            && (unified_delivery.is_some() || exchange.response_time_shift.is_some())
+        {
+            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: "read_back cannot overlap another response delivery owner".into(),
+            });
+        }
         if unified_delivery.is_some() && exchange.response_time_shift.is_some() {
             return Err(CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: "overlapping dependency delivery owners".into(),
@@ -414,6 +461,14 @@ impl RedisReplayState {
         } else {
             response
         };
+        let response = read_back
+            .as_ref()
+            .map_or(response, |prepared| prepared.response.clone());
+        self.request_contracts
+            .commit_redis_read_back_write(read_back_write)
+            .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("read_back write commit failed: {error:#}"),
+            })?;
         let mut rule_ids = value::used_rules(&normalized_exchange, arguments, &self.value_rules);
         rule_ids.extend(self.lock_tokens.claim(&normalized_exchange, arguments));
         if !request_decision
@@ -449,6 +504,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            read_back,
             request_started_at: self.request_observed_at,
             unified_delivery,
             rpc_push: exchange.rpc_push,
@@ -535,6 +591,7 @@ impl RedisReplayState {
         Some(MatchedRedisExchange {
             request_started_at: self.request_observed_at,
             unified_delivery: None,
+            read_back: None,
             rpc_push: None,
             rpc_response: None,
             publish_duration_ms: exchange.record.duration_ms,

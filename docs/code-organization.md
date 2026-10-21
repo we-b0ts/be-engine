@@ -328,7 +328,13 @@ is unclear.
   HTTP matching call it only for case-owned exchanges. `replay/http/multipart`
   owns bounded multipart parsing; `replay/http/matching` owns HTTP selection.
   Generated-value feedback and coordinator adapters keep the existing
-  evidence/plan/apply/fresh-Replay transaction. Replay control supplies an
+  evidence/plan/apply/fresh-Replay transaction. Its `read_back` child owns
+  explicit same-key Redis write-to-read scalar bindings and derived delivery
+  witnesses. Its `state` child keeps bounded Case-local observations with
+  immutable Source causality; its `wire` child owns bounded RESP copies and
+  selected JSON scalar decoding. It does not simulate Redis or change Target
+  cache behavior. Redis adapters retain matching, delivery and consumption.
+  Replay control supplies an
   independent inbound request anchor; protocol arguments cannot choose it.
   Its `script` child validates explicit Lua digests and bounded KEYS/ARGV
   envelopes without evaluating Lua. Redis compares dynamic-identity copies
@@ -1056,6 +1062,10 @@ explicit repository-wide audit.
   resolves the sole Target-root-relative `project.policy` path.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
+  Its `proposal` child merges new rules and permits only additive read-back
+  declarations on an existing write rule; its scope, contracts and prior proof
+  remain immutable. Preflight and publication retain all ordinary stale checks
+  and fresh-Replay obligations for that extension.
   `manifest/primary` freezes each selected Case's original primary-response oracle
   and published assertion/Target artifacts, including inline binary bodies, even
   for dependency-only rules. It freezes managed decryption keys and supplies

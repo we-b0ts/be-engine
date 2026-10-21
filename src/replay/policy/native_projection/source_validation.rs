@@ -108,6 +108,9 @@ pub(crate) fn validate_native_source_dependencies(
             .any(|rule| rule.rule.id == *id && dependency_effect(&rule.rule.effect))
     });
     coverage.finish(compiled, selected_rule_ids, &checked.rules)?;
+    runtime
+        .request_contracts
+        .validate_read_back_coverage(selected_rule_ids)?;
     Ok(checked)
 }
 

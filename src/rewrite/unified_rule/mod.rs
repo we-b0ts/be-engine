@@ -20,6 +20,7 @@ use crate::policy::{PolicyRule, TrafficPolicy, compile_policy, parse_policy};
 pub(super) mod discovery;
 mod manifest;
 mod preflight;
+mod proposal;
 #[cfg(test)]
 mod tests;
 
@@ -181,22 +182,7 @@ fn plan(
         .iter()
         .map(|r| r.id().to_owned())
         .collect::<BTreeSet<_>>();
-    let mut changed = false;
-    for rule in proposed.rules {
-        ensure!(
-            document
-                .rules
-                .iter()
-                .find(|current| current.id() == rule.id())
-                .is_none_or(|current| current == &rule),
-            "existing rule ID changes scope, effect, contract or proof; use a new explicitly reviewed rule ID"
-        );
-        if document.rules.iter().any(|current| current == &rule) {
-            continue;
-        }
-        document.rules.push(rule);
-        changed = true;
-    }
+    let changed = proposal::merge(&mut document, proposed.rules)?;
     let compiled = compile_policy(&document)?;
     let current = crate::validate_replay_policy(&config.replay_policy)?;
     ensure!(

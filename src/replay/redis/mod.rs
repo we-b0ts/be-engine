@@ -40,6 +40,8 @@ mod native_scope_tests;
 mod native_source;
 pub(crate) mod publish;
 pub(in crate::replay) mod pubsub;
+#[cfg(test)]
+mod read_back_tests;
 mod report_inventory;
 pub(crate) mod time_shift;
 pub(crate) mod value;
@@ -150,6 +152,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    read_back: Option<super::policy::request_contract::PreparedReadBack>,
     request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     unified_delivery: Option<super::policy::request_contract::PreparedRedisDelivery>,
     rpc_push: Option<usize>,

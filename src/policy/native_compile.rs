@@ -9,6 +9,7 @@ use super::{Proof, Protocol, SourceCondition, TimestampFormat, compiler};
 
 mod http_request;
 pub(crate) mod ownership;
+mod read_back;
 mod response;
 mod source;
 pub use ownership::*;
@@ -42,6 +43,7 @@ pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
         validate_condition(when)?;
     }
     validate_effect(rule).with_context(|| format!("invalid native rule {:?}", rule.id))?;
+    read_back::validate(rule)?;
     let compiled = CompiledNativeRule {
         rule: rule.clone(),
         domain: rule.effect.domain(),

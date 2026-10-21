@@ -24,6 +24,8 @@ one of `api.response`, `dependency.request`, `dependency.response`; native effec
 retain their explicit identity, input, acquisition, ownership or sharing owner.
 The policy is not first-match-wins. Unknown fields, unsupported combinations,
 duplicate IDs and conflicting field ownership are rejected before execution.
+For explicit Redis GET/LRANGE delivery from matched Target writes, update the
+existing native write rule as described in [Redis read-back](redis-read-back.md).
 
 See [unified rule contracts](unified-rule-contracts.md) for all three surfaces,
 JSON/PB reuse, native examples, module boundaries, precision, evidence and plan

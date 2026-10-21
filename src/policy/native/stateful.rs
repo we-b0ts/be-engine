@@ -15,6 +15,8 @@ pub struct IdentityEffect {
     pub format: Option<IdentityFormat>,
     pub capture: IdentityCapture,
     pub references: Vec<Proven<IdentityTarget>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_back: Vec<Proven<RedisReadBack>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +131,20 @@ pub struct RedisSequenceEffect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<Proven<NativeKeyContract>>,
     pub commands: Vec<SequenceCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_back: Vec<Proven<RedisReadBack>>,
+}
+
+/// An explicit same-key read may return selected values from a matched write.
+/// Empty pointers select a raw bulk value; nonempty pointers select JSON scalars.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisReadBack {
+    pub operation: String,
+    pub write_operation: String,
+    pub argument_index: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub json_pointers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

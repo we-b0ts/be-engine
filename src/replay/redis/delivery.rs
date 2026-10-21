@@ -155,6 +155,15 @@ pub(super) async fn deliver_redis_exchange(
     }
     let state_ref = state;
     let mut state = state_ref.lock().await;
+    if let Some(delivery) = &matched.read_back
+        && let Err(error) = state
+            .redis
+            .request_contracts
+            .commit_redis_read_back(delivery, chrono::Utc::now())
+    {
+        state.redis.fail_exchange(matched, error.to_string());
+        return Err(error);
+    }
     if let Some(delivery) = &matched.unified_delivery
         && let Err(error) = state.redis.request_contracts.commit_redis_delivery(
             delivery,
