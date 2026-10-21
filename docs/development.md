@@ -42,6 +42,8 @@ evidence-backed plan/apply and fresh verification with existing recordings.
 IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
 [Generated HTTP request body fields](http-request-body-fields.md) validate bounded
 random identifiers and signed JWTs against independent dependency request clocks.
+[SSE response diagnostics](interaction-diagnostics.md) expose authenticated
+per-frame response values through bounded, read-only evidence queries.
 [JWT response rules](jwt-response-rules.md) validate signatures, stable claims
 and request-relative validity for freshly issued HTTP JSON tokens, including
 URL query tokens, typed base64url nonces, RS256 public-key verification from

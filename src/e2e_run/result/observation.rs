@@ -42,7 +42,11 @@ pub(in crate::e2e_run) fn response_observation_with_status(
                 .map_or_else(
                     || observation(E2eValuePresence::Missing, None),
                     |events| {
-                        observation(E2eValuePresence::Present, Some(Value::from(events.len())))
+                        let count = events
+                            .iter()
+                            .filter(|event| event["heartbeat"] != true)
+                            .count();
+                        observation(E2eValuePresence::Present, Some(Value::from(count)))
                     },
                 );
         }
@@ -64,7 +68,26 @@ pub(in crate::e2e_run) fn response_observation_with_status(
                 None,
             );
         }
-        let Some(value) = interaction.pointer(suffix) else {
+        let value = if let Some(event_pointer) = suffix.strip_prefix("/events/") {
+            let (index, remainder) = event_pointer
+                .split_once('/')
+                .map_or((event_pointer, ""), |(index, rest)| (index, rest));
+            index.parse::<usize>().ok().and_then(|index| {
+                let event = interaction["events"]
+                    .as_array()?
+                    .iter()
+                    .filter(|event| event["heartbeat"] != true)
+                    .nth(index)?;
+                if remainder.is_empty() {
+                    Some(event)
+                } else {
+                    event.pointer(&format!("/{remainder}"))
+                }
+            })
+        } else {
+            interaction.pointer(suffix)
+        };
+        let Some(value) = value else {
             return observation(E2eValuePresence::Missing, None);
         };
         if suffix == "/end/close" || suffix == "/end/close/reason" {
@@ -276,6 +299,36 @@ fn sensitive_pointer(pointer: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interaction_counts_and_indices_use_assertions_nonheartbeat_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("response.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({"interaction":{"events":[
+                {"sequence":0,"heartbeat":true,"message":{"data":"private-heartbeat"}},
+                {"sequence":1,"heartbeat":false,"message":{"data":"private-business-event"}}
+            ]}})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            response_observation(&path, "$interaction/events/length").value,
+            Some(Value::from(1))
+        );
+        let event = response_observation(&path, "$interaction/events/0");
+        assert_eq!(event.value.as_ref().unwrap()["sequence"], 1);
+        assert_eq!(
+            response_observation(&path, "$interaction/events/1").presence,
+            E2eValuePresence::Missing
+        );
+        assert!(
+            !serde_json::to_string(&event)
+                .unwrap()
+                .contains("private-business-event")
+        );
+    }
 
     #[test]
     fn sse_virtual_data_diagnostics_retain_private_availability() {

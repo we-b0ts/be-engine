@@ -21,6 +21,8 @@ const MAX_DISTINCT_SOURCE_VALUES: usize = 8;
 const RESPONSE_DIFFERENCE_PAGE_SIZE: usize = 20;
 const MAX_TARGET_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 
+mod interaction;
+
 pub(crate) fn finalized_focused_attempt_summary(
     context: E2eRunContext,
     api: &str,
@@ -97,6 +99,8 @@ pub struct E2eCaseResponseDifference {
     pub unavailable_reason: Option<E2eResponseUnavailableReason>,
     pub expected: E2eValueObservation,
     pub actual: E2eValueObservation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interaction_diagnosis: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +346,7 @@ fn unavailable_response_page(
                 presence: E2eValuePresence::Unavailable,
                 value: None,
             },
+            interaction_diagnosis: None,
         }],
         next_offset: None,
     })
@@ -360,7 +365,7 @@ fn response_difference_page(
     let end = offset
         .saturating_add(RESPONSE_DIFFERENCE_PAGE_SIZE)
         .min(report.differences.len());
-    let differences = report.differences[offset..end]
+    let mut differences = report.differences[offset..end]
         .iter()
         .map(|difference| E2eCaseResponseDifference {
             pointer: difference.pointer.clone(),
@@ -377,8 +382,14 @@ fn response_difference_page(
                 &difference.pointer,
                 difference.actual_status,
             ),
+            interaction_diagnosis: None,
         })
         .collect::<Vec<_>>();
+    interaction::diagnose_page(
+        &mut differences,
+        &assertion.expected_response,
+        &assertion.actual_response,
+    );
     Ok(E2eCaseResponseDifferences {
         case_id: case_id.to_string(),
         gateway_protocol: Some(report.gateway_protocol),

@@ -70,6 +70,9 @@ is unclear.
   retain their own exchange identities and termination validation.
   Normal interaction closure keeps Source and Target running;
   process shutdown remains with the ordinary recording and run supervisors.
+  `e2e_run/evidence/interaction` owns on-demand authenticated SSE response
+  diagnostics, with bounded payload previews and raw JSON differences. It does
+  not persist plaintext, apply value rules or change assertion outcomes.
 
 - `policy/schema` owns the strict self-contained `traffic-policy/v1` document.
   `policy/compiler` owns typed capability validation, field ownership and
