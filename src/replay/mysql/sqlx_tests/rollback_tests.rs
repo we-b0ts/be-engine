@@ -307,6 +307,7 @@ async fn implicit_read_cleanup_can_be_omitted_or_consumed_without_discarding_rea
         );
         rollback["server_status_before"] = json!(1);
         let mut records = vec![read, rollback.clone(), rollback];
+        records[2]["server_status_before"] = json!(0);
         for (index, record) in records.iter_mut().enumerate() {
             record["connection_id"] = json!(connection);
             record["query_sequence"] = json!(116 + index);

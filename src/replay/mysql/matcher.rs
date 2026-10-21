@@ -14,6 +14,10 @@ pub(in crate::replay) struct MysqlReplayState {
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
     pub(super) origins: ownership::Origins,
     pub(super) foreign: ownership::Foreign,
+    pub(super) transaction_wires: std::collections::HashSet<(Uuid, u64)>,
+    pub(super) transaction_provenance: BTreeMap<usize, transaction_ownership::Provenance>,
+    pub(super) promoted_wires: std::collections::HashSet<(Uuid, u64)>,
+    pub(in crate::replay) has_global_transaction_start: bool,
 }
 
 impl MysqlReplayState {
@@ -22,6 +26,25 @@ impl MysqlReplayState {
         self.candidates = candidates::Candidates::default();
     }
     pub(in crate::replay) fn register_exchange(&mut self, exchange: ReplayExchange) {
+        if exchange.source == ReplaySource::Case
+            && exchange
+                .record
+                .connection_id
+                .zip(exchange.record.query_sequence)
+                .is_some_and(|wire| self.promoted_wires.contains(&wire))
+        {
+            return;
+        }
+        self.has_global_transaction_start |= exchange.source == ReplaySource::Global
+            && exchange
+                .record
+                .server_status_before
+                .is_some_and(|flags| flags & 0x2009 == 0)
+            && exchange
+                .record
+                .response
+                .server_status
+                .is_some_and(|flags| flags & 0x2009 == 1);
         let index = self.exchanges.len();
         self.case_exchange_index
             .register(exchange.source, exchange.case_id.as_deref(), index);
@@ -67,6 +90,7 @@ impl ReplayState {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn record_builtin(
         &mut self,
         identity: &ReplaySessionIdentity,
@@ -74,8 +98,20 @@ impl ReplayState {
         sql: Option<&str>,
         reason: &str,
     ) {
-        let recorded_match = self.consume_builtin_exchange(identity, command, sql);
         let case_id = self.active_case_id.clone();
+        self.record_builtin_in_case(case_id.as_deref(), identity, command, sql, reason);
+    }
+
+    pub(super) fn record_builtin_in_case(
+        &mut self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+        reason: &str,
+    ) {
+        let recorded_match = self.consume_builtin_exchange_in_case(case, identity, command, sql);
+        let case_id = case.map(ToOwned::to_owned);
         let budget_case_id = case_id.clone();
         push_success_detail(
             &mut self.mysql.events.builtin_query_count,
@@ -98,19 +134,20 @@ impl ReplayState {
         );
     }
 
-    pub(in crate::replay) fn record_unsupported(
+    pub(super) fn record_unsupported_in_case(
         &mut self,
+        case: Option<&str>,
         identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
         reason: &str,
     ) {
-        if let Some(case_id) = &self.active_case_id {
-            self.mysql.events.dirty_case_ids.insert(case_id.clone());
+        if let Some(case_id) = case {
+            self.mysql.events.dirty_case_ids.insert(case_id.to_owned());
         }
         self.mysql.events.unsupported_commands.push(QueryReport {
-            case_id: self.active_case_id.clone(),
+            case_id: case.map(ToOwned::to_owned),
             target: identity.target.clone(),
             database: identity.database.clone(),
             username: identity.username.clone(),
@@ -124,6 +161,7 @@ impl ReplayState {
         });
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn record_unmatched(
         &mut self,
         identity: &ReplaySessionIdentity,
@@ -132,11 +170,24 @@ impl ReplayState {
         params: Option<&[RecordedMysqlValue]>,
         reason: &str,
     ) {
-        if let Some(case_id) = &self.active_case_id {
-            self.mysql.events.dirty_case_ids.insert(case_id.clone());
+        let case = self.active_case_id.clone();
+        self.record_unmatched_in_case(case.as_deref(), identity, command, sql, params, reason);
+    }
+
+    pub(super) fn record_unmatched_in_case(
+        &mut self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+        params: Option<&[RecordedMysqlValue]>,
+        reason: &str,
+    ) {
+        if let Some(case_id) = case {
+            self.mysql.events.dirty_case_ids.insert(case_id.to_owned());
         }
         self.mysql.events.unmatched_queries.push(QueryReport {
-            case_id: self.active_case_id.clone(),
+            case_id: case.map(ToOwned::to_owned),
             target: identity.target.clone(),
             database: identity.database.clone(),
             username: identity.username.clone(),
@@ -154,14 +205,26 @@ impl ReplayState {
         self.mysql.events.metadata_warnings.push(warning);
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn consume_builtin_exchange(
         &mut self,
         identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
     ) -> Option<(ReplaySource, usize)> {
+        let case = self.active_case_id.clone();
+        self.consume_builtin_exchange_in_case(case.as_deref(), identity, command, sql)
+    }
+
+    fn consume_builtin_exchange_in_case(
+        &mut self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+    ) -> Option<(ReplaySource, usize)> {
         let normalized_sql = sql.map(normalize_sql);
-        let active_case_id = self.active_case_id.clone();
+        let active_case_id = case.map(ToOwned::to_owned);
         for source in [ReplaySource::Case, ReplaySource::Global] {
             for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
                 if exchange.source != source
@@ -200,8 +263,19 @@ impl ReplayState {
         None
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn statement_metadata(
         &mut self,
+        identity: &ReplaySessionIdentity,
+        sql: &str,
+    ) -> StatementMetadata {
+        let case = self.active_case_id.clone();
+        self.statement_metadata_in_case(case.as_deref(), identity, sql)
+    }
+
+    pub(super) fn statement_metadata_in_case(
+        &mut self,
+        case: Option<&str>,
         identity: &ReplaySessionIdentity,
         sql: &str,
     ) -> StatementMetadata {
@@ -209,18 +283,15 @@ impl ReplayState {
         let param_count = count_sql_placeholders(sql);
         let mut semantic_target = None;
         for source in [ReplaySource::Case, ReplaySource::Global] {
-            let candidates = self.mysql.candidates.select(
-                &self.mysql.exchanges,
-                source,
-                self.active_case_id.as_deref(),
-                identity,
-                None,
-            );
+            let candidates =
+                self.mysql
+                    .candidates
+                    .select(&self.mysql.exchanges, source, case, identity, None);
             for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
                 for index in candidates.iter().copied() {
                     let exchange = &self.mysql.exchanges[index];
                     if exchange.source != source
-                        || !self.active_case_matches(exchange)
+                        || !active_case_matches(case, exchange)
                         || !identity_matches_exchange(identity, &exchange.identity)
                     {
                         continue;
@@ -237,7 +308,7 @@ impl ReplayState {
                                     source: contracts::source_started(&exchange.record),
                                     target: None,
                                 },
-                                case_id: self.active_case_id.as_deref(),
+                                case_id: case,
                                 identity,
                                 command: "COM_STMT_EXECUTE",
                                 recorded_sql: exchange.record.sql.as_deref(),
@@ -406,10 +477,6 @@ impl ReplayState {
         }
     }
 
-    fn active_case_matches(&self, exchange: &ReplayExchange) -> bool {
-        active_case_matches(self.active_case_id.as_deref(), exchange)
-    }
-
     pub(in crate::replay) fn complete_exchange(&mut self, matched: &MatchedExchange) {
         let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) else {
             return;
@@ -443,7 +510,8 @@ impl ReplayState {
             exchange.status = ReplayExchangeStatus::Failed;
         }
         self.refresh_mysql_global_report(matched.index);
-        self.record_unmatched(
+        self.record_unmatched_in_case(
+            matched.report.case_id.as_deref(),
             identity,
             &matched.record.command,
             matched.record.sql.as_deref(),

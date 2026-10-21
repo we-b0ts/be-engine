@@ -43,6 +43,9 @@ pub(in crate::replay) struct ReplayReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) process_owned_mysql_exchanges: Vec<mysql::ownership::OwnedExchange>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) global_mysql_transaction_exchanges:
+        Vec<mysql::transaction_projection::GlobalTransactionExchange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_rollback_exchanges: Vec<RecordedExchangeSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_commit_exchanges: Vec<RecordedExchangeSummary>,

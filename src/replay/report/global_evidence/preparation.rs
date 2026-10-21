@@ -123,6 +123,7 @@ pub(crate) async fn prewarm(
                     policy: policy.clone(),
                     protocol: protocol.into(),
                     layout: view.layout(protocol)?,
+                    semantics: Identity::current_semantics(protocol),
                 };
                 let reference = super::regular::retain_reference(
                     &marker,

@@ -19,6 +19,9 @@ mod termination;
 #[cfg(test)]
 mod tests;
 pub(in crate::replay) mod time_shift;
+pub(in crate::replay) mod transaction_ownership;
+pub(in crate::replay) mod transaction_projection;
+mod transaction_scope;
 mod values;
 
 pub(super) use broker::handle_connection;

@@ -4,6 +4,7 @@ use super::*;
 impl ReplayState {
     pub(in crate::replay) fn match_mysql_control(
         &mut self,
+        case: Option<&str>,
         identity: &ReplaySessionIdentity,
         command: &str,
         argument: Option<&str>,
@@ -17,7 +18,7 @@ impl ReplayState {
                     && exchange.status.is_available()
                     && exchange.record.command == command
                     && exchange.record.sql.as_deref() == argument
-                    && active_case_matches(self.active_case_id.as_deref(), exchange)
+                    && active_case_matches(case, exchange)
                     && identity_matches_exchange(identity, &exchange.identity)
             });
             let Some(index) = index else {
@@ -30,6 +31,7 @@ impl ReplayState {
                 ReplayExchangeStatus::Responding
             };
             let matched = MatchedExchange {
+                transaction_owner: None,
                 value_delivery: None,
                 response_time_shift_rules: Vec::new(),
                 source,
@@ -37,7 +39,7 @@ impl ReplayState {
                 record: exchange.record.clone(),
                 timing: exchange.timing,
                 report: MatchedQueryReport {
-                    case_id: self.active_case_id.clone(),
+                    case_id: case.map(ToOwned::to_owned),
                     target: Some(exchange.identity.target.clone()),
                     database: exchange.identity.database.clone(),
                     username: exchange.identity.username.clone(),

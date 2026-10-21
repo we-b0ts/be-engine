@@ -104,6 +104,15 @@ impl ReplayRuntime {
             &mut kafka,
             &mut motan,
         );
+        if mysql.has_global_transaction_start {
+            let transaction_root = root_dir.clone();
+            let prepared_transactions = tokio::task::spawn_blocking(move || {
+                mysql::transaction_ownership::prepare(&transaction_root)
+            })
+            .await
+            .context("Global MySQL transaction ownership task failed")??;
+            mysql.install_global_transactions(prepared_transactions, &mut targets)?;
+        }
         if let Some(path) = global_debug_path {
             load_motan_debug_file(&path, &mut motan, &mut targets).await?;
         }

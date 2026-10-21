@@ -15,6 +15,7 @@ pub(in crate::replay) fn protocol_snapshot(
         policy: "protocol-differential".into(),
         protocol: protocol.into(),
         layout,
+        semantics: Identity::current_semantics(protocol),
     };
     let baseline = RegularBaseline::retain(report, identity, |visit| {
         for row in rows {
@@ -43,7 +44,87 @@ fn identity(protocol: &str) -> Identity {
         } else {
             vec![1024]
         },
+        semantics: Identity::current_semantics(protocol),
     }
+}
+
+#[test]
+fn historical_identity_keys_survive_and_only_new_mysql_semantics_change_the_key() {
+    #[derive(serde::Serialize)]
+    struct LegacyIdentity {
+        source_sha256: String,
+        source_bytes: u64,
+        policy: String,
+        protocol: String,
+        layout: Vec<usize>,
+    }
+    for protocol in super::super::PROTOCOLS {
+        let legacy = LegacyIdentity {
+            source_sha256: "1".repeat(64),
+            source_bytes: 1000,
+            policy: "policy-v1".into(),
+            protocol: protocol.into(),
+            layout: vec![1024],
+        };
+        let original = serde_json::to_value(&legacy).unwrap();
+        let historical: Identity = serde_json::from_value(original.clone()).unwrap();
+        assert!(historical.semantics.is_none());
+        assert_eq!(serde_json::to_value(&historical).unwrap(), original);
+        let old_key = super::super::artifact::digest(&(
+            "global-regular-projection",
+            1_u32,
+            "global-before-case-v1",
+            &legacy,
+        ))
+        .unwrap();
+        assert_eq!(historical.key().unwrap(), old_key, "{protocol}");
+        let mut current = historical;
+        current.semantics = Identity::current_semantics(protocol);
+        if protocol == "mysql" {
+            assert_eq!(
+                current.semantics.as_deref(),
+                Some("mysql-transaction-cleanup-v2")
+            );
+            assert_ne!(current.key().unwrap(), old_key);
+        } else {
+            assert_eq!(current.key().unwrap(), old_key, "{protocol}");
+        }
+    }
+}
+
+#[test]
+fn new_mysql_visibility_rebuilds_while_historical_report_pages_remain_readable() {
+    let temporary = tempfile::tempdir().unwrap();
+    let report = temporary.path().join("report.json");
+    let mut historical = identity("mysql");
+    historical.semantics = None;
+    let values = rows(2);
+    let old = RegularBaseline::retain(&report, historical, |visit| {
+        for row in &values {
+            visit(row.clone())?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(old.visible, 1);
+    let current = RegularBaseline::retain(&report, identity("mysql"), |visit| {
+        for row in &values {
+            let mut row = row.clone();
+            row.visible = false;
+            visit(row)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(current.visible, 0);
+    assert_ne!(current.reference.key(), old.reference.key());
+    let mut usage = Usage::default();
+    usage.initialize(old.visible);
+    let old_report = RegularEvidence::from_usage(&report, &old, &usage).unwrap();
+    old_report.validate_protocol(&report, "mysql").unwrap();
+    let mut restored = Vec::new();
+    old_report.read(&report, 0, 1, &mut restored).unwrap();
+    assert_eq!(restored, vec![values[1].value.clone()]);
 }
 
 fn rows(count: usize) -> Vec<Row> {

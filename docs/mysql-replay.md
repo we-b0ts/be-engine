@@ -92,6 +92,46 @@ in OK and EOF packets; a successful BEGIN therefore works with SQLx's transactio
 state checks. This status tracking does not simulate database contents or
 replace recorded effects with an in-memory database.
 
+## Transaction ownership across cases
+
+In a completed standard recording, a complete transaction whose first exchange
+starts in Global keeps Global ownership through its COMMIT or ROLLBACK, even
+when later exchanges were captured inside one or more HTTP cases. Replay derives
+this ownership from the complete connection sequence, resource identity,
+before/after status and successful immutable responses. Missing starts, sequence
+gaps, failed or truncated responses, nested BEGIN, chained ends, DDL and unknown
+transaction controls do not establish this proof. Original recordings stay immutable.
+
+Preparation includes proven members from unselected cases. Each original
+exchange is registered exactly once as a finite Global dependency; eager and
+lazy loading skip the original Case registration. Derived Global members stay
+outside the stable native Global report inventory.
+`global_mysql_transaction_exchanges` retains the original Case, dependency path,
+line, record digest and transaction start. These Source facts are independent
+of policy-dependent API-origin classifications.
+
+Target connections retain their current transaction owner across case changes.
+A transaction started between cases keeps Global matching and error attribution
+while a later case is active. Its successful end or a confirmed implicit commit
+resets that owner for connection-pool reuse. Delivery failures retain the
+original request ownership. SQL/parameter matching and business-write
+consumption remain strict.
+
+The versioned proof cache binds the complete Source file inventory and identities.
+Cold preparation reuses transaction metadata and reads candidate records by
+offset. Native Global admission tracks whether a proven transaction start is
+possible; recordings without one skip this additional Global transaction proof
+preparation. Existing API-origin preparation may still load shared transaction facts.
+Warm preparation validates file stamps and uses cached locators without
+loading the full transaction-facts inventory. Response rows remain referenced
+by their original immutable records. Request matching uses in-memory scope and
+wire indexes without rescanning transaction evidence.
+New MySQL Global report projections include the cleanup semantic revision in
+their cache identity. Older MySQL projections rebuild once; historical reports
+remain readable and other protocols retain their existing cache identities.
+
+## Optional transaction cleanup
+
 ROLLBACK remains semantic evidence, including failed rollbacks. Replay permits
 omitting a redundant successful bare ROLLBACK immediately following a
 successful bare COMMIT or ROLLBACK on the same recorded connection and identity.
@@ -103,11 +143,23 @@ missing or duplicate sequence evidence,
 intervening statements, explicit transaction chaining, and parse warnings prevent
 this compatibility.
 
-Replay also permits a bare COMMIT or ROLLBACK that closes a proven implicit
-read-only session. Recorder preserves `server_status_before` from the immediately
+Replay also permits omitting a successful bare COMMIT or ROLLBACK whose known
+before and after status confirm no active transaction, no further results and
+an unchanged AUTOCOMMIT mode. This includes repeated empty COMMITs. Complete
+zero-effect responses and unique connection/sequence/resource identities are
+required; contradictory immediate local predecessor evidence or available
+Global read-prefix evidence prevents exemption. Zero affected rows alone does
+not prove a COMMIT had no business effect.
+
+Replay also permits a bare COMMIT or ROLLBACK that closes a proven read-only
+session, including an explicit BEGIN or START TRANSACTION with a complete
+successful response proving a transition from inactive to active. BEGIN itself
+and all business SELECTs remain required.
+Recorder preserves `server_status_before` from the immediately
 preceding completed command, including maintenance such as COM_PING, and records
 the final resultset EOF status in `response.server_status`. The first ordinary
-SELECT must start with confirmed absence of an active transaction. Every
+SELECT must start with confirmed absence of an active transaction or continue
+that proven explicit BEGIN. Every
 subsequent exchange through the transaction end must have consecutive sequence numbers,
 the same complete connection/endpoint/database/username identity, consistent
 before/after transaction flags, and complete successful responses. Successful
@@ -115,7 +167,7 @@ PREPARE preserves the read proof because it does not execute SQL. The transactio
 must confirm transaction completion without chaining or further results.
 
 The independent SQL classifier parses one bounded query (at most 1 MiB and
-32,768 tokens) and excludes common locking and side-effect forms across its
+65,536 tokens) and excludes common locking and side-effect forms across its
 full token stream. It does not maintain
 a whitelist of SELECT expressions or functions: JSON operations, COALESCE,
 CASE, aggregates, joins, CTEs, scalar/IN/EXISTS subqueries and window expressions
@@ -153,7 +205,7 @@ empty candidates do not prove an engine gap. A MySQL time planner is offered
 for `unmatched_target`, not an unused-only cluster: a time rule cannot consume
 an omitted call. Request-owned reads require normal target implementation.
 
-Writes, explicit BEGIN, locks, savepoints and excluded calls
+Writes, nested or unproven BEGIN, locks, savepoints and excluded calls
 interrupt the read span. Unknown transaction starts, sequence gaps, errors or
 truncated evidence prevent a read-only proof. Replay retains compact tails of
 complete read spans from `global-dependencies.jsonl` once at load time. Only a
@@ -175,8 +227,8 @@ when a sequence gap makes the earlier transaction unknown. This is a practical
 recorded-scope classification, not coroutine tracing: it assumes the semantic
 recording has not lost that case's preceding SQL. It never uses HTTP response
 contents or a target-specific rule. A leading COMMIT with unknown preceding
-effects remains required; COMMIT needs the complete read-only proof described
-above, or existing source-proven API-origin transaction rules.
+effects remains required; COMMIT needs the complete read-only or confirmed-empty
+status proof described above, or existing source-proven API-origin transaction rules.
 
 An identical optional close does not outrank a required business transaction
 end whose immediately preceding exchange has already been consumed on the

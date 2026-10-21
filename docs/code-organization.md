@@ -106,6 +106,9 @@ is unclear.
   inventories and lazy detail projection. Its artifact child owns atomic private
   storage and portable publication; protocol children supply immutable report rows
   and sparse visibility changes using their existing consumption semantics.
+  Protocol-specific visibility semantics belong to the regular inventory identity:
+  new MySQL projections carry their cleanup revision, while omitted revisions
+  preserve historical report keys and unrelated protocol caches.
   Generic Pub/Sub notifications retain Source-confirmed lane identities and their
   own sparse delivery state. These inventories are evidence, separate from the
   disposable dependency-index cache. Case reclassification remains a reversible
@@ -153,6 +156,15 @@ is unclear.
   `replay/mysql/matcher/request` uses those identities for candidate precedence;
   native dirty/report accounting excludes proven foreign obligations and keeps
   the reversible Source provenance separate from protocol consumption.
+  `replay/mysql/transaction_ownership` separately proves complete Global-started
+  transactions using immutable wire facts and bounded original-record reads.
+  Its disposable cache retains Source-bound locators and reuses them without
+  deserializing the complete transaction index on warm startup.
+  `transaction_projection` installs Case-derived Global exchanges once, outside
+  the native Global report layout, with original provenance. `transaction_scope`
+  retains Target connection ownership through case changes and resets it at
+  successful transaction boundaries. Protocol matching and errors accept this
+  explicit request scope without mutating the session-wide active HTTP case.
 
 - `engine_binary` resolves companion executables and Linux reexec paths for a
   replaced running engine. Replay, coordinator workers and local interception
@@ -773,7 +785,11 @@ explicit repository-wide audit.
   independently of SQL equivalence. It owns compact immutable Global read-span
   tails used to classify a case's leading transaction end, and keeps case-to-case
   transaction inference out of the loader. SELECT expressions do not require per-shape
-  registration. Its `autocommit` child checks setup omission over the loaded
+  registration. Its cleanup classification remains independent of setup
+  omission over the complete loaded connection span. Its
+  `control` child validates plain BEGIN/end responses and confirmed empty ends;
+  business reads and explicit BEGIN remain required dependencies. Its
+  `autocommit` child checks setup omission over the loaded
   read-only span, including retained zero-effect COM_PING continuity witnesses.
   Case-local completed read spans may restart across consistent inactive
   boundaries; active-transaction gaps and Global post-read gaps remain strict.
