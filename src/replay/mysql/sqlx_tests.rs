@@ -10,12 +10,14 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 mod autocommit_tests;
+mod cleanup_compatibility_tests;
 mod combined_capture_tests;
 mod continuation_tests;
 mod dependency_time_tests;
 mod distinct_tests;
 mod dynamic_values_tests;
 mod foreign_cleanup_tests;
+mod global_transaction_tests;
 mod large_identity_tests;
 mod large_predicate_tests;
 mod large_sql_values_tests;
@@ -32,6 +34,7 @@ mod select_time_tests;
 mod sql_values_tests;
 mod subquery_tests;
 mod time_shift_tests;
+mod transaction_performance;
 mod tuple_tests;
 mod unified_contracts;
 

@@ -4,6 +4,7 @@ use serde_json::json;
 mod complex_read_tests;
 mod foreign_cleanup_tests;
 mod read_exclusions_tests;
+mod transaction_cleanup_tests;
 
 fn exchange(sequence: u64, sql: &str) -> Value {
     json!({"event_type":"mysql_exchange", "connection_id":Uuid::nil(),

@@ -41,6 +41,7 @@ pub(in crate::replay) enum OptionalSessionExchange {
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct MatchedExchange {
+    pub(in crate::replay) transaction_owner: Option<Option<String>>,
     pub(in crate::replay) value_delivery: Option<contracts::PreparedDelivery>,
     pub(in crate::replay) response_time_shift_rules: Vec<String>,
     #[allow(dead_code)]

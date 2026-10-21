@@ -33,7 +33,9 @@ async fn foreign_commit_is_exempt_and_cannot_steal_the_business_commit() {
     tokio::time::timeout(Duration::from_secs(30), async {
         for lazy in [false, true] {
             for commit_business in [false, true] {
-                verify_business_commit(lazy, commit_business).await;
+                for known_global_start in [false, true] {
+                    verify_business_commit(lazy, commit_business, known_global_start).await;
+                }
             }
         }
     })
@@ -41,7 +43,7 @@ async fn foreign_commit_is_exempt_and_cannot_steal_the_business_commit() {
     .unwrap();
 }
 
-async fn verify_business_commit(lazy: bool, commit_business: bool) {
+async fn verify_business_commit(lazy: bool, commit_business: bool, known_global_start: bool) {
     let temp = tempdir().unwrap();
     let root = temp.path().join(".traffic-e2e/local/recordings");
     let case = root.join("case-id");
@@ -83,7 +85,10 @@ async fn verify_business_commit(lazy: bool, commit_business: bool) {
     background_write["response"]["affected_rows"] = 1.into();
     write(
         &root.join("global-dependencies.jsonl"),
-        &[statement(foreign, 409, "BEGIN", 0, 1), background_write],
+        &[
+            statement(foreign, 409, "BEGIN", u16::from(!known_global_start), 1),
+            background_write,
+        ],
     );
     let mut business_write = statement(business, 312, "UPDATE users SET active=0 WHERE id=1", 1, 1);
     business_write["response"]["affected_rows"] = 1.into();
@@ -176,7 +181,14 @@ async fn verify_business_commit(lazy: bool, commit_business: bool) {
         state.mysql.exchanges[own].status.is_consumed(),
         commit_business
     );
-    assert_eq!(state.process_owned_mysql().len(), 1);
+    assert_eq!(
+        state.process_owned_mysql().len(),
+        usize::from(!known_global_start)
+    );
+    assert_eq!(
+        state.global_mysql_transactions().len(),
+        usize::from(known_global_start)
+    );
     assert_eq!(
         state.unused_exchanges(ReplaySource::Case).len(),
         usize::from(!commit_business)

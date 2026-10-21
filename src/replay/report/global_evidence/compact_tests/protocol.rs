@@ -20,6 +20,7 @@ fn unified(fixture: &Fixture) -> Value {
         policy: "policy".into(),
         protocol: "redis".into(),
         layout: vec![2],
+        semantics: None,
     };
     let reference =
         ArtifactReference::retain(&fixture.report, identity.key().unwrap(), |staging| {

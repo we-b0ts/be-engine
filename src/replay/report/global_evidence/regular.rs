@@ -350,6 +350,7 @@ pub(in crate::replay) fn initialize(
             policy: policy.into(),
             protocol: protocol.into(),
             layout: crate::replay::global_source::ProjectionView::from(&*state).layout(protocol)?,
+            semantics: Identity::current_semantics(protocol),
         };
         let baseline =
             RegularBaseline::retain_from_source(report, identity, Some(&source), |visitor| {

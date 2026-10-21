@@ -7,13 +7,42 @@ pub(in crate::replay) struct ReplaySession {
     pub(in crate::replay) next_statement_id: u32,
     pub(in crate::replay) status_flags: u16,
     pub(in crate::replay) statements: HashMap<u32, PreparedStatement>,
+    pub(super) transaction_scope: super::transaction_scope::Scope,
 }
 
 impl ReplaySession {
-    fn observe_response(&mut self, sql: &str, response: &RecordedMysqlResponse) {
+    pub(super) fn request_case(&self, state: &ReplayState, sql: Option<&str>) -> Option<String> {
+        self.transaction_scope
+            .case(state.active_case_id.as_deref(), sql)
+    }
+
+    fn observe_response(
+        &mut self,
+        sql: &str,
+        response: &RecordedMysqlResponse,
+        case: Option<&str>,
+        source_before: Option<u16>,
+    ) {
         if !matches!(response.status.as_str(), "ok" | "resultset") {
             return;
         }
+        let before = self.status_flags;
+        self.update_status(sql, response);
+        // A known Source active -> inactive transition also covers implicit
+        // commits (for example DDL). An autocommitting Source SELECT alone
+        // cannot end an explicit Target transaction.
+        if let Some(after) = response.server_status
+            && source_before.is_some_and(|flags| flags & 1 != 0)
+            && after & 1 == 0
+            && before & SERVER_STATUS_AUTOCOMMIT == after & SERVER_STATUS_AUTOCOMMIT
+        {
+            self.status_flags &= !0x2001;
+        }
+        self.transaction_scope
+            .observe(before, self.status_flags, sql, case);
+    }
+
+    fn update_status(&mut self, sql: &str, response: &RecordedMysqlResponse) {
         if let Some(enabled) = crate::mysql::autocommit::assignment(sql) {
             if enabled {
                 // Only OFF -> ON implicitly commits. Repeating ON inside an
@@ -126,7 +155,21 @@ pub(super) async fn deliver_matched(
     session.observe_response(
         matched.record.sql.as_deref().unwrap_or_default(),
         &matched.record.response,
+        matched.report.case_id.as_deref(),
+        matched.record.server_status_before,
     );
+    if matches!(matched.record.response.status.as_str(), "ok" | "resultset")
+        && let Some(owner) = &matched.transaction_owner
+        && session.transaction_scope.confirm(owner).is_err()
+    {
+        matched.report.case_id = session.transaction_scope.case(None, None);
+        let error = "MySQL transaction contains conflicting Case and Global ownership evidence";
+        state
+            .lock()
+            .await
+            .fail_exchange(&matched, &session.identity(), error);
+        return Err(anyhow!(error));
+    }
     if let Err(error) = write_response(
         stream,
         &matched.record.response,
@@ -167,15 +210,18 @@ pub(in crate::replay) async fn handle_query(
     session: &mut ReplaySession,
     sql: &str,
 ) -> Result<SessionDirective> {
-    let matched = {
+    let (matched, case_id) = {
         let mut state = state.lock().await;
         let identity = session.identity();
-        state.match_exchange(&identity, "COM_QUERY", Some(sql), None)
+        let case = session.request_case(&state, Some(sql));
+        let matched =
+            state.match_exchange_in_case(case.as_deref(), &identity, "COM_QUERY", Some(sql), None);
+        (matched, case)
     };
     if matched.is_none()
         && let Some(response) = builtin_response(sql, session.database.as_deref())
     {
-        session.observe_response(sql, &response);
+        session.observe_response(sql, &response, case_id.as_deref(), None);
         write_response(
             stream,
             &response,
@@ -185,7 +231,8 @@ pub(in crate::replay) async fn handle_query(
         .await?;
         let mut state = state.lock().await;
         let identity = session.identity();
-        state.record_builtin(
+        state.record_builtin_in_case(
+            case_id.as_deref(),
             &identity,
             "COM_QUERY",
             Some(sql),
@@ -202,7 +249,8 @@ pub(in crate::replay) async fn handle_query(
             {
                 let mut state = state.lock().await;
                 let identity = session.identity();
-                state.record_unmatched(
+                state.record_unmatched_in_case(
+                    case_id.as_deref(),
                     &identity,
                     "COM_QUERY",
                     Some(sql),
@@ -229,10 +277,18 @@ pub(in crate::replay) async fn handle_stmt_prepare(
     session: &mut ReplaySession,
     sql: &str,
 ) -> Result<SessionDirective> {
-    let failed_prepare = {
+    let (failed_prepare, case_id) = {
         let mut state = state.lock().await;
         let identity = session.identity();
-        state.match_exchange(&identity, "COM_STMT_PREPARE", Some(sql), None)
+        let case = session.request_case(&state, None);
+        let matched = state.match_exchange_in_case(
+            case.as_deref(),
+            &identity,
+            "COM_STMT_PREPARE",
+            Some(sql),
+            None,
+        );
+        (matched, case)
     };
     if let Some(matched) = failed_prepare {
         return deliver_matched(stream, state, session, matched, ResultRowEncoding::Text).await;
@@ -241,7 +297,7 @@ pub(in crate::replay) async fn handle_stmt_prepare(
     let metadata = {
         let mut state = state.lock().await;
         let identity = session.identity();
-        state.statement_metadata(&identity, sql)
+        state.statement_metadata_in_case(case_id.as_deref(), &identity, sql)
     };
     if metadata.columns.is_empty() && looks_like_select(sql) {
         let mut state = state.lock().await;
@@ -275,7 +331,9 @@ pub(in crate::replay) async fn handle_stmt_execute(
         {
             let mut state = state.lock().await;
             let identity = session.identity();
-            state.record_unmatched(
+            let case = session.request_case(&state, None);
+            state.record_unmatched_in_case(
+                case.as_deref(),
                 &identity,
                 "COM_STMT_EXECUTE",
                 None,
@@ -306,20 +364,23 @@ pub(in crate::replay) async fn handle_stmt_execute(
         }
     }
 
-    let matched = {
+    let (matched, case_id) = {
         let mut state = state.lock().await;
         let identity = session.identity();
-        state.match_exchange(
+        let case = session.request_case(&state, Some(&statement.sql));
+        let matched = state.match_exchange_in_case(
+            case.as_deref(),
             &identity,
             "COM_STMT_EXECUTE",
             Some(&statement.sql),
             parsed.params.as_deref(),
-        )
+        );
+        (matched, case)
     };
     if matched.is_none()
         && let Some(response) = builtin_response(&statement.sql, session.database.as_deref())
     {
-        session.observe_response(&statement.sql, &response);
+        session.observe_response(&statement.sql, &response, case_id.as_deref(), None);
         write_response(
             stream,
             &response,
@@ -329,7 +390,8 @@ pub(in crate::replay) async fn handle_stmt_execute(
         .await?;
         let mut state = state.lock().await;
         let identity = session.identity();
-        state.record_builtin(
+        state.record_builtin_in_case(
+            case_id.as_deref(),
             &identity,
             "COM_STMT_EXECUTE",
             Some(&statement.sql),
@@ -346,7 +408,8 @@ pub(in crate::replay) async fn handle_stmt_execute(
             {
                 let mut state = state.lock().await;
                 let identity = session.identity();
-                state.record_unmatched(
+                state.record_unmatched_in_case(
+                    case_id.as_deref(),
                     &identity,
                     "COM_STMT_EXECUTE",
                     Some(&statement.sql),

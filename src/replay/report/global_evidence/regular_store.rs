@@ -23,9 +23,15 @@ pub(super) struct Identity {
     pub policy: String,
     pub protocol: String,
     pub layout: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantics: Option<String>,
 }
 
 impl Identity {
+    pub(super) fn current_semantics(protocol: &str) -> Option<String> {
+        (protocol == "mysql").then(|| "mysql-transaction-cleanup-v2".to_owned())
+    }
+
     pub(super) fn key(&self) -> Result<String> {
         digest(&(
             "global-regular-projection",

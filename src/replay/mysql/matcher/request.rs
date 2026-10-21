@@ -2,8 +2,21 @@
 use super::*;
 
 impl ReplayState {
+    #[cfg(test)]
     pub(in crate::replay) fn match_exchange(
         &mut self,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+        params: Option<&[RecordedMysqlValue]>,
+    ) -> Option<MatchedExchange> {
+        let case = self.active_case_id.clone();
+        self.match_exchange_in_case(case.as_deref(), identity, command, sql, params)
+    }
+
+    pub(in crate::replay::mysql) fn match_exchange_in_case(
+        &mut self,
+        case: Option<&str>,
         identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
@@ -14,7 +27,7 @@ impl ReplayState {
         #[cfg(test)]
         let request_observed_at = self.mysql.observed_at_for_test.unwrap_or_else(Utc::now);
         let mut observation_id = Some(uuid::Uuid::new_v4());
-        if let (Some(policy), Some(case)) = (&self.replay_policy, self.active_case_id.as_deref()) {
+        if let (Some(policy), Some(case)) = (&self.replay_policy, case) {
             match contracts::record_target(
                 &policy.request_contracts,
                 case,
@@ -52,7 +65,7 @@ impl ReplayState {
                 matches!(command, "COM_QUERY" | "COM_STMT_EXECUTE")
                     && params.is_none_or(<[_]>::is_empty)
             });
-        let active_case_id = self.active_case_id.clone();
+        let active_case_id = case.map(ToOwned::to_owned);
         let preferred_end = cleanup_selection::preferred_end(
             &self.mysql.exchanges,
             active_case_id.as_deref(),
@@ -444,8 +457,21 @@ impl ReplayState {
                             }
                             policy.commit(active_case_id.as_deref(), policy_decision);
                         }
+                        let owned_global = self.mysql.foreign.contains_key(&index)
+                            || (exchange.source == ReplaySource::Global
+                                && exchange
+                                    .record
+                                    .connection_id
+                                    .zip(exchange.record.query_sequence)
+                                    .is_some_and(|wire| {
+                                        self.mysql.transaction_wires.contains(&wire)
+                                    }));
                         let matched = MatchedQueryReport {
-                            case_id: active_case_id.clone(),
+                            case_id: if owned_global {
+                                None
+                            } else {
+                                active_case_id.clone()
+                            },
                             target: Some(exchange.identity.target.clone()),
                             database: exchange.identity.database.clone(),
                             username: exchange.identity.username.clone(),
@@ -458,6 +484,20 @@ impl ReplayState {
                             target_event_index: None,
                         };
                         return Some(MatchedExchange {
+                            transaction_owner: if baseline_normalized_sql
+                                .as_deref()
+                                .is_some_and(super::super::transaction_scope::is_business)
+                            {
+                                if owned_global {
+                                    Some(None)
+                                } else if exchange.source == ReplaySource::Case {
+                                    Some(exchange.case_id.clone())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            },
                             value_delivery,
                             response_time_shift_rules,
                             source: exchange.source,

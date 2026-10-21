@@ -60,6 +60,7 @@ pub(in crate::replay) async fn handle_connection(
         next_statement_id: 1,
         status_flags: SERVER_STATUS_AUTOCOMMIT,
         statements: HashMap::new(),
+        transaction_scope: Default::default(),
     };
     loop {
         let Some(packet) = read_packet(&mut stream).await? else {
@@ -74,7 +75,9 @@ pub(in crate::replay) async fn handle_connection(
             "COM_PING" | "COM_INIT_DB" => {
                 let matched = {
                     let mut state = state.lock().await;
+                    let case = session.request_case(&state, None);
                     state.match_mysql_control(
+                        case.as_deref(),
                         &session.identity(),
                         &command.command_name,
                         command.query.as_deref(),
@@ -114,7 +117,9 @@ pub(in crate::replay) async fn handle_connection(
                 {
                     let mut state = state.lock().await;
                     let identity = session.identity();
-                    state.record_builtin(
+                    let case = session.request_case(&state, None);
+                    state.record_builtin_in_case(
+                        case.as_deref(),
                         &identity,
                         &command.command_name,
                         command.query.as_deref(),
@@ -149,16 +154,19 @@ pub(in crate::replay) async fn handle_connection(
                 let statement_id = read_u32_le(&packet.payload, 1);
                 let mut state = state.lock().await;
                 let identity = session.identity();
+                let case = session.request_case(&state, None);
                 if let Some(statement_id) = statement_id {
                     session.statements.remove(&statement_id);
-                    state.record_builtin(
+                    state.record_builtin_in_case(
+                        case.as_deref(),
                         &identity,
                         "COM_STMT_CLOSE",
                         None,
                         "prepared statement closed without a server response",
                     );
                 } else {
-                    state.record_unsupported(
+                    state.record_unsupported_in_case(
+                        case.as_deref(),
                         &identity,
                         "COM_STMT_CLOSE",
                         None,
@@ -171,7 +179,9 @@ pub(in crate::replay) async fn handle_connection(
                 {
                     let mut state = state.lock().await;
                     let identity = session.identity();
-                    state.record_unsupported(
+                    let case = session.request_case(&state, None);
+                    state.record_unsupported_in_case(
+                        case.as_deref(),
                         &identity,
                         other,
                         command.query.as_deref(),
