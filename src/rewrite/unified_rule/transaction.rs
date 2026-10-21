@@ -29,6 +29,8 @@ mod recovery_transaction;
 mod scope_transaction;
 #[path = "transaction_signed_input.rs"]
 mod signed_input_transaction;
+#[path = "transaction_sse.rs"]
+mod sse_transaction;
 
 #[test]
 fn compact_proposals_expand_source_proof_in_public_plan_apply_and_keep_stale_guards() {

@@ -54,6 +54,14 @@ same JSON/PB contracts; adding PB does not require another JSON-specific
 protocol strategy. Unsupported operation/slot/codec combinations fail during
 compilation rather than silently falling back.
 
+SSE primary responses can select `slot: {sse_data: <exact-event-name>}` with
+`codec: json`. Pointers address the decoded SSE data JSON; envelope, event order,
+count and closure stay strict. Time contracts use the independent HTTP request
+starts. Explicit `identity` fields share a case-local bijection by `binding`
+across selected events, preserving declared prefixes and decimal/UUID types.
+Trace Source identity ownership first: DB-derived IDs fixed by Replay must stay
+exact. See [SSE value contracts](../../../../../docs/sse-value-contracts.md).
+
 A self-contained Redis JSON rule is:
 
 ```yaml

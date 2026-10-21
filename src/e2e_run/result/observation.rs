@@ -46,6 +46,24 @@ pub(in crate::e2e_run) fn response_observation_with_status(
                     },
                 );
         }
+        if let Some((index, _)) = suffix
+            .strip_prefix("/events/")
+            .and_then(|s| s.split_once("/sse/"))
+        {
+            let event = index.parse::<usize>().ok().and_then(|index| {
+                interaction["events"]
+                    .as_array()
+                    .and_then(|events| events.iter().filter(|e| e["heartbeat"] != true).nth(index))
+            });
+            return observation(
+                if event.is_some() {
+                    E2eValuePresence::Unavailable
+                } else {
+                    E2eValuePresence::Missing
+                },
+                None,
+            );
+        }
         let Some(value) = interaction.pointer(suffix) else {
             return observation(E2eValuePresence::Missing, None);
         };
@@ -258,6 +276,26 @@ fn sensitive_pointer(pointer: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sse_virtual_data_diagnostics_retain_private_availability() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("response.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({"interaction":{"events":[
+                {"heartbeat":true,"message":{"data":"private-heartbeat"}},
+                {"heartbeat":false,"message":{"data":"encrypted-private-event"}}
+            ]}})
+            .to_string(),
+        )
+        .unwrap();
+        let observed = response_observation(&path, "$interaction/events/0/sse/data/item/id");
+        assert_eq!(observed.presence, E2eValuePresence::Unavailable);
+        assert!(observed.value.is_none());
+        let missing = response_observation(&path, "$interaction/events/1/sse/data/item/id");
+        assert_eq!(missing.presence, E2eValuePresence::Missing);
+    }
 
     #[test]
     fn jwt_hint_survives_redaction_and_long_url_bounding_without_exposing_tokens() {

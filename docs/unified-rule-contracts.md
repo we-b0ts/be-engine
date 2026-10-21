@@ -37,6 +37,13 @@ in-memory request views, including private interaction requests. Planning freeze
 the original encrypted artifacts and managed key; neither planning nor application
 writes decrypted recordings. Applying a rule still requires genuine Replay.
 
+Explicit `slot: {sse_data: <exact-event-name>}` rules provide JSON value
+contracts for SSE interaction data. They use the same API selector, Source-only
+request condition, proof and time kernel as ordinary bodies, with their own
+field ownership. Event order/count, SSE event/id/retry, unselected data and
+closure remain strict. Interaction rules never supply ordinary body witnesses.
+See [SSE value contracts](sse-value-contracts.md) for authoring and limits.
+
 Inbound request JWT translation, Source capture admission, Source response
 rewrite, process ownership, API-origin attribution, finite sharing and snapshot
 admission remain explicit typed effects. They are not additional permissions

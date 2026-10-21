@@ -10,6 +10,28 @@ pub(super) fn selected<'a>(
     request: &RecordedRequest,
     path: &str,
 ) -> Result<Vec<&'a CompiledRule>> {
+    Ok(applicable(loaded, request, path)?
+        .into_iter()
+        .filter(|rule| rule.rule.slot == crate::policy::Slot::Body)
+        .collect())
+}
+
+pub(super) fn selected_interaction<'a>(
+    loaded: &'a LoadedReplayPolicy,
+    request: &RecordedRequest,
+    path: &str,
+) -> Result<Vec<&'a CompiledRule>> {
+    Ok(applicable(loaded, request, path)?
+        .into_iter()
+        .filter(|rule| matches!(rule.rule.slot, crate::policy::Slot::SseData(_)))
+        .collect())
+}
+
+fn applicable<'a>(
+    loaded: &'a LoadedReplayPolicy,
+    request: &RecordedRequest,
+    path: &str,
+) -> Result<Vec<&'a CompiledRule>> {
     let Some(compiled) = &loaded.compiled else {
         return Ok(vec![]);
     };

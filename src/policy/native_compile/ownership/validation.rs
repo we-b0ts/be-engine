@@ -145,6 +145,7 @@ fn value_claims(compiled: &CompiledRule) -> Result<Vec<NativeFieldClaim>> {
                 when: rule.when.clone(),
                 slot: match &rule.slot {
                     Slot::Body => NativeOwnedSlot::Body,
+                    Slot::SseData(event) => NativeOwnedSlot::SseData(event.clone()),
                     Slot::Value => NativeOwnedSlot::Value,
                     Slot::SqlValue(index) => NativeOwnedSlot::SqlValue(*index),
                     Slot::SqlColumn(name) => NativeOwnedSlot::SqlColumn(name.clone()),

@@ -3,6 +3,8 @@ use super::*;
 
 /// Payload bytes remain private process memory and must not enter plan reports.
 pub(crate) struct ResponsePayloadPair {
+    pub(crate) source_interaction: Option<crate::interaction::model::OutputObservation>,
+    pub(crate) target_interaction: Option<crate::interaction::model::OutputObservation>,
     pub(crate) body_available: bool,
     pub(crate) source: Vec<u8>,
     pub(crate) target: Option<Vec<u8>>,
@@ -40,6 +42,8 @@ pub(crate) fn response_payload_pair(
     };
     let source_body = business_body(&request, bytes, oneway, "Source response")?;
     let mut output = ResponsePayloadPair {
+        source_interaction: source.interaction,
+        target_interaction: None,
         body_available,
         source: source_body.body().into(),
         target: None,
@@ -84,6 +88,7 @@ pub(crate) fn response_payload_pair(
             "response status differs"
         );
         output.target = Some(target_body.body().into());
+        output.target_interaction = target.interaction;
         output.times.target = target.request_sent_at;
         output.target_headers = target.headers;
     }

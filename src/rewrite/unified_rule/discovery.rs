@@ -15,6 +15,7 @@ use crate::{
     policy_evidence::{TargetRole, WitnessManifest},
     value_contract::json::{AnchorClocks, Field},
 };
+mod interaction;
 
 const LIMIT: usize = 20;
 const OBSERVATION_LIMIT: usize = 256;
@@ -233,15 +234,52 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
             drafts.limited = true;
             continue;
         }
-        let expected: Value = serde_json::from_slice(&fs::read(expected)?)?;
-        let actual: Option<Value> = actual
-            .map(|path| -> Result<Value> { Ok(serde_json::from_slice(&fs::read(path)?)?) })
-            .transpose()?;
-        let request: Value = serde_json::from_slice(&fs::read(request)?)?;
-        let Ok(source_pair) = crate::replay::response_payload_pair(&request, &expected, None)
+        let mut expected_value: Value = serde_json::from_slice(&fs::read(expected)?)?;
+        if crate::interaction::private::decrypt_output(&mut expected_value, Path::new(expected))
+            .is_err()
+        {
+            drafts.limited = true;
+            continue;
+        }
+        let actual: Result<Option<Value>> = actual
+            .map(|path| -> Result<Value> {
+                let mut value = serde_json::from_slice(&fs::read(path)?)?;
+                crate::interaction::private::decrypt_output(&mut value, Path::new(path))?;
+                Ok(value)
+            })
+            .transpose();
+        let Ok(actual) = actual else {
+            drafts.limited = true;
+            continue;
+        };
+        let mut request_value: Value = serde_json::from_slice(&fs::read(request)?)?;
+        if crate::interaction::private::decrypt_request(&mut request_value, Path::new(request))
+            .is_err()
+        {
+            drafts.limited = true;
+            continue;
+        }
+        let request = request_value;
+        let expected = expected_value;
+        let Ok(mut source_pair) = crate::replay::response_payload_pair(&request, &expected, None)
         else {
             continue;
         };
+        if let Some(pair) = actual.as_ref().and_then(|actual| {
+            crate::replay::response_payload_pair(&request, &expected, Some(actual)).ok()
+        }) {
+            source_pair = pair;
+        }
+        if !source_pair.body_available {
+            interaction::observe(
+                &mut drafts,
+                &source_pair,
+                &state.api,
+                case["case_id"].as_str().unwrap_or("api-response"),
+                schemas.as_ref(),
+            )?;
+            continue;
+        }
         let source = source_pair.source;
         let target = actual
             .as_ref()

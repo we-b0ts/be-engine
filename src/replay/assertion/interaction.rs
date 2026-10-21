@@ -1,9 +1,13 @@
 //! Assert independently observed semantic messages and complete connection closure.
+use crate::policy::CompiledRule;
+use crate::value_contract::json::{Comparison, Difference};
 use anyhow::{Result, ensure};
 use serde_json::Value;
 use std::collections::BTreeMap;
+mod contracts;
+pub(crate) use contracts::decode_sse;
 
-use super::model::{ResponseAssertionCaseReport, ResponseDifference};
+use super::model::ResponseAssertionCaseReport;
 
 pub(super) fn decrypt_output_bytes(
     bytes: &[u8],
@@ -51,14 +55,35 @@ use crate::interaction::model::{
 pub(super) fn compare(
     expected: Option<&OutputObservation>,
     actual: Option<&OutputObservation>,
+    rules: &[&CompiledRule],
+    times: super::RequestTimes,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
+    let checked = compare_outputs(expected, actual, rules, times)?;
+    report.applied_body_rule_ids.extend(checked.evaluated);
+    report.differences.extend(
+        checked
+            .differences
+            .into_iter()
+            .map(super::unified::contract_difference),
+    );
+    Ok(())
+}
+
+/// One adapter serves Source preflight, independent Target proof and Replay.
+pub(crate) fn compare_outputs(
+    expected: Option<&OutputObservation>,
+    actual: Option<&OutputObservation>,
+    rules: &[&CompiledRule],
+    times: super::RequestTimes,
+) -> Result<Comparison> {
+    let mut report = Comparison::default();
     let (expected, actual) = match (expected, actual) {
-        (None, None) => return Ok(()),
+        (None, None) => return Ok(report),
         (Some(expected), Some(actual)) => (expected, actual),
         _ => {
-            mismatch(report, "$interaction");
-            return Ok(());
+            mismatch(&mut report, "$interaction");
+            return Ok(report);
         }
     };
     ensure!(
@@ -66,35 +91,47 @@ pub(super) fn compare(
         "unsupported interaction output observation version; re-record this case"
     );
     if expected.protocol != actual.protocol {
-        mismatch(report, "$interaction/protocol");
+        mismatch(&mut report, "$interaction/protocol");
     }
     // Matching truncated or incomplete captures never proves compatibility.
     if !expected.end.clean || !actual.end.clean {
-        mismatch(report, "$interaction/end/clean");
+        mismatch(&mut report, "$interaction/end/clean");
     }
     if expected.end.reason != actual.end.reason {
-        mismatch(report, "$interaction/end/reason");
+        mismatch(&mut report, "$interaction/end/reason");
     }
     if expected.end.pending != actual.end.pending {
-        mismatch(report, "$interaction/end/pending");
+        mismatch(&mut report, "$interaction/end/pending");
     }
     if expected.end.close != actual.end.close {
-        mismatch(report, "$interaction/end/close");
+        mismatch(&mut report, "$interaction/end/close");
     }
     if partial_message(expected)? != partial_message(actual)? {
-        mismatch(report, "$interaction/end/partial_message");
+        mismatch(&mut report, "$interaction/end/partial_message");
     }
     let expected_events = comparable(expected)?;
     let actual_events = comparable(actual)?;
+    let sse = expected.protocol == Protocol::Sse && actual.protocol == Protocol::Sse;
     if expected_events.len() != actual_events.len() {
-        mismatch(report, "$interaction/events/length");
+        mismatch(&mut report, "$interaction/events/length");
     }
     for (index, (expected, actual)) in expected_events.iter().zip(&actual_events).enumerate() {
-        if expected != actual {
-            mismatch(report, &format!("$interaction/events/{index}"));
+        let pointer = format!("$interaction/events/{index}");
+        if sse && !rules.is_empty() {
+            let first_difference = report.differences.len();
+            report.merge_and_validate(contracts::compare_message(
+                expected, actual, rules, times, &pointer,
+            ));
+            for diff in &mut report.differences[first_difference..] {
+                if diff.pointer.is_empty() {
+                    diff.pointer = pointer.clone();
+                }
+            }
+        } else if expected != actual {
+            mismatch(&mut report, &pointer);
         }
     }
-    Ok(())
+    Ok(report)
 }
 
 fn partial_message(observation: &OutputObservation) -> Result<Option<Vec<u8>>> {
@@ -183,10 +220,11 @@ fn normalize_transport_identity(message: &WireMessage) -> Result<WireMessage> {
     )))
 }
 
-fn mismatch(report: &mut ResponseAssertionCaseReport, pointer: &str) {
-    let mut difference = ResponseDifference::body_value_mismatch();
-    difference.pointer = pointer.to_owned();
-    report.differences.push(difference);
+fn mismatch(report: &mut Comparison, pointer: &str) {
+    report.differences.push(Difference {
+        pointer: pointer.into(),
+        reason: "interaction value changed".into(),
+    });
 }
 
 #[cfg(test)]

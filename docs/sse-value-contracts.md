@@ -1,0 +1,97 @@
+# SSE response value contracts
+
+`api.response` supports `slot: {sse_data: <event>}` with `codec: json`.
+The slot selects the exact SSE `event` name; a missing event name selects
+`message`, as in SSE. The original distinction between an absent name and an
+explicit `event: message` remains strict. There are no event wildcards, frame
+reordering, event deletion or automatic identity permissions.
+
+The engine decodes the recorded SSE envelope, then its `data` string as complete
+JSON without duplicate members. Field pointers address that business JSON.
+Each selected event must contain all selected Source fields; Target presence,
+types and every unselected value remain checked. Non-JSON sentinels such as
+`[DONE]` can remain unselected and compare exactly. Other interaction protocols
+retain their existing strict comparisons.
+
+For example, a Source-proven request-time field is:
+
+```yaml
+id: response-created-clock
+surface: api.response
+match: {api: POST /responses}
+when:
+  request_body_json: {/stream: {equals: true}}
+slot: {sse_data: response.created}
+codec: json
+contract:
+  /response/created_at:
+    request_time: unix_seconds
+    clock_group: response
+proof:
+  source: src/events.py:response_created
+  fact: Source takes the creation time from this HTTP request's clock.
+```
+
+Both physical HTTP request starts are required. `request_time` checks the fixed
+five-second request window; `relative_time` preserves a Source-proven offset
+from each request start. Clock-group relationships also span selected frames
+in this interaction. Repeat the rule for `response.in_progress` and
+`response.completed` when Source emits that field there. Applying the ordinary
+body rule to an empty stream carrier does not grant these permissions.
+Repeated equal time observations share relationship state; each group is bounded
+to 4096 distinct Source/Target time pairs.
+
+An explicit identity contract can preserve a generated entity's equality and
+injectivity across different events and pointers:
+
+```yaml
+id: response-item-added-identity
+surface: api.response
+match: {api: POST /responses}
+slot: {sse_data: response.output_item.added}
+codec: json
+contract:
+  /item/id:
+    kind: identity
+    prefix: msg_
+    format: decimal
+    binding: assistant-message
+proof:
+  source: src/events.py:item_added
+  fact: Source constructs a fresh message identity and reuses it in later events.
+```
+
+Use the same `binding` for `/item_id` in the relevant delta events and `/item/id`
+in done events, with their own exact event selectors and Source proof. A Source
+identity must always map to the same Target identity, and distinct Source
+identities cannot collapse into one Target identity. Bindings are fresh for
+each case comparison and are shared across rule IDs in that interaction only.
+The binding's format must be consistent throughout the policy; different literal
+prefixes can refer to the same underlying identity. Prefix bytes stay exact.
+`decimal` requires a positive canonical u64 string; digit count may differ.
+`uuid` requires a canonical lowercase, hyphenated, non-nil UUID. No arbitrary
+string or inferred random-ID contract is supported. Each binding is bounded to
+4096 entities per interaction.
+
+An identity bijection does **not** prove database derivation or a relationship
+to dependency requests/results. For `msg_{subtask_id}`, trace the actual Source
+subtask allocation and Replay identity ownership before authorizing a change.
+If Replay fixes that subtask ID, its derived message ID must stay exact or be
+fixed in Target. A different displayed ID is insufficient proof for a rule.
+External identity, SQL, dependency, authentication and consumption obligations
+retain their own checks.
+
+Discovery exposes bounded SSE slots and observed time/unordered drafts without
+plaintext values; it does not infer identity permission. Plan validates complete
+selected Source observations and every available independent Target observation
+through the same adapter used by Replay. A missing Target retains a fresh-Replay
+obligation. Plans freeze original encrypted request/output artifacts and the
+managed key; Apply rejects changed evidence/keys and never rewrites recordings.
+Rule application always requires a new genuine Replay.
+
+Nested differences use `$interaction/events/<index>/sse/data/<pointer>`;
+envelope differences use the corresponding `/sse/event`, `/sse/id` or
+`/sse/retry`. Indices count non-heartbeat semantic messages. Public observations
+report these private fields as unavailable rather than falsely missing or
+exposing decrypted data. Event count, sequence, text deltas, status, headers,
+partial messages, pending actions and connection completion retain strict checks.

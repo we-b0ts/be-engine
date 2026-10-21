@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::*;
+mod interaction;
 mod order;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -84,6 +85,7 @@ fn compile_expanded(document: &TrafficPolicy) -> Result<CompiledPolicy> {
     rules.sort_by(|left, right| left.rule.id.cmp(&right.rule.id));
     order::native(&mut native);
     validate_rule_overlaps(&rules)?;
+    interaction::validate_bindings(&rules)?;
     validate_field_claims(&rules, &native)?;
     let mut expanded = document.rules.iter().collect::<Vec<_>>();
     order::expanded(&mut expanded);
@@ -246,6 +248,11 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
                 );
             }
             FieldContract::Unordered => {}
+            FieldContract::Identity {
+                binding, prefix, ..
+            } => {
+                interaction::validate_identity(rule, binding, prefix)?;
+            }
             FieldContract::Conditional { .. } => unreachable!("nested field conditions rejected"),
         }
     }
@@ -311,7 +318,7 @@ fn validate_match(rule: &Rule) -> Result<()> {
                 && selector.sql.is_none(),
             "api.response cannot select a dependency resource or operation"
         );
-        ensure!(rule.slot == Slot::Body, "api.response requires slot: body");
+        interaction::validate_slot(rule)?;
         return Ok(());
     }
     let resource = selector
