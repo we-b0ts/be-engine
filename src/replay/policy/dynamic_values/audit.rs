@@ -29,6 +29,7 @@ impl DynamicValues {
             if event["global_dependency_reason"].is_string() {
                 continue;
             }
+            self.observe_mysql_read_captures(case, &event)?;
             for rule in self.rules.iter().filter(|rule| {
                 self.matches_case(rule, case) && self.native_source_allowed(rule, &event)
             }) {
@@ -185,12 +186,43 @@ pub(in crate::replay) fn from_native_report(
     request: &Value,
     dependencies: &[u8],
 ) -> Result<(DynamicValues, BTreeSet<String>)> {
-    let source_values =
-        super::super::matcher::mysql_values::materialized(context.recorded_sql, context.recorded)
-            .map_err(anyhow::Error::msg)?;
-    let actual_values =
-        super::super::matcher::mysql_values::materialized(context.sql, context.actual)
-            .map_err(anyhow::Error::msg)?;
+    from_native_scoped_report(compiled, report, context, request, dependencies, None)
+}
+
+pub(in crate::replay) fn from_native_read_report(
+    compiled: &crate::policy::CompiledPolicy,
+    report: &Value,
+    context: &super::super::matcher::MysqlPolicyContext<'_>,
+    request: &Value,
+    dependencies: &[u8],
+    record: &crate::replay::RecordedMysqlExchange,
+    values: (
+        &crate::replay::RecordedMysqlResponse,
+        &crate::replay::RecordedMysqlResponse,
+    ),
+) -> Result<(DynamicValues, BTreeSet<String>)> {
+    from_native_scoped_report(
+        compiled,
+        report,
+        context,
+        request,
+        dependencies,
+        Some((record, values.0, values.1)),
+    )
+}
+
+fn from_native_scoped_report(
+    compiled: &crate::policy::CompiledPolicy,
+    report: &Value,
+    context: &super::super::matcher::MysqlPolicyContext<'_>,
+    request: &Value,
+    dependencies: &[u8],
+    read: Option<(
+        &crate::replay::RecordedMysqlExchange,
+        &crate::replay::RecordedMysqlResponse,
+        &crate::replay::RecordedMysqlResponse,
+    )>,
+) -> Result<(DynamicValues, BTreeSet<String>)> {
     let case = context
         .case_id
         .context("SQL identity preflight requires a Case")?;
@@ -218,10 +250,26 @@ pub(in crate::replay) fn from_native_report(
         username: context.identity.username.as_deref(),
         operation: context.command,
     };
+    let (source_values, actual_values, read_ids) = if let Some((record, source, target)) = read {
+        let values = runtime.mysql_read_values(case, context.identity, record, (source, target))?;
+        (values.source, values.target, Some(values.ids))
+    } else {
+        (
+            super::super::matcher::mysql_values::materialized(
+                context.recorded_sql,
+                context.recorded,
+            )
+            .map_err(anyhow::Error::msg)?,
+            super::super::matcher::mysql_values::materialized(context.sql, context.actual)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    };
     let allowed = runtime
         .selected_scoped(case, scope, false)
         .into_iter()
         .filter(|r| r.value_type == DynamicValueType::String)
+        .filter(|r| read_ids.as_ref().is_none_or(|ids| ids.contains(&r.id)))
         .map(|r| r.id.as_str())
         .collect::<BTreeSet<_>>();
     if allowed.is_empty() {

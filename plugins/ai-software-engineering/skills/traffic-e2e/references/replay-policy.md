@@ -220,6 +220,15 @@ a Target-local cache solely to compensate for recorded Source IDs returned by
 Replay. Undeclared fields remain strict. See
 [Redis read-back](../../../../../docs/redis-read-back.md) for schema and limits.
 
+For a generated identity read back from MySQL JSON, append
+`effect.mysql_read_back` to the existing `identity` rule with its own Source
+proof. Select an already declared reference resource, complete SELECT/table
+scope, physical result column and JSON pointers (array `*` is supported).
+The engine delivers only previously captured, same-Case Target identities;
+each pointer needs a positive Source read after capture. Other values stay
+strict, and fresh Replay is required. See
+[MySQL identity read-back](../../../../../docs/mysql-identity-read-back.md).
+
 Process ownership does not prove target initialization or cache behavior.
 Finite sharing does not authorize unused work, reusable snapshots, unrelated
 connections or arbitrary response reuse. Protocol adapters retain framing,

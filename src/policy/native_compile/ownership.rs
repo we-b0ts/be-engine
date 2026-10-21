@@ -434,6 +434,7 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             }
         }
     }
+    claims.extend(super::mysql_read_back::claims(rule));
     claims
 }
 

@@ -31,13 +31,16 @@ fn extends_relationships(current: &PolicyRule, proposed: &PolicyRule) -> bool {
         (NativeEffect::Identity(old), NativeEffect::Identity(new)) => {
             if !new.references.starts_with(&old.references)
                 || !new.read_back.starts_with(&old.read_back)
+                || !new.mysql_read_back.starts_with(&old.mysql_read_back)
                 || (new.references.len() == old.references.len()
-                    && new.read_back.len() == old.read_back.len())
+                    && new.read_back.len() == old.read_back.len()
+                    && new.mysql_read_back.len() == old.mysql_read_back.len())
             {
                 return false;
             }
             new.references = old.references.clone();
             new.read_back = old.read_back.clone();
+            new.mysql_read_back = old.mysql_read_back.clone();
         }
         (NativeEffect::RedisSequence(old), NativeEffect::RedisSequence(new)) => {
             if new.read_back.len() <= old.read_back.len()

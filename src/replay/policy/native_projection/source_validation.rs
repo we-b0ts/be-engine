@@ -55,6 +55,9 @@ pub(crate) fn validate_native_source_dependencies(
     let mut coverage = coverage::Coverage::default();
     let mut identities = BTreeSet::new();
     for case in cases {
+        runtime
+            .dynamic_values
+            .observe_mysql_read_sources(case.id, case.events)?;
         input::validate(compiled, target_root, case, &mut checked)?;
         signed_input::validate(compiled, target_root, case, &mut checked)?;
         redis::register_callbacks(&mut redis_state, case)?;
@@ -122,7 +125,12 @@ pub(crate) fn validate_native_source_dependencies(
             .iter()
             .any(|rule| rule.rule.id == *id && dependency_effect(&rule.rule.effect))
     });
-    coverage.finish(compiled, selected_rule_ids, &checked.rules)?;
+    coverage.finish(
+        compiled,
+        selected_rule_ids,
+        &checked.rules,
+        &runtime.dynamic_values.mysql_read_back_report(),
+    )?;
     runtime
         .request_contracts
         .validate_read_back_coverage(selected_rule_ids)?;

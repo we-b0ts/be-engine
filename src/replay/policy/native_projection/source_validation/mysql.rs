@@ -141,5 +141,18 @@ pub(super) fn validate(
         }
     }
     runtime.commit_mysql_response_shift(&ids);
+    if let Some(prepared) = runtime.dynamic_values.prepare_mysql_identity_delivery(
+        Some(case.id),
+        &identity,
+        &record,
+        &record.response,
+    )? {
+        let delivered = prepared.render(&record.response)?;
+        ensure!(
+            delivered == record.response,
+            "Source SQL identity self delivery changed fields"
+        );
+        prepared.commit(&runtime.dynamic_values, &delivered)?;
+    }
     Ok(())
 }

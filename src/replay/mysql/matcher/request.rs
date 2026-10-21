@@ -440,6 +440,23 @@ impl ReplayState {
                         } else {
                             None
                         };
+                        let identity_delivery = if source == ReplaySource::Case {
+                            if let Some(policy) = &self.replay_policy {
+                                match policy.dynamic_values.prepare_mysql_identity_delivery(
+                                    active_case_id.as_deref(),
+                                    identity,
+                                    &self.mysql.exchanges[index].record,
+                                    &exchange.record.response,
+                                ) {
+                                    Ok(prepared) => prepared,
+                                    Err(_) => continue,
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
                         self.mysql.exchanges[index].status =
                             if exchange.record.outcome.is_client_terminated() {
                                 ReplayExchangeStatus::AwaitingClientTermination
@@ -499,6 +516,7 @@ impl ReplayState {
                                 None
                             },
                             value_delivery,
+                            identity_delivery,
                             response_time_shift_rules,
                             source: exchange.source,
                             index,

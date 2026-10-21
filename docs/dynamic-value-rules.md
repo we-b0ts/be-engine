@@ -48,6 +48,13 @@ rule to add a consumer, and do not modify the old root proof to describe the new
 consumer. Removal, reordering or replacement of existing relationships is not an
 additive update.
 
+When Source reads a previously generated identity from MySQL result JSON before
+reusing it, append an explicit `effect.mysql_read_back` declaration to the same
+native identity rule. Select its existing reference resource, complete SELECT,
+physical column and JSON pointers; include the Source write/read proof. This
+returns already bound Target identities on a derived response copy while
+retaining strict request references. See [MySQL identity read-back](mysql-identity-read-back.md).
+
 ```yaml
 version: 3
 expected_response: assertions_only

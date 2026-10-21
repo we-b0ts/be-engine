@@ -30,6 +30,7 @@ pub(in crate::replay) struct NativeScopeGuard {
     pub selector: n::NativeMatch,
     pub when: Option<SourceCondition>,
     pub references: Vec<crate::policy::Resource>,
+    pub mysql_read_back: Vec<n::MysqlIdentityReadBack>,
 }
 
 #[derive(Debug)]
@@ -50,6 +51,14 @@ impl NativeScopeGuard {
                     .references
                     .iter()
                     .map(|reference| reference.contract.resource.clone())
+                    .collect(),
+                _ => vec![],
+            },
+            mysql_read_back: match &rule.effect {
+                n::NativeEffect::Identity(effect) => effect
+                    .mysql_read_back
+                    .iter()
+                    .map(|entry| entry.contract.clone())
                     .collect(),
                 _ => vec![],
             },

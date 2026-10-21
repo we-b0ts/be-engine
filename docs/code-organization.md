@@ -135,7 +135,13 @@ is unclear.
   the same `sql_template/table` admission and physical-table binding. Value and
   mixed field ownership checks retain the complete declared table range.
   `replay/mysql/contracts/preflight_identity` owns derived SQL witness copies for
-  composed identity/value planning. `dynamic_values/audit` restores only accepted
+  composed request and response identity/value planning. `dynamic_values/mysql_read_back`
+  owns explicit SQL JSON identity delivery patches, immutable capture clocks and
+  fingerprint-only successful delivery reports. SQL matching and session owners
+  retain finite selection, response composition and the post-wire commit boundary.
+  `policy/native_compile/mysql_read_back` owns admission and response field claims;
+  native Source validation proves each declared causal leaf without Target input.
+  `dynamic_values/audit` restores only accepted
   Case-local binding fingerprints with native capture/reference guards and Source
   causality. Immutable later captures establish whether a statement references a
   binding; only captures completed before that request may restore it. Unrelated

@@ -8,6 +8,7 @@ use super::native::*;
 use super::{Proof, Protocol, SourceCondition, TimestampFormat, compiler};
 
 mod http_request;
+mod mysql_read_back;
 pub(crate) mod ownership;
 mod read_back;
 mod response;
@@ -44,6 +45,7 @@ pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
     }
     validate_effect(rule).with_context(|| format!("invalid native rule {:?}", rule.id))?;
     read_back::validate(rule)?;
+    mysql_read_back::validate(rule)?;
     let compiled = CompiledNativeRule {
         rule: rule.clone(),
         domain: rule.effect.domain(),

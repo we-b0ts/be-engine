@@ -43,6 +43,7 @@ pub(in crate::replay) enum OptionalSessionExchange {
 pub(in crate::replay) struct MatchedExchange {
     pub(in crate::replay) transaction_owner: Option<Option<String>>,
     pub(in crate::replay) value_delivery: Option<contracts::PreparedDelivery>,
+    pub(in crate::replay) identity_delivery: Option<policy::dynamic_values::MysqlIdentityDelivery>,
     pub(in crate::replay) response_time_shift_rules: Vec<String>,
     #[allow(dead_code)]
     pub(in crate::replay) source: ReplaySource,

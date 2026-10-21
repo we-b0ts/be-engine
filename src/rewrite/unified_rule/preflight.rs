@@ -367,9 +367,7 @@ pub(super) fn verify(
                     } else {
                         &native_sql
                     };
-                    let normalized = if surface == Surface::DependencyRequest
-                        && dependency::protocol(&event) == Some(Protocol::Mysql)
-                    {
+                    let normalized = if dependency::protocol(&event) == Some(Protocol::Mysql) {
                         crate::replay::mysql_normalize_identity_witnesses(
                             crate::replay::MysqlIdentityPreflight {
                                 policy,

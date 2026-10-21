@@ -189,6 +189,7 @@ impl Walker<'_> {
             "identity" => {
                 self.one(map, "capture", Shape::IdentityCapture, false, parent, 0)?;
                 self.list(map, "references", Shape::Leaf, true, parent, 0)?;
+                self.list(map, "mysql_read_back", Shape::Leaf, true, parent, 0)?;
                 self.list(map, "read_back", Shape::Leaf, true, parent, 0)?;
             }
             "redis_sequence" => {

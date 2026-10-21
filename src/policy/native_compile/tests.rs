@@ -42,6 +42,7 @@ fn path_rule() -> NativeRule {
             ..Default::default()
         },
         effect: NativeEffect::Identity(IdentityEffect {
+            mysql_read_back: vec![],
             read_back: vec![],
             value_type: IdentityType::String,
             format: None,

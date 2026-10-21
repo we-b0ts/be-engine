@@ -17,6 +17,30 @@ pub struct IdentityEffect {
     pub references: Vec<Proven<IdentityTarget>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_back: Vec<Proven<RedisReadBack>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mysql_read_back: Vec<Proven<MysqlIdentityReadBack>>,
+}
+
+/// Deliver previously captured identities in selected MySQL JSON result fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MysqlIdentityReadBack {
+    pub resource: Resource,
+    pub sql: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_series: Option<crate::MysqlTableSeries>,
+    pub column: String,
+    pub json_pointers: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::policy::strict_map::unique_map"
+    )]
+    pub templates: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

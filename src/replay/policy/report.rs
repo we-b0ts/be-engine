@@ -12,6 +12,9 @@ pub(in crate::replay) struct ReplayPolicyReport {
     pub(in crate::replay) request_contract_candidates: Vec<super::request_contract::Candidate>,
     pub(in crate::replay) dynamic_bindings: Vec<super::dynamic_values::DynamicBindingReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) mysql_identity_read_backs:
+        Vec<super::dynamic_values::MysqlIdentityReadBackReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) redis_read_backs: Vec<super::request_contract::RedisReadBackReport>,
     pub(in crate::replay) key_bindings: Vec<super::request_contract::KeyBindingReport>,
     pub(in crate::replay) dynamic_capture_candidates: Vec<super::dynamic_values::CaptureCandidate>,
