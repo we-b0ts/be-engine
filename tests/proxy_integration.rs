@@ -1,11 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde_json::Value;
@@ -14,14 +11,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use traffic_e2e::{
-    AppConfig, ArtifactsConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
-    HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
-    MysqlRouteConfig, RecordingAccessPolicy,
+    AppConfig, ArtifactsConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, MysqlRouteConfig,
+    RecordingAccessPolicy,
 };
+
+#[path = "proxy_integration/kubeconfig.rs"]
+mod kubeconfig;
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
 // before AppState binds it. Serialize this file's integration tests to prevent
 // another test from claiming that address during the handoff.
+// This cannot prevent reuse inside one fixture; kubeconfig retains bound sockets.
 static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
@@ -698,158 +698,13 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
 #[tokio::test]
 async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    kubeconfig::verify(kubeconfig::ProxyAddress::Reserved).await;
+}
 
-    let temp = tempdir().unwrap();
-    let cluster_id = "c142fe56e07d04a749c1630fb5f1b680b";
-    let original_ip = "182.92.232.38";
-    let body = serde_json::json!({
-        "config": format!(
-            "apiVersion: v1\nclusters:\n- cluster:\n    server: https://{original_ip}:6443\n    certificate-authority-data: REDACTED\n  name: kubernetes\nusers:\n- name: admin\n  user:\n    client-key-data: REDACTED\n"
-        ),
-        "expiration": "2027-01-01T00:00:00Z"
-    })
-    .to_string();
-    let matched_upstream = spawn_http_json_response_upstream(body).await;
-    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
-    let gateway_addr = free_addr();
-    let proxy_listen = free_addr();
-    let proxy_started = temp.path().join("proxy-started");
-    let captured_kubeconfig = temp.path().join("captured-kubeconfig");
-    let fake_kubectl = temp.path().join("fake-kubectl");
-    std::fs::write(
-        &fake_kubectl,
-        format!(
-            "#!/bin/sh\nkubeconfig=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--kubeconfig\" ]; then\n    shift\n    kubeconfig=\"$1\"\n  fi\n  shift\ndone\ncp \"$kubeconfig\" '{}'\ntouch '{}'\nexec sleep 30\n",
-            captured_kubeconfig.display(),
-            proxy_started.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake_kubectl, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let proxy_listener = tokio::spawn(async move {
-        while !proxy_started.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let listener = TcpListener::bind(proxy_listen).await.unwrap();
-        loop {
-            let _ = listener.accept().await.unwrap();
-        }
-    });
-
-    let mut config = AppConfig::default();
-    config.dns_mock.enabled = true;
-    config.dns_mock.listen = free_udp_addr();
-    config.tcp_gateway.enabled = true;
-    config.tcp_gateway.listen = free_addr();
-    config.http.listen = free_addr();
-    config.http_gateway.enabled = true;
-    config.http_gateway.listen = gateway_addr;
-    config.http_gateway.matched_upstream = format!("http://{matched_upstream}");
-    config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
-    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
-        name: Some("api".to_string()),
-        methods: vec!["GET".to_string()],
-        path_prefixes: vec!["/api/".to_string()],
-        ..Default::default()
-    }];
-    config.http_response_rewrite = HttpResponseRewriteConfig {
-        enabled: true,
-        rules: vec![HttpResponseRewriteRuleConfig {
-            source_evidence: String::new(),
-            name: "pluto-kubeconfig".to_string(),
-            authorities: vec!["cs.aliyuncs.com".to_string()],
-            methods: vec!["GET".to_string()],
-            path: format!("/api/v2/k8s/{cluster_id}/user_config"),
-            path_pattern: None,
-            pointers: Vec::new(),
-            status_codes: vec![200],
-            content_types: vec!["application/json".to_string()],
-            plugin: Some(HttpResponseRewritePluginConfig::PlutoEciKubeconfig {
-                kubectl_binary: fake_kubectl.to_string_lossy().into_owned(),
-                proxy_listen,
-            }),
-        }],
-    };
-    config.mysql.enabled = false;
-    config.recording.output_dir = temp.path().join("recordings");
-    config.tls.ca_cert_path = temp.path().join("ca.pem");
-    config.tls.ca_key_path = temp.path().join("ca-key.pem");
-
-    let state = traffic_e2e::AppState::new(config).await.unwrap();
-    let state_for_assertion = state.clone();
-    let handle = tokio::spawn(async move { state.run().await });
-    wait_for_port(gateway_addr).await;
-
-    let path = format!("/api/v2/k8s/{cluster_id}/user_config");
-    let response = raw_http_get_with_host(gateway_addr, &path, "cs.aliyuncs.com").await;
-    let alias = format!("k8s-{cluster_id}.pluto-eci.trp.test");
-    assert!(response.contains(&format!("server: https://{alias}:{}", proxy_listen.port())));
-    assert!(!response.contains(original_ip));
-    assert!(!response.to_ascii_lowercase().contains("etag:"));
-    let response_payload: Value =
-        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
-    let response_kubeconfig: serde_yaml::Value =
-        serde_yaml::from_str(response_payload["config"].as_str().unwrap()).unwrap();
-    let rewritten_ca = response_kubeconfig["clusters"][0]["cluster"]["certificate-authority-data"]
-        .as_str()
-        .unwrap();
-    assert_eq!(
-        STANDARD.decode(rewritten_ca).unwrap(),
-        state_for_assertion.ca().ca_cert_pem().as_bytes()
-    );
-    let proxy_kubeconfig = std::fs::read_to_string(&captured_kubeconfig).unwrap();
-    assert!(proxy_kubeconfig.contains("server: https://182.92.232.38:6443"));
-    assert!(proxy_kubeconfig.contains("client-key-data: REDACTED"));
-
-    let entry = state_for_assertion
-        .dns_registry()
-        .get_response_alias_by_domain(&alias)
-        .await
-        .unwrap();
-    assert_eq!(entry.real_ips, vec![Ipv4Addr::LOCALHOST]);
-    assert_eq!(
-        entry.upstream_authority.as_deref(),
-        Some(proxy_listen.to_string().as_str())
-    );
-    assert_eq!(
-        entry.upstream_protocol,
-        Some(traffic_e2e::FakeDnsUpstreamProtocol::Http)
-    );
-
-    wait_for_http_cases(
-        &temp.path().join("recordings"),
-        &[(
-            format!("apis/api-v2-k8s-{cluster_id}-user_config").as_str(),
-            1,
-        )],
-        1,
-        0,
-    )
-    .await;
-    handle.abort();
-    proxy_listener.abort();
-
-    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
-    let rule_dir = run_dir.join(format!("apis/api-v2-k8s-{cluster_id}-user_config"));
-    let case_dir = std::fs::read_dir(rule_dir)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let expected: Value = serde_json::from_str(
-        &std::fs::read_to_string(case_dir.join("expected-response.json")).unwrap(),
-    )
-    .unwrap();
-    let recorded_body: Value =
-        serde_json::from_str(expected["body"]["data"].as_str().unwrap()).unwrap();
-    assert!(
-        recorded_body["config"]
-            .as_str()
-            .unwrap()
-            .contains(&format!("server: https://{alias}:{}", proxy_listen.port()))
-    );
+#[tokio::test]
+async fn http_gateway_rejects_kubeconfig_proxy_address_owned_by_gateway() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    kubeconfig::verify(kubeconfig::ProxyAddress::GatewayCollision).await;
 }
 
 #[tokio::test]
@@ -1143,13 +998,6 @@ fn free_addr() -> SocketAddr {
         .unwrap()
 }
 
-fn free_udp_addr() -> SocketAddr {
-    std::net::UdpSocket::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-}
-
 fn free_same_port_loopback_pair() -> (SocketAddr, SocketAddr) {
     for _ in 0..100 {
         let port = free_addr().port();
@@ -1183,23 +1031,6 @@ async fn spawn_http_response_upstream(body: &'static str, accept_count: usize) -
             );
             stream.write_all(response.as_bytes()).await.unwrap();
         }
-    });
-    addr
-}
-
-async fn spawn_http_json_response_upstream(body: String) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0_u8; 2048];
-        let _ = stream.read(&mut buf).await.unwrap();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json;charset=utf-8\r\nContent-Length: {}\r\nETag: original\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream.write_all(response.as_bytes()).await.unwrap();
     });
     addr
 }
