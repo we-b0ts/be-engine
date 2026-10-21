@@ -367,7 +367,7 @@ pub(crate) fn validate_encryption_key(encoded: &str) -> Result<()> {
     Ok(())
 }
 
-fn project_encryption_key_path(request_path: &Path) -> Option<PathBuf> {
+pub(crate) fn project_encryption_key_path(request_path: &Path) -> Option<PathBuf> {
     request_path.ancestors().find_map(|ancestor| {
         let is_local = ancestor.file_name().is_some_and(|name| name == "local")
             && ancestor

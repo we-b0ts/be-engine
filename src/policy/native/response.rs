@@ -6,6 +6,17 @@ use serde::{Deserialize, Serialize};
 use super::{Literal, NonceClaim, Proven, SignatureAlgorithm, StartupKey};
 use crate::policy::{DurationUnit, Resource, TimestampFormat};
 
+impl super::NativeEffect {
+    /// Interaction messages have their own assertion surface; headers remain HTTP.
+    pub(crate) fn is_response_body(&self) -> bool {
+        match self {
+            Self::ResponseGenerated(_) | Self::ResponseBody(_) => true,
+            Self::ResponseJwt(effect) => effect.location.is_none(),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResponseJwtEffect {

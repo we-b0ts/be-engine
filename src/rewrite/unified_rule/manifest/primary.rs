@@ -1,4 +1,4 @@
-//! Every rule preserves the finished attempt's complete primary-response oracle.
+//! Frozen primary HTTP evidence and authenticated caller-owned private views.
 use super::*;
 
 pub(in crate::rewrite::unified_rule) struct PrimaryResponse {
@@ -7,6 +7,49 @@ pub(in crate::rewrite::unified_rule) struct PrimaryResponse {
 }
 
 impl Bundle {
+    pub(in crate::rewrite::unified_rule) fn request(&mut self, path: &Path) -> Result<Value> {
+        let request = self.json(path)?;
+        if request.get("private_headers").is_some() {
+            self.freeze_private_key(path)?;
+        }
+        let raw = serde_json::to_vec(&request)?;
+        if let Some(decrypted) = crate::request_headers::decrypt_request_bytes(&raw, path)? {
+            self.freeze_private_key(path)?;
+            return Ok(serde_json::from_slice(&decrypted)?);
+        }
+        Ok(request)
+    }
+
+    fn freeze_private_key(&mut self, path: &Path) -> Result<()> {
+        let key = crate::request_headers::project_encryption_key_path(path)
+            .context("private rule evidence requires a managed project key")?;
+        self.freeze(&key)?;
+        self.artifacts[&key].verify()
+    }
+
+    fn output_view(&mut self, response: &mut Value, path: &Path) -> Result<()> {
+        if response.get("private_interaction_output").is_some() {
+            self.freeze_private_key(path)?;
+            crate::interaction::private::decrypt_output(response, path)?;
+            self.freeze_private_key(path)?;
+        }
+        Ok(())
+    }
+
+    fn primary_view(
+        &mut self,
+        mut source: Value,
+        mut target: Option<Value>,
+        expected: &Path,
+        actual: Option<&Path>,
+    ) -> Result<PrimaryResponse> {
+        self.output_view(&mut source, expected)?;
+        if let Some((target, path)) = target.as_mut().zip(actual) {
+            self.output_view(target, path)?;
+        }
+        Ok(PrimaryResponse { source, target })
+    }
+
     pub(in crate::rewrite::unified_rule) fn primary_response(
         &mut self,
         case: &str,
@@ -55,7 +98,7 @@ impl Bundle {
                 actual.is_none(),
                 "Target response has no runner-owned assertion detail"
             );
-            return Ok(PrimaryResponse { source, target });
+            return self.primary_view(source, target, &expected, actual.as_deref());
         };
         let detail = self.json(Path::new(detail_path))?;
         ensure!(
@@ -85,6 +128,6 @@ impl Bundle {
         // BodyCapture/ResponseBody admit only inline utf8/base64 data. Hashing
         // these original JSON files therefore freezes all supported body/frame
         // bytes too; their formats contain no external body-file references.
-        Ok(PrimaryResponse { source, target })
+        self.primary_view(source, target, &expected, actual.as_deref())
     }
 }

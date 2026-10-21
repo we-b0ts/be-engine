@@ -17,6 +17,8 @@ mod dependency_transaction;
 mod header_transaction;
 #[path = "transaction_http_body_jwt.rs"]
 mod http_body_jwt_transaction;
+#[path = "transaction_interaction.rs"]
+mod interaction_transaction;
 #[path = "transaction_mysql_candidates.rs"]
 mod mysql_candidates_transaction;
 #[path = "transaction_native.rs"]
@@ -95,6 +97,13 @@ impl Fixture {
     }
 
     fn with_request_time(timestamp: Option<&str>) -> Self {
+        Self::with_cases(timestamp, |_, _| vec![])
+    }
+
+    fn with_cases(
+        timestamp: Option<&str>,
+        prepare: impl FnOnce(&Path, &Path) -> Vec<PathBuf>,
+    ) -> Self {
         let target = crate::rewrite::worker::tests::configured_target();
         let root = target.path();
         let project_path = root.join(".traffic-e2e/project.yaml");
@@ -134,11 +143,16 @@ impl Fixture {
             json!({"timestamp":timestamp,"method":"GET","uri":"/api","body":body(json!({}))}),
         );
         fs::write(case.join("dependencies.jsonl"), "").unwrap();
+        let mut cases = vec![case];
+        cases.extend(prepare(root, &source));
         let now = "2026-10-16T00:01:00Z".parse().unwrap();
         let paths = crate::e2e_run::jwt_evidence::test_support::install_attempt(
             root,
             &source,
-            &[(case.clone(), 200, 200)],
+            &cases
+                .iter()
+                .map(|case| (case.clone(), 200, 200))
+                .collect::<Vec<_>>(),
             now,
         );
         let latest = paths.replay.parent().unwrap().parent().unwrap();
@@ -148,15 +162,6 @@ impl Fixture {
             .unwrap()
             .parent()
             .unwrap();
-        write(
-            &case.join("expected-response.json"),
-            json!({"status":200,"body":body(json!({"members":[1,2],"business":"exact"}))}),
-        );
-        let actual = latest.join("reports/case-1.json");
-        write(
-            &actual,
-            json!({"version":1,"status":200,"body":body(json!({"members":[2,1],"business":"exact"})),"request_sent_at":now}),
-        );
         let grouped = crate::case_group::ensure_case_group(crate::CaseGroupOptions {
             case_source: source.clone(),
             case_dir: source.join("apis"),
@@ -174,34 +179,48 @@ impl Fixture {
             serde_yaml::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
         focused["session_id"] = json!(uuid::Uuid::nil().to_string());
         focused["case_inventory_id"] = json!(grouped.case_inventory_id);
-        let detail = latest.join("reports/assertion-detail.json");
-        write(
-            &detail,
-            json!({"case_id":"case-1","expected_response_path":case.join("expected-response.json"),"actual_response_path":actual,
-            "expected_response_fingerprint":crate::verification_progress::fingerprint(&fs::read(case.join("expected-response.json")).unwrap()),
-            "actual_response_fingerprint":crate::verification_progress::fingerprint(&fs::read(&actual).unwrap())}),
-        );
-        let summary = &mut focused["cases"][0]["response_assertion"];
-        summary["detail_report"] = json!(detail);
-        summary["detail_fingerprint"] = json!(crate::verification_progress::fingerprint(
-            &fs::read(&detail).unwrap()
-        ));
-        summary["policy_fingerprint"] = json!(fingerprint);
+        let mut summaries = vec![];
+        for (index, case) in cases.iter().enumerate() {
+            let id = case.file_name().unwrap().to_str().unwrap();
+            write(
+                &case.join("expected-response.json"),
+                json!({"status":200,"body":body(json!({"members":[1,2],"business":"exact"}))}),
+            );
+            let actual = latest.join(format!("reports/{id}.json"));
+            write(
+                &actual,
+                json!({"version":1,"status":200,"body":body(json!({"members":[2,1],"business":"exact"})),"request_sent_at":now}),
+            );
+            let detail = latest.join(format!("reports/{id}-assertion-detail.json"));
+            write(
+                &detail,
+                json!({"case_id":id,"expected_response_path":case.join("expected-response.json"),"actual_response_path":actual,
+                "expected_response_fingerprint":crate::verification_progress::fingerprint(&fs::read(case.join("expected-response.json")).unwrap()),
+                "actual_response_fingerprint":crate::verification_progress::fingerprint(&fs::read(&actual).unwrap())}),
+            );
+            let summary = &mut focused["cases"][index]["response_assertion"];
+            summary["detail_report"] = json!(detail);
+            summary["detail_fingerprint"] = json!(crate::verification_progress::fingerprint(
+                &fs::read(&detail).unwrap()
+            ));
+            summary["policy_fingerprint"] = json!(fingerprint);
+            summaries.push(json!({"case_id":id,"response":summary}));
+        }
         write(
             &paths.assertions,
             json!({"case_source":source,"policy_fingerprint":fingerprint,"expected_response":"assertions_only","assertion_mode":"runner_owned",
-            "cases":[{"case_id":"case-1","response":summary}]}),
+            "cases":summaries}),
         );
         focused["replay_finalized"] = json!(true);
         focused["aggregate_complete"] = json!(true);
         fs::write(&state_path, serde_yaml::to_string(&focused).unwrap()).unwrap();
         write(
             &paths.replay,
-            json!({"finalized":true,"replay_policy":{"fingerprint":fingerprint},"cases":[{"case_id":"case-1","case_dir":case}]}),
+            json!({"finalized":true,"replay_policy":{"fingerprint":fingerprint},"cases":cases.iter().map(|case| json!({"case_id":case.file_name().unwrap().to_str().unwrap(),"case_dir":case})).collect::<Vec<_>>()}),
         );
         write(
             &paths.aggregate,
-            json!({"complete":true,"case_source":source,"selected_case_ids":["case-1"]}),
+            json!({"complete":true,"case_source":source,"selected_case_ids":cases.iter().map(|case| case.file_name().unwrap().to_str().unwrap()).collect::<Vec<_>>()}),
         );
         let proposal = root.join(".traffic-e2e/local/rule.yaml");
         write(&proposal, super::rule());
@@ -212,7 +231,7 @@ impl Fixture {
         state.group_id = Some("GET /api".into());
         state.attempts.push(serde_json::from_value::<RewriteAttemptSummary>(json!({"attempt":1,"passed":false,
             "engine_fingerprint":crate::build_info::ENGINE_FINGERPRINT,"gates":{"responses":"nonpassing","replay":"complete","dependencies":"clean"},
-            "counts":{"selected":1,"executed":1,"response_passed":0,"response_nonpassing":1,"response_incomplete":0}})).unwrap());
+            "counts":{"selected":cases.len(),"executed":cases.len(),"response_passed":0,"response_nonpassing":cases.len(),"response_incomplete":0}})).unwrap());
         state.replay_identity = Some(fingerprint::replay_identity(root).unwrap());
         RewriteStore::new(root).unwrap().save(&state).unwrap();
         Self {
@@ -281,9 +300,24 @@ impl Fixture {
     }
 
     fn replace_responses(&self, source: serde_json::Value, target: serde_json::Value) {
+        self.replace_case_responses("case-1", source, target);
+    }
+
+    fn replace_case_responses(
+        &self,
+        case: &str,
+        source: serde_json::Value,
+        target: serde_json::Value,
+    ) {
         let mut assertions: serde_json::Value =
             serde_json::from_slice(&fs::read(&self.paths.assertions).unwrap()).unwrap();
-        let summary = &mut assertions["cases"][0]["response"];
+        let index = assertions["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|item| item["case_id"] == case)
+            .unwrap();
+        let summary = &mut assertions["cases"][index]["response"];
         let expected = summary["expected_response"].as_str().unwrap().to_owned();
         let actual = summary["actual_response"].as_str().unwrap().to_owned();
         let detail_path = summary["detail_report"].as_str().unwrap().to_owned();
@@ -311,7 +345,7 @@ impl Fixture {
             .join("state.yaml");
         let mut focused: serde_json::Value =
             serde_yaml::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
-        focused["cases"][0]["response_assertion"] = summary.clone();
+        focused["cases"][index]["response_assertion"] = summary.clone();
         fs::write(state_path, serde_yaml::to_string(&focused).unwrap()).unwrap();
         write(&self.paths.assertions, assertions);
     }
