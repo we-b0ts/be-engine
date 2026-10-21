@@ -29,7 +29,7 @@ pub enum ClaimSurface {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum NativeOwnedSlot {
     Body,
-    SseData(String),
+    SseData(crate::policy::SseSelector),
     Value,
     Key,
     RedisArgument(usize),
@@ -39,6 +39,15 @@ pub enum NativeOwnedSlot {
     Query(String),
     PathSegment(usize),
     MultipartBoundary,
+}
+
+impl NativeOwnedSlot {
+    fn overlaps(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::SseData(a), Self::SseData(b)) => a.overlaps(b),
+            _ => self == other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

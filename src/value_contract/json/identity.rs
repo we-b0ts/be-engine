@@ -57,6 +57,12 @@ pub(super) fn compare(
                     && !token.starts_with('0')
                     && token.parse::<u64>().is_ok()
             }
+            IdentityFormat::Hex(length) => {
+                token.len() == length
+                    && token
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            }
             IdentityFormat::Uuid => uuid::Uuid::parse_str(token)
                 .is_ok_and(|uuid| uuid.hyphenated().to_string() == token && !uuid.is_nil()),
         };

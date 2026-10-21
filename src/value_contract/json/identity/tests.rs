@@ -120,3 +120,42 @@ fn repeated_frame_times_do_not_accumulate_duplicate_relationships() {
     result.merge_and_validate(wrong);
     assert!(!result.passed());
 }
+
+#[test]
+fn fixed_hex_identity_validates_both_sides_and_preserves_shared_bijection() {
+    let contract = contract(IdentityFormat::Hex(12));
+    let compare = |a: &str, b: &str| {
+        super::super::compare(
+            &json!(a),
+            &json!(b),
+            &[Field {
+                rule_id: "hex",
+                pointer: "",
+                contract: &contract,
+            }],
+            AnchorClocks::default(),
+        )
+    };
+    let source = "msg_0123456789ab";
+    let target = "msg_abcdef123456";
+    assert!(compare(source, target).passed());
+    for bad in [
+        "msg_ABCDEF123456",
+        "msg_abcdef12345",
+        "msg_abcdef1234567",
+        "msg_abcdef12345g",
+        "msg_abcdef１２３４５６",
+        "bad_abcdef123456",
+    ] {
+        assert!(!compare(source, bad).passed(), "{bad}");
+        assert!(!compare(bad, target).passed(), "{bad}");
+    }
+    let mut state = compare(source, target);
+    state.merge_and_validate(compare(source, target));
+    assert!(state.passed());
+    let mut changed = state.clone();
+    changed.merge_and_validate(compare(source, "msg_abcdef654321"));
+    assert!(!changed.passed());
+    state.merge_and_validate(compare("msg_0123456789ac", target));
+    assert!(!state.passed());
+}

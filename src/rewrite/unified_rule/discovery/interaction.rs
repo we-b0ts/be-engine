@@ -31,15 +31,26 @@ pub(super) fn observe(
         let Ok(source) = crate::replay::decode_sse(&source.message) else {
             continue;
         };
-        if crate::json_value::parse(source.data.as_bytes()).is_none() {
+        let Some(source_json) = crate::json_value::parse(source.data.as_bytes()) else {
             continue;
-        }
+        };
         let target = targets
             .get(index)
             .and_then(|e| crate::replay::decode_sse(&e.message).ok())
             .filter(|e| e.event == source.event);
+        let event = source.event.as_deref().unwrap_or("message");
+        let selector = source_json
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|t| {
+                !t.is_empty()
+                    && t.len() <= 256
+                    && !t.contains('*')
+                    && !t.chars().any(char::is_control)
+            })
+            .map_or_else(|| json!(event), |t| json!({"event":event,"json_type":t}));
         let base = json!({"surface":"api.response","match":{"api":api},
-            "slot":{"sse_data":source.event.as_deref().unwrap_or("message")}});
+            "slot":{"sse_data":selector}});
         drafts.observe(
             source.data.as_bytes(),
             target.as_ref().map(|e| e.data.as_bytes()),

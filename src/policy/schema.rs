@@ -47,17 +47,57 @@ pub enum Surface {
 pub enum Slot {
     Body,
     /// Strict SSE envelope with JSON contracts on its data string.
-    SseData(String),
+    SseData(SseSelector),
     Value,
     SqlValue(usize),
     SqlColumn(String),
+}
+
+/// Select using immutable Source framing and, explicitly, its business JSON type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum SseSelector {
+    Event(String),
+    JsonType { event: String, json_type: String },
+}
+
+impl SseSelector {
+    pub fn event(&self) -> &str {
+        match self {
+            Self::Event(event) | Self::JsonType { event, .. } => event,
+        }
+    }
+
+    pub fn json_type(&self) -> Option<&str> {
+        match self {
+            Self::Event(_) => None,
+            Self::JsonType { json_type, .. } => Some(json_type),
+        }
+    }
+
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        self.event() == other.event()
+            && match (self.json_type(), other.json_type()) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            }
+    }
+}
+
+impl Slot {
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::SseData(a), Self::SseData(b)) => a.overlaps(b),
+            _ => self == other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 enum SlotDocument {
     Named(SlotName),
-    SseData { sse_data: String },
+    SseData { sse_data: SseSelector },
     SqlValue { sql_value: usize },
     SqlColumn { sql_column: String },
 }
@@ -408,10 +448,46 @@ pub enum FieldContract {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(from = "IdentityFormatDocument", into = "IdentityFormatDocument")]
 pub enum IdentityFormat {
     Decimal,
     Uuid,
+    /// Exact number of lowercase hexadecimal characters after the literal prefix.
+    Hex(usize),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum IdentityFormatDocument {
+    Named(IdentityFormatName),
+    Hex { hex: usize },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum IdentityFormatName {
+    Decimal,
+    Uuid,
+}
+
+impl From<IdentityFormatDocument> for IdentityFormat {
+    fn from(value: IdentityFormatDocument) -> Self {
+        match value {
+            IdentityFormatDocument::Named(IdentityFormatName::Decimal) => Self::Decimal,
+            IdentityFormatDocument::Named(IdentityFormatName::Uuid) => Self::Uuid,
+            IdentityFormatDocument::Hex { hex } => Self::Hex(hex),
+        }
+    }
+}
+
+impl From<IdentityFormat> for IdentityFormatDocument {
+    fn from(value: IdentityFormat) -> Self {
+        match value {
+            IdentityFormat::Decimal => Self::Named(IdentityFormatName::Decimal),
+            IdentityFormat::Uuid => Self::Named(IdentityFormatName::Uuid),
+            IdentityFormat::Hex(hex) => Self::Hex { hex },
+        }
+    }
 }
 
 impl FieldContract {

@@ -3,6 +3,9 @@ use super::*;
 use crate::interaction::stream::SseEvent;
 use crate::policy::Slot;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) fn decode_sse(message: &WireMessage) -> Result<SseEvent> {
     ensure!(
         message.kind == MessageKind::Text,
@@ -25,9 +28,24 @@ pub(super) fn compare_message(
         mismatch(&mut result, pointer);
         return result;
     };
-    let selected = rules.iter().copied().filter(|rule| {
-        matches!(&rule.rule.slot, Slot::SseData(event) if event == source_event.event.as_deref().unwrap_or("message"))
-    }).collect::<Vec<_>>();
+    let source_json = crate::json_value::parse(source_event.data.as_bytes());
+    let selected = rules
+        .iter()
+        .copied()
+        .filter(|rule| {
+            let Slot::SseData(selector) = &rule.rule.slot else {
+                return false;
+            };
+            selector.event() == source_event.event.as_deref().unwrap_or("message")
+                && selector.json_type().is_none_or(|expected| {
+                    source_json
+                        .as_ref()
+                        .and_then(|v| v.get("type"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some(expected)
+                })
+        })
+        .collect::<Vec<_>>();
     if selected.is_empty() {
         if source != target {
             mismatch(&mut result, pointer);
@@ -59,7 +77,7 @@ pub(super) fn compare_message(
                 .all(|p| crate::value_contract::json::pointer_observed(&source.logical, p))),
             "SSE Source selected field is absent"
         );
-        crate::value_contract::encoded::compare_decoded(
+        let mut checked = crate::value_contract::encoded::compare_decoded(
             &source,
             &target,
             &selected,
@@ -68,7 +86,19 @@ pub(super) fn compare_message(
                 dependency: times,
                 ..Default::default()
             },
-        )
+        )?;
+        // A broad event-only rule cannot relax another rule's discriminator.
+        if selected
+            .iter()
+            .any(|r| matches!(&r.rule.slot, Slot::SseData(s) if s.json_type().is_some()))
+            && source.logical.get("type") != target.logical.get("type")
+        {
+            checked.differences.push(Difference {
+                pointer: "/type".into(),
+                reason: "SSE JSON type discriminator changed".into(),
+            });
+        }
+        Ok(checked)
     })();
     match checked {
         Ok(mut checked) => {
