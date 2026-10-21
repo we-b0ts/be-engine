@@ -475,6 +475,7 @@ fn validate_identity(rule: &NativeRule, effect: &IdentityEffect) -> Result<()> {
         }
         IdentityCapture::RedisArgument {
             index,
+            when,
             json_pointer,
             copies,
             derived_from,
@@ -489,7 +490,21 @@ fn validate_identity(rule: &NativeRule, effect: &IdentityEffect) -> Result<()> {
             if let Some(pointer) = json_pointer {
                 compiler::validate_pointer(pointer, false)?;
             }
+            if let Some(when) = when {
+                when.validate(
+                    json_pointer
+                        .as_deref()
+                        .context("conditional Redis identity requires a JSON pointer")?,
+                )?;
+            }
             for copy in copies {
+                if let (Some(when), Some(pointer)) = (when, json_pointer) {
+                    ensure!(
+                        when.peer_pointer(pointer).as_deref()
+                            != Some(copy.contract.pointer.as_str()),
+                        "identity copy cannot own its condition discriminator"
+                    );
+                }
                 proven(copy, |copy| {
                     compiler::validate_pointer(&copy.pointer, false)?;
                     text(&copy.template, "identity copy template", 1024)

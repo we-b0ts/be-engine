@@ -28,6 +28,7 @@ pub(in crate::replay) fn from_event(
             key,
             argument_index,
             json_pointer,
+            when,
             ..
         } => {
             if event["event_type"] != "redis_exchange"
@@ -53,6 +54,21 @@ pub(in crate::replay) fn from_event(
                 .is_none_or(|value| value.len() > 1024 || !key.matches(value))
             {
                 return Ok(None);
+            }
+            if let Some(when) = when {
+                let bytes = args
+                    .get(*argument_index)
+                    .context("Source conditional capture argument is absent")?;
+                let json = crate::json_value::parse(bytes)
+                    .context("Source conditional capture requires complete unique-member JSON")?;
+                if !when.active(
+                    &json,
+                    json_pointer
+                        .as_deref()
+                        .context("conditional capture pointer absent")?,
+                )? {
+                    return Ok(None);
+                }
             }
             Ok(Some(SourceCapture {
                 value: super::redis::capture(

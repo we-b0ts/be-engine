@@ -103,7 +103,7 @@ pub(super) fn project(
     let DynamicValueCapture::Redis {
         key,
         json_pointer: Some(pointer),
-        references: Some(references),
+        references,
         derived_from,
         ..
     } = capture
@@ -135,7 +135,7 @@ pub(super) fn project(
         }
         _ => "",
     };
-    for reference in references {
+    for reference in references.iter().flatten() {
         let render = |value: &str| {
             reference
                 .template

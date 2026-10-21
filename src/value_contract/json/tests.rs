@@ -84,6 +84,7 @@ fn source_sibling_condition_keeps_terminal_durations_exact_through_unordered_pai
     let duration = FieldContract::Conditional {
         when: crate::policy::FieldCondition {
             relative_pointer: "../status".into(),
+            equals: None,
             not_in: vec![crate::policy::SourceScalar::String("closed".into())],
         },
         contract: Box::new(FieldContract::Duration {
@@ -331,4 +332,54 @@ fn absent_source_fields_are_inactive_but_body_shape_stays_exact() {
     }
     let malformed = serde_json::json!({"items":[{"members":1}]});
     assert!(!compare(&malformed, &malformed, &fields, AnchorClocks::default()).passed());
+}
+
+#[test]
+fn conditional_equals_supports_source_selected_fields_with_exact_inactive_values() {
+    let condition = FieldContract::Conditional {
+        when: crate::policy::FieldCondition {
+            relative_pointer: "../type".into(),
+            equals: Some(crate::policy::SourceScalar::String("live".into())),
+            not_in: vec![],
+        },
+        contract: Box::new(FieldContract::Duration {
+            unit: crate::policy::DurationUnit::Seconds,
+            anchor: crate::policy::TimeAnchor::DependencyRequestStart,
+        }),
+    };
+    let fields = [Field {
+        rule_id: "conditional",
+        pointer: "/duration",
+        contract: &condition,
+    }];
+    let source = json!({"type":"live","duration":10});
+    assert!(
+        compare(
+            &source,
+            &json!({"type":"live","duration":110}),
+            &fields,
+            clocks()
+        )
+        .passed()
+    );
+    assert!(
+        !compare(
+            &source,
+            &json!({"type":"stored","duration":110}),
+            &fields,
+            clocks()
+        )
+        .passed()
+    );
+    let stored = json!({"type":"stored","duration":7});
+    assert!(compare(&stored, &stored, &fields, clocks()).passed());
+    assert!(
+        !compare(
+            &stored,
+            &json!({"type":"stored","duration":107}),
+            &fields,
+            clocks()
+        )
+        .passed()
+    );
 }

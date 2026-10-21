@@ -1,5 +1,6 @@
 //! Capture one Redis write value and correlate its later decoded references.
 use super::*;
+use anyhow::Context;
 
 pub(in crate::replay) struct ArgumentNormalization {
     pub source: Vec<Vec<u8>>,
@@ -157,7 +158,42 @@ impl DynamicValues {
             let mut legacy_decision = DynamicDecision::default();
             let mut source = source.to_vec();
             let mut actual = actual.to_vec();
-            for rule in captures {
+            // Evaluate every guard against immutable evidence before any projection.
+            let captures = captures
+                .into_iter()
+                .map(|rule| -> Result<_> {
+                    let DynamicValueCapture::Redis {
+                        argument_index,
+                        json_pointer,
+                        when,
+                        ..
+                    } = &rule.capture
+                    else {
+                        unreachable!()
+                    };
+                    let active = if let Some(when) = when {
+                        let decode = |args: &[Vec<u8>]| -> Result<_> {
+                            crate::json_value::parse(
+                                args.get(*argument_index)
+                                    .context("conditional capture argument absent")?,
+                            )
+                            .context("conditional capture requires complete unique-member JSON")
+                        };
+                        let pointer = json_pointer
+                            .as_deref()
+                            .context("conditional capture pointer absent")?;
+                        strict_arguments.insert(*argument_index);
+                        when.matches_pair(&decode(&source)?, &decode(&actual)?, pointer, pointer)?
+                    } else {
+                        true
+                    };
+                    Ok((rule, active))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for (rule, active) in captures {
+                if !active {
+                    continue;
+                }
                 let DynamicValueCapture::Redis {
                     argument_index,
                     json_pointer,
@@ -178,7 +214,7 @@ impl DynamicValues {
                     target: capture(actual_value, json_pointer.as_deref(), rule.value_type)?,
                 };
                 self.check_pair(case, rule, &pair, &decision)?;
-                if references.is_some() {
+                if references.is_some() || strict_arguments.contains(argument_index) {
                     let (left, right) = super::redis_json::project(
                         &rule.capture,
                         &source[0],
@@ -201,7 +237,7 @@ impl DynamicValues {
                     source[*argument_index] = serde_json::to_vec(&source_json)?;
                     actual[*argument_index] = serde_json::to_vec(&actual_json)?;
                 }
-                if references.is_none() {
+                if references.is_none() && !strict_arguments.contains(argument_index) {
                     legacy_decision.pairs.push((rule.id.clone(), pair.clone()));
                 }
                 decision.pairs.push((rule.id.clone(), pair));

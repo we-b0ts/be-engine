@@ -42,6 +42,8 @@ pub enum IdentityCapture {
     RedisArgument {
         index: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        when: Option<crate::policy::FieldCondition>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         json_pointer: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         copies: Vec<Proven<JsonIdentityCopy>>,

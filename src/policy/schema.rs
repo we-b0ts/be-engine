@@ -523,43 +523,14 @@ impl FieldContract {
 pub struct FieldCondition {
     /// One parent step followed by an exact JSON Pointer, e.g. ../status.
     pub relative_pointer: String,
+    #[serde(
+        default,
+        deserialize_with = "present_scalar",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub equals: Option<SourceScalar>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_in: Vec<SourceScalar>,
-}
-
-impl FieldCondition {
-    pub fn peer_pointer(&self, field: &str) -> Option<String> {
-        let relative = self.relative_pointer.strip_prefix("..")?;
-        let (parent, _) = field.rsplit_once('/')?;
-        Some(format!("{parent}{relative}"))
-    }
-
-    pub(crate) fn active(&self, root: &serde_json::Value, field: &str) -> Result<bool> {
-        let pointer = self
-            .peer_pointer(field)
-            .context("field condition requires a parent scope")?;
-        let value = root
-            .pointer(&pointer)
-            .context("Source condition sibling is absent")?;
-        let mut active = true;
-        for expected in &self.not_in {
-            let equal = match (expected, value) {
-                (SourceScalar::Bool(expected), serde_json::Value::Bool(value)) => expected == value,
-                (SourceScalar::String(expected), serde_json::Value::String(value)) => {
-                    expected == value
-                }
-                (SourceScalar::Number(expected), serde_json::Value::Number(value)) => {
-                    ensure!(
-                        expected.is_i64() == value.is_i64() && expected.is_u64() == value.is_u64(),
-                        "Source condition sibling numeric type differs"
-                    );
-                    expected == value
-                }
-                _ => anyhow::bail!("Source condition sibling type differs"),
-            };
-            active &= !equal;
-        }
-        Ok(active)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -754,4 +725,10 @@ where
         }
     }
     deserializer.deserialize_map(MapVisitor(std::marker::PhantomData))
+}
+
+fn present_scalar<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<SourceScalar>, D::Error> {
+    SourceScalar::deserialize(deserializer).map(Some)
 }

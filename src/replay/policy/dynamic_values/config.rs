@@ -2,7 +2,7 @@
 pub use super::path_segment::{PathSegmentCapture, PathSegmentField};
 pub use super::redis_json::{RedisCaptureReference, RedisDerivedIdentity};
 use crate::replay::RedisValueKeySelector;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +51,8 @@ pub enum DynamicValueCapture {
         command: String,
         key: RedisValueKeySelector,
         argument_index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        when: Option<crate::policy::FieldCondition>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         json_pointer: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +140,7 @@ impl DynamicValueCapture {
                 command,
                 key,
                 argument_index,
+                when,
                 json_pointer,
                 references,
                 derived_from,
@@ -159,6 +162,13 @@ impl DynamicValueCapture {
                 );
                 if let Some(pointer) = json_pointer {
                     validate_pointer(pointer)?;
+                }
+                if let Some(when) = when {
+                    when.validate(
+                        json_pointer
+                            .as_deref()
+                            .context("conditional Redis identity requires a JSON pointer")?,
+                    )?;
                 }
                 super::redis_json::validate(
                     json_pointer.as_deref(),
@@ -398,6 +408,7 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
                     argument_index: ai,
                     json_pointer: ap,
                     references: ar,
+                    when: aw,
                     ..
                 },
                 DynamicValueCapture::Redis {
@@ -408,10 +419,17 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
                     argument_index: bi,
                     json_pointer: bp,
                     references: br,
+                    when: bw,
                     ..
                 },
             ) = (&rule.capture, &other.capture)
             {
+                if let (Some(a), Some(b), Some(aw), Some(bw)) = (ap, bp, aw, bw)
+                    && aw.peer_pointer(a) == bw.peer_pointer(b)
+                    && aw.disjoint(bw)
+                {
+                    continue;
+                }
                 let fields_overlap = match (ap, bp) {
                     (Some(a), Some(b)) => std::iter::once(a)
                         .chain(ar.iter().flatten().map(|reference| &reference.json_pointer))

@@ -44,6 +44,7 @@ pub(super) fn project(
             json_pointer,
             copies,
             derived_from,
+            when,
         } => d::DynamicValueCapture::Redis {
             target: target.clone(),
             database: resource
@@ -60,8 +61,9 @@ pub(super) fn project(
                 .as_ref()
                 .context("identity Redis key is absent")?),
             argument_index: *index,
+            when: when.clone(),
             json_pointer: json_pointer.clone(),
-            references: (!copies.is_empty()).then(|| {
+            references: (when.is_some() || !copies.is_empty()).then(|| {
                 copies
                     .iter()
                     .map(|copy| d::RedisCaptureReference {

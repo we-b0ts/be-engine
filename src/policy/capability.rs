@@ -128,7 +128,7 @@ pub fn validate_contract_binding(
                 )
             })?;
             ensure!(!peer.repeated, "Source condition sibling must be a scalar");
-            for expected in &when.not_in {
+            for expected in when.values() {
                 let compatible = match expected {
                     super::SourceScalar::Bool(_) => peer.field_type == ProtobufType::Bool,
                     super::SourceScalar::String(_) => peer.field_type == ProtobufType::String,

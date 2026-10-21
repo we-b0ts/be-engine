@@ -338,12 +338,15 @@ impl Comparator<'_> {
             decisions.selected.insert(*index);
             decisions.evaluated.insert(field.rule_id.into());
             let contract = if let FieldContract::Conditional { when, contract } = field.contract {
-                if !when.active(self.source_root, pointer).map_err(|_| {
-                    difference(
-                        pointer,
-                        "Source field condition is missing or has an invalid type",
-                    )
-                })? {
+                if !when
+                    .matches_pair(self.source_root, self.target_root, pointer, target_pointer)
+                    .map_err(|_| {
+                        difference(
+                            pointer,
+                            "field condition is absent, invalid, or changed on Target",
+                        )
+                    })?
+                {
                     return if source == target {
                         Ok(())
                     } else {

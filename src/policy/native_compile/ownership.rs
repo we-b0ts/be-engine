@@ -10,10 +10,18 @@ pub struct NativeFieldClaim {
     pub surface: ClaimSurface,
     pub selector: NativeMatch,
     pub when: Option<SourceCondition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_condition: Option<OwnedFieldCondition>,
     pub slot: NativeOwnedSlot,
     pub location: OwnedLocation,
     pub collection: bool,
     pub hash_field: Option<crate::policy::KeySelector>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OwnedFieldCondition {
+    pub pointer: String,
+    pub when: crate::policy::FieldCondition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -92,6 +100,23 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
     use NativeOwnedSlot as L;
     let mut claims = vec![];
     let operation_override = Cell::new(None);
+    let field_condition = match &rule.effect {
+        NativeEffect::Identity(IdentityEffect {
+            capture:
+                IdentityCapture::RedisArgument {
+                    when: Some(when),
+                    json_pointer: Some(pointer),
+                    ..
+                },
+            ..
+        }) => when
+            .peer_pointer(pointer)
+            .map(|pointer| OwnedFieldCondition {
+                pointer,
+                when: when.clone(),
+            }),
+        _ => None,
+    };
     let mut add = |surface, slot, location, collection| {
         claims.push(NativeFieldClaim {
             hash_field: match &rule.effect {
@@ -114,6 +139,7 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                 selector
             },
             when: rule.when.clone(),
+            field_condition: field_condition.clone(),
             slot,
             location,
             collection,

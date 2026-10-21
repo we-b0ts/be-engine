@@ -189,30 +189,7 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
                 !matches!(contract.as_ref(), FieldContract::Conditional { .. }),
                 "nested field conditions are unsupported"
             );
-            ensure!(
-                when.relative_pointer.starts_with("../") && !when.relative_pointer.contains('*'),
-                "field condition requires one exact sibling pointer such as ../status"
-            );
-            validate_pointer(&when.relative_pointer[2..], false)?;
-            ensure!(
-                when.relative_pointer[3..]
-                    .split('/')
-                    .all(|segment| !matches!(segment, "." | "..")),
-                "field condition cannot escape its sibling scope"
-            );
-            ensure!(
-                !path.is_empty() && (1..=32).contains(&when.not_in.len()),
-                "field condition requires a non-root field and 1..32 excluded scalars"
-            );
-            let kinds = when
-                .not_in
-                .iter()
-                .map(std::mem::discriminant)
-                .collect::<Vec<_>>();
-            ensure!(
-                kinds.iter().all(|kind| *kind == kinds[0]),
-                "field condition constants must have the same scalar type"
-            );
+            when.validate(path)?;
         }
         if let Some(time) = contract.unconditional().time()
             && let Some(group) = &time.clock_group
