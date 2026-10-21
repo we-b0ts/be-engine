@@ -220,6 +220,7 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
                     &witness.id,
                     witness.metadata.clocks.comparison(),
                     schemas.as_ref(),
+                    None,
                 )?;
             }
         }
@@ -255,12 +256,15 @@ impl Drafts {
         witness: &str,
         clocks: AnchorClocks,
         schemas: Option<&CompiledPolicy>,
+        sql_scope: Option<&BTreeSet<&str>>,
     ) -> Result<()> {
         let configured = schemas
             .into_iter()
             .flat_map(|p| &p.rules)
             .filter(|rule| {
-                serde_json::to_value(rule.rule.surface).ok().as_ref() == Some(&base["surface"])
+                sql_scope.is_none_or(|ids| ids.contains(rule.rule.id.as_str()))
+                    && serde_json::to_value(rule.rule.surface).ok().as_ref()
+                        == Some(&base["surface"])
                     && serde_json::to_value(&rule.rule.slot).ok().as_ref() == Some(&base["slot"])
                     && serde_json::to_value(&rule.rule.selector.resource)
                         .ok()
@@ -335,6 +339,16 @@ impl Drafts {
         state: &RewriteState,
         schemas: Option<&CompiledPolicy>,
     ) -> Result<()> {
+        let target = if witness.metadata.surface == crate::policy::Surface::DependencyRequest {
+            match target {
+                Some(target) if crate::replay::mysql_request_witnesses_related(source, target)? => {
+                    Some(target)
+                }
+                _ => None,
+            }
+        } else {
+            target
+        };
         let mut rules = Vec::new();
         for rule in schemas.into_iter().flat_map(|policy| &policy.rules) {
             if rule.rule.surface == witness.metadata.surface
@@ -360,7 +374,11 @@ impl Drafts {
             }
             return Ok(());
         }
-        for rule in rules {
+        let scope = rules
+            .iter()
+            .map(|rule| rule.rule.id.as_str())
+            .collect::<BTreeSet<_>>();
+        for rule in &rules {
             let source_values =
                 crate::replay::mysql_witness_values(source, witness.metadata.surface, rule)?;
             let target_values = target
@@ -382,6 +400,7 @@ impl Drafts {
                     &witness.id,
                     witness.metadata.clocks.comparison(),
                     schemas,
+                    Some(&scope),
                 )?;
             }
         }
@@ -522,6 +541,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sql_value_table_discovery_uses_only_the_selected_physical_table_schemas() {
+        let mut first = json!({"id":"json","surface":"dependency.request","match":{"api":"GET /api","resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":"UPDATE {{table}} SET payload=? WHERE id=?","table_series":{"prefix":"tasks_","start":1,"end":1,"width":4}},"slot":{"sql_value":0},"codec":"json","contract":{"/members":"unordered"},"proof":{"source":"store.py:write","fact":"The first physical table stores a JSON membership set"}});
+        let mut second = first.clone();
+        second["id"] = json!("protobuf");
+        second["match"]["table_series"]["start"] = json!(2);
+        second["match"]["table_series"]["end"] = json!(2);
+        second["codec"] = json!({"kind":"protobuf","fields":{"/members":{"field_path":[1],"field_type":"string","repeated":true}}});
+        let schemas = crate::policy::parse_and_compile_policy(
+            &json!({"format":"traffic-policy/v1","rules":[first.clone(),second]}).to_string(),
+        )
+        .unwrap();
+        let mut drafts = Drafts::default();
+        let scope = BTreeSet::from(["json"]);
+        first.as_object_mut().unwrap().remove("id");
+        first.as_object_mut().unwrap().remove("contract");
+        first.as_object_mut().unwrap().remove("proof");
+        drafts
+            .observe(
+                br#"{"members":["a","b"]}"#,
+                Some(br#"{"members":["b","a"]}"#),
+                first,
+                "witness",
+                AnchorClocks::default(),
+                Some(&schemas),
+                Some(&scope),
+            )
+            .unwrap();
+        assert_eq!(drafts.values.len(), 1);
+        assert_eq!(drafts.entries[0]["binding"]["codec"], "json");
+    }
+
+    #[test]
     fn protobuf_discovery_reuses_only_an_explicit_matching_schema_and_never_its_proof() {
         let document = serde_json::json!({"format":"traffic-policy/v1","rules":[{
             "id":"known-schema","surface":"api.response","match":{"api":"GET /api"},"slot":"body",
@@ -542,6 +593,7 @@ mod tests {
                     "witness",
                     AnchorClocks::default(),
                     Some(&schemas),
+                    None,
                 )
                 .unwrap();
             assert_eq!(drafts.values.len(), expected);

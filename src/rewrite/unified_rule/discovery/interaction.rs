@@ -62,6 +62,7 @@ pub(super) fn observe(
                 ..Default::default()
             },
             schemas,
+            None,
         )?;
     }
     Ok(())

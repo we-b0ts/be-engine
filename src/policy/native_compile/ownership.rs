@@ -92,8 +92,8 @@ pub enum OwnedElement {
 }
 
 mod validation;
-pub(crate) use validation::exact_sql_scopes_overlap;
 pub use validation::validate_field_claims;
+pub(crate) use validation::value_sql_scopes_overlap;
 
 pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
     use ClaimSurface as S;

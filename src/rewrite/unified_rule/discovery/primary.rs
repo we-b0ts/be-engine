@@ -101,6 +101,7 @@ pub(super) fn observe(
             case["case_id"].as_str().unwrap_or("api-response"),
             clocks,
             schemas,
+            None,
         )?;
     }
     Ok(())

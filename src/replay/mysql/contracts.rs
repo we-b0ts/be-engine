@@ -413,6 +413,13 @@ pub(crate) fn validate_contract_candidate(
     .map(Some)
 }
 
+pub(crate) fn request_witnesses_related(source: &[u8], target: &[u8]) -> Result<bool> {
+    structurally_related(
+        &serde_json::from_slice(source)?,
+        &serde_json::from_slice(target)?,
+    )
+}
+
 fn structurally_related(source: &RequestEnvelope, target: &RequestEnvelope) -> Result<bool> {
     let statement = |request: &RequestEnvelope| {
         crate::mysql::sql::bounds::statement(

@@ -150,6 +150,12 @@ pub struct MatchSpec {
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_series: Option<crate::MysqlTableSeries>,
 }
 
 impl MatchSpec {

@@ -149,6 +149,24 @@ the corresponding request output date contract separately. Keep streaks,
 experience, totals, row identity and all other business fields strict; never
 normalize their downstream differences as time or generated values.
 
+MySQL value rules on `sql_value` and `sql_column` can select a bounded physical
+table family with `match.sql: 'UPDATE {{table}} SET json=?, updated_at=? WHERE
+{{table}}.id=?'` and `match.table_series: {prefix: tasks_, start: 0, end: 1023,
+width: 4}`. Explicit `tables` or bounded `table_patterns` use the same native
+table selector validation. A selector is required for `{{table}}`, which must be
+a whole table identifier or its qualifier. The Source table binds every marker;
+the Target cannot switch shards or qualifiers, change predicates/row identity,
+or add calls. Field ownership covers the whole declared family, including tables
+not present in the current witnesses.
+
+Use the existing conditional value contract for nullable branch-specific clocks,
+for example `/status/completedAt: {kind: conditional, when: {relative_pointer:
+../status, equals: COMPLETED}, contract: {relative_time: iso8601_naive,
+clock_group: completed}}`. The Source predicate selects the time comparison;
+inactive values, including `null`, stay exact. Other JSON members and native SQL
+arguments retain their contracts. Independent Source clock reads need separate
+clock groups; a completion field is not an unrestricted nullable timestamp.
+
 A Source sibling may condition an individual value contract with
 `kind: conditional`, `when: {relative_pointer: ../type, equals: text}` and an
 inner `contract`. Native Redis identity captures accept the same predicate under

@@ -76,6 +76,7 @@ mod memcached;
 mod model;
 mod motan;
 mod mysql;
+pub(crate) use mysql::contracts::request_witnesses_related as mysql_request_witnesses_related;
 pub(crate) use mysql::contracts::{
     IdentityPreflight as MysqlIdentityPreflight,
     normalize_identity_witnesses as mysql_normalize_identity_witnesses,
@@ -86,6 +87,7 @@ pub(crate) use mysql::contracts::{
 };
 pub(crate) use policy::mysql_native_witness_matches;
 pub(crate) use policy::mysql_witness_matches;
+pub(crate) use policy::validate_mysql_value_selector;
 mod network_access;
 mod policy;
 pub(crate) use policy::replace_request_rule_section;

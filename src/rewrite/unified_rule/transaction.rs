@@ -33,6 +33,8 @@ mod interaction_transaction;
 mod mysql_candidates_transaction;
 #[path = "transaction_mysql_composite.rs"]
 mod mysql_composite_transaction;
+#[path = "transaction_mysql_table_values.rs"]
+mod mysql_table_values_transaction;
 #[path = "transaction_native.rs"]
 mod native_transaction;
 #[path = "transaction_read_back.rs"]

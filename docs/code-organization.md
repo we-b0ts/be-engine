@@ -131,7 +131,9 @@ is unclear.
   still evaluates every applicable permission and supplied clock independently.
   `replay/policy/request_contract/mysql_selection` owns immutable SQL selector
   preparation and bounded raw-token reuse; bound parameters and live applicability
-  never belong in that cache.
+  never belong in that cache. Ordinary value selectors and native SQL effects use
+  the same `sql_template/table` admission and physical-table binding. Value and
+  mixed field ownership checks retain the complete declared table range.
   `replay/mysql/contracts/preflight_identity` owns derived SQL witness copies for
   composed identity/value planning. `dynamic_values/audit` restores only accepted
   Case-local binding fingerprints with native capture/reference guards and Source
@@ -140,6 +142,9 @@ is unclear.
   statements borrow no identity permission. Runtime SQL normalization remains in `dynamic_values/mysql`.
   Unified preflight retains original evidence and requires genuine Replay for
   these stateful relationships. Pure SQL value comparison retains the remainder.
+  SQL value discovery reuses the statement-relatedness check before projecting
+  a Target slot; an unrelated search edge retains Source-only guidance instead
+  of aborting discovery or creating an independent Target validation.
   `mysql/sql/lexical_cache` shares only bounded immutable lexer output, including
   invalid-input results. `replay/mysql/candidates` indexes immutable Case/resource
   scopes and compatible command families in original inventory order; live

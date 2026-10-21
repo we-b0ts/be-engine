@@ -33,7 +33,7 @@ pub(crate) use native_projection::{NativeSourceCase, validate_native_source_depe
 mod matcher;
 pub(crate) use matcher::mysql_contract::{
     compare_values as compare_mysql_values, selected_value as mysql_contract_value,
-    witness_matches as mysql_witness_matches,
+    validate_selector as validate_mysql_value_selector, witness_matches as mysql_witness_matches,
 };
 pub(crate) use matcher::mysql_native::witness_matches as mysql_native_witness_matches;
 mod pattern;

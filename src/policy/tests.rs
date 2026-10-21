@@ -2,6 +2,7 @@ use super::*;
 #[path = "tests/interaction.rs"]
 mod interaction;
 mod literal_paths;
+mod sql_tables;
 
 fn json_rule(surface: &str) -> String {
     let selector = if surface == "api.response" {

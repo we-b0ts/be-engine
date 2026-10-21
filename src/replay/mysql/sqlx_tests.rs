@@ -13,6 +13,7 @@ mod autocommit_tests;
 mod calendar_date;
 mod cleanup_compatibility_tests;
 mod combined_capture_tests;
+mod conditional_table_values;
 mod continuation_tests;
 mod dependency_time_tests;
 mod distinct_tests;

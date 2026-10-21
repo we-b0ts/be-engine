@@ -192,7 +192,9 @@ fn selector(value: &MatchSpec) -> NativeMatch {
         key: value.key.as_ref().map(key),
         path: value.path.clone(),
         sql: value.sql.clone(),
-        ..Default::default()
+        tables: value.tables.clone(),
+        table_patterns: value.table_patterns.clone(),
+        table_series: value.table_series.clone(),
     }
 }
 
@@ -292,18 +294,8 @@ fn sql_overlap(left: &NativeMatch, right: &NativeMatch) -> Result<bool> {
     Ok(true)
 }
 
-pub(crate) fn exact_sql_scopes_overlap(left: Option<&str>, right: Option<&str>) -> bool {
-    sql_overlap(
-        &NativeMatch {
-            sql: left.map(str::to_owned),
-            ..Default::default()
-        },
-        &NativeMatch {
-            sql: right.map(str::to_owned),
-            ..Default::default()
-        },
-    )
-    .unwrap_or(true)
+pub(crate) fn value_sql_scopes_overlap(left: &MatchSpec, right: &MatchSpec) -> bool {
+    sql_overlap(&selector(left), &selector(right)).unwrap_or(true)
 }
 
 fn disjoint<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {
