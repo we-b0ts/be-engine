@@ -16,6 +16,7 @@ use crate::{
     value_contract::json::{AnchorClocks, Field},
 };
 mod interaction;
+mod primary;
 
 const LIMIT: usize = 20;
 const OBSERVATION_LIMIT: usize = 256;
@@ -59,6 +60,18 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
         .ok()
         .map(|policy| crate::policy::compile_policy(&policy))
         .transpose()?;
+    let response_first = state
+        .active_issue
+        .as_ref()
+        .is_some_and(|issue| issue.kind == super::super::model::RewriteIssueKind::Response);
+    if response_first {
+        primary::observe(
+            &mut drafts,
+            &evidence.assertions,
+            &state.api,
+            schemas.as_ref(),
+        )?;
+    }
     if let Some(manifest) = &manifest
         && manifest.complete
         && manifest.sealed
@@ -211,99 +224,11 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
             }
         }
     }
-    let assertions: Value = serde_json::from_slice(&fs::read(&evidence.assertions)?)?;
-    for case in assertions["cases"].as_array().into_iter().flatten() {
-        if drafts.observations >= OBSERVATION_LIMIT {
-            drafts.limited = true;
-            break;
-        }
-        drafts.observations += 1;
-        let summary = &case["response"];
-        let (Some(expected), Some(request)) = (
-            summary["expected_response"].as_str(),
-            summary["request"].as_str(),
-        ) else {
-            continue;
-        };
-        let actual = summary["actual_response"].as_str();
-        if [Some(expected), actual, Some(request)]
-            .into_iter()
-            .flatten()
-            .any(|path| fs::metadata(path).map_or(true, |m| m.len() > 4 * 1024 * 1024))
-        {
-            drafts.limited = true;
-            continue;
-        }
-        let mut expected_value: Value = serde_json::from_slice(&fs::read(expected)?)?;
-        if crate::interaction::private::decrypt_output(&mut expected_value, Path::new(expected))
-            .is_err()
-        {
-            drafts.limited = true;
-            continue;
-        }
-        let actual: Result<Option<Value>> = actual
-            .map(|path| -> Result<Value> {
-                let mut value = serde_json::from_slice(&fs::read(path)?)?;
-                crate::interaction::private::decrypt_output(&mut value, Path::new(path))?;
-                Ok(value)
-            })
-            .transpose();
-        let Ok(actual) = actual else {
-            drafts.limited = true;
-            continue;
-        };
-        let mut request_value: Value = serde_json::from_slice(&fs::read(request)?)?;
-        if crate::interaction::private::decrypt_request(&mut request_value, Path::new(request))
-            .is_err()
-        {
-            drafts.limited = true;
-            continue;
-        }
-        let request = request_value;
-        let expected = expected_value;
-        let Ok(mut source_pair) = crate::replay::response_payload_pair(&request, &expected, None)
-        else {
-            continue;
-        };
-        if let Some(pair) = actual.as_ref().and_then(|actual| {
-            crate::replay::response_payload_pair(&request, &expected, Some(actual)).ok()
-        }) {
-            source_pair = pair;
-        }
-        if !source_pair.body_available {
-            interaction::observe(
-                &mut drafts,
-                &source_pair,
-                &state.api,
-                case["case_id"].as_str().unwrap_or("api-response"),
-                schemas.as_ref(),
-            )?;
-            continue;
-        }
-        let source = source_pair.source;
-        let target = actual
-            .as_ref()
-            .and_then(|actual| {
-                crate::replay::response_payload_pair(&request, &expected, Some(actual)).ok()
-            })
-            .and_then(|pair| pair.target);
-        let base = json!({"surface":"api.response","match":{"api":state.api},"slot":"body"});
-        let clocks = AnchorClocks {
-            case: crate::value_contract::time::ClockPair {
-                source: request["timestamp"].as_str().and_then(|s| s.parse().ok()),
-                target: actual
-                    .as_ref()
-                    .and_then(|value| value["request_sent_at"].as_str())
-                    .and_then(|s| s.parse().ok()),
-            },
-            ..Default::default()
-        };
-        drafts.observe(
-            &source,
-            target.as_deref(),
-            base,
-            case["case_id"].as_str().unwrap_or("api-response"),
-            clocks,
+    if !response_first {
+        primary::observe(
+            &mut drafts,
+            &evidence.assertions,
+            &state.api,
             schemas.as_ref(),
         )?;
     }
@@ -311,7 +236,7 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
     Ok(
         json!({"format":"traffic-policy/v1","api":state.api,"candidates":drafts.values,
         "observations_examined":drafts.observations,"json_nodes_examined":drafts.examined,"candidate_count":total,"summary_omitted":total.saturating_sub(LIMIT),
-        "bounded_analysis":{"limited":drafts.limited,"observation_limit":OBSERVATION_LIMIT,"node_limit":NODE_LIMIT,"payload_limit_bytes":4 * 1024 * 1024,"source_cache_limit_bytes":SOURCE_CACHE_LIMIT,"complete_coverage":false},
+        "bounded_analysis":{"scan_order":if response_first { ["api.response", "dependency"] } else { ["dependency", "api.response"] },"limited":drafts.limited,"observation_limit":OBSERVATION_LIMIT,"node_limit":NODE_LIMIT,"payload_limit_bytes":4 * 1024 * 1024,"source_cache_limit_bytes":SOURCE_CACHE_LIMIT,"complete_coverage":false},
         "coverage":manifest.as_ref().map(|m| json!({"sealed":m.sealed,"complete":m.complete,"omitted":m.omitted,"recorded":m.recorded})),
         "source_entry":{"bindings":drafts.entries,"requires":["an explicit surface and resource/operation/value slot", "a typed logical pointer (PB requires explicit numeric wire path and field type)", "Source file:line and the proven ordering or time relation"],
             "instruction":"A Source-proven field may be proposed directly even when no observed mechanism draft is available. Draft discovery is bounded and never coverage."},
@@ -375,7 +300,7 @@ impl Drafts {
         let identity = serde_json::to_string(&base)?;
         if self.entry_ids.insert(identity) && self.entries.len() < LIMIT {
             self.entries.push(json!({"binding":base,"witness_id":witness,"needs_schema":codec.is_none(),"source_intent_required":true,
-                "instruction":if codec.is_none(){"Encoded bytes do not identify a codec. Trace Source encoding; for PB provide explicit field_path, field_type and repeated before planning."}else{"Schema supplies decoding only. Choose a field and contract from Source behavior; proof is required for this binding."}}));
+                "instruction":if codec.is_none(){"Encoded bytes do not identify a codec. Trace Source encoding; for PB provide explicit field_path, field_type and repeated before planning."}else if base["slot"].get("sse_data").is_some(){"Pointers address the SSE data JSON for this exact event/type. Trace Source time generation for request_time/relative_time; a generated identity needs an explicit prefix/format and shared binding across every referring event/pointer, including terminal output. Differences alone do not prove identity permission. Event presence/order and unselected text stay strict. See docs/sse-value-contracts.md."}else{"Schema supplies decoding only. Choose a field and contract from Source behavior; proof is required for this binding."}}));
         }
         let (Some(codec), Some(target)) = (codec, target) else {
             return Ok(());

@@ -63,6 +63,9 @@ fn project(
     value["recording_run_id"] = json!(state.recording_run_id);
     if freshness.requires_fresh_replay {
         value["refresh_command"] = serde_json::to_value(super::super::action::next_command(root))?;
+        if let Some(facts) = facts.as_object_mut() {
+            facts.remove("plan");
+        }
     }
     facts["policy_freshness"] = value;
     Ok(freshness.requires_fresh_replay.then(|| {

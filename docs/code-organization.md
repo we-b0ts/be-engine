@@ -1077,9 +1077,12 @@ explicit repository-wide audit.
   `replay/assertion/interaction/contracts` owns the explicit SSE envelope/data
   adapter shared by Source/Target preflight and Replay; `value_contract/json/identity`
   owns bounded case-local identity bijections. Policy SSE slots retain separate
-  event/body field ownership. `unified_rule/discovery/interaction` supplies bounded
-  private SSE slot/time drafts without inferring identity authority. Public result
-  observations retain private-field unavailability for virtual SSE pointers.
+  event/body field ownership. `unified_rule/discovery/primary` owns authenticated
+  primary-response observations, scheduled before dependencies for response issues
+  within the shared discovery budget. Its `interaction` sibling supplies bounded
+  private SSE slot/time drafts and explicit authoring guidance without inferring
+  identity authority. Public result observations retain private-field
+  unavailability for virtual SSE pointers.
   `preflight/{api,dependency,session,source}` delegates
   payload, native envelope, stateful Source trace and whole-recording proof to
   their existing owners. Whole-recording Source effects explicitly enumerate

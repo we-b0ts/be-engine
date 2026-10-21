@@ -223,11 +223,15 @@ fn http_body_rule_keeps_path_query_and_endpoint_native() {
         });
         fixture.confirm();
         let evidence = fixture.evidence();
-        assert!(evidence.facts["source_entry"]["bindings"][0]["binding"]["match"]["key"].is_null());
-        assert_eq!(
-            evidence.facts["source_entry"]["bindings"][0]["binding"]["match"]["path"],
-            "/dependency"
-        );
+        let binding = evidence.facts["source_entry"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| &entry["binding"])
+            .find(|binding| binding["surface"] == "dependency.request")
+            .unwrap();
+        assert!(binding["match"]["key"].is_null());
+        assert_eq!(binding["match"]["path"], "/dependency");
         let result = fixture.plan();
         if change_query {
             assert!(result.is_err());

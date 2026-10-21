@@ -60,6 +60,21 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         help: help(root),
     })
     };
+    if query == QUERY_UNIFIED_RULE_CANDIDATES
+        && facts["source_entry"]["bindings"]
+            .as_array()
+            .is_some_and(|bindings| {
+                bindings
+                    .iter()
+                    .any(|b| b["binding"]["slot"].get("sse_data").is_some())
+            })
+    {
+        add(
+            "sse_data_contract",
+            "sse_data",
+            "Review source_entry.bindings for exact slot.sse_data event/json_type selectors. Contract pointers address data JSON. Time drafts require Source clock proof; generated identities require Source generator/lifetime proof, explicit prefix/format and the same binding across all referring events/pointers, including terminal output. Identity permissions are never inferred as candidates. Missing events and event order remain strict and require Target investigation. See docs/sse-value-contracts.md.",
+        );
+    }
     if query == QUERY_REPRESENTATIVES {
         for codec in response_body::codec_candidates(facts) {
             add(

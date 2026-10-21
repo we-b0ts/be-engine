@@ -136,7 +136,9 @@ pub(super) fn query(
     );
     let mut planners =
         applicable_rule_planners(target_root, issue.kind, kind, &facts, &evidence_id);
-    if kind == QUERY_UNIFIED_RULE_CANDIDATES {
+    if kind == QUERY_UNIFIED_RULE_CANDIDATES
+        && facts["policy_freshness"]["requires_fresh_replay"] != true
+    {
         planners.push(super::evidence_model::RewriteApplicableRulePlanner {
             kind: "unified".into(),
             capability: "Source-proven typed value contract across comparison surfaces".into(),

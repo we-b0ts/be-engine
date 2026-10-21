@@ -24,6 +24,8 @@ on other endpoints, operations or surfaces.
 | --- | --- | --- |
 | An unordered Set becomes a JSON array or repeated PB field | `contract: {<logical-path>: {kind: unordered}}`; PB declares field numbers/types explicitly | Multiplicity, membership, element associations, presence, unknown PB fields and remainder |
 | A generated timestamp or expiry | `kind: time`, explicit format, relation and trusted anchor | Units, microseconds, TTL offset, copied instants and clock groups |
+| SSE data contains a generated timestamp | `api.response`, exact `slot.sse_data` event/type, JSON pointer and Source-proven request-time relation | Event presence/order, envelope, unselected fields and terminal state |
+| Source generates one fresh SSE identity and references it across frames | Explicit JSON `kind: identity`, proven prefix/format and the same `binding` at every reference | Bijection, Case lifetime, exact prefixes, terminal output references and dependency-owned identities |
 | Live elapsed duration that stops at terminal state | Source sibling `conditional` around `duration` | Terminal values and status stay exact; missing/wrong-type status rejects |
 | Expired recorded Redis/MySQL input | Explicit `dependency.response` time contract plus selected `delivery.rebase_time`, or typed SQL response effect | Raw Source bytes, sentinel values, protocol outcomes, finite inventory and signature dependencies |
 | Identity captured in SQL/Redis/HTTP and reused later | `effect.kind: identity` with capture, shape/lifetime and exact allowed reference resources | Bijection, case scope and atomic candidate decisions |
@@ -41,6 +43,16 @@ on other endpoints, operations or surfaces.
 | Missing Source acquisition or IP learned from a response | `capture_http`, `capture_breeze` or `capture_http_response` | Real new Recording and provenance of original/transformed response |
 
 For timezone-free timestamps, prove the fixed UTC offset from Source deployment.
+For SSE, follow the `unified_value_contract` hint to discovery and inspect
+`source_entry.bindings` even when `candidates` is empty. Discovery prioritizes
+primary responses for response issues but remains bounded; it never infers
+identity permission. `slot: {sse_data: {event: message, json_type: <Source-type>}}`
+selects the decoded data JSON in data-only streams. Trace each Source generator
+and every reference, including IDs in terminal output; use a shared binding only
+for the same entity. IDs fixed by Replay dependencies must retain their existing
+ownership. Missing events, changed text and event order require Target diagnosis.
+See [SSE value contracts](../../../../../docs/sse-value-contracts.md).
+
 When Source uses Redis GET/LRANGE results, preserve that data flow. Return a
 read-back rule update and write/read proof if Replay returns recorded Source
 identities; do not replace the Redis read with a Target-local cache solely to

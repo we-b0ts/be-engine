@@ -23,6 +23,15 @@ Discovery drafts prefill observed selectors and request missing Source facts;
 a candidate never authorizes its own proof. PB requires actual typed schema
 bindings. Do not guess clock units, a timezone, a key source or random permissions.
 
+For SSE, inspect discovery's `source_entry.bindings` for exact event/type slots
+even if there is no mechanical candidate. Require the worker's Source clock or
+identity generator/lifetime proof and include every referring event/pointer,
+including terminal output. A shared identity `binding` preserves equality and
+injectivity across frames; missing events and event order remain strict. See
+[SSE value contracts](../../../../../docs/sse-value-contracts.md).
+When `policy_freshness.requires_fresh_replay` is true, follow its refresh command
+and scheduling gates before planning; discovery observations remain diagnostic.
+
 Apply only the returned reviewed plan. Concurrent policy, evidence, key, schema,
 Source inventory or execution changes invalidate it. A changed rule requires
 fresh genuine Replay before acceptance; capture and snapshot changes additionally
