@@ -15,7 +15,8 @@ pub(in crate::replay) mod time;
 pub(in crate::replay) use time::RequestTimes;
 mod motan;
 mod payload;
-pub(crate) use payload::response_payload_pair;
+pub(crate) use interaction::{compare_outputs as compare_interaction, decode_sse};
+pub(crate) use payload::{ResponsePayloadPair, response_payload_pair};
 pub(in crate::replay) mod protobuf;
 mod sse;
 
@@ -270,6 +271,12 @@ fn assert_recorded_response_with_policy(
         decode_body(&actual.body, "actual response")?
     };
     let actual_status = actual.status;
+    let interaction_rules =
+        unified::selected_interaction(policy, &request, &uri_path(&request.uri))?;
+    let times = RequestTimes {
+        source: request.timestamp,
+        target: actual.request_sent_at,
+    };
     let expected_request_headers = request.headers.clone();
     let expected_body =
         payload::business_body(&request, expected_body, oneway, "expected response")?;
@@ -278,10 +285,7 @@ fn assert_recorded_response_with_policy(
     let actual_status = actual_body.carrier_status().unwrap_or(actual_status);
     let mut report = evaluate_response(
         AssertionInputs {
-            times: RequestTimes {
-                source: request.timestamp,
-                target: actual.request_sent_at,
-            },
+            times,
             case_id: options.case_id,
             request,
             request_path: options.request,
@@ -303,7 +307,13 @@ fn assert_recorded_response_with_policy(
         },
         policy,
     )?;
-    interaction::compare(expected_interaction, actual_interaction, &mut report)?;
+    interaction::compare(
+        expected_interaction,
+        actual_interaction,
+        &interaction_rules,
+        times,
+        &mut report,
+    )?;
     report.passed &= report.differences.is_empty();
     Ok(report)
 }

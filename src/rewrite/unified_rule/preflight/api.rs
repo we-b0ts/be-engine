@@ -27,13 +27,23 @@ pub(super) fn verify(
     let super::super::manifest::PrimaryResponse { source, target } =
         bundle.primary_response(case, directory)?;
     let source_payload = crate::replay::response_payload_pair(request, &source, None)?;
+    let interaction = ordinary
+        .iter()
+        .copied()
+        .filter(|rule| matches!(rule.rule.slot, crate::policy::Slot::SseData(_)))
+        .collect::<Vec<_>>();
+    let ordinary = ordinary
+        .iter()
+        .copied()
+        .filter(|rule| rule.rule.slot == crate::policy::Slot::Body)
+        .collect::<Vec<_>>();
     let native = native
         .iter()
         .copied()
         .filter(|rule| source_payload.body_available || !rule.rule.effect.is_response_body())
         .collect::<Vec<_>>();
     let ordinary = if source_payload.body_available {
-        ordinary
+        ordinary.as_slice()
     } else {
         &[]
     };
@@ -64,6 +74,12 @@ pub(super) fn verify(
         clocks,
     )?;
     let mut source_ids = checked;
+    source_ids.extend(compare_interaction(
+        &source_payload,
+        &interaction,
+        source_times,
+        false,
+    )?);
     for (id, _, result) in context.header_results(
         source_payload.source_headers.as_ref(),
         source_payload.source_headers.as_ref(),
@@ -116,6 +132,7 @@ pub(super) fn verify(
         &context,
         clocks,
     )?;
+    compare_interaction(&pair, &interaction, pair.times, true)?;
     compare_headers(
         &native,
         &pair.source_headers,
@@ -136,6 +153,34 @@ pub(super) fn verify(
         result.independent_target_validations += 1;
     }
     Ok(())
+}
+
+fn compare_interaction(
+    pair: &crate::replay::ResponsePayloadPair,
+    rules: &[&CompiledRule],
+    times: crate::value_contract::time::ClockPair,
+    target: bool,
+) -> Result<BTreeSet<String>> {
+    if rules.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let source = pair.source_interaction.as_ref();
+    let checked = crate::replay::compare_interaction(
+        source,
+        if target {
+            pair.target_interaction.as_ref()
+        } else {
+            source
+        },
+        rules,
+        times,
+    )?;
+    ensure!(
+        checked.passed(),
+        "SSE response contract failed: {}",
+        serde_json::to_string(&checked.differences)?
+    );
+    Ok(checked.evaluated)
 }
 
 fn compare_payload(

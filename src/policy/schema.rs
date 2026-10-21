@@ -46,6 +46,8 @@ pub enum Surface {
 #[serde(from = "SlotDocument", into = "SlotDocument")]
 pub enum Slot {
     Body,
+    /// Strict SSE envelope with JSON contracts on its data string.
+    SseData(String),
     Value,
     SqlValue(usize),
     SqlColumn(String),
@@ -55,6 +57,7 @@ pub enum Slot {
 #[serde(untagged, deny_unknown_fields)]
 enum SlotDocument {
     Named(SlotName),
+    SseData { sse_data: String },
     SqlValue { sql_value: usize },
     SqlColumn { sql_column: String },
 }
@@ -71,6 +74,7 @@ impl From<SlotDocument> for Slot {
         match value {
             SlotDocument::Named(SlotName::Body) => Self::Body,
             SlotDocument::Named(SlotName::Value) => Self::Value,
+            SlotDocument::SseData { sse_data } => Self::SseData(sse_data),
             SlotDocument::SqlValue { sql_value } => Self::SqlValue(sql_value),
             SlotDocument::SqlColumn { sql_column } => Self::SqlColumn(sql_column),
         }
@@ -82,6 +86,7 @@ impl From<Slot> for SlotDocument {
         match value {
             Slot::Body => Self::Named(SlotName::Body),
             Slot::Value => Self::Named(SlotName::Value),
+            Slot::SseData(sse_data) => Self::SseData { sse_data },
             Slot::SqlValue(sql_value) => Self::SqlValue { sql_value },
             Slot::SqlColumn(sql_column) => Self::SqlColumn { sql_column },
         }
@@ -378,6 +383,13 @@ pub enum FieldContract {
         contract: Box<FieldContract>,
     },
     Unordered,
+    /// Source-proven generated/derived identity, shared within one interaction.
+    Identity {
+        binding: String,
+        #[serde(default)]
+        prefix: String,
+        format: IdentityFormat,
+    },
     Time {
         format: TimestampFormat,
         relation: TimeRelation,
@@ -393,6 +405,13 @@ pub enum FieldContract {
         #[serde(skip)]
         anchor: TimeAnchor,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentityFormat {
+    Decimal,
+    Uuid,
 }
 
 impl FieldContract {

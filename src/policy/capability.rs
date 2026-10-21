@@ -11,6 +11,7 @@ pub enum CapabilityId {
     RelativeTime,
     Duration,
     RebaseTime,
+    Identity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -20,6 +21,7 @@ pub enum FieldRequirement {
     Timestamp,
     Number,
     DeclaredTimestamp,
+    IdentityString,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -31,6 +33,15 @@ pub struct Capability {
 }
 
 const CAPABILITIES: &[Capability] = &[
+    Capability {
+        id: CapabilityId::Identity,
+        version: 1,
+        field_requirement: FieldRequirement::IdentityString,
+        source_proof: &[
+            "Source generation or derivation of a fresh identity and its exact representation",
+            "shared binding identifies the same entity across SSE messages; external identity relationships remain obligations",
+        ],
+    },
     Capability {
         id: CapabilityId::Unordered,
         version: 1,
@@ -77,6 +88,7 @@ impl CapabilityId {
             FieldContract::Unordered => Self::Unordered,
             FieldContract::Time { .. } => Self::RelativeTime,
             FieldContract::Duration { .. } => Self::Duration,
+            FieldContract::Identity { .. } => Self::Identity,
         }
     }
 
@@ -93,6 +105,7 @@ impl CapabilityId {
             Self::RelativeTime => "relative_time",
             Self::Duration => "duration",
             Self::RebaseTime => "rebase_time",
+            Self::Identity => "identity",
         }
     }
 }
@@ -168,6 +181,7 @@ pub fn validate_contract_binding(
             "duration requires a numeric scalar Protobuf field at {path:?}"
         ),
         FieldContract::Conditional { .. } => unreachable!("handled before codec binding"),
+        FieldContract::Identity { .. } => anyhow::bail!("SSE identity contracts require JSON"),
     }
     Ok(())
 }

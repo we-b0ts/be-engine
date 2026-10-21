@@ -29,6 +29,7 @@ pub enum ClaimSurface {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum NativeOwnedSlot {
     Body,
+    SseData(String),
     Value,
     Key,
     RedisArgument(usize),

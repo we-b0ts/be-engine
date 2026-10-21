@@ -8,6 +8,7 @@ use serde_json::Value;
 use super::time::{self, ClockPair, TimeError};
 use crate::policy::{FieldContract, TimeAnchor, TimeRelation, TimestampFormat};
 pub(crate) mod diagnosis;
+mod identity;
 mod native;
 pub(crate) use native::{LeafContext, LeafObservations, NativeField, NonceIdentity, VerifiedField};
 
@@ -55,6 +56,8 @@ pub(crate) struct Comparison {
     pub(crate) relationships: TimeRelationships,
     #[serde(skip)]
     pub(crate) nonce_relationships: NonceRelationships,
+    #[serde(skip)]
+    pub(crate) identities: BTreeMap<String, identity::Bijection>,
 }
 
 impl Comparison {
@@ -62,13 +65,42 @@ impl Comparison {
         self.differences.is_empty()
     }
     pub(crate) fn merge_and_validate(&mut self, other: Comparison) {
+        for (binding, identities) in other.identities {
+            if let Err(reason) = self
+                .identities
+                .entry(binding)
+                .or_default()
+                .merge(identities)
+            {
+                self.differences.push(difference("", reason));
+            }
+        }
         self.evaluated.extend(other.evaluated);
         self.differences.extend(other.differences);
         for (rule_id, count) in other.time_validations {
             *self.time_validations.entry(rule_id).or_default() += count;
         }
         for (scope, values) in other.relationships {
-            self.relationships.entry(scope).or_default().extend(values);
+            let existing = self.relationships.entry(scope).or_default();
+            for pair in values {
+                if existing.contains(&pair) {
+                    continue;
+                }
+                if existing.len() >= 4096 {
+                    self.differences.push(difference(
+                        "",
+                        "time relationship exceeds 4096 distinct observations",
+                    ));
+                    break;
+                }
+                if let Some(error) = existing
+                    .iter()
+                    .find_map(|other| time::validate_relationships(&[*other, pair]).err())
+                {
+                    self.differences.push(difference("", &error.to_string()));
+                }
+                existing.push(pair);
+            }
         }
         for (scope, pairs) in other.nonce_relationships {
             let existing = self.nonce_relationships.entry(scope).or_default();
@@ -85,13 +117,6 @@ impl Comparison {
                 }
             }
         }
-        if let Some(error) = self
-            .relationships
-            .values()
-            .find_map(|values| time::validate_relationships(values).err())
-        {
-            self.differences.push(difference("", &error.to_string()));
-        }
     }
 }
 
@@ -103,6 +128,7 @@ struct Decisions {
     times: TimeRelationships,
     time_validations: BTreeMap<String, usize>,
     nonces: NonceRelationships,
+    identities: BTreeMap<String, identity::Bijection>,
 }
 
 struct MultisetSlice<'a> {
@@ -193,6 +219,7 @@ pub(crate) fn compare_with_verified(
         differences: result.err().into_iter().collect(),
         relationships: decisions.times,
         nonce_relationships: decisions.nonces,
+        identities: decisions.identities,
     }
 }
 
@@ -331,6 +358,15 @@ impl Comparator<'_> {
                 field.contract
             };
             match contract {
+                FieldContract::Identity {
+                    binding,
+                    prefix,
+                    format,
+                } => {
+                    return identity::compare(
+                        source, target, binding, prefix, *format, pointer, decisions,
+                    );
+                }
                 FieldContract::Conditional { .. } => {
                     return Err(difference(
                         pointer,

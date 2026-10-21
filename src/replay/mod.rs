@@ -694,7 +694,9 @@ pub(crate) use assertion::native::{
     NativeResponseContext, compare_body as native_response_body,
     compare_header as native_response_header, selected as native_response_selected,
 };
-pub(crate) use assertion::response_payload_pair;
+pub(crate) use assertion::{
+    ResponsePayloadPair, compare_interaction, decode_sse, response_payload_pair,
+};
 pub(crate) use mysql::contracts::{
     validate_contract_candidate as mysql_validate_contract_candidate,
     validate_contract_witness as mysql_validate_contract_witness,

@@ -1,4 +1,6 @@
 use super::*;
+#[path = "tests/interaction.rs"]
+mod interaction;
 mod literal_paths;
 
 fn json_rule(surface: &str) -> String {
@@ -207,6 +209,7 @@ fn all_closed_capabilities_have_one_descriptor_and_proof_requirements() {
         CapabilityId::RelativeTime,
         CapabilityId::Duration,
         CapabilityId::RebaseTime,
+        CapabilityId::Identity,
     ] {
         assert_eq!(registered.iter().filter(|item| item.id == id).count(), 1);
         assert!(!id.descriptor().source_proof.is_empty());
