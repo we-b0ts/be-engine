@@ -77,6 +77,9 @@ reference, not a general Redis emulator: expiration, deletion, list mutations,
 request order and finite consumption keep their recorded contracts.
 
 Null and error responses are unchanged and provide no positive read witness.
+For Source-proven variable counts of current-identity GETs, a raw SET identity
+declaration may opt into [state observations](redis-state-observations.md) with
+its own `state_epochs` proof. Ordinary declarations remain finite.
 Selected JSON values must be non-null scalars. RESP responses and write values
 are limited to 1 MiB, LRANGE to 1024 elements, RPUSH to 128 elements, declarations
 to 16 per rule, JSON pointers to 32 per declaration, and runtime bindings to

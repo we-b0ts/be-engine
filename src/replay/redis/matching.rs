@@ -8,7 +8,7 @@ use crate::replay::command_matching::{
 use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
-    fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
+    pub(super) fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
         if exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none()
             && let Some(case) = exchange.case_id.as_deref()
@@ -186,6 +186,11 @@ impl RedisReplayState {
             }
         }
         if let Some(case) = active_case_id {
+            self.prepare_observations(case).map_err(|error| {
+                CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: format!("state-observation Source proof failed: {error:#}"),
+                }
+            })?;
             self.prepare_read_commutation(case).map_err(|error| {
                 CommandMatchDiagnostic::EvidenceUnavailable {
                     reason: format!("read commutation Source proof failed: {error:#}"),
@@ -208,33 +213,45 @@ impl RedisReplayState {
                 return Ok(matched);
             }
         }
-        let matched = preferred_match_with_priority(
-            &self.exchanges,
+        let observation = self.observation_candidate(
             active_case_id,
-            |exchange| {
-                (exchange.status.is_available()
-                    || (exchange.reusable_snapshot
-                        && exchange.status != ReplayExchangeStatus::Failed))
-                    && self
-                        .connection_scopes
-                        .matches(exchange, active_case_id, connection)
-                    && target_matches(
-                        target,
-                        &exchange.record.target_host,
-                        exchange.record.target_port,
-                    )
-                    && exchange.record.resp_version == resp_version
-                    && exchange.record.database == database
-                    && normalize_optional(username)
-                        == normalize_optional(exchange.record.username.as_deref())
-                    && exchange.record.command.eq_ignore_ascii_case(command)
-                    && self.arguments_match(exchange, args)
-            },
-            |exchange| {
-                !matches!(command, "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE")
-                    || self.pubsub.is_callback_subscription(exchange)
-            },
-        );
+            target,
+            connection,
+            resp_version,
+            database,
+            username,
+            command,
+            args,
+        )?;
+        let matched = observation.map(PreferredMatch::Matched).unwrap_or_else(|| {
+            preferred_match_with_priority(
+                &self.exchanges,
+                active_case_id,
+                |exchange| {
+                    (exchange.status.is_available()
+                        || (exchange.reusable_snapshot
+                            && exchange.status != ReplayExchangeStatus::Failed))
+                        && self
+                            .connection_scopes
+                            .matches(exchange, active_case_id, connection)
+                        && target_matches(
+                            target,
+                            &exchange.record.target_host,
+                            exchange.record.target_port,
+                        )
+                        && exchange.record.resp_version == resp_version
+                        && exchange.record.database == database
+                        && normalize_optional(username)
+                            == normalize_optional(exchange.record.username.as_deref())
+                        && exchange.record.command.eq_ignore_ascii_case(command)
+                        && self.arguments_match(exchange, args)
+                },
+                |exchange| {
+                    !matches!(command, "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE")
+                        || self.pubsub.is_callback_subscription(exchange)
+                },
+            )
+        });
         let index = match matched {
             PreferredMatch::Matched(index) => index,
             PreferredMatch::LaneBlocked { candidate, blocker } => {
@@ -357,6 +374,7 @@ impl RedisReplayState {
                 ));
             }
         };
+        self.check_observation_mutation(index)?;
         self.check_append_barrier(index, args)
             .map_err(append::diagnostic)?;
         let response = self.exchanges[index].response_bytes().map_err(|error| {
@@ -527,6 +545,9 @@ impl RedisReplayState {
             })?;
         let mut rule_ids = value::used_rules(&normalized_exchange, arguments, &self.value_rules);
         rule_ids.extend(exchange.read_commutation_rule.clone());
+        if self.observations.is_refresh(index) {
+            rule_ids.extend(exchange.observation_rule.clone());
+        }
         rule_ids.extend(self.lock_tokens.claim(&normalized_exchange, arguments));
         if !request_decision
             .as_ref()
@@ -547,13 +568,16 @@ impl RedisReplayState {
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
+        let observation = self.reserve_observation(index, args);
+        self.record_observation_mutation(index);
         let exchange = &mut self.exchanges[index];
-        let timing = if exchange.reusable_snapshot && exchange.matched_once {
-            ReplayExchangeTiming::from_recorded(0, DependencyExchangeOutcome::Response)
-        } else {
-            exchange.timing
-        };
-        exchange.status = if exchange.reusable_snapshot {
+        let timing =
+            if (exchange.reusable_snapshot || observation.is_some()) && exchange.matched_once {
+                ReplayExchangeTiming::from_recorded(0, DependencyExchangeOutcome::Response)
+            } else {
+                exchange.timing
+            };
+        exchange.status = if exchange.reusable_snapshot || observation.is_some() {
             exchange.status
         } else if exchange.timing.outcome().is_client_terminated() {
             ReplayExchangeStatus::AwaitingClientTermination
@@ -561,6 +585,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            observation,
             append: None,
             read_back,
             request_started_at: self.request_observed_at,
@@ -648,6 +673,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            observation: None,
             append: None,
             request_started_at: self.request_observed_at,
             unified_delivery: None,
@@ -722,7 +748,9 @@ impl CommandExchangeScope for ReplayExchange {
     }
 
     fn preserves_connection_order(&self) -> bool {
-        !self.connection_independent && self.read_commutation_rule.is_none()
+        !self.connection_independent
+            && self.read_commutation_rule.is_none()
+            && self.observation_rule.is_none()
     }
 }
 

@@ -108,6 +108,11 @@ pub(crate) fn validate_native_source_dependencies(
     {
         *checked.rules.entry(id).or_default() += count;
     }
+    for (id, count) in
+        crate::replay::redis::observations::validate_source(&runtime.request_contracts, cases)?
+    {
+        *checked.rules.entry(id).or_default() += count;
+    }
     for key in runtime.request_contracts.signing_keys() {
         checked.key_witnesses.extend(key.witnesses().cloned());
     }
@@ -130,6 +135,7 @@ fn dependency_effect(effect: &NativeEffect) -> bool {
         NativeEffect::Identity(_)
             | NativeEffect::RedisAppendStream
             | NativeEffect::RedisReadCommutation(_)
+            | NativeEffect::RedisExpiryRefresh(_)
             | NativeEffect::RedisSequence(_)
             | NativeEffect::RedisLock
             | NativeEffect::RedisPublishIdentity(_)

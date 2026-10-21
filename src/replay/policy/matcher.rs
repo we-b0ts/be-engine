@@ -217,6 +217,7 @@ impl ReplayPolicyRuntime {
                 r.rule.effect,
                 crate::policy::NativeEffect::RedisAppendStream
                     | crate::policy::NativeEffect::RedisReadCommutation(_)
+                    | crate::policy::NativeEffect::RedisExpiryRefresh(_)
             )
         }) {
             usage.insert(rule.rule.id.clone(), DependencyRuleUsage::default());

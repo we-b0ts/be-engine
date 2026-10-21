@@ -2,7 +2,7 @@
 use super::*;
 use serde_json::{Value, json};
 
-pub(super) fn rule() -> Value {
+pub(in crate::replay::redis) fn rule() -> Value {
     json!({"id":"append","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},
         "operation":"APPEND","key":{"kind":"affix","prefix":"content:"}},"effect":{"kind":"redis_append_stream"},
         "proof":{"source":"session.py:20","fact":"Source buffers nonempty ordered text into variable APPEND batches; only read/reset boundaries observe the value"}})
@@ -23,7 +23,10 @@ pub(in crate::replay::redis) fn event(
         "response_kind":if command=="SET" {"simple_string"}else if command=="GET" {"bulk_string"}else{"integer"},"replay_safe":true})
 }
 
-fn state(events: &[Value], rules: Vec<Value>) -> (tempfile::TempDir, RedisReplayState) {
+pub(in crate::replay::redis) fn state(
+    events: &[Value],
+    rules: Vec<Value>,
+) -> (tempfile::TempDir, RedisReplayState) {
     let root = tempfile::tempdir().unwrap();
     let case = root.path().join("case");
     std::fs::create_dir(&case).unwrap();
@@ -77,7 +80,7 @@ fn state(events: &[Value], rules: Vec<Value>) -> (tempfile::TempDir, RedisReplay
     (root, state)
 }
 
-fn request(
+pub(in crate::replay::redis) fn request(
     state: &mut RedisReplayState,
     command: &str,
     args: &[&[u8]],

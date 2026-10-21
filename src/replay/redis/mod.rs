@@ -40,6 +40,7 @@ mod matching;
 #[cfg(test)]
 mod native_scope_tests;
 mod native_source;
+pub(in crate::replay) mod observations;
 pub(crate) mod publish;
 pub(in crate::replay) mod pubsub;
 #[cfg(test)]
@@ -137,6 +138,7 @@ struct RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    observation_rule: Option<String>,
     read_commutation_rule: Option<String>,
     subscription_alias: bool,
     response_evidence: Option<crate::dependency_index::RecordRef>,
@@ -157,6 +159,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    observation: Option<observations::Prepared>,
     append: Option<append::PreparedAppend>,
     read_back: Option<super::policy::request_contract::PreparedReadBack>,
     request_started_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -176,6 +179,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    observations: observations::Observations,
     read_commutation: read_commutation::ReadCommutation,
     append_streams: append::AppendStreams,
     request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -247,26 +251,28 @@ impl RedisReplayState {
     }
 
     pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
-        self.exchanges.iter().enumerate().any(|(index, e)| {
-            e.source == ReplaySource::Case
-                && !self.append_streams.idle_source(index)
-                && matches!(
-                    e.status,
-                    ReplayExchangeStatus::Responding
-                        | ReplayExchangeStatus::AwaitingClientTermination
-                )
-        })
+        self.observations.has_in_flight()
+            || self.exchanges.iter().enumerate().any(|(index, e)| {
+                e.source == ReplaySource::Case
+                    && !self.append_streams.idle_source(index)
+                    && matches!(
+                        e.status,
+                        ReplayExchangeStatus::Responding
+                            | ReplayExchangeStatus::AwaitingClientTermination
+                    )
+            })
     }
 
     pub(in crate::replay) fn has_in_flight(&self) -> bool {
-        self.exchanges.iter().enumerate().any(|(index, e)| {
-            !self.append_streams.idle_source(index)
-                && matches!(
-                    e.status,
-                    ReplayExchangeStatus::Responding
-                        | ReplayExchangeStatus::AwaitingClientTermination
-                )
-        })
+        self.observations.has_in_flight()
+            || self.exchanges.iter().enumerate().any(|(index, e)| {
+                !self.append_streams.idle_source(index)
+                    && matches!(
+                        e.status,
+                        ReplayExchangeStatus::Responding
+                            | ReplayExchangeStatus::AwaitingClientTermination
+                    )
+            })
     }
 
     pub(in crate::replay) fn validate_pubsub(&self) -> Result<()> {
@@ -317,6 +323,7 @@ impl RedisReplayState {
             "cannot extend a prepared append stream Case inventory"
         );
         self.read_commutation.check_case_addition(source, case_id)?;
+        self.observations.check_case_addition(source, case_id)?;
         record.outcome.validate()?;
         ensure!(
             record
@@ -340,6 +347,7 @@ impl RedisReplayState {
             .check_inventory_addition(&record, &args)?;
         self.read_commutation
             .check_inventory_addition(&record, &args)?;
+        self.observations.check_inventory_addition(&record, &args)?;
         let response = record.response.decode()?;
         ensure!(
             record
@@ -405,6 +413,7 @@ impl RedisReplayState {
             .register(source, case_id, exchange_index);
         let rpc_push = self.pubsub.link(&record, source, case_id, &args)?;
         self.exchanges.push(ReplayExchange {
+            observation_rule: None,
             read_commutation_rule: None,
             subscription_alias: false,
             response_evidence: None,
@@ -428,6 +437,8 @@ impl RedisReplayState {
     fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
         if let Some(append) = &matched.append {
             self.complete_append(append);
+        } else if let Some(observation) = &matched.observation {
+            self.complete_observation(observation, matched.index);
         } else if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.matched_once = true;
             if !exchange.reusable_snapshot {
@@ -448,6 +459,9 @@ impl RedisReplayState {
     fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
         if let Some(append) = &matched.append {
             self.fail_append(append);
+        }
+        if let Some(observation) = &matched.observation {
+            self.fail_observation(observation);
         }
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
@@ -472,6 +486,8 @@ impl RedisReplayState {
             target_event_index_scope: Some("case_request_admission"),
             append_streams: self.append_streams.reports(),
             append_streams_omitted: self.append_streams.omitted(),
+            state_observations: self.observations.reports(),
+            state_observations_omitted: self.observations.omitted(),
             pubsub: self.pubsub.report(),
             time_shifts: self.time_shifts.clone(),
             unordered_value: Some(self.unordered_value.clone()),

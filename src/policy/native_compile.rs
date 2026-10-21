@@ -115,6 +115,7 @@ impl NativeEffect {
             Self::RedisSequence(_) => "atomic_request_sequence",
             Self::RedisAppendStream => "append_stream_equivalence",
             Self::RedisReadCommutation(_) => "finite_read_commutation",
+            Self::RedisExpiryRefresh(_) => "key_lifetime_expiry_refresh",
             Self::RedisLock => "lock_identity",
             Self::RedisPublishIdentity(_) => "publisher_identity",
             Self::ResponseJwt(_) => "signed_response",
@@ -218,23 +219,34 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
     match &rule.effect {
         NativeEffect::Identity(effect) => validate_identity(rule, effect),
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
-        NativeEffect::RedisReadCommutation(_) => {
+        NativeEffect::RedisReadCommutation(_) | NativeEffect::RedisExpiryRefresh(_) => {
             let resource = resource(selector, Protocol::Redis)?;
             ensure!(
                 selector.api.is_some(),
-                "read commutation requires an explicit API"
+                "Redis observations require an explicit API"
             );
             ensure!(
-                resource.database.is_some(),
-                "read commutation requires an explicit Redis database"
+                resource
+                    .database
+                    .as_ref()
+                    .and_then(crate::policy::Database::index)
+                    .is_some(),
+                "Redis observations require an explicit numeric Redis database"
             );
             ensure!(
-                selector.operation.as_deref() == Some("GET"),
-                "read commutation requires operation GET"
+                selector.operation.as_deref()
+                    == Some(
+                        if matches!(rule.effect, NativeEffect::RedisExpiryRefresh(_)) {
+                            "EXPIRE"
+                        } else {
+                            "GET"
+                        }
+                    ),
+                "observation contract requires its exact GET or EXPIRE operation"
             );
             ensure!(
                 selector.key.is_some(),
-                "read commutation requires a bounded key selector"
+                "Redis observations require a bounded key selector"
             );
             Ok(())
         }

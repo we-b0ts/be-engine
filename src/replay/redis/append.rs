@@ -406,6 +406,9 @@ impl RedisReplayState {
         };
         let rule_id = profile.rule.clone();
         let indices = pieces.iter().map(|p| p.index).collect::<Vec<_>>();
+        for &index in &indices {
+            self.record_observation_mutation(index);
+        }
         let profile = &mut self.append_streams.profiles[profile_index];
         profile.reserved = to;
         profile.in_flight.insert(from, to);
@@ -425,6 +428,7 @@ impl RedisReplayState {
         }
         let exchange = &self.exchanges[index];
         Ok(Some(MatchedRedisExchange {
+            observation: None,
             append: Some(PreparedAppend {
                 profile: profile_index,
                 from,

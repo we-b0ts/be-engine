@@ -140,6 +140,11 @@ pub struct RedisSequenceEffect {
 #[serde(deny_unknown_fields)]
 pub struct RedisReadCommutationEffect {}
 
+/// Explicitly normalize successful fixed-TTL refreshes within one key lifetime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisExpiryRefreshEffect {}
+
 /// An explicit same-key read may return selected values from a matched write.
 /// Empty pointers select a raw bulk value; nonempty pointers select JSON scalars.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +155,10 @@ pub struct RedisReadBack {
     pub argument_index: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub json_pointers: Vec<String>,
+    /// Source proof that GET observes the current SET/DEL state, rather than a
+    /// required invocation count. Absent declarations retain finite reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_epochs: Option<crate::policy::Proof>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

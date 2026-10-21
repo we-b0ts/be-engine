@@ -73,6 +73,7 @@ fn recorded_read_back_source_policy_validates_without_changing_project_or_record
         };
         let entry = Proven {
             contract: RedisReadBack {
+                state_epochs: None,
                 operation: "GET".into(),
                 write_operation: "SET".into(),
                 argument_index: 1,

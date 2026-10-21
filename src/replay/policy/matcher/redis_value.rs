@@ -14,6 +14,7 @@ impl ReplayPolicyRuntime {
                     r.rule.effect,
                     crate::policy::NativeEffect::RedisAppendStream
                         | crate::policy::NativeEffect::RedisReadCommutation(_)
+                        | crate::policy::NativeEffect::RedisExpiryRefresh(_)
                 )
             })
             .map(|r| {
@@ -24,6 +25,9 @@ impl ReplayPolicyRuntime {
                     kind: Some(match r.rule.effect {
                         crate::policy::NativeEffect::RedisReadCommutation(_) => {
                             "redis_read_commutation"
+                        }
+                        crate::policy::NativeEffect::RedisExpiryRefresh(_) => {
+                            "redis_expiry_refresh"
                         }
                         _ => "redis_append_stream",
                     }),

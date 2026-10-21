@@ -46,7 +46,9 @@ successful reset; an unknown nonempty initial value is unsupported.
 
 Successful unconditional positive EXPIRE/PEXPIRE refreshes remain ordinary finite
 exchanges with exact arguments and responses. Chunk equivalence does not permit
-changing, skipping, merging or adding these refresh calls. Other commands keep
+changing, skipping, merging or adding these refresh calls. They require a separate explicit
+[state observation or expiry refresh](redis-state-observations.md) proof
+to authorize count equivalence. Other commands keep
 their ordinary matching, timing and consumption contracts. Unknown mutations,
 transactional/watched sessions, ambiguous Source ordering, failed APPENDs and
 overlapping Case/Global/authentication ownership do not gain stream permission.

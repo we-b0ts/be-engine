@@ -56,6 +56,12 @@ pub(in crate::replay) enum CommandMatchDiagnostic {
         #[serde(flatten)]
         details: Box<crate::replay::redis::append::AppendBoundaryMismatch>,
     },
+    RedisStateObservationMismatch {
+        rule_id: String,
+        source_key_fingerprint: String,
+        source_epoch_mutation: Option<Box<CommandExchangeRefReport>>,
+        reason: String,
+    },
     LaneBlocked {
         candidate: Box<CommandExchangeRefReport>,
         blocked_by: Box<CommandExchangeRefReport>,
@@ -94,6 +100,10 @@ pub(crate) struct CommandSnapshotOverlayReport {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(in crate::replay) struct CommandProtocolReport {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) state_observations:
+        Vec<crate::replay::redis::observations::ObservationAudit>,
+    pub(in crate::replay) state_observations_omitted: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) target_event_index_scope: Option<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

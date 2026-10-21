@@ -27,6 +27,22 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
     for entry in entries {
         proof(&entry.proof)?;
         let read = &entry.contract;
+        if let Some(epoch_proof) = &read.state_epochs {
+            proof(epoch_proof)?;
+            ensure!(
+                read.write_operation == "SET"
+                    && read.operation == "GET"
+                    && read.argument_index == 1
+                    && read.json_pointers.is_empty()
+                    && matches!(rule.effect, NativeEffect::Identity(_)),
+                "state_epochs requires a raw SET identity read_back to GET"
+            );
+            ensure!(
+                matches!(&rule.effect, NativeEffect::Identity(effect)
+                if matches!(&effect.capture, IdentityCapture::RedisArgument { index: 1, when: None, json_pointer: None, copies, derived_from: None } if copies.is_empty())),
+                "state_epochs requires an unconditional raw identity capture"
+            );
+        }
         ensure!(
             matches!(
                 (

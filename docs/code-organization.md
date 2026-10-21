@@ -187,6 +187,11 @@ is unclear.
   key-access exclusion to both Source proofs, and `redis/native_source` loads
   their complete scoped Source inventories. Native command matching and
   delivery retain connection eligibility, claims and finite consumption.
+  `redis/observations` owns explicit SET/DEL state observations and positive TTL
+  refresh equivalence. Its `source` child validates complete, isolated key
+  lifetimes before installing observation permissions; request contracts retain
+  write-to-read identity rendering. Mutation matching, APPEND bytes and transport
+  completion remain with their existing owners.
 
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into
