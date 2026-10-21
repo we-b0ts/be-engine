@@ -135,7 +135,9 @@ is unclear.
   `replay/mysql/contracts/preflight_identity` owns derived SQL witness copies for
   composed identity/value planning. `dynamic_values/audit` restores only accepted
   Case-local binding fingerprints with native capture/reference guards and Source
-  causality; runtime SQL normalization remains in `dynamic_values/mysql`.
+  causality. Immutable later captures establish whether a statement references a
+  binding; only captures completed before that request may restore it. Unrelated
+  statements borrow no identity permission. Runtime SQL normalization remains in `dynamic_values/mysql`.
   Unified preflight retains original evidence and requires genuine Replay for
   these stateful relationships. Pure SQL value comparison retains the remainder.
   `mysql/sql/lexical_cache` shares only bounded immutable lexer output, including

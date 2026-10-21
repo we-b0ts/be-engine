@@ -29,6 +29,12 @@ fn mysql_composite_plan_uses_scoped_accepted_bindings_and_keeps_unselected_field
             "other-case",
             "wrong-audit",
             "before-capture",
+            "embedded-valid",
+            "embedded-before-capture",
+            "unrelated-before-capture",
+            "unrelated-after-capture",
+            "unrelated-business",
+            "unrelated-identity-change",
         ] {
             let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
                 let mut rule = identity();
@@ -49,14 +55,32 @@ fn mysql_composite_plan_uses_scoped_accepted_bindings_and_keeps_unselected_field
                 .unwrap()
                 .timestamp();
             let payload = |id, t| json!({"blocks":[{"id":id,"timestamp":t,"stable":7},{"id":id,"timestamp":t+1,"stable":7}],"status":"done"});
-            let source = payload("old", time).to_string();
+            let unrelated = scenario.starts_with("unrelated");
+            let embedded = scenario.starts_with("embedded");
+            let source_id = if unrelated {
+                "stable"
+            } else if embedded {
+                "prefix:old:suffix"
+            } else {
+                "old"
+            };
+            let target_id = if scenario == "unrelated-identity-change" {
+                "changed"
+            } else if unrelated {
+                "stable"
+            } else if embedded {
+                "prefix:new:suffix"
+            } else {
+                "new"
+            };
+            let source = payload(source_id, time).to_string();
             let event = json!({"event_type":"mysql_exchange","timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
             "connection_id":uuid::Uuid::nil(),"query_sequence":1,"target_host":"db.test","target_port":3306,"database":"app","username":"writer","command":"COM_QUERY",
             "sql":format!("UPDATE results SET payload='{source}' WHERE id=7"),"response":{"status":"ok"},"parse_warnings":[],"outcome":"response"});
             super::dependency_transaction::install(&fixture, event, |raw| {
                 let mut envelope: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-                let mut body = payload("new", time + 60);
-                if scenario == "business" {
+                let mut body = payload(target_id, time + 60);
+                if scenario == "business" || scenario == "unrelated-business" {
                     body["status"] = json!("changed");
                 }
                 if scenario == "shape" {
@@ -74,7 +98,7 @@ fn mysql_composite_plan_uses_scoped_accepted_bindings_and_keeps_unselected_field
                 .unwrap()
                 .join("apis/api/case-1");
             let dependencies = case.join("dependencies.jsonl");
-            let capture = json!({"event_type":"redis_exchange","timestamp":if scenario=="before-capture" {"2026-10-16T00:00:01Z"} else {"2026-10-15T23:59:59Z"},"duration_ms":0,"connection_id":"11111111-1111-4111-8111-111111111111","sequence":1,
+            let capture = json!({"event_type":"redis_exchange","timestamp":if scenario.ends_with("before-capture") {"2026-10-16T00:00:01Z"} else {"2026-10-15T23:59:59Z"},"duration_ms":0,"connection_id":"11111111-1111-4111-8111-111111111111","sequence":1,
             "target_host":"cache.test","target_port":6379,"database":0,"resp_version":2,"command":"SET","args":[raw_body(b"current"),raw_body(b"old")],"response_kind":"simple_string","response":raw_body(b"+OK\r\n"),"outcome":"response","replay_safe":true});
             let original = fs::read_to_string(&dependencies).unwrap();
             fs::write(&dependencies, format!("{capture}\n{original}")).unwrap();
@@ -99,7 +123,10 @@ fn mysql_composite_plan_uses_scoped_accepted_bindings_and_keeps_unselected_field
             }
             fixture.confirm();
             let plan = fixture.plan();
-            if scenario != "valid" {
+            if !matches!(
+                scenario,
+                "valid" | "embedded-valid" | "unrelated-before-capture" | "unrelated-after-capture"
+            ) {
                 assert!(plan.is_err(), "{scenario}");
                 continue;
             }
@@ -110,12 +137,134 @@ fn mysql_composite_plan_uses_scoped_accepted_bindings_and_keeps_unselected_field
             );
             assert_eq!(
                 plan.traffic_e2e_report["preflight"]["stateful_target_obligations"],
-                json!(["block"])
+                if unrelated {
+                    json!([])
+                } else {
+                    json!(["block"])
+                }
             );
             assert_eq!(plan.traffic_e2e_report["verified"], false);
             let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
             assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
             assert_eq!(fs::read(dependencies).unwrap(), original);
+        }
+    }
+}
+
+#[test]
+fn mysql_composite_plan_requires_prior_capture_only_for_referenced_identity() {
+    for protocol in ["redis", "mysql", "http"] {
+        for relevant in [false, true] {
+            let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
+                let mut rule = identity();
+                if protocol != "redis" {
+                    rule["match"].as_object_mut().unwrap().remove("key");
+                    if protocol == "mysql" {
+                        rule["match"]["resource"] = json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"});
+                        rule["match"]["operation"] = json!("COM_QUERY");
+                        rule["match"]["sql"] = json!("INSERT INTO blocks (name) VALUES (?)");
+                        rule["effect"]["capture"] = json!({"kind":"mysql_value","index":0});
+                    } else {
+                        rule["match"]["resource"] =
+                            json!({"protocol":"http","endpoint":"api.test:80"});
+                        rule["match"]["operation"] = json!("POST");
+                        rule["match"]["path"] = json!("/capture");
+                        rule["effect"]["capture"] = json!({"kind":"http_json","pointer":"/name"});
+                    }
+                    rule["effect"]["references"] = json!([{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"}}]);
+                    if protocol == "http" {
+                        rule["effect"]["references"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(json!({"resource":{"protocol":"http","endpoint":"api.test:80"}}));
+                    }
+                }
+                write(
+                    &root.join(".traffic-e2e/policy.yaml"),
+                    json!({"format":"traffic-policy/v1","rules":[rule]}),
+                );
+                vec![]
+            });
+            write(&fixture.proposal, times());
+            let time = "2026-10-16T00:00:00Z"
+                .parse::<chrono::DateTime<chrono::Utc>>()
+                .unwrap()
+                .timestamp();
+            let body = |id, at| json!({"blocks":[{"id":id,"timestamp":at}]});
+            let source = body(
+                if relevant {
+                    "prefix:old:suffix"
+                } else {
+                    "stable"
+                },
+                time,
+            )
+            .to_string();
+            let event = json!({"event_type":"mysql_exchange","timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
+                "connection_id":uuid::Uuid::nil(),"query_sequence":1,"target_host":"db.test","target_port":3306,"database":"app","username":"writer","command":"COM_QUERY",
+                "sql":format!("UPDATE results SET payload='{source}' WHERE id=7"),"response":{"status":"ok"},"parse_warnings":[],"outcome":"response"});
+            super::dependency_transaction::install(&fixture, event, |raw| {
+                let mut envelope: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+                envelope["sql"] = json!(format!(
+                    "UPDATE results SET payload='{}' WHERE id=7",
+                    body(
+                        if relevant {
+                            "prefix:new:suffix"
+                        } else {
+                            "stable"
+                        },
+                        time + 60
+                    )
+                ));
+                serde_json::to_vec(&envelope).unwrap()
+            });
+            let mut capture = if protocol == "redis" {
+                json!({"event_type":"redis_exchange","target_host":"cache.test","target_port":6379,"database":0,"resp_version":2,"sequence":2,"command":"SET","args":[raw_body(b"current"),raw_body(b"old")],"response":raw_body(b"+OK\r\n"),"response_kind":"simple_string","replay_safe":true})
+            } else if protocol == "mysql" {
+                json!({"event_type":"mysql_exchange","target_host":"db.test","target_port":3306,"database":"app","username":"writer","command":"COM_QUERY","query_sequence":2,"sql":"INSERT INTO blocks (name) VALUES ('old')","response":{"status":"ok"},"parse_warnings":[]})
+            } else {
+                json!({"event_type":"http_exchange","scheme":"http","authority":"api.test:80","method":"POST","uri":"/capture","request_headers":{},"request_body":raw_body(br#"{"name":"old"}"#),"response_status":200,"response_headers":{},"response_body":raw_body(b"{}")})
+            };
+            capture["timestamp"] = json!("2026-10-16T00:00:01Z");
+            capture["duration_ms"] = json!(0);
+            capture["connection_id"] = json!(uuid::Uuid::nil());
+            capture["outcome"] = json!("response");
+            let path = fixture
+                .state()
+                .case_source
+                .as_ref()
+                .unwrap()
+                .join("apis/api/case-1/dependencies.jsonl");
+            let original = fs::read_to_string(&path).unwrap();
+            fs::write(&path, format!("{original}{capture}\n")).unwrap();
+            let original = fs::read(&path).unwrap();
+            let mut report: serde_json::Value =
+                serde_json::from_slice(&fs::read(&fixture.paths.replay).unwrap()).unwrap();
+            report["replay_policy"]["dynamic_bindings"] = json!([{"case_id":"case-1","rule_id":"block","source_fingerprint":fingerprint(b"old"),"target_fingerprint":fingerprint(b"new")}]);
+            write(&fixture.paths.replay, report);
+            fixture.confirm();
+            let planned = fixture.plan();
+            if relevant {
+                assert!(planned.is_err(), "{protocol}");
+            } else {
+                let plan = planned.unwrap_or_else(|error| panic!("{protocol}: {error:#}"));
+                assert_eq!(
+                    plan.traffic_e2e_report["preflight"]["independent_target_validations"],
+                    1
+                );
+                assert_eq!(
+                    plan.traffic_e2e_report["preflight"]["stateful_target_obligations"],
+                    json!([])
+                );
+                assert_eq!(plan.traffic_e2e_report["verified"], false);
+                assert_eq!(
+                    apply_rewrite_rule(fixture.context(), &plan.plan_id)
+                        .unwrap()
+                        .traffic_e2e_report["requires_fresh_replay"],
+                    true
+                );
+            }
+            assert_eq!(fs::read(path).unwrap(), original);
         }
     }
 }

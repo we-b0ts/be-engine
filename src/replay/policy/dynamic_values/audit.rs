@@ -259,8 +259,8 @@ fn restore_bindings(
         .filter(|line| !line.is_empty())
         .map(serde_json::from_slice::<Value>)
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let events = events
-        .into_iter()
+    let eligible_events = events
+        .iter()
         .filter(|event| {
             before.is_none_or(|before| {
                 event["global_dependency_reason"].is_null()
@@ -289,6 +289,15 @@ fn restore_bindings(
             runtime.matches_case(rule, case_id),
             "dynamic proof is outside the API scope"
         );
+        // A resource reference is permission to normalize this identity where
+        // it occurs, not a prerequisite for unrelated earlier statements.
+        // Later immutable captures may establish relevance only; restoration
+        // still uses the causally eligible inventory below.
+        if allowed.is_some()
+            && !binding_occurs_in_request(runtime, rule, proof, &events, source_values)?
+        {
+            continue;
+        }
         let DynamicValueCapture::Mysql {
             target,
             database,
@@ -301,7 +310,7 @@ fn restore_bindings(
                 runtime,
                 rule,
                 proof,
-                &events,
+                &eligible_events,
                 case_id,
                 source_values,
                 actual_values,
@@ -325,7 +334,7 @@ fn restore_bindings(
         {
             let actual_params: Option<Vec<RecordedMysqlValue>> =
                 serde_json::from_value(actual.get("params").cloned().unwrap_or(Value::Null))?;
-            for source in events.iter().filter(|source| {
+            for source in eligible_events.iter().filter(|source| {
                 source["event_type"] == "mysql_exchange"
                     && runtime.native_source_allowed(rule, source)
                     && source["target_host"]
@@ -379,6 +388,70 @@ fn restore_bindings(
     Ok(())
 }
 
+fn binding_occurs_in_request(
+    runtime: &DynamicValues,
+    rule: &DynamicValueRule,
+    proof: &Value,
+    events: &[Value],
+    values: &[crate::mysql::sql::Token],
+) -> Result<bool> {
+    let strings = strings(values);
+    let mut witnessed = false;
+    for event in events.iter().filter(|event| {
+        event["global_dependency_reason"].is_null() && runtime.native_source_allowed(rule, event)
+    }) {
+        let value = if let DynamicValueCapture::Mysql {
+            target,
+            database,
+            value_index,
+            json_pointer,
+            ..
+        } = &rule.capture
+        {
+            if event["event_type"] != "mysql_exchange"
+                || event["target_host"]
+                    .as_str()
+                    .is_none_or(|host| !host.eq_ignore_ascii_case(&target.host))
+                || event["target_port"] != target.port
+                || event["database"] != *database
+            {
+                continue;
+            }
+            let params: Option<Vec<RecordedMysqlValue>> =
+                serde_json::from_value(event.get("params").cloned().unwrap_or(Value::Null))?;
+            let Ok(values) = template_values(
+                &rule.capture.mysql_template()?,
+                event["sql"].as_str(),
+                params.as_deref(),
+            ) else {
+                continue;
+            };
+            mysql::capture(
+                values
+                    .get(*value_index)
+                    .context("SQL source capture slot is absent")?,
+                json_pointer.as_deref(),
+            )?
+        } else {
+            let Some(capture) = source::from_event(&rule.capture, rule.value_type, event)? else {
+                continue;
+            };
+            capture.value
+        };
+        if fingerprint(value.as_bytes()) == proof["source_fingerprint"] {
+            witnessed = true;
+            if strings.iter().any(|text| text.contains(&value)) {
+                return Ok(true);
+            }
+        }
+    }
+    ensure!(
+        witnessed,
+        "dynamic request proof has no matching source capture"
+    );
+    Ok(false)
+}
+
 fn strings(values: &[crate::mysql::sql::Token]) -> Vec<String> {
     let mut out = Vec::new();
     fn visit(value: &Value, out: &mut Vec<String>, depth: usize) {
@@ -422,7 +495,7 @@ fn restore_request_binding(
     runtime: &DynamicValues,
     rule: &DynamicValueRule,
     proof: &Value,
-    events: &[Value],
+    events: &[&Value],
     case: &str,
     source_values: &[crate::mysql::sql::Token],
     actual_values: &[crate::mysql::sql::Token],
