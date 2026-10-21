@@ -7,6 +7,8 @@ use crate::rewrite::{
     recover_rewrite_rule_plan,
 };
 
+#[path = "transaction_api_time.rs"]
+mod api_time_transaction;
 #[path = "transaction_concurrency.rs"]
 mod concurrency_transaction;
 #[path = "transaction_dependency.rs"]
@@ -89,6 +91,10 @@ fn raw_body(bytes: &[u8]) -> serde_json::Value {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_request_time(Some("2026-10-16T00:00:00Z"))
+    }
+
+    fn with_request_time(timestamp: Option<&str>) -> Self {
         let target = crate::rewrite::worker::tests::configured_target();
         let root = target.path();
         let project_path = root.join(".traffic-e2e/project.yaml");
@@ -125,7 +131,7 @@ impl Fixture {
         );
         write(
             &case.join("request.json"),
-            json!({"timestamp":"2026-10-16T00:00:00Z","method":"GET","uri":"/api","body":body(json!({}))}),
+            json!({"timestamp":timestamp,"method":"GET","uri":"/api","body":body(json!({}))}),
         );
         fs::write(case.join("dependencies.jsonl"), "").unwrap();
         let now = "2026-10-16T00:01:00Z".parse().unwrap();
@@ -268,20 +274,21 @@ impl Fixture {
     }
 
     fn replace_response_bodies(&self, source: &[u8], target: &[u8]) {
+        self.replace_responses(
+            json!({"status":200,"body":raw_body(source)}),
+            json!({"version":1,"status":200,"body":raw_body(target),"request_sent_at":"2026-10-16T00:01:00Z"}),
+        );
+    }
+
+    fn replace_responses(&self, source: serde_json::Value, target: serde_json::Value) {
         let mut assertions: serde_json::Value =
             serde_json::from_slice(&fs::read(&self.paths.assertions).unwrap()).unwrap();
         let summary = &mut assertions["cases"][0]["response"];
         let expected = summary["expected_response"].as_str().unwrap().to_owned();
         let actual = summary["actual_response"].as_str().unwrap().to_owned();
         let detail_path = summary["detail_report"].as_str().unwrap().to_owned();
-        write(
-            Path::new(&expected),
-            json!({"status":200,"body":raw_body(source)}),
-        );
-        write(
-            Path::new(&actual),
-            json!({"version":1,"status":200,"body":raw_body(target),"request_sent_at":"2026-10-16T00:01:00Z"}),
-        );
+        write(Path::new(&expected), source);
+        write(Path::new(&actual), target);
         let mut detail: serde_json::Value =
             serde_json::from_slice(&fs::read(&detail_path).unwrap()).unwrap();
         detail["expected_response_fingerprint"] = json!(crate::verification_progress::fingerprint(

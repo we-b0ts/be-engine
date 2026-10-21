@@ -36,11 +36,13 @@ pub(super) fn verify(
     }
     context.ensure_current()?;
     let source_payload = crate::replay::response_payload_pair(request, &source, None)?;
+    let source_times = crate::value_contract::time::ClockPair {
+        source: source_payload.times.source,
+        target: source_payload.times.source,
+    };
     let clocks = AnchorClocks {
-        case: crate::value_contract::time::ClockPair {
-            source: source_payload.times.source,
-            target: source_payload.times.source,
-        },
+        case: source_times,
+        dependency: source_times,
         ..Default::default()
     };
     let checked = compare_payload(
@@ -91,6 +93,7 @@ pub(super) fn verify(
     let pair = crate::replay::response_payload_pair(request, &source, Some(&target))?;
     let clocks = AnchorClocks {
         case: pair.times,
+        dependency: pair.times,
         ..Default::default()
     };
     compare_payload(
