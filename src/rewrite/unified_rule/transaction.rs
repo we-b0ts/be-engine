@@ -39,6 +39,8 @@ mod read_back_transaction;
 mod read_commutation_transaction;
 #[path = "transaction_recovery.rs"]
 mod recovery_transaction;
+#[path = "transaction_redis_candidates.rs"]
+mod redis_candidates_transaction;
 #[path = "transaction_scope.rs"]
 mod scope_transaction;
 #[path = "transaction_signed_input.rs"]

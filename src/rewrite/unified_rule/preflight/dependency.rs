@@ -267,16 +267,27 @@ pub(super) fn compare_pair(
         Protocol::Redis if surface == Surface::DependencyRequest => {
             let source: Vec<Vec<u8>> = serde_json::from_slice(source)?;
             let target: Vec<Vec<u8>> = serde_json::from_slice(target)?;
+            let key = target.first().context("Target Redis key is missing")?;
+            if selected(rules, key).is_empty() {
+                // Search edges can contain another command's key in the same
+                // resource/operation scope. It supplies no Target validation.
+                return Ok(0);
+            }
             let index = super::value_index(event, source.len())?;
             ensure!(
-                source.len() == target.len()
-                    && source
-                        .iter()
-                        .zip(&target)
-                        .enumerate()
-                        .all(|(i, (a, b))| i == index || a == b),
-                "unselected Redis key/options/arguments differ"
+                source.len() == target.len(),
+                "unselected Redis argument inventory differs: Source {}, Target {}",
+                source.len(),
+                target.len()
             );
+            for (i, (before, after)) in source.iter().zip(&target).enumerate() {
+                ensure!(
+                    i == index || before == after,
+                    "unselected Redis key/options/arguments differ at argument {i} (Source {} bytes, Target {} bytes)",
+                    before.len(),
+                    after.len()
+                );
+            }
         }
         Protocol::Redis => (),
         Protocol::Memcached => {
