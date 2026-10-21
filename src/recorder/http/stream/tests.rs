@@ -26,6 +26,18 @@ async fn engine_body_drop_without_peer_termination_remains_a_capture_failure() {
         .active_case_invalidation(case.id)
         .expect("engine truncation must invalidate capture");
     assert_eq!(invalidation.reason, "http_stream_capture_incomplete");
+    assert!(
+        !invalidation.can_recover_after_drain(),
+        "unexplained engine body drop still requires isolation"
+    );
+    let diagnosis = invalidation.context.unwrap().http_stream.unwrap();
+    assert_eq!(diagnosis["client"]["engine_stopped"], false);
+    assert_eq!(
+        diagnosis["client"]["client_connection_end"],
+        serde_json::Value::Null
+    );
+    assert_eq!(diagnosis["received_bytes"], 6);
+    assert_eq!(diagnosis["prefix_flushed"], false);
 }
 
 fn context(state: &AppState, termination: ClientTermination) -> CaptureContext {
@@ -264,6 +276,14 @@ async fn cancellation_with_backpressure(flushed: bool) {
         .observe_client_io_error(&std::io::ErrorKind::ConnectionReset.into());
     drop(body);
     assert_eq!(state.active_case_invalidation(case.id).is_none(), flushed);
+    if !flushed {
+        assert!(
+            state
+                .active_case_invalidation(case.id)
+                .unwrap()
+                .can_recover_after_drain()
+        );
+    }
     assert!(
         state
             .drain_active_case_dependencies(case.id)

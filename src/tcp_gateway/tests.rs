@@ -19,6 +19,7 @@ use tokio_rustls::{TlsAcceptor, TlsConnector};
 use crate::dns_mock::FakeDnsEntry;
 
 use super::*;
+mod stream_cancellation;
 mod upstream_routes;
 
 #[tokio::test]

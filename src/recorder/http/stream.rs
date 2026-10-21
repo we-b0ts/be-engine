@@ -166,11 +166,38 @@ impl Capture {
     }
 
     fn invalidate(&self, error: &str) {
+        let context = crate::recorder::CaseInvalidationContext {
+            category: "http_stream_capture".into(),
+            elapsed_ms: self.context.started.elapsed().as_millis(),
+            recorder_phase: self.context.state.recording_lifecycle_phase().into(),
+            http_stream: Some(serde_json::json!({
+                "version": 1,
+                "exchange_id": self.context.event.id,
+                "client": self.context.termination.diagnosis(self.context.started),
+                "server": crate::http::termination::observed_since(
+                    self.upstream.as_ref().and_then(|upstream| upstream.observed_since(self.context.started)),
+                    self.context.started),
+                "body_complete": self.stream.complete,
+                "prefix_flushed": self.prefix.is_complete(),
+                "received_bytes": self.received,
+                "captured_bytes": self.payload.len(),
+                "chunks": self.stream.chunks.len(),
+            })),
+        };
+        let mut failure =
+            CaseInvalidation::new("http_stream_capture_incomplete", error).with_context(context);
+        let client = &self.context.termination;
+        let transport_ended = client
+            .cancelled()
+            .is_some_and(|end| end.at >= self.context.started)
+            || client.has_transport_failure_since(self.context.started);
+        if !client.engine_stopped() && transport_ended {
+            failure = failure.allow_drained_case_recovery();
+        }
         for (case, _) in &self.context.targets.cases {
-            self.context.state.invalidate_active_case(
-                case.id,
-                CaseInvalidation::new("http_stream_capture_incomplete", error),
-            );
+            self.context
+                .state
+                .invalidate_active_case(case.id, failure.clone());
         }
     }
 

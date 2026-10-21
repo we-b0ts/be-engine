@@ -171,6 +171,30 @@ failed. Closed admission cannot leave the recording service indefinitely running
 and sending every later request to fallback. Normal EOF and fully observed client
 cancellation do not stop the recording service.
 
+A diagnosed, fully drained HTTP dependency capture failure after a clean primary
+close is local to its case. Recorder preserves that failed evidence and releases
+the slot after the ordinary dependency quiet window and successful publication;
+the capture owner must also have observed a client connection ending or transport
+failure. Unexplained Body drop retains Source isolation. The next request can
+record using the same Source after a recoverable failure. Admission closure, lease loss,
+primary timeout, incomplete inventory, engine cleanup and persistence failures
+still require supervised isolation. A failed case remains failed even when the
+service continues; final run reporting retains its failure count and exit status.
+
+HTTP stream capture failures include `recording-error.json.context.http_stream`
+with the exchange identity, client/server termination clocks, engine-cleanup
+flag, bounded IO error kinds/errno, response byte/chunk counts and prefix-flush
+state. Error text, headers and payloads are excluded from this diagnostic. Raw
+socket observation under TLS preserves errors that TLS can otherwise translate;
+flush failures participate in termination observation. FIN remains a write-half
+close, and neither a failed write nor Body drop invents a client reset.
+
+The optional real-client regression runs with
+`TRAFFIC_E2E_TEST_PYTHON=/path/to/python-with-httpx cargo test --lib httpx_https_dependency_close -- --ignored`.
+It uses loopback TLS and a temporary trusted CA. It requires an independently
+observed client termination or an explicit incomplete-capture diagnosis; it never
+accepts a synthesized HTTP body EOF for a cancelled dependency.
+
 Engine business-idle closure, client closure and server EOF are distinct observed
 end reasons and are compared during Replay. WebSocket close codes and reasons
 are compared too. If the client or server closes first, recording retains that

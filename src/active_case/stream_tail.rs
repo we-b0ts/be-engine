@@ -217,6 +217,28 @@ impl ActiveCaseRegistry {
         self.enabled_stream_tail(case_id).map(|tail| tail.deadline)
     }
 
+    /// A failed stream may release its slot only after attribution closes,
+    /// business I/O and writers drain, and the complete quiet window is observed.
+    pub(crate) fn failed_stream_is_drained(&self, case_id: Uuid) -> bool {
+        let state = self.state.lock().expect("active case registry poisoned");
+        let Some(case) = state.active.iter().find(|case| case.case.id == case_id) else {
+            return false;
+        };
+        !state.quiescing
+            && !case.recovering
+            && !case.accepting_dependencies
+            && case.dependencies.snapshot().0 == 0
+            && case.stream_tail.as_ref().is_some_and(|tail| {
+                tail.is_enabled()
+                    && tail.activity.is_quiet(tail.idle)
+                    && !tail
+                        .completed
+                        .lock()
+                        .expect("stream tail inventory poisoned")
+                        .exceeded
+            })
+    }
+
     pub(crate) fn stream_tail_report(
         &self,
         case_id: Uuid,

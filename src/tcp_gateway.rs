@@ -141,6 +141,7 @@ async fn serve_https_mitm_connection(
     )?;
     let _registration = client.registration();
     let owner = termination.clone();
+    let client = ObservedClientIo::transport(client, termination.clone());
     let tls = match acceptor.accept(client).await {
         Ok(tls) => tls,
         Err(err) => {

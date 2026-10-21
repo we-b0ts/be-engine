@@ -5,6 +5,13 @@ pub(crate) struct CaseInvalidation {
     pub(crate) reason: String,
     pub(crate) message: String,
     pub(crate) context: Option<CaseInvalidationContext>,
+    recovery: CaseFailureRecovery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaseFailureRecovery {
+    StopSource,
+    AfterDependencyDrain,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -12,6 +19,8 @@ pub(crate) struct CaseInvalidationContext {
     pub(crate) category: String,
     pub(crate) elapsed_ms: u128,
     pub(crate) recorder_phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) http_stream: Option<serde_json::Value>,
 }
 
 impl CaseInvalidation {
@@ -20,12 +29,24 @@ impl CaseInvalidation {
             reason: reason.into(),
             message: message.into(),
             context: None,
+            recovery: CaseFailureRecovery::StopSource,
         }
     }
 
     pub(crate) fn with_context(mut self, context: CaseInvalidationContext) -> Self {
         self.context = Some(context);
         self
+    }
+
+    /// A capture owner may permit local archival; the lifecycle must still prove
+    /// a clean primary, complete dependency drain and successful publication.
+    pub(crate) fn allow_drained_case_recovery(mut self) -> Self {
+        self.recovery = CaseFailureRecovery::AfterDependencyDrain;
+        self
+    }
+
+    pub(crate) fn can_recover_after_drain(&self) -> bool {
+        self.recovery == CaseFailureRecovery::AfterDependencyDrain
     }
 }
 

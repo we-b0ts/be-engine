@@ -29,9 +29,24 @@ budget for these streams; it is not a deadline for business I/O. At the absolute
 observation limit, Recorder quarantines admission and marks the observation
 incomplete. Already admitted requests and the original case remain alive until
 their evidence is recorded. Writer overruns also retain ownership until drained.
-Neither condition stops Source or resets dependency sockets to obtain an ending.
-An indefinitely pending dependency can therefore keep the case quarantined until
-operator shutdown. API case-count quotas retain their normal completion meaning.
+Both conditions close global admission and wake standalone supervision. The
+supervisor stops Source before closing retained dependency sockets with explicit
+engine-cleanup attribution; cleanup cannot certify a peer ending. API case-count
+quotas retain their normal completion meaning.
+
+A quiet tail proves that admitted dependency observations and their writes have
+drained; it does not certify each response's capture integrity. An HTTP dependency
+can still fail with `http_stream_capture_incomplete` after its Body is dropped
+without a supported peer ending. After a clean primary close, this diagnosed
+case-local failure can be archived in `failed/` while Source keeps running. The
+capture owner must have independently observed a client connection ending or a
+transport failure; unexplained engine Body drop remains a stop condition. The
+registry must prove closed attribution, complete inventory, no business IO or
+writers in flight, the full quiet interval, and no global quarantine or timeout
+recovery. Publication must succeed without a preceding lease loss. Other primary,
+lease, deadline, inventory, engine-cleanup and persistence failures retain their
+supervised stop behavior. The quiet interval is unchanged and is never itself a
+failure or a global stop trigger.
 
 `dependency-tail-observation.json` version 1 stores the budget, idle interval,
 outcome, completeness and finite completed dependency references. HTTP uses the

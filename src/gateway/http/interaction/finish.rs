@@ -234,6 +234,7 @@ async fn run(
             )),
         }
     };
+    let dependencies_drained = drain.is_none();
     let invalidation = session
         .state
         .active_case_invalidation(session.case.id)
@@ -283,10 +284,13 @@ async fn run(
             return result.map_err(|error| error.context(context));
         }
     };
+    let continue_after_failure = output.end.clean
+        && dependencies_drained
+        && super::recovery::can_continue(session, invalidation.as_ref());
     if invalidation.is_some() {
         output.end.clean = false;
     }
-    if !output.end.clean {
+    if !output.end.clean && !continue_after_failure {
         stop_failed_recording(session);
     }
     let response = session
@@ -343,9 +347,23 @@ async fn run(
             sse_observation: None,
             interaction: Some(output),
         },
-        invalidation,
+        invalidation.clone(),
     )
     .await?;
+    if continue_after_failure {
+        // Publication owns the final lease-loss ordering. A loss observed before
+        // its commit still requires Source isolation, even after a quiet drain.
+        let commit = publication.begin().await;
+        if commit.invalidation.is_none()
+            && super::recovery::can_continue(session, invalidation.as_ref())
+        {
+            tracing::warn!(case_id = %session.case.id,
+                reason = "http_stream_capture_incomplete",
+                "failed streaming case finalized; continuing recording after dependency drain");
+        } else {
+            stop_failed_recording(session);
+        }
+    }
     let mut sessions = session
         .state
         .inner
