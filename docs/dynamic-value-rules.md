@@ -23,6 +23,31 @@ tokens. Inline SQL string/JSON values and prepared string parameters use the
 8 MiB value budget, including Source reference coverage and binding audit.
 Configured SQL templates retain their separate 64 KiB bound.
 
+With native `identity` rules, add a newly proven reference resource to the
+existing rule's `effect.references`; keep the same rule ID, capture, API/resource
+scope, root proof and all prior relationships. The unified planner permits
+append-only references and `read_back` declarations, including both in one
+proposal. Put the new Source proof on the appended reference:
+
+```yaml
+references:
+  # Preserve existing entries here, unchanged and in their original order.
+  - contract:
+      resource: {protocol: mysql, endpoint: 'db.example:3306', database: app, username: writer}
+    proof:
+      source: app/completion.py:store_result
+      fact: The completed SQL JSON reuses the identity previously captured in Redis.
+```
+
+This authorizes references to a committed capture, including strings inside SQL
+JSON parameters. It does not generate a second identity or relax other JSON
+members. Complete Source preflight must witness every added resource after a
+capture; missing or premature references are rejected. Plan/apply freezes the
+evidence and requires fresh genuine Replay. Do not create a duplicate capture
+rule to add a consumer, and do not modify the old root proof to describe the new
+consumer. Removal, reordering or replacement of existing relationships is not an
+additive update.
+
 ```yaml
 version: 3
 expected_response: assertions_only

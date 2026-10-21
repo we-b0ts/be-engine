@@ -9,8 +9,9 @@ creation timestamp, read it, and reuse it in subsequent writes.
 Update the existing write rule. Keep its ID, API, resource, database, key,
 capture, references and request contracts. Add a read declaration and Source
 proof of both the write and subsequent read. The planner permits a same-ID
-update only when it appends `read_back` declarations and preserves the entire
-existing rule, including prior declarations and proofs. Put the new read proof
+update that appends `read_back` declarations or identity `references` while
+preserving the existing capture, scope, contracts, prior declarations and proofs.
+Put the new read proof
 on its declaration rather than changing the existing write proof. No declaration
 means no change to existing delivery behavior.
 
