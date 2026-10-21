@@ -90,6 +90,9 @@ fn remove_relative_offset(map: &mut Mapping) -> Result<()> {
     let Some(offset) = map.get("utc_offset") else {
         return Ok(());
     };
+    if map.get("format").and_then(Value::as_str) == Some("calendar_date") {
+        return validate_legacy_offset(offset);
+    }
     ensure!(
         matches!(
             map.get("format").and_then(Value::as_str),

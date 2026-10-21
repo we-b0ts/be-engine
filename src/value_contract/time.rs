@@ -1,6 +1,7 @@
 //! Exact timestamp parsing and clock relations, independent of replay and configuration.
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Utc};
 use serde_json::Value;
+pub(crate) mod calendar;
 
 pub(crate) const NANOS_PER_SECOND: i128 = 1_000_000_000;
 const TOLERANCE_NANOS: u128 = 5_000_000_000;
@@ -54,6 +55,7 @@ pub(crate) enum TimeError {
     DeltaMismatch,
     NumericCategoryChanged,
     RelationshipMismatch,
+    CalendarDayMismatch,
 }
 
 impl std::fmt::Display for TimeError {
@@ -67,6 +69,9 @@ impl std::fmt::Display for TimeError {
             Self::DeltaMismatch => "time difference does not preserve the anchor difference",
             Self::NumericCategoryChanged => "timestamp numeric category changed",
             Self::RelationshipMismatch => "time parameter relationship changed",
+            Self::CalendarDayMismatch => {
+                "calendar date does not satisfy its local request-day relation"
+            }
         })
     }
 }

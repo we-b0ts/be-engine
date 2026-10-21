@@ -208,12 +208,15 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
         if let Some(time) = contract.unconditional().time() {
             ensure!(
                 match time.format {
+                    TimestampFormat::CalendarDate => {
+                        time.utc_offset.is_some() && time.clock_group.is_none()
+                    }
                     TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => {
                         time.relation == TimeRelation::PreserveOffset || time.utc_offset.is_some()
                     }
                     _ => time.utc_offset.is_none(),
                 },
-                "naive request_window times require utc_offset; relative times need none; zoned and Unix formats forbid it"
+                "calendar_date requires utc_offset and forbids clock_group; naive request_window times require utc_offset; relative timestamps need none; zoned and Unix formats forbid it"
             );
             time.offset()?;
         }

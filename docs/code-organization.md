@@ -80,7 +80,9 @@ is unclear.
   state. `policy/condition` owns Source sibling predicate validation, selection,
   Target discriminator equality and conservative disjointness shared by value
   fields and native Redis identity captures. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
-  relations. `value_contract/json` composes field contracts with strict remainder
+  relations. Its `calendar` child preserves civil-day distances using independent
+  local request dates and an explicit fixed offset; it never treats a date as a
+  midnight instant or rewrites counters. `value_contract/json` composes field contracts with strict remainder
   comparison and bounded whole-element multiset pairing; `value_contract/delivery`
   writes only explicitly authorized timestamps in derived copies. These pure
   owners never claim protocol exchanges or mutate recorded evidence.

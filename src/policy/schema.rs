@@ -593,6 +593,8 @@ pub enum TimestampFormat {
     AmzDate,
     Iso8601Naive,
     SqlDatetime,
+    /// A civil YYYY-MM-DD value relative to the request's declared local day.
+    CalendarDate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

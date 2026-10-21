@@ -21,6 +21,9 @@ pub(crate) fn materialize(
     let mut deltas = BTreeMap::new();
     for rule in rules {
         for contract in rule.delivery_time.values() {
+            if contract.format == TimestampFormat::CalendarDate {
+                continue;
+            }
             let pair = anchor(clocks, contract.anchor);
             let (source, target) = pair.require()?;
             let delta = time::date_nanos(target) - time::date_nanos(source);
@@ -31,8 +34,6 @@ pub(crate) fn materialize(
     }
     for rule in rules {
         for (pointer, contract) in &rule.delivery_time {
-            let (delta, quantum) = deltas[&contract.anchor];
-            let delta = delta / quantum * quantum;
             let pointers = select(pointer, source)?;
             ensure!(
                 !pointers.is_empty(),
@@ -42,7 +43,18 @@ pub(crate) fn materialize(
                 let value = result
                     .pointer_mut(&pointer)
                     .context("delivery field disappeared")?;
-                *value = shift(value, contract, delta)?;
+                *value = if contract.format == TimestampFormat::CalendarDate {
+                    time::calendar::rebase(
+                        value,
+                        contract
+                            .offset()?
+                            .context("calendar_date requires utc_offset")?,
+                        anchor(clocks, contract.anchor),
+                    )?
+                } else {
+                    let (delta, quantum) = deltas[&contract.anchor];
+                    shift(value, contract, delta / quantum * quantum)?
+                };
             }
         }
     }
@@ -100,7 +112,7 @@ fn quantum(format: TimestampFormat) -> i128 {
 }
 
 pub(crate) fn shift(value: &Value, config: &TimeContract, delta: i128) -> Result<Value> {
-    let nanos = time::parse_timestamp(value, json::core_format(config.format), config.offset()?)?
+    let nanos = time::parse_timestamp(value, json::core_format(config.format)?, config.offset()?)?
         .checked_add(delta)
         .context("delivery time overflow")?;
     match config.format {

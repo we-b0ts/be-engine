@@ -11,6 +11,8 @@ use crate::rewrite::{
 mod api_time_transaction;
 #[path = "transaction_append.rs"]
 mod append_transaction;
+#[path = "transaction_calendar_date.rs"]
+mod calendar_date_transaction;
 #[path = "transaction_concurrency.rs"]
 mod concurrency_transaction;
 #[path = "transaction_conditional_identity.rs"]

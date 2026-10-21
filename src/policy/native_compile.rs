@@ -754,6 +754,10 @@ fn validate_sequence(rule: &NativeRule, sequence: &RedisSequenceEffect) -> Resul
 
 pub(super) fn validate_time(time: &NativeTime) -> Result<()> {
     ensure!(
+        time.format != TimestampFormat::CalendarDate,
+        "calendar_date requires a value codec contract, including explicit delivery.rebase_time for read-state translation"
+    );
+    ensure!(
         time.anchor == super::TimeAnchor::DependencyRequestStart,
         "time contracts require the corresponding dependency request start"
     );

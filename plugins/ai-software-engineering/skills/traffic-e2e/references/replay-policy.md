@@ -134,6 +134,21 @@ Comparing a dependency response does not authorize rewriting it. Only explicit
 The writer revalidates the complete delivered payload and preserves unrelated
 bytes, native metadata and finite consumption.
 
+For Source business branches based on `date.today()` and stored `YYYY-MM-DD`
+state, use a value codec field such as
+`/spec/lastActiveDate: {relative_time: calendar_date, utc_offset: '+08:00'}`.
+Prove the deployment's fixed local offset. This preserves the exact signed day
+distance from each corresponding dependency request's local date; it does not
+round elapsed seconds to days. `request_time: calendar_date` requires the local
+request date itself. Both require independent clocks and a canonical date;
+`clock_group` is unsupported because a civil-day relation differs from an
+instant shift. Native time adapters require a value codec rule for this format.
+An explicit dependency-response `delivery.rebase_time` field is needed to
+translate read state before the Target evaluates its business branch. Declare
+the corresponding request output date contract separately. Keep streaks,
+experience, totals, row identity and all other business fields strict; never
+normalize their downstream differences as time or generated values.
+
 A Source sibling may condition an individual value contract with
 `kind: conditional`, `when: {relative_pointer: ../type, equals: text}` and an
 inner `contract`. Native Redis identity captures accept the same predicate under
