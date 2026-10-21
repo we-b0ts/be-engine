@@ -127,6 +127,37 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
+        // Allocate before selection under the replay mutex. Delivery completion
+        // and success-detail retention must never determine request ordering.
+        let index = self.events.request_order.reserve(active_case_id);
+        self.select_redis(
+            active_case_id,
+            target,
+            connection,
+            resp_version,
+            database,
+            username,
+            command,
+            args,
+        )
+        .map(|mut matched| {
+            matched.report.target_event_index = Some(index);
+            matched
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn select_redis(
+        &mut self,
+        active_case_id: Option<&str>,
+        target: &TargetKey,
+        connection: TargetConnection,
+        resp_version: u8,
+        database: i64,
+        username: Option<&str>,
+        command: &str,
+        args: &[Vec<u8>],
+    ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         self.request_observed_at = Some(chrono::Utc::now());
         self.request_observation_id = Some(uuid::Uuid::new_v4());
         if let Some(case) = active_case_id {
@@ -603,6 +634,7 @@ impl RedisReplayState {
             PreferredMatch::LaneBlocked { .. } | PreferredMatch::NotFound => return None,
         };
         let response = self.exchanges[index].response_bytes().ok()?;
+        let target_event_index = self.events.request_order.reserve(active_case_id);
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
@@ -636,7 +668,7 @@ impl RedisReplayState {
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
                 shared_origin: None,
-                target_event_index: None,
+                target_event_index: Some(target_event_index),
             },
         })
     }

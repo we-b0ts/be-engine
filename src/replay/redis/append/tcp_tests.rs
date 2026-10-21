@@ -7,6 +7,15 @@ use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn append_tcp_replays_changed_batches_and_exact_final_read() {
+    replay_tcp(false).await;
+}
+
+#[tokio::test]
+async fn rejected_tcp_request_and_successes_share_arrival_indices() {
+    replay_tcp(true).await;
+}
+
+async fn replay_tcp(reject_first: bool) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let case = root.join(".traffic-e2e/local/artifacts/recordings/run/apis/tasks/case");
@@ -82,6 +91,25 @@ async fn append_tcp_replays_changed_batches_and_exact_final_read() {
         runtime.state.clone(),
     ));
     let mut client = RedisBufferedReader::new(stream, 1024 * 1024);
+    if reject_first {
+        client
+            .inner
+            .write_all(&crate::redis::encode_array(&[b"GET", b"unrecorded"]))
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            read_redis_frame(&mut client),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            response.raw.as_ref(),
+            b"-ERR no recorded Redis dependency matched\r\n"
+        );
+    }
     for (parts, expected) in [
         (
             vec![b"SET".as_slice(), b"current:7", b"new"],
@@ -132,7 +160,20 @@ async fn append_tcp_replays_changed_batches_and_exact_final_read() {
         .unwrap();
     let state = runtime.state.lock().await;
     let report = state.redis.snapshot();
-    assert!(!report.is_dirty(), "{report:?}");
+    assert_eq!(report.is_dirty(), reject_first, "{report:?}");
+    assert_eq!(report.unmatched.len(), usize::from(reject_first));
+    if reject_first {
+        assert_eq!(report.unmatched[0].target_event_index, Some(0));
+    }
+    assert!(report.unused_case.is_empty());
+    assert!(report.unsupported.is_empty());
+    assert!(report.unsafe_events.is_empty());
+    for (index, matched) in report.matched.iter().enumerate() {
+        assert_eq!(
+            matched.target_event_index,
+            Some(index + usize::from(reject_first))
+        );
+    }
     assert_eq!(report.append_streams.len(), 2);
     let policy = state.replay_policy.as_ref().unwrap().report();
     assert_eq!(policy.redis_read_backs.len(), 1);

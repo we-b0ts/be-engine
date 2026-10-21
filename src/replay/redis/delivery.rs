@@ -353,6 +353,7 @@ async fn retain_after_server_end(
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: "POST_TERMINATION_BYTES".into(),
+            target_event_index: None,
             request_fingerprint: None,
             reason: "Target sent Redis data after recorded server termination".into(),
             diagnostic: None,

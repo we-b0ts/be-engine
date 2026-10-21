@@ -26,6 +26,8 @@ pub(in crate::replay) struct SharedCommandOrigin {
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct CommandRequestReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) target_event_index: Option<usize>,
     pub(in crate::replay) case_id: Option<String>,
     pub(in crate::replay) target: TargetKey,
     pub(in crate::replay) command: String,
@@ -88,6 +90,8 @@ pub(crate) struct CommandSnapshotOverlayReport {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(in crate::replay) struct CommandProtocolReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) target_event_index_scope: Option<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) append_streams: Vec<crate::replay::redis::append::AppendAudit>,
     pub(in crate::replay) append_streams_omitted: usize,

@@ -44,6 +44,7 @@ pub(in crate::replay) mod pubsub;
 #[cfg(test)]
 mod read_back_tests;
 mod report_inventory;
+mod request_order;
 pub(crate) mod time_shift;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
@@ -195,6 +196,7 @@ pub(super) struct RedisReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayEvents {
+    request_order: request_order::RequestOrder,
     global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
@@ -431,11 +433,7 @@ impl RedisReplayState {
             &mut self.events.matched,
             &mut self.events.matched_details,
             case_id.as_deref(),
-            |target_event_index| {
-                let mut report = matched.report.clone();
-                report.target_event_index = Some(target_event_index);
-                report
-            },
+            |_| matched.report.clone(),
         );
     }
 
@@ -454,6 +452,7 @@ impl RedisReplayState {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
+            target_event_index: matched.report.target_event_index,
             request_fingerprint: None,
             reason,
             diagnostic: None,
@@ -462,6 +461,7 @@ impl RedisReplayState {
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
+            target_event_index_scope: Some("case_request_admission"),
             append_streams: self.append_streams.reports(),
             append_streams_omitted: self.append_streams.omitted(),
             pubsub: self.pubsub.report(),
@@ -593,6 +593,11 @@ pub(super) async fn handle_connection(
         if redis_is_unsupported(&command) {
             let mut replay_state = state.lock().await;
             let case_id = replay_state.active_case_id.clone();
+            let target_event_index = replay_state
+                .redis
+                .events
+                .request_order
+                .reserve(case_id.as_deref());
             replay_state
                 .redis
                 .events
@@ -601,6 +606,7 @@ pub(super) async fn handle_connection(
                     case_id,
                     target: target_key.clone(),
                     command: command.name.clone(),
+                    target_event_index: Some(target_event_index),
                     request_fingerprint: None,
                     reason: "Redis command mode is unsupported for replay".to_string(),
                     diagnostic: None,
@@ -687,10 +693,16 @@ pub(super) async fn handle_connection(
                 }
                 Err(diagnostic) => {
                     let authentication_hint = redis_authentication_hint(&diagnostic);
+                    let target_event_index = state
+                        .redis
+                        .events
+                        .request_order
+                        .latest(active_case_id.as_deref());
                     if let Some(case_id) = &active_case_id {
                         state.redis.events.dirty_case_ids.insert(case_id.clone());
                     }
                     state.redis.events.unmatched.push(CommandRequestReport {
+                        target_event_index,
                         case_id: active_case_id,
                         target: target_key.clone(),
                         command: command.name.clone(),
@@ -763,6 +775,7 @@ async fn record_runtime_unsafe(
         case_id: state.active_case_id.clone(),
         target: target.clone(),
         command: command.to_string(),
+        target_event_index: None,
         request_fingerprint: None,
         reason,
         diagnostic: None,

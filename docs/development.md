@@ -1110,6 +1110,19 @@ exact success counters while retaining at most `success_detail_limit`
 successful event details per category and executed case; unscoped startup
 traffic has its own bounded scope. Successful details carry a zero-based
 `target_event_index` within that case and category.
+Redis reports with `redis.target_event_index_scope: case_request_admission`
+instead allocate this index when a command enters replay matching, before
+selection or response delivery. `matched`, `unmatched`, parsed `unsupported`
+commands and request-associated delivery failures share that case-local index;
+each case and the unscoped startup inventory starts at zero. Successful local
+handshakes, unsolicited Pub/Sub pushes and unparsed bytes do not receive an
+index. A failed recorded handshake does. Concurrent response completion and
+the successful-detail cap never renumber requests. The bounded dependency
+query preserves the failed request's index in its actual signature, while its
+`target_matches` retain the same arrival indices and the existing truncation
+indicator. Reports without this scope marker retain their historical success
+completion indices; they cannot reconstruct failed-request arrival order and
+require fresh Replay for this diagnostic.
 Dirty event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
 The report's `unrecorded_targets` field contains exact `host:port` targets to
