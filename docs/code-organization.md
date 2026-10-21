@@ -436,6 +436,16 @@ is unclear.
   supervision continues. `active_case/recovery` owns recovery admission, dependency
   quiet and refusal to admit new cases when recovery cannot finish safely.
 - `http/termination` observes downstream EOF/reset without initiating a close.
+  Its `diagnosis` child retains bounded error kinds and request-relative clocks
+  across raw transport and HTTP IO, without retaining error text or payloads.
+  TLS adapters observe raw socket failures before TLS can translate them; only
+  HTTP-level flush certifies response-prefix delivery. `active_case/stream_tail`
+  proves closed attribution, quiet business IO and drained writers for local
+  failure release. `gateway/http/interaction/recovery` admits only diagnosed
+  HTTP capture failures after a clean primary close; publication retains final
+  lease-loss ordering, and the supervisor retains all global stop decisions.
+  Recorder invalidations carry a conservative typed recovery intent separately
+  from explanatory JSON; diagnostic presentation never authorizes continuation.
   `recorder/http/dependency` retains HTTP evidence and dependency admission
   ownership across service cancellation. `replay/http/transport` owns HTTP/TLS
   delivery and `replay/http/termination` validates and completes zero-response

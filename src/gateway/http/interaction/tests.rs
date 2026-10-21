@@ -33,6 +33,7 @@ mod cancellation;
 mod content_type;
 mod dependency_tail;
 mod polling;
+mod recovery;
 mod reuse;
 mod subscription;
 use crate::{

@@ -13,6 +13,9 @@ pub(crate) use crate::dependency::termination::ObservedTermination;
 use crate::dependency::termination::{ConnectionControl, ConnectionTermination};
 use crate::dependency::{DependencyTermination, TerminationKind, TerminationScope};
 mod delivery;
+mod diagnosis;
+pub(crate) use diagnosis::observed_since;
+use diagnosis::{IoDiagnosis, IoLayer, IoOperation};
 #[cfg(test)]
 mod tests;
 pub(crate) use delivery::{DeliveryProgress, PrefixDelivery};
@@ -27,6 +30,7 @@ pub(crate) struct ClientTermination {
     input_after_server_end: Arc<AtomicBool>,
     watch_raw_input: Arc<AtomicBool>,
     events: tokio::sync::watch::Sender<u64>,
+    io_diagnosis: IoDiagnosis,
 }
 
 impl Default for ClientTermination {
@@ -39,6 +43,7 @@ impl Default for ClientTermination {
             input_after_server_end: Arc::new(AtomicBool::new(false)),
             watch_raw_input: Arc::new(AtomicBool::new(false)),
             events: tokio::sync::watch::channel(0).0,
+            io_diagnosis: IoDiagnosis::default(),
         }
     }
 }
@@ -80,7 +85,7 @@ impl ClientTermination {
                     io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
                 )
             {
-                self.observe_error(&error);
+                self.observe_io_error(IoLayer::Transport, IoOperation::Peek, &error);
                 if self.cancelled().is_some() || self.engine_stopped() {
                     return error;
                 }
@@ -89,9 +94,23 @@ impl ClientTermination {
                 Ok(0) => {
                     self.observation.observe_client_eof();
                     self.notify();
-                    // A later reset after FIN may surface only as EPIPE. Keep
-                    // the first fact and do not guess a cancellation mechanism.
-                    return self.wait_for_engine_stop().await;
+                    // FIN is only a half-close. Keep watching SO_ERROR for an
+                    // independently observed later reset without busy polling EOF.
+                    loop {
+                        if self.engine_stopped() {
+                            return io::Error::other("HTTP transport ended during engine cleanup");
+                        }
+                        if self.cancelled().is_some() {
+                            return io::ErrorKind::ConnectionReset.into();
+                        }
+                        if let Ok(Some(error)) = stream.take_error() {
+                            self.observe_io_error(IoLayer::Transport, IoOperation::Peek, &error);
+                            if self.cancelled().is_some() {
+                                return error;
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
                 }
                 Ok(_) => {
                     if self.watch_raw_input.load(Ordering::Acquire)
@@ -103,7 +122,7 @@ impl ClientTermination {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 }
                 Err(error) => {
-                    self.observe_error(&error);
+                    self.observe_io_error(IoLayer::Transport, IoOperation::Peek, &error);
                     if self.cancelled().is_some() || self.engine_stopped() {
                         return error;
                     }
@@ -225,11 +244,26 @@ impl ClientTermination {
 pub(crate) struct ObservedClientIo<T> {
     inner: T,
     termination: ClientTermination,
+    layer: IoLayer,
 }
 
 impl<T> ObservedClientIo<T> {
     pub(crate) fn new(inner: T, termination: ClientTermination) -> Self {
-        Self { inner, termination }
+        Self {
+            inner,
+            termination,
+            layer: IoLayer::Http,
+        }
+    }
+
+    /// Observe raw socket errors before TLS can translate them. Only the outer
+    /// HTTP writer can certify that a response prefix has flushed through TLS.
+    pub(crate) fn transport(inner: T, termination: ClientTermination) -> Self {
+        Self {
+            inner,
+            termination,
+            layer: IoLayer::Transport,
+        }
     }
 }
 
@@ -256,14 +290,16 @@ impl<T: AsyncRead + Unpin> AsyncRead for ObservedClientIo<T> {
                 self.termination.notify();
             }
             Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                self.termination.observe_error(error);
+                self.termination
+                    .observe_io_error(self.layer, IoOperation::Read, error);
                 // rustls reports a TCP FIN without close_notify as typed EOF.
                 // HTTP framing still rejects any incomplete request, while a
                 // complete request may receive its response after write-half FIN.
                 return Poll::Ready(Ok(()));
             }
-            Poll::Ready(Err(error)) if connection_ended(error) => {
-                self.termination.observe_error(error)
+            Poll::Ready(Err(error)) => {
+                self.termination
+                    .observe_io_error(self.layer, IoOperation::Read, error)
             }
             _ => {}
         }
@@ -278,17 +314,20 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for ObservedClientIo<T> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let result = Pin::new(&mut self.inner).poll_write(cx, buf);
-        if let Poll::Ready(Err(error)) = &result
-            && connection_ended(error)
-        {
-            self.termination.observe_error(error);
+        if let Poll::Ready(Err(error)) = &result {
+            self.termination
+                .observe_io_error(self.layer, IoOperation::Write, error);
         }
         result
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let result = Pin::new(&mut self.inner).poll_flush(cx);
-        if matches!(result, Poll::Ready(Ok(()))) {
+        if let Poll::Ready(Err(error)) = &result {
+            self.termination
+                .observe_io_error(self.layer, IoOperation::Flush, error);
+        }
+        if matches!(result, Poll::Ready(Ok(()))) && self.layer == IoLayer::Http {
             self.termination.delivery.flushed();
         }
         result

@@ -27,6 +27,7 @@ use crate::{ActiveCaseGuard, AppState, config::HttpGatewayConfig};
 mod body;
 mod finish;
 mod polling;
+mod recovery;
 mod stream;
 mod transport_lifetime;
 mod websocket;
