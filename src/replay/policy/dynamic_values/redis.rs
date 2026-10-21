@@ -97,6 +97,11 @@ impl DynamicValues {
         if rules.is_empty() && self.selected_scoped(case, scope, false).is_empty() {
             return None;
         }
+        if command == "LSET" && (source.len() != 3 || actual.len() != 3 || source[1] != actual[1]) {
+            return Some(Err(anyhow::anyhow!(
+                "LSET requires three arguments and a byte-exact list index"
+            )));
+        }
         let captures = rules
             .into_iter()
             .filter(|rule| {
@@ -134,11 +139,25 @@ impl DynamicValues {
                 Ok(ArgumentNormalization {
                     source: source
                         .iter()
-                        .map(|value| strings::normalize(value, &pairs, false))
+                        .enumerate()
+                        .map(|(index, value)| {
+                            if command == "LSET" && index == 1 {
+                                Ok(value.clone())
+                            } else {
+                                strings::normalize(value, &pairs, false)
+                            }
+                        })
                         .collect::<Result<_>>()?,
                     actual: actual
                         .iter()
-                        .map(|value| strings::normalize(value, &pairs, true))
+                        .enumerate()
+                        .map(|(index, value)| {
+                            if command == "LSET" && index == 1 {
+                                Ok(value.clone())
+                            } else {
+                                strings::normalize(value, &pairs, true)
+                            }
+                        })
                         .collect::<Result<_>>()?,
                     decision: DynamicDecision::default(),
                 })
@@ -155,6 +174,9 @@ impl DynamicValues {
             );
             let mut decision = DynamicDecision::default();
             let mut strict_arguments = std::collections::BTreeSet::new();
+            if command == "LSET" {
+                strict_arguments.insert(1);
+            }
             let mut legacy_decision = DynamicDecision::default();
             let mut source = source.to_vec();
             let mut actual = actual.to_vec();

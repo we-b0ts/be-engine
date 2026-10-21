@@ -153,12 +153,13 @@ impl DynamicValueCapture {
                 key.validate()?;
                 ensure!(
                     command == "SET" && *argument_index == 1
+                        || command == "LSET" && *argument_index == 2
                         || command == "HSET"
                             && *argument_index >= 2
                             && *argument_index <= 128
                             && argument_index.is_multiple_of(2)
                         || command == "RPUSH" && (1..=128).contains(argument_index),
-                    "Redis capture selects SET value, HSET value, or RPUSH element indices 1..128"
+                    "Redis capture selects SET value, LSET element index 2, HSET value, or RPUSH element indices 1..128"
                 );
                 if let Some(pointer) = json_pointer {
                     validate_pointer(pointer)?;

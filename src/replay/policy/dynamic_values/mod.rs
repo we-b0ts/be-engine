@@ -5,6 +5,8 @@ mod candidates;
 mod conditional_redis_tests;
 mod config;
 mod http;
+#[cfg(test)]
+mod lset_tests;
 mod mysql;
 #[cfg(test)]
 mod mysql_table_tests;

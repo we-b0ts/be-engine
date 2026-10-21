@@ -19,7 +19,7 @@ fn event(sequence: u64, command: &str, args: &[&[u8]], response: &[u8]) -> Value
         "timestamp":format!("2020-01-01T00:00:{sequence:02}Z"),"request_started_at":format!("2020-01-01T00:00:{sequence:02}Z"),
         "duration_ms":0,"outcome":"response","target_host":"redis.test","target_port":6379,"database":0,"resp_version":2,
         "command":command,"args":args.iter().map(|v|capture(v)).collect::<Vec<_>>(),"response":capture(response),
-        "response_kind":if command=="SET" {"simple_string"}else if command=="GET" {"bulk_string"}else{"integer"},"replay_safe":true})
+        "response_kind":if matches!(command,"SET"|"LSET") {"simple_string"}else if command=="GET" {"bulk_string"}else{"integer"},"replay_safe":true})
 }
 
 #[tokio::test]
@@ -37,12 +37,26 @@ async fn read_back_tcp_preserves_generated_identity_without_target_local_cache()
         event(1, "SET", &[b"current:7", b"old"], b"+OK\r\n"),
         event(2, "GET", &[b"current:7"], b"$3\r\nold\r\n"),
         event(3, "APPEND", &[b"content:old", b"x"], b":1\r\n"),
+        event(
+            4,
+            "LSET",
+            &[
+                b"blocks:7",
+                b"0",
+                br#"{"id":"old","timestamp":1577836804000,"status":"complete"}"#,
+            ],
+            b"+OK\r\n",
+        ),
     ];
     let original = events.iter().map(|v| format!("{v}\n")).collect::<String>();
     std::fs::write(case.join("dependencies.jsonl"), &original).unwrap();
     std::fs::write(
         root.join(".traffic-e2e/policy.yaml"),
-        json!({"format":"traffic-policy/v1","rules":[rule()]}).to_string(),
+        json!({"format":"traffic-policy/v1","rules":[rule(),{
+            "id":"lset-time","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"key":{"kind":"exact","value":"blocks:7"}},
+            "effect":{"kind":"redis_sequence","commands":[{"operation":"LSET","arguments":{"2":{"kind":"json","fields":{"/timestamp":{"relative_time":"unix_milliseconds"}}}}}]},
+            "proof":{"source":"blocks.py:update","fact":"Source writes a millisecond timestamp while preserving a previously bound identity in a list element"}
+        }]}).to_string(),
     )
     .unwrap();
     crate::replay::write_test_recording_network_manifest(root);
@@ -88,6 +102,9 @@ async fn read_back_tcp_preserves_generated_identity_without_target_local_cache()
         runtime.state.clone(),
     ));
     let mut client = RedisBufferedReader::new(stream, 1024 * 1024);
+    let updated =
+        json!({"id":"new","timestamp":chrono::Utc::now().timestamp_millis(),"status":"complete"})
+            .to_string();
     for (parts, expected) in [
         (
             vec![b"SET".as_slice(), b"current:7", b"new"],
@@ -100,6 +117,10 @@ async fn read_back_tcp_preserves_generated_identity_without_target_local_cache()
         (
             vec![b"APPEND".as_slice(), b"content:new", b"x"],
             b":1\r\n".as_slice(),
+        ),
+        (
+            vec![b"LSET".as_slice(), b"blocks:7", b"0", updated.as_bytes()],
+            b"+OK\r\n".as_slice(),
         ),
     ] {
         client

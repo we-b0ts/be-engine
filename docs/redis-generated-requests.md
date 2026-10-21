@@ -35,6 +35,33 @@ Multiple subjects and unsubscribe-all remain unsupported. Capturing a subject
 does not authorize translating arbitrary notification payloads. Session affinity,
 command order, required pushes and single-use consumption remain enforced.
 
+## LSET list element updates
+
+`LSET key index element` supports JSON field contracts at argument index 2:
+
+```yaml
+effect:
+  kind: redis_sequence
+  commands:
+    - operation: LSET
+      arguments:
+        2:
+          kind: json
+          fields:
+            /updated_at: {relative_time: unix_milliseconds}
+```
+
+Wrap this effect in an explicit API/resource/database/key rule with Source proof
+for the selected fields. The list index, element remainder, command order and
+finite consumption stay strict. Both Source and Target must supply exactly
+three arguments; malformed JSON, duplicate members and missing fields fail.
+LSET also supports `identity.capture: {kind: redis_argument, index: 2, ...}`,
+including conditional JSON capture, copies and derivation, and selected LRANGE
+read-back from a successful LSET. An identity preserved from an earlier RPUSH
+should reuse that existing capture's reference permission. An independent LSET
+capture needs proof that Source generates the identity there. Preserved creation
+timestamps must retain their Source-proven clock relationship.
+
 ## RPC payloads and signed URLs
 
 Socket.IO Redis-adapter RPC PUBLISH uses protocol identity comparison copies

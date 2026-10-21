@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+mod lset;
 mod protocols;
 mod read_back;
 mod recorded_generated;

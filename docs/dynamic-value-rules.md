@@ -67,9 +67,14 @@ Choose one of these capture locations:
   `value_index` is zero-based among its placeholders. An optional `json_pointer`
   selects a string inside the selected SQL value. Text queries and prepared
   string parameters use the same capture contract.
-- **Redis**: select a `SET` or `HSET` value or `RPUSH` element, a key selector and database. The index
+- **Redis**: select a `SET` or `HSET` value or `RPUSH`/`LSET` element, a key selector and database. The index
   is zero-based among arguments after the command: `SET` value is index 1;
-  `HSET` values are even indices starting at 2; `RPUSH` element indices are 1..128.
+  `HSET` values are even indices starting at 2; `RPUSH` element indices are 1..128;
+  `LSET key index element` selects only argument 2. Its key and signed list index
+  retain their existing matching, and the list index is always byte exact even
+  when its text happens to equal a captured identity. LSET requires exactly three
+  arguments in Source and Target; conditional JSON captures, copies and integer
+  derivations use the same contract as RPUSH elements.
   An optional JSON pointer selects a string inside that value; an integer
   capture requires an explicit pointer and `value_type: integer`. Other
   arguments and options remain checked.
