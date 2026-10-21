@@ -5,7 +5,7 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 use serde::Serialize;
 
 mod diagnostic;
-pub(in crate::replay) use diagnostic::AppendMismatch;
+pub(in crate::replay) use diagnostic::{AppendBoundaryMismatch, AppendMismatch};
 mod source;
 mod trace;
 pub(in crate::replay) use source::validate_source;
@@ -461,9 +461,17 @@ impl RedisReplayState {
         for profile in &self.append_streams.profiles {
             if let Some((_, offset)) = profile.barriers.iter().find(|(i, _)| *i == index) {
                 ensure!(
-                    !profile.failed && profile.reserved == *offset,
-                    "append stream has not reached this Source byte boundary"
+                    !profile.failed,
+                    "append stream disabled by an earlier delivery failure"
                 );
+                if profile.reserved != *offset {
+                    return Err(diagnostic::boundary_mismatch(
+                        profile,
+                        &self.exchanges[index],
+                        *offset,
+                    )
+                    .into());
+                }
                 if matches!(
                     self.exchanges[index].record.command.as_str(),
                     "SET" | "SETEX" | "PSETEX"
@@ -513,6 +521,11 @@ fn satisfies(exchange: &ReplayExchange) -> bool {
 }
 
 pub(super) fn diagnostic(error: anyhow::Error) -> CommandMatchDiagnostic {
+    if let Some(mismatch) = error.downcast_ref::<AppendBoundaryMismatch>() {
+        return CommandMatchDiagnostic::RedisAppendStreamBoundaryMismatch {
+            details: Box::new(mismatch.clone()),
+        };
+    }
     if let Some(mismatch) = error.downcast_ref::<AppendMismatch>() {
         return CommandMatchDiagnostic::RedisAppendStreamMismatch {
             details: Box::new(mismatch.clone()),

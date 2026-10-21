@@ -357,11 +357,8 @@ impl RedisReplayState {
                 ));
             }
         };
-        self.check_append_barrier(index, args).map_err(|error| {
-            CommandMatchDiagnostic::EvidenceUnavailable {
-                reason: format!("append stream barrier failed: {error:#}"),
-            }
-        })?;
+        self.check_append_barrier(index, args)
+            .map_err(append::diagnostic)?;
         let response = self.exchanges[index].response_bytes().map_err(|error| {
             CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: format!("response evidence unavailable: {error:#}"),

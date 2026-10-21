@@ -79,3 +79,10 @@ Overruns and extra writes after the stream is exhausted use the same diagnostic;
 the failed request reserves no bytes. These facts locate the rejected write;
 earlier failed reads or writes may still be the cause. Source preparation and
 unsupported-evidence failures retain `evidence_unavailable`.
+
+A read/reset at the wrong byte cursor is reported as
+`redis_append_stream_boundary_mismatch`. It identifies the rule, key fingerprint,
+current `source_offset`, `required_source_offset`, `missing_bytes`, and original
+Source barrier command/sequence. A premature MGET is a boundary mismatch with
+available Source evidence. It claims no read or bytes; after the missing writes
+complete, Target can retry the ordinary finite read.

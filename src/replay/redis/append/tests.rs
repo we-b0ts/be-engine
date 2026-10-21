@@ -260,6 +260,49 @@ fn reads_and_resets_fence_bytes_while_expiry_keeps_ordinary_finite_matching() {
 }
 
 #[test]
+fn mget_reports_the_incomplete_key_and_byte_boundary_without_claiming_the_read() {
+    let events = [
+        event(1, "APPEND", &[b"content:ready", b"aa"], b":2\r\n"),
+        event(2, "APPEND", &[b"content:private", b"abcdef"], b":6\r\n"),
+        event(
+            3,
+            "MGET",
+            &[b"content:ready", b"content:private"],
+            b"*2\r\n$2\r\naa\r\n$6\r\nabcdef\r\n",
+        ),
+    ];
+    let (_root, mut state) = state(&events, vec![rule()]);
+    let first = request(&mut state, "APPEND", &[b"content:ready", b"aa"]).unwrap();
+    state.complete_exchange(&first);
+    let partial = request(&mut state, "APPEND", &[b"content:private", b"abc"]).unwrap();
+    state.complete_exchange(&partial);
+    let error = request(&mut state, "MGET", &[b"content:ready", b"content:private"]).unwrap_err();
+    let diagnostic = serde_json::to_value(&error).unwrap();
+    assert_eq!(diagnostic["kind"], "redis_append_stream_boundary_mismatch");
+    assert_eq!(diagnostic["rule_id"], "append");
+    assert_eq!(
+        diagnostic["source_key_fingerprint"],
+        crate::policy_evidence::digest(b"content:private")
+    );
+    assert_eq!(diagnostic["source_offset"], 3);
+    assert_eq!(diagnostic["required_source_offset"], 6);
+    assert_eq!(diagnostic["missing_bytes"], 3);
+    assert_eq!(diagnostic["barrier"]["sequence"], 3);
+    assert_eq!(diagnostic["barrier"]["command"], "MGET");
+    let text = diagnostic.to_string();
+    assert!(!text.contains("content:private") && !text.contains("abcdef"));
+    assert!(state.exchanges[2].status.is_available());
+    assert_eq!(state.snapshot().unused_case.len(), 2);
+    // Correcting the missing bytes can retry the exact read; diagnostics never
+    // claim the read or advance either stream.
+    let rest = request(&mut state, "APPEND", &[b"content:private", b"def"]).unwrap();
+    state.complete_exchange(&rest);
+    let read = request(&mut state, "MGET", &[b"content:ready", b"content:private"]).unwrap();
+    state.complete_exchange(&read);
+    assert!(state.snapshot().unused_case.is_empty());
+}
+
+#[test]
 fn successful_reset_keeps_its_exact_initial_value() {
     let events = [
         event(1, "SET", &[b"content:1", b"prefix"], b"+OK\r\n"),

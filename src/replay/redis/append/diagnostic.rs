@@ -1,4 +1,4 @@
-//! Byte-mismatch facts from an already validated Source stream, without payloads.
+//! Mismatch facts from an already validated Source stream, without payloads.
 use super::*;
 use crate::replay::report::command::CommandExchangeRefReport;
 
@@ -26,6 +26,50 @@ impl std::fmt::Display for AppendMismatch {
 }
 
 impl std::error::Error for AppendMismatch {}
+
+/// A validated Source observation/reset arrived at the wrong Target byte cursor.
+#[derive(Debug, Clone, Serialize)]
+pub(in crate::replay) struct AppendBoundaryMismatch {
+    rule_id: String,
+    source_key_fingerprint: String,
+    source_offset: usize,
+    required_source_offset: usize,
+    missing_bytes: usize,
+    barrier: CommandExchangeRefReport,
+}
+
+impl std::fmt::Display for AppendBoundaryMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "append stream requires Source byte boundary {}, Target reached {}",
+            self.required_source_offset, self.source_offset
+        )
+    }
+}
+
+impl std::error::Error for AppendBoundaryMismatch {}
+
+pub(super) fn boundary_mismatch(
+    profile: &Profile,
+    exchange: &ReplayExchange,
+    required_source_offset: usize,
+) -> AppendBoundaryMismatch {
+    AppendBoundaryMismatch {
+        rule_id: profile.rule.clone(),
+        source_key_fingerprint: crate::policy_evidence::digest(&profile.key),
+        source_offset: profile.reserved,
+        required_source_offset,
+        missing_bytes: required_source_offset.saturating_sub(profile.reserved),
+        barrier: CommandExchangeRefReport {
+            case_id: exchange.case_id.clone(),
+            source: exchange.source,
+            connection_id: exchange.record.connection_id,
+            sequence: exchange.record.sequence,
+            command: exchange.record.command.clone(),
+        },
+    }
+}
 
 pub(super) fn bytes_mismatch(
     profile: &Profile,
