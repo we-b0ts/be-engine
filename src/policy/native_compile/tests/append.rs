@@ -1,0 +1,48 @@
+use serde_json::{Value, json};
+
+fn rule() -> Value {
+    json!({"id":"append","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
+        "operation":"APPEND","key":{"kind":"affix","prefix":"content:"}},"effect":{"kind":"redis_append_stream"},
+        "proof":{"source":"session.py:42","fact":"Source batches nonempty text in key order and retains reads, resets and expiry obligations"}})
+}
+
+#[test]
+fn append_capability_requires_explicit_scope_and_exclusive_payload_ownership() {
+    for path in [
+        "/match/api",
+        "/match/resource",
+        "/match/resource/database",
+        "/match/key",
+        "/match/operation",
+        "/proof",
+    ] {
+        let mut rule = rule();
+        let (parent, key) = path.rsplit_once('/').unwrap();
+        rule.pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove(key);
+        let result = crate::policy::parse_policy(
+            &json!({"format":"traffic-policy/v1","rules":[rule]}).to_string(),
+        )
+        .and_then(|p| crate::policy::compile_policy(&p));
+        assert!(result.is_err(), "{path}");
+    }
+    let policy = crate::policy::parse_policy(
+        &json!({"format":"traffic-policy/v1","rules":[rule()]}).to_string(),
+    )
+    .unwrap();
+    let compiled = crate::policy::compile_policy(&policy).unwrap();
+    assert_eq!(
+        compiled.native[0].rule.effect.capability_name(),
+        "append_stream_equivalence"
+    );
+    let mut other = rule();
+    other["id"] = json!("other");
+    let result = crate::policy::parse_policy(
+        &json!({"format":"traffic-policy/v1","rules":[rule(),other]}).to_string(),
+    )
+    .and_then(|policy| crate::policy::compile_policy(&policy));
+    assert!(result.is_err());
+}

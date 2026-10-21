@@ -6,6 +6,7 @@ fn stateful(rule: &CompiledNativeRule) -> bool {
     match &rule.rule.effect {
         NativeEffect::Identity(_)
         | NativeEffect::RedisSequence(_)
+        | NativeEffect::RedisAppendStream
         | NativeEffect::RedisLock
         | NativeEffect::RedisPublishIdentity(_)
         | NativeEffect::HttpRequest(_)

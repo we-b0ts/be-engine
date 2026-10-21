@@ -64,6 +64,15 @@ Use `case-pattern` for pre-inventory capture catalog bootstrap. The Source-gap
 `route`/`recorder-capture` workflows below remain explicit acquisition owners and
 write the same unified policy atomically. They are not value relaxations.
 
+## Redis APPEND Streams
+
+For Source-proven nonempty APPEND buffering, use `effect.kind: redis_append_stream`
+with an explicit API, Redis resource/database and key selector. Require ordered
+byte concatenation and observation/reset boundary proof; differing chunk sizes
+alone are insufficient. Complete Source preflight checks cumulative RESP lengths
+and preserves fresh Replay obligations. Other calls, including expiry refreshes,
+retain ordinary finite matching. See [APPEND streams](../../../../../docs/redis-append-stream.md).
+
 ## Redis Read-back
 
 For Source-proven Redis write-then-read flows, update the existing `identity`

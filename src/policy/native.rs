@@ -160,6 +160,7 @@ pub struct Proven<T> {
 pub enum NativeEffect {
     Identity(IdentityEffect),
     RedisSequence(RedisSequenceEffect),
+    RedisAppendStream,
     RedisLock,
     RedisPublishIdentity(PublishIdentityEffect),
     ResponseJwt(ResponseJwtEffect),

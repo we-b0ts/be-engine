@@ -113,6 +113,7 @@ impl NativeEffect {
         match self {
             Self::Identity(_) => "identity",
             Self::RedisSequence(_) => "atomic_request_sequence",
+            Self::RedisAppendStream => "append_stream_equivalence",
             Self::RedisLock => "lock_identity",
             Self::RedisPublishIdentity(_) => "publisher_identity",
             Self::ResponseJwt(_) => "signed_response",
@@ -216,6 +217,30 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
     match &rule.effect {
         NativeEffect::Identity(effect) => validate_identity(rule, effect),
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
+        NativeEffect::RedisAppendStream => {
+            resource(selector, Protocol::Redis)?;
+            ensure!(
+                selector.api.is_some(),
+                "append stream requires an explicit API"
+            );
+            ensure!(
+                selector
+                    .resource
+                    .as_ref()
+                    .and_then(|r| r.database.as_ref())
+                    .is_some(),
+                "append stream requires an explicit Redis database"
+            );
+            ensure!(
+                selector.operation.as_deref() == Some("APPEND"),
+                "append stream requires operation APPEND"
+            );
+            ensure!(
+                selector.key.is_some(),
+                "append stream requires a bounded key selector"
+            );
+            Ok(())
+        }
         NativeEffect::RedisLock => {
             resource(selector, Protocol::Redis)?;
             ensure!(

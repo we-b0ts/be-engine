@@ -218,6 +218,20 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
         NativeEffect::RedisLock => {
             add(S::DependencyRequest, L::Value, OwnedLocation::Scalar, false)
         }
+        NativeEffect::RedisAppendStream => {
+            add(
+                S::DependencyRequest,
+                L::RedisArgument(1),
+                OwnedLocation::Scalar,
+                false,
+            );
+            add(
+                S::DependencyResponse,
+                L::Value,
+                OwnedLocation::Scalar,
+                false,
+            );
+        }
         NativeEffect::RedisPublishIdentity(effect) => {
             let location = effect
                 .uuid_field

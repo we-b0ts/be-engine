@@ -56,13 +56,22 @@ impl ReplayPolicyRuntime {
                 requests,
             )?;
         request_contracts.configure_compiled(Some(compiled.clone()))?;
+        let mut usage: BTreeMap<String, DependencyRuleUsage> = document
+            .dependency_rules
+            .iter()
+            .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
+            .collect();
+        for rule in compiled.native.iter().filter(|r| {
+            matches!(
+                r.rule.effect,
+                crate::policy::NativeEffect::RedisAppendStream
+            )
+        }) {
+            usage.insert(rule.rule.id.clone(), DependencyRuleUsage::default());
+        }
         Ok(Self {
             mysql_selectors: mysql_selectors::MysqlSelectors::new(&document.dependency_rules)?,
-            usage: document
-                .dependency_rules
-                .iter()
-                .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
-                .collect(),
+            usage,
             request_contracts,
             dynamic_values,
             loaded: LoadedReplayPolicy {

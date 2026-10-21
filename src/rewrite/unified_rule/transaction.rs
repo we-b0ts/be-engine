@@ -9,6 +9,8 @@ use crate::rewrite::{
 
 #[path = "transaction_api_time.rs"]
 mod api_time_transaction;
+#[path = "transaction_append.rs"]
+mod append_transaction;
 #[path = "transaction_concurrency.rs"]
 mod concurrency_transaction;
 #[path = "transaction_conditional_identity.rs"]

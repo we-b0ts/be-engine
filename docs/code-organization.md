@@ -175,6 +175,13 @@ is unclear.
   replaced running engine. Replay, coordinator workers and local interception
   share that resolver; process lifecycle remains with each caller.
 
+- `replay/redis/append` owns explicitly authorized Case-local APPEND byte
+  reservations, derived lengths, delivery completion and fingerprint-only range
+  audits. Its `trace` child validates complete immutable Source byte order,
+  resets and observation fences; `source` reuses that preparation for native
+  rule preflight. Ordinary Redis adapters retain all non-APPEND matching and
+  finite consumption. Partial byte delivery is separate from active transport.
+
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into
   the recording manifest once; coordinator execution summaries only read it.

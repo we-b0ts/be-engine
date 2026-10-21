@@ -143,6 +143,11 @@ stay exact. See [conditional field contracts](../../../../../docs/conditional-fi
 
 ## Stateful And Source Effects
 
+`redis_append_stream` grants Source-proven APPEND chunk-boundary equivalence only
+under an explicit API/resource/database/key scope. Literal byte order, reads,
+resets, expiry calls and finite consumption remain checked; APPEND responses
+reflect actual Target cumulative lengths. See [APPEND streams](../../../../../docs/redis-append-stream.md).
+
 Use the typed native owner when a contract involves more than one value:
 
 - `identity`: capture and later references with explicit resource scopes;

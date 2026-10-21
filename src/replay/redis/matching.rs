@@ -154,6 +154,24 @@ impl RedisReplayState {
                 }
             }
         }
+        if let Some(case) = active_case_id {
+            self.prepare_append_case(case).map_err(append::diagnostic)?;
+            if command == "APPEND"
+                && let Some(matched) = self
+                    .match_append(
+                        case,
+                        target,
+                        connection,
+                        resp_version,
+                        database,
+                        username,
+                        args,
+                    )
+                    .map_err(append::diagnostic)?
+            {
+                return Ok(matched);
+            }
+        }
         let matched = preferred_match_with_priority(
             &self.exchanges,
             active_case_id,
@@ -303,6 +321,11 @@ impl RedisReplayState {
                 ));
             }
         };
+        self.check_append_barrier(index, args).map_err(|error| {
+            CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("append stream barrier failed: {error:#}"),
+            }
+        })?;
         let response = self.exchanges[index].response_bytes().map_err(|error| {
             CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: format!("response evidence unavailable: {error:#}"),
@@ -504,6 +527,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            append: None,
             read_back,
             request_started_at: self.request_observed_at,
             unified_delivery,
@@ -589,6 +613,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            append: None,
             request_started_at: self.request_observed_at,
             unified_delivery: None,
             read_back: None,

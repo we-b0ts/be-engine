@@ -30,6 +30,7 @@ pub(in crate::replay) mod cross_case;
 use crate::replay::json_order as json;
 pub(in crate::replay) use cross_case::load as load_cross_case;
 mod api_origin;
+pub(in crate::replay) mod append;
 pub(in crate::replay) mod key_selector;
 #[cfg(test)]
 mod lane_tests;
@@ -152,6 +153,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    append: Option<append::PreparedAppend>,
     read_back: Option<super::policy::request_contract::PreparedReadBack>,
     request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     unified_delivery: Option<super::policy::request_contract::PreparedRedisDelivery>,
@@ -170,6 +172,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    append_streams: append::AppendStreams,
     request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
     request_observation_id: Option<uuid::Uuid>,
     pub(in crate::replay) pubsub: pubsub::PubSubState,
@@ -238,8 +241,9 @@ impl RedisReplayState {
     }
 
     pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
-        self.exchanges.iter().any(|e| {
+        self.exchanges.iter().enumerate().any(|(index, e)| {
             e.source == ReplaySource::Case
+                && !self.append_streams.idle_source(index)
                 && matches!(
                     e.status,
                     ReplayExchangeStatus::Responding
@@ -249,11 +253,13 @@ impl RedisReplayState {
     }
 
     pub(in crate::replay) fn has_in_flight(&self) -> bool {
-        self.exchanges.iter().any(|e| {
-            matches!(
-                e.status,
-                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
-            )
+        self.exchanges.iter().enumerate().any(|(index, e)| {
+            !self.append_streams.idle_source(index)
+                && matches!(
+                    e.status,
+                    ReplayExchangeStatus::Responding
+                        | ReplayExchangeStatus::AwaitingClientTermination
+                )
         })
     }
 
@@ -299,6 +305,11 @@ impl RedisReplayState {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
+        ensure!(
+            source != ReplaySource::Case
+                || case_id.is_none_or(|case| !self.append_streams.has_case(case)),
+            "cannot extend a prepared append stream Case inventory"
+        );
         record.outcome.validate()?;
         ensure!(
             record
@@ -318,6 +329,8 @@ impl RedisReplayState {
             .iter()
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
+        self.append_streams
+            .check_inventory_addition(&record, &args)?;
         let response = record.response.decode()?;
         ensure!(
             record
@@ -403,7 +416,9 @@ impl RedisReplayState {
     }
 
     fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
-        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
+        if let Some(append) = &matched.append {
+            self.complete_append(append);
+        } else if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.matched_once = true;
             if !exchange.reusable_snapshot {
                 exchange.status = ReplayExchangeStatus::Consumed;
@@ -425,6 +440,9 @@ impl RedisReplayState {
     }
 
     fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
+        if let Some(append) = &matched.append {
+            self.fail_append(append);
+        }
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
@@ -444,6 +462,8 @@ impl RedisReplayState {
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
+            append_streams: self.append_streams.reports(),
+            append_streams_omitted: self.append_streams.omitted(),
             pubsub: self.pubsub.report(),
             time_shifts: self.time_shifts.clone(),
             unordered_value: Some(self.unordered_value.clone()),

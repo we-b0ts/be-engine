@@ -206,12 +206,20 @@ impl ReplayPolicyRuntime {
                 }
             }
         }
-        let usage = loaded
+        let mut usage: BTreeMap<String, DependencyRuleUsage> = loaded
             .document
             .dependency_rules
             .iter()
             .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
             .collect();
+        for rule in loaded.compiled.iter().flat_map(|p| &p.native).filter(|r| {
+            matches!(
+                r.rule.effect,
+                crate::policy::NativeEffect::RedisAppendStream
+            )
+        }) {
+            usage.insert(rule.rule.id.clone(), DependencyRuleUsage::default());
+        }
         let mut runtime = Self {
             mysql_selectors: mysql_selectors::MysqlSelectors::new(
                 &loaded.document.dependency_rules,
@@ -685,6 +693,7 @@ impl ReplayPolicyRuntime {
             })
             .chain(self.dynamic_values.rule_reports())
             .chain(self.request_contracts.reports())
+            .chain(self.append_rule_reports())
             .collect::<Vec<_>>();
         let unused_applicable_dependency_rule_ids = dependency_rules
             .iter()

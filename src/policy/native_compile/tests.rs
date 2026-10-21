@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+mod append;
 mod conditional_identity;
 mod http_request;
 mod redis_sequence;

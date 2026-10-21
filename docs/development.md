@@ -27,6 +27,8 @@ then explicitly apply reviewed plans at the next idle boundary.
 
 Redis JSON/Protobuf values and source-proven collection ordering use
 [Redis value rules](redis-value-rules.md), with the same discovery and plan/apply lifecycle.
+[Redis APPEND streams](redis-append-stream.md) support Source-proven changes to
+batch boundaries under explicit API/resource/key scope, retaining read fences.
 Source-proven expiry drift in Redis JSON read responses uses explicit
 [Redis time-shift rules](redis-time-shift-rules.md), discovered through worker
 source diagnosis without heuristic hints.
