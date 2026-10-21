@@ -77,6 +77,10 @@ mod model;
 mod motan;
 mod mysql;
 pub(crate) use mysql::contracts::{
+    IdentityPreflight as MysqlIdentityPreflight,
+    normalize_identity_witnesses as mysql_normalize_identity_witnesses,
+};
+pub(crate) use mysql::contracts::{
     source_witness as mysql_source_witness, validate_witness as mysql_validate_witness,
     witness_values as mysql_witness_values,
 };

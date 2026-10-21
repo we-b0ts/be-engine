@@ -3,6 +3,8 @@ use super::*;
 use crate::policy::{CompiledRule, Slot, Surface};
 use crate::policy_evidence::{TargetRole, WitnessMetadata};
 use crate::value_contract::json::{AnchorClocks, Comparison};
+mod preflight_identity;
+pub(crate) use preflight_identity::{IdentityPreflight, normalize_identity_witnesses};
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::replay) struct ObservedRequest<'a> {
@@ -396,26 +398,7 @@ pub(crate) fn validate_contract_candidate(
         ),
         "native SQL time values require the query adapter"
     );
-    let statement = |request: &RequestEnvelope| {
-        crate::mysql::sql::bounds::statement(
-            request
-                .sql
-                .as_deref()
-                .context("SQL witness has no statement")?,
-        )
-        .context("SQL witness statement is invalid or exceeds the supported bounds")
-    };
-    let source_tokens = statement(&source)?;
-    let target_tokens = statement(&target)?;
-    let scalar = |token: &crate::mysql::sql::Token| {
-        token.is_value() || *token == crate::mysql::sql::Token::Placeholder
-    };
-    if source_tokens.len() != target_tokens.len()
-        || !source_tokens
-            .iter()
-            .zip(&target_tokens)
-            .all(|(source, target)| source == target || scalar(source) && scalar(target))
-    {
+    if !structurally_related(&source, &target)? {
         return Ok(None);
     }
     policy::compare_mysql_contracts(
@@ -428,6 +411,28 @@ pub(crate) fn validate_contract_candidate(
         clocks,
     )
     .map(Some)
+}
+
+fn structurally_related(source: &RequestEnvelope, target: &RequestEnvelope) -> Result<bool> {
+    let statement = |request: &RequestEnvelope| {
+        crate::mysql::sql::bounds::statement(
+            request
+                .sql
+                .as_deref()
+                .context("SQL witness has no statement")?,
+        )
+        .context("SQL witness statement is invalid or exceeds the supported bounds")
+    };
+    let source_tokens = statement(source)?;
+    let target_tokens = statement(target)?;
+    let scalar = |token: &crate::mysql::sql::Token| {
+        token.is_value() || *token == crate::mysql::sql::Token::Placeholder
+    };
+    Ok(source_tokens.len() == target_tokens.len()
+        && source_tokens
+            .iter()
+            .zip(&target_tokens)
+            .all(|(source, target)| source == target || scalar(source) && scalar(target)))
 }
 
 pub(crate) fn witness_values(

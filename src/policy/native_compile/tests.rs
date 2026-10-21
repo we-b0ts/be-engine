@@ -5,6 +5,7 @@ mod append;
 mod conditional_identity;
 mod http_client_metadata;
 mod http_request;
+mod mysql_json;
 mod read_commutation;
 mod redis_sequence;
 use crate::policy::{Database, Endpoint, Resource};

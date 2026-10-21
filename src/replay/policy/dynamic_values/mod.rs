@@ -18,7 +18,7 @@ mod scopes;
 mod source;
 mod source_coverage;
 mod strings;
-pub(in crate::replay) use audit::{DynamicBindingReport, from_report};
+pub(in crate::replay) use audit::{DynamicBindingReport, from_native_report, from_report};
 pub(in crate::replay) use candidates::CaptureCandidate;
 pub(in crate::replay) use config::validate;
 pub use config::{

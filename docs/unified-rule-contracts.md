@@ -381,6 +381,25 @@ Source-proven nonbehavioral SDK request headers use the scoped
 middleware must not use the selected names for business behavior; unknown headers
 remain strict and the audit retains observations with the authorizing rule ID.
 
+MySQL JSON time fields can select variable-length arrays with exact wildcard
+leaves, for example `mysql_values.values.1: {kind: json, fields:
+{/blocks/*/timestamp: {relative_time: unix_milliseconds}}}`. Different Cases may
+have different array lengths; Source/Target length, order and all other members
+within each Case remain strict. This does not permit wildcard Source predicates
+or identity captures.
+
+SQL preflight composes these time fields with already accepted native identity
+bindings. It restores only same-Case fingerprints whose capture and reference
+match the current API/method/Source condition and resource/database/username,
+then uses the runtime SQL identity normalizer on derived comparison copies.
+Source captures must precede the recorded reference. Original Source and Target
+witnesses retain their hashes and values; a missing audit or wrong scope grants
+no normalization. The plan records the composed identities in
+`stateful_target_obligations`: fresh genuine Replay must re-establish capture,
+ordering and complete request acceptance. Raw identity differences and an
+uncommitted failed statement's usage count do not establish that a reference
+permission is inactive. Unselected business values remain checked during plan.
+
 ```yaml
 format: traffic-policy/v1
 rules:

@@ -440,7 +440,7 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
                             "SQL JSON requires 1..32 time fields"
                         );
                         for (pointer, time) in fields {
-                            compiler::validate_pointer(pointer, false)?;
+                            compiler::validate_pointer(pointer, true)?;
                             proven(time, validate_time)?;
                         }
                         Ok(())

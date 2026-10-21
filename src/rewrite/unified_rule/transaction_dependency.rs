@@ -14,7 +14,11 @@ fn dependency_rule(protocol: &str, endpoint: &str, operation: &str) -> serde_jso
         "contract":{"/members":{"kind":"unordered"}},"proof":{"source":"src/cache.rs:12","fact":"Source writes set members without observing their order"}})
 }
 
-fn install(fixture: &Fixture, event: serde_json::Value, target: impl FnOnce(Vec<u8>) -> Vec<u8>) {
+pub(super) fn install(
+    fixture: &Fixture,
+    event: serde_json::Value,
+    target: impl FnOnce(Vec<u8>) -> Vec<u8>,
+) {
     let proposed = parse_proposal(&fs::read_to_string(&fixture.proposal).unwrap()).unwrap();
     let rule = proposed.rules[0].as_value().unwrap();
     let case = fixture

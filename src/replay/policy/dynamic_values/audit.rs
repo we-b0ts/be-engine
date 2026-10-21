@@ -7,6 +7,7 @@ use crate::replay::{
         matcher::mysql_values::{template_pair_values, template_values},
     },
 };
+use anyhow::Context;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -163,18 +164,124 @@ pub(in crate::replay) fn from_report(
     if rules.is_empty() {
         return Ok(runtime);
     }
+    restore_bindings(
+        &runtime,
+        report,
+        case_id,
+        dependencies,
+        (source_values, actual_values),
+        None,
+        None,
+    )?;
+    Ok(runtime)
+}
+
+/// Native SQL preflight reuses accepted binding fingerprints while preserving
+/// method, Source conditions, database and authentication reference scope.
+pub(in crate::replay) fn from_native_report(
+    compiled: &crate::policy::CompiledPolicy,
+    report: &Value,
+    context: &super::super::matcher::MysqlPolicyContext<'_>,
+    request: &Value,
+    dependencies: &[u8],
+) -> Result<(DynamicValues, BTreeSet<String>)> {
+    let source_values =
+        super::super::matcher::mysql_values::materialized(context.recorded_sql, context.recorded)
+            .map_err(anyhow::Error::msg)?;
+    let actual_values =
+        super::super::matcher::mysql_values::materialized(context.sql, context.actual)
+            .map_err(anyhow::Error::msg)?;
+    let case = context
+        .case_id
+        .context("SQL identity preflight requires a Case")?;
+    let projection = super::super::native_projection::project_native(&compiled.native)?;
+    let path = super::super::pattern::uri_path(request["uri"].as_str().unwrap_or_default());
+    let mut runtime = DynamicValues::new(
+        projection.document.dynamic_values,
+        BTreeMap::from([(case.into(), path)]),
+    );
+    runtime.configure_native(&compiled.native);
+    runtime.set_request(case, request);
+    let database = context
+        .identity
+        .database
+        .as_ref()
+        .map(|name| crate::policy::Database::Name(name.clone()));
+    let scope = super::scopes::ResourceContext {
+        protocol: crate::policy::Protocol::Mysql,
+        target: context
+            .identity
+            .target
+            .as_ref()
+            .context("SQL identity endpoint missing")?,
+        database: database.as_ref(),
+        username: context.identity.username.as_deref(),
+        operation: context.command,
+    };
+    let allowed = runtime
+        .selected_scoped(case, scope, false)
+        .into_iter()
+        .filter(|r| r.value_type == DynamicValueType::String)
+        .map(|r| r.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if allowed.is_empty() {
+        return Ok((runtime, BTreeSet::new()));
+    }
+    restore_bindings(
+        &runtime,
+        report,
+        case,
+        dependencies,
+        (&source_values, &actual_values),
+        Some(&allowed),
+        context.request_times.source,
+    )?;
+    let ids = runtime
+        .report()
+        .into_iter()
+        .map(|row| row.rule_id)
+        .collect();
+    Ok((runtime, ids))
+}
+
+fn restore_bindings(
+    runtime: &DynamicValues,
+    report: &Value,
+    case_id: &str,
+    dependencies: &[u8],
+    values: (&[crate::mysql::sql::Token], &[crate::mysql::sql::Token]),
+    allowed: Option<&BTreeSet<&str>>,
+    before: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<()> {
+    let (source_values, actual_values) = values;
     let events = dependencies
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
         .map(serde_json::from_slice::<Value>)
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let events = events
+        .into_iter()
+        .filter(|event| {
+            before.is_none_or(|before| {
+                event["global_dependency_reason"].is_null()
+                    && event["timestamp"]
+                        .as_str()
+                        .and_then(|time| time.parse::<chrono::DateTime<chrono::Utc>>().ok())
+                        .is_some_and(|time| time <= before)
+            })
+        })
+        .collect::<Vec<_>>();
     for proof in report["replay_policy"]["dynamic_bindings"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|proof| proof["case_id"] == case_id)
+        .filter(|proof| {
+            allowed.is_none_or(|ids| proof["rule_id"].as_str().is_some_and(|id| ids.contains(id)))
+        })
     {
-        let rule = rules
+        let rule = runtime
+            .rules
             .iter()
             .find(|rule| proof["rule_id"] == rule.id)
             .ok_or_else(|| anyhow::anyhow!("Replay references an unknown dynamic rule"))?;
@@ -191,7 +298,7 @@ pub(in crate::replay) fn from_report(
         } = &rule.capture
         else {
             restore_request_binding(
-                &runtime,
+                runtime,
                 rule,
                 proof,
                 &events,
@@ -220,6 +327,7 @@ pub(in crate::replay) fn from_report(
                 serde_json::from_value(actual.get("params").cloned().unwrap_or(Value::Null))?;
             for source in events.iter().filter(|source| {
                 source["event_type"] == "mysql_exchange"
+                    && runtime.native_source_allowed(rule, source)
                     && source["target_host"]
                         .as_str()
                         .is_some_and(|host| host.eq_ignore_ascii_case(&target.host))
@@ -268,7 +376,7 @@ pub(in crate::replay) fn from_report(
             "dynamic binding cannot be restored from the same-case matched capture"
         );
     }
-    Ok(runtime)
+    Ok(())
 }
 
 fn strings(values: &[crate::mysql::sql::Token]) -> Vec<String> {
@@ -321,7 +429,8 @@ fn restore_request_binding(
 ) -> Result<()> {
     let mut captured = None;
     for event in events {
-        if let Some(source) = source::from_event(&rule.capture, rule.value_type, event)?
+        if runtime.native_source_allowed(rule, event)
+            && let Some(source) = source::from_event(&rule.capture, rule.value_type, event)?
             && fingerprint(source.value.as_bytes()) == proof["source_fingerprint"]
         {
             captured = Some(source.value);
