@@ -249,9 +249,11 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
             }
             FieldContract::Unordered => {}
             FieldContract::Identity {
-                binding, prefix, ..
+                binding,
+                prefix,
+                format,
             } => {
-                interaction::validate_identity(rule, binding, prefix)?;
+                interaction::validate_identity(rule, binding, prefix, *format)?;
             }
             FieldContract::Conditional { .. } => unreachable!("nested field conditions rejected"),
         }
@@ -634,7 +636,7 @@ fn validate_rule_overlaps(rules: &[CompiledRule]) -> Result<()> {
     for (index, left) in rules.iter().enumerate() {
         for right in &rules[index + 1..] {
             if left.rule.surface != right.rule.surface
-                || left.rule.slot != right.rule.slot
+                || !left.rule.slot.overlaps(&right.rule.slot)
                 || !selectors_overlap(&left.rule.selector, &right.rule.selector)
                 || disjoint_conditions(left.rule.when.as_ref(), right.rule.when.as_ref())
             {

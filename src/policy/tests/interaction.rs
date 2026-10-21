@@ -87,3 +87,83 @@ fn sse_slots_reject_ambiguous_events_unsupported_bindings_and_delivery() {
     r["contract"]["/item/id"]["format"] = "uuid".into();
     assert!(compile(serde_json::json!([rule(), r])).is_err());
 }
+
+fn typed_rule(kind: &str) -> serde_json::Value {
+    let mut r = rule();
+    r["slot"]["sse_data"] = serde_json::json!({"event":"message","json_type":kind});
+    r["contract"]["/item/id"]["format"] = serde_json::json!({"hex":12});
+    r
+}
+
+#[test]
+fn sse_json_type_scopes_are_disjoint_but_event_only_claims_overlap() {
+    let a = typed_rule("response.output_item.added");
+    let mut b = typed_rule("response.output_item.done");
+    b["id"] = "done".into();
+    let compiled = compile(serde_json::json!([a.clone(), b.clone()])).unwrap();
+    let policy = TrafficPolicy {
+        format: POLICY_FORMAT.into(),
+        source_revision: None,
+        rules: compiled
+            .rules
+            .into_iter()
+            .map(|r| PolicyRule::Value(Box::new(r.rule)))
+            .collect(),
+    };
+    let yaml = render_policy(&policy).unwrap();
+    assert_eq!(parse_policy(&yaml).unwrap(), policy);
+    b["slot"] = a["slot"].clone();
+    assert!(compile(serde_json::json!([a.clone(), b.clone()])).is_err());
+    b["slot"]["sse_data"] = "message".into();
+    assert!(compile(serde_json::json!([a.clone(), b.clone()])).is_err());
+    // Native/value ownership must use the same intersection semantics.
+    let claims =
+        [&a, &b].map(|r| compile_rule(&serde_json::from_value(r.clone()).unwrap()).unwrap());
+    assert!(validate_field_claims(&claims, &[]).is_err());
+    b["slot"]["sse_data"] = "other-wire-event".into();
+    assert!(compile(serde_json::json!([a.clone(), b.clone()])).is_ok());
+    b["slot"]["sse_data"] = "message".into();
+    b["contract"] =
+        serde_json::json!({"/other/id":{"kind":"identity","binding":"other","format":{"hex":12}}});
+    assert!(compile(serde_json::json!([a.clone(), b.clone()])).is_ok());
+    b["contract"]["/other/id"]["binding"] = "subtask".into();
+    b["contract"]["/other/id"]["format"] = serde_json::json!({"hex":16});
+    assert!(compile(serde_json::json!([a, b])).is_err());
+}
+
+#[test]
+fn sse_json_type_selectors_and_hex_lengths_reject_ambiguous_authoring() {
+    let mut variants = vec![];
+    for selector in [
+        serde_json::json!({"json_type":"response.created"}),
+        serde_json::json!({"event":"message","json_type":""}),
+        serde_json::json!({"event":"message","json_type":"response.*"}),
+        serde_json::json!({"event":"message","json_type":"bad\ntype"}),
+        serde_json::json!({"event":"message","json_type":1}),
+        serde_json::json!({"event":"message","json_type":"response.created","unknown":true}),
+    ] {
+        let mut r = typed_rule("response.created");
+        r["slot"]["sse_data"] = selector;
+        variants.push(r);
+    }
+    for format in [
+        serde_json::json!({"hex":0}),
+        serde_json::json!({"hex":257}),
+        serde_json::json!({"hex":12,"extra":true}),
+        serde_json::json!({"hex":-1}),
+        serde_json::json!({"hex":"12"}),
+    ] {
+        let mut r = typed_rule("response.created");
+        r["contract"]["/item/id"]["format"] = format;
+        variants.push(r);
+    }
+    for pointer in ["", "/type", "/*"] {
+        let mut r = typed_rule("response.created");
+        r["contract"] =
+            serde_json::json!({pointer:{"kind":"identity","binding":"type","format":{"hex":12}}});
+        variants.push(r);
+    }
+    for r in variants {
+        assert!(compile(serde_json::json!([r.clone()])).is_err(), "{r}");
+    }
+}

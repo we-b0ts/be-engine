@@ -38,7 +38,9 @@ the original encrypted artifacts and managed key; neither planning nor applicati
 writes decrypted recordings. Applying a rule still requires genuine Replay.
 
 Explicit `slot: {sse_data: <exact-event-name>}` rules provide JSON value
-contracts for SSE interaction data. They use the same API selector, Source-only
+contracts for SSE interaction data. Data-only streams can additionally select
+Source JSON `/type` with `slot: {sse_data: {event: message, json_type: response.completed}}`.
+Target types remain exact. These rules use the same API selector, Source-only
 request condition, proof and time kernel as ordinary bodies, with their own
 field ownership. Event order/count, SSE event/id/retry, unselected data and
 closure remain strict. Interaction rules never supply ordinary body witnesses.

@@ -18,7 +18,7 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
     for (index, claim) in claims.iter().enumerate() {
         for other in &claims[..index] {
             if claim.surface != other.surface
-                || claim.slot != other.slot
+                || !claim.slot.overlaps(&other.slot)
                 || !crate::policy::compiler::key_scopes_overlap(
                     claim.hash_field.as_ref(),
                     other.hash_field.as_ref(),
