@@ -4,6 +4,7 @@ use super::*;
 mod append;
 mod conditional_identity;
 mod http_request;
+mod read_commutation;
 mod redis_sequence;
 use crate::policy::{Database, Endpoint, Resource};
 

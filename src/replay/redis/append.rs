@@ -14,7 +14,7 @@ mod recorded_tests;
 #[cfg(test)]
 mod tcp_tests;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_VALUE: usize = 1024 * 1024;
@@ -122,7 +122,7 @@ impl AppendStreams {
             !self.profiles.iter().any(|profile| {
                 record.database == profile.database
                     && target_matches(&profile.target, &record.target_host, record.target_port)
-                    && trace::touches(&record.command, args, &profile.key)
+                    && super::key_access::touches(&record.command, args, &profile.key)
             }),
             "cannot add overlapping inventory after append stream Source preparation"
         );

@@ -181,6 +181,12 @@ is unclear.
   resets and observation fences; `source` reuses that preparation for native
   rule preflight. Ordinary Redis adapters retain all non-APPEND matching and
   finite consumption. Partial byte delivery is separate from active transport.
+  `redis/read_commutation` owns explicit finite nil-observation ordering
+  permission; its `source` child rejects mutations and overlapping ownership
+  before installing any permission. `redis/key_access` supplies conservative
+  key-access exclusion to both Source proofs, and `redis/native_source` loads
+  their complete scoped Source inventories. Native command matching and
+  delivery retain connection eligibility, claims and finite consumption.
 
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into

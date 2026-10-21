@@ -73,6 +73,18 @@ alone are insufficient. Complete Source preflight checks cumulative RESP lengths
 and preserves fresh Replay obligations. Other calls, including expiry refreshes,
 retain ordinary finite matching. See [APPEND streams](../../../../../docs/redis-append-stream.md).
 
+## Redis Independent Polling
+
+For Source-proven cancellation polling concurrent with unrelated writes,
+`effect.kind: redis_read_commutation` permits finite nil GET observations to
+cross their incidental connection order. Require an explicit API, Redis
+resource/database and key selector plus the independent-task Source proof.
+Complete preflight rejects non-nil reads, mutations, ambiguous key access and
+stateful read lanes. Every recorded read remains required; this does not
+authorize optional or extra polling. Use the unified plan/apply transaction and
+fresh Replay before attributing any remaining count mismatch. See
+[finite read commutation](../../../../../docs/redis-read-commutation.md).
+
 ## Redis Read-back
 
 For Source-proven Redis write-then-read flows, update the existing `identity`

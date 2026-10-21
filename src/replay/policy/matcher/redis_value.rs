@@ -2,7 +2,9 @@
 use super::*;
 use crate::replay::redis::value::ValueRule;
 impl ReplayPolicyRuntime {
-    pub(super) fn append_rule_reports(&self) -> Vec<super::super::report::DependencyRuleReport> {
+    pub(super) fn redis_native_rule_reports(
+        &self,
+    ) -> Vec<super::super::report::DependencyRuleReport> {
         self.loaded
             .compiled
             .iter()
@@ -11,6 +13,7 @@ impl ReplayPolicyRuntime {
                 matches!(
                     r.rule.effect,
                     crate::policy::NativeEffect::RedisAppendStream
+                        | crate::policy::NativeEffect::RedisReadCommutation(_)
                 )
             })
             .map(|r| {
@@ -18,7 +21,12 @@ impl ReplayPolicyRuntime {
                 super::super::report::DependencyRuleReport {
                     id: r.rule.id.clone(),
                     protocol: super::super::config::DependencyProtocol::Redis,
-                    kind: Some("redis_append_stream"),
+                    kind: Some(match r.rule.effect {
+                        crate::policy::NativeEffect::RedisReadCommutation(_) => {
+                            "redis_read_commutation"
+                        }
+                        _ => "redis_append_stream",
+                    }),
                     applicable: self.applicable_dependency_rule_ids.contains(&r.rule.id),
                     matches: usage.matches,
                     binds: usage.binds,

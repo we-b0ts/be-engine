@@ -161,6 +161,7 @@ pub enum NativeEffect {
     Identity(IdentityEffect),
     RedisSequence(RedisSequenceEffect),
     RedisAppendStream,
+    RedisReadCommutation(RedisReadCommutationEffect),
     RedisLock,
     RedisPublishIdentity(PublishIdentityEffect),
     ResponseJwt(ResponseJwtEffect),

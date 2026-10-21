@@ -114,6 +114,7 @@ impl NativeEffect {
             Self::Identity(_) => "identity",
             Self::RedisSequence(_) => "atomic_request_sequence",
             Self::RedisAppendStream => "append_stream_equivalence",
+            Self::RedisReadCommutation(_) => "finite_read_commutation",
             Self::RedisLock => "lock_identity",
             Self::RedisPublishIdentity(_) => "publisher_identity",
             Self::ResponseJwt(_) => "signed_response",
@@ -217,6 +218,26 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
     match &rule.effect {
         NativeEffect::Identity(effect) => validate_identity(rule, effect),
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
+        NativeEffect::RedisReadCommutation(_) => {
+            let resource = resource(selector, Protocol::Redis)?;
+            ensure!(
+                selector.api.is_some(),
+                "read commutation requires an explicit API"
+            );
+            ensure!(
+                resource.database.is_some(),
+                "read commutation requires an explicit Redis database"
+            );
+            ensure!(
+                selector.operation.as_deref() == Some("GET"),
+                "read commutation requires operation GET"
+            );
+            ensure!(
+                selector.key.is_some(),
+                "read commutation requires a bounded key selector"
+            );
+            Ok(())
+        }
         NativeEffect::RedisAppendStream => {
             resource(selector, Protocol::Redis)?;
             ensure!(

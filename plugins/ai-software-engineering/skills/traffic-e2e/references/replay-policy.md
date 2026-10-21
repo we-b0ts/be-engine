@@ -148,6 +148,12 @@ under an explicit API/resource/database/key scope. Literal byte order, reads,
 resets, expiry calls and finite consumption remain checked; APPEND responses
 reflect actual Target cumulative lengths. See [APPEND streams](../../../../../docs/redis-append-stream.md).
 
+`redis_read_commutation` permits explicitly scoped finite nil GET observations
+to cross unrelated commands only after complete Source key validation. It
+preserves each read's count and delivery; extra or missing reads still fail.
+Use it for proven independent polling, never to suppress a cancellation value
+or repair missing business reads. See [finite read commutation](../../../../../docs/redis-read-commutation.md).
+
 Use the typed native owner when a contract involves more than one value:
 
 - `identity`: capture and later references with explicit resource scopes;

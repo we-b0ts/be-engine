@@ -186,6 +186,11 @@ impl RedisReplayState {
             }
         }
         if let Some(case) = active_case_id {
+            self.prepare_read_commutation(case).map_err(|error| {
+                CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: format!("read commutation Source proof failed: {error:#}"),
+                }
+            })?;
             self.prepare_append_case(case).map_err(append::diagnostic)?;
             if command == "APPEND"
                 && let Some(matched) = self
@@ -524,6 +529,7 @@ impl RedisReplayState {
                 reason: format!("read_back write commit failed: {error:#}"),
             })?;
         let mut rule_ids = value::used_rules(&normalized_exchange, arguments, &self.value_rules);
+        rule_ids.extend(exchange.read_commutation_rule.clone());
         rule_ids.extend(self.lock_tokens.claim(&normalized_exchange, arguments));
         if !request_decision
             .as_ref()
@@ -719,7 +725,7 @@ impl CommandExchangeScope for ReplayExchange {
     }
 
     fn preserves_connection_order(&self) -> bool {
-        !self.connection_independent
+        !self.connection_independent && self.read_commutation_rule.is_none()
     }
 }
 

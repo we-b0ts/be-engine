@@ -31,6 +31,7 @@ use crate::replay::json_order as json;
 pub(in crate::replay) use cross_case::load as load_cross_case;
 mod api_origin;
 pub(in crate::replay) mod append;
+mod key_access;
 pub(in crate::replay) mod key_selector;
 #[cfg(test)]
 mod lane_tests;
@@ -43,6 +44,7 @@ pub(crate) mod publish;
 pub(in crate::replay) mod pubsub;
 #[cfg(test)]
 mod read_back_tests;
+pub(in crate::replay) mod read_commutation;
 mod report_inventory;
 mod request_order;
 pub(crate) mod time_shift;
@@ -135,6 +137,7 @@ struct RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    read_commutation_rule: Option<String>,
     subscription_alias: bool,
     response_evidence: Option<crate::dependency_index::RecordRef>,
     rpc_push: Option<usize>,
@@ -173,6 +176,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    read_commutation: read_commutation::ReadCommutation,
     append_streams: append::AppendStreams,
     request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
     request_observation_id: Option<uuid::Uuid>,
@@ -312,6 +316,7 @@ impl RedisReplayState {
                 || case_id.is_none_or(|case| !self.append_streams.has_case(case)),
             "cannot extend a prepared append stream Case inventory"
         );
+        self.read_commutation.check_case_addition(source, case_id)?;
         record.outcome.validate()?;
         ensure!(
             record
@@ -332,6 +337,8 @@ impl RedisReplayState {
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
         self.append_streams
+            .check_inventory_addition(&record, &args)?;
+        self.read_commutation
             .check_inventory_addition(&record, &args)?;
         let response = record.response.decode()?;
         ensure!(
@@ -398,6 +405,7 @@ impl RedisReplayState {
             .register(source, case_id, exchange_index);
         let rpc_push = self.pubsub.link(&record, source, case_id, &args)?;
         self.exchanges.push(ReplayExchange {
+            read_commutation_rule: None,
             subscription_alias: false,
             response_evidence: None,
             rpc_push,

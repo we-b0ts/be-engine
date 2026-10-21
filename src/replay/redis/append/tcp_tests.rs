@@ -7,15 +7,20 @@ use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn append_tcp_replays_changed_batches_and_exact_final_read() {
-    replay_tcp(false).await;
+    replay_tcp(false, false).await;
 }
 
 #[tokio::test]
 async fn rejected_tcp_request_and_successes_share_arrival_indices() {
-    replay_tcp(true).await;
+    replay_tcp(true, false).await;
 }
 
-async fn replay_tcp(reject_first: bool) {
+#[tokio::test]
+async fn nil_poll_reads_commute_with_append_batches_over_real_tcp() {
+    replay_tcp(false, true).await;
+}
+
+async fn replay_tcp(reject_first: bool, commute_reads: bool) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let case = root.join(".traffic-e2e/local/artifacts/recordings/run/apis/tasks/case");
@@ -27,7 +32,7 @@ async fn replay_tcp(reject_first: bool) {
     )
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let events = [
+    let mut events = vec![
         event(1, "SET", &[b"current:7", b"old"], b"+OK\r\n"),
         event(2, "GET", &[b"current:7"], b"$3\r\nold\r\n"),
         event(3, "APPEND", &[b"content:old", b"ab"], b":2\r\n"),
@@ -36,6 +41,13 @@ async fn replay_tcp(reject_first: bool) {
         event(6, "EXPIRE", &[b"content:old", b"3600"], b":1\r\n"),
         event(7, "GET", &[b"content:old"], b"$4\r\nabcd\r\n"),
     ];
+    if commute_reads {
+        events.insert(2, event(3, "GET", &[b"cancel:7"], b"$-1\r\n"));
+        events.push(event(9, "GET", &[b"cancel:7"], b"$-1\r\n"));
+        for (index, event) in events.iter_mut().enumerate() {
+            event["sequence"] = json!(index + 1);
+        }
+    }
     let original = events.iter().map(|e| format!("{e}\n")).collect::<String>();
     std::fs::write(case.join("dependencies.jsonl"), &original).unwrap();
     let identity = json!({"id":"block","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"operation":"SET","key":{"kind":"affix","prefix":"current:"}},
@@ -43,9 +55,13 @@ async fn replay_tcp(reject_first: bool) {
             "references":[{"resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0}}],
             "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1}]},
         "proof":{"source":"session.py:1","fact":"Source writes a generated block id, reads it and uses it in content keys"}});
+    let mut rules = vec![identity, rule()];
+    if commute_reads {
+        rules.push(crate::replay::redis::read_commutation::tests::rule());
+    }
     std::fs::write(
         root.join(".traffic-e2e/policy.yaml"),
-        json!({"format":"traffic-policy/v1","rules":[identity,rule()]}).to_string(),
+        json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
     )
     .unwrap();
     crate::replay::write_test_recording_network_manifest(root);
@@ -152,6 +168,25 @@ async fn replay_tcp(reject_first: bool) {
         .unwrap();
         assert_eq!(frame.raw.as_ref(), expected);
     }
+    if commute_reads {
+        // Source polls precede the flush. Target polls arrive after both batches.
+        for _ in 0..2 {
+            client
+                .inner
+                .write_all(&crate::redis::encode_array(&[b"GET", b"cancel:7"]))
+                .await
+                .unwrap();
+            let frame = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_redis_frame(&mut client),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+            assert_eq!(frame.raw.as_ref(), b"$-1\r\n");
+        }
+    }
     drop(client);
     tokio::time::timeout(std::time::Duration::from_secs(5), &mut task)
         .await
@@ -177,6 +212,17 @@ async fn replay_tcp(reject_first: bool) {
     assert_eq!(report.append_streams.len(), 2);
     let policy = state.replay_policy.as_ref().unwrap().report();
     assert_eq!(policy.redis_read_backs.len(), 1);
+    if commute_reads {
+        assert_eq!(
+            policy
+                .dependency_rules
+                .iter()
+                .find(|r| r.id == "poll")
+                .unwrap()
+                .matches,
+            2
+        );
+    }
     assert_eq!(
         policy
             .dependency_rules

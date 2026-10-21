@@ -8,7 +8,12 @@ pub(super) fn rule() -> Value {
         "proof":{"source":"session.py:20","fact":"Source buffers nonempty ordered text into variable APPEND batches; only read/reset boundaries observe the value"}})
 }
 
-pub(super) fn event(seq: u64, command: &str, args: &[&[u8]], response: &[u8]) -> Value {
+pub(in crate::replay::redis) fn event(
+    seq: u64,
+    command: &str,
+    args: &[&[u8]],
+    response: &[u8],
+) -> Value {
     let capture =
         |bytes: &[u8]| json!({"encoding":"base64","data":STANDARD.encode(bytes),"truncated":false});
     json!({"event_type":"redis_exchange","connection_id":Uuid::nil(),"sequence":seq,

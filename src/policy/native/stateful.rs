@@ -135,6 +135,11 @@ pub struct RedisSequenceEffect {
     pub read_back: Vec<Proven<RedisReadBack>>,
 }
 
+/// No optional/reusable modes: every selected read stays finite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisReadCommutationEffect {}
+
 /// An explicit same-key read may return selected values from a matched write.
 /// Empty pointers select a raw bulk value; nonempty pointers select JSON scalars.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

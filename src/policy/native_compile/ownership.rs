@@ -232,6 +232,16 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                 false,
             );
         }
+        NativeEffect::RedisReadCommutation(_) => {
+            // The proof requires an unchanged nil response. Another delivery
+            // owner must not rewrite that observation or authorize it twice.
+            add(
+                S::DependencyResponse,
+                L::Value,
+                OwnedLocation::Scalar,
+                false,
+            );
+        }
         NativeEffect::RedisPublishIdentity(effect) => {
             let location = effect
                 .uuid_field
