@@ -26,6 +26,17 @@ Keep three value surfaces explicit:
 | `dependency.response` | Select the recorded dependency input and, when explicitly authorized, materialize a delivery copy for Target. There is normally no Target-produced response to compare here. | Deliver recorded evidence with its original outcome and timing. |
 | `api.response` | Compare the recorded primary response oracle with the actual Target primary response. | Strict status, headers, structure and unselected content. |
 
+Ordinary `api.response` body contracts apply only when the Source has an ordinary
+response body. SSE, NDJSON and other recorded interactions retain their separate
+strict event/order/closure assertions; an empty carrier body is not JSON and body
+contracts do not authorize changes inside interaction messages. Header date and
+header JWT contracts still apply to interaction responses. A body rule must have
+at least one complete ordinary Source witness; interaction cases never count as
+successful body validations. Request-body `when` conditions use authenticated
+in-memory request views, including private interaction requests. Planning freezes
+the original encrypted artifacts and managed key; neither planning nor application
+writes decrypted recordings. Applying a rule still requires genuine Replay.
+
 Inbound request JWT translation, Source capture admission, Source response
 rewrite, process ownership, API-origin attribution, finite sharing and snapshot
 admission remain explicit typed effects. They are not additional permissions

@@ -1043,7 +1043,13 @@ explicit repository-wide audit.
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
   `manifest/primary` freezes each selected Case's original primary-response oracle
   and published assertion/Target artifacts, including inline binary bodies, even
-  for dependency-only rules. `preflight/{api,dependency,session,source}` delegates
+  for dependency-only rules. It freezes managed decryption keys and supplies
+  authenticated private request/response views only in memory. Primary payload
+  adapters distinguish ordinary bodies from interaction observations; native
+  response effects retain explicit body/header ownership. Preflight and Replay
+  keep interaction body contracts inactive without weakening message assertions
+  or dropping header date/JWT validation.
+  `preflight/{api,dependency,session,source}` delegates
   payload, native envelope, stateful Source trace and whole-recording proof to
   their existing owners. Whole-recording Source effects explicitly enumerate
   their broader inventory; ordinary payload rules retain their prepared API scope.

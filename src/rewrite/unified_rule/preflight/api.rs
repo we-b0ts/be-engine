@@ -26,7 +26,18 @@ pub(super) fn verify(
 ) -> Result<()> {
     let super::super::manifest::PrimaryResponse { source, target } =
         bundle.primary_response(case, directory)?;
-    let context = NativeResponseContext::from_rules(native, root, directory)?;
+    let source_payload = crate::replay::response_payload_pair(request, &source, None)?;
+    let native = native
+        .iter()
+        .copied()
+        .filter(|rule| source_payload.body_available || !rule.rule.effect.is_response_body())
+        .collect::<Vec<_>>();
+    let ordinary = if source_payload.body_available {
+        ordinary
+    } else {
+        &[]
+    };
+    let context = NativeResponseContext::from_rules(&native, root, directory)?;
     for (path, digest) in context.key_witnesses() {
         bundle.freeze(path)?;
         ensure!(
@@ -35,7 +46,6 @@ pub(super) fn verify(
         );
     }
     context.ensure_current()?;
-    let source_payload = crate::replay::response_payload_pair(request, &source, None)?;
     let source_times = crate::value_contract::time::ClockPair {
         source: source_payload.times.source,
         target: source_payload.times.source,
@@ -49,7 +59,7 @@ pub(super) fn verify(
         &source_payload.source,
         &source_payload.source,
         ordinary,
-        native,
+        &native,
         &context,
         clocks,
     )?;
@@ -65,7 +75,7 @@ pub(super) fn verify(
         );
         source_ids.insert(id);
     }
-    for rule in native {
+    for rule in &native {
         if let NativeEffect::ResponseHeaderDate(effect) = &rule.rule.effect {
             let values = header(&source_payload.source_headers, &effect.header);
             if !values.is_empty() {
@@ -102,12 +112,12 @@ pub(super) fn verify(
             .as_deref()
             .context("independent Target response is unavailable")?,
         ordinary,
-        native,
+        &native,
         &context,
         clocks,
     )?;
     compare_headers(
-        native,
+        &native,
         &pair.source_headers,
         &pair.target_headers,
         pair.times,

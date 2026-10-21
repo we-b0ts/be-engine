@@ -297,6 +297,7 @@ fn assert_recorded_response_with_policy(
             actual_headers: actual.headers,
             actual_sse_observation: actual.sse_observation,
             actual_body,
+            body_available: expected_interaction.is_none(),
             actual_path: options.actual_response,
             actual_fingerprint: fingerprint(actual_bytes),
         },
@@ -308,6 +309,7 @@ fn assert_recorded_response_with_policy(
 }
 
 struct AssertionInputs {
+    body_available: bool,
     times: RequestTimes,
     case_id: String,
     request: RecordedRequest,
@@ -379,6 +381,7 @@ fn evaluate_response(
     loaded: &LoadedReplayPolicy,
 ) -> Result<ResponseAssertionCaseReport> {
     let AssertionInputs {
+        body_available,
         times,
         case_id,
         request,
@@ -419,6 +422,9 @@ fn evaluate_response(
                 &path,
                 source_request_body.as_ref(),
             )
+            .into_iter()
+            .filter(|rule| body_available || !rule.rule.effect.is_response_body())
+            .collect::<Vec<_>>()
         })
         .unwrap_or_default();
     let native_root = if native::needs_startup(&native_selected) {
@@ -553,6 +559,10 @@ fn evaluate_response(
                 report.applied_header_rule_ids.push(id);
             }
         }
+    }
+    if !body_available {
+        report.finish(&[], &[]);
+        return Ok(report);
     }
     if !unified_rules.is_empty()
         || native_context

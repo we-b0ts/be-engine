@@ -3,6 +3,7 @@ use super::*;
 
 /// Payload bytes remain private process memory and must not enter plan reports.
 pub(crate) struct ResponsePayloadPair {
+    pub(crate) body_available: bool,
     pub(crate) source: Vec<u8>,
     pub(crate) target: Option<Vec<u8>>,
     pub(crate) times: RequestTimes,
@@ -18,6 +19,12 @@ pub(crate) fn response_payload_pair(
     let request: RecordedRequest = serde_json::from_value(request.clone())?;
     request.gateway_protocol()?;
     let source: ExpectedResponse = serde_json::from_value(source.clone())?;
+    ensure!(
+        source.sse_observation.is_none(),
+        "legacy SSE observation recordings require re-recording with the interaction lifecycle"
+    );
+    interaction::validate_input(request.interaction.as_ref(), source.interaction.as_ref())?;
+    let body_available = source.interaction.is_none();
     let oneway = source.response_expected == Some(false);
     let source_status = source
         .status
@@ -26,12 +33,14 @@ pub(crate) fn response_payload_pair(
         .or(oneway.then_some(204))
         .context("Source response status is absent")?;
     let bytes = match source.body.as_ref().or(source.frame.as_ref()) {
+        _ if !body_available => vec![],
         Some(body) => decode_body(body, "Source response")?,
         None if oneway => vec![],
         None => anyhow::bail!("Source response body is absent"),
     };
     let source_body = business_body(&request, bytes, oneway, "Source response")?;
     let mut output = ResponsePayloadPair {
+        body_available,
         source: source_body.body().into(),
         target: None,
         times: RequestTimes {
@@ -47,9 +56,17 @@ pub(crate) fn response_payload_pair(
             target.version == 1,
             "unsupported Target response artifact version"
         );
+        ensure!(
+            !body_available || target.interaction.is_none(),
+            "Target interaction cannot satisfy an ordinary response body contract"
+        );
         let target_body = business_body(
             &request,
-            decode_body(&target.body, "Target response")?,
+            if target.interaction.is_some() {
+                vec![]
+            } else {
+                decode_body(&target.body, "Target response")?
+            },
             oneway,
             "Target response",
         )?;

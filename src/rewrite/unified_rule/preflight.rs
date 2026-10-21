@@ -104,7 +104,7 @@ pub(super) fn verify(
         .map(WitnessManifest::source_index)
         .transpose()?;
     for (case_id, directory) in bundle.cases.clone() {
-        let request = bundle.json(&directory.join("request.json"))?;
+        let request = bundle.request(&directory.join("request.json"))?;
         let method = request["method"]
             .as_str()
             .context("Source request method unavailable")?;
