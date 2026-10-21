@@ -282,7 +282,9 @@ pub(super) fn compare_pair(
         Protocol::Memcached => {
             crate::replay::memcached_validate_witness(source, target, surface, &allowed, clocks)?
         }
-        Protocol::Http => crate::replay::http_validate_witness(source, target, surface, clocks)?,
+        Protocol::Http => {
+            crate::replay::http_validate_contract_witness(source, target, surface, native, clocks)?
+        }
         _ => anyhow::bail!("selected protocol requires its native envelope validation adapter"),
     }
     ensure!(

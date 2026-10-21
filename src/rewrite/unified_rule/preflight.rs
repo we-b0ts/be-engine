@@ -356,13 +356,18 @@ pub(super) fn verify(
                         found = true;
                         continue;
                     }
+                    let native_pair = if http {
+                        &native_applicable
+                    } else {
+                        &native_sql
+                    };
                     let comparison = dependency::compare_pair(
                         surface,
                         &event,
                         &raw,
                         &target,
                         &rules,
-                        &native_sql,
+                        native_pair,
                         clocks,
                     )
                     .with_context(|| {

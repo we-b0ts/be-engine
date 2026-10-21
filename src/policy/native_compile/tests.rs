@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use super::*;
 mod append;
 mod conditional_identity;
+mod http_client_metadata;
 mod http_request;
 mod read_commutation;
 mod redis_sequence;

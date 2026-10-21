@@ -24,6 +24,7 @@ on other endpoints, operations or surfaces.
 | --- | --- | --- |
 | An unordered Set becomes a JSON array or repeated PB field | `contract: {<logical-path>: {kind: unordered}}`; PB declares field numbers/types explicitly | Multiplicity, membership, element associations, presence, unknown PB fields and remainder |
 | A generated timestamp or expiry | `kind: time`, explicit format, relation and trusted anchor | Units, microseconds, TTL offset, copied instants and clock groups |
+| SDK runtime headers differ, and Source consumer/middleware do not read them | Explicit API/endpoint/method/path-scoped `http_client_metadata` with exact supported names; [schema](../../../../../docs/http-client-metadata.md) | Business/authentication headers, body/query, finite requests and delivery. `protected: false` concerns confidentiality; it does not make a mismatch nonblocking |
 | SSE data contains a generated timestamp | `api.response`, exact `slot.sse_data` event/type, JSON pointer and Source-proven request-time relation | Event presence/order, envelope, unselected fields and terminal state |
 | Source generates one fresh SSE identity and references it across frames | Explicit JSON `kind: identity`, proven prefix/format and the same `binding` at every reference | Bijection, Case lifetime, exact prefixes, terminal output references and dependency-owned identities |
 | Live elapsed duration that stops at terminal state | Source sibling `conditional` around `duration` | Terminal values and status stay exact; missing/wrong-type status rejects |

@@ -407,6 +407,12 @@ is unclear.
   audit evidence; its time-reference child resolves dependency-local recorded or
   completion-minus-duration clocks internally. Its
   timestamp-evidence child verifies immutable witnesses.
+  `policy/native/http_client_metadata` owns the closed SDK-name schema;
+  `native_compile/http_request` validates its explicit consumer scope and field
+  ownership. `replay/policy/http_client_metadata` shares endpoint/method/path
+  selection between audit and protected witness preflight; the matcher supplies
+  Source API/condition selection and usage accounting. The header audit retains
+  observational differences without selecting exchanges or changing delivery.
   `rewrite/evidence/rule_guidance/http_header_timestamp` projects bounded
   candidates without proving source semantics. The coordinator model and HTTP
   The unified rule transaction owns authoring; protocol children own only their

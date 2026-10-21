@@ -21,6 +21,8 @@ mod dependency_transaction;
 mod header_transaction;
 #[path = "transaction_http_body_jwt.rs"]
 mod http_body_jwt_transaction;
+#[path = "transaction_http_client_metadata.rs"]
+mod http_client_metadata_transaction;
 #[path = "transaction_interaction.rs"]
 mod interaction_transaction;
 #[path = "transaction_mysql_candidates.rs"]

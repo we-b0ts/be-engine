@@ -16,6 +16,7 @@ Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 [HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
 strict matching and fresh verification.
 Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
+Source-proven SDK request metadata uses [scoped HTTP client metadata](http-client-metadata.md).
 Failed outbound requests expose [HTTP request body evidence](http-request-evidence.md),
 including exact protected body pages, raw differences and recorded rule results.
 Rule planning reuses [recording indexes and sealed Source content identities](rule-evidence-index.md)

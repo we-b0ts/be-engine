@@ -6,6 +6,7 @@ use crate::replay::report::{build_dependency_evidence, report_has_case_dirty_eve
 use hyper::client::conn::http1;
 use serde_json::json;
 use std::path::PathBuf;
+mod client_metadata;
 mod timestamp_tests;
 
 const HOST: &str = "api.example.test";

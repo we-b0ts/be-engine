@@ -140,6 +140,7 @@ fn dependency_effect(effect: &NativeEffect) -> bool {
             | NativeEffect::RedisLock
             | NativeEffect::RedisPublishIdentity(_)
             | NativeEffect::HttpRequest(_)
+            | NativeEffect::HttpClientMetadata(_)
             | NativeEffect::MysqlValues(_)
             | NativeEffect::InputJwt(_)
             | NativeEffect::InputSignedTimestamp(_)

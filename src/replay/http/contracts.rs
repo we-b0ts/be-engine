@@ -7,7 +7,8 @@ use crate::value_contract::json::AnchorClocks;
 mod attachment_tests;
 mod witness;
 pub(crate) use witness::{
-    source_witness, validate_witness, witness_matches, witness_metadata_matches, witness_value,
+    source_witness, validate_contract_witness, validate_witness, witness_matches,
+    witness_metadata_matches, witness_value,
 };
 
 pub(super) struct RequestView<'a> {

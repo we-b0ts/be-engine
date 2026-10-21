@@ -12,6 +12,7 @@ fn stateful(rule: &CompiledNativeRule) -> bool {
         | NativeEffect::RedisLock
         | NativeEffect::RedisPublishIdentity(_)
         | NativeEffect::HttpRequest(_)
+        | NativeEffect::HttpClientMetadata(_)
         | NativeEffect::InputJwt(_)
         | NativeEffect::InputSignedTimestamp(_) => true,
         NativeEffect::MysqlValues(effect) => {

@@ -123,6 +123,7 @@ impl NativeEffect {
             Self::ResponseGenerated(_) => "generated_response",
             Self::ResponseBody(_) => "structured_response",
             Self::HttpRequest(_) => "http_request_contract",
+            Self::HttpClientMetadata(_) => "scoped_http_client_metadata",
             Self::MysqlValues(_) => "sql_value_contract",
             Self::InputJwt(_) => "input_token_rebase",
             Self::InputSignedTimestamp(_) => "input_signed_timestamp_rebase",
@@ -412,6 +413,9 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
             Ok(())
         }
         NativeEffect::HttpRequest(effect) => http_request::validate(selector, effect),
+        NativeEffect::HttpClientMetadata(effect) => {
+            http_request::validate_client_metadata(selector, effect)
+        }
         NativeEffect::MysqlValues(effect) => {
             resource(selector, Protocol::Mysql)?;
             ensure!(

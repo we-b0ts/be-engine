@@ -98,10 +98,11 @@ pub(in crate::replay) fn project_native(
             | n::NativeEffect::ResponseHeaderDate(_)
             | n::NativeEffect::ResponseBody(_) => response::project(&mut output, rule)?,
             n::NativeEffect::ResponseGenerated(_) => (),
-            // The Redis native stream owner consumes this typed effect directly.
+            // Native protocol owners consume these typed effects directly.
             n::NativeEffect::RedisAppendStream
             | n::NativeEffect::RedisReadCommutation(_)
-            | n::NativeEffect::RedisExpiryRefresh(_) => (),
+            | n::NativeEffect::RedisExpiryRefresh(_)
+            | n::NativeEffect::HttpClientMetadata(_) => (),
             n::NativeEffect::InputJwt(effect) => input(&mut output, rule, effect)?,
             // The inbound runtime consumes this typed effect directly; no
             // legacy request-rule document represents custom signatures.

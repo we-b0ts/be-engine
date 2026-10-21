@@ -146,6 +146,7 @@ pub use feedback::{
     HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
 };
 
+pub(in crate::replay) mod http_client_metadata;
 mod http_headers;
 mod http_json;
 pub use http_headers::HttpHeaderTimestampSelector;

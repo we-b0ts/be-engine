@@ -54,7 +54,8 @@ pub use egress_counter::{
 mod global_dependency_tests;
 mod http;
 pub(crate) use http::contracts::{
-    source_witness as http_source_witness, validate_witness as http_validate_witness,
+    source_witness as http_source_witness,
+    validate_contract_witness as http_validate_contract_witness,
     witness_matches as http_witness_matches,
     witness_metadata_matches as http_witness_metadata_matches, witness_value as http_witness_value,
 };

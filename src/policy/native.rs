@@ -1,10 +1,12 @@
 //! Closed contracts for stateful identities, signatures and acquisition effects.
 //! The compiler retains these as typed effects; protocol owners never reparse YAML.
+mod http_client_metadata;
 mod input;
 mod response;
 mod source;
 mod stateful;
 
+pub use http_client_metadata::*;
 pub use input::*;
 pub use response::*;
 pub use source::*;
@@ -170,6 +172,7 @@ pub enum NativeEffect {
     ResponseGenerated(GeneratedEffect),
     ResponseBody(BodyEffect),
     HttpRequest(HttpRequestEffect),
+    HttpClientMetadata(HttpClientMetadataEffect),
     MysqlValues(MysqlValuesEffect),
     InputJwt(InputJwtEffect),
     InputSignedTimestamp(InputSignedTimestampEffect),

@@ -376,6 +376,11 @@ proof states the complete Source fact; nested `contract`/`proof` pairs are used
 when distinct relaxations need independently auditable facts. These records
 remain fully inline; there is no required resources/codec/contracts registry.
 
+Source-proven nonbehavioral SDK request headers use the scoped
+[`http_client_metadata` effect](http-client-metadata.md). The consumer and its
+middleware must not use the selected names for business behavior; unknown headers
+remain strict and the audit retains observations with the authorizing rule ID.
+
 ```yaml
 format: traffic-policy/v1
 rules:

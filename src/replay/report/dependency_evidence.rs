@@ -587,6 +587,7 @@ fn event_difference(direction: DifferenceDirection, event: &Value) -> ReplayDepe
                     "uri": event.get("uri"),
                     "values": value.get("values"),
                     "protected": value.get("protected"),
+                    "comparison": event.get("comparison"),
                     "rule_id": event.get("rule_id"),
                     "validation_error": event.get("validation_error"),
                     "request_started_at": event.get(if side == "expected" { "source_request_started_at" } else { "target_request_started_at" }),

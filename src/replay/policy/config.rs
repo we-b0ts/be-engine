@@ -315,6 +315,7 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
                                 | crate::policy::NativeEffect::RedisLock
                                 | crate::policy::NativeEffect::RedisPublishIdentity(_)
                                 | crate::policy::NativeEffect::HttpRequest(_)
+                                | crate::policy::NativeEffect::HttpClientMetadata(_)
                                 | crate::policy::NativeEffect::MysqlValues(_)
                                 | crate::policy::NativeEffect::FiniteSharing(_)
                         )

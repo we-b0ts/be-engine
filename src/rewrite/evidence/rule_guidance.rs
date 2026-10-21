@@ -2,6 +2,7 @@
 use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint};
 use super::*;
 mod generated_values;
+mod http_client_metadata;
 mod http_header_timestamp;
 pub(super) use generated_values::has_response_jwt;
 
@@ -139,6 +140,13 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             "Trace source SDK header generation and declare a typed http_request header time contract with its own dependency request anchor, exact endpoint, method and path. Header presence, multiplicity and authentication remain checked.",
         );
     }
+    if http_client_metadata::has_difference(facts) {
+        add(
+            "http_client_metadata",
+            "http_client_metadata",
+            "SDK metadata header differences remain strict until explicitly authorized. protected=false concerns confidentiality, not acceptance. Trace both the SDK generator and the downstream consumer/middleware. If these exact names have no application, authentication, routing or idempotency role, declare http_client_metadata with API, endpoint, method, path and exact supported header names. The audit retains differences as observations with a rule ID; do not emulate another language's SDK identity. Source proof, complete per-name witnesses and fresh Replay are required. See docs/http-client-metadata.md.",
+        );
+    }
     for (protocol, capability) in [
         ("http", "http_json_unordered"),
         ("redis", "redis_value_unordered"),
@@ -256,6 +264,9 @@ pub(super) fn applicable_rule_planners(
     }
     if nonempty(&facts["http_header_timestamp_candidates"]) {
         add("dependency_value", "http_header_timestamp");
+    }
+    if http_client_metadata::has_difference(facts) {
+        add("dependency_value", "http_client_metadata");
     }
     if facts["cross_case_candidates"]["candidates"]
         .as_array()

@@ -218,6 +218,7 @@ impl ReplayPolicyRuntime {
                 crate::policy::NativeEffect::RedisAppendStream
                     | crate::policy::NativeEffect::RedisReadCommutation(_)
                     | crate::policy::NativeEffect::RedisExpiryRefresh(_)
+                    | crate::policy::NativeEffect::HttpClientMetadata(_)
             )
         }) {
             usage.insert(rule.rule.id.clone(), DependencyRuleUsage::default());
@@ -696,6 +697,7 @@ impl ReplayPolicyRuntime {
             .chain(self.dynamic_values.rule_reports())
             .chain(self.request_contracts.reports())
             .chain(self.redis_native_rule_reports())
+            .chain(self.http_client_metadata_reports())
             .collect::<Vec<_>>();
         let unused_applicable_dependency_rule_ids = dependency_rules
             .iter()
@@ -857,6 +859,7 @@ fn rule_matches_target(rule: &ReplayDependencyRule, actual: Option<&TargetKey>) 
     normalize_host(host) == actual.host && rule.target.port.is_none_or(|port| port == actual.port)
 }
 
+mod http_client_metadata;
 mod http_headers;
 mod http_json;
 

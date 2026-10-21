@@ -15,7 +15,9 @@ pub(super) fn validate(
             compiled.native.iter().any(|rule| {
                 matches!(
                     rule.rule.effect,
-                    NativeEffect::HttpRequest(_) | NativeEffect::Identity(_)
+                    NativeEffect::HttpRequest(_)
+                        | NativeEffect::Identity(_)
+                        | NativeEffect::HttpClientMetadata(_)
                 ) && (rule
                     .rule
                     .selector
@@ -155,5 +157,22 @@ pub(super) fn validate(
     }
     runtime.commit(Some(case.id), decision);
     runtime.commit_http_header_timestamps(&timestamps);
+    let observed = runtime
+        .http_client_metadata_headers(&context)
+        .into_iter()
+        .filter(|(name, _)| {
+            headers.iter().any(|(key, values)| {
+                key.eq_ignore_ascii_case(name)
+                    && !values.is_empty()
+                    && values
+                        .iter()
+                        .all(|value| !value.is_empty() && value != "<redacted>")
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (name, id) in &observed {
+        coverage.header(id, name);
+    }
+    runtime.commit_http_client_metadata(&observed);
     Ok(())
 }
