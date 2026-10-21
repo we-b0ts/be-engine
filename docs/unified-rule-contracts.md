@@ -738,3 +738,9 @@ consistent with `project.policy`. Script syntax, an isolated deployment dry run
 and actual project recorder projection pass without starting Docker or Target.
 The recording image must use an engine that includes this MR; the build checks
 that capability, and no image publication or running-binary update is performed.
+
+
+Conditional fields also support `when: {relative_pointer: ../type, equals: text}`.
+Native Redis JSON identity captures can carry the same sibling condition under
+`effect.capture.when`; this controls capture without disabling later bound
+references. See [conditional field contracts](conditional-field-contracts.md).

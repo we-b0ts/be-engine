@@ -33,6 +33,7 @@ impl DynamicValueRedisTimeRule {
             json_pointer: Some(pointer),
             references: Some(references),
             derived_from,
+            ..
         } = &identity.capture
         else {
             anyhow::bail!(

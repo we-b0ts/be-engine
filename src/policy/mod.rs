@@ -7,6 +7,7 @@ pub(crate) use authoring::expanded as expand_policy;
 pub use authoring::render_policy;
 pub(crate) use authoring::retired_authoring;
 mod compiler;
+mod condition;
 pub mod native;
 mod native_compile;
 mod schema;

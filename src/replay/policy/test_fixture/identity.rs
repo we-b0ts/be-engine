@@ -43,6 +43,7 @@ pub(super) fn convert(rule: &d::DynamicValueRule, inventory: &Inventory) -> Resu
             json_pointer,
             references,
             derived_from,
+            when,
         } => {
             selector.resource = Some(p::Resource {
                 protocol: p::Protocol::Redis,
@@ -57,6 +58,7 @@ pub(super) fn convert(rule: &d::DynamicValueRule, inventory: &Inventory) -> Resu
             selector.key = Some(native_key(key));
             n::IdentityCapture::RedisArgument {
                 index: *argument_index,
+                when: when.clone(),
                 json_pointer: json_pointer.clone(),
                 copies: references
                     .iter()

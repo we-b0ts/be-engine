@@ -1,6 +1,8 @@
 //! Case-local identity mappings shared by decoded dependency protocol adapters.
 mod audit;
 mod candidates;
+#[cfg(test)]
+mod conditional_redis_tests;
 mod config;
 mod http;
 mod mysql;

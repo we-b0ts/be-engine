@@ -74,7 +74,9 @@ is unclear.
 - `policy/schema` owns the strict self-contained `traffic-policy/v1` document.
   `policy/compiler` owns typed capability validation, field ownership and
   semantic effect fingerprints; neither module reads evidence or changes runtime
-  state. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
+  state. `policy/condition` owns Source sibling predicate validation, selection,
+  Target discriminator equality and conservative disjointness shared by value
+  fields and native Redis identity captures. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
   relations. `value_contract/json` composes field contracts with strict remainder
   comparison and bounded whole-element multiset pairing; `value_contract/delivery`
   writes only explicitly authorized timestamps in derived copies. These pure

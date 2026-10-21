@@ -120,6 +120,7 @@ impl DynamicValues {
                     DynamicValueCapture::Redis {
                         references: None,
                         derived_from: None,
+                        when: None,
                         target: DynamicValueTarget {
                             host: target.host.clone(),
                             port: target.port,

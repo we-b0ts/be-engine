@@ -134,6 +134,13 @@ Comparing a dependency response does not authorize rewriting it. Only explicit
 The writer revalidates the complete delivered payload and preserves unrelated
 bytes, native metadata and finite consumption.
 
+A Source sibling may condition an individual value contract with
+`kind: conditional`, `when: {relative_pointer: ../type, equals: text}` and an
+inner `contract`. Native Redis identity captures accept the same predicate under
+`effect.capture.when`; inactive captures create no binding, while later reference
+operations use existing bindings. Predicates are Source-only and Target siblings
+stay exact. See [conditional field contracts](../../../../../docs/conditional-field-contracts.md).
+
 ## Stateful And Source Effects
 
 Use the typed native owner when a contract involves more than one value:

@@ -42,7 +42,7 @@ pub(super) fn verify(
     let mut cases = Vec::new();
     let mut total = 0usize;
     for (id, dir) in bundle.cases.clone() {
-        let request = bundle.json(&dir.join("request.json"))?;
+        let request = bundle.request(&dir.join("request.json"))?;
         let path = dir.join("dependencies.jsonl");
         bundle.freeze(&path)?;
         let bytes = fs::read(&path)?;

@@ -117,7 +117,27 @@ async fn exact_exclusion_returns_fixed_404_and_records_other_paths_and_methods()
     .into_iter()
     .enumerate()
     {
-        let response = raw_http_request(gateway_addr, method, path, "", "").await;
+        // Publishing the previous case can precede releasing its admission slot.
+        // Retry only the fixed fallback; an exclusion regression still times out.
+        let response = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let response = raw_http_request(gateway_addr, method, path, "", "").await;
+                if !response
+                    .to_ascii_lowercase()
+                    .contains("x-recorder-fallback: fixed")
+                {
+                    break response;
+                }
+                assert!(
+                    response.contains("404 Not Found")
+                        && response.ends_with(r#"{"code":"not_recorded"}"#),
+                    "{response}"
+                );
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{method} {path} must be admitted after the previous case"));
         assert!(
             response.contains("200 OK") && response.ends_with("matched"),
             "{response}"

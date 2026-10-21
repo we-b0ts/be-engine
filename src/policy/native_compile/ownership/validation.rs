@@ -31,6 +31,12 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
             {
                 continue;
             }
+            if let (Some(a), Some(b)) = (&claim.field_condition, &other.field_condition)
+                && a.pointer == b.pointer
+                && a.when.disjoint(&b.when)
+            {
+                continue;
+            }
             let overlap = locations_overlap(&claim.location, &other.location);
             if overlap && !container_child(claim, other) && !container_child(other, claim) {
                 anyhow::bail!(
@@ -143,6 +149,7 @@ fn value_claims(compiled: &CompiledRule) -> Result<Vec<NativeFieldClaim>> {
                 },
                 selector: selector(&rule.selector),
                 when: rule.when.clone(),
+                field_condition: None,
                 slot: match &rule.slot {
                     Slot::Body => NativeOwnedSlot::Body,
                     Slot::SseData(event) => NativeOwnedSlot::SseData(event.clone()),

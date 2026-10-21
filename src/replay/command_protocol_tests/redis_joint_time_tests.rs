@@ -205,3 +205,137 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
     }
     assert_eq!(std::fs::read_to_string(dependencies).unwrap(), immutable);
 }
+
+#[tokio::test]
+async fn conditional_redis_capture_replays_mixed_blocks_times_references_and_finite_consumption() {
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let case = temp.path().join(".traffic-e2e/local/recordings/run/case");
+    std::fs::create_dir_all(&case).unwrap();
+    std::fs::write(case.join("request.json"), inbound("generated")).unwrap();
+    std::fs::write(case.join("expected-response.json"), "{}").unwrap();
+    let connection = Uuid::new_v4();
+    let text = |time| {
+        json!({"type":"text","id":format!("text-{time}"),"timestamp":time,
+        "content_key":format!("content:text-{time}"),"content":""})
+        .to_string()
+    };
+    let thinking =
+        json!({"type":"thinking","id":"thinking-abcdef123456","timestamp":1000000}).to_string();
+    let tool = json!({"type":"tool","id":"toolu_recorded","timestamp":1000000}).to_string();
+    let records = [
+        redis_hash_dependency(connection, 1, "RPUSH", &["blocks:7", &thinking], b":1\r\n"),
+        redis_hash_dependency(connection, 2, "RPUSH", &["blocks:7", &tool], b":2\r\n"),
+        redis_hash_dependency(
+            connection,
+            3,
+            "RPUSH",
+            &["blocks:7", &text(1000000)],
+            b":3\r\n",
+        ),
+        redis_hash_dependency(
+            connection,
+            4,
+            "SET",
+            &["current:7", "text-1000000", "EX", "300"],
+            b"+OK\r\n",
+        ),
+        redis_hash_dependency(
+            connection,
+            5,
+            "APPEND",
+            &["content:text-1000000", "hello"],
+            b":5\r\n",
+        ),
+        redis_hash_dependency(
+            connection,
+            6,
+            "EXPIRE",
+            &["content:text-1000000", "300"],
+            b":1\r\n",
+        ),
+    ];
+    let original = records.iter().map(|v| format!("{v}\n")).collect::<String>();
+    std::fs::write(case.join("dependencies.jsonl"), &original).unwrap();
+    let resource = json!({"protocol":"redis","endpoint":"redis.internal:6379","database":0});
+    let proof = json!({"source":"blocks.py:create","fact":"Text ID derives from its wall-clock millisecond timestamp, while thinking and tool IDs have independent provenance"});
+    let identity = json!({"id":"text","match":{"api":"POST /items","resource":resource,"operation":"RPUSH","key":{"kind":"exact","value":"blocks:7"}},
+        "effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1,"json_pointer":"/id",
+        "when":{"relative_pointer":"../type","equals":"text"},"derived_from":{"pointer":"/timestamp","prefix":"text-"},
+        "copies":[{"pointer":"/content_key","template":"content:{value}"}]},"references":[{"resource":resource}]},"proof":proof});
+    let time = json!({"id":"clock","match":{"api":"POST /items","resource":resource,"key":{"kind":"exact","value":"blocks:7"}},
+        "effect":{"kind":"redis_sequence","commands":[{"operation":"RPUSH","arguments":{"1":{"kind":"json","fields":{
+            "/timestamp":{"kind":"time","format":"unix_milliseconds","relation":"preserve_offset"}}}}}]},"proof":proof});
+    let policy = temp.path().join(".traffic-e2e/policy.yaml");
+    std::fs::write(
+        &policy,
+        serde_yaml::to_string(&json!({"format":"traffic-policy/v1","rules":[identity,time]}))
+            .unwrap(),
+    )
+    .unwrap();
+    let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy)).await;
+    state
+        .lock()
+        .await
+        .replay_policy
+        .as_ref()
+        .unwrap()
+        .request_contracts
+        .request_begin("case")
+        .unwrap();
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let live_time = Utc::now().timestamp_millis();
+    let live_thinking =
+        json!({"type":"thinking","id":"thinking-abcdef123456","timestamp":live_time}).to_string();
+    let live_tool = json!({"type":"tool","id":"toolu_recorded","timestamp":live_time}).to_string();
+    redis_value_tests::request(
+        &mut client,
+        &["RPUSH", "blocks:7", &live_thinking],
+        b":1\r\n",
+    )
+    .await;
+    redis_value_tests::request(&mut client, &["RPUSH", "blocks:7", &live_tool], b":2\r\n").await;
+    redis_value_tests::request(
+        &mut client,
+        &["RPUSH", "blocks:7", &text(live_time)],
+        b":3\r\n",
+    )
+    .await;
+    let id = format!("text-{live_time}");
+    let content = format!("content:{id}");
+    redis_value_tests::request(
+        &mut client,
+        &["SET", "current:7", &id, "EX", "300"],
+        b"+OK\r\n",
+    )
+    .await;
+    redis_value_tests::request(&mut client, &["APPEND", &content, "hello"], b":5\r\n").await;
+    redis_value_tests::request(&mut client, &["EXPIRE", &content, "300"], b":1\r\n").await;
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .snapshot_report()
+            .protocols
+            .redis
+            .matched_count,
+        6
+    );
+    assert!(!state.lock().await.snapshot_report().is_dirty());
+    // A successful conditional match never makes the Source exchange reusable.
+    redis_value_tests::request(&mut client, &["RPUSH", "blocks:7", &text(live_time)], ERROR).await;
+    assert_eq!(
+        state
+            .lock()
+            .await
+            .snapshot_report()
+            .protocols
+            .redis
+            .matched_count,
+        6
+    );
+    task.abort();
+    assert_eq!(
+        std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+        original
+    );
+}
