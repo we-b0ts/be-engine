@@ -61,6 +61,7 @@ pub(in crate::replay) async fn handle_connection(
         status_flags: SERVER_STATUS_AUTOCOMMIT,
         statements: HashMap::new(),
         transaction_scope: Default::default(),
+        transaction_witness: Default::default(),
     };
     loop {
         let Some(packet) = read_packet(&mut stream).await? else {

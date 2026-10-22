@@ -108,6 +108,8 @@ impl MysqlReplayState {
                     sql_summary: exchange.record.sql.as_deref().map(SqlSummary::new),
                     status: exchange.record.response.status.clone(),
                     row_count: exchange.record.result_row_count(),
+                    // Immutable Global rows retain Source-only diagnostics.
+                    diagnostic: self.transaction_equivalence.diagnostic(index),
                 })?,
             })?;
         }

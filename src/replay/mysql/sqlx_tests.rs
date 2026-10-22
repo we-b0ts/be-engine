@@ -37,6 +37,7 @@ mod select_time_tests;
 mod sql_values_tests;
 mod subquery_tests;
 mod time_shift_tests;
+mod transaction_equivalence;
 mod transaction_performance;
 mod tuple_tests;
 mod unified_contracts;

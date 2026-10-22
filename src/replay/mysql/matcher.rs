@@ -12,6 +12,7 @@ pub(in crate::replay) struct MysqlReplayState {
     pub(super) sql_cache: sql_match::cache::SqlCache,
     candidates: candidates::Candidates,
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
+    pub(in crate::replay) transaction_equivalence: transaction_equivalence::Registry,
     pub(super) origins: ownership::Origins,
     pub(super) foreign: ownership::Foreign,
     pub(super) transaction_wires: std::collections::HashSet<(Uuid, u64)>,
@@ -415,6 +416,12 @@ impl ReplayState {
         self.allowed_unused_session_exchanges(OptionalSessionExchange::Autocommit)
     }
 
+    pub(in crate::replay) fn transaction_equivalent_autocommit(
+        &self,
+    ) -> Vec<RecordedExchangeSummary> {
+        self.allowed_unused_session_exchanges(OptionalSessionExchange::TransactionAutocommit)
+    }
+
     fn allowed_unused_session_exchanges(
         &self,
         kind: OptionalSessionExchange,
@@ -475,6 +482,7 @@ impl ReplayState {
             sql_summary: exchange.record.sql.as_deref().map(SqlSummary::new),
             status: exchange.record.response.status.clone(),
             row_count: exchange.record.result_row_count(),
+            diagnostic: self.mysql.transaction_equivalence.diagnostic(index),
         }
     }
 
