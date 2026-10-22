@@ -35,6 +35,7 @@ struct Transaction {
     operation_count: usize,
     write_count: usize,
     explicit: bool,
+    savepoints: bool,
     strict: bool,
     single_update_outcome: &'static str,
     source_error_code: Option<u16>,
@@ -59,6 +60,7 @@ impl Transaction {
     fn autocommit_eligible(&self) -> bool {
         self.write_count == 1
             && !self.strict
+            && !self.savepoints
             && !self.explicit
             && (self.end == "commit" && self.expected_errors.is_empty()
                 || self.end == "rollback"
@@ -124,7 +126,7 @@ impl Registry {
     pub(super) fn requires_witness(&self, index: usize) -> bool {
         self.ends.get(&index).is_some_and(|&(r, t)| {
             let group = &self.requirements[r].transactions[t];
-            (group.write_count != 0 || group.strict) && group.witness.is_none()
+            (group.write_count != 0 || group.strict || group.savepoints) && group.witness.is_none()
         })
     }
 
@@ -204,7 +206,18 @@ impl Registry {
                 let first_write = if group.strict || group.explicit && group.write_count != 0 {
                     0
                 } else {
-                    group.first_write.unwrap_or(all.len() - 1)
+                    let first = group.first_write.unwrap_or(all.len() - 1);
+                    all[..first]
+                        .iter()
+                        .position(|&i| {
+                            exchanges[i]
+                                .record
+                                .sql
+                                .as_deref()
+                                .and_then(crate::mysql::savepoint::parse)
+                                .is_some()
+                        })
+                        .unwrap_or(first)
                 };
                 let first = &exchanges[all[0]].record;
                 let last = &exchanges[*all.last().unwrap()].record;
@@ -219,10 +232,19 @@ impl Registry {
                 let transaction = requirement.transactions.len();
                 pending_ends.push((*all.last().unwrap(), (id, transaction)));
                 pending_free.extend(all[..first_write].iter().copied());
-                let witness = (group.write_count == 0 && !group.strict).then_some(Coverage {
-                    connection: None,
-                    transaction: None,
+                let has_savepoints = all.iter().any(|&i| {
+                    exchanges[i]
+                        .record
+                        .sql
+                        .as_deref()
+                        .and_then(crate::mysql::savepoint::parse)
+                        .is_some()
                 });
+                let witness = (group.write_count == 0 && !group.strict && !has_savepoints)
+                    .then_some(Coverage {
+                        connection: None,
+                        transaction: None,
+                    });
                 if witness.is_some() {
                     pending_omissions.push((*all.last().unwrap(), end_kind(last)));
                 }
@@ -230,6 +252,7 @@ impl Registry {
                     operation_count: all.len() - 1,
                     write_count: group.write_count,
                     explicit: group.explicit,
+                    savepoints: has_savepoints,
                     strict: group.strict,
                     single_update_outcome,
                     source_error_code: written.and_then(|r| r.response.error_code),
@@ -267,7 +290,7 @@ impl Registry {
                 self.setups.insert(index, id);
             }
             for (transaction, group) in requirement.transactions.iter().enumerate() {
-                if group.write_count != 0 || group.strict {
+                if group.write_count != 0 || group.strict || group.savepoints {
                     for &index in &group.members {
                         self.members.insert(index, (id, transaction));
                     }

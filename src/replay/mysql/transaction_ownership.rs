@@ -141,6 +141,7 @@ fn prove(
             continue;
         };
         let mut valid = true;
+        let mut savepoints = crate::mysql::savepoint::Names::default();
         let mut case_records = Vec::new();
         let mut members = Vec::new();
         for (position, member) in transaction.members.iter().enumerate() {
@@ -154,7 +155,13 @@ fn prove(
                     .context("Source transaction member has no sequence")?,
             };
             let record = read(root, binding, reader, &locator, connection)?;
-            if !validation::member(&record, position, transaction.members.len(), &mut sql) {
+            if !validation::member(&record, position, transaction.members.len(), &mut sql)
+                || record
+                    .sql
+                    .as_deref()
+                    .and_then(crate::mysql::savepoint::parse)
+                    .is_some_and(|command| !savepoints.observe(&command))
+            {
                 valid = false;
                 break;
             }

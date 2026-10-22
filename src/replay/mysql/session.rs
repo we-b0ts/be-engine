@@ -8,6 +8,7 @@ pub(in crate::replay) struct ReplaySession {
     pub(in crate::replay) status_flags: u16,
     pub(in crate::replay) statements: HashMap<u32, PreparedStatement>,
     pub(super) transaction_scope: super::transaction_scope::Scope,
+    pub(super) savepoints: super::savepoints::Bindings,
     pub(super) transaction_witness: super::transaction_equivalence::Witness,
 }
 
@@ -227,6 +228,10 @@ pub(super) async fn deliver_matched(
         return Err(error);
     }
     replay.complete_exchange(&matched);
+    session.savepoints.observe(
+        &matched.record,
+        matched.report.sql.as_deref().unwrap_or_default(),
+    );
     let identity = session.identity();
     replay.observe_mysql_transaction(
         &mut session.transaction_witness,
@@ -266,6 +271,7 @@ pub(in crate::replay) async fn handle_query(
             Some(sql),
             None,
             Some(super::matcher::TransactionMatch {
+                savepoints: &session.savepoints,
                 preferred_end: transaction_end,
                 status_flags: session.status_flags,
             }),
@@ -293,6 +299,12 @@ pub(in crate::replay) async fn handle_query(
             Some(sql),
             "driver/session query handled by replay server",
         );
+        if matches!(
+            normalize_sql(sql).as_str(),
+            "begin" | "start transaction" | "commit" | "rollback"
+        ) {
+            session.savepoints = Default::default();
+        }
         state.observe_mysql_transaction(
             &mut session.transaction_witness,
             super::transaction_equivalence::Delivery {
@@ -448,6 +460,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
             Some(&statement.sql),
             parsed.params.as_deref(),
             Some(super::matcher::TransactionMatch {
+                savepoints: &session.savepoints,
                 preferred_end: transaction_end,
                 status_flags: session.status_flags,
             }),
@@ -475,6 +488,12 @@ pub(in crate::replay) async fn handle_stmt_execute(
             Some(&statement.sql),
             "prepared driver/session query handled by replay server",
         );
+        if matches!(
+            normalize_sql(&statement.sql).as_str(),
+            "begin" | "start transaction" | "commit" | "rollback"
+        ) {
+            session.savepoints = Default::default();
+        }
         state.observe_mysql_transaction(
             &mut session.transaction_witness,
             super::transaction_equivalence::Delivery {

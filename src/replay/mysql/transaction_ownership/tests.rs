@@ -216,7 +216,6 @@ fn boundary_restarts_chain_implicit_commits_and_unknown_controls_stay_strict() {
         "CREATE TABLE other (id INT)",
         "ALTER TABLE items ADD COLUMN flag INT",
         "SET autocommit=1",
-        "SAVEPOINT sp",
         "ROLLBACK TO SAVEPOINT sp",
         "CALL worker()",
         "XA START 'x'",
@@ -315,4 +314,35 @@ fn missing_recording_boundary_returns_empty_without_creating_cache() {
     assert!(prepared.wires.is_empty());
     assert_eq!(prepared.source_bytes, 0);
     assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn global_savepoint_lifetimes_are_complete_and_reusable_from_warm_cache() {
+    for ending in [
+        "RELEASE SAVEPOINT s",
+        "ROLLBACK TO SAVEPOINT s",
+        "RELEASE SAVEPOINT missing",
+    ] {
+        let fixture = Fixture::new();
+        fixture.write(
+            "global-dependencies.jsonl",
+            &[
+                fixture.statement(10, "BEGIN", 2, 3),
+                fixture.statement(11, "SAVEPOINT s", 3, 3),
+            ],
+        );
+        fixture.write(
+            "case-a/dependencies.jsonl",
+            &[
+                fixture.statement(12, "UPDATE items SET value=8 WHERE id=7", 3, 3),
+                fixture.statement(13, ending, 3, 3),
+                fixture.statement(14, "COMMIT", 3, 2),
+            ],
+        );
+        let expected = if ending.ends_with("missing") { 0 } else { 3 };
+        assert_eq!(prepare(&fixture.root).unwrap().promoted.len(), expected);
+        let warm = prepare(&fixture.root).unwrap();
+        assert!(warm.cache_reused);
+        assert_eq!(warm.promoted.len(), expected);
+    }
 }
