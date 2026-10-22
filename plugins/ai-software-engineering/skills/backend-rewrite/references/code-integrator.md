@@ -90,15 +90,13 @@ attest that the configured final quality tool passed. Never reuse a worker repor
 integration, an ordinary integration report for the final stage, or a candidate
 report after subsequent relevant changes.
 
-Workers run relevant tests as needed and do not need to run Clippy. Their
-accepted reports certify engine source/isolation checks and delivery identity.
-Do not independently re-prove API business logic; inspect code for merge
+Accepted implementer reports certify engine source/isolation checks and delivery
+identity. Do not independently re-prove API business logic; inspect code for merge
 conflicts, routine quality repairs and required evidence.
 
-Build and run focused tests as needed during ordinary integration; a full
-fmt/test/Clippy run is not a per-delivery gate. Include the local checks you
-actually executed with their outcomes. The existing final stage below requires
-the configured agent-owned quality_check.
+Build and run focused tests as needed during ordinary integration. Follow
+[Final Pre-Revalidation Review](#final-pre-revalidation-review) for the final
+check trigger. Include the local checks you actually executed with their outcomes.
 
 When the reviewed handoff needs no code change after input application, the
 candidate may equal the assigned base. Return the identity and checks without
@@ -165,9 +163,13 @@ or an allowed constant returns the missing proof; do not weaken the check.
 ## Final Pre-Revalidation Review
 
 The engine issues `pre_revalidation_review_required` only when ordinary work is
-ready for the final full revalidation or completion. This final gate also
-applies to an unchanged purpose baseline: ordinary Source-review exemption is
-not final quality proof. Work in the retained integration worktree at the
+ready for the final full revalidation or completion. Run Clippy and project-level
+test suites only for a `pre_revalidation_review` assignment issued in response
+to that explicit engine action. Do not start them during ordinary
+`integrate` or `review` assignments, including when a project guide lists them
+as development checks. This final gate also applies to an unchanged purpose
+baseline: ordinary Source-review exemption is not final quality proof.
+Work in the retained integration worktree at the
 assigned canonical base, preserving any unfinished changes. First commit the
 final target/managed code and changed tracked build/toolchain inputs. Execute
 `details.quality_check` across `details.quality_paths` using the project's
@@ -175,11 +177,14 @@ configuration. The tool is configured by `project.delivery.quality_check` and
 defaults to `cargo-clippy`; other languages can select `eslint`, `ruff`,
 `golangci-lint` or a project tool identifier. For `cargo-clippy`, run
 `cargo clippy --workspace --all-targets -- -D warnings` from each applicable
-Rust project directory. Fix findings and check the corrected candidate before
-reporting success. Run formatting and unit tests according to project
-instructions and the changes being made.
+Rust project directory. Also run the full project test suite in each applicable
+target and managed project; for Rust, use `cargo test` without a test-name
+filter. Other languages use their configured project test command. Fix findings,
+commit corrections, and rerun checks affected by the changes. Run formatting
+according to project instructions.
 
-After the tool passed, execute the returned reporting command; its form is:
+After both the configured quality tool and project test suites pass on the final
+committed candidate, execute the returned reporting command; its form is:
 
 ```bash
 backend-rewrite --target-root /absolute/canonical review check \
@@ -198,11 +203,11 @@ out of this global check. Progress, policy and private runtime keep their
 existing separate handling. Supply current Source evidence and exact hardcode
 mappings when required.
 
-Inspect the report status and retain the local tool command and result in your
-agent response. Repair routine formatting/lint failures directly in this
-worktree, commit the corrected candidate, rerun the quality tool as needed, then
-report its successful result through the same final-stage command. Return API behavior decisions
-with exact evidence to their responsible implementer. A failure or stale
+Inspect the report status and retain the quality-tool and project-test commands
+and results in your agent response. Repair routine formatting/lint failures
+directly in this worktree, commit the corrected candidate, rerun affected checks,
+then report success through the same final-stage command. Return API behavior
+decisions with exact evidence to their responsible implementer. A failure or stale
 receipt cannot advance full revalidation. Do not modify code after a passing
 check and continue to describe that report as current.
 
@@ -212,10 +217,10 @@ and invokes `review accept`; you do not publish or accept it. The engine binds
 the receipt to code, canonical inputs, review policy, inventory and immutable
 recording. Relevant changes require a fresh final-stage check. Progress-only
 publication does not invalidate an already admitted matching receipt. When the
-engine reuses current final proof, do not run the quality tool again merely because
-another API in the same revalidation round is next. Retrying the identical
-successful candidate reuses the cached result and restores its report file if
-needed; the engine never executes the quality tool.
+engine reuses current final proof, do not run the quality tool or test suites
+again merely because another API in the same revalidation round is next.
+Retrying the identical successful candidate reuses the cached result and
+restores its report file if needed; the engine never executes the quality tool.
 
 ## Output
 

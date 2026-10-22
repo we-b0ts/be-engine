@@ -25,15 +25,13 @@ paths such as `../backend-rs/src/lib.rs`; use those exact paths in review
 evidence. Tracked candidate changes outside the target and managed paths are
 rejected rather than silently omitted.
 
-Worker review checks source rules, Replay isolation, source-sensitive public
+Implementer review checks source rules, Replay isolation, source-sensitive public
 domain values (including test code), and the exact assignment/code/input
-identities. It does not execute repository commands such as fmt, workspace
-tests or Clippy. Run tests relevant to the changes as needed and return their
-results. Build and debug as needed to establish API correctness. You do not
-need to run Clippy; the code integrator executes the configured quality_check
-and reports success before final revalidation. A passing worker report establishes handoff
-eligibility; it does not certify complete integration quality. Fix source and
-isolation findings before returning a handoff.
+identities. It does not execute repository quality commands. Follow the
+[implementer local-check policy](api-implementer.md#start) and return your local
+test results. A passing report establishes handoff eligibility; it does not
+certify complete integration quality. Fix source and isolation findings before
+returning a handoff.
 
 Consume `status`, `findings`, `quality`, `next_step`, and `report_path`. The
 quality section retains isolation findings; worker review has no mandatory
