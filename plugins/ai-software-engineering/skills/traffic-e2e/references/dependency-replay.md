@@ -136,8 +136,9 @@ ordinary SELECTs and successful transaction completion on the same connection
 and identity. Read-effect checks cover derived tables, UNION, joins, EXISTS and
 pure ROW_NUMBER windows by checking every child, independently of SQL matching;
 long OR chains do not lose their read proof solely because of expression width.
-Writes, locks, explicit transactions, unknown starts and incomplete
-evidence remain strict. Older recordings lacking query status evidence require
+Writes and locks do not qualify for this read-only proof; explicit BEGIN itself
+remains required. Unknown starts and incomplete evidence remain strict.
+Older recordings lacking query status evidence require
 re-recording; do not infer eligibility from SELECT summaries or read debug JSONL
 as the replay source. Optional cleanup stays matchable, and all business reads
 remain required. A matching HTTP response alone cannot justify omitting rollback.
@@ -149,7 +150,8 @@ omitted setup appears as `allowed_unused_mysql_autocommit_exchanges` and stays
 matchable. Both 0 and 1 are retained during recording; failed controls,
 unknown transaction starts and incomplete spans remain strict. Initial gaps
 caused by omitted setup may be crossed only before the first read and with
-consistent inactive status; gaps inside a transaction never establish proof.
+consistent inactive status; unknown gaps inside a transaction never establish
+proof.
 New recordings retain complete COM_PING exchanges in semantic JSONL for sequence
 continuity; unchanged-status, zero-effect PINGs do not break a read-only span and
 are not required business exchanges. Older recordings with omitted post-read
@@ -157,20 +159,60 @@ PINGs need fresh recording rather than an inferred explanation for their gaps.
 No rule or new recording is needed when the immutable capture already has the
 required status evidence. This does not verify transaction isolation equivalence.
 
-For a write-containing connection, a recorded `SET autocommit=0` can instead
-be satisfied by complete explicit Target transactions. Ordinary SQLx transactions
-and `with_transaction` wrappers pin one connection for BEGIN, all corresponding
-reads/writes and the matching COMMIT/ROLLBACK. Each Source transaction remains
-ordered and finite; all affected complete transactions in the loaded scope
-must have successful Target delivery witnesses before the SET becomes optional.
-Replay retains the original SET and reports it separately in
-`transaction_equivalent_mysql_autocommit_exchanges`. Split/merged transactions,
-missing BEGIN, pooled standalone COMMITs, mismatched ends and incomplete Source
-evidence remain strict. Unconsumed SET summaries carry bounded
-`mysql_autocommit_transaction_coverage` diagnostics, and coordinator
-`mysql_autocommit_diagnosis` supplies transaction-specific evidence guidance.
-Do not copy a driver SET, skip an API or infer an engine gap just from its
-unused count. Historical reports cannot establish fresh Target coverage.
+Write-containing implicit Source sessions use first-write-through-end
+compatibility by default, without a configuration switch. A driver
+`SET autocommit=0` is connection mode, not an explicit BEGIN. For each complete
+ordinary Source transaction:
+
+- One business write followed by successful COMMIT can omit that end when the
+  corresponding Target delivery independently proves autocommit 1 with no active
+  transaction before and after the write.
+- Exactly one ordinary UPDATE followed by successful ROLLBACK can use the same
+  Target witness only if Source's UPDATE returned an error or succeeded with
+  known `affected_rows: 0`. Delivery of that recorded response must succeed.
+  This is bounded compatibility, not proof about arbitrary trigger effects or
+  the application's conditional branch. Positive-row UPDATE then ROLLBACK
+  retains the transaction requirement; a zero-row UPDATE still counts as a write.
+- Two or more writes, and write-containing ROLLBACK outside that exception,
+  require one Target transaction from the first write through the matching end,
+  including every intervening and trailing read. Ordinary SQLx transactions or
+  a project's `with_transaction` wrapper provide this boundary. Prefix ordinary
+  reads may use the normal read route outside it; every business SQL remains a
+  finite required dependency.
+
+Explicit Source BEGIN and locking or unclassified effects retain the full
+Source boundary. Failed transaction controls never become optional. Successful
+no-write cleanup retains its independent Source read-only/inactive proof.
+Extra cleanup cannot replace the required business end or select another
+socket's identical COMMIT/ROLLBACK.
+
+Complete ordinary Global reads may supply Source-only continuity evidence for
+a Case's already established implicit Source span before its first write. Each
+missing sequence in its active gap must have one complete original Global read
+on the same connection and identity with continuous transaction status. These
+facts do not consume or reassign Global exchanges, change endpoints, or provide
+a Target witness. Unknown or duplicate
+sequences, writes, locks, unsupported effects, missing status and any gap after
+the first write remain strict. A later independently known inactive start can
+establish a separate complete transaction; it does not repair the rejected
+earlier span or justify omitting connection setup over incomplete evidence.
+
+All affected complete Source transactions in the loaded scope need their own
+successful Target delivery witnesses before the SET becomes optional. Replay
+retains the original SET and reports covered setup separately in
+`transaction_equivalent_mysql_autocommit_exchanges`; reports identify the
+default as `mysql_transaction_semantics: first_write_through_end_v1`.
+Unconsumed setup/end summaries and transaction violations carry bounded
+`mysql_autocommit_transaction_coverage` diagnostics. Follow
+`mysql_autocommit_diagnosis`: resolve an incomplete Source proof using its
+failure/missing query sequences first, then compare the proven write interval,
+actual Target status and missing members. An unproven interval or absent
+historical witness does not establish a write count or missing Target BEGIN.
+For a proven required interval, split/merged transactions, an early end before
+trailing reads, mismatched outcomes and a pooled standalone end remain strict.
+Do not copy a driver SET, wrap prefix reads solely for Replay, skip an API or
+use a value rule to hide transaction membership failures. Passing HTTP responses
+and historical reports cannot establish fresh Target coverage or an engine gap.
 
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.

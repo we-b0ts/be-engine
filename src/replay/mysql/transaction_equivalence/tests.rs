@@ -34,7 +34,8 @@ fn registry(values: &[Value]) -> Registry {
         .iter()
         .map(|v| serde_json::from_value(v.clone()).unwrap())
         .collect();
-    let plans = Registry::prepare(&records, &BTreeMap::new());
+    let mut registry = Registry::default();
+    let plans = registry.prepare(&records, &BTreeMap::new(), ReplaySource::Case);
     let exchanges: Vec<_> = records
         .into_iter()
         .map(|r| {
@@ -56,7 +57,6 @@ fn registry(values: &[Value]) -> Registry {
         })
         .collect();
     let mapping = (0..exchanges.len()).map(|i| (i, i)).collect();
-    let mut registry = Registry::default();
     let _ = registry.install(plans, &mapping, &exchanges);
     registry
 }
@@ -367,4 +367,159 @@ fn failed_update_status_requires_a_consecutive_end_and_never_a_failed_rollback()
         assert!(r.requirements[0].transactions.is_empty());
         assert!(r.requirements[0].source_reason.is_some());
     }
+}
+
+fn gap_records() -> (Vec<Value>, Vec<Value>) {
+    let base = records();
+    let mut case = base[1..4].to_vec();
+    case[0]["query_sequence"] = json!(1);
+    case[1]["query_sequence"] = json!(3);
+    case[2]["query_sequence"] = json!(4);
+    let mut global = case[0].clone();
+    global["query_sequence"] = json!(2);
+    global["server_status_before"] = json!(1);
+    global["sql"] = json!("SELECT id FROM teams WHERE id=2");
+    (case, vec![global])
+}
+
+fn scoped_plans(case: &[Value], global: &[Value]) -> Vec<source::Plan> {
+    let decode = |values: &[Value]| {
+        values
+            .iter()
+            .map(|v| serde_json::from_value(v.clone()).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let mut registry = Registry::default();
+    let _ = registry.prepare(&decode(global), &BTreeMap::new(), ReplaySource::Global);
+    registry.prepare(&decode(case), &BTreeMap::new(), ReplaySource::Case)
+}
+
+#[test]
+fn global_read_facts_only_complete_an_ordinary_prewrite_gap() {
+    let (case, global) = gap_records();
+    let plans = scoped_plans(&case, &global);
+    assert!(plans[0].reason.is_none());
+    assert!(plans[0].failed_ends.is_empty());
+    assert_eq!(plans[0].transactions.len(), 1);
+    assert_eq!(plans[0].transactions[0].write_count, 1);
+    assert_eq!(plans[0].transactions[0].members, vec![0, 1, 2]);
+
+    let mut variants = vec![Vec::new(), vec![global[0].clone(), global[0].clone()]];
+    for (field, value) in [
+        ("sql", json!("SELECT id FROM teams WHERE id=2 FOR UPDATE")),
+        ("sql", json!("SELECT @@autocommit")),
+        ("sql", json!("UPDATE teams SET active=1 WHERE id=2")),
+        ("database", json!("another_database")),
+        ("connection_id", json!(Uuid::from_u128(17))),
+        ("server_status_before", json!(0)),
+        ("server_status_before", Value::Null),
+    ] {
+        let mut changed = global.clone();
+        changed[0][field] = value;
+        variants.push(changed);
+    }
+    let mut truncated = global.clone();
+    truncated[0]["response"]["rows_truncated"] = json!(true);
+    variants.push(truncated);
+    let mut missing_after = global.clone();
+    missing_after[0]["response"]["server_status"] = Value::Null;
+    variants.push(missing_after);
+    let mut case_overlap = global.clone();
+    case_overlap.push(case[0].clone());
+    variants.push(case_overlap);
+    for global in variants {
+        let plans = scoped_plans(&case, &global);
+        assert_eq!(plans[0].reason, Some("source_sequence_gap"));
+        assert!(plans[0].transactions.is_empty());
+        let rejected = &plans[0].failed_ends[0];
+        assert_eq!(rejected.source_query_sequence, Some(4));
+        assert_eq!(rejected.failure_query_sequence, Some(3));
+        assert_eq!(rejected.missing_query_sequences, vec![2]);
+    }
+}
+
+#[test]
+fn global_reads_after_the_first_write_or_an_explicit_start_never_bridge() {
+    let (case, global) = gap_records();
+    for mode in ["write", "begin", "lock"] {
+        let mut case = case.clone();
+        if mode == "write" {
+            case[0] = case[1].clone();
+            case[0]["query_sequence"] = json!(1);
+            case[0]["server_status_before"] = json!(0);
+        } else if mode == "begin" {
+            case[0]["sql"] = json!("BEGIN");
+            case[0]["response"] = json!({"status":"ok","server_status":1,
+                "affected_rows":0,"last_insert_id":0});
+        } else {
+            case[0]["sql"] = json!("SELECT id FROM users FOR UPDATE");
+        }
+        let plans = scoped_plans(&case, &global);
+        assert_eq!(plans[0].reason, Some("source_sequence_gap"), "{mode}");
+        assert!(plans[0].transactions.is_empty(), "{mode}");
+    }
+}
+
+#[test]
+fn an_unproven_span_keeps_its_end_diagnostic_and_recovers_later_complete_groups() {
+    let (mut case, _) = gap_records();
+    let mut later = case.clone();
+    for (record, sequence) in later.iter_mut().zip([5, 6, 7]) {
+        record["query_sequence"] = json!(sequence);
+    }
+    case.extend(later);
+    let mut r = registry(&case);
+    assert_eq!(r.requirements[0].transactions.len(), 1);
+    assert_eq!(r.requirements[0].transactions[0].last_sequence, 7);
+    let rejected = r.diagnostic(2).unwrap();
+    assert_eq!(rejected["reason"], "source_sequence_gap");
+    assert_eq!(
+        rejected["source_proof_rejection"]["missing_query_sequences"],
+        json!([2])
+    );
+    assert!(
+        rejected["source_transactions"][0]
+            .get("write_count")
+            .is_none()
+    );
+    assert!(
+        rejected["source_transactions"][0]
+            .get("target_status_before")
+            .is_none()
+    );
+    assert!(segment(&mut r, &mut Witness::default(), &[3, 4, 5], "COMMIT").is_empty());
+    assert!(
+        r.requirements[0].transactions[0]
+            .witness
+            .unwrap()
+            .transaction
+            .is_some()
+    );
+    assert_eq!(r.requirements[0].source_reason, Some("source_sequence_gap"));
+}
+
+#[test]
+fn an_end_without_a_connection_has_a_rejection_instead_of_missing_diagnostics() {
+    let mut values = vec![records()[3].clone()];
+    values[0]["connection_id"] = Value::Null;
+    let r = registry(&values);
+    let proof = r.diagnostic(0).unwrap();
+    assert_eq!(proof["reason"], "source_connection_missing");
+    assert!(proof["source_transactions"][0]["source_connection_id"].is_null());
+}
+
+#[test]
+fn a_large_unproven_gap_retains_only_bounded_missing_sequence_evidence() {
+    let (mut case, global) = gap_records();
+    case[1]["query_sequence"] = json!(u64::MAX - 1);
+    case[2]["query_sequence"] = json!(u64::MAX);
+    let plans = scoped_plans(&case, &global);
+    assert!(plans[0].transactions.is_empty());
+    let rejected = &plans[0].failed_ends[0];
+    assert_eq!(rejected.reason, "source_sequence_gap");
+    assert_eq!(
+        rejected.missing_query_sequences,
+        (2..10).collect::<Vec<_>>()
+    );
+    assert_eq!(rejected.omitted_missing_query_sequences, u64::MAX - 11);
 }

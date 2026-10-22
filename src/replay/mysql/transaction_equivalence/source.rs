@@ -6,6 +6,49 @@ pub(in crate::replay) struct Plan {
     pub setups: Vec<usize>,
     pub transactions: Vec<Segment>,
     pub reason: Option<&'static str>,
+    pub failed_ends: Vec<RejectedEnd>,
+}
+
+#[derive(Debug)]
+pub(in crate::replay) struct RejectedEnd {
+    pub index: usize,
+    pub reason: &'static str,
+    pub end: &'static str,
+    pub source_connection_id: Option<Uuid>,
+    pub source_query_sequence: Option<u64>,
+    pub failure_query_sequence: Option<u64>,
+    pub missing_query_sequences: Vec<u64>,
+    pub omitted_missing_query_sequences: u64,
+}
+
+struct Failure {
+    reason: &'static str,
+    sequence: Option<u64>,
+    gap: Option<(u64, u64)>,
+}
+
+impl Failure {
+    fn rejected_end(&self, index: usize, record: &RecordedMysqlExchange) -> Option<RejectedEnd> {
+        let end = match normalize_sql(record.sql.as_deref()?).as_str() {
+            "commit" => "commit",
+            "rollback" => "rollback",
+            _ => return None,
+        };
+        let count = self.gap.map_or(0, |(first, next)| next - first);
+        Some(RejectedEnd {
+            index,
+            reason: self.reason,
+            end,
+            source_connection_id: record.connection_id,
+            source_query_sequence: record.query_sequence,
+            failure_query_sequence: self.sequence,
+            missing_query_sequences: self
+                .gap
+                .map(|(first, next)| (first..next).take(8).collect())
+                .unwrap_or_default(),
+            omitted_missing_query_sequences: count.saturating_sub(8),
+        })
+    }
 }
 
 pub(in crate::replay) struct Segment {
@@ -19,6 +62,8 @@ pub(in crate::replay) struct Segment {
 pub(super) fn prepare(
     records: &[DependencyRecord],
     optional: &BTreeMap<usize, OptionalSessionExchange>,
+    scope: ReplaySource,
+    global_reads: &source_evidence::GlobalReads,
 ) -> Vec<Plan> {
     let mut connections = BTreeMap::<Uuid, Vec<(usize, &RecordedMysqlExchange)>>::new();
     let mut plans = Vec::new();
@@ -29,11 +74,25 @@ pub(super) fn prepare(
                     .entry(connection)
                     .or_default()
                     .push((index, record));
-            } else if assignment(record).is_some() && !optional.contains_key(&index) {
+            } else {
+                let failed_end = Failure {
+                    reason: "source_connection_missing",
+                    sequence: record.query_sequence,
+                    gap: None,
+                }
+                .rejected_end(index, record);
+                let setups = (assignment(record).is_some() && !optional.contains_key(&index))
+                    .then_some(index)
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                if setups.is_empty() && failed_end.is_none() {
+                    continue;
+                }
                 plans.push(Plan {
-                    setups: vec![index],
+                    setups,
                     transactions: Vec::new(),
                     reason: Some("source_connection_missing"),
+                    failed_ends: failed_end.into_iter().collect(),
                 });
             }
         }
@@ -46,11 +105,17 @@ pub(super) fn prepare(
             .collect();
         records.sort_by_key(|(_, record)| record.query_sequence);
         let mut transactions = Vec::new();
-        let reason = collect_transactions(&records, &mut transactions).err();
+        let bridge_reads = (scope == ReplaySource::Case
+            && !records
+                .iter()
+                .any(|(_, record)| global_reads.contains_wire(record)))
+        .then_some(global_reads);
+        let (reason, failed_ends) = collect_transactions(&records, &mut transactions, bridge_reads);
         plans.push(Plan {
             setups,
             transactions,
             reason,
+            failed_ends,
         });
     }
     plans
@@ -70,106 +135,171 @@ fn assignment(record: &RecordedMysqlExchange) -> Option<bool> {
 fn collect_transactions(
     records: &[(usize, &RecordedMysqlExchange)],
     complete: &mut Vec<Segment>,
-) -> Result<(), &'static str> {
+    global_reads: Option<&source_evidence::GlobalReads>,
+) -> (Option<&'static str>, Vec<RejectedEnd>) {
     // Duplicate wire identities can make an already collected end ambiguous.
     // Check them before retaining any partial connection proof.
     if records
         .windows(2)
         .any(|pair| pair[0].1.query_sequence == pair[1].1.query_sequence)
     {
-        return Err("source_sequence_ambiguous");
+        let failure = Failure {
+            reason: "source_sequence_ambiguous",
+            sequence: None,
+            gap: None,
+        };
+        return (
+            Some(failure.reason),
+            records
+                .iter()
+                .filter_map(|(index, record)| failure.rejected_end(*index, record))
+                .collect(),
+        );
     }
     let mut active = Vec::<(usize, bool, bool)>::new();
     let mut explicit = false;
     let mut previous: Option<(&RecordedMysqlExchange, u16)> = None;
+    let mut reason = None;
+    let mut failed_ends = Vec::new();
+    let mut failure: Option<Failure> = None;
     for (position, &(index, record)) in records.iter().enumerate() {
-        let identity = identity_from_exchange(record).ok_or("source_identity_missing")?;
-        let sequence = record.query_sequence.ok_or("source_sequence_missing")?;
-        let before = record.server_status_before.ok_or("source_status_missing")?;
-        let failed_update = update_outcome(record) == Some("error");
-        let after = status_after(record)
-            .or_else(|| {
-                let (_, next) = records.get(position + 1)?;
-                (failed_update
-                    && next.query_sequence == sequence.checked_add(1)
-                    && identity_from_exchange(next).as_ref() == Some(&identity))
-                .then_some(next.server_status_before)
-                .flatten()
-            })
-            .ok_or("source_status_missing")?;
-        if let Some((previous, last_status)) = previous {
-            if identity_from_exchange(previous).as_ref() != Some(&identity) {
-                return Err("source_identity_changed");
-            }
-            let last = previous.query_sequence.ok_or("source_sequence_missing")?;
-            if last_status & 0x200b != before & 0x200b {
-                return Err("source_status_discontinuous");
-            }
-            if sequence <= last || (last.checked_add(1) != Some(sequence) && before & 0x2009 != 0) {
-                return Err("source_sequence_gap");
-            }
-        } else if before & 0x2009 != 0 {
-            return Err("source_transaction_start_unknown");
-        }
-        if let Some(enabled) = assignment(record) {
-            if !optional_session::successful_control(record)
-                || before & 0x2009 != 0
-                || after & 0x200b != if enabled { 2 } else { 0 }
-                || !active.is_empty()
+        if let Some(failed) = &failure {
+            // No permission is recovered until an independently known inactive
+            // start. The incomplete earlier span remains strict and diagnosed.
+            if record
+                .server_status_before
+                .is_none_or(|before| before & 0x2009 != 0)
             {
-                return Err("source_autocommit_setup_unsafe");
+                failed_ends.extend(failed.rejected_end(index, record));
+                continue;
             }
-        } else if optional_session::successful_prepare(record)
-            || optional_session::successful_ping(record)
-        {
-            // Neither command executes business SQL; both preserve continuity.
-        } else if optional_session::successful_begin(record) {
-            if !active.is_empty() {
-                return Err("source_transaction_restarted");
-            }
-            active.push((index, false, false));
-            explicit = true;
-        } else if optional_session::successful_end(record, &["commit", "rollback"]) {
-            if active.is_empty() && before & 0x2009 != 0 {
+            failure = None;
+        }
+        let mut gap = None;
+        let result: Result<(), &'static str> = (|| {
+            let identity = identity_from_exchange(record).ok_or("source_identity_missing")?;
+            let sequence = record.query_sequence.ok_or("source_sequence_missing")?;
+            let before = record.server_status_before.ok_or("source_status_missing")?;
+            let failed_update = update_outcome(record) == Some("error");
+            let after = status_after(record)
+                .or_else(|| {
+                    let (_, next) = records.get(position + 1)?;
+                    (failed_update
+                        && next.query_sequence == sequence.checked_add(1)
+                        && identity_from_exchange(next).as_ref() == Some(&identity))
+                    .then_some(next.server_status_before)
+                    .flatten()
+                })
+                .ok_or("source_status_missing")?;
+            if let Some((previous, last_status)) = previous {
+                if identity_from_exchange(previous).as_ref() != Some(&identity) {
+                    return Err("source_identity_changed");
+                }
+                let last = previous.query_sequence.ok_or("source_sequence_missing")?;
+                if last_status & 0x200b != before & 0x200b {
+                    return Err("source_status_discontinuous");
+                }
+                if sequence <= last {
+                    return Err("source_sequence_gap");
+                }
+                if last.checked_add(1) != Some(sequence) && before & 0x2009 != 0 {
+                    let bridged = active.iter().all(|(_, write, strict)| !write && !strict)
+                        && !active.is_empty()
+                        && !explicit
+                        && global_reads.is_some_and(|reads| {
+                            record.connection_id.is_some_and(|connection| {
+                                reads.bridges(
+                                    connection,
+                                    &identity,
+                                    last,
+                                    sequence,
+                                    last_status,
+                                    before,
+                                )
+                            })
+                        });
+                    if !bridged {
+                        gap = last.checked_add(1).map(|first| (first, sequence));
+                        return Err("source_sequence_gap");
+                    }
+                }
+            } else if before & 0x2009 != 0 {
                 return Err("source_transaction_start_unknown");
             }
-            if !active.is_empty() {
-                let first_write = active.iter().position(|(_, write, _)| *write);
-                let write_count = active.iter().filter(|(_, write, _)| *write).count();
-                let strict = active.iter().any(|(_, _, strict)| *strict);
-                let mut members = active.drain(..).map(|(i, _, _)| i).collect::<Vec<_>>();
-                members.push(index);
-                complete.push(Segment {
-                    members,
-                    first_write,
-                    write_count,
-                    explicit,
-                    strict,
-                });
-            }
-            explicit = false;
-        } else {
-            let (write, strict) =
-                statement(record).ok_or("source_statement_or_response_unsupported")?;
-            if before & 0x200b == 2 && after & 0x200b == 2 && active.is_empty() {
-                // Source-native autocommit statements have no cross-statement obligation.
-            } else {
-                if (!failed_update && after & 0x2009 != 1)
-                    || (failed_update && after & 0x2008 != 0)
-                    || before & 2 != after & 2
-                    || (active.is_empty() && before & 0x2009 != 0)
+            if let Some(enabled) = assignment(record) {
+                if !optional_session::successful_control(record)
+                    || before & 0x2009 != 0
+                    || after & 0x200b != if enabled { 2 } else { 0 }
+                    || !active.is_empty()
                 {
-                    return Err("source_transaction_status_unsupported");
+                    return Err("source_autocommit_setup_unsafe");
                 }
-                active.push((index, write, strict));
+            } else if optional_session::successful_prepare(record)
+                || optional_session::successful_ping(record)
+            {
+                // Neither command executes business SQL; both preserve continuity.
+            } else if optional_session::successful_begin(record) {
+                if !active.is_empty() {
+                    return Err("source_transaction_restarted");
+                }
+                active.push((index, false, false));
+                explicit = true;
+            } else if optional_session::successful_end(record, &["commit", "rollback"]) {
+                if active.is_empty() && before & 0x2009 != 0 {
+                    return Err("source_transaction_start_unknown");
+                }
+                if !active.is_empty() {
+                    let first_write = active.iter().position(|(_, write, _)| *write);
+                    let write_count = active.iter().filter(|(_, write, _)| *write).count();
+                    let strict = active.iter().any(|(_, _, strict)| *strict);
+                    let mut members = active.drain(..).map(|(i, _, _)| i).collect::<Vec<_>>();
+                    members.push(index);
+                    complete.push(Segment {
+                        members,
+                        first_write,
+                        write_count,
+                        explicit,
+                        strict,
+                    });
+                }
+                explicit = false;
+            } else {
+                let (write, strict) =
+                    statement(record).ok_or("source_statement_or_response_unsupported")?;
+                if before & 0x200b == 2 && after & 0x200b == 2 && active.is_empty() {
+                    // Source-native autocommit statements have no cross-statement obligation.
+                } else {
+                    if (!failed_update && after & 0x2009 != 1)
+                        || (failed_update && after & 0x2008 != 0)
+                        || before & 2 != after & 2
+                        || (active.is_empty() && before & 0x2009 != 0)
+                    {
+                        return Err("source_transaction_status_unsupported");
+                    }
+                    active.push((index, write, strict));
+                }
             }
+            previous = Some((record, after));
+            Ok(())
+        })();
+        if let Err(error) = result {
+            reason.get_or_insert(error);
+            let failed = Failure {
+                reason: error,
+                sequence: record.query_sequence,
+                gap,
+            };
+            failed_ends.extend(failed.rejected_end(index, record));
+            failure = Some(failed);
+            active.clear();
+            explicit = false;
+            previous = None;
         }
-        previous = Some((record, after));
     }
     if !active.is_empty() {
-        return Err("source_transaction_unclosed");
+        reason.get_or_insert("source_transaction_unclosed");
     }
-    Ok(())
+    (reason, failed_ends)
 }
 
 fn status_after(record: &RecordedMysqlExchange) -> Option<u16> {
