@@ -109,12 +109,17 @@ is unclear.
   header adapters reuse the same private key snapshots and JWT verifier. Header
   ownership never implies a JSON body codec or a response-status exemption.
 
+- `replay/report/sql_summary` owns bounded original SQL excerpts for diagnostics,
+  including outer SELECT bodies when long projections hide the predicates.
+  It uses the MySQL lexer, retains explicit truncation and never grants SQL
+  matching or ownership permission. MySQL evidence retains complete result-row
+  counts independently of lazy result payload storage.
 - `replay/report/global_evidence` owns durable, source-bound shared Global report
   inventories and lazy detail projection. Its artifact child owns atomic private
   storage and portable publication; protocol children supply immutable report rows
   and sparse visibility changes using their existing consumption semantics.
   Protocol-specific visibility semantics belong to the regular inventory identity:
-  new MySQL projections carry their cleanup revision, while omitted revisions
+  new MySQL projections carry their report revision, while omitted revisions
   preserve historical report keys and unrelated protocol caches.
   Generic Pub/Sub notifications retain Source-confirmed lane identities and their
   own sparse delivery state. These inventories are evidence, separate from the

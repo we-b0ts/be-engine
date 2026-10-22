@@ -18,9 +18,13 @@ fn read(connection: Uuid, sequence: u64, sql: &str, before: u16, after: u16) -> 
 }
 
 async fn fixture(root: &Path) -> ReplayRuntime {
+    fixture_with_case(root, "").await
+}
+
+async fn fixture_with_case(root: &Path, records: &str) -> ReplayRuntime {
     let case = root.join("case");
     std::fs::create_dir(&case).unwrap();
-    std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
+    std::fs::write(case.join("dependencies.jsonl"), records).unwrap();
     let rollback = Uuid::new_v4();
     let commit = Uuid::new_v4();
     let auto = Uuid::new_v4();
@@ -79,6 +83,69 @@ fn identity() -> ReplaySessionIdentity {
         database: Some("app".into()),
         username: Some("user".into()),
     }
+}
+
+#[tokio::test]
+async fn unused_empty_history_query_retains_its_selection_in_ai_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let connection = Uuid::new_v4();
+    let columns = (0..24)
+        .map(|index| format!("subtasks.field_{index} AS subtasks_field_{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = "FROM subtasks WHERE subtasks.task_id = 42 \
+                ORDER BY subtasks.message_id ASC, subtasks.created_at ASC";
+    let sql = format!("SELECT {columns} {body}");
+    let mut record = read(connection, 17, &sql, 0, 1);
+    record["response"]["columns"] = Value::Array(
+        (0..24)
+            .map(|index| {
+                json!({"name":format!("subtasks_field_{index}"),
+                "family":"integer","sql_type":"INT"})
+            })
+            .collect(),
+    );
+    record["response"]["rows"] = json!([]);
+    let runtime = fixture_with_case(temp.path(), &record.to_string()).await;
+    let state = runtime.state.lock().await;
+    let (index, exchange) = state
+        .mysql
+        .exchanges
+        .iter()
+        .enumerate()
+        .find(|(_, exchange)| exchange.record.sql.as_deref() == Some(&sql))
+        .unwrap();
+    assert_eq!(exchange.record.result_row_count(), Some(0));
+    let summary = serde_json::to_value(state.mysql_summary(index)).unwrap();
+    assert_eq!(summary["row_count"], 0);
+    assert_eq!(summary["sql_summary"]["select_body"]["preview"], body);
+    assert!(
+        !summary["sql_summary"]["preview"]
+            .as_str()
+            .unwrap()
+            .contains("WHERE")
+    );
+    let report = json!({"unused_case_exchanges":[summary]});
+    let evidence = crate::replay::report::build_dependency_evidence(&report);
+    let representative = evidence.clusters[0].representative.as_ref().unwrap();
+    let signature = representative
+        .difference
+        .expected
+        .signature
+        .as_ref()
+        .unwrap();
+    assert_eq!(signature["connection_id"], connection.to_string());
+    assert_eq!(signature["query_sequence"], 17);
+    assert_eq!(signature["index"], index);
+    assert_eq!(signature["row_count"], 0);
+    assert_eq!(signature["sql_summary"]["select_body"]["preview"], body);
+    assert_eq!(signature["sql_summary"]["select_body"]["truncated"], false);
+    assert_eq!(
+        signature["sql_summary"]["fingerprint"],
+        summary["sql_summary"]["fingerprint"]
+    );
+    assert_eq!(state.mysql.events.matched_query_count, 0);
+    assert!(state.mysql.events.unmatched_queries.is_empty());
 }
 
 fn rows(state: &ReplayState) -> Vec<Row> {

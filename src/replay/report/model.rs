@@ -216,28 +216,8 @@ pub(in crate::replay) struct RecordedExchangeSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) sql_summary: Option<SqlSummary>,
     pub(in crate::replay) status: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(in crate::replay) struct SqlSummary {
-    preview: String,
-    fingerprint: String,
-    truncated: bool,
-}
-
-impl SqlSummary {
-    const PREVIEW_CHARS: usize = 256;
-
-    pub(in crate::replay) fn new(sql: &str) -> Self {
-        let mut chars = sql.chars();
-        let preview = chars.by_ref().take(Self::PREVIEW_CHARS).collect::<String>();
-        let truncated = chars.next().is_some();
-        Self {
-            preview,
-            fingerprint: fnv1a64(sql.as_bytes()),
-            truncated,
-        }
-    }
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) row_count: Option<usize>,
 }
 
 pub(super) fn fnv1a64(bytes: &[u8]) -> String {
@@ -247,25 +227,4 @@ pub(super) fn fnv1a64(bytes: &[u8]) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("fnv1a64:{hash:016x}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unused_sql_summary_bounds_preview_and_keeps_fingerprint() {
-        let sql = "SELECT very_long_column ".repeat(100);
-        let summary = serde_json::to_value(SqlSummary::new(&sql)).unwrap();
-
-        assert_eq!(summary["preview"].as_str().unwrap().chars().count(), 256);
-        assert_eq!(summary["truncated"], true);
-        assert!(
-            summary["fingerprint"]
-                .as_str()
-                .unwrap()
-                .starts_with("fnv1a64:")
-        );
-        assert!(!summary.to_string().contains(&sql));
-    }
 }

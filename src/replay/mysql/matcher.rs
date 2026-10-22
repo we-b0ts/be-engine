@@ -474,6 +474,7 @@ impl ReplayState {
             command: exchange.record.command.clone(),
             sql_summary: exchange.record.sql.as_deref().map(SqlSummary::new),
             status: exchange.record.response.status.clone(),
+            row_count: exchange.record.result_row_count(),
         }
     }
 

@@ -91,6 +91,20 @@ immutable cases rerun; an engine revision change alone is not functional accepta
 
 ### Read-Only Session Cleanup
 
+Long SELECT projections can fill `sql_summary.preview` before the WHERE clause.
+Read `sql_summary.select_body` and its independent `truncated` flag for the
+outer FROM and following clauses; never infer an id lookup from the selected
+column names. The bounded signature retains the original `index`,
+`connection_id`, `query_sequence` and, for complete results, `row_count`.
+Use those locators for complete semantic evidence when the excerpts are
+insufficient. An omitted row count is unknown, not an empty result.
+
+For repeated equivalent SQL, an unused Source occurrence does not identify the
+missing Target call site: existing calls can consume earlier recorded copies.
+Compare the complete Source occurrence count and actual Target calls, then trace
+the missing Source position. Successful-detail arrays may be capped; absence
+from that array alone does not establish a missing call or projection gap.
+
 For MySQL `unused_recorded`, read `mysql_unused_diagnosis` before proposing a
 rule or engine gap. Trace the complete request, including authentication and
 helper calls. A commit or rollback can expire an ORM object; later attribute

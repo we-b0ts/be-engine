@@ -1126,6 +1126,19 @@ completion indices; they cannot reconstruct failed-request arrival order and
 require fresh Replay for this diagnostic.
 Dirty event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
+When a SELECT exceeds the 256-character prefix, `sql_summary.select_body` adds
+an independently bounded 256-character excerpt beginning at its outer FROM.
+Its own `truncated` flag covers the predicates, ordering, pagination and locks
+in that excerpt. Quoted text, comments and nested SELECTs cannot select a false
+outer FROM. Statements over 64 KiB, compound SELECTs and unsupported lexical
+forms retain the original prefix/fingerprint without an inferred body.
+The bounded dependency query preserves this summary together with `index`,
+`connection_id` and `query_sequence`, so an implementer can locate the original
+semantic exchange when either excerpt is truncated. These are diagnostic views,
+not matching evidence. `row_count` is present only for complete, untruncated,
+well-formed result sets; zero is an observed empty result, while omission means
+the exact count is unavailable. Lazy result storage retains the count without
+loading or publishing result cells.
 The report's `unrecorded_targets` field contains exact `host:port` targets to
 which the target sent payload even though they were not accessed during
 recording. DNS lookup and TCP connection establishment alone do not add an
