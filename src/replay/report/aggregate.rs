@@ -42,6 +42,8 @@ pub struct ReplayAggregateReport {
 pub struct ReplayReportSummary {
     pub path: String,
     pub version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mysql_transaction_semantics: Option<String>,
     pub case_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -528,6 +530,7 @@ fn summarize_report(
     Ok(ReplayReportSummary {
         path: report_name,
         version,
+        mysql_transaction_semantics: optional_string(report, "mysql_transaction_semantics"),
         case_dir: case_dir.display().to_string(),
         session_id: Some(session_id),
         started_at: Some(started_at),

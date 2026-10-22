@@ -223,7 +223,7 @@ async fn mysql_cleanup_prewarm_imports_the_current_hidden_noop_commit_inventory(
     assert_eq!(portable.visible, 0);
     assert_eq!(
         portable.identity.semantics.as_deref(),
-        Some("mysql-transaction-diagnostics-v4")
+        Some("mysql-transaction-diagnostics-v5-first-write-through-end")
     );
     let report = temp
         .path()
@@ -249,43 +249,46 @@ async fn mysql_cleanup_prewarm_imports_the_current_hidden_noop_commit_inventory(
 
 #[tokio::test]
 async fn historical_mysql_prewarm_is_skipped_without_invalidating_other_protocols() {
-    let temp = tempfile::tempdir().unwrap();
-    let (recorder, _, _) = recorded(temp.path(), &[noop_commit()]).await;
-    recorder.finish_run().await.unwrap();
-    let marker = recorder.run_dir.join(MARKER);
-    let mut status: Preparation = store::read_json(&marker).unwrap();
-    assert_eq!(status.status, "ready");
-    let (current, original) = status.inventories["mysql"]
-        .load::<Inventory>(&marker)
-        .unwrap();
-    let mut historical = current.identity.clone();
-    historical.semantics = None;
-    let old = super::super::regular::retain_reference(&marker, historical, true, None, |visitor| {
-        for page in 0..current.pages.len() {
-            for mut row in current.read_page(&original, page)? {
-                row.visible = true;
-                visitor(row)?;
-            }
-        }
-        Ok(())
-    })
-    .unwrap();
-    status.inventories.insert("mysql".into(), old);
-    store::write_json(&marker, &status).unwrap();
-    let source = recorder.run_dir.join("global-dependencies.jsonl");
-    let report = temp
-        .path()
-        .join(".traffic-e2e/local/artifacts/replays/import/report.json");
-    assert!(
-        import(&source, &report, &current.identity)
-            .unwrap()
-            .is_none()
-    );
-    let (redis, _) = status.inventories["redis"]
-        .load::<Inventory>(&marker)
-        .unwrap();
-    assert!(redis.identity.semantics.is_none());
-    assert!(import(&source, &report, &redis.identity).unwrap().is_some());
+    for semantics in [None, Some("mysql-transaction-diagnostics-v4".to_owned())] {
+        let temp = tempfile::tempdir().unwrap();
+        let (recorder, _, _) = recorded(temp.path(), &[noop_commit()]).await;
+        recorder.finish_run().await.unwrap();
+        let marker = recorder.run_dir.join(MARKER);
+        let mut status: Preparation = store::read_json(&marker).unwrap();
+        assert_eq!(status.status, "ready");
+        let (current, original) = status.inventories["mysql"]
+            .load::<Inventory>(&marker)
+            .unwrap();
+        let mut historical = current.identity.clone();
+        historical.semantics = semantics;
+        let old =
+            super::super::regular::retain_reference(&marker, historical, true, None, |visitor| {
+                for page in 0..current.pages.len() {
+                    for mut row in current.read_page(&original, page)? {
+                        row.visible = true;
+                        visitor(row)?;
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        status.inventories.insert("mysql".into(), old);
+        store::write_json(&marker, &status).unwrap();
+        let source = recorder.run_dir.join("global-dependencies.jsonl");
+        let report = temp
+            .path()
+            .join(".traffic-e2e/local/artifacts/replays/import/report.json");
+        assert!(
+            import(&source, &report, &current.identity)
+                .unwrap()
+                .is_none()
+        );
+        let (redis, _) = status.inventories["redis"]
+            .load::<Inventory>(&marker)
+            .unwrap();
+        assert!(redis.identity.semantics.is_none());
+        assert!(import(&source, &report, &redis.identity).unwrap().is_some());
+    }
 }
 
 #[tokio::test]

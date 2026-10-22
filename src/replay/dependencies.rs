@@ -291,11 +291,16 @@ pub(super) fn register_dependency_records(
             mysql_record_indices.insert(record_index, mysql_index);
         }
     }
-    mysql.transaction_equivalence.install(
+    let transaction_omissions = mysql.transaction_equivalence.install(
         transaction_plans,
         &mysql_record_indices,
         &mysql.exchanges,
     );
+    for (index, kind) in transaction_omissions {
+        if mysql.exchanges[index].status.is_available() {
+            mysql.exchanges[index].optional_session = Some(kind);
+        }
+    }
     redis.pubsub.validate_links(source, case_id)?;
     Ok(())
 }

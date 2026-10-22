@@ -1,6 +1,7 @@
 use super::*;
 mod control;
 mod request;
+pub(super) use request::TransactionMatch;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct MysqlReplayState {
@@ -11,6 +12,7 @@ pub(in crate::replay) struct MysqlReplayState {
     pub(in crate::replay) events: ReplayEvents,
     pub(super) sql_cache: sql_match::cache::SqlCache,
     candidates: candidates::Candidates,
+    cleanup_selection: cleanup_selection::Index,
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
     pub(in crate::replay) transaction_equivalence: transaction_equivalence::Registry,
     pub(super) origins: ownership::Origins,
@@ -25,6 +27,7 @@ impl MysqlReplayState {
     #[cfg(test)]
     pub(in crate::replay) fn invalidate_scope_index(&mut self) {
         self.candidates = candidates::Candidates::default();
+        self.cleanup_selection = cleanup_selection::Index::default();
     }
     pub(in crate::replay) fn register_exchange(&mut self, exchange: ReplayExchange) {
         if exchange.source == ReplaySource::Case
@@ -50,6 +53,7 @@ impl MysqlReplayState {
         self.case_exchange_index
             .register(exchange.source, exchange.case_id.as_deref(), index);
         self.exchanges.push(exchange);
+        self.cleanup_selection.register(&self.exchanges);
         self.classify_origin(index);
     }
 
@@ -111,7 +115,13 @@ impl ReplayState {
         sql: Option<&str>,
         reason: &str,
     ) {
-        let recorded_match = self.consume_builtin_exchange_in_case(case, identity, command, sql);
+        // Plain ends already tried ordinary finite matching. An end rejected
+        // there must not consume a business boundary through the fallback.
+        let plain_end =
+            sql.is_some_and(|sql| matches!(normalize_sql(sql).as_str(), "commit" | "rollback"));
+        let recorded_match = (!plain_end)
+            .then(|| self.consume_builtin_exchange_in_case(case, identity, command, sql))
+            .flatten();
         let case_id = case.map(ToOwned::to_owned);
         let budget_case_id = case_id.clone();
         push_success_detail(
@@ -120,6 +130,7 @@ impl ReplayState {
             &mut self.mysql.events.builtin_query_details,
             budget_case_id.as_deref(),
             |target_event_index| QueryReport {
+                diagnostic: None,
                 case_id,
                 target: identity.target.clone(),
                 database: identity.database.clone(),
@@ -148,6 +159,7 @@ impl ReplayState {
             self.mysql.events.dirty_case_ids.insert(case_id.to_owned());
         }
         self.mysql.events.unsupported_commands.push(QueryReport {
+            diagnostic: None,
             case_id: case.map(ToOwned::to_owned),
             target: identity.target.clone(),
             database: identity.database.clone(),
@@ -188,6 +200,7 @@ impl ReplayState {
             self.mysql.events.dirty_case_ids.insert(case_id.to_owned());
         }
         self.mysql.events.unmatched_queries.push(QueryReport {
+            diagnostic: None,
             case_id: case.map(ToOwned::to_owned),
             target: identity.target.clone(),
             database: identity.database.clone(),

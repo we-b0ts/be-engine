@@ -1,7 +1,7 @@
 //! Complete zero-effect responses and plain transaction-control statements.
 use super::*;
 
-pub(super) fn successful_begin(exchange: &RecordedMysqlExchange) -> bool {
+pub(in crate::replay::mysql) fn successful_begin(exchange: &RecordedMysqlExchange) -> bool {
     complete_control(exchange)
         && plain_statement(exchange, &["begin", "start transaction"])
         && exchange

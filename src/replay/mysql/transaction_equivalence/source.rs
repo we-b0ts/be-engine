@@ -1,10 +1,19 @@
-//! Prove complete, ordinary implicit transactions from one immutable input file.
+//! Prove complete Source transaction segments before assigning write obligations.
 use super::*;
 use crate::replay::dependencies::DependencyRecord;
 
 pub(in crate::replay) struct Plan {
     pub setups: Vec<usize>,
-    pub transactions: Result<Vec<Vec<usize>>, &'static str>,
+    pub transactions: Vec<Segment>,
+    pub reason: Option<&'static str>,
+}
+
+pub(in crate::replay) struct Segment {
+    pub members: Vec<usize>,
+    pub first_write: Option<usize>,
+    pub write_count: usize,
+    pub explicit: bool,
+    pub strict: bool,
 }
 
 pub(super) fn prepare(
@@ -12,7 +21,7 @@ pub(super) fn prepare(
     optional: &BTreeMap<usize, OptionalSessionExchange>,
 ) -> Vec<Plan> {
     let mut connections = BTreeMap::<Uuid, Vec<(usize, &RecordedMysqlExchange)>>::new();
-    let mut unidentified = Vec::new();
+    let mut plans = Vec::new();
     for (index, record) in records.iter().enumerate() {
         if let DependencyRecord::MysqlExchange(record) = record {
             if let Some(connection) = record.connection_id {
@@ -20,71 +29,79 @@ pub(super) fn prepare(
                     .entry(connection)
                     .or_default()
                     .push((index, record));
-            } else if is_setup(record) && !optional.contains_key(&index) {
-                unidentified.push(Plan {
+            } else if assignment(record).is_some() && !optional.contains_key(&index) {
+                plans.push(Plan {
                     setups: vec![index],
-                    transactions: Err("source_connection_missing"),
+                    transactions: Vec::new(),
+                    reason: Some("source_connection_missing"),
                 });
             }
         }
     }
     for mut records in connections.into_values() {
-        let setups: Vec<_> = records
+        let setups = records
             .iter()
-            .filter(|(index, r)| is_setup(r) && !optional.contains_key(index))
+            .filter(|(index, r)| assignment(r).is_some() && !optional.contains_key(index))
             .map(|(i, _)| *i)
             .collect();
-        if setups.is_empty() {
-            continue;
-        }
         records.sort_by_key(|(_, record)| record.query_sequence);
-        unidentified.push(Plan {
+        let mut transactions = Vec::new();
+        let reason = collect_transactions(&records, &mut transactions).err();
+        plans.push(Plan {
             setups,
-            transactions: transactions(&records),
+            transactions,
+            reason,
         });
     }
-    unidentified
+    plans
 }
 
-fn is_setup(record: &RecordedMysqlExchange) -> bool {
+fn assignment(record: &RecordedMysqlExchange) -> Option<bool> {
     matches!(record.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE")
-        && record
-            .sql
-            .as_deref()
-            .and_then(crate::mysql::autocommit::assignment)
-            == Some(false)
+        .then(|| {
+            record
+                .sql
+                .as_deref()
+                .and_then(crate::mysql::autocommit::assignment)
+        })
+        .flatten()
 }
 
-fn transactions(
+fn collect_transactions(
     records: &[(usize, &RecordedMysqlExchange)],
-) -> Result<Vec<Vec<usize>>, &'static str> {
-    let mut complete = Vec::new();
-    let mut active = Vec::new();
-    let mut previous: Option<&RecordedMysqlExchange> = None;
-    let mut writes = false;
-    for &(index, record) in records {
+    complete: &mut Vec<Segment>,
+) -> Result<(), &'static str> {
+    // Duplicate wire identities can make an already collected end ambiguous.
+    // Check them before retaining any partial connection proof.
+    if records
+        .windows(2)
+        .any(|pair| pair[0].1.query_sequence == pair[1].1.query_sequence)
+    {
+        return Err("source_sequence_ambiguous");
+    }
+    let mut active = Vec::<(usize, bool, bool)>::new();
+    let mut explicit = false;
+    let mut previous: Option<(&RecordedMysqlExchange, u16)> = None;
+    for (position, &(index, record)) in records.iter().enumerate() {
         let identity = identity_from_exchange(record).ok_or("source_identity_missing")?;
         let sequence = record.query_sequence.ok_or("source_sequence_missing")?;
         let before = record.server_status_before.ok_or("source_status_missing")?;
-        let after = if optional_session::successful_prepare(record) {
-            before
-        } else {
-            record
-                .response
-                .server_status
-                .ok_or("source_status_missing")?
-        };
-        if let Some(previous) = previous {
+        let failed_update = update_outcome(record) == Some("error");
+        let after = status_after(record)
+            .or_else(|| {
+                let (_, next) = records.get(position + 1)?;
+                (failed_update
+                    && next.query_sequence == sequence.checked_add(1)
+                    && identity_from_exchange(next).as_ref() == Some(&identity))
+                .then_some(next.server_status_before)
+                .flatten()
+            })
+            .ok_or("source_status_missing")?;
+        if let Some((previous, last_status)) = previous {
             if identity_from_exchange(previous).as_ref() != Some(&identity) {
                 return Err("source_identity_changed");
             }
             let last = previous.query_sequence.ok_or("source_sequence_missing")?;
-            let last_status = if optional_session::successful_prepare(previous) {
-                previous.server_status_before
-            } else {
-                previous.response.server_status
-            }
-            .ok_or("source_status_missing")?;
             if last_status & 0x200b != before & 0x200b {
                 return Err("source_status_discontinuous");
             }
@@ -94,62 +111,131 @@ fn transactions(
         } else if before & 0x2009 != 0 {
             return Err("source_transaction_start_unknown");
         }
-        if is_setup(record) {
+        if let Some(enabled) = assignment(record) {
             if !optional_session::successful_control(record)
                 || before & 0x2009 != 0
-                || after & 0x200b != 0
+                || after & 0x200b != if enabled { 2 } else { 0 }
+                || !active.is_empty()
             {
                 return Err("source_autocommit_setup_unsafe");
             }
         } else if optional_session::successful_prepare(record)
             || optional_session::successful_ping(record)
         {
-            // These commands execute no business SQL, but prove sequence continuity.
-        } else if optional_session::successful_end(record, &["commit", "rollback"]) {
+            // Neither command executes business SQL; both preserve continuity.
+        } else if optional_session::successful_begin(record) {
             if !active.is_empty() {
-                active.push(index);
-                complete.push(std::mem::take(&mut active));
-            } else if before & 0x2009 != 0 {
+                return Err("source_transaction_restarted");
+            }
+            active.push((index, false, false));
+            explicit = true;
+        } else if optional_session::successful_end(record, &["commit", "rollback"]) {
+            if active.is_empty() && before & 0x2009 != 0 {
                 return Err("source_transaction_start_unknown");
             }
-        } else {
-            let kind = statement(record).ok_or("source_statement_or_response_unsupported")?;
-            if before & 2 != 0 || after & 0x200b != 1 || (active.is_empty() && before & 0x2009 != 0)
-            {
-                return Err("source_transaction_status_unsupported");
+            if !active.is_empty() {
+                let first_write = active.iter().position(|(_, write, _)| *write);
+                let write_count = active.iter().filter(|(_, write, _)| *write).count();
+                let strict = active.iter().any(|(_, _, strict)| *strict);
+                let mut members = active.drain(..).map(|(i, _, _)| i).collect::<Vec<_>>();
+                members.push(index);
+                complete.push(Segment {
+                    members,
+                    first_write,
+                    write_count,
+                    explicit,
+                    strict,
+                });
             }
-            writes |= kind;
-            active.push(index);
+            explicit = false;
+        } else {
+            let (write, strict) =
+                statement(record).ok_or("source_statement_or_response_unsupported")?;
+            if before & 0x200b == 2 && after & 0x200b == 2 && active.is_empty() {
+                // Source-native autocommit statements have no cross-statement obligation.
+            } else {
+                if (!failed_update && after & 0x2009 != 1)
+                    || (failed_update && after & 0x2008 != 0)
+                    || before & 2 != after & 2
+                    || (active.is_empty() && before & 0x2009 != 0)
+                {
+                    return Err("source_transaction_status_unsupported");
+                }
+                active.push((index, write, strict));
+            }
         }
-        previous = Some(record);
+        previous = Some((record, after));
     }
     if !active.is_empty() {
         return Err("source_transaction_unclosed");
     }
-    if complete.is_empty() || !writes {
-        return Err("source_write_transaction_not_proven");
-    }
-    Ok(complete)
+    Ok(())
 }
 
-/// Return whether a complete supported statement writes transactional data.
-fn statement(record: &RecordedMysqlExchange) -> Option<bool> {
+fn status_after(record: &RecordedMysqlExchange) -> Option<u16> {
+    if optional_session::successful_prepare(record) {
+        record.server_status_before
+    } else {
+        record.response.server_status
+    }
+}
+
+/// DML count is a request property; an UPDATE affecting zero rows is still a write.
+fn statement(record: &RecordedMysqlExchange) -> Option<(bool, bool)> {
     let sql = record.sql.as_deref()?;
     if sql.len() > 1024 * 1024 {
         return None;
     }
+    if update_outcome(record) == Some("error") {
+        return Some((true, false));
+    }
     if optional_session::complete_read(record)
         && optional_session::read::classify(sql) == optional_session::read::Effect::ReadOnly
     {
-        return Some(false);
+        return Some((false, false));
     }
     if !matches!(record.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE")
         || record.outcome != crate::DependencyExchangeOutcome::Response
         || !record.parse_warnings.is_empty()
-        || record.response.status != "ok"
+        || !matches!(record.response.status.as_str(), "ok" | "resultset")
         || record.response.error_code.is_some()
         || record.response.error_message.is_some()
-        || record.response.affected_rows.is_none()
+        || record.response.rows_truncated
+    {
+        return None;
+    }
+    if record.response.status == "resultset" && !optional_session::complete_read(record) {
+        return None;
+    }
+    let tokens = crate::mysql::sql::tokens(sql);
+    let write = tokens
+        .as_ref()
+        .and_then(|t| t.first())
+        .is_some_and(|first| {
+            ["insert", "update", "delete", "replace"]
+                .iter()
+                .any(|name| first.is(name))
+        });
+    let ordinary_write = write
+        && record.response.status == "ok"
+        && record.response.affected_rows.is_some()
+        && record.response.no_rows()
+        && record.response.columns.is_empty()
+        && tokens
+            .as_ref()
+            .is_some_and(|t| !optional_session::read::has_session_effect(t))
+        && optional_session::read::classify(sql) == optional_session::read::Effect::StateChange;
+    // Unknown SQL and locking reads retain a complete same-socket transaction.
+    Some((write, !ordinary_write))
+}
+
+/// Only ordinary UPDATE outcomes authorize the narrow no-effect rollback exception.
+pub(super) fn update_outcome(record: &RecordedMysqlExchange) -> Option<&'static str> {
+    let sql = record.sql.as_deref()?;
+    if sql.len() > 1024 * 1024
+        || !matches!(record.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE")
+        || record.outcome != crate::DependencyExchangeOutcome::Response
+        || !record.parse_warnings.is_empty()
         || record.response.rows_truncated
         || !record.response.no_rows()
         || !record.response.columns.is_empty()
@@ -157,13 +243,24 @@ fn statement(record: &RecordedMysqlExchange) -> Option<bool> {
         return None;
     }
     let tokens = crate::mysql::sql::tokens(sql)?;
-    if optional_session::read::has_session_effect(&tokens) {
+    if !tokens.first()?.is("update")
+        || optional_session::read::has_session_effect(&tokens)
+        || optional_session::read::classify(sql) != optional_session::read::Effect::StateChange
+    {
         return None;
     }
-    let first = tokens.first()?;
-    (["insert", "update", "delete", "replace"]
-        .iter()
-        .any(|name| first.is(name))
-        && optional_session::read::classify(sql) == optional_session::read::Effect::StateChange)
-        .then_some(true)
+    if record.response.status == "error" && record.response.error_code.is_some() {
+        return Some("error");
+    }
+    if record.response.status != "ok"
+        || record.response.error_code.is_some()
+        || record.response.error_message.is_some()
+    {
+        return None;
+    }
+    Some(if record.response.affected_rows? == 0 {
+        "zero_affected_rows"
+    } else {
+        "positive_affected_rows"
+    })
 }

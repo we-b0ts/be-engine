@@ -126,9 +126,11 @@ Warm preparation validates file stamps and uses cached locators without
 loading the full transaction-facts inventory. Response rows remain referenced
 by their original immutable records. Request matching uses in-memory scope and
 wire indexes without rescanning transaction evidence.
-New MySQL Global report projections include the cleanup semantic revision in
-their cache identity. Older MySQL projections rebuild once; historical reports
-remain readable and other protocols retain their existing cache identities.
+New MySQL Global report projections include the transaction semantic revision in
+their cache identity. First-write-through-end semantics rebuild older MySQL
+projections once; historical reports remain readable and other protocols retain
+their existing cache identities. This revision only separates report caches:
+Source-only prewarming cannot grant a Target delivery or transaction witness.
 
 ## Optional transaction cleanup
 
@@ -301,43 +303,97 @@ the required status evidence. An incomplete session keeps the setup required.
 Old captures that discarded AUTOCOMMIT=1 cannot validate
 that missing transaction control without a new recording.
 
-Write-containing sessions can also satisfy a recorded `SET autocommit=0`
-through equivalent explicit Target transactions. Use the ordinary SQLx
-transaction API, or a project's `with_transaction` wrapper: acquire one
-connection, send `BEGIN`, execute the complete corresponding reads and writes,
-then `COMMIT` or `ROLLBACK` on that connection. Source's SET remains in the
-immutable recording; Target does not need to reproduce it or disable automatic
-commit on a shared pool. COMMIT/ROLLBACK are the correspondence anchors, not
-a literal SET-to-BEGIN substitution. The Source session remains in mode 0
-after each end, while Target remains in mode 1 outside its explicit transactions.
+Write-containing implicit Source sessions use first-write-through-end
+compatibility by default. No configuration switch is required. A recorded
+`SET autocommit=0` sets connection mode; it is not an explicit BEGIN and must not
+force the complete connection lifetime into one Target transaction. Source's
+SET remains in the immutable recording. Target can retain autocommit mode 1,
+with explicit transactions only where the following proof requires them.
+
+For each complete implicit Source transaction:
+
+- With no business writes, successful setup and cleanup can use the existing
+  bounded read-only proof; every business SELECT remains required.
+- With one business write and a successful plain Source COMMIT, independently
+  observed Target autocommit mode 1 and no active Target transaction at that
+  write, followed by successful response delivery, can satisfy its Source setup
+  and COMMIT without a Target transaction end. The write and every read still
+  require their ordinary finite matching and delivery.
+- With exactly one ordinary UPDATE followed by a successful plain Source
+  ROLLBACK, the same independently observed Target autocommit-1/no-active-
+  transaction delivery can satisfy the setup and ROLLBACK only when the recorded
+  UPDATE returned an error, or succeeded with known `affected_rows: 0`. Delivery
+  of the corresponding UPDATE response, including a recorded error response,
+  must still succeed. The UPDATE remains one write request; it is not converted
+  into a zero-write span.
+- With two or more business writes, or Source ROLLBACK after a write outside
+  that single-UPDATE exception, Target must use one explicit transaction from
+  the first corresponding write through the matching Source COMMIT or ROLLBACK.
+  Every intervening statement and every trailing read after the last
+  write must remain ordered on that same Target socket through the end.
+  Preceding ordinary reads may execute outside the Target transaction and use
+  the normal read route; they are still required dependencies.
+
+Ordinary ROLLBACK cleanup remains optional when complete Source evidence
+establishes no pending business write: for example a complete ordinary read-only
+transaction, a confirmed inactive session, or the existing redundant cleanup
+after a successful end. The additional single-UPDATE error/zero-row case above
+is a deliberately bounded compatibility rule based on recorded Source results;
+it does not prove the absence of arbitrary trigger or session side effects,
+and it does not identify a particular conditional branch in Source code.
+A successful UPDATE with positive affected rows followed by ROLLBACK retains
+the write-through-ROLLBACK obligation even when there is only one write.
+Missing affected-row evidence does not establish the zero-row exception. Each
+UPDATE in a multi-write span counts as a write even when it affects zero rows.
+
+The ordinary SQLx transaction API or a project's `with_transaction` wrapper
+provides the explicit Target boundary. A Source transaction ending in COMMIT
+cannot be satisfied by Target ROLLBACK, or conversely, when this boundary is
+required. Successful Source cleanup after the actual end is independently
+optional; it cannot replace a required business end. Source explicit BEGIN
+transactions retain their existing boundary requirements.
 
 Replay requires complete Source connection identity, sequence and transaction
 status evidence. It supports complete ordinary reads and INSERT/UPDATE/DELETE/
 REPLACE writes with successful plain transaction ends. PING/PREPARE can prove
-continuity without adding executed business statements. Active sequence gaps,
-unknown starts, missing status, errors, session observers/effects, unsupported
-SQL, and incomplete or cross-file transaction fragments retain the SET requirement.
+continuity without adding executed business statements. Complete transactions
+containing locking reads or SQL whose effects cannot be classified keep their
+full same-connection boundary; neither prefix trimming nor single-write end
+omission applies. Their diagnostics identify `strict_source_effects`, and their
+write count describes recognized DML only. Active sequence gaps, unknown starts,
+missing status, errors outside the bounded single-UPDATE case above, and
+incomplete or cross-file transaction fragments grant no new compatibility
+exemption and retain required Source controls. A failed ROLLBACK itself is
+always required; the UPDATE exception never hides a failed transaction end.
 This does not prove arbitrary storage-engine, isolation or session-setting
 equivalence. Existing strict session operations and ordinary SQL/value matching
 remain in force.
 
-Each Target transaction must cover exactly one Source transaction's ordered
-business exchanges and matching end. A Source connection's transaction order
+Each required Target transaction must cover exactly one Source transaction's
+ordered first-write-through-end window. A Source connection's transaction order
 is retained, although completed transactions can use different Target pool
-connections. Splitting or merging transactions, early ends, reversed outcomes,
-nested/restarted transactions and another socket's commit cannot satisfy the
-SET. One persistent Source SET can cover several transactions; all complete
-transactions in the loaded connection scope must be proven. Read-only setup
-and cleanup compatibility retain their independent existing rules.
-When concurrent transactions have identical end SQL, the delivered business
-members on each Target socket select its corresponding finite Source end;
-ordinary identity, value, availability and policy checks still apply.
+connections. Splitting or merging write windows, early ends before trailing
+reads, reversed outcomes, nested/restarted transactions and another socket's
+commit cannot satisfy the SET. One persistent Source SET can cover several
+transactions; every affected complete segment must establish its corresponding
+proof. Read-only setup and cleanup compatibility retain their independent rules.
+When concurrent transactions have identical end SQL, the delivered members on
+each Target socket select its corresponding finite Source end; ordinary identity,
+value, availability and policy checks still apply. Neither the initial SET nor
+this compatibility grants permission to change dependency endpoints.
 
 Coverage is recorded only after successful response delivery and response-policy
-commit. It never fabricates a Target SET or consumes its Source record. Covered
-setups appear in `transaction_equivalent_mysql_autocommit_exchanges`, separately
-from read-only omissions, with bounded Source interval and independent Target
-connection/transaction witnesses. Remaining setup summaries expose
+commit. Failed setup/end controls, unknown boundaries and incomplete evidence
+remain required. Replay never fabricates a Target SET or consumes its Source
+record. Covered setups retain the historical
+`transaction_equivalent_mysql_autocommit_exchanges` report field, separately from
+read-only omissions, with bounded Source interval and independent Target
+connection/transaction witnesses. This field records the supported write-window
+compatibility; it does not claim full implicit-transaction snapshot or isolation
+equivalence. New reports identify the default with
+`mysql_transaction_semantics: first_write_through_end_v1`; aggregate summaries
+preserve it when present and do not relabel historical reports. Remaining setup
+summaries expose
 `diagnostic.kind: mysql_autocommit_transaction_coverage`, a precise rejection
 or pending reason, and covered/total transaction counts. The coordinator's
 `mysql_autocommit_diagnosis` guides Source lifecycle and Target SQLx transaction

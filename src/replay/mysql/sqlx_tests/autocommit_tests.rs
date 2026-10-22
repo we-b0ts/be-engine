@@ -90,12 +90,19 @@ async fn cold_source_setup_can_be_omitted_or_consumed_by_normal_sqlx_clients() {
 }
 
 #[tokio::test]
-async fn autocommit_failures_and_write_session_omissions_stay_visible() {
+async fn autocommit_failures_and_multi_write_session_omissions_stay_visible() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let mut records = cold_records();
         records[1]["sql"] = json!("UPDATE users SET active=0 WHERE id=1");
         records[1]["response"] =
             json!({"status":"ok", "server_status":1,"affected_rows":1,"last_insert_id":0});
+        let mut second_write = records[1].clone();
+        second_write["sql"] = json!("UPDATE users SET active=0 WHERE id=2");
+        second_write["query_sequence"] = json!(6);
+        second_write["server_status_before"] = json!(1);
+        records[2]["query_sequence"] = json!(7);
+        records[3]["query_sequence"] = json!(8);
+        records.insert(2, second_write);
         let (temp, addr, runtime, task) = fixture(&records, false).await;
         let mut client = connect(
             addr,
@@ -108,16 +115,23 @@ async fn autocommit_failures_and_write_session_omissions_stay_visible() {
             .execute(&mut client)
             .await
             .unwrap();
+        sqlx::raw_sql("UPDATE users SET active=0 WHERE id=2")
+            .execute(&mut client)
+            .await
+            .unwrap();
         {
             let state = runtime.state.lock().await;
             assert!(state.allowed_unused_autocommit().is_empty());
+            assert!(state.transaction_equivalent_autocommit().is_empty());
+            assert!(state.mysql.case_is_dirty("case-id"));
+            assert!(!state.mysql.events.unmatched_queries.is_empty());
             assert_eq!(
                 state
                     .unused_exchanges(ReplaySource::Case)
                     .iter()
                     .map(|e| e.index)
                     .collect::<Vec<_>>(),
-                vec![0, 2]
+                vec![0, 3]
             );
         }
         task.abort();

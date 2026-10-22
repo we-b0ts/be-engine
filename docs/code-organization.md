@@ -865,21 +865,39 @@ explicit repository-wide audit.
   Case-local completed read spans may restart across consistent inactive
   boundaries; active-transaction gaps and Global post-read gaps remain strict.
   `replay/mysql/transaction_equivalence/source` separately proves complete
-  ordinary implicit read/write transaction segments and retains unsafe-evidence
-  reasons. Its parent owns connection-local Target BEGIN/end witnesses, ordered
-  finite Source member correspondence and delivery-confirmed setup coverage.
-  COMMIT/ROLLBACK anchor matching; a persistent Source SET is satisfied only
-  after every affected loaded segment has an independent successful witness.
+  ordinary implicit read/write transaction segments, their write counts and
+  first-write-through-end windows, retaining unsafe-evidence reasons. Its parent
+  owns connection-local Target BEGIN/end witnesses, ordered finite Source window
+  correspondence and delivery-confirmed setup coverage. Multi-write windows
+  include every read after the first write, through the actual matching end;
+  preceding reads remain finite ordinary dependencies. A single write can supply
+  an independent Target autocommit-1/no-active-transaction delivery witness for
+  successful Source COMMIT omission. A complete segment containing exactly one
+  ordinary UPDATE can also omit successful Source ROLLBACK when that UPDATE
+  returned an error or succeeded with known zero affected rows. This bounded
+  Source-result compatibility does not infer Source conditional branches or
+  prove arbitrary trigger effects; zero-row UPDATEs still count as writes.
+  Other business writes ending in Source ROLLBACK retain the same-socket
+  first-write-through-ROLLBACK obligation, including trailing reads. Zero-write
+  spans retain the existing read-only or confirmed inactive cleanup proof;
+  failed controls and unknown boundaries never gain an exemption. A persistent
+  Source SET is satisfied only after every affected loaded segment has its own
+  successful witness.
   A Target socket's delivered member prefix selects its ordinary finite end
   candidate so concurrent transactions cannot steal identical COMMIT/ROLLBACKs.
   It shares the bounded SQL effect checks in `optional_session/read`, never
   rewrites recordings or grants matching permission from report hints.
-  Reports distinguish transaction-covered setups from read-only omissions;
+  Reports distinguish transaction-covered setups from read-only omissions and
+  expose the first-write-through-end semantic revision without relabeling older
+  reports. Global projection caches bind that revision independently of Source
+  proof facts; Source-only prewarming cannot provide a Target witness.
   `rewrite/evidence/mysql_diagnosis` projects targeted Source/Target transaction
   guidance without asserting ownership or a capability gap from unused counts.
-  `replay/mysql/cleanup_selection` gives a required transaction
-  end precedence over identical optional cleanup only after its immediately
-  preceding recorded exchange has been consumed. Recorder's MySQL semantic
+  `replay/mysql/cleanup_selection` owns immutable scope/end/predecessor indexes
+  and gives a required transaction end precedence over identical optional cleanup
+  only after its immediately preceding recorded exchange has been consumed.
+  Availability and consumption remain live checks; end selection does not rebuild
+  a consumed-record inventory for every request. Recorder's MySQL semantic
   tracker owns before-command status continuity and final resultset status
   capture. Neither infers transaction
   boundaries from HTTP responses or ORM names.

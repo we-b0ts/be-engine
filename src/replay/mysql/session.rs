@@ -166,6 +166,7 @@ pub(super) async fn deliver_matched(
             }
         }
     }
+    let target_status_before = session.status_flags;
     session.observe_response(
         matched.record.sql.as_deref().unwrap_or_default(),
         &matched.record.response,
@@ -226,11 +227,20 @@ pub(super) async fn deliver_matched(
         return Err(error);
     }
     replay.complete_exchange(&matched);
+    let identity = session.identity();
     replay.observe_mysql_transaction(
         &mut session.transaction_witness,
-        matched.report.sql.as_deref().unwrap_or_default(),
-        Some(matched.index),
-        matches!(matched.record.response.status.as_str(), "ok" | "resultset"),
+        super::transaction_equivalence::Delivery {
+            command: &matched.report.command,
+            params: matched.report.params.as_deref(),
+            sql: matched.report.sql.as_deref().unwrap_or_default(),
+            index: Some(matched.index),
+            successful: matches!(matched.record.response.status.as_str(), "ok" | "resultset"),
+            before: target_status_before,
+            after: session.status_flags,
+        },
+        matched.report.case_id.as_deref(),
+        &identity,
     );
     Ok(SessionDirective::Continue)
 }
@@ -255,13 +265,17 @@ pub(in crate::replay) async fn handle_query(
             "COM_QUERY",
             Some(sql),
             None,
-            transaction_end,
+            Some(super::matcher::TransactionMatch {
+                preferred_end: transaction_end,
+                status_flags: session.status_flags,
+            }),
         );
         (matched, case)
     };
     if matched.is_none()
         && let Some(response) = builtin_response(sql, session.database.as_deref())
     {
+        let target_status_before = session.status_flags;
         session.observe_response(sql, &response, case_id.as_deref(), None);
         write_response(
             stream,
@@ -279,7 +293,20 @@ pub(in crate::replay) async fn handle_query(
             Some(sql),
             "driver/session query handled by replay server",
         );
-        state.observe_mysql_transaction(&mut session.transaction_witness, sql, None, true);
+        state.observe_mysql_transaction(
+            &mut session.transaction_witness,
+            super::transaction_equivalence::Delivery {
+                command: "COM_QUERY",
+                params: None,
+                sql,
+                index: None,
+                successful: true,
+                before: target_status_before,
+                after: session.status_flags,
+            },
+            case_id.as_deref(),
+            &identity,
+        );
         return Ok(SessionDirective::Continue);
     }
 
@@ -420,13 +447,17 @@ pub(in crate::replay) async fn handle_stmt_execute(
             "COM_STMT_EXECUTE",
             Some(&statement.sql),
             parsed.params.as_deref(),
-            transaction_end,
+            Some(super::matcher::TransactionMatch {
+                preferred_end: transaction_end,
+                status_flags: session.status_flags,
+            }),
         );
         (matched, case)
     };
     if matched.is_none()
         && let Some(response) = builtin_response(&statement.sql, session.database.as_deref())
     {
+        let target_status_before = session.status_flags;
         session.observe_response(&statement.sql, &response, case_id.as_deref(), None);
         write_response(
             stream,
@@ -446,9 +477,17 @@ pub(in crate::replay) async fn handle_stmt_execute(
         );
         state.observe_mysql_transaction(
             &mut session.transaction_witness,
-            &statement.sql,
-            None,
-            true,
+            super::transaction_equivalence::Delivery {
+                command: "COM_STMT_EXECUTE",
+                params: parsed.params.as_deref(),
+                sql: &statement.sql,
+                index: None,
+                successful: true,
+                before: target_status_before,
+                after: session.status_flags,
+            },
+            case_id.as_deref(),
+            &identity,
         );
         return Ok(SessionDirective::Continue);
     }

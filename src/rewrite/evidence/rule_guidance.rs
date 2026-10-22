@@ -279,7 +279,7 @@ pub(super) fn applicable_rule_planners(
     {
         add("dependency_scope", "http_cross_case");
     }
-    if cluster(facts, "mysql", "unmatched_target") {
+    if super::mysql_diagnosis::has_sql_mismatch(facts) {
         add("dependency_value", "mysql_sql_time");
     }
     if issue == RewriteIssueKind::Dependency {
