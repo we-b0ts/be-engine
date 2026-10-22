@@ -29,7 +29,8 @@ pub(super) struct Identity {
 
 impl Identity {
     pub(super) fn current_semantics(protocol: &str) -> Option<String> {
-        (protocol == "mysql").then(|| "mysql-transaction-diagnostics-v4".to_owned())
+        (protocol == "mysql")
+            .then(|| "mysql-transaction-diagnostics-v5-first-write-through-end".to_owned())
     }
 
     pub(super) fn key(&self) -> Result<String> {

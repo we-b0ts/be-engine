@@ -5,6 +5,17 @@ fn records() -> Vec<Value> {
     super::super::transaction_equivalence::tests::records()
 }
 
+fn multi_write_records() -> Vec<Value> {
+    let mut values = records();
+    values.truncate(4);
+    let mut second = values[2].clone();
+    second["query_sequence"] = json!(7);
+    second["sql"] = json!("UPDATE users SET active=2 WHERE id=1");
+    values[3]["query_sequence"] = json!(8);
+    values.insert(3, second);
+    values
+}
+
 async fn body(tx: &mut sqlx::Transaction<'_, sqlx::MySql>, value: i32) {
     let row = sqlx::query("SELECT id FROM users WHERE id=?")
         .bind(1_i32)
@@ -55,8 +66,7 @@ async fn sqlx_explicit_transactions_cover_one_persistent_source_autocommit_setti
 #[tokio::test]
 async fn pooled_autocommit_writes_followed_by_commit_keep_the_original_dirty_setup() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let mut values = records();
-        values.truncate(4);
+        let values = multi_write_records();
         let (temp, addr, runtime, task) = fixture(&values, false).await;
         let mut client = connect(
             addr,
@@ -76,11 +86,17 @@ async fn pooled_autocommit_writes_followed_by_commit_keep_the_original_dirty_set
             .execute(&mut client)
             .await
             .unwrap();
+        sqlx::query("UPDATE users SET active=? WHERE id=?")
+            .bind(2_i32)
+            .bind(1_i32)
+            .execute(&mut client)
+            .await
+            .unwrap();
         sqlx::raw_sql("COMMIT").execute(&mut client).await.unwrap();
         let state = runtime.state.lock().await;
         assert!(state.transaction_equivalent_autocommit().is_empty());
         let unused = state.unused_exchanges(ReplaySource::Case);
-        assert_eq!(unused.len(), 1);
+        assert_eq!(unused.len(), 2);
         assert_eq!(
             unused[0].diagnostic.as_ref().unwrap()["reason"],
             "target_transaction_missing"
@@ -121,8 +137,7 @@ async fn sqlx_explicit_rollback_covers_a_recorded_implicit_rollback() {
 async fn matching_all_business_sql_without_begin_or_commit_does_not_match_the_transaction() {
     tokio::time::timeout(Duration::from_secs(15), async {
         for with_begin in [false, true] {
-            let mut values = records();
-            values.truncate(4);
+            let values = multi_write_records();
             let (temp, addr, runtime, task) = fixture(&values, false).await;
             let mut client = connect(
                 addr,
@@ -146,12 +161,20 @@ async fn matching_all_business_sql_without_begin_or_commit_does_not_match_the_tr
                 .await
                 .unwrap();
             let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.matched_query_count, 2);
+            drop(state);
+            sqlx::query("UPDATE users SET active=? WHERE id=?")
+                .bind(2_i32)
+                .bind(1_i32)
+                .execute(&mut client)
+                .await
+                .unwrap();
+            let state = runtime.state.lock().await;
+            assert_eq!(state.mysql.events.matched_query_count, 3);
             assert!(state.transaction_equivalent_autocommit().is_empty());
             let unused = state.unused_exchanges(ReplaySource::Case);
             assert_eq!(unused.len(), 2, "SET and COMMIT must both remain required");
             assert!(unused.iter().any(|e| e.query_sequence == Some(3)));
-            assert!(unused.iter().any(|e| e.query_sequence == Some(7)));
+            assert!(unused.iter().any(|e| e.query_sequence == Some(8)));
             assert!(state.snapshot_report().is_dirty());
             task.abort();
         }

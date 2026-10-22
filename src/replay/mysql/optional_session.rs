@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod autocommit;
 mod control;
 pub(in crate::replay::mysql) mod read;
-use control::successful_begin;
+pub(in crate::replay::mysql) use control::successful_begin;
 pub(in crate::replay::mysql) use control::{successful_control, successful_end};
 
 /// Only the ends of proven read-compatible Global spans are retained, including

@@ -13,6 +13,7 @@ impl ReplayState {
                 .and_then(|policy| policy.request_contracts.witness_manifest()),
             egress_rejections: self.egress_rejections.values().cloned().collect(),
             version: 6,
+            mysql_transaction_semantics: MYSQL_TRANSACTION_SEMANTICS,
             session_id: self.session_id.to_string(),
             started_at: self.started_at,
             finalized_at: self.finalized_at,

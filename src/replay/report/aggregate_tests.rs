@@ -11,6 +11,26 @@ use super::aggregate::{
 };
 
 #[test]
+fn mysql_transaction_semantics_are_reported_without_relabeling_historical_reports() {
+    for semantics in [None, Some("first_write_through_end_v1")] {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("recording");
+        let mut report = report_value(6, &source.join("api"), &[("case-a", "ended")], 0);
+        if let Some(semantics) = semantics {
+            report["mysql_transaction_semantics"] = json!(semantics);
+        }
+        write_report(&source, "api", report);
+        let aggregate = aggregate_replay_reports(&source).unwrap();
+        assert!(aggregate.is_complete());
+        assert!(!aggregate.is_dirty());
+        assert_eq!(
+            aggregate.reports[0].mysql_transaction_semantics.as_deref(),
+            semantics
+        );
+    }
+}
+
+#[test]
 fn rejects_pre_global_report_versions() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("20260714041519").join("pluto");

@@ -1,6 +1,12 @@
 //! Live MySQL request selection; ownership and protocol consumption stay explicit.
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(in crate::replay::mysql) struct TransactionMatch {
+    pub(in crate::replay::mysql) preferred_end: Option<usize>,
+    pub(in crate::replay::mysql) status_flags: u16,
+}
+
 impl ReplayState {
     #[cfg(test)]
     pub(in crate::replay) fn match_exchange(
@@ -32,7 +38,7 @@ impl ReplayState {
         command: &str,
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
-        transaction_end: Option<usize>,
+        transaction: Option<TransactionMatch>,
     ) -> Option<MatchedExchange> {
         #[cfg(not(test))]
         let request_observed_at = Utc::now();
@@ -70,6 +76,11 @@ impl ReplayState {
         let observed_sql = sql;
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
+        let transaction_end = transaction.and_then(|transaction| transaction.preferred_end);
+        let plain_end = matches!(
+            baseline_normalized_sql.as_deref(),
+            Some("commit" | "rollback")
+        );
         let mut baseline_semantic_target = None;
         let actual_autocommit = sql
             .and_then(crate::mysql::autocommit::assignment)
@@ -79,7 +90,7 @@ impl ReplayState {
             });
         let active_case_id = case.map(ToOwned::to_owned);
         let preferred_end = transaction_end.or_else(|| {
-            cleanup_selection::preferred_end(
+            self.mysql.cleanup_selection.preferred_end(
                 &self.mysql.exchanges,
                 active_case_id.as_deref(),
                 identity,
@@ -90,16 +101,23 @@ impl ReplayState {
         for source in [ReplaySource::Case, ReplaySource::Global] {
             // Preserve existing candidate precedence before trying compatible
             // projections, without allowing Global to outrank the active Case.
-            let candidates = self.mysql.candidates.select(
-                &self.mysql.exchanges,
-                source,
-                active_case_id.as_deref(),
-                identity,
-                Some(command),
-            );
+            // An authoritative socket witness admits exactly one end. Avoid
+            // collecting the scope only to reject all of its other candidates.
+            let candidates = transaction_end.is_none().then(|| {
+                self.mysql.candidates.select(
+                    &self.mysql.exchanges,
+                    source,
+                    active_case_id.as_deref(),
+                    identity,
+                    Some(command),
+                )
+            });
             for foreign in [false, true] {
                 for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
-                    for index in preferred_end.into_iter().chain(candidates.iter().copied()) {
+                    for index in preferred_end
+                        .into_iter()
+                        .chain(candidates.as_deref().unwrap_or_default().iter().copied())
+                    {
                         if transaction_end.is_some_and(|expected| expected != index) {
                             continue;
                         }
@@ -109,6 +127,25 @@ impl ReplayState {
                             || !exchange.status.is_available()
                             || !active_case_matches(active_case_id.as_deref(), exchange)
                             || !identity_matches_exchange(identity, &exchange.identity)
+                        {
+                            continue;
+                        }
+                        if plain_end
+                            && let Some(transaction) = transaction
+                            && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
+                            && exchange.record.response.status == "ok"
+                            && exchange.record.response.error_code.is_none()
+                            && exchange.record.sql.as_deref().is_some_and(|sql| {
+                                matches!(normalize_sql(sql).as_str(), "commit" | "rollback")
+                            })
+                            && (self.mysql.transaction_equivalence.requires_witness(index)
+                                && transaction.preferred_end != Some(index)
+                                || transaction.status_flags & 1 == 0
+                                    && exchange.optional_session.is_none()
+                                    && exchange
+                                        .record
+                                        .server_status_before
+                                        .is_some_and(|before| before & 0x2009 == 1))
                         {
                             continue;
                         }

@@ -41,6 +41,7 @@ mod transaction_equivalence;
 mod transaction_performance;
 mod tuple_tests;
 mod unified_contracts;
+mod write_span;
 
 fn exchange(sql: &str, response: Value) -> Value {
     json!({"event_type":"mysql_exchange", "timestamp":"2020-01-01T00:00:00Z", "duration_ms":0, "target_host":"127.0.0.1", "target_port":3306,

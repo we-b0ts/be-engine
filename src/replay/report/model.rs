@@ -7,6 +7,7 @@ pub(in crate::replay) struct ReplayReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) egress_rejections: Vec<ReplayEgressRejections>,
     pub(in crate::replay) version: u8,
+    pub(in crate::replay) mysql_transaction_semantics: &'static str,
     pub(in crate::replay) session_id: String,
     pub(in crate::replay) started_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,6 +157,8 @@ pub(in crate::replay) struct ConnectionReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct QueryReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) diagnostic: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) case_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

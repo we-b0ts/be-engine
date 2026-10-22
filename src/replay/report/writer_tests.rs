@@ -42,6 +42,10 @@ async fn loading_runtime_does_not_publish_report() {
     let report: Value =
         serde_json::from_slice(&tokio::fs::read(report_path).await.unwrap()).unwrap();
     assert_eq!(report["version"], 6);
+    assert_eq!(
+        report["mysql_transaction_semantics"],
+        "first_write_through_end_v1"
+    );
 }
 
 #[tokio::test]

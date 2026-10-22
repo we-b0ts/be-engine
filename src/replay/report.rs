@@ -1,5 +1,7 @@
 use super::*;
 
+pub(in crate::replay) const MYSQL_TRANSACTION_SEMANTICS: &str = "first_write_through_end_v1";
+
 pub(crate) mod aggregate;
 #[cfg(test)]
 mod aggregate_tests;
