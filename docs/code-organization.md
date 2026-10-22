@@ -1140,10 +1140,15 @@ explicit repository-wide audit.
   from bounded dependency operations and Source binding metadata. It supplies
   proof requirements and ordinary plan commands without granting permission or
   changing matching, ownership or consumption.
-  `preflight/{api,dependency,session,source}` delegates
-  payload, native envelope, stateful Source trace and whole-recording proof to
-  their existing owners. Whole-recording Source effects explicitly enumerate
-  their broader inventory; ordinary payload rules retain their prepared API scope.
+  `preflight/{api,dependency,session,source}` delegates primary response, native
+  envelope, stateful Source trace and whole-recording proof to their existing
+  owners. `preflight/resource` enumerates complete recording scope for API-free
+  resource rules and freezes relevant API memberships and foreign execution
+  identities, including missing Target evidence. `preflight/payload` validates
+  each execution with its own protected Target witnesses and clocks. Primary
+  response assertions retain their prepared API scope. Discovery and proposal
+  preparation omit API selectors for new resource rules while preserving legacy
+  explicitly scoped relationships. Native bindings remain case-local.
   Coordinator admission preserves write intents and fresh real verification
   obligations across crashes. Bounded hints never substitute for full coverage.
   MySQL's `contracts` adapter filters structurally unrelated request candidates

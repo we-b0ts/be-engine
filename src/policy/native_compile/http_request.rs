@@ -7,8 +7,8 @@ pub(super) fn validate_client_metadata(
 ) -> Result<()> {
     resource(selector, Protocol::Http)?;
     ensure!(
-        selector.api.is_some() && selector.operation.is_some() && selector.path.is_some(),
-        "HTTP client metadata requires explicit API, method and consumer path"
+        selector.operation.is_some() && selector.path.is_some(),
+        "HTTP client metadata requires an explicit method and consumer path"
     );
     hyper::Method::from_bytes(selector.operation.as_deref().unwrap().as_bytes())?;
     ensure!(

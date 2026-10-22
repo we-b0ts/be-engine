@@ -410,6 +410,15 @@ fn read_back_lrange_translates_conditional_ids_and_copies_without_changing_other
 
 #[test]
 fn read_back_compiler_rejects_unowned_fields_operations_and_overlapping_delivery() {
+    let mut resource_rule = identity_rule();
+    resource_rule["match"]
+        .as_object_mut()
+        .unwrap()
+        .remove("api");
+    let document: crate::policy::TrafficPolicy =
+        serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[resource_rule]}))
+            .unwrap();
+    assert!(crate::policy::compile_policy(&document).is_ok());
     for mutate in 0..4 {
         let mut definition = identity_rule();
         match mutate {
@@ -417,7 +426,7 @@ fn read_back_compiler_rejects_unowned_fields_operations_and_overlapping_delivery
             1 => definition["effect"]["read_back"][0]["operation"] = json!("MGET"),
             2 => definition["effect"]["read_back"][0]["argument_index"] = json!(2),
             _ => {
-                definition["match"].as_object_mut().unwrap().remove("api");
+                definition["match"].as_object_mut().unwrap().remove("key");
             }
         }
         let document: crate::policy::TrafficPolicy =

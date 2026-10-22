@@ -3,9 +3,8 @@ use super::*;
 use serde_json::Value;
 
 fn proposal(operation: &str) -> Value {
-    json!({"id":"text-block","match":{"api":"GET /api","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
+    json!({"id":"text-block","match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
         "operation":operation,"key":{"kind":"exact","value":"blocks:7"}},
-        "when":{"request_body_json":{"/stream":{"equals":true}}},
         "effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":if operation=="LSET" {2}else{1},"json_pointer":"/id",
             "when":{"relative_pointer":"../type","equals":"text"},
             "copies":[{"pointer":"/content_key","template":"content:{value}"}],
@@ -83,23 +82,20 @@ fn check_plan_apply(operation: &str) {
             .join("apis/api/case-1");
         let originals = [case.join("request.json"), case.join("dependencies.jsonl")]
             .map(|p| (p.clone(), fs::read(p).unwrap()));
-        let result = fixture.plan();
-        if stream {
-            let plan = result.unwrap();
-            assert_eq!(
-                plan.traffic_e2e_report["preflight"]["rules"]["text-block"],
-                1
-            );
-            assert_eq!(
-                plan.traffic_e2e_report["preflight"]["stateful_target_obligations"],
-                json!(["text-block"])
-            );
-            assert_eq!(plan.traffic_e2e_report["verified"], false);
-            apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
-            assert!(fixture.state().rule_replay_pending);
-        } else {
-            assert!(result.is_err());
-        }
+        // The resource's local text discriminator applies regardless of the
+        // encrypted inbound API body.
+        let plan = fixture.plan().unwrap();
+        assert_eq!(
+            plan.traffic_e2e_report["preflight"]["rules"]["text-block"],
+            1
+        );
+        assert_eq!(
+            plan.traffic_e2e_report["preflight"]["stateful_target_obligations"],
+            json!(["text-block"])
+        );
+        assert_eq!(plan.traffic_e2e_report["verified"], false);
+        apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+        assert!(fixture.state().rule_replay_pending);
         for (path, bytes) in originals {
             assert_eq!(fs::read(path).unwrap(), bytes);
         }

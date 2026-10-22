@@ -23,6 +23,15 @@ Discovery drafts prefill observed selectors and request missing Source facts;
 a candidate never authorizes its own proof. PB requires actual typed schema
 bindings. Do not guess clock units, a timezone, a key source or random permissions.
 
+For new dependency value rules and native resource effects, omit `match.api`.
+Select the protocol, endpoint, database/user, operation, SQL/key and value slot
+from Source behavior. The API identifies the issue and transaction only; root
+inbound `when` predicates cannot scope a new resource rule. Review complete
+cross-API Source coverage and each API's independent Target evidence. Missing
+Target evidence requires genuine Replay. Keep explicit `calendar_date`
+`utc_offset`. Existing explicitly API-scoped relationships retain their previous
+scope and proof when extended; primary response assertions still select an API.
+
 Discovery is paged independently from complete plan coverage. Follow
 `pagination.next_page.command` for omitted candidate/Source-binding summaries
 and `pagination.next_scan.command` for remaining observations, including long
@@ -76,7 +85,7 @@ write the same unified policy atomically. They are not value relaxations.
 ## Redis APPEND Streams
 
 For Source-proven nonempty APPEND buffering, use `effect.kind: redis_append_stream`
-with an explicit API, Redis resource/database and key selector. Require ordered
+with an explicit Redis resource/database and key selector. Require ordered
 byte concatenation and observation/reset boundary proof; differing chunk sizes
 alone are insufficient. Complete Source preflight checks cumulative RESP lengths
 and preserves fresh Replay obligations. Other calls, including expiry refreshes,
@@ -86,7 +95,7 @@ retain ordinary finite matching. See [APPEND streams](../../../../../docs/redis-
 
 For Source-proven cancellation polling concurrent with unrelated writes,
 `effect.kind: redis_read_commutation` permits finite nil GET observations to
-cross their incidental connection order. Require an explicit API, Redis
+cross their incidental connection order. Require an explicit Redis
 resource/database and key selector plus the independent-task Source proof.
 Complete preflight rejects non-nil reads, mutations, ambiguous key access and
 stateful read lanes. Every recorded read remains required; this does not

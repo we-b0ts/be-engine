@@ -304,6 +304,7 @@ fn recorded_mysql_candidate_preflight() {
         })
         .collect();
     let mut bundle = manifest::Bundle {
+        inventory_path: None,
         replay_path: report.clone(),
         replay,
         assertions: Value::Null,

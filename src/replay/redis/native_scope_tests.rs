@@ -3,9 +3,18 @@ use serde_json::json;
 
 #[test]
 fn native_lock_and_publish_scope_comes_from_source_api_body_database_and_auth() {
+    assert_scopes(true);
+}
+
+#[test]
+fn native_resource_rules_apply_across_apis_but_keep_database_and_auth_isolated() {
+    assert_scopes(false);
+}
+
+fn assert_scopes(api_scoped: bool) {
     let temp = tempfile::tempdir().unwrap();
     let policy_path = temp.path().join("policy.yaml");
-    std::fs::write(&policy_path,r#"
+    let policy = r#"
 format: traffic-policy/v1
 rules:
 - id: scoped-lock
@@ -25,7 +34,16 @@ rules:
   when: {request_body_json: {/enabled: {equals: true}}}
   effect: {kind: redis_publish_identity, uuid_field: host_id}
   proof: {source: 'source.py:publish', fact: 'This Source path publishes a process UUID while keeping the event business fields exact'}
-"#).unwrap();
+"#;
+    let policy = if api_scoped {
+        policy.to_owned()
+    } else {
+        policy.replace("    api: POST /sessions\n", "").replace(
+            "  when: {request_body_json: {/enabled: {equals: true}}}\n",
+            "",
+        )
+    };
+    std::fs::write(&policy_path, policy).unwrap();
     let mut cases = BTreeMap::new();
     for (id, method, enabled) in [
         ("ok", "POST", true),
@@ -34,7 +52,12 @@ rules:
     ] {
         let dir = temp.path().join(id);
         std::fs::create_dir(&dir).unwrap();
-        std::fs::write(dir.join("request.json"),json!({"method":method,"uri":"/sessions","body":{"encoding":"utf8","truncated":false,"data":json!({"enabled":enabled}).to_string()}}).to_string()).unwrap();
+        let uri = if id == "method" {
+            "/other"
+        } else {
+            "/sessions"
+        };
+        std::fs::write(dir.join("request.json"),json!({"method":method,"uri":uri,"body":{"encoding":"utf8","truncated":false,"data":json!({"enabled":enabled}).to_string()}}).to_string()).unwrap();
         std::fs::write(dir.join("expected-response.json"), "{}").unwrap();
         std::fs::write(dir.join("dependencies.jsonl"), "").unwrap();
         cases.insert(
@@ -78,7 +101,11 @@ rules:
             state
                 .lock_tokens
                 .arguments_match(exchange, &state.exchanges, &actual),
-            if index == 0 { Some(true) } else { None }
+            if index == 0 || (!api_scoped && index < 3) {
+                Some(true)
+            } else {
+                None
+            }
         );
     }
     state.configure_publish(runtime.redis_publish_rules());
@@ -111,7 +138,7 @@ rules:
             &source,
             &actual,
         );
-        if index == 0 {
+        if index == 0 || (!api_scoped && index < 3) {
             assert!(result.unwrap().is_ok());
         } else {
             assert!(result.is_none());

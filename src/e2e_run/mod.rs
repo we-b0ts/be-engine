@@ -381,6 +381,34 @@ pub(crate) fn focused_active_progress(
     }))
 }
 
+/// Resource rules may include APIs that have never executed. Absence is an
+/// explicit Replay obligation; malformed or active published evidence is not.
+pub(crate) fn optional_response_rule_evidence(
+    context: E2eRunContext,
+    api: &str,
+) -> Result<Option<(E2eResponseRuleEvidence, PathBuf)>> {
+    let (_, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    let focused = inactive_response_evidence_root(&layout, api)?.join("latest/state.yaml");
+    let full = layout.latest_dir.join("state.yaml");
+    let state_path = if !focused.is_file() {
+        if !full.is_file() {
+            return Ok(None);
+        }
+        let state: model::ActiveRunState = store::read_yaml(&full)?;
+        if !state.apis.iter().any(|candidate| candidate.group_id == api) {
+            return Ok(None);
+        }
+        full
+    } else {
+        focused
+    };
+    resolve_e2e_response_rule_evidence(context, api).map(|evidence| Some((evidence, state_path)))
+}
+
 pub fn resolve_e2e_response_rule_evidence(
     context: E2eRunContext,
     api: &str,

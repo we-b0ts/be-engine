@@ -2,7 +2,7 @@ use super::*;
 use serde_json::{Value, json};
 
 fn rule(kind: &str) -> Value {
-    json!({"id":kind,"match":{"api":"POST /blocks","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
+    json!({"id":kind,"match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
         "operation":"RPUSH","key":{"kind":"affix","prefix":"blocks:"}},
         "effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1,"json_pointer":"/id",
             "when":{"relative_pointer":"../type","equals":kind},

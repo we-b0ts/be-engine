@@ -1,6 +1,49 @@
 //! Extend proven relationships without replacing existing owners or prior proofs.
-use crate::policy::{NativeEffect, PolicyRule, TrafficPolicy};
+use crate::policy::{NativeEffect, PolicyRule, Surface, TrafficPolicy};
 use anyhow::{Result, ensure};
+
+/// The issue owns the transaction, not a dependency resource's matching scope.
+/// Existing policy entries retain their proven scope until explicitly migrated.
+pub(super) fn prepare_scopes(
+    document: &mut TrafficPolicy,
+    existing: &TrafficPolicy,
+    active_api: &str,
+) -> Result<()> {
+    for rule in &mut document.rules {
+        let legacy_scope = existing
+            .rules
+            .iter()
+            .find(|old| old.id() == rule.id())
+            .is_some_and(|old| match old {
+                PolicyRule::Value(old) => old.selector.api.is_some(),
+                PolicyRule::Native(old) => old.selector.api.is_some(),
+            });
+        let (api, resource, when) = match rule {
+            PolicyRule::Value(rule) => (
+                &mut rule.selector.api,
+                rule.surface != Surface::ApiResponse,
+                rule.when.is_some(),
+            ),
+            PolicyRule::Native(rule) => (
+                &mut rule.selector.api,
+                rule.selector.resource.is_some(),
+                rule.when.is_some(),
+            ),
+        };
+        ensure!(
+            api.as_deref().is_none_or(|api| api == active_api),
+            "rule proposal belongs to another API issue"
+        );
+        if resource && !legacy_scope {
+            ensure!(
+                !when,
+                "resource rules cannot depend on an inbound API body; select the dependency resource and value instead"
+            );
+            *api = None;
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn merge(document: &mut TrafficPolicy, rules: Vec<PolicyRule>) -> Result<bool> {
     let mut changed = false;
@@ -75,6 +118,48 @@ mod tests {
 
     fn document(rule: Value) -> TrafficPolicy {
         serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[rule]})).unwrap()
+    }
+
+    #[test]
+    fn resource_scope_omits_api_but_preserves_existing_scopes_and_primary_assertions() {
+        let value = json!({"id":"date","surface":"dependency.request",
+            "match":{"api":"GET /tasks","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"SET","key":{"exact":"members"}},
+            "slot":"value","codec":"json","contract":{"/members":"unordered"},
+            "proof":{"source":"source.py:1","fact":"Source writes unordered members"}});
+        let native = json!({"id":"append","match":{"api":"GET /tasks",
+            "resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"APPEND","key":{"kind":"exact","value":"content"}},
+            "effect":{"kind":"redis_append_stream"},"proof":{"source":"source.py:2","fact":"Source writes a text stream"}});
+        for raw in [value, native] {
+            let old = document(raw);
+            let empty = TrafficPolicy {
+                rules: vec![],
+                ..old.clone()
+            };
+            let mut fresh = old.clone();
+            prepare_scopes(&mut fresh, &empty, "GET /tasks").unwrap();
+            assert!(
+                serde_json::to_value(&fresh).unwrap()["rules"][0]["match"]
+                    .get("api")
+                    .is_none()
+            );
+            crate::policy::compile_policy(&fresh).unwrap();
+            let mut update = old.clone();
+            prepare_scopes(&mut update, &old, "GET /tasks").unwrap();
+            assert_eq!(update, old);
+            assert!(!merge(&mut old.clone(), update.rules).unwrap());
+            assert!(prepare_scopes(&mut old.clone(), &empty, "POST /other").is_err());
+            let mut conditional = serde_json::to_value(&old).unwrap();
+            conditional["rules"][0]["when"] =
+                json!({"request_body_json":{"/enabled":{"equals":true}}});
+            let mut conditional: TrafficPolicy = serde_json::from_value(conditional).unwrap();
+            assert!(prepare_scopes(&mut conditional, &empty, "GET /tasks").is_err());
+        }
+        let mut response = document(json!({"id":"response","surface":"api.response",
+            "match":{"api":"GET /tasks"},"slot":"body","codec":"json","contract":{"/members":"unordered"},
+            "proof":{"source":"source.py:3","fact":"Source returns unordered members"}}));
+        let original = response.clone();
+        prepare_scopes(&mut response, &original, "GET /tasks").unwrap();
+        assert_eq!(response, original);
     }
 
     #[test]

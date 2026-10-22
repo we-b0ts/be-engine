@@ -16,8 +16,8 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
         "Redis read_back requires an explicit database"
     );
     ensure!(
-        rule.selector.api.is_some() && rule.selector.key.is_some(),
-        "Redis read_back requires explicit API and write key selectors"
+        rule.selector.key.is_some(),
+        "Redis read_back requires an explicit write key selector"
     );
     ensure!(
         entries.len() <= 16,

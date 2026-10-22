@@ -225,10 +225,6 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
         NativeEffect::RedisReadCommutation(_) | NativeEffect::RedisExpiryRefresh(_) => {
             let resource = resource(selector, Protocol::Redis)?;
             ensure!(
-                selector.api.is_some(),
-                "Redis observations require an explicit API"
-            );
-            ensure!(
                 resource
                     .database
                     .as_ref()
@@ -255,10 +251,6 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
         }
         NativeEffect::RedisAppendStream => {
             resource(selector, Protocol::Redis)?;
-            ensure!(
-                selector.api.is_some(),
-                "append stream requires an explicit API"
-            );
             ensure!(
                 selector
                     .resource
@@ -505,10 +497,6 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
 }
 
 fn validate_identity(rule: &NativeRule, effect: &IdentityEffect) -> Result<()> {
-    ensure!(
-        rule.selector.api.is_some(),
-        "identity capture requires an API selector"
-    );
     let resource = rule
         .selector
         .resource

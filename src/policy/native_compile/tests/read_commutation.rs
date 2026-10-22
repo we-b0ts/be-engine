@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 fn rule() -> Value {
-    json!({"id":"poll","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
+    json!({"id":"poll","match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
         "operation":"GET","key":{"kind":"numeric","prefix":"cancel:"}},"effect":{"kind":"redis_read_commutation"},
         "proof":{"source":"poll.py:1; flush.py:2","fact":"Source independently polls an absent cancellation key while flushing unrelated content; reads stay finite"}})
 }
@@ -9,7 +9,6 @@ fn rule() -> Value {
 #[test]
 fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
     for path in [
-        "/match/api",
         "/match/resource",
         "/match/resource/database",
         "/match/key",

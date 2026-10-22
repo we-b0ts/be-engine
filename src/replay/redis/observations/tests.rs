@@ -268,12 +268,13 @@ fn state_observation_schema_requires_proof_and_keeps_the_closed_effects() {
     let mut read = read_rule(true);
     read["effect"]["capture"]["json_pointer"] = json!("/id");
     assert!(compile(read).is_err());
-    for pointer in [
-        "/match/api",
-        "/match/resource/database",
-        "/match/key",
-        "/proof",
-    ] {
+    let mut resource_rule = refresh_rule();
+    resource_rule["match"]
+        .as_object_mut()
+        .unwrap()
+        .remove("api");
+    assert!(compile(resource_rule).is_ok());
+    for pointer in ["/match/resource/database", "/match/key", "/proof"] {
         let mut r = refresh_rule();
         let (parent, key) = pointer.rsplit_once('/').unwrap();
         r.pointer_mut(parent)

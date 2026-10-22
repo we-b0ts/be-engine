@@ -9,9 +9,13 @@ use crate::{
 };
 
 fn dependency_rule(protocol: &str, endpoint: &str, operation: &str) -> serde_json::Value {
-    json!({"id":"dependency-members","surface":"dependency.request","match":{"api":"GET /api",
+    let mut rule = json!({"id":"dependency-members","surface":"dependency.request","match":{"api":"GET /api",
         "resource":{"protocol":protocol,"endpoint":endpoint},"operation":operation},"slot":"value","codec":"json",
-        "contract":{"/members":{"kind":"unordered"}},"proof":{"source":"src/cache.rs:12","fact":"Source writes set members without observing their order"}})
+        "contract":{"/members":{"kind":"unordered"}},"proof":{"source":"src/cache.rs:12","fact":"Source writes set members without observing their order"}});
+    if protocol == "redis" {
+        rule["match"]["resource"]["database"] = json!(0);
+    }
+    rule
 }
 
 pub(super) fn install(
@@ -235,7 +239,13 @@ fn http_body_rule_keeps_path_query_and_endpoint_native() {
             .find(|binding| binding["surface"] == "dependency.request")
             .unwrap();
         assert!(binding["match"]["key"].is_null());
+        assert!(binding["match"].get("api").is_none());
         assert_eq!(binding["match"]["path"], "/dependency");
+        for candidate in evidence.facts["candidates"].as_array().unwrap() {
+            if candidate["draft_rule"]["surface"] == "dependency.request" {
+                assert!(candidate["draft_rule"]["match"].get("api").is_none());
+            }
+        }
         let result = fixture.plan();
         if change_query {
             assert!(result.is_err());
@@ -299,13 +309,13 @@ fn sql_template_slot_keeps_other_literals_and_requires_explicit_discovery_bindin
 }
 
 #[test]
-fn missing_exchange_identity_does_not_multiply_a_target_observation() {
+fn missing_exchange_identity_cannot_authorize_a_global_resource_rule() {
     let fixture = Fixture::new();
     let mut rule = dependency_rule("redis", "cache.test:6379", "SET");
     rule["match"]["key"] = json!({"exact":"session"});
     write(&fixture.proposal, rule);
     let event = json!({"event_type":"redis_exchange","timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
-        "target_host":"cache.test","target_port":6379,"command":"SET",
+        "target_host":"cache.test","target_port":6379,"database":0,"command":"SET",
         "args":[raw_body(b"session"),raw_body(br#"{"members":[1,2]}"#)],"response":raw_body(b"+OK\r\n")});
     install(&fixture, event, |raw| {
         let mut args: Vec<Vec<u8>> = serde_json::from_slice(&raw).unwrap();
@@ -313,16 +323,9 @@ fn missing_exchange_identity_does_not_multiply_a_target_observation() {
         serde_json::to_vec(&args).unwrap()
     });
     fixture.confirm();
-    let plan = fixture.plan().unwrap();
-    assert_eq!(plan.traffic_e2e_report["status"], "planned_needs_replay");
-    assert_eq!(
-        plan.traffic_e2e_report["preflight"]["source_validations"],
-        1
-    );
-    assert_eq!(
-        plan.traffic_e2e_report["preflight"]["independent_target_validations"],
-        0
-    );
+    let error = fixture.plan().unwrap_err();
+    assert!(format!("{error:#}").contains("Redis connection identity missing"));
+    assert!(fixture.state().rule_plan.is_none());
 }
 
 #[test]
@@ -334,7 +337,7 @@ fn dependency_only_rules_cannot_replace_the_finished_primary_response_oracle() {
         write(&fixture.proposal, rule);
         let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
             "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
-            "target_host":"cache.test","target_port":6379,"command":"SET",
+            "target_host":"cache.test","target_port":6379,"database":0,"command":"SET",
             "args":[raw_body(b"session"),raw_body(br#"{"members":[1,2]}"#)],"response":raw_body(b"+OK\r\n")});
         install(&fixture, event, |raw| {
             let mut args: Vec<Vec<u8>> = serde_json::from_slice(&raw).unwrap();
@@ -390,7 +393,7 @@ fn missing_json_and_presence_sensitive_protobuf_fields_cannot_authorize_a_rule()
             br#"{"members":[1,2]}"#
         };
         let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
-            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,
+            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,"database":0,
             "command":"SET","args":[raw_body(b"session"),raw_body(source)],"response":raw_body(b"+OK\r\n")});
         install(&fixture, event, |raw| raw);
         fixture.confirm();
@@ -411,7 +414,7 @@ fn empty_protobuf_repeated_fields_are_complete_source_values_and_cannot_gain_mem
         }});
         write(&fixture.proposal, rule);
         let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
-            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,
+            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,"database":0,
             "command":"SET","args":[raw_body(b"session"),raw_body(b"\x0a\x01a")],"response":raw_body(b"+OK\r\n")});
         install(&fixture, event, |raw| {
             let mut args: Vec<Vec<u8>> = serde_json::from_slice(&raw).unwrap();
@@ -447,7 +450,7 @@ fn response_compare_contract_does_not_implicitly_authorize_delivery_rewrites() {
             std::str::from_utf8(source).unwrap()
         );
         let event = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
-            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,
+            "timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"target_host":"cache.test","target_port":6379,"database":0,
             "command":"GET","args":[raw_body(b"session")],"response":raw_body(frame.as_bytes())});
         install(&fixture, event, |raw| {
             if unauthorized {

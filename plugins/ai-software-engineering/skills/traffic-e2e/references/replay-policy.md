@@ -27,6 +27,15 @@ describe the current bounded scan window; Source bindings have separate
 under `bounded_analysis.nonresumable_limits`. Missing drafts are not proof of a
 missing capability, and supported mechanism hints never supply Source proof.
 
+Dependency value rules and native resource effects use resource scope without
+`match.api`: the same resource access contract applies across APIs. Discovery and
+planning omit API from new rules and validate complete cross-API Source coverage,
+using each API's own Target witnesses and clocks where available. Missing Target
+evidence requires genuine Replay; changed Source membership or foreign execution
+invalidates the plan. Existing explicitly API-scoped rules retain their scope
+when extended. API response assertions and inbound adaptations keep API scope.
+`calendar_date` retains its required explicit `utc_offset`.
+
 The coordinator accepts one rule, a list, or a complete typed document:
 
 ```bash
@@ -78,7 +87,6 @@ A self-contained Redis JSON rule is:
 id: cache-members
 surface: dependency.request
 match:
-  api: POST /tasks
   resource: {protocol: redis, endpoint: 'cache.example:6379', database: 0}
   operation: SET
   key: {kind: exact, value: task-cache}
@@ -184,7 +192,7 @@ stay exact. See [conditional field contracts](../../../../../docs/conditional-fi
 ## Stateful And Source Effects
 
 `redis_append_stream` grants Source-proven APPEND chunk-boundary equivalence only
-under an explicit API/resource/database/key scope. Literal byte order, reads,
+under an explicit resource/database/key scope. Literal byte order, reads,
 resets, expiry calls and finite consumption remain checked; APPEND responses
 reflect actual Target cumulative lengths. See [APPEND streams](../../../../../docs/redis-append-stream.md).
 

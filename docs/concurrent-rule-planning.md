@@ -18,6 +18,16 @@ independent Target witnesses, protected artifacts, key/schema identities and
 policy freshness. Growing the shared prepared index for an unrelated API does
 not invalidate a plan: the selected group's membership is checked semantically.
 
+New resource rules omit `match.api`. Their Source coverage includes every
+matching case in the recording, regardless of the issue's API. Preflight uses
+each affected API's own completed execution and protected clocks; missing Target
+evidence retains an explicit fresh-Replay obligation. An active affected API
+blocks access to its old evidence. Unrelated API progress does not block resource
+planning. Source inventory changes, relevant prepared membership changes, a
+foreign execution replacement or newly available Target evidence invalidate the
+plan. Apply and recovery recheck these identities. Applying a changed policy
+invalidates earlier API verification fingerprints so they require revalidation.
+
 Each API has a planning/application lock. Different APIs can plan concurrently.
 Plans publish through a separate atomic event file instead of replacing the
 coordinator's in-memory workflow snapshot. Workflow loads and snapshot saves
