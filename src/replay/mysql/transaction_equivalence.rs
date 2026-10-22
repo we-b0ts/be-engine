@@ -53,6 +53,20 @@ struct Trace {
 }
 
 impl Registry {
+    /// Identical end SQL is disambiguated by this socket's delivered members.
+    /// This only selects an ordinary finite candidate; it grants no coverage.
+    pub(super) fn preferred_end(&self, witness: &Witness, sql: &str) -> Option<usize> {
+        let trace = witness.active.as_ref().filter(|trace| trace.valid)?;
+        let (requirement, transaction) = self.members.get(trace.members.first()?)?;
+        let requirement = &self.requirements[*requirement];
+        let group = &requirement.transactions[*transaction];
+        (!requirement.blocked
+            && group.end == normalize_sql(sql)
+            && group.witness.is_none()
+            && trace.members == group.members[..group.members.len() - 1])
+            .then(|| *group.members.last().unwrap())
+    }
+
     pub(in crate::replay) fn prepare(
         records: &[crate::replay::dependencies::DependencyRecord],
         optional: &BTreeMap<usize, OptionalSessionExchange>,
