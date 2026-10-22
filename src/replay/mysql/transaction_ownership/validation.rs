@@ -8,6 +8,7 @@ enum Kind {
     Begin,
     End,
     Statement,
+    Savepoint,
     Unknown,
 }
 
@@ -60,7 +61,9 @@ pub(super) fn member(
             && record.command == "COM_QUERY"
             && zero_effect(record)
     } else {
-        before & 0x2009 == 1 && after & 0x2009 == 1 && kind == Kind::Statement
+        before & 0x2009 == 1
+            && after & 0x2009 == 1
+            && (kind == Kind::Statement || kind == Kind::Savepoint && zero_effect(record))
     }
 }
 
@@ -97,6 +100,9 @@ fn zero_effect(record: &RecordedMysqlExchange) -> bool {
 }
 
 fn classify(sql: &str) -> Kind {
+    if crate::mysql::savepoint::parse(sql).is_some() {
+        return Kind::Savepoint;
+    }
     if sql.len() > 1024 * 1024 {
         return Kind::Unknown;
     }
@@ -123,7 +129,7 @@ fn classify(sql: &str) -> Kind {
         return Kind::Unknown;
     };
     // Restrict promotion to statements which cannot implicitly end/restart a
-    // transaction. DDL, session changes, CALL, XA, savepoint controls and chained
+    // transaction. DDL, session changes, CALL, XA and chained
     // ends require separate boundary semantics, even when IN_TRANS stays set.
     match parser.parse_statements().as_deref() {
         Ok(

@@ -10,6 +10,7 @@ pub(in crate::replay) mod ownership;
 mod projection;
 mod report_inventory;
 mod response;
+mod savepoints;
 mod session;
 mod session_setup;
 pub(in crate::replay) mod sql_match;

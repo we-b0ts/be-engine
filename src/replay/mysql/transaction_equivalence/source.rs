@@ -158,6 +158,7 @@ fn collect_transactions(
     }
     let mut active = Vec::<(usize, bool, bool)>::new();
     let mut explicit = false;
+    let mut savepoints = crate::mysql::savepoint::Names::default();
     let mut previous: Option<(&RecordedMysqlExchange, u16)> = None;
     let mut reason = None;
     let mut failed_ends = Vec::new();
@@ -263,6 +264,19 @@ fn collect_transactions(
                     });
                 }
                 explicit = false;
+                savepoints.clear();
+            } else if let Some(control) = record
+                .sql
+                .as_deref()
+                .and_then(crate::mysql::savepoint::parse)
+            {
+                if !super::super::savepoints::complete(record)
+                    || !savepoints.observe(&control)
+                    || active.is_empty()
+                {
+                    return Err("source_savepoint_lifetime_unsupported");
+                }
+                active.push((index, false, false));
             } else {
                 let (write, strict) =
                     statement(record).ok_or("source_statement_or_response_unsupported")?;
@@ -292,6 +306,7 @@ fn collect_transactions(
             failed_ends.extend(failed.rejected_end(index, record));
             failure = Some(failed);
             active.clear();
+            savepoints.clear();
             explicit = false;
             previous = None;
         }

@@ -366,6 +366,26 @@ errors outside the bounded single-UPDATE case above, and unproven transaction
 fragments grant no new compatibility exemption and retain required Source
 controls. A failed ROLLBACK itself is always required; the UPDATE exception
 never hides a failed transaction end.
+Successful `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK [WORK] TO
+[SAVEPOINT]` controls now retain a connection-local lifetime proof. Source
+transactions must contain complete, consecutive exchanges and active before/after
+status. Generated savepoint names may differ between SQLAlchemy and SQLx;
+Replay binds each delivered creation to its Source name and requires subsequent
+release/rollback references on that same Target socket. Rollback removes later
+savepoints; release removes only the selected name. SQLx may reuse the depth name
+of a rolled-back scope on a subsequent Source retry. Unbound, released, foreign
+and wrong-kind references remain rejected, and failed controls retain strict SQL
+matching without granting an alias or omission.
+
+Savepoint transactions require a real outer Target transaction, including single-
+write and read-only savepoint spans. Their required interval begins at the first
+savepoint preceding the first write (or the write itself when earlier), through
+the final outer COMMIT/ROLLBACK. Ordinary prefix reads remain finite required
+calls and may use the ordinary read route. Inner release never counts as an
+outer commit. Complete Global-started transactions use the same Source savepoint
+lifetime validation before cross-Case promotion; old proof caches are rebuilt.
+No recording, policy rule or setup SQL needs to be changed.
+
 This does not prove arbitrary storage-engine, isolation or session-setting
 equivalence. Existing strict session operations and ordinary SQL/value matching
 remain in force.

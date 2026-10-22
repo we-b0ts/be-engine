@@ -2,7 +2,8 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub(in crate::replay::mysql) struct TransactionMatch {
+pub(in crate::replay::mysql) struct TransactionMatch<'a> {
+    pub(in crate::replay::mysql) savepoints: &'a super::super::savepoints::Bindings,
     pub(in crate::replay::mysql) preferred_end: Option<usize>,
     pub(in crate::replay::mysql) status_flags: u16,
 }
@@ -38,7 +39,7 @@ impl ReplayState {
         command: &str,
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
-        transaction: Option<TransactionMatch>,
+        transaction: Option<TransactionMatch<'_>>,
     ) -> Option<MatchedExchange> {
         #[cfg(not(test))]
         let request_observed_at = Utc::now();
@@ -130,6 +131,16 @@ impl ReplayState {
                         {
                             continue;
                         }
+                        let savepoint_match = transaction.and_then(|t| {
+                            sql.and_then(|sql| {
+                                t.savepoints.preview(&exchange.record, sql, t.status_flags)
+                            })
+                        });
+                        if savepoint_match == Some(false) {
+                            continue;
+                        }
+                        let same_savepoint =
+                            savepoint_match == Some(true) && params.is_none_or(<[_]>::is_empty);
                         if plain_end
                             && let Some(transaction) = transaction
                             && exchange.record.outcome == crate::DependencyExchangeOutcome::Response
@@ -343,6 +354,7 @@ impl ReplayState {
                                 if cross_protocol
                                     && !project_columns
                                     && !same_autocommit
+                                    && !same_savepoint
                                     && !sql.is_some_and(|sql| {
                                         sql_match::cross_protocol_matches(
                                             &exchange.record,
@@ -380,6 +392,7 @@ impl ReplayState {
                                     if !project_columns
                                         && Some(recorded_sql.as_str()) != normalized_sql
                                         && !same_autocommit
+                                        && !same_savepoint
                                         && !same_prepared_values
                                         && !policy.allows_mysql_sql_difference(&context)
                                     {
@@ -398,6 +411,7 @@ impl ReplayState {
                                 } else if !project_columns
                                     && Some(recorded_sql.as_str()) != normalized_sql
                                     && !same_autocommit
+                                    && !same_savepoint
                                     && !same_prepared_values
                                 {
                                     continue;

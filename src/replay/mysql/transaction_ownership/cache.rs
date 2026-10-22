@@ -1,7 +1,7 @@
 //! Disposable proof outcomes bound to every original Source file, without payloads.
 use super::*;
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Binding {

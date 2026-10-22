@@ -33,6 +33,7 @@ mod projection_tests;
 mod query_in_tests;
 mod recorded_performance;
 mod rollback_tests;
+mod savepoints;
 mod select_time_tests;
 mod source_read_bridge;
 mod sql_values_tests;

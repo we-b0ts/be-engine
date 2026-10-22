@@ -197,6 +197,16 @@ is unclear.
   successful transaction boundaries. Protocol matching and errors accept this
   explicit request scope without mutating the session-wide active HTTP case.
 
+- `mysql/savepoint` owns bounded savepoint command parsing and Source name
+  lifetimes. `replay/mysql/savepoints` owns connection-local Source/Target name
+  bindings, with side-effect-free candidate previews and post-delivery commits.
+  `transaction_equivalence/source` retains complete Source interval proof;
+  `transaction_equivalence` retains the outer transaction delivery witness and
+  includes savepoint controls in its required interval. Neither name aliasing nor
+  inner rollback/release supplies an outer commit or consumes another socket's
+  control. `transaction_ownership` reuses the Source name lifetime proof for
+  Global-started intervals and versions its disposable proof cache separately.
+
 - `engine_binary` resolves companion executables and Linux reexec paths for a
   replaced running engine. Replay, coordinator workers and local interception
   share that resolver; process lifecycle remains with each caller.
