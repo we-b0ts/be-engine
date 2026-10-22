@@ -2,7 +2,7 @@ use crate::policy::{self, NativeEffect};
 use serde_json::{Value, json};
 
 fn rule() -> Value {
-    json!({"id":"sdk-metadata","match":{"api":"POST /tasks",
+    json!({"id":"sdk-metadata","match":{
         "resource":{"protocol":"http","endpoint":"client.test:8080"},
         "operation":"POST","path":"/responses"},
         "effect":{"kind":"http_client_metadata","headers":["x-stainless-lang","x-stainless-runtime"]},
@@ -55,7 +55,7 @@ fn client_metadata_rejects_unbounded_scopes_unknown_names_and_security_headers()
         value["effect"]["headers"] = names;
         assert!(compile(vec![value]).is_err());
     }
-    for name in ["api", "resource", "operation", "path"] {
+    for name in ["resource", "operation", "path"] {
         let mut value = rule();
         value["match"].as_object_mut().unwrap().remove(name);
         assert!(compile(vec![value]).is_err(), "{name}");

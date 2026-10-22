@@ -4,13 +4,12 @@ Redis `APPEND key value` appends bytes to a string and returns its new byte
 length. Applications may buffer streaming text before calling it. A Source-proven
 `redis_append_stream` effect permits different nonempty chunk boundaries while
 preserving the ordered bytes. It is disabled unless an explicit rule selects
-the API, Redis endpoint/database/authentication identity and bounded key family.
+the Redis endpoint/database/authentication identity and bounded key family.
 State belongs to one Case and Source key, including ordinary pooled connections.
 
 ```yaml
 id: task-content-append
 match:
-  api: POST /tasks
   resource: {protocol: redis, endpoint: 'cache.test:6379', database: 0}
   operation: APPEND
   key: {kind: affix, prefix: 'content:'}
@@ -23,9 +22,9 @@ proof:
     There are no unrecorded or concurrent writers to these keys.
 ```
 
-Use `resource.username` when the Source Redis identity has a username. Conditions
-may additionally select an immutable inbound request body. Independent APIs need
-their own Source proof. The rule grants no process ownership, shared inventory,
+Use `resource.username` when the Source Redis identity has a username. The same
+resource contract applies across APIs, with complete Source coverage during
+planning. The rule grants no process ownership, shared inventory,
 snapshot renewal or additional non-APPEND calls. Existing proven identity rules
 may translate a generated key; they never transform stream text.
 

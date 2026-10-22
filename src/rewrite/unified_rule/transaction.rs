@@ -47,6 +47,8 @@ mod read_commutation_transaction;
 mod recovery_transaction;
 #[path = "transaction_redis_candidates.rs"]
 mod redis_candidates_transaction;
+#[path = "transaction_resource_scope.rs"]
+mod resource_scope_transaction;
 #[path = "transaction_scope.rs"]
 mod scope_transaction;
 #[path = "transaction_signed_input.rs"]
@@ -420,6 +422,10 @@ fn public_discover_plan_apply_keeps_issue_and_requires_real_replay() {
     assert_eq!(
         evidence.facts["candidates"][0]["draft_rule"]["contract"]["/members"]["kind"],
         "unordered"
+    );
+    assert_eq!(
+        evidence.facts["candidates"][0]["draft_rule"]["match"]["api"],
+        "GET /api"
     );
     assert!(
         evidence

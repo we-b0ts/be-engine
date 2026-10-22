@@ -864,6 +864,17 @@ explicit repository-wide audit.
   read-only span, including retained zero-effect COM_PING continuity witnesses.
   Case-local completed read spans may restart across consistent inactive
   boundaries; active-transaction gaps and Global post-read gaps remain strict.
+  `replay/mysql/transaction_equivalence/source` separately proves complete
+  ordinary implicit read/write transaction segments and retains unsafe-evidence
+  reasons. Its parent owns connection-local Target BEGIN/end witnesses, ordered
+  finite Source member correspondence and delivery-confirmed setup coverage.
+  COMMIT/ROLLBACK anchor matching; a persistent Source SET is satisfied only
+  after every affected loaded segment has an independent successful witness.
+  It shares the bounded SQL effect checks in `optional_session/read`, never
+  rewrites recordings or grants matching permission from report hints.
+  Reports distinguish transaction-covered setups from read-only omissions;
+  `rewrite/evidence/mysql_diagnosis` projects targeted Source/Target transaction
+  guidance without asserting ownership or a capability gap from unused counts.
   `replay/mysql/cleanup_selection` gives a required transaction
   end precedence over identical optional cleanup only after its immediately
   preceding recorded exchange has been consumed. Recorder's MySQL semantic
@@ -1140,10 +1151,15 @@ explicit repository-wide audit.
   from bounded dependency operations and Source binding metadata. It supplies
   proof requirements and ordinary plan commands without granting permission or
   changing matching, ownership or consumption.
-  `preflight/{api,dependency,session,source}` delegates
-  payload, native envelope, stateful Source trace and whole-recording proof to
-  their existing owners. Whole-recording Source effects explicitly enumerate
-  their broader inventory; ordinary payload rules retain their prepared API scope.
+  `preflight/{api,dependency,session,source}` delegates primary response, native
+  envelope, stateful Source trace and whole-recording proof to their existing
+  owners. `preflight/resource` enumerates complete recording scope for API-free
+  resource rules and freezes relevant API memberships and foreign execution
+  identities, including missing Target evidence. `preflight/payload` validates
+  each execution with its own protected Target witnesses and clocks. Primary
+  response assertions retain their prepared API scope. Discovery and proposal
+  preparation omit API selectors for new resource rules while preserving legacy
+  explicitly scoped relationships. Native bindings remain case-local.
   Coordinator admission preserves write intents and fresh real verification
   obligations across crashes. Bounded hints never substitute for full coverage.
   MySQL's `contracts` adapter filters structurally unrelated request candidates

@@ -193,6 +193,13 @@ impl Drafts {
         if let Some(codec) = &codec {
             base["codec"] = serde_json::to_value(codec)?;
         }
+        // The API above locates historical schemas; it is not an authored
+        // dependency permission. Public bindings and drafts select resources.
+        if base["surface"] != "api.response"
+            && let Some(selector) = base["match"].as_object_mut()
+        {
+            selector.remove("api");
+        }
         let identity = serde_json::to_string(&base)?;
         self.add_entry(identity, json!({"binding":base,"witness_id":witness,"needs_schema":codec.is_none(),"source_intent_required":true,
                 "instruction":if codec.is_none(){"Encoded bytes do not identify a codec. Trace Source encoding; for PB provide explicit field_path, field_type and repeated before planning."}else if base["slot"].get("sse_data").is_some(){"Pointers address the SSE data JSON for this exact event/type. Trace Source time generation for request_time/relative_time; a generated identity needs an explicit prefix/format and shared binding across every referring event/pointer, including terminal output. Differences alone do not prove identity permission. Event presence/order and unselected text stay strict. See docs/sse-value-contracts.md."}else{"Schema supplies decoding only. Choose a field and contract from Source behavior; proof is required for this binding."}}));
@@ -254,7 +261,7 @@ impl Drafts {
             }
         }
         if rules.is_empty() {
-            let base = json!({"surface":witness.metadata.surface,"match":{"api":state.api,
+            let base = json!({"surface":witness.metadata.surface,"match":{
                 "resource":witness.metadata.resource,"operation":witness.metadata.operation}});
             let identity = serde_json::to_string(&(&base, &event["response"]["status"]))?;
             self.add_entry(identity, json!({"binding":base,"witness_id":witness.id,

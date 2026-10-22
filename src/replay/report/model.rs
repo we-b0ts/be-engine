@@ -51,6 +51,9 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) allowed_unused_mysql_commit_exchanges: Vec<RecordedExchangeSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_autocommit_exchanges: Vec<RecordedExchangeSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) transaction_equivalent_mysql_autocommit_exchanges:
+        Vec<RecordedExchangeSummary>,
     pub(in crate::replay) matched_http_exchange_count: usize,
     pub(in crate::replay) matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
     pub(in crate::replay) unmatched_http_requests: Vec<http::HttpRequestReport>,
@@ -199,6 +202,8 @@ pub(in crate::replay) struct MatchedQueryReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct RecordedExchangeSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) diagnostic: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) connection_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]

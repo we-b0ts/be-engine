@@ -5,13 +5,12 @@ pooled Redis connection. Requiring that incidental wire order can deadlock a
 Target whose polling and flush tasks run at different speeds.
 
 `redis_read_commutation` explicitly permits selected, finite nil observations
-to commute with unrelated commands. It requires an API, Redis endpoint,
+to commute with unrelated commands. It requires a Redis endpoint,
 database and bounded key selector:
 
 ```yaml
 id: task-cancel-observations
 match:
-  api: POST /tasks
   resource:
     protocol: redis
     endpoint: cache.example:6379

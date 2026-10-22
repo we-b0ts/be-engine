@@ -11,7 +11,6 @@ format: traffic-policy/v1
 rules:
   - id: responses-sdk-metadata
     match:
-      api: POST /api/responses
       resource: {protocol: http, endpoint: 'chat-shell.example:8100'}
       operation: POST
       path: /v1/responses
@@ -27,7 +26,7 @@ The closed supported names are `x-stainless-arch`, `x-stainless-async`,
 `x-stainless-lang`, `x-stainless-os`, `x-stainless-package-version`,
 `x-stainless-read-timeout`, `x-stainless-retry-count`, `x-stainless-runtime` and
 `x-stainless-runtime-version`. Select exact lowercase names individually; an
-unknown name, wildcard, duplicate, empty selection or missing API/resource/method/
+unknown name, wildcard, duplicate, empty selection or missing resource/method/
 path is rejected. This is not a general header-ignore mechanism. A consumer that
 reads these names needs a different Source conclusion.
 

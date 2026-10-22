@@ -6,8 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod autocommit;
 mod control;
-mod read;
-use control::{successful_begin, successful_control, successful_end};
+pub(in crate::replay::mysql) mod read;
+use control::successful_begin;
+pub(in crate::replay::mysql) use control::{successful_control, successful_end};
 
 /// Only the ends of proven read-compatible Global spans are retained, including
 /// empty explicit starts. Cases never contribute prefixes, so lazy case loading
@@ -153,7 +154,7 @@ pub(in crate::replay) fn classify(
     optional
 }
 
-fn successful_prepare(exchange: &RecordedMysqlExchange) -> bool {
+pub(in crate::replay::mysql) fn successful_prepare(exchange: &RecordedMysqlExchange) -> bool {
     exchange.command == "COM_STMT_PREPARE"
         && exchange.response.status == "stmt_prepare"
         && exchange.outcome == crate::DependencyExchangeOutcome::Response
@@ -165,7 +166,7 @@ fn successful_prepare(exchange: &RecordedMysqlExchange) -> bool {
             .is_some_and(|flags| flags & 8 == 0)
 }
 
-fn successful_ping(exchange: &RecordedMysqlExchange) -> bool {
+pub(in crate::replay::mysql) fn successful_ping(exchange: &RecordedMysqlExchange) -> bool {
     exchange.command == "COM_PING"
         && exchange.sql.is_none()
         && exchange.params.as_ref().is_none_or(Vec::is_empty)
@@ -194,7 +195,7 @@ fn status_after(exchange: &RecordedMysqlExchange) -> Option<u16> {
     }
 }
 
-fn complete_read(exchange: &RecordedMysqlExchange) -> bool {
+pub(in crate::replay::mysql) fn complete_read(exchange: &RecordedMysqlExchange) -> bool {
     matches!(exchange.command.as_str(), "COM_QUERY" | "COM_STMT_EXECUTE")
         && identity_from_exchange(exchange).is_some()
         && exchange.parse_warnings.is_empty()

@@ -134,6 +134,7 @@ impl ExecutionIdentity {
 }
 
 pub(super) struct Bundle {
+    pub inventory_path: Option<PathBuf>,
     pub replay_path: PathBuf,
     pub replay: Value,
     pub assertions: Value,
@@ -159,6 +160,7 @@ impl Bundle {
                 .context("rule requires prepared API group")?,
         )?;
         let mut output = Self {
+            inventory_path: None,
             replay_path: evidence.replay.clone(),
             replay: Value::Null,
             assertions: Value::Null,
@@ -209,6 +211,7 @@ impl Bundle {
         // membership is revalidated by ExecutionIdentity::current; do not bind
         // this plan to unrelated index bytes.
         let inventory = crate::case_group::load_case_group_inventory(&index, &case_source)?;
+        output.inventory_path = Some(index);
         ensure!(
             Some(inventory.source_revision.as_str()) == state.source_revision.as_deref(),
             "Source revision changed after Replay"

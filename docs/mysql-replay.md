@@ -297,9 +297,50 @@ the load-local cache used for rollback classification.
 Optional setup remains matchable and, if omitted, appears separately as
 `allowed_unused_mysql_autocommit_exchanges`; business reads remain required.
 No target shim, rule or re-recording is needed when existing captures contain
-the required status evidence. A write-containing or incomplete session keeps
-the setup required. Old captures that discarded AUTOCOMMIT=1 cannot validate
+the required status evidence. An incomplete session keeps the setup required.
+Old captures that discarded AUTOCOMMIT=1 cannot validate
 that missing transaction control without a new recording.
+
+Write-containing sessions can also satisfy a recorded `SET autocommit=0`
+through equivalent explicit Target transactions. Use the ordinary SQLx
+transaction API, or a project's `with_transaction` wrapper: acquire one
+connection, send `BEGIN`, execute the complete corresponding reads and writes,
+then `COMMIT` or `ROLLBACK` on that connection. Source's SET remains in the
+immutable recording; Target does not need to reproduce it or disable automatic
+commit on a shared pool. COMMIT/ROLLBACK are the correspondence anchors, not
+a literal SET-to-BEGIN substitution. The Source session remains in mode 0
+after each end, while Target remains in mode 1 outside its explicit transactions.
+
+Replay requires complete Source connection identity, sequence and transaction
+status evidence. It supports complete ordinary reads and INSERT/UPDATE/DELETE/
+REPLACE writes with successful plain transaction ends. PING/PREPARE can prove
+continuity without adding executed business statements. Active sequence gaps,
+unknown starts, missing status, errors, session observers/effects, unsupported
+SQL, and incomplete or cross-file transaction fragments retain the SET requirement.
+This does not prove arbitrary storage-engine, isolation or session-setting
+equivalence. Existing strict session operations and ordinary SQL/value matching
+remain in force.
+
+Each Target transaction must cover exactly one Source transaction's ordered
+business exchanges and matching end. A Source connection's transaction order
+is retained, although completed transactions can use different Target pool
+connections. Splitting or merging transactions, early ends, reversed outcomes,
+nested/restarted transactions and another socket's commit cannot satisfy the
+SET. One persistent Source SET can cover several transactions; all complete
+transactions in the loaded connection scope must be proven. Read-only setup
+and cleanup compatibility retain their independent existing rules.
+
+Coverage is recorded only after successful response delivery and response-policy
+commit. It never fabricates a Target SET or consumes its Source record. Covered
+setups appear in `transaction_equivalent_mysql_autocommit_exchanges`, separately
+from read-only omissions, with bounded Source interval and independent Target
+connection/transaction witnesses. Remaining setup summaries expose
+`diagnostic.kind: mysql_autocommit_transaction_coverage`, a precise rejection
+or pending reason, and covered/total transaction counts. The coordinator's
+`mysql_autocommit_diagnosis` guides Source lifecycle and Target SQLx transaction
+investigation. Missing evidence and passing responses alone grant no exemption
+or engine-gap attribution. Historical reports can receive guidance, but only a
+fresh Replay can establish transaction coverage.
 
 Run the actual-client and focused protocol tests with:
 

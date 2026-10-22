@@ -106,7 +106,7 @@ impl DynamicValues {
                 .filter(|rule| {
                     self.routes
                         .get(case_id)
-                        .is_some_and(|path| super::pattern::path_pattern_matches(&rule.api, path))
+                        .is_some_and(|path| rule.matches_route(path))
                 })
                 .filter_map(|rule| {
                     rule.when
@@ -125,7 +125,7 @@ impl DynamicValues {
             && self
                 .routes
                 .get(case_id)
-                .is_some_and(|path| super::pattern::path_pattern_matches(&rule.api, path))
+                .is_some_and(|path| rule.matches_route(path))
             && (rule.when.is_none()
                 || self
                     .conditions

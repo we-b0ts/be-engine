@@ -83,7 +83,7 @@ fn historical_identity_keys_survive_and_only_new_mysql_semantics_change_the_key(
         if protocol == "mysql" {
             assert_eq!(
                 current.semantics.as_deref(),
-                Some("mysql-sql-diagnostics-v3")
+                Some("mysql-transaction-diagnostics-v4")
             );
             assert_ne!(current.key().unwrap(), old_key);
         } else {

@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 fn rule() -> Value {
-    json!({"id":"append","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
+    json!({"id":"append","match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
         "operation":"APPEND","key":{"kind":"affix","prefix":"content:"}},"effect":{"kind":"redis_append_stream"},
         "proof":{"source":"session.py:42","fact":"Source batches nonempty text in key order and retains reads, resets and expiry obligations"}})
 }
@@ -9,7 +9,6 @@ fn rule() -> Value {
 #[test]
 fn append_capability_requires_explicit_scope_and_exclusive_payload_ownership() {
     for path in [
-        "/match/api",
         "/match/resource",
         "/match/resource/database",
         "/match/key",

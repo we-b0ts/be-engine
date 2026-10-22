@@ -132,35 +132,12 @@ fn plan(
         !proposed.rules.is_empty(),
         "rule proposal must contain explicit Source-proven rules"
     );
-    for proposal in &mut proposed.rules {
-        match proposal {
-            PolicyRule::Value(rule) => {
-                if let Some(api) = &rule.selector.api {
-                    ensure!(
-                        api == &state.api,
-                        "rule plan must retain the exact active prepared API scope"
-                    );
-                } else {
-                    rule.selector.api = Some(state.api.clone());
-                }
-            }
-            PolicyRule::Native(rule) => {
-                if let Some(api) = &rule.selector.api {
-                    ensure!(
-                        api == &state.api,
-                        "native rule plan must retain the exact active prepared API scope"
-                    );
-                }
-                // Global acquisition/ownership/sharing effects retain the empty
-                // outer selector required by their typed domain compiler.
-            }
-        }
-    }
     let (_, config) = crate::e2e_run::resolve_project(root)?;
     let original = fs::read_to_string(&config.replay_policy)?;
     let mut document = parse_policy(&original).context(
         "unified authoring requires a traffic-policy/v1 policy; no legacy fallback is used",
     )?;
+    proposal::prepare_scopes(&mut proposed, &document, &state.api)?;
     if let Some(revision) = &document.source_revision {
         ensure!(
             proposed

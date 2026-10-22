@@ -146,7 +146,7 @@ MySQL AUTOCOMMIT assignments are handled as connection state by Replay. A target
 can use its normal driver mode; do not add SET AUTOCOMMIT merely to consume cold
 source-connection initialization. With complete read-only session evidence,
 omitted setup appears as `allowed_unused_mysql_autocommit_exchanges` and stays
-matchable. Both 0 and 1 are retained during recording; writes, failed controls,
+matchable. Both 0 and 1 are retained during recording; failed controls,
 unknown transaction starts and incomplete spans remain strict. Initial gaps
 caused by omitted setup may be crossed only before the first read and with
 consistent inactive status; gaps inside a transaction never establish proof.
@@ -156,6 +156,21 @@ are not required business exchanges. Older recordings with omitted post-read
 PINGs need fresh recording rather than an inferred explanation for their gaps.
 No rule or new recording is needed when the immutable capture already has the
 required status evidence. This does not verify transaction isolation equivalence.
+
+For a write-containing connection, a recorded `SET autocommit=0` can instead
+be satisfied by complete explicit Target transactions. Ordinary SQLx transactions
+and `with_transaction` wrappers pin one connection for BEGIN, all corresponding
+reads/writes and the matching COMMIT/ROLLBACK. Each Source transaction remains
+ordered and finite; all affected complete transactions in the loaded scope
+must have successful Target delivery witnesses before the SET becomes optional.
+Replay retains the original SET and reports it separately in
+`transaction_equivalent_mysql_autocommit_exchanges`. Split/merged transactions,
+missing BEGIN, pooled standalone COMMITs, mismatched ends and incomplete Source
+evidence remain strict. Unconsumed SET summaries carry bounded
+`mysql_autocommit_transaction_coverage` diagnostics, and coordinator
+`mysql_autocommit_diagnosis` supplies transaction-specific evidence guidance.
+Do not copy a driver SET, skip an API or infer an engine gap just from its
+unused count. Historical reports cannot establish fresh Target coverage.
 
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.

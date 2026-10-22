@@ -8,6 +8,7 @@ pub(in crate::replay) struct ReplaySession {
     pub(in crate::replay) status_flags: u16,
     pub(in crate::replay) statements: HashMap<u32, PreparedStatement>,
     pub(super) transaction_scope: super::transaction_scope::Scope,
+    pub(super) transaction_witness: super::transaction_equivalence::Witness,
 }
 
 impl ReplaySession {
@@ -225,6 +226,12 @@ pub(super) async fn deliver_matched(
         return Err(error);
     }
     replay.complete_exchange(&matched);
+    replay.observe_mysql_transaction(
+        &mut session.transaction_witness,
+        matched.report.sql.as_deref().unwrap_or_default(),
+        Some(matched.index),
+        matches!(matched.record.response.status.as_str(), "ok" | "resultset"),
+    );
     Ok(SessionDirective::Continue)
 }
 
@@ -262,6 +269,7 @@ pub(in crate::replay) async fn handle_query(
             Some(sql),
             "driver/session query handled by replay server",
         );
+        state.observe_mysql_transaction(&mut session.transaction_witness, sql, None, true);
         return Ok(SessionDirective::Continue);
     }
 
@@ -420,6 +428,12 @@ pub(in crate::replay) async fn handle_stmt_execute(
             "COM_STMT_EXECUTE",
             Some(&statement.sql),
             "prepared driver/session query handled by replay server",
+        );
+        state.observe_mysql_transaction(
+            &mut session.transaction_witness,
+            &statement.sql,
+            None,
+            true,
         );
         return Ok(SessionDirective::Continue);
     }

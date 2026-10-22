@@ -13,7 +13,10 @@ pub(super) fn successful_begin(exchange: &RecordedMysqlExchange) -> bool {
             })
 }
 
-pub(super) fn successful_end(exchange: &RecordedMysqlExchange, commands: &[&str]) -> bool {
+pub(in crate::replay::mysql) fn successful_end(
+    exchange: &RecordedMysqlExchange,
+    commands: &[&str],
+) -> bool {
     successful_control(exchange)
         && plain_statement(exchange, commands)
         && exchange.server_status_before.is_none_or(|before| {
@@ -24,7 +27,7 @@ pub(super) fn successful_end(exchange: &RecordedMysqlExchange, commands: &[&str]
         })
 }
 
-pub(super) fn successful_control(exchange: &RecordedMysqlExchange) -> bool {
+pub(in crate::replay::mysql) fn successful_control(exchange: &RecordedMysqlExchange) -> bool {
     complete_control(exchange)
         // A bare COMMIT/ROLLBACK can implicitly AND CHAIN via completion_type.
         // Require the server to confirm no transaction and no further results.

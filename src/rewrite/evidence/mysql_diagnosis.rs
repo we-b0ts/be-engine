@@ -33,6 +33,49 @@ pub(super) fn attach(facts: &mut Value) {
         },
         "required_behavior": "Business SELECTs remain required, including repeated reads returning equal rows. Optional session cleanup and passing HTTP responses do not make a business read optional. Repair target behavior when source proof establishes the missing request-owned call; otherwise retain unresolved evidence."
     });
+    let autocommit: Vec<_> = unused_clusters(facts)
+        .filter_map(|cluster| {
+            let signature = &cluster["representative"]["difference"]["expected"]["signature"];
+            let diagnostic = &signature["diagnostic"];
+            let sql = signature["sql"].as_str().or_else(|| {
+                (signature["sql_summary"]["truncated"] == false)
+                    .then(|| signature["sql_summary"]["preview"].as_str())
+                    .flatten()
+            });
+            (diagnostic["kind"] == "mysql_autocommit_transaction_coverage"
+                || sql.and_then(crate::mysql::autocommit::assignment) == Some(false))
+            .then(|| {
+                json!({"cluster_id":cluster["cluster_id"],
+                    "connection_id":signature["connection_id"],
+                    "query_sequence":signature["query_sequence"],
+                    "transaction_evidence":diagnostic})
+            })
+        })
+        .collect();
+    if !autocommit.is_empty() {
+        let only_autocommit = autocommit.len() == cluster_ids.len()
+            && unused_clusters(facts).all(|cluster| cluster["count"] == 1);
+        facts["mysql_autocommit_diagnosis"] = json!({
+            "observation":"recorded_autocommit_off_not_satisfied",
+            "clusters":autocommit,
+            "source_checks":[
+                "Inspect the complete Source connection, query sequence and before/after transaction status. A session AUTOCOMMIT=0 assignment persists after COMMIT; identify every complete affected transaction rather than inferring transaction boundaries from HTTP responses or driver names.",
+                "Trace Source callers to establish transaction settings and the full read/write scope. Missing status, active sequence gaps, failures, unsupported statements and cross-file fragments do not prove a complete transaction."
+            ],
+            "target_checks":[
+                "Use the ordinary SQLx transaction API (or the project's with_transaction wrapper) to pin one connection for BEGIN, every corresponding SELECT/write, and the matching COMMIT or ROLLBACK. A later COMMIT issued through a pool does not prove transaction coverage.",
+                "Check transaction_evidence.reason and covered_transaction_count. Replay accepts complete ordered implicit/explicit transaction pairs after successful delivery. Missing BEGIN, split/merged transactions, another connection's end, early commits and incomplete coverage retain this SET requirement.",
+                "If complete independent Target transaction evidence is unavailable, retain an unresolved diagnosis. If a complete supported pair still remains dirty, investigate Replay coverage and report publication with the exact transaction references."
+            ],
+            "required_behavior":"Verify transaction equivalence; do not add a literal SET solely to satisfy Replay, disable autocommit on a shared pool, skip the API, or infer an engine gap from passing responses. Matching, finite business calls and commit/rollback outcomes remain required."
+        });
+        if only_autocommit {
+            facts["mysql_unused_diagnosis"]["source_checks"] =
+                facts["mysql_autocommit_diagnosis"]["source_checks"].clone();
+            facts["mysql_unused_diagnosis"]["required_behavior"] =
+                facts["mysql_autocommit_diagnosis"]["required_behavior"].clone();
+        }
+    }
 }
 
 pub(super) fn limitations(facts: &Value) -> Vec<String> {
@@ -47,7 +90,9 @@ pub(super) fn limitations(facts: &Value) -> Vec<String> {
 
 pub(super) fn next_step(facts: &Value) -> String {
     let mut step = "Start with the largest endpoint cluster. Execute representative_dependencies_command when present to summarize that case's dependency targets, then select a returned detail_command before proving request or process ownership and response causality in source code.".to_string();
-    if unused_clusters(facts).next().is_some() {
+    if facts.get("mysql_autocommit_diagnosis").is_some() {
+        step.push_str(" For unconsumed AUTOCOMMIT=0, follow mysql_autocommit_diagnosis and inspect exact Source/Target transaction coverage before changing Target code or alleging an engine gap.");
+    } else if unused_clusters(facts).next().is_some() {
         step.push_str(" For unused MySQL calls, follow mysql_unused_diagnosis.source_checks before choosing a rule or reporting an engine gap; include implicit ORM refreshes in the source trace.");
     }
     step
@@ -127,5 +172,59 @@ mod tests {
             "current",
         );
         assert!(planners.iter().any(|p| p.capability == "mysql_sql_time"));
+    }
+
+    #[test]
+    fn autocommit_guidance_uses_transaction_evidence_without_inferring_a_gap() {
+        let mut facts = json!({"clusters":[{
+            "cluster_id":"setup", "protocol":"mysql", "reason":"unused_recorded", "count":1,
+            "representative":{"difference":{"expected":{"signature":{
+                "connection_id":"source-connection", "query_sequence":3,
+                "sql_summary":{"preview":"SET AUTOCOMMIT = 0", "truncated":false},
+                "diagnostic":{"kind":"mysql_autocommit_transaction_coverage",
+                    "reason":"target_transaction_missing", "covered_transaction_count":0,
+                    "source_transactions":[{"first_query_sequence":5,"last_query_sequence":7,"end":"commit"}]}
+            }}}}
+        }]});
+        let original = facts["clusters"].clone();
+        attach(&mut facts);
+        assert_eq!(facts["clusters"], original);
+        let diagnosis = &facts["mysql_autocommit_diagnosis"];
+        assert_eq!(
+            diagnosis["clusters"][0]["transaction_evidence"]["reason"],
+            "target_transaction_missing"
+        );
+        assert!(
+            diagnosis["target_checks"]
+                .to_string()
+                .contains("with_transaction")
+        );
+        assert!(
+            !facts["mysql_unused_diagnosis"]["source_checks"]
+                .to_string()
+                .contains("ORM")
+        );
+        assert!(next_step(&facts).contains("mysql_autocommit_diagnosis"));
+        assert_eq!(facts["mysql_unused_diagnosis"]["ownership"], "unresolved");
+    }
+
+    #[test]
+    fn historical_setup_reports_get_guidance_without_fabricated_transaction_proof() {
+        let mut facts = json!({"clusters":[{
+            "cluster_id":"setup", "protocol":"mysql", "reason":"unused_recorded", "count":2,
+            "representative":{"difference":{"expected":{"signature":{
+                "sql_summary":{"preview":"SET AUTOCOMMIT = 0", "truncated":false}
+            }}}}
+        }]});
+        attach(&mut facts);
+        assert!(
+            facts["mysql_autocommit_diagnosis"]["clusters"][0]["transaction_evidence"].is_null()
+        );
+        // One representative cannot classify the other calls in a mixed cluster.
+        assert!(
+            facts["mysql_unused_diagnosis"]["source_checks"]
+                .to_string()
+                .contains("ORM")
+        );
     }
 }

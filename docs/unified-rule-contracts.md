@@ -52,6 +52,28 @@ admission remain explicit typed effects. They are not additional permissions
 obtained by decoding a value. In particular, an unordered SET value rule does
 not reorder a GET response, authorize a reusable read, or classify unused work.
 
+## Resource scope across APIs
+
+Task: `rMyn5SlKQg`. New dependency value rules and native resource effects select
+the resource, operation and value location without `match.api`. Discovery and
+planning omit that field from these rules. The API that owns a rewrite issue
+still identifies the transaction and its evidence; it does not limit resource
+access contracts. Root inbound request-body `when` conditions cannot be used on
+new resource rules. API response assertions and inbound adaptation retain their
+API scopes. Existing explicitly API-scoped rules retain their original scope
+when reapplied or extended; planning never silently widens a prior proof.
+
+Resource preflight scans the complete immutable recording for matching cases,
+including cases belonging to other APIs. It validates their Source values and
+uses each API's published Target execution, protected witnesses and clocks when
+available. Missing Target evidence remains an explicit fresh-Replay obligation;
+another API's Target values or clocks cannot substitute for it. Planning freezes
+the Source inventory, relevant prepared memberships and Target execution
+identities, including evidence absence, and checks them again before application
+or recovery. Native state remains case-local and finite. Applying a changed
+policy invalidates previous API verification fingerprints and requires genuine
+Replay. `calendar_date` continues to require its explicit `utc_offset`.
+
 ## Requirement inventory
 
 The reference project is
@@ -179,7 +201,6 @@ source_revision: sha256:11111111111111111111111111111111111111111111111111111111
 rules:
   - id: task-update-times
     match:
-      api: POST /tasks
       resource:
         protocol: mysql
         endpoint: db.internal:3306
@@ -243,7 +264,6 @@ rules:
   - id: session-write
     surface: dependency.request
     match:
-      api: POST /api/sessions
       resource:
         protocol: redis
         endpoint: cache.internal:6379
@@ -265,7 +285,6 @@ rules:
   - id: protobuf-membership-write
     surface: dependency.request
     match:
-      api: POST /api/sessions
       resource:
         protocol: memcached
         endpoint: membership.internal:11211
@@ -285,7 +304,6 @@ rules:
   - id: session-read-expiry
     surface: dependency.response
     match:
-      api: GET /api/sessions/*
       resource:
         protocol: redis
         endpoint: cache.internal:6379
@@ -400,7 +418,7 @@ ordering and complete request acceptance. Raw identity differences and an
 uncommitted failed statement's usage count do not establish that a reference
 permission is inactive. Unselected business values remain checked during plan.
 
-A scalar Redis SET timestamp uses the same value contract: select the exact API,
+A scalar Redis SET timestamp uses the same value contract: select the exact
 Redis resource/database, `operation: SET` and key, then declare `slot: value`,
 `codec: json` and `contract: {'': {relative_time: unix_seconds}}`. The JSON root
 can be a floating Unix-seconds number. A `redis_sequence` scalar-slot restriction

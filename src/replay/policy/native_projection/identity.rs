@@ -138,12 +138,16 @@ pub(super) fn project(
             }),
         },
     };
-    let (_, api) = selector
+    let api = selector
         .api
         .as_deref()
-        .context("identity API selector is absent")?
-        .split_once(' ')
-        .context("identity API selector is invalid")?;
+        .map(|api| {
+            api.split_once(' ')
+                .map(|(_, path)| path)
+                .context("identity API selector is invalid")
+        })
+        .transpose()?
+        .unwrap_or_default();
     let mut targets = effect
         .references
         .iter()

@@ -9,11 +9,22 @@ pub(crate) fn install_attempt(
     cases: &[(PathBuf, u16, u16)],
     replayed_at: DateTime<Utc>,
 ) -> crate::E2eResponseRuleEvidence {
+    install_attempt_for_api(root, source, cases, replayed_at, "GET /api")
+}
+
+pub(crate) fn install_attempt_for_api(
+    root: &Path,
+    source: &Path,
+    cases: &[(PathBuf, u16, u16)],
+    replayed_at: DateTime<Utc>,
+    api: &str,
+) -> crate::E2eResponseRuleEvidence {
+    let (method, path) = api.split_once(' ').unwrap();
     let (_, layout) = config::resolve_layout(root, source, None).unwrap();
     let latest = layout
         .run_root
         .join("focused")
-        .join(support::api_directory("GET /api"))
+        .join(support::api_directory(api))
         .join("latest");
     std::fs::create_dir_all(latest.join("reports")).unwrap();
     let inventory = CaseGroupInventory {
@@ -21,10 +32,10 @@ pub(crate) fn install_attempt(
         source_revision: "source".into(),
         case_inventory_id: "inventory".into(),
         groups: vec![CanonicalCaseGroup {
-            group_id: "GET /api".into(),
-            method: "GET".into(),
-            source_route: "/api".into(),
-            pattern: Some("/api".into()),
+            group_id: api.into(),
+            method: method.into(),
+            source_route: path.into(),
+            pattern: Some(path.into()),
             case_inventory_id: "inventory".into(),
             cases: cases
                 .iter()
@@ -38,10 +49,10 @@ pub(crate) fn install_attempt(
     };
     let mut state = model::ActiveRunState::new("recording".into(), 1, &inventory, &latest);
     state.apis.push(model::ApiExecution {
-        api_key: "GET /api".into(),
-        group_id: "GET /api".into(),
-        method: "GET".into(),
-        api_pattern: "/api".into(),
+        api_key: api.into(),
+        group_id: api.into(),
+        method: method.into(),
+        api_pattern: path.into(),
         case_ids: cases
             .iter()
             .map(|(p, _, _)| p.file_name().unwrap().to_str().unwrap().to_string())
@@ -74,8 +85,8 @@ pub(crate) fn install_attempt(
         case.status = model::CaseStatus::Failed;
         case.response_assertion = Some(model::ResponseAssertionSummary {
             passed: false,
-            method: "GET".into(),
-            path: "/api".into(),
+            method: method.into(),
+            path: path.into(),
             gateway_protocol: crate::ResponseGatewayProtocol::Http,
             body_codec: crate::ResponseBodyCodec::Json,
             body_diagnosis: None,

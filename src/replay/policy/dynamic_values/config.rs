@@ -244,7 +244,8 @@ pub struct DynamicValueRule {
     #[serde(default, skip_serializing_if = "DynamicValueType::is_string")]
     pub value_type: DynamicValueType,
     pub id: String,
-    #[serde(default)]
+    /// Empty means resource scope; native guards retain protocol/Case ownership.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<super::super::case_condition::CaseCondition>,
@@ -257,6 +258,16 @@ pub struct DynamicValueRule {
 }
 
 impl DynamicValueRule {
+    pub(super) fn matches_route(&self, path: &str) -> bool {
+        self.api.is_empty() || super::super::pattern::path_pattern_matches(&self.api, path)
+    }
+
+    fn overlaps_route(&self, other: &Self) -> bool {
+        self.api.is_empty()
+            || other.api.is_empty()
+            || crate::path_pattern::path_patterns_overlap(&self.api, &other.api)
+    }
+
     pub(in crate::replay) fn validate(&self) -> Result<()> {
         ensure!(
             !self.id.is_empty()
@@ -268,11 +279,12 @@ impl DynamicValueRule {
             "invalid dynamic value rule id"
         );
         ensure!(
-            matches!(
-                self.api
-                    .parse::<crate::recording_api::RecordingApiScope>()?,
-                crate::recording_api::RecordingApiScope::Route(_)
-            ),
+            self.api.is_empty()
+                || matches!(
+                    self.api
+                        .parse::<crate::recording_api::RecordingApiScope>()?,
+                    crate::recording_api::RecordingApiScope::Route(_)
+                ),
             "dynamic value API must be an HTTP route"
         );
         ensure!(
@@ -376,7 +388,7 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
                 && a.host.eq_ignore_ascii_case(&b.host)
                 && a.port == b.port
                 && ad == bd
-                && crate::path_pattern::path_patterns_overlap(&rule.api, &other.api)
+                && rule.overlaps_route(other)
             {
                 let left = rule.capture.mysql_template()?;
                 let right = other.capture.mysql_template()?;
@@ -449,7 +461,7 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
                         && ai == bi
                         && fields_overlap
                         && ak.overlaps(bk)
-                        && crate::path_pattern::path_patterns_overlap(&rule.api, &other.api)),
+                        && rule.overlaps_route(other)),
                     "overlapping dynamic Redis capture location"
                 );
             }
@@ -475,7 +487,7 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
                         && a.port == b.port
                         && am == bm
                         && ac.index == bc.index
-                        && crate::path_pattern::path_patterns_overlap(&rule.api, &other.api)
+                        && rule.overlaps_route(other)
                         && crate::path_pattern::path_patterns_overlap(ap, bp)),
                     "overlapping dynamic path capture location"
                 );
@@ -487,9 +499,8 @@ pub(in crate::replay) fn validate(rules: &[DynamicValueRule]) -> Result<()> {
                 .any(|other| super::super::case_condition::overlaps(
                     other.when.as_ref(),
                     rule.when.as_ref()
-                ) && crate::path_pattern::path_patterns_overlap(
-                    &other.api, &rule.api
-                ) && other.capture == rule.capture),
+                ) && rule.overlaps_route(other)
+                    && other.capture == rule.capture),
             "duplicate dynamic value capture location"
         );
     }

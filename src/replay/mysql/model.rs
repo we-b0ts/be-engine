@@ -37,6 +37,7 @@ pub(in crate::replay) enum OptionalSessionExchange {
     Rollback,
     Commit,
     Autocommit,
+    TransactionAutocommit,
 }
 
 #[derive(Debug, Clone)]

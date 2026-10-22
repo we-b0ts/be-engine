@@ -184,6 +184,9 @@ pub(super) fn register_dependency_records(
     let (lines, records): (Vec<_>, Vec<_>) = records.into_iter().unzip();
     let optional_sessions =
         mysql::optional_session::classify(&records, source, &mut mysql.read_prefixes);
+    let transaction_plans =
+        mysql::transaction_equivalence::Registry::prepare(&records, &optional_sessions);
+    let mut mysql_record_indices = std::collections::BTreeMap::new();
     for (record_index, (line, record)) in lines.into_iter().zip(records).enumerate() {
         if skip.contains(&line) {
             continue;
@@ -274,6 +277,7 @@ pub(super) fn register_dependency_records(
             })?;
         register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
         let timing = ReplayExchangeTiming::from_recorded(exchange.duration_ms, exchange.outcome);
+        let mysql_index = mysql.exchanges.len();
         mysql.register_exchange(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -283,7 +287,15 @@ pub(super) fn register_dependency_records(
             status: ReplayExchangeStatus::Available,
             timing,
         });
+        if mysql.exchanges.len() > mysql_index {
+            mysql_record_indices.insert(record_index, mysql_index);
+        }
     }
+    mysql.transaction_equivalence.install(
+        transaction_plans,
+        &mysql_record_indices,
+        &mysql.exchanges,
+    );
     redis.pubsub.validate_links(source, case_id)?;
     Ok(())
 }
