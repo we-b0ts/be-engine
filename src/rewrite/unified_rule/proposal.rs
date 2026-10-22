@@ -1,4 +1,4 @@
-//! Merge new rules and append proven relationships without replacing existing owners.
+//! Extend proven relationships without replacing existing owners or prior proofs.
 use crate::policy::{NativeEffect, PolicyRule, TrafficPolicy};
 use anyhow::{Result, ensure};
 
@@ -11,7 +11,7 @@ pub(super) fn merge(document: &mut TrafficPolicy, rules: Vec<PolicyRule>) -> Res
             }
             ensure!(
                 extends_relationships(current, &rule),
-                "existing rule ID changes scope, capture, contract or prior proof; only additive identity references or read_back declarations of the same rule are supported. Preserve the existing rule and put new Source proof on each appended relationship"
+                "existing rule ID changes scope, capture, contract or prior proof; only additive identity references, read_back declarations or a separately proven finite read_back to state_epochs upgrade are supported. Preserve the existing rule and put new Source proof on each added permission"
             );
             *current = rule;
         } else {
@@ -29,11 +29,24 @@ fn extends_relationships(current: &PolicyRule, proposed: &PolicyRule) -> bool {
     let mut base = proposed.clone();
     match (&current.effect, &mut base.effect) {
         (NativeEffect::Identity(old), NativeEffect::Identity(new)) => {
+            let read_extension = new.read_back.len() >= old.read_back.len()
+                && old.read_back.iter().zip(&new.read_back).all(|(old, new)| {
+                    if old == new {
+                        return true;
+                    }
+                    let mut previous = new.clone();
+                    // The typed compiler admits state_epochs only on an
+                    // unconditional raw SET-to-GET identity. This merge
+                    // preserves that read's original contract and proof.
+                    old.contract.state_epochs.is_none()
+                        && previous.contract.state_epochs.take().is_some()
+                        && &previous == old
+                });
             if !new.references.starts_with(&old.references)
-                || !new.read_back.starts_with(&old.read_back)
+                || !read_extension
                 || !new.mysql_read_back.starts_with(&old.mysql_read_back)
                 || (new.references.len() == old.references.len()
-                    && new.read_back.len() == old.read_back.len()
+                    && new.read_back == old.read_back
                     && new.mysql_read_back.len() == old.mysql_read_back.len())
             {
                 return false;
@@ -157,5 +170,58 @@ mod tests {
             .unwrap()
             .push(json!({"operation":"GET","write_operation":"SET","argument_index":1}));
         assert!(merge(&mut installed, document(combined).rules).unwrap());
+    }
+
+    #[test]
+    fn finite_read_back_upgrades_only_add_the_state_proof_and_cannot_reverse_it() {
+        let prior = json!({"id":"block","match":{"api":"GET /tasks","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
+            "operation":"SET","key":{"kind":"exact","value":"current:7"}},
+            "effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1},
+                "references":[{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0}}],
+                "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1,
+                    "proof":{"source":"source.py:2","fact":"Source reads the identity written to the same key"}}]},
+            "proof":{"source":"source.py:1","fact":"Source writes a generated identity"}});
+        let mut proposed = prior.clone();
+        proposed["effect"]["read_back"][0]["state_epochs"] = json!({
+            "source":"source.py:3","fact":"Repeated GETs observe the current identity until SET or DEL"});
+        let baseline = document(prior.clone());
+        let mut installed = baseline.clone();
+        assert!(merge(&mut installed, document(proposed.clone()).rules).unwrap());
+        assert!(!merge(&mut installed, document(proposed.clone()).rules).unwrap());
+        let mut combined = proposed.clone();
+        combined["effect"]["references"].as_array_mut().unwrap().push(json!({
+            "contract":{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"}},
+            "proof":{"source":"source.py:4","fact":"The completed SQL result refers to the captured identity"}}));
+        assert!(merge(&mut baseline.clone(), document(combined.clone()).rules).unwrap());
+        for change in 0..8 {
+            let mut bad = combined.clone();
+            match change {
+                0 => bad["match"]["api"] = json!("GET /other"),
+                1 => bad["effect"]["capture"]["index"] = json!(2),
+                2 => bad["proof"]["fact"] = json!("changed capture proof"),
+                3 => bad["effect"]["read_back"][0]["proof"]["fact"] = json!("changed read proof"),
+                4 => bad["effect"]["read_back"][0]["operation"] = json!("LRANGE"),
+                5 => bad["effect"]["read_back"][0]["json_pointers"] = json!(["/id"]),
+                6 => bad["effect"]["references"] = json!([]),
+                _ => {
+                    bad["effect"]["references"][0]["resource"]["endpoint"] =
+                        json!("other.test:6379")
+                }
+            }
+            let mut current = baseline.clone();
+            assert!(
+                merge(&mut current, document(bad).rules).is_err(),
+                "change {change}"
+            );
+            assert_eq!(current, baseline);
+        }
+        for mut bad in [prior, proposed] {
+            if let Some(proof) = bad["effect"]["read_back"][0].get_mut("state_epochs") {
+                proof["fact"] = json!("replacement state proof");
+            }
+            let mut current = installed.clone();
+            assert!(merge(&mut current, document(bad).rules).is_err());
+            assert_eq!(current, installed);
+        }
     }
 }

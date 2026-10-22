@@ -15,6 +15,13 @@ Put the new read proof
 on its declaration rather than changing the existing write proof. No declaration
 means no change to existing delivery behavior.
 
+An installed raw SET identity read-back can also gain an independent
+`state_epochs` proof through the same transaction. Preserve the existing read
+declaration and its proof; add only the new state observation permission.
+Replacing or removing an installed state proof remains unsupported. Complete
+Source validation and fresh Replay are required for this one-way upgrade; see
+[state observations](redis-state-observations.md).
+
 For an `identity` rule capturing SET argument 1 as a raw block ID:
 
 ```yaml

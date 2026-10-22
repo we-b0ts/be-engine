@@ -28,6 +28,13 @@ user and bounded key selector. Original write capture, references and read-back
 proof remain in place. Only raw SET identity to GET supports `state_epochs`;
 JSON fields and list reads keep their finite contracts.
 
+The ordinary rule plan/apply transaction accepts this one-way addition to an
+already installed finite read-back declaration. Keep the declaration in its
+original position and preserve its write/read contract and proof. Put the new
+state observation proof under `state_epochs`; replacing or removing an installed
+state proof is rejected. Planning checks the complete Source trace again and
+Apply requires fresh genuine Replay.
+
 Source must start absent and prove every GET
 equals the latest SET value or nil after DEL. Only unconditional SET, GET,
 successful DEL/UNLINK and positive TTL refreshes are supported on these keys.

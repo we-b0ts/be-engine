@@ -74,3 +74,105 @@ fn read_back_public_plan_apply_requires_source_read_proof_and_fresh_target_repla
         assert_eq!(fs::read(&path).unwrap(), original);
     }
 }
+
+#[test]
+fn finite_read_back_state_epoch_upgrade_uses_complete_source_and_normal_plan_apply_guards() {
+    for scenario in [
+        "valid",
+        "stale",
+        "wrong-value",
+        "before-capture",
+        "no-positive-read",
+        "expiry-observer",
+        "missing-proof",
+    ] {
+        let mut prior = proposal();
+        prior["effect"]["read_back"][0]["proof"] = json!({
+            "source":"session.py:50","fact":"The same-key GET reads the previously written current identity"});
+        let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, source| {
+            crate::platform::encryption_key::load_or_create(root).unwrap();
+            write(
+                &root.join(".traffic-e2e/policy.yaml"),
+                json!({"format":"traffic-policy/v1","rules":[prior.clone()]}),
+            );
+            let mut events = vec![
+                event(1, "GET", &["current:7"], b"$-1\r\n"),
+                event(2, "SET", &["current:7", "old"], b"+OK\r\n"),
+                event(3, "GET", &["current:7"], b"$3\r\nold\r\n"),
+                event(4, "APPEND", &["content:old", "x"], b":1\r\n"),
+                event(5, "GET", &["current:7"], b"$3\r\nold\r\n"),
+                event(6, "DEL", &["current:7"], b":1\r\n"),
+                event(7, "GET", &["current:7"], b"$-1\r\n"),
+            ];
+            if scenario == "wrong-value" {
+                events[4]["response"] = raw_body(b"$-1\r\n");
+            }
+            if scenario == "before-capture" {
+                events[0]["response"] = raw_body(b"$3\r\nold\r\n");
+            }
+            if scenario == "no-positive-read" {
+                events.retain(|event| !matches!(event["sequence"].as_u64(), Some(3 | 5)));
+            }
+            if scenario == "expiry-observer" {
+                events.push(event(8, "TTL", &["current:7"], b":-2\r\n"));
+            }
+            fs::write(
+                source.join("apis/api/case-1/dependencies.jsonl"),
+                events.iter().map(|e| format!("{e}\n")).collect::<String>(),
+            )
+            .unwrap();
+            vec![]
+        });
+        let mut upgrade = prior.clone();
+        upgrade["effect"]["read_back"][0]["state_epochs"] = json!({
+        "source":"session.py:51","fact":if scenario == "missing-proof" {""} else {
+            "Scheduling changes repeated GET counts; SET and DEL exclusively define the same Case-owned identity state"
+        }});
+        write(&fixture.proposal, upgrade);
+        fixture.confirm();
+        let dependencies = fixture
+            .state()
+            .case_source
+            .as_ref()
+            .unwrap()
+            .join("apis/api/case-1/dependencies.jsonl");
+        let original_dependencies = fs::read(&dependencies).unwrap();
+        let original_policy = fs::read(fixture.policy()).unwrap();
+        let planned = fixture.plan();
+        if !matches!(scenario, "valid" | "stale") {
+            assert!(planned.is_err(), "{scenario}");
+            assert_eq!(fs::read(fixture.policy()).unwrap(), original_policy);
+            continue;
+        }
+        let plan = planned.unwrap();
+        let expanded = &plan.traffic_e2e_report["expanded_rules"][0];
+        assert_eq!(expanded["proof"], prior["proof"]);
+        assert_eq!(
+            expanded["effect"]["read_back"][0]["proof"],
+            prior["effect"]["read_back"][0]["proof"]
+        );
+        assert_eq!(
+            expanded["effect"]["read_back"][0]["contract"]["state_epochs"]["source"],
+            "session.py:51"
+        );
+        assert_eq!(
+            plan.traffic_e2e_report["preflight"]["stateful_target_obligations"],
+            json!(["current-block"])
+        );
+        assert_eq!(plan.traffic_e2e_report["verified"], false);
+        if scenario == "stale" {
+            fs::write(
+                &dependencies,
+                format!("{}\n", std::str::from_utf8(&original_dependencies).unwrap()),
+            )
+            .unwrap();
+            assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
+            assert_eq!(fs::read(fixture.policy()).unwrap(), original_policy);
+        } else {
+            let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+            assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
+            assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+            assert_eq!(fs::read(&dependencies).unwrap(), original_dependencies);
+        }
+    }
+}

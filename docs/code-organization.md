@@ -1112,8 +1112,9 @@ explicit repository-wide audit.
   resolves the sole Target-root-relative `project.policy` path.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
-  Its `proposal` child merges new rules and permits only additive read-back
-  declarations on an existing write rule; its scope, contracts and prior proof
+  Its `proposal` child merges new rules, additive identity references/read-back
+  declarations and independently proven one-way finite raw identity read-back
+  upgrades to state observations. Existing scope, contracts and prior proofs
   remain immutable. Preflight and publication retain all ordinary stale checks
   and fresh-Replay obligations for that extension.
   `manifest/primary` freezes each selected Case's original primary-response oracle
