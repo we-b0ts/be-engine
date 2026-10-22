@@ -185,7 +185,9 @@ pub(super) fn register_dependency_records(
     let optional_sessions =
         mysql::optional_session::classify(&records, source, &mut mysql.read_prefixes);
     let transaction_plans =
-        mysql::transaction_equivalence::Registry::prepare(&records, &optional_sessions);
+        mysql
+            .transaction_equivalence
+            .prepare(&records, &optional_sessions, source);
     let mut mysql_record_indices = std::collections::BTreeMap::new();
     for (record_index, (line, record)) in lines.into_iter().zip(records).enumerate() {
         if skip.contains(&line) {

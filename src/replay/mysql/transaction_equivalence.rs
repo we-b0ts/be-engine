@@ -3,6 +3,7 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod source;
+mod source_evidence;
 #[cfg(test)]
 pub(super) mod tests;
 
@@ -13,6 +14,8 @@ pub(in crate::replay) struct Registry {
     members: BTreeMap<usize, (usize, usize)>,
     ends: BTreeMap<usize, (usize, usize)>,
     free_reads: BTreeSet<usize>,
+    global_reads: source_evidence::GlobalReads,
+    rejected_ends: BTreeMap<usize, source::RejectedEnd>,
 }
 
 #[derive(Debug)]
@@ -139,10 +142,15 @@ impl Registry {
     }
 
     pub(in crate::replay) fn prepare(
+        &mut self,
         records: &[crate::replay::dependencies::DependencyRecord],
         optional: &BTreeMap<usize, OptionalSessionExchange>,
+        scope: ReplaySource,
     ) -> Vec<source::Plan> {
-        source::prepare(records, optional)
+        if scope == ReplaySource::Global {
+            self.global_reads.record(records);
+        }
+        source::prepare(records, optional, scope, &self.global_reads)
     }
 
     pub(in crate::replay) fn install(
@@ -153,6 +161,11 @@ impl Registry {
     ) -> Vec<(usize, OptionalSessionExchange)> {
         let mut omissions = Vec::new();
         for plan in plans {
+            for rejected in plan.failed_ends {
+                if let Some(&index) = mapping.get(&rejected.index) {
+                    self.rejected_ends.insert(index, rejected);
+                }
+            }
             let id = self.requirements.len();
             let mut pending_free = Vec::new();
             let mut pending_ends = Vec::new();
@@ -523,6 +536,23 @@ impl Registry {
     }
 
     pub(in crate::replay) fn diagnostic(&self, index: usize) -> Option<Value> {
+        if let Some(rejected) = self.rejected_ends.get(&index) {
+            return Some(serde_json::json!({
+                "kind": "mysql_autocommit_transaction_coverage",
+                "reason": rejected.reason,
+                "source_proof_status": "incomplete",
+                "source_proof_rejection": {
+                    "failure_query_sequence": rejected.failure_query_sequence,
+                    "missing_query_sequences": rejected.missing_query_sequences,
+                    "omitted_missing_query_sequences": rejected.omitted_missing_query_sequences,
+                },
+                "source_transactions": [{
+                    "source_connection_id": rejected.source_connection_id,
+                    "last_query_sequence": rejected.source_query_sequence,
+                    "end": rejected.end,
+                }],
+            }));
+        }
         let r = self.setups.get(&index).copied().or_else(|| {
             self.members
                 .get(&index)

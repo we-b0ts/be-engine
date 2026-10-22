@@ -866,7 +866,16 @@ explicit repository-wide audit.
   boundaries; active-transaction gaps and Global post-read gaps remain strict.
   `replay/mysql/transaction_equivalence/source` separately proves complete
   ordinary implicit read/write transaction segments, their write counts and
-  first-write-through-end windows, retaining unsafe-evidence reasons. Its parent
+  first-write-through-end windows, retaining unsafe-evidence reasons. Its sibling
+  `source_evidence` stores immutable Global ordinary-read identity/status facts,
+  without SQL/result bodies or consumption rights. It can bridge only a Case's
+  pre-write active sequence gap in an established implicit span with complete,
+  unique, continuous same-identity Global reads. Unknown/duplicate facts,
+  unsupported effects, missing status and gaps after the first write remain
+  strict. These facts neither change ownership nor supply Target delivery
+  witnesses. The Source scanner may resume at a later
+  independently known inactive start; earlier rejected spans remain diagnosed
+  and connection-level incompleteness still prevents setup omission. Its parent
   owns connection-local Target BEGIN/end witnesses, ordered finite Source window
   correspondence and delivery-confirmed setup coverage. Multi-write windows
   include every read after the first write, through the actual matching end;

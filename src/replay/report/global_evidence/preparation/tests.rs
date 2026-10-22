@@ -223,7 +223,7 @@ async fn mysql_cleanup_prewarm_imports_the_current_hidden_noop_commit_inventory(
     assert_eq!(portable.visible, 0);
     assert_eq!(
         portable.identity.semantics.as_deref(),
-        Some("mysql-transaction-diagnostics-v5-first-write-through-end")
+        Some("mysql-transaction-diagnostics-v6-source-read-proof")
     );
     let report = temp
         .path()
@@ -249,7 +249,11 @@ async fn mysql_cleanup_prewarm_imports_the_current_hidden_noop_commit_inventory(
 
 #[tokio::test]
 async fn historical_mysql_prewarm_is_skipped_without_invalidating_other_protocols() {
-    for semantics in [None, Some("mysql-transaction-diagnostics-v4".to_owned())] {
+    for semantics in [
+        None,
+        Some("mysql-transaction-diagnostics-v4".to_owned()),
+        Some("mysql-transaction-diagnostics-v5-first-write-through-end".to_owned()),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let (recorder, _, _) = recorded(temp.path(), &[noop_commit()]).await;
         recorder.finish_run().await.unwrap();

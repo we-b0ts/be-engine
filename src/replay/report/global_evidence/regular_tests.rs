@@ -83,7 +83,7 @@ fn historical_identity_keys_survive_and_only_new_mysql_semantics_change_the_key(
         if protocol == "mysql" {
             assert_eq!(
                 current.semantics.as_deref(),
-                Some("mysql-transaction-diagnostics-v5-first-write-through-end")
+                Some("mysql-transaction-diagnostics-v6-source-read-proof")
             );
             assert_ne!(current.key().unwrap(), old_key);
         } else {
@@ -98,6 +98,7 @@ fn new_mysql_visibility_rebuilds_while_historical_report_pages_remain_readable()
         None,
         Some("mysql-transaction-cleanup-v2".to_owned()),
         Some("mysql-transaction-diagnostics-v4".to_owned()),
+        Some("mysql-transaction-diagnostics-v5-first-write-through-end".to_owned()),
     ] {
         let temporary = tempfile::tempdir().unwrap();
         let report = temporary.path().join("report.json");

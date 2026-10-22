@@ -292,9 +292,10 @@ exchanges as continuity evidence, although they are not required business
 dependencies. A complete successful, zero-effect PING with unchanged transaction
 status preserves that proof, including inside an active read transaction.
 Unknown gaps inside active transactions remain strict.
-The check is scoped to one immutable dependency file and does not infer the
-contents of a gap or join evidence across cases/Global. SQL effect checks share
-the load-local cache used for rollback classification.
+This read-only setup check is scoped to one immutable dependency file and does
+not infer the contents of a gap or join evidence across cases/Global. The
+write-containing Source proof below has a separate, bounded Global-read bridge.
+SQL effect checks share the load-local cache used for rollback classification.
 
 Optional setup remains matchable and, if omitted, appears separately as
 `allowed_unused_mysql_autocommit_exchanges`; business reads remain required.
@@ -360,14 +361,35 @@ continuity without adding executed business statements. Complete transactions
 containing locking reads or SQL whose effects cannot be classified keep their
 full same-connection boundary; neither prefix trimming nor single-write end
 omission applies. Their diagnostics identify `strict_source_effects`, and their
-write count describes recognized DML only. Active sequence gaps, unknown starts,
-missing status, errors outside the bounded single-UPDATE case above, and
-incomplete or cross-file transaction fragments grant no new compatibility
-exemption and retain required Source controls. A failed ROLLBACK itself is
-always required; the UPDATE exception never hides a failed transaction end.
+write count describes recognized DML only. Unknown starts, missing status,
+errors outside the bounded single-UPDATE case above, and unproven transaction
+fragments grant no new compatibility exemption and retain required Source
+controls. A failed ROLLBACK itself is always required; the UPDATE exception
+never hides a failed transaction end.
 This does not prove arbitrary storage-engine, isolation or session-setting
 equivalence. Existing strict session operations and ordinary SQL/value matching
 remain in force.
+
+Some original ordinary reads can have Global ownership while surrounding
+statements belong to a Case. Replay can use those Global reads only to complete
+the Case's already established implicit Source span across an active sequence
+gap before its first write. Every missing sequence must have one complete,
+successful ordinary Global read on the same recorded connection, with matching
+endpoint/database/username, continuous before/after transaction status and no
+mode change. Duplicate wire
+identities, unknown or absent exchanges, writes, locks, session effects,
+unsupported reads and missing status cannot bridge the gap. No gap after the
+first write can use this bridge, including one containing ordinary Global reads.
+
+The bridge retains only immutable identity/status metadata; it supplies neither
+SQL matching permission nor a Target delivery witness. Global ownership,
+endpoint checks and finite consumption stay unchanged, and the proof itself
+does not consume a Global read or move it into the Case. Case evidence never
+supplies another Case's missing prefix. If an earlier segment is incomplete,
+a later independently known inactive start can establish a separate complete
+transaction. The earlier segment keeps its rejection evidence, and its
+connection-level incompleteness still prevents setup omission; later recovery
+does not repair the missing history.
 
 Each required Target transaction must cover exactly one Source transaction's
 ordered first-write-through-end window. A Source connection's transaction order
@@ -397,9 +419,15 @@ summaries expose
 `diagnostic.kind: mysql_autocommit_transaction_coverage`, a precise rejection
 or pending reason, and covered/total transaction counts. The coordinator's
 `mysql_autocommit_diagnosis` guides Source lifecycle and Target SQLx transaction
-investigation. Missing evidence and passing responses alone grant no exemption
-or engine-gap attribution. Historical reports can receive guidance, but only a
-fresh Replay can establish transaction coverage.
+investigation. Resolve `source_proof_status: incomplete` using its failure and
+missing query sequences before deciding whether Target needs a transaction.
+An unregistered end or absent historical witness does not prove the write count
+or Target status. Once Source proof is complete, compare its required members
+and end with actual Target connection/status witnesses. Do not wrap prefix reads
+or add driver SET statements solely to remove an unused count. Missing evidence
+and passing responses alone grant no exemption or engine-gap attribution.
+Historical reports can receive guidance, but only a fresh Replay can establish
+transaction coverage.
 
 Run the actual-client and focused protocol tests with:
 

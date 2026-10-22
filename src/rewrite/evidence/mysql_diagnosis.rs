@@ -21,7 +21,7 @@ fn transaction_diagnostic(cluster: &Value) -> Option<&Value> {
         .find(|diagnostic| diagnostic["kind"] == "mysql_autocommit_transaction_coverage")
 }
 
-fn recorded_autocommit_off(cluster: &Value) -> bool {
+fn recorded_transaction_control(cluster: &Value) -> bool {
     let signature = &cluster["representative"]["difference"]["expected"]["signature"];
     let sql = signature["sql"].as_str().or_else(|| {
         (signature["sql_summary"]["truncated"] == false)
@@ -29,7 +29,13 @@ fn recorded_autocommit_off(cluster: &Value) -> bool {
             .flatten()
     });
     cluster["reason"] == "unused_recorded"
-        && sql.and_then(crate::mysql::autocommit::assignment) == Some(false)
+        && sql.is_some_and(|sql| {
+            crate::mysql::autocommit::assignment(sql) == Some(false)
+                || matches!(
+                    crate::mysql::sql::normalize(sql).as_str(),
+                    "commit" | "rollback"
+                )
+        })
 }
 
 // A transaction-only witness cannot justify a generated SQL-value rule. A
@@ -85,7 +91,7 @@ pub(super) fn attach(facts: &mut Value) {
                 .get("query_sequence")
                 .filter(|value| !value.is_null())
                 .or_else(|| interval.and_then(|interval| interval.get("last_query_sequence")));
-            (diagnostic.is_some() || recorded_autocommit_off(cluster)).then(|| {
+            (diagnostic.is_some() || recorded_transaction_control(cluster)).then(|| {
                 json!({"cluster_id":cluster["cluster_id"],
                     "reason":cluster["reason"],
                     "connection_id":connection,
@@ -99,13 +105,14 @@ pub(super) fn attach(facts: &mut Value) {
             && unused_clusters(facts).all(|cluster| {
                 cluster["count"] == 1
                     && (transaction_diagnostic(cluster).is_some()
-                        || recorded_autocommit_off(cluster))
+                        || recorded_transaction_control(cluster))
             });
         facts["mysql_autocommit_diagnosis"] = json!({
             "observation":"source_transaction_coverage_not_satisfied",
             "clusters":autocommit,
             "source_checks":[
                 "Inspect the complete Source connection, query sequence and before/after transaction status. A session AUTOCOMMIT=0 assignment persists after COMMIT; identify every complete affected transaction rather than inferring transaction boundaries from HTTP responses or driver names.",
+                "If source_proof_status is incomplete, follow source_proof_rejection.failure_query_sequence and missing_query_sequences (bounded with omitted_missing_query_sequences). Write count and Target status are unknown unless independently present; an unregistered end is not evidence that Target needs BEGIN. Resolve the Source proof first. An original Global ordinary complete read may bridge a pre-write sequence gap only with the same wire connection, identity and continuous status; it retains its Global ownership and consumption requirement. Unknown gaps, unsupported reads and gaps after the first write remain strict. A historical null transaction_evidence likewise proves no write count or Target status.",
                 "Read source_transactions.write_count, first_write_query_sequence, last_query_sequence and end. Writes count SQL executions, including an UPDATE affecting zero rows. For the single-UPDATE rollback exception, inspect single_update_outcome, source_error_code, source_affected_rows and autocommit_eligible; do not infer the application's branch condition. If strict_source_effects is true, write_count counts only recognized DML and does not prove other statements are read-only; retain the full Source transaction. Missing status, active sequence gaps, failures and cross-file fragments do not prove a complete transaction; do not fabricate a write interval from a partial recording."
             ],
             "target_checks":[
@@ -143,7 +150,7 @@ pub(super) fn limitations(facts: &Value) -> Vec<String> {
 pub(super) fn next_step(facts: &Value) -> String {
     let mut step = "Start with the largest endpoint cluster. Execute representative_dependencies_command when present to summarize that case's dependency targets, then select a returned detail_command before proving request or process ownership and response causality in source code.".to_string();
     if facts.get("mysql_autocommit_diagnosis").is_some() {
-        step.push_str(" For MySQL transaction evidence, follow mysql_autocommit_diagnosis: inspect Source write count and first-write-through-end members, then the actual Target socket's transaction status and missing members before changing code or alleging an engine gap.");
+        step.push_str(" For MySQL transaction evidence, follow mysql_autocommit_diagnosis: resolve an incomplete Source proof using its rejected query references first; otherwise inspect Source write count and first-write-through-end members, then the actual Target socket's transaction status and missing members before changing code or alleging an engine gap.");
     } else if unused_clusters(facts).next().is_some() {
         step.push_str(" For unused MySQL calls, follow mysql_unused_diagnosis.source_checks before choosing a rule or reporting an engine gap; include implicit ORM refreshes in the source trace.");
     }
@@ -277,6 +284,93 @@ mod tests {
             facts["mysql_unused_diagnosis"]["source_checks"]
                 .to_string()
                 .contains("ORM")
+        );
+    }
+
+    #[test]
+    fn historical_unused_ends_get_guidance_without_inventing_a_write_interval() {
+        for sql in ["COMMIT", "ROLLBACK"] {
+            let mut facts = json!({"clusters":[{
+                "cluster_id":"end", "protocol":"mysql", "reason":"unused_recorded", "count":1,
+                "representative":{"difference":{"expected":{"signature":{
+                    "connection_id":"source", "query_sequence":91,
+                    "sql_summary":{"preview":sql, "truncated":false}
+                }}}}
+            }]});
+            attach(&mut facts);
+            let evidence = &facts["mysql_autocommit_diagnosis"]["clusters"][0];
+            assert_eq!(evidence["query_sequence"], 91);
+            assert!(evidence["transaction_evidence"].is_null());
+            assert!(
+                facts["mysql_autocommit_diagnosis"]["source_checks"]
+                    .to_string()
+                    .contains("historical null")
+            );
+            assert!(
+                facts["mysql_unused_diagnosis"]["source_checks"]
+                    .to_string()
+                    .contains("Source proof")
+            );
+            assert!(
+                facts["mysql_autocommit_diagnosis"]["required_behavior"]
+                    .to_string()
+                    .contains("without wrapping prefix reads")
+            );
+        }
+    }
+
+    #[test]
+    fn a_truncated_end_preview_cannot_establish_a_transaction_control() {
+        for (sql, truncated) in [("COMMIT", true), ("ROLLBACK TO SAVEPOINT example", false)] {
+            let mut facts = json!({"clusters":[{
+                "cluster_id":"unknown", "protocol":"mysql", "reason":"unused_recorded", "count":1,
+                "representative":{"difference":{"expected":{"signature":{
+                    "sql_summary":{"preview":sql, "truncated":truncated}
+                }}}}
+            }]});
+            attach(&mut facts);
+            assert!(facts.get("mysql_autocommit_diagnosis").is_none());
+        }
+    }
+
+    #[test]
+    fn a_rejected_source_end_guides_proof_repair_without_fabricating_target_evidence() {
+        let rejected = json!({
+            "kind":"mysql_autocommit_transaction_coverage", "reason":"source_sequence_gap",
+            "source_proof_status":"incomplete",
+            "source_proof_rejection":{"failure_query_sequence":90,
+                "missing_query_sequences":[89], "omitted_missing_query_sequences":0},
+            "source_transactions":[{"source_connection_id":"source", "last_query_sequence":91,
+                "end":"commit"}]
+        });
+        let mut facts = json!({"clusters":[{
+            "cluster_id":"rejected", "protocol":"mysql", "reason":"unused_recorded", "count":1,
+            "representative":{"difference":{"expected":{"signature":{"diagnostic":rejected}}}}
+        }]});
+        attach(&mut facts);
+        let cluster = &facts["mysql_autocommit_diagnosis"]["clusters"][0];
+        assert_eq!(cluster["connection_id"], "source");
+        assert_eq!(cluster["query_sequence"], 91);
+        assert_eq!(cluster["transaction_evidence"], rejected);
+        let checks = facts["mysql_autocommit_diagnosis"]["source_checks"].to_string();
+        for text in [
+            "Source proof first",
+            "unknown",
+            "Global ownership",
+            "after the first write",
+        ] {
+            assert!(checks.contains(text), "missing {text}");
+        }
+        assert!(next_step(&facts).contains("rejected query references first"));
+        assert!(
+            cluster["transaction_evidence"]["source_transactions"][0]
+                .get("write_count")
+                .is_none()
+        );
+        assert!(
+            cluster["transaction_evidence"]["source_transactions"][0]
+                .get("target_status_before")
+                .is_none()
         );
     }
 
