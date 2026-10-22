@@ -23,6 +23,15 @@ Discovery drafts prefill observed selectors and request missing Source facts;
 a candidate never authorizes its own proof. PB requires actual typed schema
 bindings. Do not guess clock units, a timezone, a key source or random permissions.
 
+Discovery is paged independently from complete plan coverage. Follow
+`pagination.next_page.command` for omitted candidate/Source-binding summaries
+and `pagination.next_scan.command` for remaining observations, including long
+SSE streams. Counts describe one bounded scan window. Inspect the separate
+`source_entry.binding_count`/`summary_omitted` and explicit
+`bounded_analysis.nonresumable_limits`; an empty page does not prove a missing
+capability. Continuations reject an obsolete active issue. Supported dependency
+capability hints still require independent Source conclusions and full planning.
+
 For SSE, inspect discovery's `source_entry.bindings` for exact event/type slots
 even if there is no mechanical candidate. Require the worker's Source clock or
 identity generator/lifetime proof and include every referring event/pointer,

@@ -1130,10 +1130,16 @@ explicit repository-wide audit.
   owns bounded case-local identity bijections. Policy SSE slots retain separate
   event/body field ownership. `unified_rule/discovery/primary` owns authenticated
   primary-response observations, scheduled before dependencies for response issues
-  within the shared discovery budget. Its `interaction` sibling supplies bounded
+  within the shared discovery budget. Its `page` sibling owns bounded scan and
+  summary positions; `evidence/unified_discovery` binds continuation commands
+  and evidence identities to the active issue. Its `interaction` sibling supplies bounded
   private SSE slot/time drafts and explicit authoring guidance without inferring
   identity authority. Public result observations retain private-field
   unavailability for virtual SSE pointers.
+  `evidence/rule_guidance/stateful_dependencies` projects supported mechanisms
+  from bounded dependency operations and Source binding metadata. It supplies
+  proof requirements and ordinary plan commands without granting permission or
+  changing matching, ownership or consumption.
   `preflight/{api,dependency,session,source}` delegates
   payload, native envelope, stateful Source trace and whole-recording proof to
   their existing owners. Whole-recording Source effects explicitly enumerate

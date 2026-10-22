@@ -175,12 +175,8 @@ pub(super) fn api_for_evidence_id(
     evidence_id: &str,
 ) -> Option<String> {
     slices(state).find_map(|slice| {
-        super::evidence::commands(target_root, &slice)
-            .into_iter()
-            .any(|command| {
-                super::evidence::query(target_root, &slice, &command.query_id)
-                    .is_ok_and(|report| report.evidence_id == evidence_id)
-            })
+        super::evidence::report_for_id(target_root, &slice, evidence_id)
+            .is_some()
             .then(|| slice.api.clone())
     })
 }

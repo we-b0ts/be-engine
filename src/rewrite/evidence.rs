@@ -25,6 +25,7 @@ mod overview;
 pub(super) mod policy_freshness;
 mod response_body;
 mod rule_guidance;
+mod unified_discovery;
 pub(super) use rule_guidance::supports_response_body_codec;
 use rule_guidance::{applicable_rule_planners, rule_hints};
 
@@ -83,6 +84,10 @@ fn requested_query(
             (query_identifier(state, issue, kind, 0) == requested_id).then_some((kind, 0))
         })
         .or_else(|| {
+            unified_discovery::parse(state, issue, requested_id)
+                .map(|_| (QUERY_UNIFIED_RULE_CANDIDATES, 0))
+        })
+        .or_else(|| {
             case_response_difference_offset(state, issue, requested_id)
                 .map(|offset| (QUERY_CASE_RESPONSE_DIFFERENCES, offset))
         })
@@ -123,17 +128,17 @@ pub(super) fn query(
         (http_requests::facts(target_root, state, issue, requested_id)?,
             vec!["Retained candidates and raw body differences do not prove a successful match, response causality, or authorization for a rule.".into()],
             "Follow candidates_query, differences_query, and source_body_query/target_body_query. Body pages return exact captured bytes; concatenate them by offset and verify sha256. Runtime rule traces retain their original policy fingerprint; unavailable historical traces require fresh Replay.".into())
+    } else if kind == QUERY_UNIFIED_RULE_CANDIDATES {
+        (unified_discovery::facts(target_root, state, issue, requested_id)?,
+            vec!["A mechanical draft requires Source code proof and full selected evidence validation. Derived delivery never proves independent Target response behavior.".into()],
+            "Inspect draft_rule or Source bindings. Follow pagination.next_page for omitted summaries and pagination.next_scan for remaining observations. Fill Source proof and use the returned unified planner; bounded discovery never proves complete coverage.".into())
     } else {
         facts(target_root, state, issue, kind, offset)?
     };
     if let Some(refresh) = policy_freshness::attach(target_root, state, issue, kind, &mut facts)? {
         next_step = refresh;
     }
-    let evidence_id = format!(
-        "evidence-{}",
-        fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
-            .trim_start_matches("fnv1a64:")
-    );
+    let evidence_id = unified_discovery::evidence_id(requested_id, &facts)?;
     let mut planners =
         applicable_rule_planners(target_root, issue.kind, kind, &facts, &evidence_id);
     if kind == QUERY_UNIFIED_RULE_CANDIDATES
@@ -176,6 +181,20 @@ pub(super) fn query(
     })
 }
 
+pub(super) fn report_for_id(
+    root: &Path,
+    state: &RewriteState,
+    evidence_id: &str,
+) -> Option<RewriteEvidenceReport> {
+    if evidence_id.starts_with("evidence-discovery:") {
+        return unified_discovery::report_for_id(root, state, evidence_id);
+    }
+    commands(root, state).into_iter().find_map(|command| {
+        let report = query(root, state, &command.query_id).ok()?;
+        (report.evidence_id == evidence_id).then_some(report)
+    })
+}
+
 fn has_redis_bootstrap_traffic(facts: &Value) -> bool {
     facts
         .pointer("/bootstrap/protocols")
@@ -210,9 +229,6 @@ fn facts(
     offset: usize,
 ) -> Result<(Value, Vec<String>, String)> {
     match kind {
-        QUERY_UNIFIED_RULE_CANDIDATES => Ok((super::unified_rule::discovery::facts(target_root,state)?,
-            vec!["A mechanical draft requires Source code proof and full selected evidence validation. Derived delivery never proves independent Target response behavior.".into()],
-            "Inspect draft_rule for observed unordered/time differences, fill proof.source and proof.fact from Source, and run the returned unified rule planner. An explicit Source field may also be proposed directly; apply always requires fresh genuine Replay.".into())),
         QUERY_JWT_TIME_VALIDITY => Ok((super::jwt_rule::evidence_facts(target_root, state)?,
             vec!["Unverified JWT time claims and HTTP 401 do not alone prove authentication causality or rule applicability.".into()],
             "For time-drift candidates, inspect signing_key_discovery for target variable names, startup mount paths/access modes, existing bindings and discovery commands. Trace the source/target JWT path, configuration precedence and expiration leeway, then use the returned rule planner with the proven signing-key source. Plan/apply verifies original signatures.".into())),

@@ -20,6 +20,13 @@ discovery query and capability metadata. Follow its returned command. Inspect
 immutable Source code and the exact Source/Target witnesses before proposing a
 rule; a mechanically explainable difference is not a semantic justification.
 
+Follow discovery's `pagination.next_page.command` for omitted candidate/binding
+summaries and `pagination.next_scan.command` for remaining observations. Counts
+describe the current bounded scan window; Source bindings have separate
+`binding_count` and `summary_omitted` fields. Explicit nonresumable limits remain
+under `bounded_analysis.nonresumable_limits`. Missing drafts are not proof of a
+missing capability, and supported mechanism hints never supply Source proof.
+
 The coordinator accepts one rule, a list, or a complete typed document:
 
 ```bash

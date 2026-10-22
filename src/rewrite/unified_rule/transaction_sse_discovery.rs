@@ -9,6 +9,9 @@ use crate::{
     rewrite::model::RewriteIssueKind,
 };
 
+#[path = "transaction_sse_discovery/paging.rs"]
+mod paging_tests;
+
 fn install_dependencies(fixture: &Fixture) {
     let case = options(fixture).request.parent().unwrap().to_owned();
     let mut report: Value =

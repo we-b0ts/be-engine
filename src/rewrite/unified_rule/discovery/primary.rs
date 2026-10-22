@@ -4,16 +4,39 @@ use super::*;
 pub(super) fn observe(
     drafts: &mut Drafts,
     assertions: &Path,
-    api: &str,
+    state: &RewriteState,
     schemas: Option<&CompiledPolicy>,
-) -> Result<()> {
+    cursor: &mut Cursor,
+) -> Result<bool> {
     let assertions: Value = serde_json::from_slice(&fs::read(assertions)?)?;
-    for case in assertions["cases"].as_array().into_iter().flatten() {
+    let representative = state
+        .active_issue
+        .as_ref()
+        .and_then(|issue| issue.representative.as_ref())
+        .map(|case| case.case_id.as_str());
+    let mut cases = assertions["cases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    cases.sort_by_key(|case| {
+        if case["case_id"].as_str() == representative && representative.is_some() {
+            0
+        } else if case["response"]["passed"] == false || case["response"]["status"] == "failed" {
+            1
+        } else {
+            2
+        }
+    });
+    for (case_index, case) in cases.into_iter().enumerate().skip(cursor.primary_case) {
         if drafts.observations >= OBSERVATION_LIMIT {
             drafts.limited = true;
-            break;
+            return Ok(false);
         }
         drafts.observations += 1;
+        let event_offset = cursor.primary_event;
+        cursor.primary_case = case_index + 1;
+        cursor.primary_event = 0;
         let summary = &case["response"];
         let (Some(expected), Some(request)) = (
             summary["expected_response"].as_str(),
@@ -27,14 +50,14 @@ pub(super) fn observe(
             .flatten()
             .any(|path| fs::metadata(path).map_or(true, |m| m.len() > 4 * 1024 * 1024))
         {
-            drafts.limited = true;
+            drafts.limit("primary_payload_bytes");
             continue;
         }
         let mut expected_value: Value = serde_json::from_slice(&fs::read(expected)?)?;
         if crate::interaction::private::decrypt_output(&mut expected_value, Path::new(expected))
             .is_err()
         {
-            drafts.limited = true;
+            drafts.limit("private_primary_evidence");
             continue;
         }
         let actual: Result<Option<Value>> = actual
@@ -45,14 +68,14 @@ pub(super) fn observe(
             })
             .transpose();
         let Ok(actual) = actual else {
-            drafts.limited = true;
+            drafts.limit("private_primary_evidence");
             continue;
         };
         let mut request_value: Value = serde_json::from_slice(&fs::read(request)?)?;
         if crate::interaction::private::decrypt_request(&mut request_value, Path::new(request))
             .is_err()
         {
-            drafts.limited = true;
+            drafts.limit("private_primary_evidence");
             continue;
         }
         let request = request_value;
@@ -67,13 +90,18 @@ pub(super) fn observe(
             source_pair = pair;
         }
         if !source_pair.body_available {
-            interaction::observe(
+            if let Some(next_event) = interaction::observe(
                 drafts,
                 &source_pair,
-                api,
+                &state.api,
                 case["case_id"].as_str().unwrap_or("api-response"),
                 schemas,
-            )?;
+                event_offset,
+            )? {
+                cursor.primary_case = case_index;
+                cursor.primary_event = next_event;
+                return Ok(false);
+            }
             continue;
         }
         let source = source_pair.source;
@@ -83,7 +111,7 @@ pub(super) fn observe(
                 crate::replay::response_payload_pair(&request, &expected, Some(actual)).ok()
             })
             .and_then(|pair| pair.target);
-        let base = json!({"surface":"api.response","match":{"api":api},"slot":"body"});
+        let base = json!({"surface":"api.response","match":{"api":state.api},"slot":"body"});
         let clocks = AnchorClocks {
             case: crate::value_contract::time::ClockPair {
                 source: request["timestamp"].as_str().and_then(|s| s.parse().ok()),
@@ -104,5 +132,5 @@ pub(super) fn observe(
             None,
         )?;
     }
-    Ok(())
+    Ok(true)
 }

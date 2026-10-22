@@ -4,6 +4,7 @@ use super::*;
 mod generated_values;
 mod http_client_metadata;
 mod http_header_timestamp;
+mod stateful_dependencies;
 pub(super) use generated_values::has_response_jwt;
 
 pub(super) fn http_header_timestamp_candidates(facts: &Value) -> Vec<Value> {
@@ -54,6 +55,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         return vec![hint];
     }
     let mut hints = generated_values::hints(root, query, facts);
+    hints.extend(stateful_dependencies::hints(root, query, facts));
     let mut add = |capability: &str, rule: &str, instruction: &str| {
         hints.push(RewriteRuleHint {
         capability: capability.into(), rule: rule.into(),
@@ -216,6 +218,9 @@ pub(super) fn applicable_rule_planners(
         return vec![];
     }
     let mut planners = generated_values::planners(root, issue, query, facts, evidence);
+    planners.extend(stateful_dependencies::planners(
+        root, issue, query, facts, evidence,
+    ));
     let mut add = |kind: &str, capability: &str| {
         planners.push(RewriteApplicableRulePlanner {
             kind: kind.into(),

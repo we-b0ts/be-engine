@@ -34,6 +34,24 @@ their old configuration/commands are retired. Production loaders and authoring
 APIs do not accept old version 1/2/3 policy documents or split file layouts.
 
 Workers discover bounded drafts and missing Source proof through current evidence.
+Discovery prioritizes the representative and failed response Cases. Each scan
+window has its own observation and JSON-node budgets; candidate and Source
+binding counts describe that window, not complete recording coverage. Follow
+`pagination.next_page.command` for omitted candidate/binding summaries and
+`pagination.next_scan.command` for remaining primary/dependency observations.
+The latter alternates surface priority and can resume within a long SSE stream.
+`source_entry.binding_count` and `source_entry.summary_omitted` report bindings
+separately from mechanical candidates. Nonresumable payload, authentication,
+Source-cache or JSON traversal limits remain explicit under
+`bounded_analysis.nonresumable_limits`; paging cannot make those observations
+available. Continuation commands are bound to the active issue and reject stale
+queries. Empty candidates do not establish a missing engine capability.
+
+Bounded dependency operations also expose supported APPEND, finite nil-read
+commutation, expiry-refresh and Redis/MySQL read-back mechanisms with their
+Source proof requirements. These hints identify capabilities to investigate;
+they never authorize changed values, ordering or call counts.
+
 The coordinator proposes one record or a rule list:
 
 ```text

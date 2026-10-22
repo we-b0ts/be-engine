@@ -111,14 +111,9 @@ fn plan(
         ),
         "unified value rules require response or dependency evidence"
     );
-    for command in evidence::commands(root, state) {
-        if let Ok(report) = evidence::query(root, state, &command.query_id)
-            && report.evidence_id == options.evidence_id
-        {
-            evidence::policy_freshness::ensure_plannable(&report)?;
-            break;
-        }
-    }
+    let evidence = evidence::report_for_id(root, state, &options.evidence_id)
+        .context("rule evidence is stale or unavailable")?;
+    evidence::policy_freshness::ensure_plannable(&evidence)?;
     if let Some(record) = state.rule_plan.as_ref().and_then(|p| p.unified.as_ref()) {
         record.ensure_current(root, state)?;
     }

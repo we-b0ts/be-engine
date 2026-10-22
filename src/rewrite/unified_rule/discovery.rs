@@ -15,8 +15,11 @@ use crate::{
     policy_evidence::{TargetRole, WitnessManifest},
     value_contract::json::{AnchorClocks, Field},
 };
+mod dependency;
 mod interaction;
+mod page;
 mod primary;
+pub(in crate::rewrite) use page::Cursor;
 
 const LIMIT: usize = 20;
 const OBSERVATION_LIMIT: usize = 256;
@@ -32,9 +35,15 @@ struct Drafts {
     limited: bool,
     entries: Vec<Value>,
     entry_ids: BTreeSet<String>,
+    summary_offset: usize,
+    nonresumable_limits: BTreeSet<&'static str>,
 }
 
-pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Value> {
+pub(in crate::rewrite) fn facts(
+    root: &Path,
+    state: &RewriteState,
+    cursor: Cursor,
+) -> Result<Value> {
     let evidence = crate::resolve_e2e_response_rule_evidence(
         crate::E2eRunContext {
             target_root: root.into(),
@@ -52,194 +61,73 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
         .cloned()
         .map(serde_json::from_value::<WitnessManifest>)
         .transpose()?;
-    let mut drafts = Drafts::default();
-    let mut source_events = BTreeMap::new();
-    let mut source_bytes = 0_u64;
     let (_, project) = crate::e2e_run::resolve_project(root)?;
     let schemas = crate::policy::parse_policy(&fs::read_to_string(project.replay_policy)?)
         .ok()
         .map(|policy| crate::policy::compile_policy(&policy))
         .transpose()?;
-    let response_first = state
-        .active_issue
-        .as_ref()
-        .is_some_and(|issue| issue.kind == super::super::model::RewriteIssueKind::Response);
-    if response_first {
-        primary::observe(
+    let mut next = cursor;
+    let mut drafts = Drafts {
+        summary_offset: cursor.summary,
+        ..Default::default()
+    };
+    let (primary_done, dependency_done) = if cursor.primary_first {
+        let primary_done = primary::observe(
             &mut drafts,
             &evidence.assertions,
-            &state.api,
+            state,
             schemas.as_ref(),
+            &mut next,
         )?;
-    }
-    if let Some(manifest) = &manifest
-        && manifest.complete
-        && manifest.sealed
-    {
-        let private = crate::policy_evidence::verify(&evidence.replay, manifest)?;
-        for entry in manifest.witness_entries()? {
-            if drafts.observations >= OBSERVATION_LIMIT {
-                drafts.limited = true;
-                break;
-            }
-            let witness = entry?.expand()?;
-            let witness = witness.as_ref();
-            drafts.observations += 1;
-            let case = report["cases"].as_array().and_then(|items| {
-                items
-                    .iter()
-                    .find(|c| c["case_id"] == witness.metadata.source.case_id)
-            });
-            let Some(directory) = case.and_then(|c| c["case_dir"].as_str()) else {
-                continue;
-            };
-            crate::policy_evidence::verify_case_clock(witness, &report)?;
-            let (source, target) =
-                crate::policy_evidence::read(&private, witness, Path::new(directory))?;
-            let Some(resource) = &witness.metadata.resource else {
-                continue;
-            };
-            if !source_events.contains_key(directory) {
-                let path = Path::new(directory).join("dependencies.jsonl");
-                let size = fs::metadata(&path)?.len();
-                let events = if size <= 16 * 1024 * 1024
-                    && source_bytes.saturating_add(size) <= SOURCE_CACHE_LIMIT
-                {
-                    source_bytes += size;
-                    BufReader::new(fs::File::open(path)?)
-                        .lines()
-                        .map(|line| -> Result<Option<Value>> {
-                            let line = line?;
-                            if line.trim().is_empty() {
-                                Ok(None)
-                            } else {
-                                Ok(Some(serde_json::from_str(&line)?))
-                            }
-                        })
-                        .collect::<Result<Vec<_>>>()?
-                        .into_iter()
-                        .flatten()
-                        .collect()
-                } else {
-                    drafts.limited = true;
-                    Vec::new()
-                };
-                source_events.insert(directory.to_owned(), events);
-            }
-            let identity_present = if resource.protocol == Protocol::Http {
-                witness.metadata.source.exchange_id.is_some()
-            } else {
-                witness.metadata.source.connection_id.is_some()
-                    && witness.metadata.source.sequence.is_some()
-            };
-            let event = source_events[directory].iter().find(|event| {
-                super::preflight::dependency::protocol(event) == Some(resource.protocol)
-                    && if let Some(id) = &witness.metadata.source.exchange_id {
-                        event["id"] == *id
-                    } else {
-                        event["connection_id"].as_str()
-                            == witness.metadata.source.connection_id.as_deref()
-                            && (if resource.protocol == Protocol::Mysql {
-                                event["query_sequence"].as_u64()
-                            } else {
-                                event["sequence"].as_u64()
-                            }) == witness.metadata.source.sequence
-                    }
-                    && super::preflight::dependency::source_witness(
-                        witness.metadata.surface,
-                        event,
-                        Path::new(directory),
-                    )
-                    .is_ok_and(|bytes| {
-                        crate::policy_evidence::digest(&bytes) == witness.source_sha256
-                    })
-            });
-            let Some(event) = event else {
-                continue;
-            };
-            let independent = identity_present
-                && witness.metadata.target_role == TargetRole::IndependentTargetObservation;
-            if witness
-                .metadata
-                .resource
-                .as_ref()
-                .is_some_and(|r| r.protocol == Protocol::Mysql)
-            {
-                drafts.sql_entry(
-                    event,
-                    &source,
-                    target.as_deref().filter(|_| independent),
-                    witness,
-                    state,
-                    schemas.as_ref(),
-                )?;
-                continue;
-            }
-            let values =
-                super::preflight::dependency::values(witness.metadata.surface, event, &source);
-            let Ok(values) = values else {
-                continue;
-            };
-            let actual = if independent {
-                target.as_ref().and_then(|target| {
-                    super::preflight::dependency::values(witness.metadata.surface, event, target)
-                        .ok()
-                })
-            } else {
-                None
-            };
-            for (index, (key, value)) in values.into_iter().enumerate() {
-                let Some(key) = std::str::from_utf8(&key).ok() else {
-                    continue;
-                };
-                let mut base = json!({"surface":witness.metadata.surface,"match":{"api":state.api,
-                    "resource":witness.metadata.resource,"operation":witness.metadata.operation},"slot":witness.metadata.slot});
-                if witness
-                    .metadata
-                    .resource
-                    .as_ref()
-                    .is_some_and(|r| r.protocol == Protocol::Http)
-                {
-                    base["match"]["path"] = json!(
-                        event["uri"]
-                            .as_str()
-                            .and_then(|uri| uri.parse::<hyper::Uri>().ok())
-                            .map(|uri| uri.path().to_owned())
-                            .unwrap_or_default()
-                    );
-                } else {
-                    base["match"]["key"] = json!({"exact":key});
-                }
-                drafts.observe(
-                    &value,
-                    actual
-                        .as_ref()
-                        .and_then(|a| a.get(index))
-                        .map(|(_, v)| v.as_slice()),
-                    base,
-                    &witness.id,
-                    witness.metadata.clocks.comparison(),
-                    schemas.as_ref(),
-                    None,
-                )?;
-            }
+        let dependency_done = dependency::observe(
+            &mut drafts,
+            &evidence.replay,
+            &report,
+            manifest.as_ref(),
+            state,
+            schemas.as_ref(),
+            &mut next,
+        )?;
+        (primary_done, dependency_done)
+    } else {
+        let dependency_done = dependency::observe(
+            &mut drafts,
+            &evidence.replay,
+            &report,
+            manifest.as_ref(),
+            state,
+            schemas.as_ref(),
+            &mut next,
+        )?;
+        let primary_done = primary::observe(
+            &mut drafts,
+            &evidence.assertions,
+            state,
+            schemas.as_ref(),
+            &mut next,
+        )?;
+        (primary_done, dependency_done)
+    };
+    let next_page = drafts.has_summary_page().then(|| {
+        Cursor {
+            summary: cursor.summary + LIMIT,
+            ..cursor
         }
-    }
-    if !response_first {
-        primary::observe(
-            &mut drafts,
-            &evidence.assertions,
-            &state.api,
-            schemas.as_ref(),
-        )?;
-    }
+        .encode()
+    });
+    let next_scan = (!primary_done || !dependency_done).then(|| {
+        next.summary = 0;
+        next.primary_first = !cursor.primary_first;
+        next.encode()
+    });
     let total = drafts.seen.len();
     Ok(
         json!({"format":"traffic-policy/v1","api":state.api,"candidates":drafts.values,
-        "observations_examined":drafts.observations,"json_nodes_examined":drafts.examined,"candidate_count":total,"summary_omitted":total.saturating_sub(LIMIT),
-        "bounded_analysis":{"scan_order":if response_first { ["api.response", "dependency"] } else { ["dependency", "api.response"] },"limited":drafts.limited,"observation_limit":OBSERVATION_LIMIT,"node_limit":NODE_LIMIT,"payload_limit_bytes":4 * 1024 * 1024,"source_cache_limit_bytes":SOURCE_CACHE_LIMIT,"complete_coverage":false},
+        "observations_examined":drafts.observations,"json_nodes_examined":drafts.examined,"candidate_count":total,"summary_omitted":total.saturating_sub(drafts.values.len()),
+        "pagination":{"scope":"bounded_scan_window","summary_offset":cursor.summary,"summary_limit":LIMIT,"scan_remaining":!primary_done || !dependency_done,"next_page_cursor":next_page,"next_scan_cursor":next_scan},
+        "bounded_analysis":{"scan_order":if cursor.primary_first { ["api.response", "dependency"] } else { ["dependency", "api.response"] },"limited":drafts.limited || drafts.summary_limited(),"summary_limited":drafts.summary_limited(),"observation_limit":OBSERVATION_LIMIT,"node_limit":NODE_LIMIT,"payload_limit_bytes":4 * 1024 * 1024,"source_cache_limit_bytes":SOURCE_CACHE_LIMIT,"complete_coverage":false,"nonresumable_limits":drafts.nonresumable_limits},
         "coverage":manifest.as_ref().map(|m| json!({"sealed":m.sealed,"complete":m.complete,"omitted":m.omitted,"recorded":m.recorded})),
-        "source_entry":{"bindings":drafts.entries,"requires":["an explicit surface and resource/operation/value slot", "a typed logical pointer (PB requires explicit numeric wire path and field type)", "Source file:line and the proven ordering or time relation"],
+        "source_entry":{"binding_count":drafts.entry_ids.len(),"summary_omitted":drafts.entry_ids.len().saturating_sub(drafts.entries.len()),"bindings":drafts.entries,"requires":["an explicit surface and resource/operation/value slot", "a typed logical pointer (PB requires explicit numeric wire path and field type)", "Source file:line and the proven ordering or time relation"],
             "instruction":"A Source-proven field may be proposed directly even when no observed mechanism draft is available. Draft discovery is bounded and never coverage."},
         "plan":super::super::action::command(root,vec!["rule".into(),"plan".into(),"--file".into(),"<rule.yaml>".into(),"--evidence".into(),"<evidence-id>".into()],vec![]),
         "requires_genuine_replay":true,"does_not_prove":"Observed permutations or timestamp shifts do not prove Source intent, ownership, sharing, or successful Replay. Complete Source inventory and all selected fields are checked by plan."}),
@@ -247,6 +135,10 @@ pub(in crate::rewrite) fn facts(root: &Path, state: &RewriteState) -> Result<Val
 }
 
 impl Drafts {
+    fn limit(&mut self, reason: &'static str) {
+        self.limited = true;
+        self.nonresumable_limits.insert(reason);
+    }
     #[allow(clippy::too_many_arguments)] // The bounded observation retains its evidence and decoding context.
     fn observe(
         &mut self,
@@ -302,10 +194,8 @@ impl Drafts {
             base["codec"] = serde_json::to_value(codec)?;
         }
         let identity = serde_json::to_string(&base)?;
-        if self.entry_ids.insert(identity) && self.entries.len() < LIMIT {
-            self.entries.push(json!({"binding":base,"witness_id":witness,"needs_schema":codec.is_none(),"source_intent_required":true,
+        self.add_entry(identity, json!({"binding":base,"witness_id":witness,"needs_schema":codec.is_none(),"source_intent_required":true,
                 "instruction":if codec.is_none(){"Encoded bytes do not identify a codec. Trace Source encoding; for PB provide explicit field_path, field_type and repeated before planning."}else if base["slot"].get("sse_data").is_some(){"Pointers address the SSE data JSON for this exact event/type. Trace Source time generation for request_time/relative_time; a generated identity needs an explicit prefix/format and shared binding across every referring event/pointer, including terminal output. Differences alone do not prove identity permission. Event presence/order and unselected text stay strict. See docs/sse-value-contracts.md."}else{"Schema supplies decoding only. Choose a field and contract from Source behavior; proof is required for this binding."}}));
-        }
         let (Some(codec), Some(target)) = (codec, target) else {
             return Ok(());
         };
@@ -366,12 +256,11 @@ impl Drafts {
         if rules.is_empty() {
             let base = json!({"surface":witness.metadata.surface,"match":{"api":state.api,
                 "resource":witness.metadata.resource,"operation":witness.metadata.operation}});
-            let identity = serde_json::to_string(&base)?;
-            if self.entry_ids.insert(identity) && self.entries.len() < LIMIT {
-                self.entries.push(json!({"binding":base,"witness_id":witness.id,
+            let identity = serde_json::to_string(&(&base, &event["response"]["status"]))?;
+            self.add_entry(identity, json!({"binding":base,"witness_id":witness.id,
+                    "source_response_kind":event["response"]["status"],
                     "needs_sql_template":true,"needs_slot":true,"needs_schema":true,"source_intent_required":true,
                     "instruction":"Trace Source SQL construction and declare match.sql plus sql_value (template parameter ordinal) or sql_column. Metadata placeholders do not identify the value slot. Supply an explicit codec and fresh Source proof."}));
-            }
             return Ok(());
         }
         let scope = rules
@@ -419,7 +308,11 @@ impl Drafts {
         depth: usize,
     ) -> Result<()> {
         if depth > 32 || self.examined >= NODE_LIMIT {
-            self.limited = true;
+            self.limit(if depth > 32 {
+                "json_depth"
+            } else {
+                "json_nodes"
+            });
             return Ok(());
         }
         if source == target {
@@ -482,6 +375,10 @@ impl Drafts {
         }
         if let (Some(a), Some(b)) = (source.as_object(), target.as_object()) {
             for (key, value) in a {
+                if self.examined >= NODE_LIMIT {
+                    self.limit("json_nodes");
+                    break;
+                }
                 if key.contains('\0') {
                     continue;
                 }
@@ -501,6 +398,10 @@ impl Drafts {
             && a.len() == b.len()
         {
             for (index, (value, other)) in a.iter().zip(b).enumerate() {
+                if self.examined >= NODE_LIMIT {
+                    self.limit("json_nodes");
+                    break;
+                }
                 self.collect(
                     value,
                     other,
@@ -517,7 +418,10 @@ impl Drafts {
 
     fn push(&mut self, base: &Value, pointer: &str, contract: Value, witness: &str) -> Result<()> {
         let identity = serde_json::to_string(&(base, pointer, &contract))?;
-        if !self.seen.insert(identity.clone()) || self.values.len() >= LIMIT {
+        if !self.seen.insert(identity.clone())
+            || self.seen.len() <= self.summary_offset
+            || self.values.len() >= LIMIT
+        {
             return Ok(());
         }
         let id = format!(
