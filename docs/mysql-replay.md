@@ -329,6 +329,9 @@ nested/restarted transactions and another socket's commit cannot satisfy the
 SET. One persistent Source SET can cover several transactions; all complete
 transactions in the loaded connection scope must be proven. Read-only setup
 and cleanup compatibility retain their independent existing rules.
+When concurrent transactions have identical end SQL, the delivered business
+members on each Target socket select its corresponding finite Source end;
+ordinary identity, value, availability and policy checks still apply.
 
 Coverage is recorded only after successful response delivery and response-policy
 commit. It never fabricates a Target SET or consumes its Source record. Covered

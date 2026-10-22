@@ -22,6 +22,18 @@ impl ReplayState {
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<MatchedExchange> {
+        self.match_exchange_in_case_preferred(case, identity, command, sql, params, None)
+    }
+
+    pub(in crate::replay::mysql) fn match_exchange_in_case_preferred(
+        &mut self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+        params: Option<&[RecordedMysqlValue]>,
+        transaction_end: Option<usize>,
+    ) -> Option<MatchedExchange> {
         #[cfg(not(test))]
         let request_observed_at = Utc::now();
         #[cfg(test)]
@@ -66,13 +78,15 @@ impl ReplayState {
                     && params.is_none_or(<[_]>::is_empty)
             });
         let active_case_id = case.map(ToOwned::to_owned);
-        let preferred_end = cleanup_selection::preferred_end(
-            &self.mysql.exchanges,
-            active_case_id.as_deref(),
-            identity,
-            command,
-            baseline_normalized_sql.as_deref(),
-        );
+        let preferred_end = transaction_end.or_else(|| {
+            cleanup_selection::preferred_end(
+                &self.mysql.exchanges,
+                active_case_id.as_deref(),
+                identity,
+                command,
+                baseline_normalized_sql.as_deref(),
+            )
+        });
         for source in [ReplaySource::Case, ReplaySource::Global] {
             // Preserve existing candidate precedence before trying compatible
             // projections, without allowing Global to outrank the active Case.
@@ -86,6 +100,9 @@ impl ReplayState {
             for foreign in [false, true] {
                 for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
                     for index in preferred_end.into_iter().chain(candidates.iter().copied()) {
+                        if transaction_end.is_some_and(|expected| expected != index) {
+                            continue;
+                        }
                         let exchange = &self.mysql.exchanges[index];
                         if self.mysql.foreign.contains_key(&index) != foreign
                             || exchange.source != source

@@ -202,3 +202,50 @@ async fn sqlx_transaction_closures_can_reuse_distinct_pool_connections() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn concurrent_transactions_match_their_own_commit_in_reverse_completion_order() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let mut values = records();
+        values.truncate(4);
+        let mut other = values.clone();
+        for record in &mut other {
+            record["connection_id"] = json!(Uuid::from_u128(1));
+            record["sql"] = json!(record["sql"].as_str().unwrap().replace("id=1", "id=2"));
+        }
+        values.extend(other);
+        let (temp, addr, runtime, task) = fixture(&values, false).await;
+        let ca = temp
+            .path()
+            .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
+        let mut first = connect(addr, &ca).await;
+        let mut second = connect(addr, &ca).await;
+        let mut first_tx = first.begin().await.unwrap();
+        let mut second_tx = second.begin().await.unwrap();
+        for (tx, id) in [(&mut first_tx, 1_i32), (&mut second_tx, 2_i32)] {
+            sqlx::query("SELECT id FROM users WHERE id=?")
+                .bind(id)
+                .fetch_one(&mut **tx)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE users SET active=? WHERE id=?")
+                .bind(1_i32)
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .unwrap();
+        }
+        second_tx.commit().await.unwrap();
+        first_tx.commit().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert!(
+            state.unused_exchanges(ReplaySource::Case).is_empty(),
+            "{:?}",
+            state.unused_exchanges(ReplaySource::Case)
+        );
+        assert_eq!(state.transaction_equivalent_autocommit().len(), 2);
+        task.abort();
+    })
+    .await
+    .unwrap();
+}

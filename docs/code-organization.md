@@ -870,6 +870,8 @@ explicit repository-wide audit.
   finite Source member correspondence and delivery-confirmed setup coverage.
   COMMIT/ROLLBACK anchor matching; a persistent Source SET is satisfied only
   after every affected loaded segment has an independent successful witness.
+  A Target socket's delivered member prefix selects its ordinary finite end
+  candidate so concurrent transactions cannot steal identical COMMIT/ROLLBACKs.
   It shares the bounded SQL effect checks in `optional_session/read`, never
   rewrites recordings or grants matching permission from report hints.
   Reports distinguish transaction-covered setups from read-only omissions;

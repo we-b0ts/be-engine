@@ -245,8 +245,18 @@ pub(in crate::replay) async fn handle_query(
         let mut state = state.lock().await;
         let identity = session.identity();
         let case = session.request_case(&state, Some(sql));
-        let matched =
-            state.match_exchange_in_case(case.as_deref(), &identity, "COM_QUERY", Some(sql), None);
+        let transaction_end = state
+            .mysql
+            .transaction_equivalence
+            .preferred_end(&session.transaction_witness, sql);
+        let matched = state.match_exchange_in_case_preferred(
+            case.as_deref(),
+            &identity,
+            "COM_QUERY",
+            Some(sql),
+            None,
+            transaction_end,
+        );
         (matched, case)
     };
     if matched.is_none()
@@ -400,12 +410,17 @@ pub(in crate::replay) async fn handle_stmt_execute(
         let mut state = state.lock().await;
         let identity = session.identity();
         let case = session.request_case(&state, Some(&statement.sql));
-        let matched = state.match_exchange_in_case(
+        let transaction_end = state
+            .mysql
+            .transaction_equivalence
+            .preferred_end(&session.transaction_witness, &statement.sql);
+        let matched = state.match_exchange_in_case_preferred(
             case.as_deref(),
             &identity,
             "COM_STMT_EXECUTE",
             Some(&statement.sql),
             parsed.params.as_deref(),
+            transaction_end,
         );
         (matched, case)
     };
