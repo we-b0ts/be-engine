@@ -14,7 +14,11 @@ fn dependency_rule(protocol: &str, endpoint: &str, operation: &str) -> serde_jso
         "contract":{"/members":{"kind":"unordered"}},"proof":{"source":"src/cache.rs:12","fact":"Source writes set members without observing their order"}})
 }
 
-fn install(fixture: &Fixture, event: serde_json::Value, target: impl FnOnce(Vec<u8>) -> Vec<u8>) {
+pub(super) fn install(
+    fixture: &Fixture,
+    event: serde_json::Value,
+    target: impl FnOnce(Vec<u8>) -> Vec<u8>,
+) {
     let proposed = parse_proposal(&fs::read_to_string(&fixture.proposal).unwrap()).unwrap();
     let rule = proposed.rules[0].as_value().unwrap();
     let case = fixture
@@ -223,11 +227,15 @@ fn http_body_rule_keeps_path_query_and_endpoint_native() {
         });
         fixture.confirm();
         let evidence = fixture.evidence();
-        assert!(evidence.facts["source_entry"]["bindings"][0]["binding"]["match"]["key"].is_null());
-        assert_eq!(
-            evidence.facts["source_entry"]["bindings"][0]["binding"]["match"]["path"],
-            "/dependency"
-        );
+        let binding = evidence.facts["source_entry"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| &entry["binding"])
+            .find(|binding| binding["surface"] == "dependency.request")
+            .unwrap();
+        assert!(binding["match"]["key"].is_null());
+        assert_eq!(binding["match"]["path"], "/dependency");
         let result = fixture.plan();
         if change_query {
             assert!(result.is_err());

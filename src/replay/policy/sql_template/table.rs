@@ -13,6 +13,17 @@ pub(in crate::replay::policy) struct SqlValueTemplate {
 }
 
 impl SqlValueTemplate {
+    pub(in crate::replay::policy) fn from_value_selector(
+        selector: &crate::policy::MatchSpec,
+    ) -> Result<Self> {
+        Self::new(
+            selector.sql.as_deref().context("SQL template is absent")?,
+            &selector.tables,
+            &selector.table_patterns,
+            selector.table_series.as_ref(),
+        )
+    }
+
     pub(in crate::replay::policy) fn new(
         sql: &str,
         tables: &[String],

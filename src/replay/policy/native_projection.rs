@@ -30,6 +30,7 @@ pub(in crate::replay) struct NativeScopeGuard {
     pub selector: n::NativeMatch,
     pub when: Option<SourceCondition>,
     pub references: Vec<crate::policy::Resource>,
+    pub mysql_read_back: Vec<n::MysqlIdentityReadBack>,
 }
 
 #[derive(Debug)]
@@ -50,6 +51,14 @@ impl NativeScopeGuard {
                     .references
                     .iter()
                     .map(|reference| reference.contract.resource.clone())
+                    .collect(),
+                _ => vec![],
+            },
+            mysql_read_back: match &rule.effect {
+                n::NativeEffect::Identity(effect) => effect
+                    .mysql_read_back
+                    .iter()
+                    .map(|entry| entry.contract.clone())
                     .collect(),
                 _ => vec![],
             },
@@ -98,6 +107,11 @@ pub(in crate::replay) fn project_native(
             | n::NativeEffect::ResponseHeaderDate(_)
             | n::NativeEffect::ResponseBody(_) => response::project(&mut output, rule)?,
             n::NativeEffect::ResponseGenerated(_) => (),
+            // Native protocol owners consume these typed effects directly.
+            n::NativeEffect::RedisAppendStream
+            | n::NativeEffect::RedisReadCommutation(_)
+            | n::NativeEffect::RedisExpiryRefresh(_)
+            | n::NativeEffect::HttpClientMetadata(_) => (),
             n::NativeEffect::InputJwt(effect) => input(&mut output, rule, effect)?,
             // The inbound runtime consumes this typed effect directly; no
             // legacy request-rule document represents custom signatures.
@@ -153,9 +167,7 @@ fn dependency_rule(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
     })
 }
 
-pub(in crate::replay::policy) fn key(
-    value: &n::NativeKeySelector,
-) -> crate::replay::RedisValueKeySelector {
+pub(in crate::replay) fn key(value: &n::NativeKeySelector) -> crate::replay::RedisValueKeySelector {
     match value {
         n::NativeKeySelector::Exact { value } => crate::replay::RedisValueKeySelector::Exact {
             value: value.clone(),

@@ -690,7 +690,11 @@ fn sequence(value: &request::RedisRequestSelector, fact: &str) -> Result<n::Redi
             })
         })
         .collect::<Result<_>>()?;
-    Ok(n::RedisSequenceEffect { key, commands })
+    Ok(n::RedisSequenceEffect {
+        key,
+        commands,
+        read_back: vec![],
+    })
 }
 fn transform_kind(value: identity::Transform) -> n::IdentityTransform {
     match value {

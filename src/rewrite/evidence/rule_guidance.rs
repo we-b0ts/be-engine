@@ -2,7 +2,9 @@
 use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint};
 use super::*;
 mod generated_values;
+mod http_client_metadata;
 mod http_header_timestamp;
+mod stateful_dependencies;
 pub(super) use generated_values::has_response_jwt;
 
 pub(super) fn http_header_timestamp_candidates(facts: &Value) -> Vec<Value> {
@@ -53,6 +55,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         return vec![hint];
     }
     let mut hints = generated_values::hints(root, query, facts);
+    hints.extend(stateful_dependencies::hints(root, query, facts));
     let mut add = |capability: &str, rule: &str, instruction: &str| {
         hints.push(RewriteRuleHint {
         capability: capability.into(), rule: rule.into(),
@@ -60,6 +63,21 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         help: help(root),
     })
     };
+    if query == QUERY_UNIFIED_RULE_CANDIDATES
+        && facts["source_entry"]["bindings"]
+            .as_array()
+            .is_some_and(|bindings| {
+                bindings
+                    .iter()
+                    .any(|b| b["binding"]["slot"].get("sse_data").is_some())
+            })
+    {
+        add(
+            "sse_data_contract",
+            "sse_data",
+            "Review source_entry.bindings for exact slot.sse_data event/json_type selectors. Contract pointers address data JSON. Time drafts require Source clock proof; generated identities require Source generator/lifetime proof, explicit prefix/format and the same binding across all referring events/pointers, including terminal output. Identity permissions are never inferred as candidates. Missing events and event order remain strict and require Target investigation. See docs/sse-value-contracts.md.",
+        );
+    }
     if query == QUERY_REPRESENTATIVES {
         for codec in response_body::codec_candidates(facts) {
             add(
@@ -122,6 +140,13 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             "http_header_timestamp",
             "header-timestamp",
             "Trace source SDK header generation and declare a typed http_request header time contract with its own dependency request anchor, exact endpoint, method and path. Header presence, multiplicity and authentication remain checked.",
+        );
+    }
+    if http_client_metadata::has_difference(facts) {
+        add(
+            "http_client_metadata",
+            "http_client_metadata",
+            "SDK metadata header differences remain strict until explicitly authorized. protected=false concerns confidentiality, not acceptance. Trace both the SDK generator and the downstream consumer/middleware. If these exact names have no application, authentication, routing or idempotency role, declare http_client_metadata with API, endpoint, method, path and exact supported header names. The audit retains differences as observations with a rule ID; do not emulate another language's SDK identity. Source proof, complete per-name witnesses and fresh Replay are required. See docs/http-client-metadata.md.",
         );
     }
     for (protocol, capability) in [
@@ -193,6 +218,9 @@ pub(super) fn applicable_rule_planners(
         return vec![];
     }
     let mut planners = generated_values::planners(root, issue, query, facts, evidence);
+    planners.extend(stateful_dependencies::planners(
+        root, issue, query, facts, evidence,
+    ));
     let mut add = |kind: &str, capability: &str| {
         planners.push(RewriteApplicableRulePlanner {
             kind: kind.into(),
@@ -241,6 +269,9 @@ pub(super) fn applicable_rule_planners(
     }
     if nonempty(&facts["http_header_timestamp_candidates"]) {
         add("dependency_value", "http_header_timestamp");
+    }
+    if http_client_metadata::has_difference(facts) {
+        add("dependency_value", "http_client_metadata");
     }
     if facts["cross_case_candidates"]["candidates"]
         .as_array()

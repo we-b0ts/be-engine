@@ -34,6 +34,12 @@ impl RedisRequestCommand {
     }
 
     pub(super) fn validate_arguments(&self, args: &[Vec<u8>]) -> Result<()> {
+        if self.command == "LSET" {
+            ensure!(
+                args.len() == 3,
+                "LSET requires a key, list index and element"
+            );
+        }
         if matches!(self.command.as_str(), "SUBSCRIBE" | "UNSUBSCRIBE") {
             ensure!(
                 args.len() == 1,

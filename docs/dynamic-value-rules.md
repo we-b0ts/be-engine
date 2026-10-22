@@ -23,6 +23,38 @@ tokens. Inline SQL string/JSON values and prepared string parameters use the
 8 MiB value budget, including Source reference coverage and binding audit.
 Configured SQL templates retain their separate 64 KiB bound.
 
+With native `identity` rules, add a newly proven reference resource to the
+existing rule's `effect.references`; keep the same rule ID, capture, API/resource
+scope, root proof and all prior relationships. The unified planner permits
+append-only references and `read_back` declarations, including both in one
+proposal. Put the new Source proof on the appended reference:
+
+```yaml
+references:
+  # Preserve existing entries here, unchanged and in their original order.
+  - contract:
+      resource: {protocol: mysql, endpoint: 'db.example:3306', database: app, username: writer}
+    proof:
+      source: app/completion.py:store_result
+      fact: The completed SQL JSON reuses the identity previously captured in Redis.
+```
+
+This authorizes references to a committed capture, including strings inside SQL
+JSON parameters. It does not generate a second identity or relax other JSON
+members. Complete Source preflight must witness every added resource after a
+capture; missing or premature references are rejected. Plan/apply freezes the
+evidence and requires fresh genuine Replay. Do not create a duplicate capture
+rule to add a consumer, and do not modify the old root proof to describe the new
+consumer. Removal, reordering or replacement of existing relationships is not an
+additive update.
+
+When Source reads a previously generated identity from MySQL result JSON before
+reusing it, append an explicit `effect.mysql_read_back` declaration to the same
+native identity rule. Select its existing reference resource, complete SELECT,
+physical column and JSON pointers; include the Source write/read proof. This
+returns already bound Target identities on a derived response copy while
+retaining strict request references. See [MySQL identity read-back](mysql-identity-read-back.md).
+
 ```yaml
 version: 3
 expected_response: assertions_only
@@ -67,9 +99,14 @@ Choose one of these capture locations:
   `value_index` is zero-based among its placeholders. An optional `json_pointer`
   selects a string inside the selected SQL value. Text queries and prepared
   string parameters use the same capture contract.
-- **Redis**: select a `SET` or `HSET` value or `RPUSH` element, a key selector and database. The index
+- **Redis**: select a `SET` or `HSET` value or `RPUSH`/`LSET` element, a key selector and database. The index
   is zero-based among arguments after the command: `SET` value is index 1;
-  `HSET` values are even indices starting at 2; `RPUSH` element indices are 1..128.
+  `HSET` values are even indices starting at 2; `RPUSH` element indices are 1..128;
+  `LSET key index element` selects only argument 2. Its key and signed list index
+  retain their existing matching, and the list index is always byte exact even
+  when its text happens to equal a captured identity. LSET requires exactly three
+  arguments in Source and Target; conditional JSON captures, copies and integer
+  derivations use the same contract as RPUSH elements.
   An optional JSON pointer selects a string inside that value; an integer
   capture requires an explicit pointer and `value_type: integer`. Other
   arguments and options remain checked.

@@ -168,7 +168,8 @@ pub fn validate_contract_binding(
                 TimestampFormat::Rfc3339
                 | TimestampFormat::AmzDate
                 | TimestampFormat::Iso8601Naive
-                | TimestampFormat::SqlDatetime => field.field_type == ProtobufType::String,
+                | TimestampFormat::SqlDatetime
+                | TimestampFormat::CalendarDate => field.field_type == ProtobufType::String,
                 _ => numeric(field.field_type),
             };
             ensure!(

@@ -16,6 +16,7 @@ Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 [HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
 strict matching and fresh verification.
 Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
+Source-proven SDK request metadata uses [scoped HTTP client metadata](http-client-metadata.md).
 Failed outbound requests expose [HTTP request body evidence](http-request-evidence.md),
 including exact protected body pages, raw differences and recorded rule results.
 Rule planning reuses [recording indexes and sealed Source content identities](rule-evidence-index.md)
@@ -27,6 +28,8 @@ then explicitly apply reviewed plans at the next idle boundary.
 
 Redis JSON/Protobuf values and source-proven collection ordering use
 [Redis value rules](redis-value-rules.md), with the same discovery and plan/apply lifecycle.
+[Redis APPEND streams](redis-append-stream.md) support Source-proven changes to
+batch boundaries under explicit API/resource/key scope, retaining read fences.
 Source-proven expiry drift in Redis JSON read responses uses explicit
 [Redis time-shift rules](redis-time-shift-rules.md), discovered through worker
 source diagnosis without heuristic hints.
@@ -42,6 +45,8 @@ evidence-backed plan/apply and fresh verification with existing recordings.
 IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
 [Generated HTTP request body fields](http-request-body-fields.md) validate bounded
 random identifiers and signed JWTs against independent dependency request clocks.
+[SSE response diagnostics](interaction-diagnostics.md) expose authenticated
+per-frame response values through bounded, read-only evidence queries.
 [JWT response rules](jwt-response-rules.md) validate signatures, stable claims
 and request-relative validity for freshly issued HTTP JSON tokens, including
 URL query tokens, typed base64url nonces, RS256 public-key verification from
@@ -1106,8 +1111,34 @@ exact success counters while retaining at most `success_detail_limit`
 successful event details per category and executed case; unscoped startup
 traffic has its own bounded scope. Successful details carry a zero-based
 `target_event_index` within that case and category.
+Redis reports with `redis.target_event_index_scope: case_request_admission`
+instead allocate this index when a command enters replay matching, before
+selection or response delivery. `matched`, `unmatched`, parsed `unsupported`
+commands and request-associated delivery failures share that case-local index;
+each case and the unscoped startup inventory starts at zero. Successful local
+handshakes, unsolicited Pub/Sub pushes and unparsed bytes do not receive an
+index. A failed recorded handshake does. Concurrent response completion and
+the successful-detail cap never renumber requests. The bounded dependency
+query preserves the failed request's index in its actual signature, while its
+`target_matches` retain the same arrival indices and the existing truncation
+indicator. Reports without this scope marker retain their historical success
+completion indices; they cannot reconstruct failed-request arrival order and
+require fresh Replay for this diagnostic.
 Dirty event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
+When a SELECT exceeds the 256-character prefix, `sql_summary.select_body` adds
+an independently bounded 256-character excerpt beginning at its outer FROM.
+Its own `truncated` flag covers the predicates, ordering, pagination and locks
+in that excerpt. Quoted text, comments and nested SELECTs cannot select a false
+outer FROM. Statements over 64 KiB, compound SELECTs and unsupported lexical
+forms retain the original prefix/fingerprint without an inferred body.
+The bounded dependency query preserves this summary together with `index`,
+`connection_id` and `query_sequence`, so an implementer can locate the original
+semantic exchange when either excerpt is truncated. These are diagnostic views,
+not matching evidence. `row_count` is present only for complete, untruncated,
+well-formed result sets; zero is an observed empty result, while omission means
+the exact count is unavailable. Lazy result storage retains the count without
+loading or publishing result cells.
 The report's `unrecorded_targets` field contains exact `host:port` targets to
 which the target sent payload even though they were not accessed during
 recording. DNS lookup and TCP connection establishment alone do not add an

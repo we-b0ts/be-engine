@@ -9,6 +9,10 @@ use crate::rewrite::{
 
 #[path = "transaction_api_time.rs"]
 mod api_time_transaction;
+#[path = "transaction_append.rs"]
+mod append_transaction;
+#[path = "transaction_calendar_date.rs"]
+mod calendar_date_transaction;
 #[path = "transaction_concurrency.rs"]
 mod concurrency_transaction;
 #[path = "transaction_conditional_identity.rs"]
@@ -19,14 +23,30 @@ mod dependency_transaction;
 mod header_transaction;
 #[path = "transaction_http_body_jwt.rs"]
 mod http_body_jwt_transaction;
+#[path = "transaction_http_client_metadata.rs"]
+mod http_client_metadata_transaction;
+#[path = "transaction_identity_references.rs"]
+mod identity_references_transaction;
 #[path = "transaction_interaction.rs"]
 mod interaction_transaction;
 #[path = "transaction_mysql_candidates.rs"]
 mod mysql_candidates_transaction;
+#[path = "transaction_mysql_composite.rs"]
+mod mysql_composite_transaction;
+#[path = "transaction_mysql_read_back.rs"]
+mod mysql_read_back_transaction;
+#[path = "transaction_mysql_table_values.rs"]
+mod mysql_table_values_transaction;
 #[path = "transaction_native.rs"]
 mod native_transaction;
+#[path = "transaction_read_back.rs"]
+mod read_back_transaction;
+#[path = "transaction_read_commutation.rs"]
+mod read_commutation_transaction;
 #[path = "transaction_recovery.rs"]
 mod recovery_transaction;
+#[path = "transaction_redis_candidates.rs"]
+mod redis_candidates_transaction;
 #[path = "transaction_scope.rs"]
 mod scope_transaction;
 #[path = "transaction_signed_input.rs"]

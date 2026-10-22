@@ -62,6 +62,84 @@ async fn sql_json_contract_preserves_statement_and_finite_consumption_over_tls()
 }
 
 #[tokio::test]
+async fn mysql_json_wildcard_times_preserve_array_shape_members_and_finite_consumption() {
+    let start = 1_577_836_800_i64;
+    let sql = "UPDATE widgets SET payload=? WHERE id=?";
+    for count in [1, 2, 6] {
+        let payload = |time: i64| json!({"blocks":(0..count).map(|i| json!({"id":format!("fixed-{i}"),"timestamp":time+i,"stable":7})).collect::<Vec<_>>(),"status":"done"});
+        let mut record = exchange(sql, json!({"status":"ok","affected_rows":1}));
+        record["timestamp"] = json!(chrono::DateTime::from_timestamp(start, 0).unwrap());
+        record["duration_ms"] = json!(0);
+        record["command"] = json!("COM_STMT_EXECUTE");
+        record["connection_id"] = json!(uuid::Uuid::new_v4());
+        record["query_sequence"] = json!(1);
+        record["params"] = json!([{"kind":"string","value":payload(start).to_string()},{"kind":"integer","value":7}]);
+        let policy = format!(
+            r#"format: traffic-policy/v1
+rules:
+- id: block-times
+  match:
+    api: GET /users
+    resource: {{protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}}
+    operation: COM_STMT_EXECUTE
+    sql: {sql:?}
+  effect:
+    kind: mysql_values
+    values:
+      0:
+        kind: json
+        fields:
+          /blocks/*/timestamp: {{relative_time: unix_seconds}}
+  proof: {{source: 'blocks.py:create', fact: 'Each block carries its creation clock; array shape and other fields are stable'}}
+"#
+        );
+        let (temp, addr, runtime, task) = fixture_with_policy(&[record], Some(&policy)).await;
+        let observed = Utc::now();
+        runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
+        let good = payload(observed.timestamp());
+        let mut business = good.clone();
+        business["status"] = json!("changed");
+        let mut shape = good.clone();
+        shape["blocks"].as_array_mut().unwrap().pop();
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
+        for (body, valid) in [
+            (business, false),
+            (shape, false),
+            (good.clone(), true),
+            (good, false),
+        ] {
+            let result = sqlx::query(sql)
+                .bind(body.to_string())
+                .bind(7_i64)
+                .execute(&mut client)
+                .await;
+            assert_eq!(result.is_ok(), valid, "block count {count}: {result:?}");
+        }
+        client.close().await.unwrap();
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert_eq!(state.mysql.events.unmatched_queries.len(), 3);
+        let report = state.replay_policy.as_ref().unwrap().report();
+        assert_eq!(
+            report
+                .dependency_rules
+                .iter()
+                .find(|r| r.id == "block-times")
+                .unwrap()
+                .time_validations,
+            count as usize
+        );
+        task.abort();
+    }
+}
+
+#[tokio::test]
 async fn sql_json_response_changes_only_explicit_delivery_time() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let sql = "SELECT payload FROM widgets WHERE id=7";

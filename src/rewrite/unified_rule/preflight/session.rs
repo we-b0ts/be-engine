@@ -6,9 +6,13 @@ fn stateful(rule: &CompiledNativeRule) -> bool {
     match &rule.rule.effect {
         NativeEffect::Identity(_)
         | NativeEffect::RedisSequence(_)
+        | NativeEffect::RedisAppendStream
+        | NativeEffect::RedisReadCommutation(_)
+        | NativeEffect::RedisExpiryRefresh(_)
         | NativeEffect::RedisLock
         | NativeEffect::RedisPublishIdentity(_)
         | NativeEffect::HttpRequest(_)
+        | NativeEffect::HttpClientMetadata(_)
         | NativeEffect::InputJwt(_)
         | NativeEffect::InputSignedTimestamp(_) => true,
         NativeEffect::MysqlValues(effect) => {

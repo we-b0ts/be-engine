@@ -46,11 +46,12 @@ impl MysqlSelection {
                     .resource
                     .as_ref()
                     .is_some_and(|r| r.protocol == Protocol::Mysql)
-                    && let Some(sql) = &rule.selector.sql
+                    && rule.selector.sql.is_some()
                 {
-                    selection
-                        .templates
-                        .insert(rule.id.clone(), SqlValueTemplate::new(sql, &[], &[], None)?);
+                    selection.templates.insert(
+                        rule.id.clone(),
+                        SqlValueTemplate::from_value_selector(&rule.selector)?,
+                    );
                 }
             }
             for compiled in &compiled.native {

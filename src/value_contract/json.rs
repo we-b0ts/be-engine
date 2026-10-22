@@ -453,11 +453,15 @@ impl Comparator<'_> {
                         .time_validations
                         .entry(field.rule_id.into())
                         .or_default() += 1;
-                    decisions
-                        .times
-                        .entry((*anchor, clock_group.clone()))
-                        .or_default()
-                        .push(pair);
+                    // Civil dates already preserve the exact local-day relation.
+                    // They do not share a nanosecond shift with instant fields.
+                    if *format != TimestampFormat::CalendarDate {
+                        decisions
+                            .times
+                            .entry((*anchor, clock_group.clone()))
+                            .or_default()
+                            .push(pair);
+                    }
                     return validate_relationships(decisions)
                         .map_err(|e| difference(pointer, &e.to_string()));
                 }
@@ -583,8 +587,8 @@ fn same_type(source: &Value, target: &Value) -> bool {
         && (!source.is_number() || time::validate_numeric_category(source, target).is_ok())
 }
 
-pub(crate) fn core_format(format: TimestampFormat) -> time::TimestampFormat {
-    match format {
+pub(crate) fn core_format(format: TimestampFormat) -> Result<time::TimestampFormat, TimeError> {
+    Ok(match format {
         TimestampFormat::UnixSeconds => time::TimestampFormat::UnixSeconds,
         TimestampFormat::UnixMilliseconds => time::TimestampFormat::UnixMilliseconds,
         TimestampFormat::UnixMicroseconds => time::TimestampFormat::UnixMicroseconds,
@@ -592,7 +596,8 @@ pub(crate) fn core_format(format: TimestampFormat) -> time::TimestampFormat {
         TimestampFormat::AmzDate => time::TimestampFormat::AmzDate,
         TimestampFormat::Iso8601Naive => time::TimestampFormat::Iso8601Naive,
         TimestampFormat::SqlDatetime => time::TimestampFormat::SqlDatetime,
-    }
+        TimestampFormat::CalendarDate => return Err(TimeError::InvalidValue),
+    })
 }
 
 fn compare_time(
@@ -614,12 +619,21 @@ fn compare_time(
         return Err(TimeError::InvalidValue);
     }
     let offset = config.offset().map_err(|_| TimeError::InvalidValue)?;
-    let source = time::parse_timestamp(source, core_format(config.format), offset)?;
-    let target = time::parse_timestamp(target, core_format(config.format), offset)?;
     let mode = match config.relation {
         TimeRelation::RequestWindow => time::TimeMode::RequestWindow,
         TimeRelation::PreserveOffset => time::TimeMode::PreserveRelative,
     };
+    if config.format == TimestampFormat::CalendarDate {
+        return time::calendar::compare(
+            source,
+            target,
+            offset.ok_or(TimeError::InvalidValue)?,
+            mode,
+            clocks,
+        );
+    }
+    let source = time::parse_timestamp(source, core_format(config.format)?, offset)?;
+    let target = time::parse_timestamp(target, core_format(config.format)?, offset)?;
     time::compare_timestamp_nanos(source, target, mode, clocks)?;
     Ok((source, target))
 }

@@ -33,6 +33,7 @@ impl ReplayState {
             let matched = MatchedExchange {
                 transaction_owner: None,
                 value_delivery: None,
+                identity_delivery: None,
                 response_time_shift_rules: Vec::new(),
                 source,
                 index,

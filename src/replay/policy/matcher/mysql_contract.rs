@@ -6,6 +6,24 @@ use crate::policy::{CompiledRule, Slot};
 use crate::replay::policy::sql_template::SqlValueTemplate;
 use crate::value_contract::json::{AnchorClocks, Comparison};
 
+pub(crate) fn validate_selector(selector: &crate::policy::MatchSpec) -> Result<usize> {
+    let template = SqlValueTemplate::from_value_selector(selector)?;
+    let sql = selector.sql.as_deref().context("SQL template is absent")?;
+    ensure!(
+        !template.tokens().is_empty()
+            && crate::mysql::access::analyze_sql(
+                &sql.replace("{{table}}", "__traffic_value_selector_table__")
+            )
+            .statements_complete,
+        "SQL selector requires one bounded complete statement without a statement separator"
+    );
+    Ok(template
+        .tokens()
+        .iter()
+        .filter(|token| **token == Token::Placeholder)
+        .count())
+}
+
 pub(crate) fn compare_values(
     source_sql: Option<&str>,
     source_params: Option<&[RecordedMysqlValue]>,
@@ -33,16 +51,7 @@ pub(crate) fn selected_value(
     let Slot::SqlValue(index) = rule.rule.slot else {
         anyhow::bail!("SQL request requires sql_value")
     };
-    let template = SqlValueTemplate::new(
-        rule.rule
-            .selector
-            .sql
-            .as_deref()
-            .context("SQL template is absent")?,
-        &[],
-        &[],
-        None,
-    )?;
+    let template = SqlValueTemplate::from_value_selector(&rule.rule.selector)?;
     let values =
         mysql_values::template_values(&template, sql, params).map_err(anyhow::Error::msg)?;
     let Some(Token::Bytes(value)) = values.get(index) else {
@@ -53,16 +62,7 @@ pub(crate) fn selected_value(
 
 pub(crate) fn witness_matches(event: &Value, rule: &CompiledRule) -> Result<bool> {
     let record: crate::replay::RecordedMysqlExchange = serde_json::from_value(event.clone())?;
-    let template = SqlValueTemplate::new(
-        rule.rule
-            .selector
-            .sql
-            .as_deref()
-            .context("SQL template is absent")?,
-        &[],
-        &[],
-        None,
-    )?;
+    let template = SqlValueTemplate::from_value_selector(&rule.rule.selector)?;
     let source = mysql_values::materialized(record.sql.as_deref(), record.params.as_deref())
         .map_err(anyhow::Error::msg)?;
     Ok(template

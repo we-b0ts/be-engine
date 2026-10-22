@@ -55,6 +55,10 @@ pub(in crate::replay) fn from_event(
             {
                 return Ok(None);
             }
+            ensure!(
+                command != "LSET" || args.len() == 3,
+                "Source LSET capture requires a key, list index and element"
+            );
             if let Some(when) = when {
                 let bytes = args
                     .get(*argument_index)

@@ -68,16 +68,7 @@ pub(crate) fn compare(
         let Slot::SqlValue(slot) = rule.rule.slot else {
             anyhow::bail!("SQL request requires sql_value")
         };
-        let template = SqlValueTemplate::new(
-            rule.rule
-                .selector
-                .sql
-                .as_deref()
-                .context("SQL template absent")?,
-            &[],
-            &[],
-            None,
-        )?;
+        let template = SqlValueTemplate::from_value_selector(&rule.rule.selector)?;
         selected
             .entry(position(&template, &source, &actual, slot)?)
             .or_default()

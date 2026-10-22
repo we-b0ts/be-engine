@@ -8,13 +8,14 @@ pub(super) fn observe(
     api: &str,
     witness: &str,
     schemas: Option<&CompiledPolicy>,
-) -> Result<()> {
+    offset: usize,
+) -> Result<Option<usize>> {
     let Some(source) = pair
         .source_interaction
         .as_ref()
         .filter(|s| s.protocol == InteractionProtocol::Sse)
     else {
-        return Ok(());
+        return Ok(None);
     };
     let targets = pair
         .target_interaction
@@ -22,10 +23,16 @@ pub(super) fn observe(
         .filter(|s| s.protocol == InteractionProtocol::Sse)
         .map(|s| s.events.iter().filter(|e| !e.heartbeat).collect::<Vec<_>>())
         .unwrap_or_default();
-    for (index, source) in source.events.iter().filter(|e| !e.heartbeat).enumerate() {
+    for (index, source) in source
+        .events
+        .iter()
+        .filter(|e| !e.heartbeat)
+        .enumerate()
+        .skip(offset)
+    {
         if drafts.observations >= OBSERVATION_LIMIT {
             drafts.limited = true;
-            break;
+            return Ok(Some(index));
         }
         drafts.observations += 1;
         let Ok(source) = crate::replay::decode_sse(&source.message) else {
@@ -62,7 +69,8 @@ pub(super) fn observe(
                 ..Default::default()
             },
             schemas,
+            None,
         )?;
     }
-    Ok(())
+    Ok(None)
 }

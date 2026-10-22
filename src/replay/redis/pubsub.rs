@@ -495,6 +495,7 @@ fn fail_rpc_delivery(
             case_id: None,
             target: matched.report.target.clone(),
             command: "PUBSUB_PUSH".into(),
+            target_event_index: None,
             request_fingerprint: None,
             reason,
             diagnostic: None,

@@ -7,6 +7,7 @@ use crate::replay::{
         matcher::mysql_values::{template_pair_values, template_values},
     },
 };
+use anyhow::Context;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -28,6 +29,7 @@ impl DynamicValues {
             if event["global_dependency_reason"].is_string() {
                 continue;
             }
+            self.observe_mysql_read_captures(case, &event)?;
             for rule in self.rules.iter().filter(|rule| {
                 self.matches_case(rule, case) && self.native_source_allowed(rule, &event)
             }) {
@@ -163,18 +165,171 @@ pub(in crate::replay) fn from_report(
     if rules.is_empty() {
         return Ok(runtime);
     }
+    restore_bindings(
+        &runtime,
+        report,
+        case_id,
+        dependencies,
+        (source_values, actual_values),
+        None,
+        None,
+    )?;
+    Ok(runtime)
+}
+
+/// Native SQL preflight reuses accepted binding fingerprints while preserving
+/// method, Source conditions, database and authentication reference scope.
+pub(in crate::replay) fn from_native_report(
+    compiled: &crate::policy::CompiledPolicy,
+    report: &Value,
+    context: &super::super::matcher::MysqlPolicyContext<'_>,
+    request: &Value,
+    dependencies: &[u8],
+) -> Result<(DynamicValues, BTreeSet<String>)> {
+    from_native_scoped_report(compiled, report, context, request, dependencies, None)
+}
+
+pub(in crate::replay) fn from_native_read_report(
+    compiled: &crate::policy::CompiledPolicy,
+    report: &Value,
+    context: &super::super::matcher::MysqlPolicyContext<'_>,
+    request: &Value,
+    dependencies: &[u8],
+    record: &crate::replay::RecordedMysqlExchange,
+    values: (
+        &crate::replay::RecordedMysqlResponse,
+        &crate::replay::RecordedMysqlResponse,
+    ),
+) -> Result<(DynamicValues, BTreeSet<String>)> {
+    from_native_scoped_report(
+        compiled,
+        report,
+        context,
+        request,
+        dependencies,
+        Some((record, values.0, values.1)),
+    )
+}
+
+fn from_native_scoped_report(
+    compiled: &crate::policy::CompiledPolicy,
+    report: &Value,
+    context: &super::super::matcher::MysqlPolicyContext<'_>,
+    request: &Value,
+    dependencies: &[u8],
+    read: Option<(
+        &crate::replay::RecordedMysqlExchange,
+        &crate::replay::RecordedMysqlResponse,
+        &crate::replay::RecordedMysqlResponse,
+    )>,
+) -> Result<(DynamicValues, BTreeSet<String>)> {
+    let case = context
+        .case_id
+        .context("SQL identity preflight requires a Case")?;
+    let projection = super::super::native_projection::project_native(&compiled.native)?;
+    let path = super::super::pattern::uri_path(request["uri"].as_str().unwrap_or_default());
+    let mut runtime = DynamicValues::new(
+        projection.document.dynamic_values,
+        BTreeMap::from([(case.into(), path)]),
+    );
+    runtime.configure_native(&compiled.native);
+    runtime.set_request(case, request);
+    let database = context
+        .identity
+        .database
+        .as_ref()
+        .map(|name| crate::policy::Database::Name(name.clone()));
+    let scope = super::scopes::ResourceContext {
+        protocol: crate::policy::Protocol::Mysql,
+        target: context
+            .identity
+            .target
+            .as_ref()
+            .context("SQL identity endpoint missing")?,
+        database: database.as_ref(),
+        username: context.identity.username.as_deref(),
+        operation: context.command,
+    };
+    let (source_values, actual_values, read_ids) = if let Some((record, source, target)) = read {
+        let values = runtime.mysql_read_values(case, context.identity, record, (source, target))?;
+        (values.source, values.target, Some(values.ids))
+    } else {
+        (
+            super::super::matcher::mysql_values::materialized(
+                context.recorded_sql,
+                context.recorded,
+            )
+            .map_err(anyhow::Error::msg)?,
+            super::super::matcher::mysql_values::materialized(context.sql, context.actual)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    };
+    let allowed = runtime
+        .selected_scoped(case, scope, false)
+        .into_iter()
+        .filter(|r| r.value_type == DynamicValueType::String)
+        .filter(|r| read_ids.as_ref().is_none_or(|ids| ids.contains(&r.id)))
+        .map(|r| r.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if allowed.is_empty() {
+        return Ok((runtime, BTreeSet::new()));
+    }
+    restore_bindings(
+        &runtime,
+        report,
+        case,
+        dependencies,
+        (&source_values, &actual_values),
+        Some(&allowed),
+        context.request_times.source,
+    )?;
+    let ids = runtime
+        .report()
+        .into_iter()
+        .map(|row| row.rule_id)
+        .collect();
+    Ok((runtime, ids))
+}
+
+fn restore_bindings(
+    runtime: &DynamicValues,
+    report: &Value,
+    case_id: &str,
+    dependencies: &[u8],
+    values: (&[crate::mysql::sql::Token], &[crate::mysql::sql::Token]),
+    allowed: Option<&BTreeSet<&str>>,
+    before: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<()> {
+    let (source_values, actual_values) = values;
     let events = dependencies
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
         .map(serde_json::from_slice::<Value>)
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let eligible_events = events
+        .iter()
+        .filter(|event| {
+            before.is_none_or(|before| {
+                event["global_dependency_reason"].is_null()
+                    && event["timestamp"]
+                        .as_str()
+                        .and_then(|time| time.parse::<chrono::DateTime<chrono::Utc>>().ok())
+                        .is_some_and(|time| time <= before)
+            })
+        })
+        .collect::<Vec<_>>();
     for proof in report["replay_policy"]["dynamic_bindings"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|proof| proof["case_id"] == case_id)
+        .filter(|proof| {
+            allowed.is_none_or(|ids| proof["rule_id"].as_str().is_some_and(|id| ids.contains(id)))
+        })
     {
-        let rule = rules
+        let rule = runtime
+            .rules
             .iter()
             .find(|rule| proof["rule_id"] == rule.id)
             .ok_or_else(|| anyhow::anyhow!("Replay references an unknown dynamic rule"))?;
@@ -182,6 +337,15 @@ pub(in crate::replay) fn from_report(
             runtime.matches_case(rule, case_id),
             "dynamic proof is outside the API scope"
         );
+        // A resource reference is permission to normalize this identity where
+        // it occurs, not a prerequisite for unrelated earlier statements.
+        // Later immutable captures may establish relevance only; restoration
+        // still uses the causally eligible inventory below.
+        if allowed.is_some()
+            && !binding_occurs_in_request(runtime, rule, proof, &events, source_values)?
+        {
+            continue;
+        }
         let DynamicValueCapture::Mysql {
             target,
             database,
@@ -191,10 +355,10 @@ pub(in crate::replay) fn from_report(
         } = &rule.capture
         else {
             restore_request_binding(
-                &runtime,
+                runtime,
                 rule,
                 proof,
-                &events,
+                &eligible_events,
                 case_id,
                 source_values,
                 actual_values,
@@ -218,8 +382,9 @@ pub(in crate::replay) fn from_report(
         {
             let actual_params: Option<Vec<RecordedMysqlValue>> =
                 serde_json::from_value(actual.get("params").cloned().unwrap_or(Value::Null))?;
-            for source in events.iter().filter(|source| {
+            for source in eligible_events.iter().filter(|source| {
                 source["event_type"] == "mysql_exchange"
+                    && runtime.native_source_allowed(rule, source)
                     && source["target_host"]
                         .as_str()
                         .is_some_and(|host| host.eq_ignore_ascii_case(&target.host))
@@ -268,7 +433,71 @@ pub(in crate::replay) fn from_report(
             "dynamic binding cannot be restored from the same-case matched capture"
         );
     }
-    Ok(runtime)
+    Ok(())
+}
+
+fn binding_occurs_in_request(
+    runtime: &DynamicValues,
+    rule: &DynamicValueRule,
+    proof: &Value,
+    events: &[Value],
+    values: &[crate::mysql::sql::Token],
+) -> Result<bool> {
+    let strings = strings(values);
+    let mut witnessed = false;
+    for event in events.iter().filter(|event| {
+        event["global_dependency_reason"].is_null() && runtime.native_source_allowed(rule, event)
+    }) {
+        let value = if let DynamicValueCapture::Mysql {
+            target,
+            database,
+            value_index,
+            json_pointer,
+            ..
+        } = &rule.capture
+        {
+            if event["event_type"] != "mysql_exchange"
+                || event["target_host"]
+                    .as_str()
+                    .is_none_or(|host| !host.eq_ignore_ascii_case(&target.host))
+                || event["target_port"] != target.port
+                || event["database"] != *database
+            {
+                continue;
+            }
+            let params: Option<Vec<RecordedMysqlValue>> =
+                serde_json::from_value(event.get("params").cloned().unwrap_or(Value::Null))?;
+            let Ok(values) = template_values(
+                &rule.capture.mysql_template()?,
+                event["sql"].as_str(),
+                params.as_deref(),
+            ) else {
+                continue;
+            };
+            mysql::capture(
+                values
+                    .get(*value_index)
+                    .context("SQL source capture slot is absent")?,
+                json_pointer.as_deref(),
+            )?
+        } else {
+            let Some(capture) = source::from_event(&rule.capture, rule.value_type, event)? else {
+                continue;
+            };
+            capture.value
+        };
+        if fingerprint(value.as_bytes()) == proof["source_fingerprint"] {
+            witnessed = true;
+            if strings.iter().any(|text| text.contains(&value)) {
+                return Ok(true);
+            }
+        }
+    }
+    ensure!(
+        witnessed,
+        "dynamic request proof has no matching source capture"
+    );
+    Ok(false)
 }
 
 fn strings(values: &[crate::mysql::sql::Token]) -> Vec<String> {
@@ -314,14 +543,15 @@ fn restore_request_binding(
     runtime: &DynamicValues,
     rule: &DynamicValueRule,
     proof: &Value,
-    events: &[Value],
+    events: &[&Value],
     case: &str,
     source_values: &[crate::mysql::sql::Token],
     actual_values: &[crate::mysql::sql::Token],
 ) -> Result<()> {
     let mut captured = None;
     for event in events {
-        if let Some(source) = source::from_event(&rule.capture, rule.value_type, event)?
+        if runtime.native_source_allowed(rule, event)
+            && let Some(source) = source::from_event(&rule.capture, rule.value_type, event)?
             && fingerprint(source.value.as_bytes()) == proof["source_fingerprint"]
         {
             captured = Some(source.value);

@@ -30,6 +30,8 @@ pub(in crate::replay) mod cross_case;
 use crate::replay::json_order as json;
 pub(in crate::replay) use cross_case::load as load_cross_case;
 mod api_origin;
+pub(in crate::replay) mod append;
+mod key_access;
 pub(in crate::replay) mod key_selector;
 #[cfg(test)]
 mod lane_tests;
@@ -38,9 +40,14 @@ mod matching;
 #[cfg(test)]
 mod native_scope_tests;
 mod native_source;
+pub(in crate::replay) mod observations;
 pub(crate) mod publish;
 pub(in crate::replay) mod pubsub;
+#[cfg(test)]
+mod read_back_tests;
+pub(in crate::replay) mod read_commutation;
 mod report_inventory;
+mod request_order;
 pub(crate) mod time_shift;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
@@ -131,6 +138,8 @@ struct RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    observation_rule: Option<String>,
+    read_commutation_rule: Option<String>,
     subscription_alias: bool,
     response_evidence: Option<crate::dependency_index::RecordRef>,
     rpc_push: Option<usize>,
@@ -150,6 +159,9 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    observation: Option<observations::Prepared>,
+    append: Option<append::PreparedAppend>,
+    read_back: Option<super::policy::request_contract::PreparedReadBack>,
     request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     unified_delivery: Option<super::policy::request_contract::PreparedRedisDelivery>,
     rpc_push: Option<usize>,
@@ -167,6 +179,9 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    observations: observations::Observations,
+    read_commutation: read_commutation::ReadCommutation,
+    append_streams: append::AppendStreams,
     request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
     request_observation_id: Option<uuid::Uuid>,
     pub(in crate::replay) pubsub: pubsub::PubSubState,
@@ -189,6 +204,7 @@ pub(super) struct RedisReplayState {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayEvents {
+    request_order: request_order::RequestOrder,
     global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
@@ -235,23 +251,28 @@ impl RedisReplayState {
     }
 
     pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
-        self.exchanges.iter().any(|e| {
-            e.source == ReplaySource::Case
-                && matches!(
-                    e.status,
-                    ReplayExchangeStatus::Responding
-                        | ReplayExchangeStatus::AwaitingClientTermination
-                )
-        })
+        self.observations.has_in_flight()
+            || self.exchanges.iter().enumerate().any(|(index, e)| {
+                e.source == ReplaySource::Case
+                    && !self.append_streams.idle_source(index)
+                    && matches!(
+                        e.status,
+                        ReplayExchangeStatus::Responding
+                            | ReplayExchangeStatus::AwaitingClientTermination
+                    )
+            })
     }
 
     pub(in crate::replay) fn has_in_flight(&self) -> bool {
-        self.exchanges.iter().any(|e| {
-            matches!(
-                e.status,
-                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
-            )
-        })
+        self.observations.has_in_flight()
+            || self.exchanges.iter().enumerate().any(|(index, e)| {
+                !self.append_streams.idle_source(index)
+                    && matches!(
+                        e.status,
+                        ReplayExchangeStatus::Responding
+                            | ReplayExchangeStatus::AwaitingClientTermination
+                    )
+            })
     }
 
     pub(in crate::replay) fn validate_pubsub(&self) -> Result<()> {
@@ -296,6 +317,13 @@ impl RedisReplayState {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
+        ensure!(
+            source != ReplaySource::Case
+                || case_id.is_none_or(|case| !self.append_streams.has_case(case)),
+            "cannot extend a prepared append stream Case inventory"
+        );
+        self.read_commutation.check_case_addition(source, case_id)?;
+        self.observations.check_case_addition(source, case_id)?;
         record.outcome.validate()?;
         ensure!(
             record
@@ -315,6 +343,11 @@ impl RedisReplayState {
             .iter()
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
+        self.append_streams
+            .check_inventory_addition(&record, &args)?;
+        self.read_commutation
+            .check_inventory_addition(&record, &args)?;
+        self.observations.check_inventory_addition(&record, &args)?;
         let response = record.response.decode()?;
         ensure!(
             record
@@ -380,6 +413,8 @@ impl RedisReplayState {
             .register(source, case_id, exchange_index);
         let rpc_push = self.pubsub.link(&record, source, case_id, &args)?;
         self.exchanges.push(ReplayExchange {
+            observation_rule: None,
+            read_commutation_rule: None,
             subscription_alias: false,
             response_evidence: None,
             rpc_push,
@@ -400,7 +435,11 @@ impl RedisReplayState {
     }
 
     fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
-        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
+        if let Some(append) = &matched.append {
+            self.complete_append(append);
+        } else if let Some(observation) = &matched.observation {
+            self.complete_observation(observation, matched.index);
+        } else if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.matched_once = true;
             if !exchange.reusable_snapshot {
                 exchange.status = ReplayExchangeStatus::Consumed;
@@ -413,15 +452,17 @@ impl RedisReplayState {
             &mut self.events.matched,
             &mut self.events.matched_details,
             case_id.as_deref(),
-            |target_event_index| {
-                let mut report = matched.report.clone();
-                report.target_event_index = Some(target_event_index);
-                report
-            },
+            |_| matched.report.clone(),
         );
     }
 
     fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
+        if let Some(append) = &matched.append {
+            self.fail_append(append);
+        }
+        if let Some(observation) = &matched.observation {
+            self.fail_observation(observation);
+        }
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
             exchange.status = ReplayExchangeStatus::Failed;
         }
@@ -433,6 +474,7 @@ impl RedisReplayState {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
+            target_event_index: matched.report.target_event_index,
             request_fingerprint: None,
             reason,
             diagnostic: None,
@@ -441,6 +483,11 @@ impl RedisReplayState {
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
+            target_event_index_scope: Some("case_request_admission"),
+            append_streams: self.append_streams.reports(),
+            append_streams_omitted: self.append_streams.omitted(),
+            state_observations: self.observations.reports(),
+            state_observations_omitted: self.observations.omitted(),
             pubsub: self.pubsub.report(),
             time_shifts: self.time_shifts.clone(),
             unordered_value: Some(self.unordered_value.clone()),
@@ -570,6 +617,11 @@ pub(super) async fn handle_connection(
         if redis_is_unsupported(&command) {
             let mut replay_state = state.lock().await;
             let case_id = replay_state.active_case_id.clone();
+            let target_event_index = replay_state
+                .redis
+                .events
+                .request_order
+                .reserve(case_id.as_deref());
             replay_state
                 .redis
                 .events
@@ -578,6 +630,7 @@ pub(super) async fn handle_connection(
                     case_id,
                     target: target_key.clone(),
                     command: command.name.clone(),
+                    target_event_index: Some(target_event_index),
                     request_fingerprint: None,
                     reason: "Redis command mode is unsupported for replay".to_string(),
                     diagnostic: None,
@@ -664,10 +717,16 @@ pub(super) async fn handle_connection(
                 }
                 Err(diagnostic) => {
                     let authentication_hint = redis_authentication_hint(&diagnostic);
+                    let target_event_index = state
+                        .redis
+                        .events
+                        .request_order
+                        .latest(active_case_id.as_deref());
                     if let Some(case_id) = &active_case_id {
                         state.redis.events.dirty_case_ids.insert(case_id.clone());
                     }
                     state.redis.events.unmatched.push(CommandRequestReport {
+                        target_event_index,
                         case_id: active_case_id,
                         target: target_key.clone(),
                         command: command.name.clone(),
@@ -740,6 +799,7 @@ async fn record_runtime_unsafe(
         case_id: state.active_case_id.clone(),
         target: target.clone(),
         command: command.to_string(),
+        target_event_index: None,
         request_fingerprint: None,
         reason,
         diagnostic: None,

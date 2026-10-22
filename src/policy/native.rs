@@ -1,10 +1,12 @@
 //! Closed contracts for stateful identities, signatures and acquisition effects.
 //! The compiler retains these as typed effects; protocol owners never reparse YAML.
+mod http_client_metadata;
 mod input;
 mod response;
 mod source;
 mod stateful;
 
+pub use http_client_metadata::*;
 pub use input::*;
 pub use response::*;
 pub use source::*;
@@ -160,6 +162,9 @@ pub struct Proven<T> {
 pub enum NativeEffect {
     Identity(IdentityEffect),
     RedisSequence(RedisSequenceEffect),
+    RedisAppendStream,
+    RedisReadCommutation(RedisReadCommutationEffect),
+    RedisExpiryRefresh(RedisExpiryRefreshEffect),
     RedisLock,
     RedisPublishIdentity(PublishIdentityEffect),
     ResponseJwt(ResponseJwtEffect),
@@ -167,6 +172,7 @@ pub enum NativeEffect {
     ResponseGenerated(GeneratedEffect),
     ResponseBody(BodyEffect),
     HttpRequest(HttpRequestEffect),
+    HttpClientMetadata(HttpClientMetadataEffect),
     MysqlValues(MysqlValuesEffect),
     InputJwt(InputJwtEffect),
     InputSignedTimestamp(InputSignedTimestampEffect),
@@ -175,6 +181,16 @@ pub enum NativeEffect {
     CaptureHttpResponse(CaptureResponseEffect),
     ProcessOwned(ProcessOwnedEffect),
     FiniteSharing(FiniteSharingEffect),
+}
+
+impl NativeEffect {
+    pub(crate) fn redis_read_back(&self) -> &[Proven<RedisReadBack>] {
+        match self {
+            Self::Identity(effect) => &effect.read_back,
+            Self::RedisSequence(effect) => &effect.read_back,
+            _ => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

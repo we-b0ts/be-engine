@@ -76,6 +76,7 @@ impl DynamicValues {
         }
         let indexes: Vec<usize> = match command {
             "SET" => vec![1],
+            "LSET" if source.len() == 3 => vec![2],
             "HSET" => (2..source.len().min(130)).step_by(2).collect(),
             "RPUSH" if source.len() <= 129 => (1..source.len()).collect(),
             _ => return,
@@ -98,7 +99,7 @@ impl DynamicValues {
             }
             let differences =
                 if let Some(differences) = json_differences(&source[index], &actual[index]) {
-                    if command != "RPUSH" && differences.len() != 1 {
+                    if !matches!(command, "RPUSH" | "LSET") && differences.len() != 1 {
                         continue;
                     }
                     differences

@@ -92,8 +92,8 @@ pub enum OwnedElement {
 }
 
 mod validation;
-pub(crate) use validation::exact_sql_scopes_overlap;
 pub use validation::validate_field_claims;
+pub(crate) use validation::value_sql_scopes_overlap;
 
 pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
     use ClaimSurface as S;
@@ -218,6 +218,30 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
         NativeEffect::RedisLock => {
             add(S::DependencyRequest, L::Value, OwnedLocation::Scalar, false)
         }
+        NativeEffect::RedisAppendStream => {
+            add(
+                S::DependencyRequest,
+                L::RedisArgument(1),
+                OwnedLocation::Scalar,
+                false,
+            );
+            add(
+                S::DependencyResponse,
+                L::Value,
+                OwnedLocation::Scalar,
+                false,
+            );
+        }
+        NativeEffect::RedisReadCommutation(_) | NativeEffect::RedisExpiryRefresh(_) => {
+            // The proof requires an unchanged nil response. Another delivery
+            // owner must not rewrite that observation or authorize it twice.
+            add(
+                S::DependencyResponse,
+                L::Value,
+                OwnedLocation::Scalar,
+                false,
+            );
+        }
         NativeEffect::RedisPublishIdentity(effect) => {
             let location = effect
                 .uuid_field
@@ -280,6 +304,16 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                     ),
                 };
                 add(S::ApiResponse, L::Body, location, collection);
+            }
+        }
+        NativeEffect::HttpClientMetadata(effect) => {
+            for header in &effect.headers {
+                add(
+                    S::DependencyRequest,
+                    L::Header(header.clone()),
+                    OwnedLocation::Scalar,
+                    false,
+                );
             }
         }
         NativeEffect::HttpRequest(effect) => {
@@ -379,6 +413,28 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
         | NativeEffect::CaptureHttpResponse(_)
         | NativeEffect::ProcessOwned(_) => (),
     }
+    for entry in rule.effect.redis_read_back() {
+        let read = &entry.contract;
+        operation_override.set(Some(read.operation.as_str()));
+        if read.json_pointers.is_empty() {
+            add(
+                S::DependencyResponse,
+                L::Value,
+                OwnedLocation::Scalar,
+                false,
+            );
+        } else {
+            for pointer in &read.json_pointers {
+                let pointer = if read.operation == "LRANGE" {
+                    format!("/*{pointer}")
+                } else {
+                    pointer.clone()
+                };
+                add(S::DependencyResponse, L::Value, json(&pointer), false);
+            }
+        }
+    }
+    claims.extend(super::mysql_read_back::claims(rule));
     claims
 }
 

@@ -23,6 +23,24 @@ Discovery drafts prefill observed selectors and request missing Source facts;
 a candidate never authorizes its own proof. PB requires actual typed schema
 bindings. Do not guess clock units, a timezone, a key source or random permissions.
 
+Discovery is paged independently from complete plan coverage. Follow
+`pagination.next_page.command` for omitted candidate/Source-binding summaries
+and `pagination.next_scan.command` for remaining observations, including long
+SSE streams. Counts describe one bounded scan window. Inspect the separate
+`source_entry.binding_count`/`summary_omitted` and explicit
+`bounded_analysis.nonresumable_limits`; an empty page does not prove a missing
+capability. Continuations reject an obsolete active issue. Supported dependency
+capability hints still require independent Source conclusions and full planning.
+
+For SSE, inspect discovery's `source_entry.bindings` for exact event/type slots
+even if there is no mechanical candidate. Require the worker's Source clock or
+identity generator/lifetime proof and include every referring event/pointer,
+including terminal output. A shared identity `binding` preserves equality and
+injectivity across frames; missing events and event order remain strict. See
+[SSE value contracts](../../../../../docs/sse-value-contracts.md).
+When `policy_freshness.requires_fresh_replay` is true, follow its refresh command
+and scheduling gates before planning; discovery observations remain diagnostic.
+
 Apply only the returned reviewed plan. Concurrent policy, evidence, key, schema,
 Source inventory or execution changes invalidate it. A changed rule requires
 fresh genuine Replay before acceptance; capture and snapshot changes additionally
@@ -54,6 +72,37 @@ issues; applying a rule does not establish a pass or replace implementation work
 Use `case-pattern` for pre-inventory capture catalog bootstrap. The Source-gap
 `route`/`recorder-capture` workflows below remain explicit acquisition owners and
 write the same unified policy atomically. They are not value relaxations.
+
+## Redis APPEND Streams
+
+For Source-proven nonempty APPEND buffering, use `effect.kind: redis_append_stream`
+with an explicit API, Redis resource/database and key selector. Require ordered
+byte concatenation and observation/reset boundary proof; differing chunk sizes
+alone are insufficient. Complete Source preflight checks cumulative RESP lengths
+and preserves fresh Replay obligations. Other calls, including expiry refreshes,
+retain ordinary finite matching. See [APPEND streams](../../../../../docs/redis-append-stream.md).
+
+## Redis Independent Polling
+
+For Source-proven cancellation polling concurrent with unrelated writes,
+`effect.kind: redis_read_commutation` permits finite nil GET observations to
+cross their incidental connection order. Require an explicit API, Redis
+resource/database and key selector plus the independent-task Source proof.
+Complete preflight rejects non-nil reads, mutations, ambiguous key access and
+stateful read lanes. Every recorded read remains required; this does not
+authorize optional or extra polling. Use the unified plan/apply transaction and
+fresh Replay before attributing any remaining count mismatch. See
+[finite read commutation](../../../../../docs/redis-read-commutation.md).
+
+## Redis Read-back
+
+For Source-proven Redis write-then-read flows, update the existing `identity`
+or `redis_sequence` rule with `effect.read_back`; do not duplicate its capture
+or introduce a Target cache to compensate for a recorded generated ID. Require
+the worker's exact same-key write/read Source proof and selected fields. GET
+can return the matched SET value; LRANGE can return selected RPUSH/LSET JSON
+fields. Planning requires positive complete Source witnesses and Apply retains
+fresh Replay obligations. See [Redis read-back](../../../../../docs/redis-read-back.md).
 
 ## Recorder Capture
 

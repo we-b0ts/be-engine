@@ -206,12 +206,23 @@ impl ReplayPolicyRuntime {
                 }
             }
         }
-        let usage = loaded
+        let mut usage: BTreeMap<String, DependencyRuleUsage> = loaded
             .document
             .dependency_rules
             .iter()
             .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
             .collect();
+        for rule in loaded.compiled.iter().flat_map(|p| &p.native).filter(|r| {
+            matches!(
+                r.rule.effect,
+                crate::policy::NativeEffect::RedisAppendStream
+                    | crate::policy::NativeEffect::RedisReadCommutation(_)
+                    | crate::policy::NativeEffect::RedisExpiryRefresh(_)
+                    | crate::policy::NativeEffect::HttpClientMetadata(_)
+            )
+        }) {
+            usage.insert(rule.rule.id.clone(), DependencyRuleUsage::default());
+        }
         let mut runtime = Self {
             mysql_selectors: mysql_selectors::MysqlSelectors::new(
                 &loaded.document.dependency_rules,
@@ -685,6 +696,8 @@ impl ReplayPolicyRuntime {
             })
             .chain(self.dynamic_values.rule_reports())
             .chain(self.request_contracts.reports())
+            .chain(self.redis_native_rule_reports())
+            .chain(self.http_client_metadata_reports())
             .collect::<Vec<_>>();
         let unused_applicable_dependency_rule_ids = dependency_rules
             .iter()
@@ -698,6 +711,8 @@ impl ReplayPolicyRuntime {
             expected_response: self.loaded.document.expected_response,
             dependency_rules,
             dynamic_bindings: self.dynamic_values.report(),
+            mysql_identity_read_backs: self.dynamic_values.mysql_read_back_report(),
+            redis_read_backs: self.request_contracts.read_back_report(),
             key_bindings: self.request_contracts.key_binding_report(),
             dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
             request_contract_candidates: self.request_contracts.candidates(),
@@ -845,6 +860,7 @@ fn rule_matches_target(rule: &ReplayDependencyRule, actual: Option<&TargetKey>) 
     normalize_host(host) == actual.host && rule.target.port.is_none_or(|port| port == actual.port)
 }
 
+mod http_client_metadata;
 mod http_headers;
 mod http_json;
 

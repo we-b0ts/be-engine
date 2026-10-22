@@ -20,6 +20,7 @@ use crate::policy::{PolicyRule, TrafficPolicy, compile_policy, parse_policy};
 pub(super) mod discovery;
 mod manifest;
 mod preflight;
+mod proposal;
 #[cfg(test)]
 mod tests;
 
@@ -110,14 +111,9 @@ fn plan(
         ),
         "unified value rules require response or dependency evidence"
     );
-    for command in evidence::commands(root, state) {
-        if let Ok(report) = evidence::query(root, state, &command.query_id)
-            && report.evidence_id == options.evidence_id
-        {
-            evidence::policy_freshness::ensure_plannable(&report)?;
-            break;
-        }
-    }
+    let evidence = evidence::report_for_id(root, state, &options.evidence_id)
+        .context("rule evidence is stale or unavailable")?;
+    evidence::policy_freshness::ensure_plannable(&evidence)?;
     if let Some(record) = state.rule_plan.as_ref().and_then(|p| p.unified.as_ref()) {
         record.ensure_current(root, state)?;
     }
@@ -181,22 +177,7 @@ fn plan(
         .iter()
         .map(|r| r.id().to_owned())
         .collect::<BTreeSet<_>>();
-    let mut changed = false;
-    for rule in proposed.rules {
-        ensure!(
-            document
-                .rules
-                .iter()
-                .find(|current| current.id() == rule.id())
-                .is_none_or(|current| current == &rule),
-            "existing rule ID changes scope, effect, contract or proof; use a new explicitly reviewed rule ID"
-        );
-        if document.rules.iter().any(|current| current == &rule) {
-            continue;
-        }
-        document.rules.push(rule);
-        changed = true;
-    }
+    let changed = proposal::merge(&mut document, proposed.rules)?;
     let compiled = compile_policy(&document)?;
     let current = crate::validate_replay_policy(&config.replay_policy)?;
     ensure!(

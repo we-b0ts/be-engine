@@ -9,6 +9,9 @@ use serde_json::Value;
 const START: i64 = 1_792_108_800;
 const PRIVATE: &str = "synthetic-private-delta";
 
+#[path = "transaction_sse_discovery.rs"]
+mod discovery_tests;
+
 fn proposal() -> Value {
     let identity = json!({"kind":"identity","prefix":"msg_","format":{"hex":12},"binding":"assistant-message"});
     let time = json!({"request_time":"unix_seconds","clock_group":"response"});

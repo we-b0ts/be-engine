@@ -152,6 +152,19 @@ pub(super) async fn deliver_matched(
             }
         }
     }
+    if let Some(prepared) = &matched.identity_delivery {
+        match prepared.render(&matched.record.response) {
+            Ok(response) => matched.record.response = response,
+            Err(error) => {
+                state.lock().await.fail_exchange(
+                    &matched,
+                    &session.identity(),
+                    &format!("SQL identity delivery: {error:#}"),
+                );
+                return Err(error);
+            }
+        }
+    }
     session.observe_response(
         matched.record.sql.as_deref().unwrap_or_default(),
         &matched.record.response,
@@ -197,6 +210,17 @@ pub(super) async fn deliver_matched(
             &matched,
             &session.identity(),
             &format!("SQL response witness: {error:#}"),
+        );
+        return Err(error);
+    }
+    if let (Some(prepared), Some(policy)) =
+        (&matched.identity_delivery, replay.replay_policy.as_ref())
+        && let Err(error) = prepared.commit(&policy.dynamic_values, &matched.record.response)
+    {
+        replay.fail_exchange(
+            &matched,
+            &session.identity(),
+            &format!("SQL identity delivery witness: {error:#}"),
         );
         return Err(error);
     }

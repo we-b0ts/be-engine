@@ -464,6 +464,7 @@ impl MotanReplayState {
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
+            target_event_index: None,
             request_fingerprint: None,
             reason,
             diagnostic: None,
@@ -725,6 +726,7 @@ async fn enqueue_request(
                 case_id,
                 target: target.clone(),
                 command: identity.command(),
+                target_event_index: None,
                 request_fingerprint: None,
                 reason: "no recorded Motan heartbeat response template".to_string(),
                 diagnostic: None,
@@ -782,6 +784,7 @@ async fn record_unmatched_request(
         case_id: active_case_id,
         target: target.clone(),
         command: identity.command(),
+        target_event_index: None,
         request_fingerprint: None,
         reason,
         diagnostic: Some(diagnostic),
@@ -879,6 +882,11 @@ impl CommandExchangeScope for ReplayExchange {
 fn motan_unmatched_reason(diagnostic: &CommandMatchDiagnostic) -> String {
     match diagnostic {
         CommandMatchDiagnostic::EvidenceUnavailable { reason } => reason.clone(),
+        CommandMatchDiagnostic::RedisAppendStreamMismatch { .. }
+        | CommandMatchDiagnostic::RedisStateObservationMismatch { .. }
+        | CommandMatchDiagnostic::RedisAppendStreamBoundaryMismatch { .. } => {
+            "Redis APPEND stream bytes mismatch".into()
+        }
         CommandMatchDiagnostic::NoScopedCandidate => {
             "no available recorded Motan exchange exists in the current replay scope".to_string()
         }

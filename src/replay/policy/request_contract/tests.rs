@@ -1,6 +1,7 @@
 use super::*;
 use serde_json::json;
 mod dependency_clocks;
+mod lset;
 
 pub(super) fn rule(redis: Value) -> ReplayDependencyRule {
     serde_json::from_value(json!({"id":"write-contract","protocol":"redis","target":{"host":"cache.test","port":6379},"case":{"method":"PUT","path":"/presence/*"},"source_evidence":"Presence:update uses current Unix seconds and preserves its expiry interval","redis":redis})).unwrap()

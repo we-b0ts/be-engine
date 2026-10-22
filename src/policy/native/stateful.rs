@@ -15,6 +15,32 @@ pub struct IdentityEffect {
     pub format: Option<IdentityFormat>,
     pub capture: IdentityCapture,
     pub references: Vec<Proven<IdentityTarget>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_back: Vec<Proven<RedisReadBack>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mysql_read_back: Vec<Proven<MysqlIdentityReadBack>>,
+}
+
+/// Deliver previously captured identities in selected MySQL JSON result fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MysqlIdentityReadBack {
+    pub resource: Resource,
+    pub sql: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_series: Option<crate::MysqlTableSeries>,
+    pub column: String,
+    pub json_pointers: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::policy::strict_map::unique_map"
+    )]
+    pub templates: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +155,34 @@ pub struct RedisSequenceEffect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<Proven<NativeKeyContract>>,
     pub commands: Vec<SequenceCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_back: Vec<Proven<RedisReadBack>>,
+}
+
+/// No optional/reusable modes: every selected read stays finite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisReadCommutationEffect {}
+
+/// Explicitly normalize successful fixed-TTL refreshes within one key lifetime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisExpiryRefreshEffect {}
+
+/// An explicit same-key read may return selected values from a matched write.
+/// Empty pointers select a raw bulk value; nonempty pointers select JSON scalars.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisReadBack {
+    pub operation: String,
+    pub write_operation: String,
+    pub argument_index: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub json_pointers: Vec<String>,
+    /// Source proof that GET observes the current SET/DEL state, rather than a
+    /// required invocation count. Absent declarations retain finite reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_epochs: Option<crate::policy::Proof>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -150,6 +150,12 @@ pub struct MatchSpec {
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_series: Option<crate::MysqlTableSeries>,
 }
 
 impl MatchSpec {
@@ -593,6 +599,8 @@ pub enum TimestampFormat {
     AmzDate,
     Iso8601Naive,
     SqlDatetime,
+    /// A civil YYYY-MM-DD value relative to the request's declared local day.
+    CalendarDate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -70,6 +70,9 @@ is unclear.
   retain their own exchange identities and termination validation.
   Normal interaction closure keeps Source and Target running;
   process shutdown remains with the ordinary recording and run supervisors.
+  `e2e_run/evidence/interaction` owns on-demand authenticated SSE response
+  diagnostics, with bounded payload previews and raw JSON differences. It does
+  not persist plaintext, apply value rules or change assertion outcomes.
 
 - `policy/schema` owns the strict self-contained `traffic-policy/v1` document.
   `policy/compiler` owns typed capability validation, field ownership and
@@ -77,7 +80,9 @@ is unclear.
   state. `policy/condition` owns Source sibling predicate validation, selection,
   Target discriminator equality and conservative disjointness shared by value
   fields and native Redis identity captures. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
-  relations. `value_contract/json` composes field contracts with strict remainder
+  relations. Its `calendar` child preserves civil-day distances using independent
+  local request dates and an explicit fixed offset; it never treats a date as a
+  midnight instant or rewrites counters. `value_contract/json` composes field contracts with strict remainder
   comparison and bounded whole-element multiset pairing; `value_contract/delivery`
   writes only explicitly authorized timestamps in derived copies. These pure
   owners never claim protocol exchanges or mutate recorded evidence.
@@ -104,12 +109,17 @@ is unclear.
   header adapters reuse the same private key snapshots and JWT verifier. Header
   ownership never implies a JSON body codec or a response-status exemption.
 
+- `replay/report/sql_summary` owns bounded original SQL excerpts for diagnostics,
+  including outer SELECT bodies when long projections hide the predicates.
+  It uses the MySQL lexer, retains explicit truncation and never grants SQL
+  matching or ownership permission. MySQL evidence retains complete result-row
+  counts independently of lazy result payload storage.
 - `replay/report/global_evidence` owns durable, source-bound shared Global report
   inventories and lazy detail projection. Its artifact child owns atomic private
   storage and portable publication; protocol children supply immutable report rows
   and sparse visibility changes using their existing consumption semantics.
   Protocol-specific visibility semantics belong to the regular inventory identity:
-  new MySQL projections carry their cleanup revision, while omitted revisions
+  new MySQL projections carry their report revision, while omitted revisions
   preserve historical report keys and unrelated protocol caches.
   Generic Pub/Sub notifications retain Source-confirmed lane identities and their
   own sparse delivery state. These inventories are evidence, separate from the
@@ -126,7 +136,26 @@ is unclear.
   still evaluates every applicable permission and supplied clock independently.
   `replay/policy/request_contract/mysql_selection` owns immutable SQL selector
   preparation and bounded raw-token reuse; bound parameters and live applicability
-  never belong in that cache.
+  never belong in that cache. Ordinary value selectors and native SQL effects use
+  the same `sql_template/table` admission and physical-table binding. Value and
+  mixed field ownership checks retain the complete declared table range.
+  `replay/mysql/contracts/preflight_identity` owns derived SQL witness copies for
+  composed request and response identity/value planning. `dynamic_values/mysql_read_back`
+  owns explicit SQL JSON identity delivery patches, immutable capture clocks and
+  fingerprint-only successful delivery reports. SQL matching and session owners
+  retain finite selection, response composition and the post-wire commit boundary.
+  `policy/native_compile/mysql_read_back` owns admission and response field claims;
+  native Source validation proves each declared causal leaf without Target input.
+  `dynamic_values/audit` restores only accepted
+  Case-local binding fingerprints with native capture/reference guards and Source
+  causality. Immutable later captures establish whether a statement references a
+  binding; only captures completed before that request may restore it. Unrelated
+  statements borrow no identity permission. Runtime SQL normalization remains in `dynamic_values/mysql`.
+  Unified preflight retains original evidence and requires genuine Replay for
+  these stateful relationships. Pure SQL value comparison retains the remainder.
+  SQL value discovery reuses the statement-relatedness check before projecting
+  a Target slot; an unrelated search edge retains Source-only guidance instead
+  of aborting discovery or creating an independent Target validation.
   `mysql/sql/lexical_cache` shares only bounded immutable lexer output, including
   invalid-input results. `replay/mysql/candidates` indexes immutable Case/resource
   scopes and compatible command families in original inventory order; live
@@ -171,6 +200,24 @@ is unclear.
 - `engine_binary` resolves companion executables and Linux reexec paths for a
   replaced running engine. Replay, coordinator workers and local interception
   share that resolver; process lifecycle remains with each caller.
+
+- `replay/redis/append` owns explicitly authorized Case-local APPEND byte
+  reservations, derived lengths, delivery completion and fingerprint-only range
+  audits. Its `trace` child validates complete immutable Source byte order,
+  resets and observation fences; `source` reuses that preparation for native
+  rule preflight. Ordinary Redis adapters retain all non-APPEND matching and
+  finite consumption. Partial byte delivery is separate from active transport.
+  `redis/read_commutation` owns explicit finite nil-observation ordering
+  permission; its `source` child rejects mutations and overlapping ownership
+  before installing any permission. `redis/key_access` supplies conservative
+  key-access exclusion to both Source proofs, and `redis/native_source` loads
+  their complete scoped Source inventories. Native command matching and
+  delivery retain connection eligibility, claims and finite consumption.
+  `redis/observations` owns explicit SET/DEL state observations and positive TTL
+  refresh equivalence. Its `source` child validates complete, isolated key
+  lifetimes before installing observation permissions; request contracts retain
+  write-to-read identity rendering. Mutation matching, APPEND bytes and transport
+  completion remain with their existing owners.
 
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into
@@ -325,7 +372,13 @@ is unclear.
   HTTP matching call it only for case-owned exchanges. `replay/http/multipart`
   owns bounded multipart parsing; `replay/http/matching` owns HTTP selection.
   Generated-value feedback and coordinator adapters keep the existing
-  evidence/plan/apply/fresh-Replay transaction. Replay control supplies an
+  evidence/plan/apply/fresh-Replay transaction. Its `read_back` child owns
+  explicit same-key Redis write-to-read scalar bindings and derived delivery
+  witnesses. Its `state` child keeps bounded Case-local observations with
+  immutable Source causality; its `wire` child owns bounded RESP copies and
+  selected JSON scalar decoding. It does not simulate Redis or change Target
+  cache behavior. Redis adapters retain matching, delivery and consumption.
+  Replay control supplies an
   independent inbound request anchor; protocol arguments cannot choose it.
   Its `script` child validates explicit Lua digests and bounded KEYS/ARGV
   envelopes without evaluating Lua. Redis compares dynamic-identity copies
@@ -380,6 +433,12 @@ is unclear.
   audit evidence; its time-reference child resolves dependency-local recorded or
   completion-minus-duration clocks internally. Its
   timestamp-evidence child verifies immutable witnesses.
+  `policy/native/http_client_metadata` owns the closed SDK-name schema;
+  `native_compile/http_request` validates its explicit consumer scope and field
+  ownership. `replay/policy/http_client_metadata` shares endpoint/method/path
+  selection between audit and protected witness preflight; the matcher supplies
+  Source API/condition selection and usage accounting. The header audit retains
+  observational differences without selecting exchanges or changing delivery.
   `rewrite/evidence/rule_guidance/http_header_timestamp` projects bounded
   candidates without proving source semantics. The coordinator model and HTTP
   The unified rule transaction owns authoring; protocol children own only their
@@ -1053,6 +1112,11 @@ explicit repository-wide audit.
   resolves the sole Target-root-relative `project.policy` path.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
+  Its `proposal` child merges new rules, additive identity references/read-back
+  declarations and independently proven one-way finite raw identity read-back
+  upgrades to state observations. Existing scope, contracts and prior proofs
+  remain immutable. Preflight and publication retain all ordinary stale checks
+  and fresh-Replay obligations for that extension.
   `manifest/primary` freezes each selected Case's original primary-response oracle
   and published assertion/Target artifacts, including inline binary bodies, even
   for dependency-only rules. It freezes managed decryption keys and supplies
@@ -1064,9 +1128,18 @@ explicit repository-wide audit.
   `replay/assertion/interaction/contracts` owns the explicit SSE envelope/data
   adapter shared by Source/Target preflight and Replay; `value_contract/json/identity`
   owns bounded case-local identity bijections. Policy SSE slots retain separate
-  event/body field ownership. `unified_rule/discovery/interaction` supplies bounded
-  private SSE slot/time drafts without inferring identity authority. Public result
-  observations retain private-field unavailability for virtual SSE pointers.
+  event/body field ownership. `unified_rule/discovery/primary` owns authenticated
+  primary-response observations, scheduled before dependencies for response issues
+  within the shared discovery budget. Its `page` sibling owns bounded scan and
+  summary positions; `evidence/unified_discovery` binds continuation commands
+  and evidence identities to the active issue. Its `interaction` sibling supplies bounded
+  private SSE slot/time drafts and explicit authoring guidance without inferring
+  identity authority. Public result observations retain private-field
+  unavailability for virtual SSE pointers.
+  `evidence/rule_guidance/stateful_dependencies` projects supported mechanisms
+  from bounded dependency operations and Source binding metadata. It supplies
+  proof requirements and ordinary plan commands without granting permission or
+  changing matching, ownership or consumption.
   `preflight/{api,dependency,session,source}` delegates
   payload, native envelope, stateful Source trace and whole-recording proof to
   their existing owners. Whole-recording Source effects explicitly enumerate

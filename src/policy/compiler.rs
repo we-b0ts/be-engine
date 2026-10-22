@@ -208,12 +208,15 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
         if let Some(time) = contract.unconditional().time() {
             ensure!(
                 match time.format {
+                    TimestampFormat::CalendarDate => {
+                        time.utc_offset.is_some() && time.clock_group.is_none()
+                    }
                     TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => {
                         time.relation == TimeRelation::PreserveOffset || time.utc_offset.is_some()
                     }
                     _ => time.utc_offset.is_none(),
                 },
-                "naive request_window times require utc_offset; relative times need none; zoned and Unix formats forbid it"
+                "calendar_date requires utc_offset and forbids clock_group; naive request_window times require utc_offset; relative timestamps need none; zoned and Unix formats forbid it"
             );
             time.offset()?;
         }
@@ -283,6 +286,16 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
 
 fn validate_match(rule: &Rule) -> Result<()> {
     let selector = &rule.selector;
+    ensure!(
+        selector
+            .resource
+            .as_ref()
+            .is_some_and(|r| r.protocol == Protocol::Mysql)
+            || (selector.tables.is_empty()
+                && selector.table_patterns.is_empty()
+                && selector.table_series.is_none()),
+        "SQL table selectors require a MySQL dependency resource"
+    );
     if let Some(api) = &selector.api {
         validate_api(api)?;
     }
@@ -410,25 +423,8 @@ fn validate_match(rule: &Rule) -> Result<()> {
                 "match.sql",
                 65536,
             )?;
-            let sql = selector.sql.as_deref().expect("SQL selector was required");
-            ensure!(
-                !sql.contains("{{table}}"),
-                "generic SQL slots select an exact physical table; bounded table families use a typed native effect"
-            );
-            let tokens = crate::mysql::sql::tokens(sql)
-                .context("SQL selector cannot be tokenized completely")?;
-            ensure!(
-                !tokens.is_empty()
-                    && tokens.len() <= crate::mysql::sql::bounds::MAX_TOKENS
-                    && !tokens.iter().any(|token| token.is(";"))
-                    && crate::mysql::access::analyze_sql(sql).statements_complete,
-                "SQL selector requires one bounded complete statement without a statement separator"
-            );
+            let values = crate::replay::validate_mysql_value_selector(selector)?;
             if let Slot::SqlValue(index) = &rule.slot {
-                let values = tokens
-                    .iter()
-                    .filter(|token| **token == crate::mysql::sql::Token::Placeholder)
-                    .count();
                 ensure!(
                     *index < values,
                     "SQL value index {index} exceeds {values} explicit placeholder slots"
@@ -693,10 +689,7 @@ fn selectors_overlap(left: &MatchSpec, right: &MatchSpec) -> bool {
     {
         return false;
     }
-    super::native_compile::ownership::exact_sql_scopes_overlap(
-        left.sql.as_deref(),
-        right.sql.as_deref(),
-    )
+    super::native_compile::ownership::value_sql_scopes_overlap(left, right)
 }
 
 pub(crate) fn key_scopes_overlap(left: Option<&KeySelector>, right: Option<&KeySelector>) -> bool {

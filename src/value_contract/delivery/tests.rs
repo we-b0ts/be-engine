@@ -2,6 +2,7 @@ use super::*;
 use crate::value_contract::time::ClockPair;
 use chrono::TimeZone;
 use serde_json::json;
+mod calendar;
 
 #[test]
 fn naive_delivery_preserves_civil_text_without_timezone_configuration() {

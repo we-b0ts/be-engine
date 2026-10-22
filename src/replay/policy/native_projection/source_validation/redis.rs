@@ -135,5 +135,36 @@ pub(super) fn validate(
     {
         runtime.request_contracts.commit(decision?);
     }
+    if runtime.request_contracts.has_read_back_for(&context, &args)
+        && event["outcome"]
+            .as_str()
+            .is_none_or(|outcome| outcome == "response")
+    {
+        let response = crate::api_trigger::decode(&event["response"])
+            .context("read_back Source response is invalid or truncated")?;
+        if let Some(prepared) = runtime
+            .request_contracts
+            .prepare_redis_read_back(&context, &args, &args, &response)?
+        {
+            ensure!(
+                prepared.response == response,
+                "Source read_back self validation changed response bytes"
+            );
+            runtime.request_contracts.commit_redis_read_back(
+                &prepared,
+                clock.context("Source read_back clock missing")?,
+            )?;
+        }
+        let write = runtime.request_contracts.preview_redis_read_back_write(
+            &context,
+            &args,
+            &args,
+            &response,
+            event["timestamp"].as_str().map(str::parse).transpose()?,
+        )?;
+        runtime
+            .request_contracts
+            .commit_redis_read_back_write(write)?;
+    }
     Ok(())
 }

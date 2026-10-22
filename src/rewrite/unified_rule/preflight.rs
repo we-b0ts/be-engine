@@ -163,8 +163,14 @@ pub(super) fn verify(
                 &mut result,
             )?;
         }
-        let file = fs::File::open(directory.join("dependencies.jsonl"))?;
-        for line in BufReader::new(file).lines() {
+        let dependency_path = directory.join("dependencies.jsonl");
+        bundle.freeze(&dependency_path)?;
+        ensure!(
+            fs::metadata(&dependency_path)?.len() <= 1024 * 1024 * 1024,
+            "Source trace inventory exceeds supported evidence bounds"
+        );
+        let dependency_bytes = fs::read(&dependency_path)?;
+        for line in BufReader::new(dependency_bytes.as_slice()).lines() {
             let line = line?;
             ensure!(
                 line.len() <= crate::dependency::http_limits::MAX_RECORD_BYTES,
@@ -356,13 +362,39 @@ pub(super) fn verify(
                         found = true;
                         continue;
                     }
+                    let native_pair = if http {
+                        &native_applicable
+                    } else {
+                        &native_sql
+                    };
+                    let normalized = if dependency::protocol(&event) == Some(Protocol::Mysql) {
+                        crate::replay::mysql_normalize_identity_witnesses(
+                            crate::replay::MysqlIdentityPreflight {
+                                policy,
+                                report: &bundle.replay,
+                                case: &case_id,
+                                request: &request,
+                                dependencies: &dependency_bytes,
+                                resource: witness
+                                    .metadata
+                                    .resource
+                                    .as_ref()
+                                    .context("SQL identity witness resource missing")?,
+                                clocks,
+                            },
+                            &raw,
+                            &target,
+                        )?
+                    } else {
+                        None
+                    };
                     let comparison = dependency::compare_pair(
                         surface,
                         &event,
-                        &raw,
-                        &target,
+                        normalized.as_ref().map_or(raw.as_slice(), |n| n.source.as_slice()),
+                        normalized.as_ref().map_or(target.as_slice(), |n| n.target.as_slice()),
                         &rules,
-                        &native_sql,
+                        native_pair,
                         clocks,
                     )
                     .with_context(|| {
@@ -381,6 +413,13 @@ pub(super) fn verify(
                     };
                     if evaluated == 0 {
                         continue;
+                    }
+                    if let Some(normalized) = normalized {
+                        // The scalar/JSON comparison uses attested identity pairs;
+                        // genuine Replay still re-establishes capture and use order.
+                        result
+                            .stateful_target_obligations
+                            .extend(normalized.rule_ids);
                     }
                     found = true;
                     // One physical observation may be recorded once per SQL slot.

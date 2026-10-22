@@ -103,8 +103,30 @@ retain their own checks.
 
 Discovery groups JSON-bearing SSE slots by their explicit Source `/type` when
 present and exposes observed time/unordered drafts without
-plaintext values; it does not infer identity permission. Plan validates complete
-selected Source observations and every available independent Target observation
+plaintext values; it does not infer identity permission. Follow the
+`unified_value_contract` evidence hint to the `unified_rule_candidates` query.
+For response issues, discovery inspects primary responses before dependency
+witnesses so a large dependency trace cannot consume the budget first.
+`bounded_analysis.scan_order` reports each window's priority; the shared
+256-observation and 8192-JSON-node limits still apply per scan window. Discovery
+prioritizes the representative and failed Cases. Follow
+`pagination.next_page.command` for omitted summaries and
+`pagination.next_scan.command` to continue past the observation budget, including
+later SSE frames and terminal output. Candidate and binding counts describe
+only the current window; `source_entry.binding_count` and `summary_omitted`
+expose binding truncation independently of candidates. Nonresumable limits are
+reported under `bounded_analysis.nonresumable_limits`.
+`source_entry.bindings` exposes exact
+SSE selectors and authoring instructions even when no time/unordered draft is
+found. Use those bindings to trace Source generation and prove explicit identity
+rules; an empty candidate list does not mean the engine lacks SSE support.
+Include every identity reference, including IDs nested in terminal response
+output. Missing events and event order require Target diagnosis. If
+`policy_freshness.requires_fresh_replay` is true, follow its coordinator refresh
+command before planning against new evidence.
+
+Plan validates complete selected Source observations and every available
+independent Target observation
 through the same adapter used by Replay. A missing Target retains a fresh-Replay
 obligation. Plans freeze original encrypted request/output artifacts and the
 managed key; Apply rejects changed evidence/keys and never rewrites recordings.

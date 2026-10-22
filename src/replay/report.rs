@@ -8,6 +8,7 @@ pub(super) mod command;
 mod dependency_evidence;
 pub(in crate::replay) mod global_evidence;
 mod model;
+mod sql_summary;
 mod success;
 mod writer;
 #[cfg(test)]
@@ -31,6 +32,7 @@ pub(crate) use dependency_evidence::{
     read_dependency_evidence,
 };
 pub(super) use model::*;
+pub(super) use sql_summary::SqlSummary;
 pub(super) use success::{
     SUCCESS_DETAIL_LIMIT, SUCCESS_DETAIL_SCOPE, SuccessDetailBudget, push_success_detail,
 };

@@ -5,7 +5,11 @@ mod candidates;
 mod conditional_redis_tests;
 mod config;
 mod http;
+#[cfg(test)]
+mod lset_tests;
 mod mysql;
+mod mysql_read_back;
+pub(in crate::replay) use mysql_read_back::{MysqlIdentityDelivery, MysqlIdentityReadBackReport};
 #[cfg(test)]
 mod mysql_table_tests;
 mod path_candidates;
@@ -16,7 +20,9 @@ mod scopes;
 mod source;
 mod source_coverage;
 mod strings;
-pub(in crate::replay) use audit::{DynamicBindingReport, from_report};
+pub(in crate::replay) use audit::{
+    DynamicBindingReport, from_native_read_report, from_native_report, from_report,
+};
 pub(in crate::replay) use candidates::CaptureCandidate;
 pub(in crate::replay) use config::validate;
 pub use config::{
@@ -62,6 +68,8 @@ pub(in crate::replay) struct DynamicValues {
     bindings: Arc<Mutex<CaseBindings>>,
     candidates: Arc<Mutex<Vec<CaptureCandidate>>>,
     applicable: Arc<Mutex<BTreeSet<String>>>,
+    mysql_capture_clocks: Arc<Mutex<mysql_read_back::CaptureClocks>>,
+    mysql_read_backs: Arc<Mutex<Vec<MysqlIdentityReadBackReport>>>,
 }
 
 impl DynamicValues {
@@ -81,6 +89,8 @@ impl DynamicValues {
             bindings: Arc::new(Mutex::new(BTreeMap::new())),
             candidates: Arc::new(Mutex::new(Vec::new())),
             applicable: Arc::new(Mutex::new(BTreeSet::new())),
+            mysql_capture_clocks: Arc::default(),
+            mysql_read_backs: Arc::default(),
         }
     }
     pub(in crate::replay::policy) fn set_request(
@@ -123,6 +133,10 @@ impl DynamicValues {
                     .is_some_and(|ids| ids.contains(&rule.id)))
     }
     pub(in crate::replay) fn begin_case(&self, case_id: &str) {
+        self.mysql_read_backs
+            .lock()
+            .expect("SQL identity deliveries")
+            .retain(|row| row.case_id != case_id);
         self.candidates
             .lock()
             .expect("capture candidates")

@@ -1,8 +1,12 @@
 use std::collections::BTreeMap;
 
 use super::*;
+mod append;
 mod conditional_identity;
+mod http_client_metadata;
 mod http_request;
+mod mysql_json;
+mod read_commutation;
 mod redis_sequence;
 use crate::policy::{Database, Endpoint, Resource};
 
@@ -38,6 +42,8 @@ fn path_rule() -> NativeRule {
             ..Default::default()
         },
         effect: NativeEffect::Identity(IdentityEffect {
+            mysql_read_back: vec![],
+            read_back: vec![],
             value_type: IdentityType::String,
             format: None,
             references: vec![proven(IdentityTarget { resource })],
@@ -246,6 +252,7 @@ fn grouped_clock_names_are_semantic_and_sequence_claims_keep_command_slots() {
             ..Default::default()
         },
         effect: NativeEffect::RedisSequence(RedisSequenceEffect {
+            read_back: vec![],
             key: None,
             commands: vec![SequenceCommand {
                 operation: "ZADD".into(),

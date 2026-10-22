@@ -24,9 +24,19 @@ on other endpoints, operations or surfaces.
 | --- | --- | --- |
 | An unordered Set becomes a JSON array or repeated PB field | `contract: {<logical-path>: {kind: unordered}}`; PB declares field numbers/types explicitly | Multiplicity, membership, element associations, presence, unknown PB fields and remainder |
 | A generated timestamp or expiry | `kind: time`, explicit format, relation and trusted anchor | Units, microseconds, TTL offset, copied instants and clock groups |
+| Redis SET stores a scalar floating timestamp | Exact API/resource/DB/key `dependency.request`, `slot: value`, `codec: json`, root `contract: {'': {relative_time: unix_seconds}}` | Key, options, TTL and finite calls stay strict. A native sequence adapter's scalar-slot whitelist does not imply the generic value capability is missing |
+| SDK runtime headers differ, and Source consumer/middleware do not read them | Explicit API/endpoint/method/path-scoped `http_client_metadata` with exact supported names; [schema](../../../../../docs/http-client-metadata.md) | Business/authentication headers, body/query, finite requests and delivery. `protected: false` concerns confidentiality; it does not make a mismatch nonblocking |
+| SSE data contains a generated timestamp | `api.response`, exact `slot.sse_data` event/type, JSON pointer and Source-proven request-time relation | Event presence/order, envelope, unselected fields and terminal state |
+| Source generates one fresh SSE identity and references it across frames | Explicit JSON `kind: identity`, proven prefix/format and the same `binding` at every reference | Bijection, Case lifetime, exact prefixes, terminal output references and dependency-owned identities |
 | Live elapsed duration that stops at terminal state | Source sibling `conditional` around `duration` | Terminal values and status stay exact; missing/wrong-type status rejects |
 | Expired recorded Redis/MySQL input | Explicit `dependency.response` time contract plus selected `delivery.rebase_time`, or typed SQL response effect | Raw Source bytes, sentinel values, protocol outcomes, finite inventory and signature dependencies |
 | Identity captured in SQL/Redis/HTTP and reused later | `effect.kind: identity` with capture, shape/lifetime and exact allowed reference resources | Bijection, case scope and atomic candidate decisions |
+| Redis reads back a generated ID or preserved timestamp after writing it | Add explicit `effect.read_back` to the existing `identity` / `redis_sequence` rule; see [schema](../../../../../docs/redis-read-back.md) | Successful matched write, same key/Case/resource, original Source causality, selected fields, finite reads and fresh Replay |
+| A previously captured identity is reused in another dependency, including SQL JSON | Append a separately proven resource to the existing identity rule's `effect.references`; [details](../../../../../docs/dynamic-value-rules.md) | Keep its ID, capture, root proof and all old relationships unchanged. Complete Source must show the new use after capture; other JSON fields remain strict |
+| SQL JSON combines captured identities and generated times in variable-length arrays | Keep the identity references; use `mysql_values.values` JSON time paths such as `/blocks/*/timestamp`, plus separate proven clock groups for independent SQL clocks | Plan uses accepted scoped bindings on comparison copies. Raw IDs remain different; require fresh Replay for capture/order and inspect the first remaining unselected field. Array shape and business members stay strict |
+| LSET updates a JSON list element | JSON fields select `redis_sequence.commands[].arguments.2`; a Source-generated identity can capture Redis argument 2; see [schema](../../../../../docs/redis-generated-requests.md#lset-list-element-updates) | Exact list index, existing identity references for preserved IDs, strict remainder, three arguments and finite writes |
+| Source buffers ordered text into APPEND batches whose boundaries vary with scheduling | Explicit API/resource/database/key-scoped `redis_append_stream`; see [schema](../../../../../docs/redis-append-stream.md) | Literal byte order, read/reset boundaries, correct returned lengths, exact finite expiry/other calls, successful delivery and Case ownership |
+| APPEND bytes match, but a changed batch count adds current-identity GETs or fixed-TTL EXPIREs | Source-proven `read_back.state_epochs` or `redis_expiry_refresh`; see [state observations](../../../../../docs/redis-state-observations.md) | Follow the earliest Target admission index; preserve SET/DEL lifetimes, generated identity binding and exact TTL. Do not infer missing key translation from a later MGET mismatch caused by an earlier rejected batch |
 | SET NX lock and conditional release | `effect.kind: redis_lock` with endpoint/database/user/key scope | Successful acquisition completion before reference, token equality, NX/TTL/script and finite consumption |
 | Script ARGV/time-key or INCRBY/EXPIRE chain | `effect.kind: redis_sequence` with Source-proven ordered commands | Script identity, numkeys, KEYS, stable ARGV, sequence closure and derived key relationships |
 | PUBLISH UUID and JSON times | Typed publisher identity plus disjoint shared time contracts | Channel, publisher bijection and atomic commit |
@@ -40,6 +50,20 @@ on other endpoints, operations or surfaces.
 | Missing Source acquisition or IP learned from a response | `capture_http`, `capture_breeze` or `capture_http_response` | Real new Recording and provenance of original/transformed response |
 
 For timezone-free timestamps, prove the fixed UTC offset from Source deployment.
+For SSE, follow the `unified_value_contract` hint to discovery and inspect
+`source_entry.bindings` even when `candidates` is empty. Discovery prioritizes
+primary responses for response issues but remains bounded; it never infers
+identity permission. `slot: {sse_data: {event: message, json_type: <Source-type>}}`
+selects the decoded data JSON in data-only streams. Trace each Source generator
+and every reference, including IDs in terminal output; use a shared binding only
+for the same entity. IDs fixed by Replay dependencies must retain their existing
+ownership. Missing events, changed text and event order require Target diagnosis.
+See [SSE value contracts](../../../../../docs/sse-value-contracts.md).
+
+When Source uses Redis GET/LRANGE results, preserve that data flow. Return a
+read-back rule update and write/read proof if Replay returns recorded Source
+identities; do not replace the Redis read with a Target-local cache solely to
+compensate for that delivery difference.
 Different `clock_group` names require independent Source clock reads; omission
 retains rigid copy/precision checks. For SQL, return the exact SQL template,
 physical table bounds, parameter/value indices, database and authentication

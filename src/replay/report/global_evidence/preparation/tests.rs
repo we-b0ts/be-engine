@@ -223,7 +223,7 @@ async fn mysql_cleanup_prewarm_imports_the_current_hidden_noop_commit_inventory(
     assert_eq!(portable.visible, 0);
     assert_eq!(
         portable.identity.semantics.as_deref(),
-        Some("mysql-transaction-cleanup-v2")
+        Some("mysql-sql-diagnostics-v3")
     );
     let report = temp
         .path()

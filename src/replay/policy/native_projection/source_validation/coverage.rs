@@ -5,8 +5,12 @@ use super::*;
 pub(super) struct Coverage {
     references: BTreeSet<(String, usize)>,
     columns: BTreeSet<(String, String)>,
+    headers: BTreeSet<(String, String)>,
 }
 impl Coverage {
+    pub(super) fn header(&mut self, id: &str, name: &str) {
+        self.headers.insert((id.into(), name.into()));
+    }
     pub(super) fn references(&mut self, hits: impl IntoIterator<Item = (String, usize)>) {
         self.references.extend(hits);
     }
@@ -18,6 +22,7 @@ impl Coverage {
         compiled: &CompiledPolicy,
         selected: &BTreeSet<String>,
         counts: &BTreeMap<String, usize>,
+        mysql_reads: &[crate::replay::policy::dynamic_values::MysqlIdentityReadBackReport],
     ) -> Result<()> {
         for compiled in compiled
             .native
@@ -31,6 +36,15 @@ impl Coverage {
                 rule.id
             );
             match &rule.effect {
+                NativeEffect::HttpClientMetadata(effect) => {
+                    for name in &effect.headers {
+                        ensure!(
+                            self.headers.contains(&(rule.id.clone(), name.clone())),
+                            "HTTP client metadata rule {} header {name} has no complete positive Source witness",
+                            rule.id
+                        );
+                    }
+                }
                 NativeEffect::Identity(effect) => {
                     for index in 0..effect.references.len() {
                         ensure!(
@@ -38,6 +52,17 @@ impl Coverage {
                             "native identity {} reference resource {index} has no use after a Source capture",
                             rule.id
                         );
+                    }
+                    for (index, entry) in effect.mysql_read_back.iter().enumerate() {
+                        for pointer in &entry.contract.json_pointers {
+                            ensure!(
+                                mysql_reads.iter().any(|read| read.rule_id == rule.id
+                                    && read.declaration == index
+                                    && read.json_pointers.contains(pointer)),
+                                "native identity {} MySQL read_back {index} field {pointer} has no positive causal Source witness",
+                                rule.id
+                            );
+                        }
                     }
                 }
                 NativeEffect::MysqlValues(effect) => {

@@ -54,7 +54,8 @@ pub use egress_counter::{
 mod global_dependency_tests;
 mod http;
 pub(crate) use http::contracts::{
-    source_witness as http_source_witness, validate_witness as http_validate_witness,
+    source_witness as http_source_witness,
+    validate_contract_witness as http_validate_contract_witness,
     witness_matches as http_witness_matches,
     witness_metadata_matches as http_witness_metadata_matches, witness_value as http_witness_value,
 };
@@ -75,12 +76,18 @@ mod memcached;
 mod model;
 mod motan;
 mod mysql;
+pub(crate) use mysql::contracts::request_witnesses_related as mysql_request_witnesses_related;
+pub(crate) use mysql::contracts::{
+    IdentityPreflight as MysqlIdentityPreflight,
+    normalize_identity_witnesses as mysql_normalize_identity_witnesses,
+};
 pub(crate) use mysql::contracts::{
     source_witness as mysql_source_witness, validate_witness as mysql_validate_witness,
     witness_values as mysql_witness_values,
 };
 pub(crate) use policy::mysql_native_witness_matches;
 pub(crate) use policy::mysql_witness_matches;
+pub(crate) use policy::validate_mysql_value_selector;
 mod network_access;
 mod policy;
 pub(crate) use policy::replace_request_rule_section;

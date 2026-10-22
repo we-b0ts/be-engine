@@ -534,9 +534,15 @@ fn signature(event: &Value) -> Value {
         "topic",
         "database",
         "sql",
+        "sql_summary",
+        "index",
+        "connection_id",
+        "query_sequence",
+        "row_count",
         "status",
         "reason",
         "diagnostic",
+        "target_event_index",
     ] {
         if let Some(value) = event.get(field) {
             signature.insert(field.to_string(), bounded_value(value));
@@ -586,6 +592,7 @@ fn event_difference(direction: DifferenceDirection, event: &Value) -> ReplayDepe
                     "uri": event.get("uri"),
                     "values": value.get("values"),
                     "protected": value.get("protected"),
+                    "comparison": event.get("comparison"),
                     "rule_id": event.get("rule_id"),
                     "validation_error": event.get("validation_error"),
                     "request_started_at": event.get(if side == "expected" { "source_request_started_at" } else { "target_request_started_at" }),
@@ -687,6 +694,31 @@ mod tests {
 
         assert!(!report_has_case_dirty_events(&report));
         assert!(build_dependency_evidence(&report).clusters.is_empty());
+    }
+
+    #[test]
+    fn redis_failure_signature_and_matches_preserve_shared_arrival_indices() {
+        let report = json!({
+            "success_detail_limit":100,"success_detail_scope":"case",
+            "redis":{
+                "target_event_index_scope":"case_request_admission",
+                "matched":[
+                    {"case_id":"case-a","command":"GET","target_event_index":2,"index":12},
+                    {"case_id":"case-a","command":"GET","target_event_index":0,"index":10}
+                ],
+                "unmatched":[{"case_id":"case-a","command":"LRANGE","target_event_index":1,
+                    "diagnostic":{"kind":"lane_blocked"}}]
+            }
+        });
+        let evidence = build_dependency_evidence(&report);
+        let representative = evidence.clusters[0].representative.as_ref().unwrap();
+        assert_eq!(
+            representative.difference.actual.signature.as_ref().unwrap()["target_event_index"],
+            1
+        );
+        assert_eq!(representative.target_matches[0].target_event_index, 0);
+        assert_eq!(representative.target_matches[1].target_event_index, 2);
+        assert!(!representative.target_matches_may_be_truncated);
     }
 
     #[test]

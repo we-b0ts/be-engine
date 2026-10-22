@@ -272,12 +272,13 @@ impl RedisRequestSelector {
                     ArgumentRule::Json(json) => {
                         ensure!(
                             command.command == "SET" && *index == 1
+                                || command.command == "LSET" && *index == 2
                                 || matches!(command.command.as_str(), "RPUSH" | "LPUSH")
                                     && (1..=128).contains(index)
                                 || command.command == "PUBLISH" && *index == 1
                                 || matches!(command.command.as_str(), "EVAL" | "EVALSHA")
                                     && (3..=128).contains(index),
-                            "JSON request rules select SET/PUBLISH value index 1, LPUSH/RPUSH elements or bounded script ARGV"
+                            "JSON request rules select SET/PUBLISH value index 1, LSET element index 2, LPUSH/RPUSH elements or bounded script ARGV"
                         );
                         ensure!(
                             !json.json.is_empty() && json.json.len() <= 32,

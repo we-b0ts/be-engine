@@ -303,6 +303,9 @@ fn sql_time(value: &n::NativeTime) -> Result<c::TimeRule> {
         TimestampFormat::Iso8601Naive => Some("%Y-%m-%dT%H:%M:%S%.f".into()),
         TimestampFormat::SqlDatetime => Some("%Y-%m-%d %H:%M:%S%.f".into()),
         TimestampFormat::AmzDate => Some("%Y%m%dT%H%M%SZ".into()),
+        TimestampFormat::CalendarDate => {
+            anyhow::bail!("calendar_date requires a value codec contract")
+        }
     };
     Ok(c::TimeRule {
         relative_to: c::TimeReference::PreserveRelative,

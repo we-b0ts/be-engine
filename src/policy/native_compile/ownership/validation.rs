@@ -8,6 +8,16 @@ use crate::policy::{
 
 pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRule]) -> Result<()> {
     validate_body_codecs(value, native)?;
+    let read_back = native
+        .iter()
+        .filter(|rule| !rule.rule.effect.redis_read_back().is_empty())
+        .map(|rule| rule.rule.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let delivery = value
+        .iter()
+        .filter(|rule| rule.rule.delivery.is_some())
+        .map(|rule| rule.rule.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     let mut claims = vec![];
     for compiled in value {
         claims.extend(value_claims(compiled)?);
@@ -37,6 +47,16 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
             {
                 continue;
             }
+            anyhow::ensure!(
+                claim.surface != ClaimSurface::DependencyResponse
+                    || !(read_back.contains(claim.rule_id.as_str())
+                        && delivery.contains(other.rule_id.as_str())
+                        || read_back.contains(other.rule_id.as_str())
+                            && delivery.contains(claim.rule_id.as_str())),
+                "Redis read_back cannot share a response with another delivery owner: {:?} / {:?}",
+                claim.rule_id,
+                other.rule_id
+            );
             let overlap = locations_overlap(&claim.location, &other.location);
             if overlap && !container_child(claim, other) && !container_child(other, claim) {
                 anyhow::bail!(
@@ -172,7 +192,9 @@ fn selector(value: &MatchSpec) -> NativeMatch {
         key: value.key.as_ref().map(key),
         path: value.path.clone(),
         sql: value.sql.clone(),
-        ..Default::default()
+        tables: value.tables.clone(),
+        table_patterns: value.table_patterns.clone(),
+        table_series: value.table_series.clone(),
     }
 }
 
@@ -272,18 +294,8 @@ fn sql_overlap(left: &NativeMatch, right: &NativeMatch) -> Result<bool> {
     Ok(true)
 }
 
-pub(crate) fn exact_sql_scopes_overlap(left: Option<&str>, right: Option<&str>) -> bool {
-    sql_overlap(
-        &NativeMatch {
-            sql: left.map(str::to_owned),
-            ..Default::default()
-        },
-        &NativeMatch {
-            sql: right.map(str::to_owned),
-            ..Default::default()
-        },
-    )
-    .unwrap_or(true)
+pub(crate) fn value_sql_scopes_overlap(left: &MatchSpec, right: &MatchSpec) -> bool {
+    sql_overlap(&selector(left), &selector(right)).unwrap_or(true)
 }
 
 fn disjoint<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {

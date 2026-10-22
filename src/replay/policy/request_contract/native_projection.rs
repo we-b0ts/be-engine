@@ -92,6 +92,9 @@ pub(in crate::replay::policy) fn time(
         TimestampFormat::Iso8601Naive => config::RequestTimestampFormat::Iso8601Naive,
         TimestampFormat::AmzDate => config::RequestTimestampFormat::AmzDate,
         TimestampFormat::SqlDatetime => config::RequestTimestampFormat::SqlDatetime,
+        TimestampFormat::CalendarDate => {
+            anyhow::bail!("calendar_date requires a value codec contract")
+        }
     };
     let projected = config::TimeField {
         time: config::RelativeTime::PreserveRelative,

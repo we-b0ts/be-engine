@@ -20,6 +20,13 @@ discovery query and capability metadata. Follow its returned command. Inspect
 immutable Source code and the exact Source/Target witnesses before proposing a
 rule; a mechanically explainable difference is not a semantic justification.
 
+Follow discovery's `pagination.next_page.command` for omitted candidate/binding
+summaries and `pagination.next_scan.command` for remaining observations. Counts
+describe the current bounded scan window; Source bindings have separate
+`binding_count` and `summary_omitted` fields. Explicit nonresumable limits remain
+under `bounded_analysis.nonresumable_limits`. Missing drafts are not proof of a
+missing capability, and supported mechanism hints never supply Source proof.
+
 The coordinator accepts one rule, a list, or a complete typed document:
 
 ```bash
@@ -134,6 +141,39 @@ Comparing a dependency response does not authorize rewriting it. Only explicit
 The writer revalidates the complete delivered payload and preserves unrelated
 bytes, native metadata and finite consumption.
 
+For Source business branches based on `date.today()` and stored `YYYY-MM-DD`
+state, use a value codec field such as
+`/spec/lastActiveDate: {relative_time: calendar_date, utc_offset: '+08:00'}`.
+Prove the deployment's fixed local offset. This preserves the exact signed day
+distance from each corresponding dependency request's local date; it does not
+round elapsed seconds to days. `request_time: calendar_date` requires the local
+request date itself. Both require independent clocks and a canonical date;
+`clock_group` is unsupported because a civil-day relation differs from an
+instant shift. Native time adapters require a value codec rule for this format.
+An explicit dependency-response `delivery.rebase_time` field is needed to
+translate read state before the Target evaluates its business branch. Declare
+the corresponding request output date contract separately. Keep streaks,
+experience, totals, row identity and all other business fields strict; never
+normalize their downstream differences as time or generated values.
+
+MySQL value rules on `sql_value` and `sql_column` can select a bounded physical
+table family with `match.sql: 'UPDATE {{table}} SET json=?, updated_at=? WHERE
+{{table}}.id=?'` and `match.table_series: {prefix: tasks_, start: 0, end: 1023,
+width: 4}`. Explicit `tables` or bounded `table_patterns` use the same native
+table selector validation. A selector is required for `{{table}}`, which must be
+a whole table identifier or its qualifier. The Source table binds every marker;
+the Target cannot switch shards or qualifiers, change predicates/row identity,
+or add calls. Field ownership covers the whole declared family, including tables
+not present in the current witnesses.
+
+Use the existing conditional value contract for nullable branch-specific clocks,
+for example `/status/completedAt: {kind: conditional, when: {relative_pointer:
+../status, equals: COMPLETED}, contract: {relative_time: iso8601_naive,
+clock_group: completed}}`. The Source predicate selects the time comparison;
+inactive values, including `null`, stay exact. Other JSON members and native SQL
+arguments retain their contracts. Independent Source clock reads need separate
+clock groups; a completion field is not an unrestricted nullable timestamp.
+
 A Source sibling may condition an individual value contract with
 `kind: conditional`, `when: {relative_pointer: ../type, equals: text}` and an
 inner `contract`. Native Redis identity captures accept the same predicate under
@@ -142,6 +182,17 @@ operations use existing bindings. Predicates are Source-only and Target siblings
 stay exact. See [conditional field contracts](../../../../../docs/conditional-field-contracts.md).
 
 ## Stateful And Source Effects
+
+`redis_append_stream` grants Source-proven APPEND chunk-boundary equivalence only
+under an explicit API/resource/database/key scope. Literal byte order, reads,
+resets, expiry calls and finite consumption remain checked; APPEND responses
+reflect actual Target cumulative lengths. See [APPEND streams](../../../../../docs/redis-append-stream.md).
+
+`redis_read_commutation` permits explicitly scoped finite nil GET observations
+to cross unrelated commands only after complete Source key validation. It
+preserves each read's count and delivery; extra or missing reads still fail.
+Use it for proven independent polling, never to suppress a cancellation value
+or repair missing business reads. See [finite read commutation](../../../../../docs/redis-read-commutation.md).
 
 Use the typed native owner when a contract involves more than one value:
 
@@ -165,6 +216,25 @@ Source self-validation exercises complete traces in isolated state. It cannot
 replace independent Target evidence; successful planning can still require
 fresh Replay. Startup signing inputs are frozen by actual resolved file hash,
 without copying secret values into a plan.
+
+If Source reads back a generated ID or preserved timestamp from Redis before
+reusing it, an existing `identity` or `redis_sequence` write rule can declare
+`effect.read_back`. This explicitly binds GET/LRANGE response fields to values
+from successful matched Target writes to the same key. Update the original
+rule and its write/read Source proof through normal plan/apply; each declaration
+needs a positive Source trace witness and fresh genuine Replay. Do not introduce
+a Target-local cache solely to compensate for recorded Source IDs returned by
+Replay. Undeclared fields remain strict. See
+[Redis read-back](../../../../../docs/redis-read-back.md) for schema and limits.
+
+For a generated identity read back from MySQL JSON, append
+`effect.mysql_read_back` to the existing `identity` rule with its own Source
+proof. Select an already declared reference resource, complete SELECT/table
+scope, physical result column and JSON pointers (array `*` is supported).
+The engine delivers only previously captured, same-Case Target identities;
+each pointer needs a positive Source read after capture. Other values stay
+strict, and fresh Replay is required. See
+[MySQL identity read-back](../../../../../docs/mysql-identity-read-back.md).
 
 Process ownership does not prove target initialization or cache behavior.
 Finite sharing does not authorize unused work, reusable snapshots, unrelated

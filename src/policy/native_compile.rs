@@ -8,7 +8,9 @@ use super::native::*;
 use super::{Proof, Protocol, SourceCondition, TimestampFormat, compiler};
 
 mod http_request;
+mod mysql_read_back;
 pub(crate) mod ownership;
+mod read_back;
 mod response;
 mod source;
 pub use ownership::*;
@@ -42,6 +44,8 @@ pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
         validate_condition(when)?;
     }
     validate_effect(rule).with_context(|| format!("invalid native rule {:?}", rule.id))?;
+    read_back::validate(rule)?;
+    mysql_read_back::validate(rule)?;
     let compiled = CompiledNativeRule {
         rule: rule.clone(),
         domain: rule.effect.domain(),
@@ -111,6 +115,9 @@ impl NativeEffect {
         match self {
             Self::Identity(_) => "identity",
             Self::RedisSequence(_) => "atomic_request_sequence",
+            Self::RedisAppendStream => "append_stream_equivalence",
+            Self::RedisReadCommutation(_) => "finite_read_commutation",
+            Self::RedisExpiryRefresh(_) => "key_lifetime_expiry_refresh",
             Self::RedisLock => "lock_identity",
             Self::RedisPublishIdentity(_) => "publisher_identity",
             Self::ResponseJwt(_) => "signed_response",
@@ -118,6 +125,7 @@ impl NativeEffect {
             Self::ResponseGenerated(_) => "generated_response",
             Self::ResponseBody(_) => "structured_response",
             Self::HttpRequest(_) => "http_request_contract",
+            Self::HttpClientMetadata(_) => "scoped_http_client_metadata",
             Self::MysqlValues(_) => "sql_value_contract",
             Self::InputJwt(_) => "input_token_rebase",
             Self::InputSignedTimestamp(_) => "input_signed_timestamp_rebase",
@@ -214,6 +222,61 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
     match &rule.effect {
         NativeEffect::Identity(effect) => validate_identity(rule, effect),
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
+        NativeEffect::RedisReadCommutation(_) | NativeEffect::RedisExpiryRefresh(_) => {
+            let resource = resource(selector, Protocol::Redis)?;
+            ensure!(
+                selector.api.is_some(),
+                "Redis observations require an explicit API"
+            );
+            ensure!(
+                resource
+                    .database
+                    .as_ref()
+                    .and_then(crate::policy::Database::index)
+                    .is_some(),
+                "Redis observations require an explicit numeric Redis database"
+            );
+            ensure!(
+                selector.operation.as_deref()
+                    == Some(
+                        if matches!(rule.effect, NativeEffect::RedisExpiryRefresh(_)) {
+                            "EXPIRE"
+                        } else {
+                            "GET"
+                        }
+                    ),
+                "observation contract requires its exact GET or EXPIRE operation"
+            );
+            ensure!(
+                selector.key.is_some(),
+                "Redis observations require a bounded key selector"
+            );
+            Ok(())
+        }
+        NativeEffect::RedisAppendStream => {
+            resource(selector, Protocol::Redis)?;
+            ensure!(
+                selector.api.is_some(),
+                "append stream requires an explicit API"
+            );
+            ensure!(
+                selector
+                    .resource
+                    .as_ref()
+                    .and_then(|r| r.database.as_ref())
+                    .is_some(),
+                "append stream requires an explicit Redis database"
+            );
+            ensure!(
+                selector.operation.as_deref() == Some("APPEND"),
+                "append stream requires operation APPEND"
+            );
+            ensure!(
+                selector.key.is_some(),
+                "append stream requires a bounded key selector"
+            );
+            Ok(())
+        }
         NativeEffect::RedisLock => {
             resource(selector, Protocol::Redis)?;
             ensure!(
@@ -352,6 +415,9 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
             Ok(())
         }
         NativeEffect::HttpRequest(effect) => http_request::validate(selector, effect),
+        NativeEffect::HttpClientMetadata(effect) => {
+            http_request::validate_client_metadata(selector, effect)
+        }
         NativeEffect::MysqlValues(effect) => {
             resource(selector, Protocol::Mysql)?;
             ensure!(
@@ -376,7 +442,7 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
                             "SQL JSON requires 1..32 time fields"
                         );
                         for (pointer, time) in fields {
-                            compiler::validate_pointer(pointer, false)?;
+                            compiler::validate_pointer(pointer, true)?;
                             proven(time, validate_time)?;
                         }
                         Ok(())
@@ -689,6 +755,10 @@ fn validate_sequence(rule: &NativeRule, sequence: &RedisSequenceEffect) -> Resul
 }
 
 pub(super) fn validate_time(time: &NativeTime) -> Result<()> {
+    ensure!(
+        time.format != TimestampFormat::CalendarDate,
+        "calendar_date requires a value codec contract, including explicit delivery.rebase_time for read-state translation"
+    );
     ensure!(
         time.anchor == super::TimeAnchor::DependencyRequestStart,
         "time contracts require the corresponding dependency request start"

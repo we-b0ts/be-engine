@@ -376,6 +376,45 @@ proof states the complete Source fact; nested `contract`/`proof` pairs are used
 when distinct relaxations need independently auditable facts. These records
 remain fully inline; there is no required resources/codec/contracts registry.
 
+Source-proven nonbehavioral SDK request headers use the scoped
+[`http_client_metadata` effect](http-client-metadata.md). The consumer and its
+middleware must not use the selected names for business behavior; unknown headers
+remain strict and the audit retains observations with the authorizing rule ID.
+
+MySQL JSON time fields can select variable-length arrays with exact wildcard
+leaves, for example `mysql_values.values.1: {kind: json, fields:
+{/blocks/*/timestamp: {relative_time: unix_milliseconds}}}`. Different Cases may
+have different array lengths; Source/Target length, order and all other members
+within each Case remain strict. This does not permit wildcard Source predicates
+or identity captures.
+
+SQL preflight composes these time fields with already accepted native identity
+bindings. It restores only same-Case fingerprints whose capture and reference
+match the current API/method/Source condition and resource/database/username,
+then uses the runtime SQL identity normalizer on derived comparison copies.
+Source captures must precede the recorded reference. Original Source and Target
+witnesses retain their hashes and values; a missing audit or wrong scope grants
+no normalization. The plan records the composed identities in
+`stateful_target_obligations`: fresh genuine Replay must re-establish capture,
+ordering and complete request acceptance. Raw identity differences and an
+uncommitted failed statement's usage count do not establish that a reference
+permission is inactive. Unselected business values remain checked during plan.
+
+A scalar Redis SET timestamp uses the same value contract: select the exact API,
+Redis resource/database, `operation: SET` and key, then declare `slot: value`,
+`codec: json` and `contract: {'': {relative_time: unix_seconds}}`. The JSON root
+can be a floating Unix-seconds number. A `redis_sequence` scalar-slot restriction
+does not remove this generic value capability. SET options, TTL and finite calls
+remain strict.
+
+Redis search edges are not already paired exchanges. Preflight excludes a Target
+key outside every selected rule's key scope before checking value and remainder;
+that edge supplies no Target validation. A related key still requires exact
+unselected arguments, and a failure identifies their argument index and byte
+lengths without dumping payloads. No related Target evidence keeps its explicit
+missing-witness/fresh-Replay obligation. Excluding a search edge never changes
+runtime matching or clears an unmatched Target command.
+
 ```yaml
 format: traffic-policy/v1
 rules:
