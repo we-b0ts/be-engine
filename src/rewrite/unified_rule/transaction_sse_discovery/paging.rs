@@ -219,7 +219,7 @@ fn mysql_resultset_binding_survives_an_earlier_ok_response_and_exposes_read_back
             target: None,
         };
         store.record(WitnessMetadata {
-            surface:Surface::DependencyResponse, source_role:SourceRole::DependencyResponse, target_role:TargetRole::DerivedDelivery,
+            surface:Surface::DependencyResponse, source_role:SourceRole::DependencyResponse, target_role:TargetRole::Unavailable,
             source:SourceIdentity {case_id:"case-1".into(),exchange_id:None,connection_id:Some(uuid::Uuid::nil().to_string()),sequence:Some(sequence)},
             resource:Some(serde_json::from_value(json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"})).unwrap()),
             operation:"COM_QUERY".into(),slot:Slot::SqlColumn("unconfigured".into()),

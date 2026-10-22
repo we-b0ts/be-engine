@@ -38,7 +38,7 @@ pub(super) fn observe(
             let Some(directory) = case.and_then(|c| c["case_dir"].as_str()) else {
                 continue;
             };
-            crate::policy_evidence::verify_case_clock(witness, &report)?;
+            crate::policy_evidence::verify_case_clock(witness, report)?;
             let (source, target) =
                 crate::policy_evidence::read(&private, witness, Path::new(directory))?;
             let Some(resource) = &witness.metadata.resource else {
