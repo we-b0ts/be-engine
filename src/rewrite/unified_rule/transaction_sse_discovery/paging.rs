@@ -291,6 +291,7 @@ fn continuation_evidence_plans_reject_tampering_and_preserve_policy_freshness() 
         )
         .is_err()
     );
+    fixture.confirm();
     let first = fixture.evidence();
     let page = continuation(&fixture, &first.facts, "next_page");
     let plan = plan_rewrite_unified_rule(
