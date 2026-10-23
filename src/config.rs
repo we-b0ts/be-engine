@@ -270,17 +270,33 @@ pub struct TlsConfig {
 impl AppConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read config {}", path.display()))?;
-        let mut config = Self::parse_static(path, &raw)?;
+        let config = Self::read_static(path)?;
         let rules_path = resolve_unified_policy_path(path)?;
         let (rules, fingerprints) = SourceTrafficPolicyConfig::load_with_fingerprints(&rules_path)?;
-        rules.apply_to(&mut config)?;
+        let mut config = config.with_source_policy(path, &rules)?;
         config.global_projection_policy = Some(fingerprints.full);
-        config
-            .validate()
-            .with_context(|| format!("invalid config {}", path.display()))?;
         Ok(config)
+    }
+
+    /// Validate the effective recorder after applying a prospective policy.
+    /// Static settings can refer to paths owned by that policy.
+    pub(crate) fn load_with_source_policy(
+        path: impl AsRef<Path>,
+        rules: &SourceTrafficPolicyConfig,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        Self::read_static(path)?.with_source_policy(path, rules)
+    }
+
+    fn with_source_policy(
+        mut self,
+        path: &Path,
+        rules: &SourceTrafficPolicyConfig,
+    ) -> Result<Self> {
+        rules.apply_to(&mut self)?;
+        self.validate()
+            .with_context(|| format!("invalid config {}", path.display()))?;
+        Ok(self)
     }
 
     fn parse_static(path: &Path, raw: &str) -> Result<Self> {
@@ -292,13 +308,17 @@ impl AppConfig {
 
     pub(crate) fn load_static(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read config {}", path.display()))?;
-        let config = Self::parse_static(path, &raw)?;
+        let config = Self::read_static(path)?;
         config
             .validate()
             .with_context(|| format!("invalid static config {}", path.display()))?;
         Ok(config)
+    }
+
+    fn read_static(path: &Path) -> Result<Self> {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read config {}", path.display()))?;
+        Self::parse_static(path, &raw)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -546,6 +566,25 @@ mod tests {
             .join("config")
             .join("policy.example.yaml");
         SourceTrafficPolicyConfig::load(path).unwrap();
+    }
+
+    #[test]
+    fn prospective_policy_is_applied_before_validating_managed_path_references() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("project.yaml");
+        std::fs::write(
+            &path,
+            "recorder:\n  http_gateway:\n    per_api_case_limits:\n      overrides:\n        /api/items/*: 2\n",
+        )
+        .unwrap();
+        let mut policy = SourceTrafficPolicyConfig::empty();
+        policy.http.case_path_patterns = vec!["/api/items/*".into()];
+        let config = AppConfig::load_with_source_policy(&path, &policy).unwrap();
+        assert_eq!(config.http_gateway.case_path_patterns, ["/api/items/*"]);
+
+        policy.http.case_path_patterns.clear();
+        let error = AppConfig::load_with_source_policy(&path, &policy).unwrap_err();
+        assert!(format!("{error:#}").contains("must exactly match"));
     }
 
     #[test]

@@ -20,6 +20,7 @@ fn time_contract_uses_only_independent_dependency_start_and_never_falls_back() {
         anchor: crate::policy::TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
+        clock_scope: Default::default(),
     };
     let fields = [Field {
         rule_id: "clock",
@@ -52,6 +53,7 @@ fn naive_relative_times_cancel_shared_offsets_without_timezone_configuration() {
             anchor: crate::policy::TimeAnchor::DependencyRequestStart,
             utc_offset: None,
             clock_group: None,
+            clock_scope: Default::default(),
         };
         let fields = [Field {
             rule_id: "relative",
@@ -171,6 +173,7 @@ fn time_requires_independent_anchors_even_for_equal_values() {
         anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
+        clock_scope: Default::default(),
     };
     let fields = [Field {
         rule_id: "clock",
@@ -192,6 +195,7 @@ fn unordered_time_pairs_whole_elements_and_rejects_relationship_changes() {
         anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
+        clock_scope: Default::default(),
     };
     let fields = [
         Field {
@@ -260,6 +264,7 @@ fn explicitly_independent_clocks_keep_each_anchor_window_and_strict_group_copies
         anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: group.map(str::to_owned),
+        clock_scope: Default::default(),
     };
     let shared = clock(None);
     let event = clock(Some("event"));

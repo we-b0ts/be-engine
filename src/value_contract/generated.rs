@@ -133,6 +133,7 @@ pub(crate) fn compare_value(
                         anchor: time.anchor,
                         utc_offset: time.utc_offset.clone(),
                         clock_group: time.clock_group.clone(),
+                        clock_scope: time.clock_scope.clone(),
                     },
                     PlaintextContract::Duration { unit, anchor } => FieldContract::Duration {
                         unit: *unit,

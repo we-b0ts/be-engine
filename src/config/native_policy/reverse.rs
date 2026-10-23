@@ -120,25 +120,33 @@ pub(super) fn rules(
 }
 
 fn rule(id: String, effect: n::NativeEffect, proof: &Proof) -> n::NativeRule {
+    let mut proof = proof.clone();
+    if matches!(effect, n::NativeEffect::CaptureHttp(_)) {
+        proof.source.clear();
+    }
     n::NativeRule {
         id,
         selector: Default::default(),
         effect,
-        proof: proof.clone(),
+        proof,
         when: None,
     }
 }
 
 /// Unchanged nested selectors retain their complete original facts. A newly
 /// introduced selector must carry the current update's explicit proof.
-pub(super) fn preserve_nested(old: &n::NativeRule, next: &mut n::NativeRule) {
+pub(super) fn preserve_nested(old: &n::NativeRule, next: &mut n::NativeRule) -> Result<()> {
     if old.proof != next.proof {
         // Selector convergence may unite facts from independently proven Source
         // scopes. Preserve the complete typed original proof; never reconstruct
         // it by splitting the DTO's human-readable evidence string.
         next.proof = Proof {
-            source: format!("{}; {}", old.proof.source, next.proof.source),
-            fact: format!("{}; {}", old.proof.fact, next.proof.fact),
+            source: old.proof.merged_source(&next.proof)?,
+            fact: if old.proof.fact == next.proof.fact {
+                old.proof.fact.clone()
+            } else {
+                format!("{}; {}", old.proof.fact, next.proof.fact)
+            },
         };
     }
     match (&old.effect, &mut next.effect) {
@@ -207,4 +215,5 @@ pub(super) fn preserve_nested(old: &n::NativeRule, next: &mut n::NativeRule) {
         }
         _ => (),
     }
+    Ok(())
 }

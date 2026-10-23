@@ -24,6 +24,7 @@ fn naive_delivery_preserves_civil_text_without_timezone_configuration() {
             anchor: TimeAnchor::DependencyRequestStart,
             utc_offset: None,
             clock_group: None,
+            clock_scope: Default::default(),
         };
         let source = json!(source);
         let delta = 100 * time::NANOS_PER_SECOND;

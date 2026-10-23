@@ -115,8 +115,8 @@ pub fn plan_case_path_pattern_feedback(
         .with_context(|| format!("failed to read {}", feedback.project_config_path.display()))?;
     let original_rules = fs::read_to_string(&feedback.rules_path)
         .with_context(|| format!("failed to read {}", feedback.rules_path.display()))?;
-    let mut static_config = AppConfig::load_static(&feedback.project_config_path)?;
     let mut rules = SourceTrafficPolicyConfig::parse(&original_rules, &feedback.rules_path)?;
+    let static_config = AppConfig::load_with_source_policy(&feedback.project_config_path, &rules)?;
 
     let requested = feedback
         .patterns
@@ -182,19 +182,14 @@ pub fn plan_case_path_pattern_feedback(
 
     rules.http.case_path_patterns = after.iter().cloned().collect();
     rules.http.source_revision = feedback.source_revision.clone();
-    rules.apply_to(&mut static_config)?;
-    static_config.validate()?;
+    AppConfig::load_with_source_policy(&feedback.project_config_path, &rules)?;
     let updated_rules = super::native_policy::render_updated(
         &original_rules,
         &rules,
         &crate::policy::Proof {
             source: format!("{} at {}", feedback.case_source, feedback.source_revision),
             fact: feedback.correction_evidence.clone().unwrap_or_else(|| {
-                format!(
-                    "Observed Source APIs support the {} case-path scope: {}",
-                    feedback.authority,
-                    rules.http.case_path_patterns.join(", ")
-                )
+                "Observed Source inventory authorizes these capture paths; comparison permissions remain unchanged.".into()
             }),
         },
     )?;

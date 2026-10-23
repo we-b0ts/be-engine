@@ -27,6 +27,15 @@ pub(super) fn owns(rule: &CompiledNativeRule) -> bool {
     )
 }
 
+pub(super) fn validate_project(root: &Path, policy: &CompiledPolicy) -> Result<()> {
+    // This also runs when a transaction removes its final Source effect. A
+    // published policy must not make project loading or crash recovery fail.
+    let projected = crate::config::native_policy::project_source_policy(&policy.native)?;
+    crate::AppConfig::load_with_source_policy(root.join(".traffic-e2e/project.yaml"), &projected)
+        .map(|_| ())
+        .context("updated Source effects are unsupported by the configured recorder")
+}
+
 pub(super) fn verify(
     root: &Path,
     state: &RewriteState,
@@ -44,13 +53,6 @@ pub(super) fn verify(
     if rules.is_empty() {
         return Ok(());
     }
-    // Validate the prospective recorder configuration in memory. Publishing a
-    // policy that makes project loading fail would also block crash recovery.
-    let mut recorder = crate::AppConfig::load_static(root.join(".traffic-e2e/project.yaml"))?;
-    crate::config::native_policy::project_source_policy(&policy.native)?.apply_to(&mut recorder)?;
-    recorder
-        .validate()
-        .context("updated Source effects are unsupported by the configured recorder")?;
     let mut record = SourceRecord {
         case_source: state
             .case_source

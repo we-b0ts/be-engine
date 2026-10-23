@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use super::time::{self, ClockPair, TimeError};
 use crate::policy::{FieldContract, TimeAnchor, TimeRelation, TimestampFormat};
+mod clock_scope;
 pub(crate) mod diagnosis;
 mod identity;
 mod native;
@@ -15,7 +16,23 @@ pub(crate) use native::{LeafContext, LeafObservations, NativeField, NonceIdentit
 const MAX_COMPARISONS: usize = 16_384;
 const MAX_DEPTH: usize = 128;
 
-type TimeRelationships = BTreeMap<(TimeAnchor, Option<String>), Vec<(i128, i128)>>;
+type TimeRelationships =
+    BTreeMap<(TimeAnchor, Option<String>, clock_scope::ScopeKey), Vec<(i128, i128)>>;
+const MAX_TIME_OBSERVATIONS: usize = 4096;
+fn time_observation_count(
+    relationships: &TimeRelationships,
+    key: &(TimeAnchor, Option<String>, clock_scope::ScopeKey),
+) -> usize {
+    if key.2.is_shared() {
+        relationships.get(key).map_or(0, Vec::len)
+    } else {
+        relationships
+            .iter()
+            .filter(|((_, _, scope), _)| !scope.is_shared())
+            .map(|(_, times)| times.len())
+            .sum()
+    }
+}
 type NonceRelationships = BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -81,12 +98,23 @@ impl Comparison {
             *self.time_validations.entry(rule_id).or_default() += count;
         }
         for (scope, values) in other.relationships {
+            let mut observations = time_observation_count(&self.relationships, &scope);
+            if !scope.2.is_shared()
+                && !self.relationships.contains_key(&scope)
+                && observations >= MAX_TIME_OBSERVATIONS
+            {
+                self.differences.push(difference(
+                    "",
+                    "scoped time relationship exceeds 4096 distinct observations",
+                ));
+                break;
+            }
             let existing = self.relationships.entry(scope).or_default();
             for pair in values {
                 if existing.contains(&pair) {
                     continue;
                 }
-                if existing.len() >= 4096 {
+                if observations >= MAX_TIME_OBSERVATIONS {
                     self.differences.push(difference(
                         "",
                         "time relationship exceeds 4096 distinct observations",
@@ -100,6 +128,7 @@ impl Comparison {
                     self.differences.push(difference("", &error.to_string()));
                 }
                 existing.push(pair);
+                observations += 1;
             }
         }
         for (scope, pairs) in other.nonce_relationships {
@@ -439,6 +468,7 @@ impl Comparator<'_> {
                     anchor,
                     utc_offset,
                     clock_group,
+                    clock_scope,
                 } => {
                     let config = crate::policy::TimeContract {
                         format: *format,
@@ -446,6 +476,7 @@ impl Comparator<'_> {
                         anchor: *anchor,
                         utc_offset: utc_offset.clone(),
                         clock_group: clock_group.clone(),
+                        clock_scope: clock_scope.clone(),
                     };
                     let result = compare_time(source, target, &config, self.clocks.get(*anchor));
                     let pair = result.map_err(|e| difference(pointer, &e.to_string()))?;
@@ -456,11 +487,25 @@ impl Comparator<'_> {
                     // Civil dates already preserve the exact local-day relation.
                     // They do not share a nanosecond shift with instant fields.
                     if *format != TimestampFormat::CalendarDate {
-                        decisions
+                        let scope =
+                            clock_scope::resolve(self, field, pointer, target_pointer, decisions)?;
+                        let key = (*anchor, clock_group.clone(), scope);
+                        if !decisions
                             .times
-                            .entry((*anchor, clock_group.clone()))
-                            .or_default()
-                            .push(pair);
+                            .get(&key)
+                            .is_some_and(|times| times.contains(&pair))
+                            && time_observation_count(&decisions.times, &key)
+                                >= MAX_TIME_OBSERVATIONS
+                        {
+                            return Err(difference(
+                                pointer,
+                                "time relationship exceeds 4096 distinct observations",
+                            ));
+                        }
+                        let relationships = decisions.times.entry(key).or_default();
+                        if !relationships.contains(&pair) {
+                            relationships.push(pair);
+                        }
                     }
                     return validate_relationships(decisions)
                         .map_err(|e| difference(pointer, &e.to_string()));

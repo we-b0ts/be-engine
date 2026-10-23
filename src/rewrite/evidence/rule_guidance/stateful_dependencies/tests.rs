@@ -85,6 +85,11 @@ fn mysql_read_back_requires_mysql_read_facts_and_preserves_source_causality() {
     assert!(hint.contains("completed before the Source read"));
     assert!(hint.contains("derived delivery is not independent Target evidence"));
     assert!(hint.contains("SELECTs remain finite"));
+    assert!(hint.contains("Source-proven sharded ORM SELECT"));
+    assert!(hint.contains("bounded table_series"));
+    assert!(hint.contains("AS {{table}}_suffix"));
+    assert!(hint.contains("Do not enumerate witnessed shards"));
+    assert!(hint.contains("numeric object keys stay literal"));
 
     let facts = json!({"clusters":[{"protocol":"mysql","reason":"unused_recorded","operations":{"COM_QUERY":1},"representative":{"difference":{
         "expected":{"presence":"present","signature":{"sql_summary":{"preview":"SELECT records.payload AS records_payload, records.id AS records_id …","truncated":true,"select_body":{"preview":"FROM records WHERE id=?","truncated":false}}}}}}}]});

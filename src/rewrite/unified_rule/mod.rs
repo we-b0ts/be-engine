@@ -17,6 +17,7 @@ use super::{
 };
 use crate::policy::{PolicyRule, TrafficPolicy, compile_policy, parse_policy};
 
+mod change;
 pub(super) mod discovery;
 mod manifest;
 mod preflight;
@@ -67,6 +68,8 @@ pub struct UnifiedRulePlanRecord {
     artifacts: Vec<manifest::Artifact>,
     preflight: preflight::Preflight,
     rule_ids: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    replaced_rules: Vec<PolicyRule>,
 }
 
 pub fn plan_rewrite_unified_rule(
@@ -127,7 +130,8 @@ fn plan(
         crate::policy_evidence::digest(input.as_bytes()) == proposal.sha256,
         "rule proposal changed while loading"
     );
-    let mut proposed = parse_proposal(&input)?;
+    let mut change = change::parse(&input)?;
+    let proposed = &mut change.policy;
     ensure!(
         !proposed.rules.is_empty(),
         "rule proposal must contain explicit Source-proven rules"
@@ -137,7 +141,7 @@ fn plan(
     let mut document = parse_policy(&original).context(
         "unified authoring requires a traffic-policy/v1 policy; no legacy fallback is used",
     )?;
-    proposal::prepare_scopes(&mut proposed, &document, &state.api)?;
+    proposal::prepare_scopes(proposed, &document, &state.api)?;
     if let Some(revision) = &document.source_revision {
         ensure!(
             proposed
@@ -147,14 +151,16 @@ fn plan(
             "proposal Source revision conflicts with the active policy"
         );
         proposed.source_revision = Some(revision.clone());
-        proposed = crate::policy::expand_policy(&proposed)?;
+        *proposed = crate::policy::expand_policy(proposed)?;
     }
     let rule_ids = proposed
         .rules
         .iter()
         .map(|r| r.id().to_owned())
         .collect::<BTreeSet<_>>();
-    let changed = proposal::merge(&mut document, proposed.rules)?;
+    let replaced_rules = change.remove_from(&mut document, &state.api)?;
+    let changed =
+        proposal::merge(&mut document, change.policy.rules)? || !replaced_rules.is_empty();
     let compiled = compile_policy(&document)?;
     let current = crate::validate_replay_policy(&config.replay_policy)?;
     ensure!(
@@ -179,6 +185,7 @@ fn plan(
         artifacts: bundle.artifacts.into_values().collect(),
         preflight,
         rule_ids,
+        replaced_rules,
     };
     let id = format!(
         "plan-{}",
@@ -254,7 +261,7 @@ impl UnifiedRulePlanRecord {
         });
         json!({"kind":"unified", "status":if !self.changed() && applied {"applied_no_change"} else if !self.changed() {"planned_no_change"} else if applied && self.preflight.needs_recording() {"applied_pending_recording"} else if applied {"applied_pending_replay"} else {self.preflight.status()},
             "applied":applied, "changed":self.original != self.updated,
-            "rule_ids":self.rule_ids, "preflight":self.preflight,
+            "rule_ids":self.rule_ids, "replaced_rules":self.replaced_rules, "preflight":self.preflight,
             "requires_fresh_replay":self.changed(), "requires_fresh_recording":self.changed() && self.preflight.needs_recording(), "verified":false,
             "policy":self.policy, "evidence_artifacts":self.artifacts.len(),
             "expanded_rules":rules, "effect_identity":expanded.as_ref().map(|p| &p.fingerprints),

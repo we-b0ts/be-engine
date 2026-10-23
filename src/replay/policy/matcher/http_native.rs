@@ -66,6 +66,7 @@ impl ReplayPolicyRuntime {
                         anchor: time.anchor,
                         utc_offset: time.utc_offset.clone(),
                         clock_group: time.clock_group.clone(),
+                        clock_scope: time.clock_scope.clone(),
                     },
                 ));
                 selected.insert((rule.rule.id.clone(), name.clone()));

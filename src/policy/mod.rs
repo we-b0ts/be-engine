@@ -10,8 +10,12 @@ mod compiler;
 mod condition;
 pub mod native;
 mod native_compile;
+mod proof;
+pub use proof::{MAX_PROOF_FACT_BYTES, MAX_PROOF_SOURCE_REFERENCES};
 mod schema;
 mod strict_map;
+mod time_scope;
+pub use time_scope::ClockScope;
 
 pub use capability::*;
 pub use compiler::*;

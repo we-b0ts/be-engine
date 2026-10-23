@@ -21,6 +21,7 @@ fn repeated_scalar_elements_keep_their_declared_type_without_changing_collection
         anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
+        clock_scope: Default::default(),
     };
     assert!(validate_contract_binding(&codec, "/numbers/*", &time).is_ok());
     assert!(validate_contract_binding(&codec, "/numbers/0", &time).is_ok());

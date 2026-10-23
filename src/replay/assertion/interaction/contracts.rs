@@ -4,6 +4,8 @@ use crate::interaction::stream::SseEvent;
 use crate::policy::Slot;
 
 #[cfg(test)]
+mod clock_scope_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) fn decode_sse(message: &WireMessage) -> Result<SseEvent> {
@@ -69,14 +71,6 @@ pub(super) fn compare_message(
         let codec = crate::value_codec::CodecPlan::compile(&crate::policy::Codec::Json)?;
         let source = codec.decode(source_event.data.as_bytes())?;
         let target = codec.decode(target_event.data.as_bytes())?;
-        ensure!(
-            selected.iter().all(|r| r
-                .rule
-                .contract
-                .keys()
-                .all(|p| crate::value_contract::json::pointer_observed(&source.logical, p))),
-            "SSE Source selected field is absent"
-        );
         let mut checked = crate::value_contract::encoded::compare_decoded(
             &source,
             &target,

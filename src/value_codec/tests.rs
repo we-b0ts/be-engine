@@ -73,6 +73,7 @@ fn fields() -> BTreeMap<String, FieldContract> {
                 anchor: TimeAnchor::DependencyRequestStart,
                 utc_offset: None,
                 clock_group: None,
+                clock_scope: Default::default(),
             },
         ),
     ])
@@ -201,6 +202,7 @@ fn repeated_scalar_element_contracts_release_only_selected_raw_elements() {
         anchor: TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: None,
+        clock_scope: Default::default(),
     };
     let paths = ["/numbers/*".into()];
     assert!(

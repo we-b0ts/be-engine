@@ -13,8 +13,10 @@ pub(crate) mod ownership;
 mod read_back;
 mod response;
 mod source;
+mod time;
 pub use ownership::*;
 use response::{validate_body_field, validate_generated_response, validate_nonce};
+use time::{validate_json_time, validate_time};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CompiledNativeRule {
@@ -34,7 +36,8 @@ pub enum NativeDomain {
 
 pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
     identifier(&rule.id, "rule id")?;
-    proof(&rule.proof)?;
+    rule.proof
+        .validate(matches!(rule.effect, NativeEffect::CaptureHttp(_)))?;
     validate_match(&rule.selector)?;
     if let Some(when) = &rule.when {
         ensure!(
@@ -69,11 +72,12 @@ pub(crate) fn semantic_rule(rule: &NativeRule) -> Result<serde_json::Value> {
                     .get("proof")
                     .and_then(serde_json::Value::as_object)
                     .is_some_and(|proof| {
-                        proof.len() == 2
-                            && proof
-                                .get("source")
-                                .is_some_and(serde_json::Value::is_string)
-                            && proof.get("fact").is_some_and(serde_json::Value::is_string)
+                        proof.get("fact").is_some_and(serde_json::Value::is_string)
+                            && (proof.len() == 1
+                                || (proof.len() == 2
+                                    && proof
+                                        .get("source")
+                                        .is_some_and(serde_json::Value::is_string)))
                     });
                 let proof_owner = (fields.len() == 2 && fields.contains_key("contract"))
                     || (fields.contains_key("id")
@@ -94,6 +98,8 @@ pub(crate) fn semantic_rule(rule: &NativeRule) -> Result<serde_json::Value> {
             _ => (),
         }
     }
+    let mut rule = rule.clone();
+    read_back::normalize_proof_identity(&mut rule.effect);
     let mut value = serde_json::to_value(rule)?;
     strip_proofs(&mut value);
     Ok(value)
@@ -435,7 +441,7 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
                         );
                         for (pointer, time) in fields {
                             compiler::validate_pointer(pointer, true)?;
-                            proven(time, validate_time)?;
+                            proven(time, |time| validate_json_time(time, pointer))?;
                         }
                         Ok(())
                     }
@@ -742,33 +748,6 @@ fn validate_sequence(rule: &NativeRule, sequence: &RedisSequenceEffect) -> Resul
     Ok(())
 }
 
-pub(super) fn validate_time(time: &NativeTime) -> Result<()> {
-    ensure!(
-        time.format != TimestampFormat::CalendarDate,
-        "calendar_date requires a value codec contract, including explicit delivery.rebase_time for read-state translation"
-    );
-    ensure!(
-        time.anchor == super::TimeAnchor::DependencyRequestStart,
-        "time contracts require the corresponding dependency request start"
-    );
-    ensure!(
-        match time.format {
-            TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => {
-                time.relation == super::TimeRelation::PreserveOffset || time.utc_offset.is_some()
-            }
-            _ => time.utc_offset.is_none(),
-        },
-        "naive request_window times require UTC offset; relative times need none; other time formats forbid it"
-    );
-    if let Some(value) = &time.utc_offset {
-        offset(value)?;
-    }
-    if let Some(group) = &time.clock_group {
-        identifier(group, "clock_group")?;
-    }
-    Ok(())
-}
-
 fn validate_key_contract(key: &NativeKeyContract) -> Result<()> {
     match key {
         NativeKeyContract::TimeWindow {
@@ -924,8 +903,7 @@ pub(super) fn api_parts(api: &str) -> Result<(&str, &str)> {
 }
 
 pub(super) fn proof(proof: &Proof) -> Result<()> {
-    text(&proof.source, "proof.source", 2048)?;
-    text(&proof.fact, "proof.fact", 4096)
+    proof.validate(false)
 }
 
 pub(super) fn proven<T>(value: &Proven<T>, validate: impl FnOnce(&T) -> Result<()>) -> Result<()> {

@@ -2,6 +2,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use super::ClockScope;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -445,6 +446,8 @@ pub enum FieldContract {
         utc_offset: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         clock_group: Option<String>,
+        #[serde(default, skip_serializing_if = "ClockScope::is_shared")]
+        clock_scope: ClockScope,
     },
     Duration {
         unit: DurationUnit,
@@ -512,12 +515,14 @@ impl FieldContract {
                 anchor,
                 utc_offset,
                 clock_group,
+                clock_scope,
             } => Some(TimeContract {
                 format: *format,
                 relation: *relation,
                 anchor: *anchor,
                 utc_offset: utc_offset.clone(),
                 clock_group: clock_group.clone(),
+                clock_scope: clock_scope.clone(),
             }),
             _ => None,
         }
@@ -550,6 +555,8 @@ pub struct TimeContract {
     pub utc_offset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_group: Option<String>,
+    #[serde(default, skip_serializing_if = "ClockScope::is_shared")]
+    pub clock_scope: ClockScope,
 }
 
 impl TimeContract {
@@ -634,6 +641,11 @@ pub enum DurationUnit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Proof {
+    #[serde(
+        default,
+        deserialize_with = "super::proof::deserialize_source",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub source: String,
     pub fact: String,
 }

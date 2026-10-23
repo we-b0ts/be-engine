@@ -19,6 +19,19 @@ pub(super) fn expand(
     parent: Option<&Value>,
     revision: Option<&str>,
 ) -> Result<Value> {
+    expand_inner(raw, parent, revision, false)
+}
+
+pub(super) fn expand_capture(raw: Option<Value>, revision: Option<&str>) -> Result<Value> {
+    expand_inner(raw, None, revision, true)
+}
+
+fn expand_inner(
+    raw: Option<Value>,
+    parent: Option<&Value>,
+    revision: Option<&str>,
+    source_optional: bool,
+) -> Result<Value> {
     let mut result = parent
         .and_then(Value::as_mapping)
         .cloned()
@@ -33,16 +46,38 @@ pub(super) fn expand(
             result.insert(key.clone(), value.clone());
         }
     }
+    if let Some(source) = result.get_mut("source") {
+        let source_text = crate::policy::proof::deserialize_source(source.clone())?;
+        *source = if source_optional && source_text.is_empty() {
+            String::new()
+        } else {
+            let references = crate::policy::proof::references(&source_text)?.join("; ");
+            if let Some((_, revision)) = source_text.rsplit_once(" @ ") {
+                format!("{references} @ {revision}")
+            } else {
+                references
+            }
+        }
+        .into();
+    } else if source_optional {
+        result.insert("source".into(), "".into());
+    }
     for key in ["source", "fact"] {
         ensure!(
-            result
-                .get(key)
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.trim().is_empty()),
+            (key == "source" && source_optional)
+                || result
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.trim().is_empty()),
             "proof.{key} is required; proof inheritance is limited to one rule"
         );
     }
-    if let Some(revision) = revision {
+    if let Some(revision) = revision
+        && !result["source"]
+            .as_str()
+            .expect("checked source")
+            .is_empty()
+    {
         let source = result["source"].as_str().expect("checked source");
         let source = if let Some((_, recorded)) = source.rsplit_once(" @ ") {
             ensure!(
@@ -76,6 +111,20 @@ pub(super) fn compact(
         && let Some(path) = text.strip_suffix(&format!(" @ {revision}"))
     {
         *source = path.into();
+    }
+    if result.get("source").and_then(Value::as_str) == Some("") {
+        result.remove("source");
+    } else if let Some(source) = result.get_mut("source") {
+        let references = crate::policy::proof::references(source.as_str().expect("typed source"))
+            .expect("validated Source references");
+        if references.len() > 1 {
+            *source = Value::Sequence(
+                references
+                    .into_iter()
+                    .map(|s| Value::String(s.into()))
+                    .collect(),
+            );
+        }
     }
     Some(Value::Mapping(result))
 }

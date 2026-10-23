@@ -27,6 +27,14 @@ describe the current bounded scan window; Source bindings have separate
 under `bounded_analysis.nonresumable_limits`. Missing drafts are not proof of a
 missing capability, and supported mechanism hints never supply Source proof.
 
+Draft discovery follows actual array structure: `/blocks/*/timestamp` covers
+repeated elements across indexes and cases without guessing that numeric object
+keys are arrays. Array time drafts use `clock_scope: array_element`. Candidate
+IDs remain stable across witness cases/indexes; `bindings`, `binding_count` and
+`bindings_omitted` expose bounded concrete witness pointers. These are sampled
+observations, not complete coverage or Source permission: drafts retain empty
+proofs and `plan_ready: false`, and differing IDs do not authorize identities.
+
 Dependency value rules and native resource effects use resource scope without
 `match.api`: the same resource access contract applies across APIs. Discovery and
 planning omit API from new rules and validate complete cross-API Source coverage,
@@ -49,6 +57,38 @@ reports remaining Replay, reclassification and recording obligations. Reuse the
 same pending plan after an interruption; `rule recover <plan-id>` resolves an
 interrupted transaction through the coordinator. Do not edit a managed policy
 or recording to bypass this transaction.
+
+Ordinary rule documents are additive: omitted existing IDs stay in the policy.
+To consolidate existing owners, use an explicit change proposal with complete
+replacement rules and their own Source proof:
+
+```yaml
+format: traffic-policy-change/v1
+replace_rules: [old-a, old-b]
+policy:
+  format: traffic-policy/v1
+  rules:
+    - id: cache-write-clock
+      surface: dependency.request
+      match:
+        resource: {protocol: redis, endpoint: 'cache.example:6379', database: 0}
+        operation: SET
+        key: {exact: task-cache}
+      slot: value
+      codec: json
+      contract:
+        /written_at: {relative_time: unix_seconds}
+      proof:
+        source: source/cache.py:write
+        fact: Source writes this request-relative clock; all other values remain exact.
+```
+
+Only `replace_rules` IDs are replaced; unlisted rules remain. Each new rule still
+needs complete Source/Target preflight. Existing primary response/input owners
+cannot be removed across another API's issue. Whole-policy compare-and-swap,
+durable intent, stale checks, recovery and fresh Replay obligations apply to the
+same reviewed plan/apply transaction. This does not authorize arbitrary deletion
+or a replacement without evidence.
 
 Standalone traffic operations can load the same reviewed document with
 `traffic-e2e replay --policy <path> <case-source>` or `record --policy <path>`.
@@ -116,6 +156,15 @@ Every rule carries its own inline `proof: {source, fact}`. Default to inline
 resources, codec bindings and contracts. The current format keeps these definitions inline; plans expose their complete
 content without requiring an AI to traverse configuration references.
 
+Write `fact` as the causal conclusion in at most 200 UTF-8 bytes, not a replay
+diary; never truncate existing proof mechanically. The renderer uses at most two
+content lines. Keep at most three file references in `source`, using a list for
+multiple files and grouping locations from each file in one entry. The root
+`capture_http` proof can omit `source` because capture paths grant no comparison
+permission; it still needs `fact` and an immutable revision. Other permissions
+retain Source references. Serialization places capture-path rules first and
+preserves other rules' authored relative order.
+
 For human authoring, a document-level `source_revision` can bind the common
 Source identity. Nested contracts inherit the nearest proof inside their own
 rule; supply a local proof only for different facts or Source references. Partial
@@ -135,7 +184,10 @@ Unselected fields and native protocol envelope stay strict. Unordered arrays
 preserve elements, types and duplicate counts. JSON null is a present value;
 a protocol miss, null bulk response or quiet no-response is an unavailable slot
 and retains its original outcome without counting as a successful rule match.
-Missing selected JSON/PB fields or a changed type in an available payload fail.
+Source-present selected JSON/PB fields require corresponding Target presence and
+type. Missing Source selections and empty Source arrays keep their shape exact;
+they do not authorize Target additions. A present JSON null still needs a valid
+explicit contract or an inactive exact branch.
 
 Time contracts declare format and relation; request ownership fixes the clock. Unix seconds, milliseconds
 and microseconds preserve integer precision; formatted times require their
@@ -143,6 +195,21 @@ explicit offset when necessary. Source and Target use independent clocks.
 Request windows use the fixed engine boundary; preserve-offset comparisons
 also check cross-field differences and declared clock groups. Do not invent an
 offset, tolerance or a payload-derived clock to make a mismatch disappear.
+
+Use `clock_scope: array_element` for Source-proven independent reads in repeated
+elements, for example `/blocks/*/timestamp: {relative_time: unix_milliseconds,
+clock_scope: array_element}`. Actual nested array ancestry scopes each element;
+numeric object keys stay literal. The default `shared` retains existing group
+relationships. Copies derived from one read keep one `clock_group`, while separate
+reads within an element still require separate groups and Source proof. Neither
+scope nor group selects another request anchor.
+
+For a clock repeated across SSE frames, declare an explicit identity for its
+Source-owned entity, then use `clock_scope: {binding: text-block,
+relative_pointer: ../id}` on the timestamp. The same SSE selector must contain a
+matching sibling identity contract with that binding and its proven prefix and
+format. This preserves each entity's copies without equating independent blocks;
+it never infers identity permissions from a difference.
 
 Comparing a dependency response does not authorize rewriting it. Only explicit
 `delivery: {rebase_time: [/path]}` materializes declared response time fields.
@@ -169,10 +236,16 @@ table family with `match.sql: 'UPDATE {{table}} SET json=?, updated_at=? WHERE
 {{table}}.id=?'` and `match.table_series: {prefix: tasks_, start: 0, end: 1023,
 width: 4}`. Explicit `tables` or bounded `table_patterns` use the same native
 table selector validation. A selector is required for `{{table}}`, which must be
-a whole table identifier or its qualifier. The Source table binds every marker;
+a whole table identifier, its qualifier, or an explicit outer SELECT projection
+alias such as `AS {{table}}_id`. An alias suffix is a nonempty literal of ASCII
+letters, digits or underscores. The Source table binds every marker;
 the Target cannot switch shards or qualifiers, change predicates/row identity,
 or add calls. Field ownership covers the whole declared family, including tables
 not present in the current witnesses.
+Trace Source sharding and ORM alias construction before declaring this family;
+do not enumerate observed shard numbers or infer a family from numeric names.
+Discovery without a configured SQL template requests that bounded `table_series`
+and alias proof rather than inventing selectors, slots or codecs.
 
 Use the existing conditional value contract for nullable branch-specific clocks,
 for example `/status/completedAt: {kind: conditional, when: {relative_pointer:

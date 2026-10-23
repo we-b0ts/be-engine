@@ -65,7 +65,12 @@ fn emit(value: &Value, indent: usize, output: &mut String) -> Result<()> {
             Value::Mapping(map) => {
                 for (key, value) in map {
                     let key = scalar(key)?;
-                    if let Some(lines) = folded(value) {
+                    let paragraph = if key == "fact" {
+                        fact_lines(value)
+                    } else {
+                        folded(value)
+                    };
+                    if let Some(lines) = paragraph {
                         output.push_str(&format!("{padding}{key}: >-\n"));
                         for line in lines {
                             output.push_str(&format!("{padding}  {line}\n"));
@@ -108,6 +113,24 @@ fn emit(value: &Value, indent: usize, output: &mut String) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// A bounded fact has at most two physical content lines. Splitting at one
+// ordinary space preserves its complete logical text through YAML folding.
+fn fact_lines(value: &Value) -> Option<Vec<String>> {
+    let text = value.as_str()?;
+    if text.len() <= 100
+        || text.trim() != text
+        || text.contains("  ")
+        || text.chars().any(|c| c.is_whitespace() && c != ' ')
+    {
+        return None;
+    }
+    let split = text
+        .match_indices(' ')
+        .min_by_key(|(index, _)| index.abs_diff(text.len() / 2))?
+        .0;
+    Some(vec![text[..split].into(), text[split + 1..].into()])
 }
 
 // Fold only ordinary single-space paragraphs. The render/parse identity check

@@ -14,7 +14,10 @@ fn record() -> RecordedMysqlExchange {
 }
 
 fn fixture() -> DynamicValues {
-    let mut definition = definition();
+    fixture_with(definition())
+}
+
+fn fixture_with(mut definition: Value) -> DynamicValues {
     definition["effect"]["mysql_read_back"][0]["templates"] =
         json!({"/blocks/*/key":"content:{value}"});
     let compiled = crate::policy::compile_policy(
@@ -49,6 +52,99 @@ fn fixture() -> DynamicValues {
         .unwrap();
     runtime.commit("case", pending.decision);
     runtime
+}
+
+#[test]
+fn mysql_identity_read_back_binds_derived_aliases_across_bounded_text_and_prepared_shards() {
+    let mut definition = definition();
+    definition["effect"]["mysql_read_back"][0]["sql"] =
+        json!("SELECT {{table}}.payload AS {{table}}_payload FROM {{table}} WHERE {{table}}.id=?");
+    let runtime = fixture_with(definition);
+    for table in ["results_0000", "results_0009"] {
+        for command in ["COM_QUERY", "COM_STMT_EXECUTE"] {
+            let mut record = record();
+            record.command = command.into();
+            record.sql = Some(format!(
+                "SELECT {table}.payload AS {table}_payload FROM {table} WHERE {table}.id={}",
+                if command == "COM_QUERY" { "7" } else { "?" }
+            ));
+            if command == "COM_STMT_EXECUTE" {
+                record.params = Some(vec![crate::replay::RecordedMysqlValue {
+                    kind: "integer".into(),
+                    value: Some(json!(7)),
+                    raw: None,
+                }]);
+            }
+            record.response.columns[0].name = format!("{table}_payload");
+            let original = serde_json::to_vec(&record.response).unwrap();
+            let prepared = runtime
+                .prepare_mysql_identity_delivery(
+                    Some("case"),
+                    &identity(),
+                    &record,
+                    &record.response,
+                )
+                .unwrap()
+                .unwrap();
+            let delivered = prepared.render(&record.response).unwrap();
+            let value = json(&delivered.rows[0][0]).unwrap();
+            assert_eq!(value["blocks"][0]["id"], "new");
+            assert_eq!(value["blocks"][0]["key"], "content:new");
+            assert_eq!(value["blocks"][0]["stable"], 7);
+            assert_eq!(value["blocks"][1]["id"], "older");
+            assert_eq!(serde_json::to_vec(&record.response).unwrap(), original);
+        }
+    }
+    for sql in [
+        "SELECT results_0000.payload AS results_0009_payload FROM results_0000 WHERE results_0000.id=7",
+        "SELECT results_0009.payload AS results_0000_payload FROM results_0000 WHERE results_0000.id=7",
+        "SELECT results_0010.payload AS results_0010_payload FROM results_0010 WHERE results_0010.id=7",
+    ] {
+        let mut record = record();
+        record.sql = Some(sql.into());
+        assert!(
+            runtime
+                .prepare_mysql_identity_delivery(
+                    Some("case"),
+                    &identity(),
+                    &record,
+                    &record.response
+                )
+                .unwrap()
+                .is_none(),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn mysql_identity_read_back_alias_family_rejects_overlapping_exact_result_owners() {
+    let mut identity = definition();
+    identity["effect"]["mysql_read_back"][0]["sql"] =
+        json!("SELECT {{table}}.payload AS {{table}}_payload FROM {{table}} WHERE {{table}}.id=?");
+    for (table, alias, conflict) in [
+        ("results_0009", "results_0009_payload", true),
+        ("results_0010", "results_0010_payload", false),
+        ("results_0009", "other_payload", false),
+    ] {
+        let other = json!({
+            "id":"other", "surface":"dependency.response",
+            "match":{"api":"POST /api", "resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"},"operation":"COM_QUERY",
+                "sql":format!("SELECT {table}.payload AS {alias} FROM {table} WHERE {table}.id=?")},
+            "slot":{"sql_column":"payload"}, "codec":"json",
+            "contract":{"/blocks/*/id":{"relative_time":"rfc3339"}},
+            "proof":{"source":"other.py:1","fact":"Another contract selects the stored identity leaf"}
+        });
+        let policy = serde_json::from_value(
+            json!({"format":"traffic-policy/v1","rules":[identity.clone(),other]}),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::policy::compile_policy(&policy).is_err(),
+            conflict,
+            "{table}/{alias}"
+        );
+    }
 }
 
 fn identity() -> ReplaySessionIdentity {

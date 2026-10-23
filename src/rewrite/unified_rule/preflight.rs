@@ -83,6 +83,7 @@ pub(super) fn verify(
     policy: &CompiledPolicy,
     selected: &BTreeSet<String>,
 ) -> Result<Preflight> {
+    source::validate_project(root, policy)?;
     let mut result = Preflight::default();
     source::verify(root, state, bundle, policy, selected, &mut result)?;
     let (scope, mut foreign) = resource::prepare(root, state, bundle, policy, selected)?;

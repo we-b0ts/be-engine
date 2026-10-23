@@ -80,7 +80,9 @@ fn source_writer_preserves_shared_revision_and_expanded_nested_proofs() {
         after
             .rules
             .iter()
-            .all(|rule| rule.proof().source.ends_with(&format!(" @ {}", revision())))
+            .all(|rule| rule.proof().source.ends_with(&format!(" @ {}", revision()))
+                || (rule.proof().source.is_empty() && matches!(rule,
+                    PolicyRule::Native(rule) if matches!(rule.effect, NativeEffect::CaptureHttp(_)))))
     );
     assert!(!rendered.contains(" @ sha256:"));
     let after_compiled = crate::policy::compile_policy(&after).unwrap();
@@ -120,7 +122,8 @@ fn source_scope_update_preserves_other_effects_complete_rules_and_original_proof
         .iter()
         .find(|rule| rule.id() == "source-capture-http")
         .unwrap();
-    assert_eq!(new.proof(), &update);
+    assert_eq!(new.proof().fact, update.fact);
+    assert!(new.proof().source.is_empty());
     let compiled = crate::policy::compile_policy(&after).unwrap();
     assert_eq!(compiled.fingerprints.runtime, before.fingerprints.runtime);
     assert_eq!(
@@ -136,6 +139,41 @@ fn source_scope_update_preserves_other_effects_complete_rules_and_original_proof
         )
         .unwrap(),
         rendered
+    );
+}
+
+#[test]
+fn changed_owner_merges_file_references_under_one_document_revision() {
+    let mut document = base();
+    document.source_revision = Some(revision());
+    let original = crate::policy::render_policy(&document).unwrap();
+    let compiled = crate::policy::parse_and_compile_policy(&original).unwrap();
+    let mut proposed = project_source_policy(&compiled.native).unwrap();
+    if let B::Http { path_prefixes, .. } = &mut proposed.process_owned_dependencies[0] {
+        path_prefixes.push("/additional".into());
+    } else {
+        panic!("HTTP fixture required");
+    }
+    let output = render_updated(&original, &proposed, &proof("new-scope")).unwrap();
+    let after = crate::policy::parse_and_compile_policy(&output).unwrap();
+    let projected = project_source_policy(&after.native).unwrap();
+    let B::Http { path_prefixes, .. } = &projected.process_owned_dependencies[0] else {
+        panic!("HTTP fixture required");
+    };
+    assert_eq!(path_prefixes, &["/configuration", "/additional"]);
+    assert_eq!(output.matches("source_revision:").count(), 1);
+    assert!(!output.contains(" @ "));
+    let owner = after
+        .native
+        .iter()
+        .find(|rule| rule.rule.id == "process-config")
+        .unwrap();
+    assert!(
+        owner
+            .rule
+            .proof
+            .source
+            .ends_with(&format!(" @ {}", revision()))
     );
 }
 

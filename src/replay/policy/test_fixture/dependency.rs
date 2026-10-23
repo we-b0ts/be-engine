@@ -83,6 +83,7 @@ pub(super) fn convert(
                                     anchor: p::TimeAnchor::DependencyRequestStart,
                                     utc_offset: Some("+00:00".into()),
                                     clock_group: None,
+                                    clock_scope: Default::default(),
                                 },
                                 preserve_values: field.preserve_values.clone(),
                             },
@@ -176,6 +177,7 @@ pub(super) fn convert(
                                     anchor: p::TimeAnchor::DependencyRequestStart,
                                     utc_offset: None,
                                     clock_group: None,
+                                    clock_scope: Default::default(),
                                 },
                                 &rule.source_evidence,
                             ),
@@ -266,6 +268,7 @@ pub(super) fn convert(
                             anchor: p::TimeAnchor::DependencyRequestStart,
                             utc_offset: None,
                             clock_group: None,
+                            clock_scope: Default::default(),
                         },
                     )
                 })
@@ -722,5 +725,6 @@ fn redis_time(
         relation: p::TimeRelation::PreserveOffset,
         utc_offset: None,
         clock_group: None,
+        clock_scope: Default::default(),
     }
 }

@@ -23,6 +23,7 @@ pub(super) fn convert(
                     anchor: p::TimeAnchor::DependencyRequestStart,
                     utc_offset: None,
                     clock_group: None,
+                    clock_scope: Default::default(),
                 },
             );
         }

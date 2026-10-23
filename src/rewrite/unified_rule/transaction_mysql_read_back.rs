@@ -4,7 +4,7 @@ use super::*;
 fn identity(extended: bool) -> serde_json::Value {
     let mut rule = json!({"id":"block","match":{"api":"GET /api","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"SET","key":{"kind":"exact","value":"current:7"}},"effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1},"references":[{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0}},{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"}}]},"proof":{"source":"session.py:create","fact":"Source creates an identity reused in its stored result"}});
     if extended {
-        rule["effect"]["mysql_read_back"] = json!([{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"},"sql":"SELECT payload FROM {{table}} WHERE id=?","table_series":{"prefix":"results_","start":0,"end":9,"width":4},"column":"payload","json_pointers":["/blocks/*/id"],"proof":{"source":"session.py:read","fact":"Source reads stored results before copying the same ids into Task JSON"}}]);
+        rule["effect"]["mysql_read_back"] = json!([{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"},"sql":"SELECT {{table}}.payload AS {{table}}_payload FROM {{table}} WHERE {{table}}.id=?","table_series":{"prefix":"results_","start":0,"end":9,"width":4},"column":"payload","json_pointers":["/blocks/*/id"],"proof":{"source":"session.py:read","fact":"Source reads stored results before copying the same ids into Task JSON"}}]);
     }
     rule
 }
@@ -17,7 +17,7 @@ fn events(read: bool) -> Vec<serde_json::Value> {
         redis(2, "APPEND", &["content:old", "x"], ":1\r\n"),
     ];
     if read {
-        events.push(mysql(1,"SELECT payload FROM results_0001 WHERE id=7",json!({"status":"resultset","columns":[{"name":"payload","column":"payload","table":"results_0001","family":"text","sql_type":"LONGTEXT","nullable":false}],"rows":[[{"kind":"string","value":json!({"blocks":[{"id":"old","stable":7}],"time":"2026-10-16T00:00:00Z"}).to_string()}]]})));
+        events.push(mysql(1,"SELECT results_0001.payload AS results_0001_payload FROM results_0001 WHERE results_0001.id=7",json!({"status":"resultset","columns":[{"name":"results_0001_payload","column":"payload","table":"results_0001","family":"text","sql_type":"LONGTEXT","nullable":false}],"rows":[[{"kind":"string","value":json!({"blocks":[{"id":"old","stable":7}],"time":"2026-10-16T00:00:00Z"}).to_string()}]]})));
     }
     events.push(mysql(
         2,
@@ -41,6 +41,8 @@ fn mysql_identity_read_back_public_extension_requires_each_causal_source_field_a
         "missing-read",
         "before-capture",
         "wrong-path",
+        "wrong-alias",
+        "out-of-range",
         "truncated",
         "stale",
     ] {
@@ -56,6 +58,22 @@ fn mysql_identity_read_back_public_extension_requires_each_causal_source_field_a
             }
             if scenario == "truncated" {
                 events[2]["response"]["rows_truncated"] = json!(true);
+            }
+            if scenario == "wrong-alias" {
+                events[2]["sql"] = json!(
+                    events[2]["sql"]
+                        .as_str()
+                        .unwrap()
+                        .replace("AS results_0001_payload", "AS results_0002_payload")
+                );
+            }
+            if scenario == "out-of-range" {
+                events[2]["sql"] = json!(
+                    events[2]["sql"]
+                        .as_str()
+                        .unwrap()
+                        .replace("results_0001", "results_0010")
+                );
             }
             fs::write(
                 source.join("apis/api/case-1/dependencies.jsonl"),
@@ -103,6 +121,52 @@ fn mysql_identity_read_back_public_extension_requires_each_causal_source_field_a
 }
 
 #[test]
+fn mysql_identity_read_back_public_alias_template_covers_multiple_source_shards() {
+    let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, source| {
+        crate::platform::encryption_key::load_or_create(root).unwrap();
+        write(
+            &root.join(".traffic-e2e/policy.yaml"),
+            json!({"format":"traffic-policy/v1","rules":[identity(false)]}),
+        );
+        let mut events = events(true);
+        let mut second_read = events[2].clone();
+        second_read["sql"] = json!(
+            second_read["sql"]
+                .as_str()
+                .unwrap()
+                .replace("results_0001", "results_0009")
+        );
+        second_read["query_sequence"] = json!(2);
+        second_read["response"]["columns"][0]["name"] = json!("results_0009_payload");
+        second_read["response"]["columns"][0]["table"] = json!("results_0009");
+        events.last_mut().unwrap()["query_sequence"] = json!(3);
+        events.insert(3, second_read);
+        fs::write(
+            source.join("apis/api/case-1/dependencies.jsonl"),
+            events
+                .iter()
+                .map(|event| format!("{event}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        vec![]
+    });
+    write(&fixture.proposal, identity(true));
+    fixture.confirm();
+    let path = fixture
+        .state()
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("apis/api/case-1/dependencies.jsonl");
+    let original = fs::read(&path).unwrap();
+    let plan = fixture.plan().unwrap();
+    let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+    assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
 fn mysql_identity_read_back_public_time_plan_restores_only_attested_selected_delivery_copies() {
     for scenario in [
         "valid",
@@ -120,7 +184,7 @@ fn mysql_identity_read_back_public_time_plan_restores_only_attested_selected_del
         });
         write(
             &fixture.proposal,
-            json!({"id":"read-clock","surface":"dependency.response","match":{"api":"GET /api","resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"},"operation":"COM_QUERY","sql":"SELECT payload FROM {{table}} WHERE id=?","table_series":{"prefix":"results_","start":0,"end":9,"width":4}},"slot":{"sql_column":"payload"},"codec":"json","contract":{"/time":{"relative_time":"rfc3339"}},"delivery":{"rebase_time":["/time"]},"proof":{"source":"session.py:clock","fact":"The stored result contains the Source request-relative time"}}),
+            json!({"id":"read-clock","surface":"dependency.response","match":{"api":"GET /api","resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"},"operation":"COM_QUERY","sql":"SELECT {{table}}.payload AS {{table}}_payload FROM {{table}} WHERE {{table}}.id=?","table_series":{"prefix":"results_","start":0,"end":9,"width":4}},"slot":{"sql_column":"payload"},"codec":"json","contract":{"/time":{"relative_time":"rfc3339"}},"delivery":{"rebase_time":["/time"]},"proof":{"source":"session.py:clock","fact":"The stored result contains the Source request-relative time"}}),
         );
         let source_events = events(true);
         super::dependency_transaction::install(&fixture, source_events[2].clone(), |source| {

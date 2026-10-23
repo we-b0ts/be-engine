@@ -75,6 +75,8 @@ is unclear.
   not persist plaintext, apply value rules or change assertion outcomes.
 
 - `policy/schema` owns the strict self-contained `traffic-policy/v1` document.
+  `policy/proof` owns shared proof byte limits and bounded Source references;
+  authoring resolves local inheritance and common document revision context.
   `policy/compiler` owns typed capability validation, field ownership and
   semantic effect fingerprints; neither module reads evidence or changes runtime
   state. `policy/condition` owns Source sibling predicate validation, selection,
@@ -978,6 +980,10 @@ explicit repository-wide audit.
   extracting Target values. Runtime capture, evidence planning and binding-audit
   restoration use that same operation. `sql_template/table` owns declaration
   intersection across complete table ranges for policy admission.
+  `mysql/sql/table_template` owns only bounded token expansion and constraint
+  solving for physical table markers and explicit derived projection aliases.
+  Replay value selectors and process-owned selectors share it while retaining
+  their own SQL admission, table ranges and lifecycle responsibilities.
   `rewrite/rule/generated_values` freezes the engine's file witnesses across
   coordinator plan/apply commands. `e2e_run` supplies the active-attempt guard
   independently of report availability; `rewrite/plan_recovery` retires legacy
@@ -1158,6 +1164,10 @@ explicit repository-wide audit.
   element pairing, microsecond relationships, conditional fields and staged
   nonces/templates. Keys are borrowed immutable inputs; bytes and plaintext do
   not enter errors or reports.
+  `policy/time_scope` validates explicit shared, array-element and identity-bound
+  clock scopes. `value_contract/json/clock_scope` resolves immutable array
+  coordinates or identity fingerprints; the existing comparison owner retains
+  relation budgets and cross-message validation.
 - `replay/policy/native_projection` translates typed effects to existing domain
   data. Its SourceSession exercises a complete immutable Source trace in private
   state; it cannot claim live Target work or certify Target correctness.
@@ -1169,6 +1179,10 @@ explicit repository-wide audit.
   resolves the sole Target-root-relative `project.policy` path.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
+  Its `change` child admits explicit replacement sets, preserving unselected
+  rules and API ownership. Replacements reuse complete preflight, whole-policy
+  compare-and-swap, durable publication intent and recovery; they are not an
+  alternate policy writer or a persisted policy format.
   Its `proposal` child merges new rules, additive identity references/read-back
   declarations and independently proven one-way finite raw identity read-back
   upgrades to state observations. Existing scope, contracts and prior proofs
@@ -1193,6 +1207,9 @@ explicit repository-wide audit.
   private SSE slot/time drafts and explicit authoring guidance without inferring
   identity authority. Public result observations retain private-field
   unavailability for virtual SSE pointers.
+  `discovery/values` derives wildcard fields only from actual decoded arrays and
+  combines bounded candidate bindings without inferring generation authority
+  from field names, numeric object keys or observed physical shards.
   `evidence/rule_guidance/stateful_dependencies` projects supported mechanisms
   from bounded dependency operations and Source binding metadata. It supplies
   proof requirements and ordinary plan commands without granting permission or

@@ -1,5 +1,5 @@
 //! Bounded selectors for source-proven process-owned MySQL reads.
-use crate::mysql::sql::{Token, tokens};
+use crate::mysql::sql::{Token, table_template, tokens};
 use crate::recorder::MysqlExchangeEvent;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -96,9 +96,7 @@ impl MysqlBackgroundSelector {
             .enumerate()
             .filter(|(i, token)| {
                 token.is(TABLE_MARKER)
-                    || (*i < from
-                        && i.checked_sub(1).is_some_and(|p| template[p].is("as"))
-                        && alias_suffix(token).is_some())
+                    || table_template::projection_alias(&template, *i, TABLE_MARKER)
             })
             .count();
         if expansions != self.sql.matches("{{table}}").count() {
@@ -195,85 +193,20 @@ impl MysqlBackgroundSelector {
         ) else {
             return false;
         };
-        match overlap_table(&left, &right) {
-            Some(Some(table)) => a.matches(&table) && b.matches(&table),
-            Some(None) => a.overlaps(&b),
-            None => false,
-        }
+        table_template::overlap(&left, Some(TABLE_MARKER), &right, Some(TABLE_MARKER)).is_some_and(
+            |constraints| {
+                constraints.compatible(
+                    |table| a.matches(table),
+                    |table| b.matches(table),
+                    || a.overlaps(&b),
+                )
+            },
+        )
     }
-}
-
-// A literal projection alias can constrain an otherwise patterned table name.
-// Solve that binding before intersecting the physical table selectors.
-fn overlap_table(left: &[Token], right: &[Token]) -> Option<Option<String>> {
-    if left.len() != right.len() {
-        return None;
-    }
-    let mut table = None;
-    for (a, b) in left.iter().zip(right) {
-        let suffix = |t: &Token| {
-            if t.is(TABLE_MARKER) {
-                Some(String::new())
-            } else {
-                alias_suffix(t).map(|s| format!("_{s}"))
-            }
-        };
-        let candidate = match (suffix(a), suffix(b)) {
-            (Some(a), Some(b)) if a == b => continue,
-            (Some(_), Some(_)) => return None,
-            (Some(suffix), None) => literal_table(b, &suffix)?,
-            (None, Some(suffix)) => literal_table(a, &suffix)?,
-            (None, None)
-                if a == b
-                    || (*a == Token::Placeholder && b.is_value())
-                    || (*b == Token::Placeholder && a.is_value()) =>
-            {
-                continue;
-            }
-            _ => return None,
-        };
-        if table.as_ref().is_some_and(|table| table != &candidate) {
-            return None;
-        }
-        table = Some(candidate);
-    }
-    Some(table)
-}
-
-fn literal_table(token: &Token, suffix: &str) -> Option<String> {
-    let Token::Word(word) = token else {
-        return None;
-    };
-    Some(word.strip_suffix(suffix)?.to_string())
-}
-
-fn alias_suffix(token: &Token) -> Option<&str> {
-    let Token::Word(word) = token else {
-        return None;
-    };
-    let suffix = word.strip_prefix(TABLE_MARKER)?.strip_prefix('_')?;
-    (!suffix.is_empty()
-        && !suffix.contains(TABLE_MARKER)
-        && suffix
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_'))
-    .then_some(suffix)
 }
 
 fn instantiate(template: &[Token], table: &str) -> Option<Vec<Token>> {
-    template
-        .iter()
-        .map(|token| {
-            if token.is(TABLE_MARKER) {
-                Some(Token::Word(table.to_owned()))
-            } else if let Some(suffix) = alias_suffix(token) {
-                let alias = format!("{table}_{suffix}");
-                (alias.len() <= 256).then_some(Token::Word(alias))
-            } else {
-                Some(token.clone())
-            }
-        })
-        .collect()
+    table_template::instantiate(template, TABLE_MARKER, table)
 }
 
 #[cfg(test)]
@@ -400,6 +333,9 @@ mod tests {
             "SELECT {{table}}_id FROM {{table}} WHERE status='RUNNING'",
             "SELECT id AS {{table}}_ FROM {{table}} WHERE status='RUNNING'",
             "SELECT id AS {{table}}_{{table}} FROM {{table}} WHERE status='RUNNING'",
+            "SELECT id AS {{table}}_id.extra FROM {{table}} WHERE status='RUNNING'",
+            "SELECT CAST(id AS {{table}}_id) FROM {{table}} WHERE status='RUNNING'",
+            "SELECT id FROM {{table}} AS {{table}}_alias WHERE status='RUNNING'",
             "SELECT id FROM {{table}} WHERE status='{{table}}'",
             "SELECT __traffic_background_table__ FROM {{table}} WHERE status='RUNNING'",
         ] {
@@ -407,6 +343,33 @@ mod tests {
             s.sql = sql.into();
             assert!(s.validate().is_err(), "{sql}");
         }
+    }
+
+    #[test]
+    fn projection_alias_expansion_retains_the_shared_alias_length_bound() {
+        let mut s = selector();
+        let suffix = "a".repeat(239);
+        s.sql = format!(
+            "SELECT id AS {{{{table}}}}_{suffix} FROM {{{{table}}}} WHERE status='RUNNING'"
+        );
+        s.validate().unwrap();
+        assert!(s.matches_query(
+            Some("mysql.internal"),
+            Some(3306),
+            Some("appdb"),
+            Some("root"),
+            "COM_QUERY",
+            Some(&s.sql.replace("{{table}}", "video_tasks_0000"))
+        ));
+        s.sql = s.sql.replace(&suffix, &format!("{suffix}a"));
+        assert!(!s.matches_query(
+            Some("mysql.internal"),
+            Some(3306),
+            Some("appdb"),
+            Some("root"),
+            "COM_QUERY",
+            Some(&s.sql.replace("{{table}}", "video_tasks_0000"))
+        ));
     }
 
     #[test]

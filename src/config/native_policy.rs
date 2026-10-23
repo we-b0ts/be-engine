@@ -27,8 +27,10 @@ pub(crate) fn parse_source_with_fingerprints(
 
 #[cfg(test)]
 pub(crate) fn render_initial(config: &SourceTrafficPolicyConfig) -> Result<String> {
-    let proof=crate::policy::Proof{source:"traffic-e2e Source owner bootstrap".into(),
-        fact:"The explicitly supplied acquisition and ownership configuration defines these Source effects".into()};
+    let proof = crate::policy::Proof {
+        source: "traffic-e2e Source owner bootstrap".into(),
+        fact: "Explicit Source acquisition and ownership settings define these effects".into(),
+    };
     let rules = reverse::rules(config, &proof)?;
     let document = crate::policy::TrafficPolicy {
         format: crate::policy::POLICY_FORMAT.into(),

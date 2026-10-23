@@ -1,7 +1,7 @@
 //! Bind one declared physical table without changing SQL values or predicates.
 use super::{bounded_statement_tokens, bounded_tokens, extract};
 use crate::config::mysql_tables::TableMatcher;
-use crate::mysql::sql::Token;
+use crate::mysql::sql::{Token, table_template};
 use anyhow::{Context, Result, ensure};
 
 const TABLE: &str = "__traffic_time_table__";
@@ -48,11 +48,13 @@ impl SqlValueTemplate {
             let positions = tokens
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| t.is(TABLE))
+                .filter(|(position, token)| {
+                    token.is(TABLE) || table_template::projection_alias(&tokens, *position, TABLE)
+                })
                 .collect::<Vec<_>>();
             ensure!(
                 positions.len() == count,
-                "MySQL {{{{table}}}} must be a whole table identifier or qualifier; literals and identifier fragments are unsupported"
+                "MySQL {{{{table}}}} requires a whole table identifier, qualifier or explicit SELECT projection alias; other identifier fragments and literals are unsupported"
             );
             let is_table = |position: usize| {
                 position.checked_sub(1).is_some_and(|p| {
@@ -62,14 +64,18 @@ impl SqlValueTemplate {
                 })
             };
             ensure!(
-                positions.iter().any(|(p, _)| is_table(*p)),
+                positions
+                    .iter()
+                    .any(|(p, token)| token.is(TABLE) && is_table(*p)),
                 "MySQL table template must select a physical table"
             );
             ensure!(
-                positions
-                    .iter()
-                    .all(|(p, _)| is_table(*p) || tokens.get(p + 1).is_some_and(|t| t.is("."))),
-                "MySQL table template cannot select a column or alias"
+                positions.iter().all(|(p, token)| {
+                    token.is(TABLE)
+                        && (is_table(*p) || tokens.get(p + 1).is_some_and(|t| t.is(".")))
+                        || table_template::projection_alias(&tokens, *p, TABLE)
+                }),
+                "MySQL table template cannot select a column or table alias"
             );
             Some(matcher)
         } else {
@@ -99,17 +105,7 @@ impl SqlValueTemplate {
         if !tables.matches(table) {
             return None;
         }
-        let bound = self
-            .tokens
-            .iter()
-            .map(|token| {
-                if token.is(TABLE) {
-                    Token::Word(table.clone())
-                } else {
-                    token.clone()
-                }
-            })
-            .collect::<Vec<_>>();
+        let bound = table_template::instantiate(&self.tokens, TABLE, table)?;
         extract(&bound, actual)?;
         Some(bound)
     }
@@ -117,50 +113,19 @@ impl SqlValueTemplate {
     // Policy admission needs the whole declared table range, not only the
     // physical table observed in the current planning witness.
     pub(in crate::replay::policy) fn overlaps(&self, other: &Self) -> bool {
-        if self.tokens.len() != other.tokens.len() {
-            return false;
-        }
-        let mut left_table = None;
-        let mut right_table = None;
-        let mut shared_table = false;
-        for (left, right) in self.tokens.iter().zip(&other.tokens) {
-            match (
-                self.tables.is_some() && left.is(TABLE),
-                other.tables.is_some() && right.is(TABLE),
-            ) {
-                (true, true) => shared_table = true,
-                (true, false) => {
-                    if !constrain_table(self, right, &mut left_table) {
-                        return false;
-                    }
-                }
-                (false, true) => {
-                    if !constrain_table(other, left, &mut right_table) {
-                        return false;
-                    }
-                }
-                (false, false) => {
-                    if left != right
-                        && !(*left == Token::Placeholder && right.is_value()
-                            || *right == Token::Placeholder && left.is_value())
-                    {
-                        return false;
-                    }
-                }
-            }
-        }
-        if !shared_table {
-            return true;
-        }
-        let (Some(left), Some(right)) = (&self.tables, &other.tables) else {
-            return false;
-        };
-        match (left_table, right_table) {
-            (Some(a), Some(b)) => a == b,
-            (Some(table), None) => right.matches(&table),
-            (None, Some(table)) => left.matches(&table),
-            (None, None) => left.overlaps(right),
-        }
+        table_template::overlap(
+            &self.tokens,
+            self.tables.as_ref().map(|_| TABLE),
+            &other.tokens,
+            other.tables.as_ref().map(|_| TABLE),
+        )
+        .is_some_and(|constraints| {
+            constraints.compatible(
+                |table| self.tables.as_ref().is_some_and(|tables| tables.matches(table)),
+                |table| other.tables.as_ref().is_some_and(|tables| tables.matches(table)),
+                || matches!((&self.tables, &other.tables), (Some(left), Some(right)) if left.overlaps(right)),
+            )
+        })
     }
 
     pub(in crate::replay::policy) fn matches(&self, sql: &str) -> bool {
@@ -201,10 +166,8 @@ impl SqlValueTemplate {
             None
         };
         self.tokens.iter().zip(actual).all(|(expected, actual)| {
-            if expected.is(TABLE)
-                && let Some(table) = table
-            {
-                matches!(actual, Token::Word(name) if name == table)
+            if let Some(table) = table {
+                table_template::matches_token(expected, actual, TABLE, table)
             } else {
                 expected == actual
                     || *expected == Token::Placeholder
@@ -212,22 +175,6 @@ impl SqlValueTemplate {
             }
         })
     }
-}
-
-fn constrain_table(template: &SqlValueTemplate, token: &Token, bound: &mut Option<String>) -> bool {
-    let Token::Word(table) = token else {
-        return false;
-    };
-    if bound.as_ref().is_some_and(|previous| previous != table)
-        || !template
-            .tables
-            .as_ref()
-            .is_some_and(|tables| tables.matches(table))
-    {
-        return false;
-    }
-    *bound = Some(table.clone());
-    true
 }
 
 fn plain_statement_verb(sql: &str) -> Option<&str> {
