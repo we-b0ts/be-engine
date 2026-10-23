@@ -75,7 +75,7 @@ pub(super) fn validate_generated_response(value: &GeneratedResponse) -> Result<(
             for (pointer, field) in fields {
                 compiler::validate_pointer(pointer, true)?;
                 proven(field, |field| match field {
-                    PlaintextContract::Time(time) => validate_time(time),
+                    PlaintextContract::Time(time) => validate_json_time(time, pointer),
                     _ => Ok(()),
                 })?;
             }

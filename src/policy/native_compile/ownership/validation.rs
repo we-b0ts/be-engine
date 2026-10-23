@@ -254,44 +254,33 @@ fn sql_overlap(left: &NativeMatch, right: &NativeMatch) -> Result<bool> {
         crate::mysql::sql::tokens(&b.replace("{{table}}", MARKER))
             .context("invalid native SQL ownership selector")?,
     );
-    if a.len() != b.len() {
-        return Ok(false);
-    }
     let tables = |selector: &NativeMatch| {
-        crate::config::mysql_tables::TableMatcher::new(
-            &selector.tables,
-            &selector.table_patterns,
-            selector.table_series.as_ref(),
-        )
+        (!selector.tables.is_empty()
+            || !selector.table_patterns.is_empty()
+            || selector.table_series.is_some())
+        .then(|| {
+            crate::config::mysql_tables::TableMatcher::new(
+                &selector.tables,
+                &selector.table_patterns,
+                selector.table_series.as_ref(),
+            )
+        })
+        .transpose()
     };
-    use crate::mysql::sql::Token;
-    for (a, b) in a.iter().zip(&b) {
-        if a.is(MARKER) && b.is(MARKER) {
-            if !tables(left)?.overlaps(&tables(right)?) {
-                return Ok(false);
-            }
-        } else if a.is(MARKER) {
-            let Token::Word(table) = b else {
-                return Ok(false);
-            };
-            if !tables(left)?.matches(table) {
-                return Ok(false);
-            }
-        } else if b.is(MARKER) {
-            let Token::Word(table) = a else {
-                return Ok(false);
-            };
-            if !tables(right)?.matches(table) {
-                return Ok(false);
-            }
-        } else if a != b
-            && !(*a == Token::Placeholder && b.is_value())
-            && !(*b == Token::Placeholder && a.is_value())
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    let (left, right) = (tables(left)?, tables(right)?);
+    Ok(crate::mysql::sql::table_template::overlap(
+        &a,
+        left.as_ref().map(|_| MARKER),
+        &b,
+        right.as_ref().map(|_| MARKER),
+    )
+    .is_some_and(|constraints| {
+        constraints.compatible(
+            |table| left.as_ref().is_some_and(|tables| tables.matches(table)),
+            |table| right.as_ref().is_some_and(|tables| tables.matches(table)),
+            || matches!((&left, &right), (Some(left), Some(right)) if left.overlaps(right)),
+        )
+    }))
 }
 
 pub(crate) fn value_sql_scopes_overlap(left: &MatchSpec, right: &MatchSpec) -> bool {

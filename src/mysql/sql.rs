@@ -6,6 +6,7 @@ pub(crate) mod bounds;
 pub(crate) mod insert;
 mod lexical_cache;
 pub(crate) mod projection;
+pub(crate) mod table_template;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Token {

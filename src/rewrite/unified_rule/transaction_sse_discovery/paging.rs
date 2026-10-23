@@ -242,6 +242,15 @@ fn mysql_resultset_binding_survives_an_earlier_ok_response_and_exposes_read_back
     assert_eq!(mysql[0]["source_response_kind"], "ok");
     assert_eq!(mysql[1]["source_response_kind"], "resultset");
     assert_ne!(mysql[0]["witness_id"], mysql[1]["witness_id"]);
+    for entry in &mysql {
+        assert_eq!(entry["needs_sql_template"], true);
+        assert!(entry["binding"]["match"].get("sql").is_none());
+        assert!(entry["binding"]["match"].get("table_series").is_none());
+        let instruction = entry["instruction"].as_str().unwrap();
+        assert!(instruction.contains("prove a bounded table_series"));
+        assert!(instruction.contains("AS {{table}}_suffix"));
+        assert!(instruction.contains("do not enumerate witnessed shards"));
+    }
     assert!(
         evidence
             .rule_hints

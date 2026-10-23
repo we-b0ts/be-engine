@@ -179,6 +179,7 @@ fn encrypted_plaintext_composes_unordered_time_and_uuid_with_strict_remainder() 
                 anchor: TimeAnchor::DependencyRequestStart,
                 utc_offset: None,
                 clock_group: None,
+                clock_scope: Default::default(),
             })),
         ),
         ("/jti".into(), proof(PlaintextContract::UuidV4)),

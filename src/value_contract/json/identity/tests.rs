@@ -105,7 +105,11 @@ fn repeated_frame_times_do_not_accumulate_duplicate_relationships() {
     for _ in 0..1000 {
         let mut frame = Comparison::default();
         frame.relationships.insert(
-            (TimeAnchor::DependencyRequestStart, Some("response".into())),
+            (
+                TimeAnchor::DependencyRequestStart,
+                Some("response".into()),
+                Default::default(),
+            ),
             vec![(1, 61)],
         );
         result.merge_and_validate(frame);
@@ -114,7 +118,11 @@ fn repeated_frame_times_do_not_accumulate_duplicate_relationships() {
     assert_eq!(result.relationships.values().next().unwrap().len(), 1);
     let mut wrong = Comparison::default();
     wrong.relationships.insert(
-        (TimeAnchor::DependencyRequestStart, Some("response".into())),
+        (
+            TimeAnchor::DependencyRequestStart,
+            Some("response".into()),
+            Default::default(),
+        ),
         vec![(1, 62)],
     );
     result.merge_and_validate(wrong);

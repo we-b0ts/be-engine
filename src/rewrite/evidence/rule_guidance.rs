@@ -59,7 +59,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
     let mut add = |capability: &str, rule: &str, instruction: &str| {
         hints.push(RewriteRuleHint {
         capability: capability.into(), rule: rule.into(),
-        hint: format!("{instruction} Write a self-contained traffic-policy/v1 rule with fresh Source file:line proof. Use rule plan --file <rule.yaml> --evidence <evidence-id>, inspect the immutable plan, apply, then complete its genuine Replay or recording obligations."),
+        hint: format!("{instruction} Write a self-contained traffic-policy/v1 rule with fresh Source file:line proof: at most three file references and a causal fact of at most 200 UTF-8 bytes. Use one document source_revision. Use rule plan --file <rule.yaml> --evidence <evidence-id>, inspect the immutable plan, apply, then complete its genuine Replay or recording obligations."),
         help: help(root),
     })
     };

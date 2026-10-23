@@ -18,7 +18,7 @@ mysql_read_back:
       endpoint: db.example:3306
       database: app
       username: writer
-    sql: SELECT payload FROM {{table}} WHERE id=?
+    sql: SELECT {{table}}.payload AS {{table}}_payload FROM {{table}} WHERE {{table}}.id=?
     table_series: {prefix: results_, start: 0, end: 1023, width: 4}
     column: payload
     json_pointers: [/blocks/*/id]
@@ -29,9 +29,16 @@ mysql_read_back:
 
 `column` identifies the physical result column, independent of its alias. The
 SQL is a bounded complete SELECT; explicit tables, patterns and series use the
-ordinary SQL table selector. `{{table}}` must be a complete identifier or
-qualifier. It cannot replace fragments inside aliases such as `results_0001_id`;
-use separate exact physical SQL declarations for those statements. SQL text and
+ordinary SQL table selector. `{{table}}` selects a complete physical table or
+qualifier. An explicit outer SELECT projection alias may use
+`AS {{table}}_suffix`, where the nonempty suffix contains only ASCII letters,
+digits or underscores. Its complete expanded name is bounded to 256 bytes and
+must use the same physical table as FROM and every selected qualifier. Using the
+marker in other identifier fragments, table-alias positions or literal values
+remains rejected.
+Prove the shard bounds from Source configuration; physical names observed in a
+few cases do not establish a table family. One bounded declaration covers the
+same stored-identity read across those shards. SQL text and
 prepared execution share the same finite recorded exchanges. Query matching,
 predicates, authentication, physical shard selection and consumption retain
 their ordinary owners.

@@ -356,6 +356,7 @@ fn time(value: &old::TimeRule) -> Result<n::NativeTime> {
         relation: p::TimeRelation::PreserveOffset,
         anchor: p::TimeAnchor::DependencyRequestStart,
         clock_group: None,
+        clock_scope: Default::default(),
     })
 }
 fn request_time(value: &super::request_contract::config::TimeField) -> n::NativeTime {
@@ -374,6 +375,7 @@ fn request_time(value: &super::request_contract::config::TimeField) -> n::Native
         relation: p::TimeRelation::PreserveOffset,
         anchor: value.anchor,
         clock_group: value.clock_group.clone(),
+        clock_scope: Default::default(),
     }
 }
 fn time_field(value: &n::NativeTime) -> p::FieldContract {
@@ -383,6 +385,7 @@ fn time_field(value: &n::NativeTime) -> p::FieldContract {
         anchor: value.anchor,
         utc_offset: value.utc_offset.clone(),
         clock_group: value.clock_group.clone(),
+        clock_scope: value.clock_scope.clone(),
     }
 }
 

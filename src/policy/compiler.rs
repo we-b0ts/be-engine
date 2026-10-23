@@ -174,8 +174,7 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
                 .all(|byte| byte.is_ascii_alphanumeric() || b"_.:-".contains(&byte)),
         "rule id requires 1..128 ASCII identifier characters"
     );
-    text(&rule.proof.source, "proof.source", 2048)?;
-    text(&rule.proof.fact, "proof.fact", 4096)?;
+    rule.proof.validate(false)?;
     validate_match(rule)?;
     validate_condition(rule)?;
     ensure!(
@@ -206,6 +205,17 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
         validate_pointer(path, true)?;
         validate_contract_binding(&rule.codec, path, contract)?;
         if let Some(time) = contract.unconditional().time() {
+            time.clock_scope.validate(path)?;
+            ensure!(
+                !matches!(time.clock_scope, ClockScope::Entity { .. })
+                    || (rule.surface == Surface::ApiResponse
+                        && matches!(rule.slot, Slot::SseData(_))),
+                "entity clock_scope requires an SSE identity binding"
+            );
+            ensure!(
+                time.format != TimestampFormat::CalendarDate || time.clock_scope.is_shared(),
+                "calendar_date forbids clock_scope"
+            );
             ensure!(
                 match time.format {
                     TimestampFormat::CalendarDate => {

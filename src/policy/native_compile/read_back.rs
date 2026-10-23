@@ -1,6 +1,22 @@
 //! Validate read permissions independently of existing write matching contracts.
 use super::*;
 
+/// The presence of state_epochs grants a permission; its proof text does not
+/// alter that permission. Touch only typed read-back metadata, never JSON data.
+pub(super) fn normalize_proof_identity(effect: &mut NativeEffect) {
+    let reads = match effect {
+        NativeEffect::Identity(effect) => &mut effect.read_back,
+        NativeEffect::RedisSequence(effect) => &mut effect.read_back,
+        _ => return,
+    };
+    for read in reads {
+        if let Some(proof) = &mut read.contract.state_epochs {
+            proof.source.clear();
+            proof.fact = "enabled".into();
+        }
+    }
+}
+
 pub(super) fn validate(rule: &NativeRule) -> Result<()> {
     let entries = rule.effect.redis_read_back();
     if entries.is_empty() {

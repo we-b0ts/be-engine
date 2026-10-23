@@ -58,7 +58,7 @@ pub(super) fn transform(value: &mut Value, tagged: bool, compact: bool) -> Resul
     ensure!(
         map.keys().all(|key| matches!(
             key.as_str(),
-            Some("relative_time" | "request_time" | "utc_offset" | "clock_group")
+            Some("relative_time" | "request_time" | "utc_offset" | "clock_group" | "clock_scope")
         )),
         "time abbreviations cannot mix kind/format/relation or unknown fields"
     );
@@ -115,6 +115,7 @@ pub(super) fn validate_legacy_offset(offset: &Value) -> Result<()> {
         anchor: crate::policy::TimeAnchor::DependencyRequestStart,
         utc_offset: Some(offset.into()),
         clock_group: None,
+        clock_scope: Default::default(),
     }
     .offset()?;
     Ok(())

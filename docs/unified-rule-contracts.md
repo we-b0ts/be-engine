@@ -242,6 +242,57 @@ verifies the compiled identity after a parse round trip before returning output.
 Writers preserve shared revision context; unchanged apply keeps original bytes
 and does not manufacture a new verification obligation.
 
+Keep proof metadata short. `fact` is a nonempty logical single line of at most
+200 UTF-8 bytes; the renderer folds it into at most two content lines without
+truncation. `source` accepts one file reference or a list of at most three file
+references. Group locations from the same file in one entry. Nested proof
+overrides obey the same limits. Put the common `source_revision` only at document
+level; compact output omits inherited per-rule revision text.
+
+HTTP capture-path rules are acquisition filters, so their root proof may omit
+`source`; `fact` and the immutable effect revision remain required. This
+exception grants no value-comparison permission. Other rules and nested
+contracts still require Source references. Authoring serialization places
+`capture_http` rules first while preserving the relative order of all other
+rules, including ordered response capture plugins.
+
+### Arrays, repeated clocks and physical SQL families
+
+JSON `*` selects elements of an actual array. A numeric object member such as
+`/by_id/123` is a literal key; its spelling does not prove an array or a generated
+identity. Author repeated fields as `/blocks/*/timestamp`, with Source proof for
+every selected kind, instead of enumerating the indexes observed in one case.
+Array length, order, element types and all unselected members remain strict.
+An absent Source selection or empty Source array grants no Target additions.
+JSON `null` is present and still needs an explicit valid contract or an exact
+inactive branch.
+
+Timestamp contracts default to `clock_scope: shared`, retaining existing named
+`clock_group` relationships. When each array element reads its own clock, use
+`{relative_time: unix_milliseconds, clock_scope: array_element}`. This scopes
+relationships by the complete actual array ancestry; it does not treat a numeric
+object key as an element. Fields derived from one read within an element share
+a group; independent reads within that element still need distinct Source-proven
+`clock_group` names. Reusing a group name in a different case does not reuse a
+clock. Neither scope nor group changes the independent request-time anchor.
+
+SSE copies may follow an entity across frames instead of array positions. A
+timestamp can declare `clock_scope: {binding: text-block, relative_pointer: ../id}`
+only with an explicit matching identity contract for that sibling and binding in
+the same SSE selector. The declared prefix/format and case-local bijection govern
+the entity; the scope does not infer an identity permission from differing IDs.
+Use this to preserve one block creation instant in its creation and terminal
+frames, while different blocks keep independent clocks.
+
+For Source-proven sharded ORM SELECTs, declare the bounded `table_series` and use
+whole `{{table}}` identifiers/qualifiers plus explicit projection aliases such as
+`AS {{table}}_id`. The alias suffix is a nonempty ASCII letter/digit/underscore
+literal bound to that same physical table. Aliases, predicates, selected columns,
+the actual Source/Target shard and finite exchanges remain checked. Do not infer
+sharding from digits in a sample or append a separate rule for each witnessed
+shard. SQL discovery with no configured template asks for this Source construction
+proof; it does not manufacture a family, codec or value slot.
+
 The document discriminator is `format: traffic-policy/v1`; `rules` is the
 authoring list; ordinary comparison permissions are combined by explicit field
 ownership. Every rule has an ID,
@@ -655,6 +706,17 @@ surface, slot, codec/type, likely contract, selected scope, coverage, missing
 Source proof and supported next action. Do not present a syntactic time/UUID/PB
 candidate as an established Source semantic fact.
 
+Discovery follows actual decoded arrays when producing wildcard paths. Identical
+surface/selector/slot/codec/path/contract candidates merge across indexes and cases
+within the bounded scan window; their IDs do not contain a witness or concrete
+array index. Each candidate reports a bounded `bindings` list of witness IDs and
+concrete pointers, `binding_count` and `bindings_omitted`. These counts explain the
+sampled draft and do not establish full coverage. Summary pages retain the same
+candidate IDs, and scan continuations retain the existing observation/node bounds.
+Time drafts under arrays use `clock_scope: array_element`; Source ownership and
+grouping still require proof. Draft proofs remain empty, `plan_ready` remains
+false, and differing identifiers never generate identity permissions.
+
 The intended interaction is:
 
 ```text
@@ -670,6 +732,37 @@ scopes and codec selectors should be prefilled so workers supply only
 the Source fact and genuinely missing schema/relationship choices. Plans show
 what stays strict, affected coverage, residual differences and the exact next
 verification action. They never ask workers to construct internal fingerprints.
+
+Ordinary documents remain additive; omitting an existing rule does not delete it.
+An explicit reviewed replacement uses the same plan/apply CLI with this wrapper:
+
+```yaml
+format: traffic-policy-change/v1
+replace_rules: [old-a, old-b]
+policy:
+  format: traffic-policy/v1
+  rules:
+    - id: cache-write-clock
+      surface: dependency.request
+      match:
+        resource: {protocol: redis, endpoint: 'cache.example:6379', database: 0}
+        operation: SET
+        key: {exact: task-cache}
+      slot: value
+      codec: json
+      contract:
+        /written_at: {relative_time: unix_seconds}
+      proof:
+        source: source/cache.py:write
+        fact: Source writes this request-relative clock; all other values remain exact.
+```
+
+Only the listed old IDs are replaced; every unlisted rule is retained. The nested
+policy must contain the complete proposed rules, each admitted through the same
+Source/Target coverage preflight. Existing primary response/input rules cannot be
+removed across another API's issue. This is not permission for an unproven
+replacement or implicit deletion. Whole-policy compare-and-swap, durable apply
+intent, stale-input rejection, recovery and required fresh Replay remain active.
 
 Distinguish candidate, needs-proof/schema/evidence, stale, unsupported,
 planned, applied-pending-verification, verified, residual-failure and

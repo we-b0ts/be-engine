@@ -91,7 +91,11 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
         root.insert("source_revision".into(), revision.clone().into());
     }
     let mut rules = vec![];
-    for rule in &document.rules {
+    let capture_first = document.rules.iter().filter(|rule| matches!(rule,
+        PolicyRule::Native(rule) if matches!(rule.effect, crate::policy::NativeEffect::CaptureHttp(_))));
+    let remaining = document.rules.iter().filter(|rule| !matches!(rule,
+        PolicyRule::Native(rule) if matches!(rule.effect, crate::policy::NativeEffect::CaptureHttp(_))));
+    for rule in capture_first.chain(remaining) {
         let mut rule = serde_yaml::to_value(rule)?;
         walk::compact_rule(&mut rule, document.source_revision.as_deref())?;
         rules.push(rule);

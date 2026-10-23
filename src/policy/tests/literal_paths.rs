@@ -68,6 +68,7 @@ fn dependency_and_native_selectors_share_literal_http_paths_without_widening_pat
                         anchor: TimeAnchor::DependencyRequestStart,
                         utc_offset: None,
                         clock_group: None,
+                        clock_scope: Default::default(),
                     },
                     proof: value.proof.clone(),
                 },

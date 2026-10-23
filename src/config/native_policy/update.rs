@@ -55,6 +55,7 @@ pub(crate) fn render_updated(
             } else {
                 let mut replacement = old.clone();
                 replacement.proof = proof.clone();
+                replacement.proof.source.clear();
                 replacement.effect = n::NativeEffect::CaptureHttp(n::CaptureHttpEffect {
                     source_revision: proposed.http.source_revision.clone(),
                     case_paths: paths,
@@ -68,7 +69,7 @@ pub(crate) fn render_updated(
             retained.push(entry);
         } else if let Some(next) = generated.iter_mut().find(|next| same_key(old, next)) {
             next.id = old.id.clone();
-            reverse::preserve_nested(old, next);
+            reverse::preserve_nested(old, next)?;
         }
     }
     for mut next in generated {

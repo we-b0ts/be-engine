@@ -217,6 +217,7 @@ fn time_contract(time: &crate::policy::TimeContract) -> FieldContract {
         anchor: time.anchor,
         utc_offset: time.utc_offset.clone(),
         clock_group: time.clock_group.clone(),
+        clock_scope: time.clock_scope.clone(),
     }
 }
 
@@ -289,6 +290,9 @@ pub(in crate::replay::policy) fn decision(
     output
 }
 
+#[cfg(test)]
+#[path = "mysql_native/array_tests.rs"]
+mod array_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

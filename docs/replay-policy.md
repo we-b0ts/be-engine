@@ -22,6 +22,9 @@ Use a self-contained rule by default. Inline resource, codec, contracts and Sour
 proof make the complete permission visible in one place. Value rules declare
 one of `api.response`, `dependency.request`, `dependency.response`; native effects
 retain their explicit identity, input, acquisition, ownership or sharing owner.
+Keep `fact` within 200 UTF-8 bytes and `source` within three file references;
+use a list for multiple files. Capture-path rules come first and may omit
+`source`. A common document-level `source_revision` is emitted only once.
 The policy is not first-match-wins. Unknown fields, unsupported combinations,
 duplicate IDs and conflicting field ownership are rejected before execution.
 For explicit Redis GET/LRANGE delivery from matched Target writes, update the
@@ -64,6 +67,33 @@ provenance and the whole policy transaction. Apply rejects stale inputs, records
 its write intent, and returns mandatory fresh Replay or Recording obligations.
 Applying a rule does not certify Target correctness. Interrupted or legacy plans
 use the engine-returned `rule recover` action; never edit workflow state.
+
+To consolidate or revise existing rules, submit an explicit change proposal to
+the same `rule plan --file` command:
+
+```yaml
+format: traffic-policy-change/v1
+replace_rules: [old-clock-rule, old-identity-rule]
+policy:
+  format: traffic-policy/v1
+  rules:
+    # Complete replacement rules, with their own Source proof.
+```
+
+Only the named old IDs are removed. The planner rejects unknown IDs and a
+response/input rule owned by another API issue. Every new or revised permission
+passes the ordinary complete Source and independent Target preflight; an empty
+replacement is rejected. Resource rules can consolidate prior API scopes only
+through complete resource evidence. The plan displays the old rules, expanded
+replacement rules and whole-policy diff. Unselected rules remain unchanged.
+Publication reuses the original policy compare-and-swap, frozen witnesses,
+durable write intent and recovery, and requires fresh genuine Replay. A change
+proposal is not a persisted policy format. Ordinary rule documents remain
+additive; omitting an old rule from them never deletes it.
+Capture HTTP consolidation must preserve the exact existing path union, Source
+revision and selectors. Breeze capture and ordered Source-response rewrites
+cannot be deleted or replaced through this value-rule transaction. Prospective
+recorder configuration is checked even when no new Source effect is selected.
 
 The compiled policy has separate runtime, acquisition and classification
 fingerprints. Proof-only edits do not invent behavioral changes, while concurrent

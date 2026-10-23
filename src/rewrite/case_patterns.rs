@@ -230,18 +230,13 @@ fn apply_patterns(
     policy.http.case_path_patterns = after.into_iter().collect();
     policy.http.source_revision = source_revision.into();
 
-    let mut effective = crate::config::AppConfig::load_static(project_config)?;
-    policy.apply_to(&mut effective)?;
-    effective.validate()?;
+    crate::config::AppConfig::load_with_source_policy(project_config, &policy)?;
     let updated = crate::config::native_policy::render_updated(
         &original,
         &policy,
         &crate::policy::Proof {
             source: format!("{} at {}", case_source.display(), source_revision),
-            fact: format!(
-                "Finalized Source API inventory supports case-path patterns: {}",
-                patterns.join(", ")
-            ),
+            fact: "Finalized Source inventory authorizes these capture paths; comparison permissions remain unchanged.".into(),
         },
     )?;
     let current = fs::read_to_string(policy_path)

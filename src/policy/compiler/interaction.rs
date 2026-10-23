@@ -77,5 +77,27 @@ pub(super) fn validate_bindings(rules: &[CompiledRule]) -> Result<()> {
             );
         }
     }
+    for rule in rules {
+        for (pointer, contract) in &rule.rule.contract {
+            let Some(time) = contract.unconditional().time() else {
+                continue;
+            };
+            let ClockScope::Entity { binding, .. } = &time.clock_scope else {
+                continue;
+            };
+            let identity_pointer = time
+                .clock_scope
+                .peer_pointer(pointer)
+                .context("clock scope identity sibling is absent")?;
+            ensure!(rules.iter().any(|candidate| {
+                candidate.rule.selector == rule.rule.selector
+                    && candidate.rule.slot == rule.rule.slot
+                    && candidate.rule.when == rule.rule.when
+                    && candidate.rule.contract.get(&identity_pointer).is_some_and(|identity| {
+                        matches!(identity.unconditional(), FieldContract::Identity { binding: other, .. } if other.as_str() == binding.as_str())
+                    })
+            }), "entity clock_scope requires a matching identity binding at its sibling pointer in the same SSE scope");
+        }
+    }
     Ok(())
 }

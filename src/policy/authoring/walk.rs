@@ -24,6 +24,7 @@ enum Shape {
     Origin,
     ProcessSelector,
     SqlResponse,
+    RedisReadBack,
     CaptureResponse,
 }
 
@@ -50,7 +51,17 @@ struct Walker<'a> {
 impl Walker<'_> {
     fn rule(&self, value: &mut Value) -> Result<()> {
         let map = value.as_mapping_mut().context("rule must be a mapping")?;
-        let own = proof::expand(map.remove("proof"), None, self.revision)?;
+        let capture = map
+            .get("effect")
+            .and_then(|effect| effect.get("kind"))
+            .and_then(Value::as_str)
+            == Some("capture_http");
+        let raw = map.remove("proof");
+        let own = if capture {
+            proof::expand_capture(raw, self.revision)?
+        } else {
+            proof::expand(raw, None, self.revision)?
+        };
         if let Some(effect) = map.get_mut("effect") {
             self.effect(effect, &own)?;
         } else if let Some(fields) = map.get_mut("contract") {
@@ -190,12 +201,12 @@ impl Walker<'_> {
                 self.one(map, "capture", Shape::IdentityCapture, false, parent, 0)?;
                 self.list(map, "references", Shape::Leaf, true, parent, 0)?;
                 self.list(map, "mysql_read_back", Shape::Leaf, true, parent, 0)?;
-                self.list(map, "read_back", Shape::Leaf, true, parent, 0)?;
+                self.list(map, "read_back", Shape::RedisReadBack, true, parent, 0)?;
             }
             "redis_sequence" => {
                 self.one(map, "key", Shape::Leaf, true, parent, 0)?;
                 self.list(map, "commands", Shape::SequenceCommand, false, parent, 0)?;
-                self.list(map, "read_back", Shape::Leaf, true, parent, 0)?;
+                self.list(map, "read_back", Shape::RedisReadBack, true, parent, 0)?;
             }
             "response_jwt" => self.list(map, "nonces", Shape::Leaf, true, parent, 0)?,
             "response_header_date" => {
@@ -301,6 +312,16 @@ impl Walker<'_> {
                 self.one(map, "script", Shape::Leaf, true, parent, depth)?;
             }
             Shape::SqlResponse => self.one(map, "time", Shape::Time, false, parent, depth)?,
+            Shape::RedisReadBack => {
+                if let Some(epoch) = map.get_mut("state_epochs") {
+                    let own = proof::expand(Some(epoch.clone()), None, self.revision)?;
+                    *epoch = if self.compact {
+                        proof::compact(&own, None, self.revision).expect("explicit state proof")
+                    } else {
+                        own
+                    };
+                }
+            }
             Shape::CaptureResponse => {
                 self.list(map, "pointers", Shape::Leaf, true, parent, depth)?
             }

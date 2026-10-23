@@ -138,6 +138,7 @@ fn native_relative_times_accept_omitted_offsets_but_absolute_windows_require_the
             anchor: super::super::TimeAnchor::DependencyRequestStart,
             utc_offset: None,
             clock_group: None,
+            clock_scope: Default::default(),
         };
         validate_time(&time).unwrap();
         time.relation = super::super::TimeRelation::RequestWindow;
@@ -230,6 +231,7 @@ fn grouped_clock_names_are_semantic_and_sequence_claims_keep_command_slots() {
         anchor: crate::policy::TimeAnchor::DependencyRequestStart,
         utc_offset: None,
         clock_group: Some("first-read".into()),
+        clock_scope: Default::default(),
     };
     let mut rule = NativeRule {
         id: "sequence".into(),

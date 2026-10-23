@@ -19,6 +19,7 @@ mod dependency;
 mod interaction;
 mod page;
 mod primary;
+mod values;
 pub(in crate::rewrite) use page::Cursor;
 
 const LIMIT: usize = 20;
@@ -30,6 +31,7 @@ const SOURCE_CACHE_LIMIT: u64 = 64 * 1024 * 1024;
 struct Drafts {
     values: Vec<Value>,
     seen: BTreeSet<String>,
+    candidate_bindings: BTreeMap<String, BTreeSet<(String, String)>>,
     examined: usize,
     observations: usize,
     limited: bool,
@@ -121,9 +123,10 @@ pub(in crate::rewrite) fn facts(
         next.encode()
     });
     let total = drafts.seen.len();
+    let candidates = drafts.candidates();
     Ok(
-        json!({"format":"traffic-policy/v1","api":state.api,"candidates":drafts.values,
-        "observations_examined":drafts.observations,"json_nodes_examined":drafts.examined,"candidate_count":total,"summary_omitted":total.saturating_sub(drafts.values.len()),
+        json!({"format":"traffic-policy/v1","api":state.api,"candidates":candidates,
+        "observations_examined":drafts.observations,"json_nodes_examined":drafts.examined,"candidate_count":total,"summary_omitted":total.saturating_sub(candidates.len()),
         "pagination":{"scope":"bounded_scan_window","summary_offset":cursor.summary,"summary_limit":LIMIT,"scan_remaining":!primary_done || !dependency_done,"next_page_cursor":next_page,"next_scan_cursor":next_scan},
         "bounded_analysis":{"scan_order":if cursor.primary_first { ["api.response", "dependency"] } else { ["dependency", "api.response"] },"limited":drafts.limited || drafts.summary_limited(),"summary_limited":drafts.summary_limited(),"observation_limit":OBSERVATION_LIMIT,"node_limit":NODE_LIMIT,"payload_limit_bytes":4 * 1024 * 1024,"source_cache_limit_bytes":SOURCE_CACHE_LIMIT,"complete_coverage":false,"nonresumable_limits":drafts.nonresumable_limits},
         "coverage":manifest.as_ref().map(|m| json!({"sealed":m.sealed,"complete":m.complete,"omitted":m.omitted,"recorded":m.recorded})),
@@ -219,7 +222,7 @@ impl Drafts {
         self.collect(
             &source.comparison_value(&paths),
             &target.comparison_value(&paths),
-            "",
+            &values::JsonLocation::default(),
             &base,
             witness,
             clocks,
@@ -267,7 +270,7 @@ impl Drafts {
             self.add_entry(identity, json!({"binding":base,"witness_id":witness.id,
                     "source_response_kind":event["response"]["status"],
                     "needs_sql_template":true,"needs_slot":true,"needs_schema":true,"source_intent_required":true,
-                    "instruction":"Trace Source SQL construction and declare match.sql plus sql_value (template parameter ordinal) or sql_column. Metadata placeholders do not identify the value slot. Supply an explicit codec and fresh Source proof."}));
+                    "instruction":"Trace Source SQL construction and declare match.sql plus sql_value (template parameter ordinal) or sql_column. Metadata placeholders do not identify the value slot. For sharded ORM SQL, prove a bounded table_series and explicit AS {{table}}_suffix aliases from Source; do not enumerate witnessed shards or infer a table family from digits. Supply an explicit codec and fresh Source proof."}));
             return Ok(());
         }
         let scope = rules
@@ -300,149 +303,6 @@ impl Drafts {
                 )?;
             }
         }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)] // A recursive walk retains one immutable observation context.
-    fn collect(
-        &mut self,
-        source: &Value,
-        target: &Value,
-        pointer: &str,
-        base: &Value,
-        witness: &str,
-        clocks: AnchorClocks,
-        depth: usize,
-    ) -> Result<()> {
-        if depth > 32 || self.examined >= NODE_LIMIT {
-            self.limit(if depth > 32 {
-                "json_depth"
-            } else {
-                "json_nodes"
-            });
-            return Ok(());
-        }
-        if source == target {
-            return Ok(());
-        }
-        self.examined += 1;
-        if let (Some(a), Some(b)) = (source.as_array(), target.as_array()) {
-            let sorted = |items: &[Value]| {
-                let mut values = items.iter().map(Value::to_string).collect::<Vec<_>>();
-                values.sort();
-                values
-            };
-            if sorted(a) == sorted(b) {
-                self.push(base, pointer, json!({"kind":"unordered"}), witness)?;
-                return Ok(());
-            }
-        }
-        let formats = if source.is_number() && target.is_number() {
-            let value = source.as_i64().unwrap_or(0);
-            if value >= 946_684_800_000_000 {
-                vec!["unix_microseconds"]
-            } else if value >= 946_684_800_000 {
-                vec!["unix_milliseconds"]
-            } else if value >= 946_684_800 {
-                vec!["unix_seconds"]
-            } else {
-                vec![]
-            }
-        } else if source.is_string() && target.is_string() {
-            vec!["rfc3339"]
-        } else {
-            vec![]
-        };
-        for format in formats {
-            let contract = json!({"kind":"time","format":format,"relation":"preserve_offset"});
-            let typed: FieldContract = serde_json::from_value(contract.clone())?;
-            let observed = if base["surface"] == "api.response" {
-                AnchorClocks {
-                    dependency: clocks.case,
-                    ..clocks
-                }
-            } else {
-                clocks
-            };
-            if crate::value_contract::json::compare(
-                source,
-                target,
-                &[Field {
-                    rule_id: "draft",
-                    pointer: "",
-                    contract: &typed,
-                }],
-                observed,
-            )
-            .passed()
-            {
-                self.push(base, pointer, contract, witness)?;
-                return Ok(());
-            }
-        }
-        if let (Some(a), Some(b)) = (source.as_object(), target.as_object()) {
-            for (key, value) in a {
-                if self.examined >= NODE_LIMIT {
-                    self.limit("json_nodes");
-                    break;
-                }
-                if key.contains('\0') {
-                    continue;
-                }
-                if let Some(other) = b.get(key) {
-                    self.collect(
-                        value,
-                        other,
-                        &format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1")),
-                        base,
-                        witness,
-                        clocks,
-                        depth + 1,
-                    )?;
-                }
-            }
-        } else if let (Some(a), Some(b)) = (source.as_array(), target.as_array())
-            && a.len() == b.len()
-        {
-            for (index, (value, other)) in a.iter().zip(b).enumerate() {
-                if self.examined >= NODE_LIMIT {
-                    self.limit("json_nodes");
-                    break;
-                }
-                self.collect(
-                    value,
-                    other,
-                    &format!("{pointer}/{index}"),
-                    base,
-                    witness,
-                    clocks,
-                    depth + 1,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    fn push(&mut self, base: &Value, pointer: &str, contract: Value, witness: &str) -> Result<()> {
-        let identity = serde_json::to_string(&(base, pointer, &contract))?;
-        if !self.seen.insert(identity.clone())
-            || self.seen.len() <= self.summary_offset
-            || self.values.len() >= LIMIT
-        {
-            return Ok(());
-        }
-        let id = format!(
-            "draft-{}",
-            super::super::fingerprint::id(&[&identity]).trim_start_matches("fnv1a64:")
-        );
-        let mut rule = base.clone();
-        rule["id"] = json!(id);
-        rule["contract"] = json!({pointer:contract});
-        rule["proof"] = json!({"source":"","fact":""});
-        self.values.push(
-            json!({"candidate_id":id,"witness_id":witness,"mechanism":contract["kind"],
-            "draft_rule":rule,"source_proof_required":true,"plan_ready":false}),
-        );
         Ok(())
     }
 }
@@ -527,7 +387,7 @@ mod tests {
             .collect(
                 &json!({"members":[1,2,2],"business":"source"}),
                 &json!({"members":[2,1,2],"business":"wrong"}),
-                "",
+                &values::JsonLocation::default(),
                 &json!({}),
                 "witness",
                 AnchorClocks::default(),
