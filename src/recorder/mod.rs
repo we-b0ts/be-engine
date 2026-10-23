@@ -35,6 +35,7 @@ mod preparation;
 pub(crate) mod readiness;
 pub(crate) mod redis;
 mod run;
+mod shutdown;
 mod storage;
 mod summary;
 mod writer;

@@ -12,6 +12,25 @@ reuses the Recorder section of `.traffic-e2e/project.yaml` and the single
 The app does not inspect Git or start the rewrite coordinator. Ingress selects API traffic. Recorder preserves the configured HTTP include/exclude
 rules; their default permits all methods and paths.
 
+Normal SIGTERM/SIGINT shutdown first withdraws discovery and closes admission of
+new cases. Source, Recorder and admitted sessions remain alive for up to **15
+seconds**, waiting for primary requests, dependency tails and case publication.
+Existing Socket.IO polling follow-ups may finish their admitted session. Stream
+idle windows, absolute request deadlines and dependency persistence budgets
+continue to apply; a failure requiring Source isolation ends the wait early.
+After this wait, the supervisor stops Source and then closes retained dependency
+connections as engine cleanup before finalizing the recording.
+
+If an uncommitted case is still incomplete after 15 seconds, it fails with
+`shutdown_case_drain_timeout`. An earlier independent case failure is preserved.
+The supervisor writes `recording-shutdown.json` before stopping Source, retaining
+the shutdown trigger, elapsed time, outcome and affected case identities. This
+also distinguishes case truncation from a subsequent dependency drain error.
+Cases already inside their publication commit barrier finish that transaction.
+The 15-second limit bounds the normal case wait; process termination and evidence
+cleanup follow their existing separate budgets. Low-level Recorder shutdown uses
+`recording.shutdown_case_drain_timeout_ms` for its own final drain.
+
 HTTP request waits and HTTP streaming duration share
 `recorder.http_gateway.request_timeout_ms`, default 900000 ms (900 seconds).
 `--request-timeout-seconds` overrides the same budget for both. Ordinary HTTP
@@ -70,6 +89,7 @@ or passwordless sudo:
 
 ```bash
 cargo test --lib record_service::tests::quiescing -- --ignored --test-threads=1
+cargo test --lib record_service::tests::shutdown -- --ignored --test-threads=1
 ```
 
 Run in an isolated container network namespace, with a root controller and

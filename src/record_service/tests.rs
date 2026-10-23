@@ -24,6 +24,7 @@ mod policy;
 mod project;
 mod quiescing;
 mod readiness;
+mod shutdown;
 mod sse;
 
 #[test]

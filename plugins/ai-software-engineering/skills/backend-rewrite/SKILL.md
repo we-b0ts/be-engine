@@ -29,24 +29,11 @@ workflow agent role and is never workflow authority.
 | Code integrator | `code-integrator` assignment | Prepare one retained integration/review candidate, resolve assigned conflicts and routine quality issues, run candidate review, and return a version-bound result | Act as an API implementer, mutate engine state, or report implementation-worker activity |
 | API expert | Engine-requested `api-expert` assignment | Investigate one reserved API read-only and return evidence-backed findings for its existing API implementer | Edit code, own the API, mutate workflow state, or satisfy implementation/acceptance gates |
 
-API implementers build/debug and run tests relevant to their changes as needed;
-they do not need to run Clippy. Worker and ordinary integration review check
-Source rules, Replay isolation and exact delivery identity without executing
-repository quality commands. Daily integration uses focused builds/tests as
-needed. After implementation and ordinary delivery drain, the engine requires
-`pre_revalidation_review_required`: the retained integrator executes the tool
-named in `details.quality_check` across `details.quality_paths` on the final
-committed candidate. For `cargo-clippy`, run `cargo clippy --workspace
---all-targets -- -D warnings` in each applicable Rust project; other tools follow
-the project's language and configuration. After success, execute the returned
-`review check --pre-revalidation --quality-check TOOL --worktree ...` command.
-This records the agent's successful check and runs Source/isolation checks; the
-engine never executes repository quality commands. Report the tool only after
-it passed on that candidate. Reuse a current passing result for the same code
-and inputs; do not repeat it for each API in the final sweep. The integrator fixes routine formatting/lint issues; API
-behavior decisions return to the responsible implementer. Only the coordinator
-publishes and admits the exact checked candidate. The state machine requires a
-current final-stage receipt before full revalidation and final delivery.
+Follow your role's validation instructions: the
+[API implementer entrypoint](references/api-implementer.md#start) owns implementer
+local checks, and the
+[integrator final review](references/code-integrator.md#final-pre-revalidation-review)
+owns the engine-requested final checks and reporting.
 
 The normal ownership flow is:
 

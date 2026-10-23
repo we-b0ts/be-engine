@@ -7,14 +7,15 @@ use uuid::Uuid;
 use crate::recorder::{CaseContext, CaseInvalidation};
 
 mod activity;
-mod interaction;
 mod observation;
+mod publication;
 mod recovery;
+mod shutdown;
 mod stream_tail;
 
 use activity::{DependencyActivity, DependencyReservation};
-pub(crate) use interaction::InteractionPublication;
 use observation::{CaseObservation, SelectedRequest};
+pub(crate) use publication::CasePublication;
 use stream_tail::{StreamTail, StreamTailRequest};
 
 #[derive(Clone)]
@@ -26,11 +27,12 @@ pub(crate) struct ActiveCaseRegistry {
 
 struct ActiveCaseState {
     active: Vec<ActiveCaseRegistration>,
-    interaction_publications: std::collections::HashMap<Uuid, Arc<InteractionPublication>>,
+    case_publications: std::collections::HashMap<Uuid, Arc<CasePublication>>,
     bootstrap_open: bool,
     bootstrap_sealed: bool,
     bootstrap_dependencies: Arc<DependencyActivity>,
     case_matching_ready: bool,
+    admission_closed: bool,
     quiescing: bool,
 }
 
@@ -107,11 +109,12 @@ impl ActiveCaseRegistry {
         Self {
             state: Arc::new(Mutex::new(ActiveCaseState {
                 active: Vec::new(),
-                interaction_publications: std::collections::HashMap::new(),
+                case_publications: std::collections::HashMap::new(),
                 bootstrap_open: true,
                 bootstrap_sealed: false,
                 bootstrap_dependencies: Arc::new(DependencyActivity::default()),
                 case_matching_ready,
+                admission_closed: false,
                 quiescing: false,
             })),
             active_count,
@@ -124,7 +127,7 @@ impl ActiveCaseRegistry {
         case: CaseContext,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
         let mut state = self.state.lock().expect("active case registry poisoned");
-        if state.quiescing {
+        if state.quiescing || state.admission_closed {
             return Err(ActiveCaseRejection::Quiescing);
         }
         if !state.case_matching_ready {
@@ -179,7 +182,7 @@ impl ActiveCaseRegistry {
         state
             .active
             .retain(|registration| registration.case.id != case_id);
-        state.interaction_publications.remove(&case_id);
+        state.case_publications.remove(&case_id);
         self.active_count.send_replace(state.active.len());
     }
 
@@ -192,7 +195,7 @@ impl ActiveCaseRegistry {
 
     pub(crate) fn enable_case_matching(&self) -> bool {
         let mut state = self.state.lock().expect("active case registry poisoned");
-        if state.quiescing {
+        if state.quiescing || state.admission_closed {
             return false;
         }
         state.case_matching_ready = true;

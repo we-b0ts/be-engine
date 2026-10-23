@@ -126,6 +126,18 @@ pub(super) async fn try_admit_case(
 }
 
 async fn discard_unadmitted_case(state: &AppState, case: &CaseContext) {
+    if let Some(failure) = state.active_case_invalidation(case.id)
+        && failure.reason == "shutdown_case_drain_timeout"
+    {
+        if let Err(error) = state
+            .recorder()
+            .fail_case_with_context(case, failure.reason, failure.message, failure.context)
+            .await
+        {
+            warn!(%error, case_id = %case.id, "failed to archive admission interrupted by shutdown");
+        }
+        return;
+    }
     if let Err(error) = state.recorder().discard_unadmitted_case(case).await {
         warn!(
             %error,

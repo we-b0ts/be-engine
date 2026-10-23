@@ -22,7 +22,7 @@ use crate::http::{
     rewrite::{self, RewriteInput},
 };
 use crate::recorder::http::case::{
-    CaseRequestRecord, CaseResponseRecord, finalize_interaction_http_case,
+    CaseRequestRecord, CaseResponseRecord, finalize_owned_http_case,
 };
 use crate::recorder::{
     CaseContext, HeaderMapSnapshot, HttpExchangeEvent, RecorderEvent, capture_body,
@@ -353,9 +353,9 @@ impl CaptureContext {
             .state
             .inner
             .active_cases
-            .register_interaction_publication(case.id)
+            .register_case_publication(case.id)
             .expect("case ownership retained through publication");
-        if let Err(error) = finalize_interaction_http_case(
+        if let Err(error) = finalize_owned_http_case(
             self.state.recorder(),
             &publication,
             case,

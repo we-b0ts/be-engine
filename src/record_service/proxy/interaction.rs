@@ -104,11 +104,11 @@ impl<R: Redis + Clone + 'static> Relay<R> {
             .interactions
             .as_ref()
             .expect("interaction relay is configured");
-        if !self.ready.load(Ordering::SeqCst) {
-            return response(StatusCode::SERVICE_UNAVAILABLE, "recorder unavailable");
-        }
         let sid = wire::socket_sid(&request);
         let mut lease = sid.as_deref().and_then(|sid| interaction.find(sid));
+        if !self.ready.load(Ordering::SeqCst) && lease.is_none() {
+            return response(StatusCode::SERVICE_UNAVAILABLE, "recorder unavailable");
+        }
         let mut fresh = None;
         if sid.is_none() {
             let Ok(permit) = self.slot.clone().try_acquire_owned() else {

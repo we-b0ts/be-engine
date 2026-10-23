@@ -306,7 +306,7 @@ fn sdk_renewal_spans_slow_headers_live_stream_and_eof_dependency_cleanup() {
         let _publication = state
             .inner
             .active_cases
-            .register_interaction_publication(case.id)
+            .register_case_publication(case.id)
             .unwrap();
         let inner = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let fixture = RenewalFixture::new(state.clone(), inner.local_addr().unwrap()).await;
@@ -384,7 +384,7 @@ fn renewal_loss_or_redis_error_invalidates_open_stream_or_pending_cleanup_withou
                 let publication = state
                     .inner
                     .active_cases
-                    .register_interaction_publication(case.id)
+                    .register_case_publication(case.id)
                     .unwrap();
                 let inner = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let fixture = RenewalFixture::new(state.clone(), inner.local_addr().unwrap()).await;
@@ -468,7 +468,7 @@ fn renewal_failure_returning_after_case_completion_preserves_service_and_next_ca
         let _publication = state
             .inner
             .active_cases
-            .register_interaction_publication(first.id)
+            .register_case_publication(first.id)
             .unwrap();
         let inner = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let fixture = RenewalFixture::new(state.clone(), inner.local_addr().unwrap()).await;
@@ -509,7 +509,7 @@ fn renewal_failure_returning_after_case_completion_preserves_service_and_next_ca
         let _publication = state
             .inner
             .active_cases
-            .register_interaction_publication(second.id)
+            .register_case_publication(second.id)
             .unwrap();
         let response = fixture.request("next-owner").await;
         assert_eq!(response.status(), StatusCode::OK);

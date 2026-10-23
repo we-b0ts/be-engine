@@ -9,7 +9,9 @@ use uuid::Uuid;
 
 use super::dependencies::ensure_case_dependency_file;
 use super::summary::{write_case_dependency_summary, write_global_dependency_summary};
-use super::{CaseContext, CaseInvalidationContext, Recorder, sanitize_path_component};
+use super::{
+    CaseContext, CaseInvalidation, CaseInvalidationContext, Recorder, sanitize_path_component,
+};
 use crate::recording_completion::RecordingCompletionReason;
 
 #[derive(Debug, Serialize)]
@@ -40,6 +42,7 @@ pub(crate) struct RecorderRunState {
     pub(crate) failed_cases: usize,
     pub(crate) completion_reason: Option<RecordingCompletionReason>,
     pub(crate) errors: Vec<RecordingErrorSummary>,
+    pub(crate) shutdown_failures: BTreeMap<Uuid, CaseInvalidation>,
     pub(crate) finishing: bool,
     pub(crate) finished: bool,
 }
@@ -266,11 +269,23 @@ impl Recorder {
             unfinished
         };
         for (case, failed_dir) in unfinished {
+            let failure = self
+                .run_state
+                .lock()
+                .await
+                .shutdown_failures
+                .remove(&case.id)
+                .unwrap_or_else(|| {
+                    CaseInvalidation::new(
+                        "recording_incomplete_at_shutdown",
+                        "case remained in staging when the recording run finished",
+                    )
+                });
             self.record_case_failure(
                 &case,
-                "recording_incomplete_at_shutdown".to_string(),
-                "case remained in staging when the recording run finished".to_string(),
-                None,
+                failure.reason,
+                failure.message,
+                failure.context,
                 failed_dir,
             )
             .await?;

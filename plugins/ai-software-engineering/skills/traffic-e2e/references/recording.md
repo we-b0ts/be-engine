@@ -58,6 +58,13 @@ finalization. One local slot remains mandatory in both modes.
 
 One process creates one run. `--run-id` is optional; record generates and reserves
 its own UTC identity. Stop normally and retain the exact finalized manifest.
+SIGTERM/SIGINT withdraws fresh case admission and waits up to 15 seconds for
+admitted cases, stream tails and publication while Source remains running.
+Existing stream deadlines continue to apply. At the shutdown deadline,
+uncommitted incomplete cases fail with `shutdown_case_drain_timeout` before
+Source is stopped; earlier independent failures remain primary. The run-level
+`recording-shutdown.json` records that decision. Source termination and evidence
+cleanup have separate budgets after this normal case wait.
 Never select or edit a running or failed recording to make verification pass.
 
 Persist the data root. Recordings live under
