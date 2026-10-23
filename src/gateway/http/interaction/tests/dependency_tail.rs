@@ -453,7 +453,7 @@ async fn timeout_with_partial_primary_sse_drains_late_dependency_before_failed_p
             .state
             .inner
             .active_cases
-            .register_interaction_publication(case.id)
+            .register_case_publication(case.id)
             .unwrap();
         assert!(fixture.state.invalidate_interaction_reservation(
             Some(case.id),

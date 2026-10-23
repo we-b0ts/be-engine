@@ -3,7 +3,7 @@
 use super::SessionRef;
 use crate::interaction::{lifecycle::LifecycleDecision, model::Protocol};
 use crate::recorder::http::case::{
-    CaseRequestRecord, CaseResponseRecord, finalize_interaction_http_case, interaction_invalidation,
+    CaseRequestRecord, CaseResponseRecord, finalize_owned_http_case, interaction_invalidation,
 };
 use crate::recorder::{CaseInvalidation, HeaderMapSnapshot, capture_case_body, redact_headers};
 use crate::{ActiveCaseGuard, AppState};
@@ -56,7 +56,7 @@ pub(super) fn spawn(
         .state
         .inner
         .active_cases
-        .register_interaction_publication(session.case.id)
+        .register_case_publication(session.case.id)
         .expect("interaction retains its active case guard");
     session
         .state
@@ -114,7 +114,7 @@ pub(super) fn spawn(
 async fn run(
     session: &SessionRef,
     meta: RequestMeta,
-    publication: &crate::active_case::InteractionPublication,
+    publication: &crate::active_case::CasePublication,
 ) -> anyhow::Result<()> {
     let reason = loop {
         if let Some(reason) = session.closing() {
@@ -303,7 +303,7 @@ async fn run(
     let headers = response
         .as_ref()
         .map(|(_, headers)| redact_headers(headers, &config.recording.redact_headers));
-    finalize_interaction_http_case(
+    finalize_owned_http_case(
         session.state.recorder(),
         publication,
         &session.case,

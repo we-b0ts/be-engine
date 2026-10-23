@@ -4,6 +4,7 @@ mod coordination;
 mod kubernetes;
 mod options;
 mod proxy;
+mod shutdown;
 mod source;
 #[cfg(test)]
 mod tests;
@@ -125,11 +126,12 @@ async fn run_prepared(
     let mut adapter = None;
     let mut recorder_finished = false;
     let mut adapter_finished = false;
+    let mut normal_shutdown = false;
     let mut result = async {
         tokio::select! {
             ready = wait_startup(&control, options.startup_timeout_seconds, false, &mut recorder, &mut recorder_finished) => ready?,
             error = forwards.failure() => return Err(error),
-            signal = &mut shutdown => { signal?; return Ok(()); }
+            signal = &mut shutdown => { signal?; normal_shutdown = true; return Ok(()); }
         }
         source::verify_sensitive_state_isolated(&options.data_root, &options.data_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("recordings"), &config.tls.ca_key_path)?;
         let trust = process::prepare_source_trust(&runtime.path, &config.tls.ca_cert_path, &options.source_workdir, &program)?;
@@ -139,7 +141,7 @@ async fn run_prepared(
             ready = wait_startup(&control, options.startup_timeout_seconds, true, &mut recorder, &mut recorder_finished) => ready?,
             error = forwards.failure() => return Err(error),
             status = source.wait() => bail!("Source exited during startup: {}", status?),
-            signal = &mut shutdown => { signal?; return Ok(()); }
+            signal = &mut shutdown => { signal?; normal_shutdown = true; return Ok(()); }
         }
         let listener = TcpListener::bind(options.listen).await?;
         adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped)));
@@ -151,7 +153,7 @@ async fn run_prepared(
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                signal = &mut shutdown => { signal?; break Ok(()); }
+                signal = &mut shutdown => { signal?; normal_shutdown = true; break Ok(()); }
                 error = forwards.failure() => break Err(error),
                 _ = state.wait_for_interaction_source_stop() => {
                     break Ok(());
@@ -168,11 +170,19 @@ async fn run_prepared(
         }
     }.await;
     relay.close();
-    state.close_interactions();
+    state.inner.active_cases.close_admission();
     // An unacknowledged registration may still have succeeded in Redis.
     if let Err(error) = coordination.unregister().await {
         warn!(%error, "recorder unregister failed; address TTL will expire");
     }
+    if normal_shutdown
+        && let Err(error) = shutdown::drain(&state, &relay).await
+        && result.is_ok()
+    {
+        result = Err(error.context("failed to persist recording shutdown diagnostics"));
+    }
+    state.close_interactions();
+    state.begin_case_quiescing();
     let _ = stop_adapter.send(true);
     // Source exit can emit disconnect dependencies. Keep Recorder and active
     // ownership alive until the process has exited, before draining relay/cases.

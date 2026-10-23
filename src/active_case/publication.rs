@@ -1,4 +1,4 @@
-//! Interaction publication ownership and dependency activity snapshots.
+//! Primary case publication ownership and dependency activity snapshots.
 
 use super::ActiveCaseRegistry;
 use crate::recorder::CaseInvalidation;
@@ -11,18 +11,18 @@ use uuid::Uuid;
 /// ordered before it is retained; a loss ordered after it cannot revoke that
 /// already-linearized transaction. The owner holds the lock through disk publish.
 #[derive(Debug, Default)]
-pub(crate) struct InteractionPublication {
-    state: tokio::sync::Mutex<InteractionPublicationState>,
+pub(crate) struct CasePublication {
+    state: tokio::sync::Mutex<CasePublicationState>,
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct InteractionPublicationState {
+pub(crate) struct CasePublicationState {
     pub(crate) invalidation: Option<CaseInvalidation>,
     pub(crate) finalized: bool,
 }
 
-impl InteractionPublication {
-    pub(crate) async fn begin(&self) -> tokio::sync::MutexGuard<'_, InteractionPublicationState> {
+impl CasePublication {
+    pub(crate) async fn begin(&self) -> tokio::sync::MutexGuard<'_, CasePublicationState> {
         self.state.lock().await
     }
 
@@ -38,24 +38,26 @@ impl InteractionPublication {
         state.invalidation.get_or_insert(invalidation);
         true
     }
+
+    pub(super) fn invalidate_shutdown(
+        &self,
+        invalidation: CaseInvalidation,
+    ) -> Option<CaseInvalidation> {
+        let mut state = self.state.try_lock().ok()?;
+        if state.finalized {
+            return None;
+        }
+        Some(state.invalidation.get_or_insert(invalidation).clone())
+    }
 }
 
 impl ActiveCaseRegistry {
-    pub(crate) fn register_interaction_publication(
-        &self,
-        case_id: Uuid,
-    ) -> Option<Arc<InteractionPublication>> {
+    pub(crate) fn register_case_publication(&self, case_id: Uuid) -> Option<Arc<CasePublication>> {
         let mut state = self.state.lock().expect("active case registry poisoned");
         if !state.active.iter().any(|case| case.case.id == case_id) {
             return None;
         }
-        Some(
-            state
-                .interaction_publications
-                .entry(case_id)
-                .or_default()
-                .clone(),
-        )
+        Some(state.case_publications.entry(case_id).or_default().clone())
     }
 
     pub(crate) fn invalidate_interaction_reservation(
@@ -69,7 +71,7 @@ impl ActiveCaseRegistry {
                 [case] => Some(case.case.id),
                 _ => None,
             });
-            case_id.and_then(|id| state.interaction_publications.get(&id).cloned())
+            case_id.and_then(|id| state.case_publications.get(&id).cloned())
         };
         publication.is_some_and(|publication| publication.invalidate(invalidation))
     }

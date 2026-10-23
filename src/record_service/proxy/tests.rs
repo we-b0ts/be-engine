@@ -8,6 +8,7 @@ use uuid::Uuid;
 mod finite;
 mod renewal;
 mod reuse;
+mod shutdown;
 
 const BOUND: Duration = Duration::from_secs(3);
 

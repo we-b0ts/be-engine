@@ -475,6 +475,13 @@ is unclear.
   best-effort address refresh independently of Source and request supervision;
   `proxy` owns direct or reservation-aware request forwarding and completion;
   `source` owns fixed-identity process startup, trust, isolation and cleanup.
+  Its `shutdown` child owns the standalone normal-stop 15-second case wait and
+  pre-termination diagnostics, separately from failure-driven Source isolation.
+  `active_case/shutdown` closes fresh admission without cancelling admitted
+  activity and installs timeout failures before publication commits;
+  `active_case/publication` owns the shared primary case commit barrier.
+  `recorder/shutdown` persists run-level shutdown decisions and retains the
+  failure cause for unfinished staging cases; ordinary finalization owns moves.
   Global admission closure wakes supervision even before case publication;
   confirmed Source exit permits engine-owned connection cleanup before the
   remaining evidence is drained. HTTP timeout recovery keeps request ownership

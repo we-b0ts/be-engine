@@ -772,7 +772,17 @@ drain exceeds its deadline, new case admission stops for the run because Source
 completion/isolation cannot be established. Old recordings remain immutable;
 fixing timeout isolation requires recording new evidence.
 
-On recorder shutdown, case matching enters a quiescing phase before run
+Standalone `traffic-e2e record` handles normal SIGTERM/SIGINT by closing fresh
+case admission and withdrawing discovery, then retaining Source and existing
+sessions for at most 15 seconds. This wait includes dependency tails and case
+publication; existing stream limits still run and an isolation failure stops
+Source promptly. An incomplete uncommitted case receives
+`shutdown_case_drain_timeout`, while its earlier independent failure is retained.
+`recording-shutdown.json` records the decision before Source termination. Process
+termination and evidence cleanup retain separate budgets. See
+[normal recording shutdown](recording.md).
+
+On low-level Recorder shutdown, case matching enters a quiescing phase before run
 finalization. New matching requests use the fallback upstream while the current
 case is allowed to finish for up to
 `recording.shutdown_case_drain_timeout_ms`. If the timeout expires, the

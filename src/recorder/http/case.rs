@@ -118,15 +118,15 @@ pub(crate) async fn finalize_http_case(
     }
 }
 
-pub(crate) async fn finalize_interaction_http_case(
+pub(crate) async fn finalize_owned_http_case(
     recorder: &Recorder,
-    publication: &crate::active_case::InteractionPublication,
+    publication: &crate::active_case::CasePublication,
     case: &CaseContext,
     request: CaseRequestRecord,
     mut response: CaseResponseRecord,
     invalidation: Option<CaseInvalidation>,
 ) -> Result<()> {
-    // This is the interaction publication linearization point. Keep ownership
+    // This is the primary case publication linearization point. Keep ownership
     // across all file writes, safety checks, rename and run-report publication.
     let mut commit = publication.begin().await;
     let invalidation = if let Some(observation) = &response.interaction {
@@ -425,7 +425,7 @@ mod tests {
             };
             let _owner = registry.try_reserve(case.clone()).unwrap();
             _owner.activate_dependencies().unwrap();
-            let publication = registry.register_interaction_publication(case.id).unwrap();
+            let publication = registry.register_case_publication(case.id).unwrap();
             assert_eq!(
                 registry
                     .drain_case_dependencies(
@@ -447,7 +447,7 @@ mod tests {
             request.interaction = Some(input);
             let mut response = json_response(b"");
             response.interaction = Some(output);
-            finalize_interaction_http_case(
+            finalize_owned_http_case(
                 &recorder,
                 &publication,
                 &case,
@@ -504,7 +504,7 @@ mod tests {
             uri_group: None,
         };
         let _owner = registry.try_reserve(case.clone()).unwrap();
-        let publication = registry.register_interaction_publication(case.id).unwrap();
+        let publication = registry.register_case_publication(case.id).unwrap();
         // Block real file writes after the finalizer has acquired its commit
         // ownership; this makes the loss/publication ordering deterministic.
         let disk = recorder.dependency_write_lock.lock().await;
@@ -513,7 +513,7 @@ mod tests {
             let case = case.clone();
             let publication = publication.clone();
             async move {
-                finalize_interaction_http_case(
+                finalize_owned_http_case(
                     &recorder,
                     &publication,
                     &case,

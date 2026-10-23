@@ -17,7 +17,9 @@ use crate::AppState;
 use crate::access_policy::AccessDecision;
 use crate::config::{HttpGatewayConfig, HttpGatewayFallbackMode};
 use crate::http::access::classify_method;
-use crate::recorder::http::case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
+use crate::recorder::http::case::{
+    CaseRequestRecord, CaseResponseRecord, finalize_owned_http_case,
+};
 use crate::recorder::{
     CaseContext, HeaderMapSnapshot, HttpExchangeEvent, PrimaryCaseDescriptor, ProxyErrorEvent,
     RecorderEvent, capture_body, capture_case_body,
@@ -294,10 +296,7 @@ async fn handle_gateway_request(
             started,
             Duration::from_millis(config.request_timeout_ms),
         );
-        state
-            .inner
-            .active_cases
-            .register_interaction_publication(case.id);
+        state.inner.active_cases.register_case_publication(case.id);
     }
     let case_guard = case_guard.map(std::sync::Arc::new);
     let stream_guard = case_guard.clone();
@@ -566,8 +565,13 @@ async fn record_gateway_error_with_status(
             .await;
     }
     if let Some(case) = &ctx.case
-        && let Err(err) = finalize_http_case(
+        && let Err(err) = finalize_owned_http_case(
             ctx.state.recorder(),
+            &ctx.state
+                .inner
+                .active_cases
+                .register_case_publication(case.id)
+                .expect("failed HTTP request retains case publication ownership"),
             case,
             CaseRequestRecord {
                 timestamp: Utc::now(),
