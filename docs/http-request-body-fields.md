@@ -2,23 +2,27 @@
 
 HTTP request bodies use the same `json.fields` formats as responses, SSE data,
 SQL JSON columns and Redis JSON values. Declare each path once, without an API,
-endpoint, request effect, signing key or business model:
+endpoint, request effect or business model. JWT fields reference named profiles:
 
 ```yaml
 format: traffic-policy/v2
+signatures:
+  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
 json:
   fields:
     /metadata/request_id: {kind: identity, formats: [{hex: 8}]}
-    /metadata/auth_token: {kind: identity, formats: [jwt]}
-    /metadata/skill_identity_token: {kind: identity, formats: [jwt]}
+    /metadata/auth_token: {kind: jwt}
+    /metadata/skill_identity_token: {kind: jwt}
 ```
 
-A JWT is one complete token identity. The format checks its compact token shape;
-comparison does not verify its signature, inspect claims or change token contents.
-The internal case-local correspondence applies across all selected fields and
-payloads: equal Source values require equal Target values, and distinct Source
-values cannot collapse into one Target value. No binding declaration is needed.
-The same mechanism applies to UUID, hexadecimal and base64url identifiers.
+`kind: jwt` uses the explicit `default` signature profile, or a named
+`signature` reference. A frozen key context verifies HMAC signatures and relative
+NumericDates; stable claims and globally declared claim formats remain checked.
+The internal correspondence applies to the complete token across carriers:
+equal Source tokens require equal Target tokens. Recognized equal JWTs still
+authenticate. The old authored identity `formats: [jwt]` syntax is rejected;
+there is no keyless JWT policy mode. See
+[signature profiles](signature-profiles.md).
 
 Equal scalar values pass directly. Unknown scalar formats remain exact. A field
 missing on both sides is irrelevant; a field present on only one side differs.
@@ -37,9 +41,10 @@ json:
 
 Use unified `rule plan --file ... --evidence ...` and `rule apply`. The transaction
 checks the complete Source scope and protected Target observations, then requires
-a fresh Replay. Global field formats do not require startup signing inputs.
+a fresh Replay. Verified JWT fields require their explicitly declared startup
+signing profile; ordinary time/identity fields do not.
 
 Native `http_request` effects retain transport-specific query and multipart
-contracts. Their former `json` field is rejected. If Replay actually modifies a
-recorded input JWT before sending it to Target, the separate `input_jwt` rewrite
-flow still owns its explicit key and re-signing operation.
+contracts. Their former `json` field is rejected. Only the declared `api` request
+header/query/body positions authorize input time translation and re-signing;
+those positions reuse the existing strict native transformation owner.

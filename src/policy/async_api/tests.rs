@@ -1,10 +1,10 @@
 use super::*;
 use crate::policy::{compile_policy, parse_policy, render_policy};
 
-const POLICY: &str = "format: traffic-policy/v2\nmysql: {database: task_manager}\nredis: {database: 3}\nasync_api:\n  'POST /api/v1/responses':\n    when: {'/background': true}\n    end:\n      - redis: {operation: del, key: 'chat:cancel:*', occurrence: 2}\n      - mysql: {sql: 'UPDATE tasks SET status = ? WHERE id = ?'}\n";
+const POLICY: &str = "format: traffic-policy/v2\nasync_api:\n  'POST /api/v1/responses':\n    when: {'/background': true}\n    end:\n      - redis: {operation: del, key: 'chat:cancel:*', occurrence: 2, database: 3}\n      - mysql: {sql: 'UPDATE tasks SET status = ? WHERE id = ?', database: task_manager}\n";
 
 #[test]
-fn completion_formats_roundtrip_inherit_databases_and_refresh_capture_and_replay_identity() {
+fn completion_formats_preserve_explicit_databases_and_refresh_capture_and_replay_identity() {
     let document = parse_policy(POLICY).unwrap();
     let compiled = compile_policy(&document).unwrap();
     let rule = &compiled.async_api["POST /api/v1/responses"];
@@ -24,9 +24,12 @@ fn completion_formats_roundtrip_inherit_databases_and_refresh_capture_and_replay
         compile_policy(&parse_policy(&rendered).unwrap()).unwrap(),
         compiled
     );
-    // Authoring retains omitted databases: subsequent root scope edits inherit.
+    let without_databases = POLICY
+        .replace(", database: 3", "")
+        .replace(", database: task_manager", "");
+    let unscoped = compile_policy(&parse_policy(&without_databases).unwrap()).unwrap();
     assert!(
-        document.async_api.as_ref().unwrap()["POST /api/v1/responses"]
+        unscoped.async_api["POST /api/v1/responses"]
             .end
             .iter()
             .all(|end| match end {
@@ -113,7 +116,7 @@ fn invalid_or_ambiguous_lifecycle_descriptions_are_rejected() {
         POLICY.replace("when:", "timeout: 200\n    when:"),
         POLICY.replace("when:", "failure: false\n    when:"),
         POLICY.replace(
-            "redis: {operation: del, key: 'chat:cancel:*', occurrence: 2}",
+            "redis: {operation: del, key: 'chat:cancel:*', occurrence: 2, database: 3}",
             "redis: {operation: del, key: 'chat:cancel:*'}, mysql: {sql: 'SELECT 1'}",
         ),
         POLICY.replace("redis: {operation:", "unknown: {operation:"),

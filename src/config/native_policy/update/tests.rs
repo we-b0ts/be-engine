@@ -37,6 +37,7 @@ json:
             id: "process-config".into(),
             selector: Default::default(),
             effect: NativeEffect::ProcessOwned(n::ProcessOwnedEffect {
+                task_name: None,
                 source_revision: revision(),
                 origin: None,
                 selector: n::ProcessSelector::Http {

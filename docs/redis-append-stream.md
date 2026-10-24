@@ -2,31 +2,25 @@
 
 Redis `APPEND key value` appends bytes to a string and returns its new byte
 length. Applications may buffer streaming text before calling it. A Source-proven
-`redis_append_stream` effect permits different nonempty chunk boundaries while
-preserving the ordered bytes. It is disabled unless an explicit rule selects
-the Redis endpoint/database/authentication identity and bounded key family.
-State belongs to one Case and Source key, including ordinary pooled connections.
+`append_stream: true` permits different nonempty chunk boundaries while
+preserving the ordered bytes. Declare a bounded key family:
 
 ```yaml
-id: task-content-append
-match:
-  resource: {protocol: redis, endpoint: 'cache.test:6379', database: 0}
-  operation: APPEND
-  key: {kind: affix, prefix: 'content:'}
-effect: {kind: redis_append_stream}
-proof:
-  source: src/storage.py:append_buffer
-  fact: >-
-    Source buffers one Case-owned ordered byte stream. Scheduling determines
-    chunk boundaries; reads and mutations delimit observable byte prefixes.
-    There are no unrecorded or concurrent writers to these keys.
+redis:
+  keys:
+    'content:*': {append_stream: true}
 ```
 
-Use `resource.username` when the Source Redis identity has a username. The same
-resource contract applies across APIs, with complete Source coverage during
-planning. The rule grants no process ownership, shared inventory,
-snapshot renewal or additional non-APPEND calls. Existing proven identity rules
-may translate a generated key; they never transform stream text.
+In an annotated plan proposal, attach the key's independent Source proof of
+all writers, initial length, ordered buffering and read/reset boundaries. The
+runtime policy omits proof metadata. Resource and database selectors are not
+authored; preparation and runtime preserve each actual endpoint, database,
+authentication identity and Case key, including pooled connections.
+
+The declaration grants no process ownership, shared inventory, snapshot renewal
+or additional non-APPEND calls. Existing proven identity formats may translate
+a generated key; they never transform stream text. Use `localcache.requests`
+or `process_dependencies.tasks` only for separately proven dependency lifetimes.
 
 For Source writes `ab`, `cd`, a Target may write `a`, `bcd`; its responses are
 `:1` and `:4`, rather than Source's `:2` and `:4`. Matching compares the next

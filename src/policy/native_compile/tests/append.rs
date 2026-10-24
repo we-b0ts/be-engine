@@ -7,13 +7,8 @@ fn rule() -> Value {
 }
 
 #[test]
-fn append_capability_requires_explicit_scope_and_exclusive_payload_ownership() {
-    for path in [
-        "/match/resource",
-        "/match/resource/database",
-        "/match/key",
-        "/match/operation",
-    ] {
+fn append_capability_requires_bounded_key_scope_and_exclusive_payload_ownership() {
+    for path in ["/match/resource/database", "/match/key", "/match/operation"] {
         let mut rule = rule();
         let (parent, key) = path.rsplit_once('/').unwrap();
         rule.pointer_mut(parent)
@@ -51,4 +46,21 @@ fn append_capability_requires_explicit_scope_and_exclusive_payload_ownership() {
     )
     .and_then(|policy| crate::policy::compile_policy(&policy));
     assert!(result.is_err());
+    let mut discovered = rule();
+    discovered["match"]
+        .as_object_mut()
+        .unwrap()
+        .remove("resource");
+    let key_only = json!({"format":"traffic-policy/v2","rules":[discovered.clone()]});
+    assert!(crate::policy::parse_policy(&key_only.to_string()).is_ok());
+    for field in ["path", "sql"] {
+        let mut cross_protocol = discovered.clone();
+        cross_protocol["match"][field] = json!("/other");
+        assert!(
+            crate::policy::parse_policy(
+                &json!({"format":"traffic-policy/v2","rules":[cross_protocol]}).to_string()
+            )
+            .is_err()
+        );
+    }
 }

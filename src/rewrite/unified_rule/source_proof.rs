@@ -50,7 +50,8 @@ pub(super) fn validate_proposal(input: &str) -> Result<()> {
                 "read_commutation",
                 "expiry_refresh",
                 "read_back",
-                "finite_sharing",
+                "commands",
+                "key_format",
             ]
             .iter()
             .any(|behavior| entry.get(*behavior).is_some())
@@ -67,6 +68,72 @@ pub(super) fn validate_proposal(input: &str) -> Result<()> {
                 .with_context(|| {
                 format!("Redis key {pattern:?} behavior requires local Source proof")
             })?;
+        }
+    }
+    let mut lifetime_requests = Vec::new();
+    if let Some(requests) = value
+        .get("localcache")
+        .and_then(|section| section.get("requests"))
+        .and_then(serde_yaml::Value::as_sequence)
+    {
+        lifetime_requests.extend(requests.iter());
+    }
+    if let Some(tasks) = value
+        .get("process_dependencies")
+        .and_then(|section| section.get("tasks"))
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        for (_, task) in tasks {
+            if let Some(requests) = task
+                .get("requests")
+                .and_then(serde_yaml::Value::as_sequence)
+            {
+                lifetime_requests.extend(requests.iter());
+            }
+        }
+    }
+    for request in lifetime_requests {
+        let mut local = serde_yaml::Mapping::new();
+        if let Some(proof) = request.get("proof") {
+            local.insert("proof".into(), proof.clone());
+        }
+        crate::policy::require_source_proof(&mut serde_yaml::Value::Mapping(local), revision)
+            .context(
+                "dependency lifetime plan requires local Source proof for each selected request",
+            )?;
+    }
+    if let Some(apis) = value.get("api").and_then(serde_yaml::Value::as_mapping) {
+        for (_, api) in apis {
+            for (direction, collection) in [
+                ("request", "headers"),
+                ("request", "query"),
+                ("response", "json"),
+                ("response", "headers"),
+            ] {
+                if let Some(positions) = api
+                    .get(direction)
+                    .and_then(|side| side.get(collection))
+                    .and_then(serde_yaml::Value::as_mapping)
+                {
+                    for (_, position) in positions {
+                        let mut local = serde_yaml::Mapping::new();
+                        if let Some(proof) = position.get("proof") {
+                            local.insert("proof".into(), proof.clone());
+                        }
+                        crate::policy::require_source_proof(&mut local.into(), revision).context(
+                            "API signature position requires local Source proof in a plan",
+                        )?;
+                    }
+                }
+            }
+            if let Some(body) = api.get("request").and_then(|side| side.get("body")) {
+                let mut local = serde_yaml::Mapping::new();
+                if let Some(proof) = body.get("proof") {
+                    local.insert("proof".into(), proof.clone());
+                }
+                crate::policy::require_source_proof(&mut local.into(), revision)
+                    .context("API signed body requires local Source proof in a plan")?;
+            }
         }
     }
     Ok(())

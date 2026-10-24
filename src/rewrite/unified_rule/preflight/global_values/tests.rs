@@ -216,7 +216,6 @@ fn redis_scalar_formats_compose_with_json_and_protocol_expiration_without_old_ru
     let policy = crate::policy::parse_and_compile_policy(
         r#"format: traffic-policy/v2
 redis:
-  database: 0
   keys:
     as-of: {kind: time, formats: [unix_seconds]}
 json:
@@ -274,17 +273,32 @@ json:
     .unwrap();
     assert!(record_source(&same, &selected, &mut Preflight::default()).unwrap());
     let other_database = json!({"event_type":"redis_exchange","command":"SET","database":1});
-    assert!(match compare(
-        &other_database,
-        Surface::DependencyRequest,
-        &source,
-        &target,
-        &policy,
-        clocks
-    ) {
-        Ok(comparison) => !comparison.passed(),
-        Err(_) => true,
-    });
+    assert!(
+        compare(
+            &other_database,
+            Surface::DependencyRequest,
+            &source,
+            &target,
+            &policy,
+            clocks
+        )
+        .unwrap()
+        .passed(),
+        "key formats apply across independently paired Redis databases"
+    );
+    let changed_key = args(&["other-key", "2000", "EXAT", "2060"]);
+    assert!(
+        compare(
+            &other_database,
+            Surface::DependencyRequest,
+            &source,
+            &changed_key,
+            &policy,
+            clocks
+        )
+        .is_err(),
+        "a shared value format cannot waive the native physical key"
+    );
 }
 
 #[test]

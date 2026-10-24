@@ -13,12 +13,7 @@ pub(crate) fn validate_finite_sharing(
         "finite-sharing proof received another effect"
     );
     let projected = dependency::project(&compiled.rule)?;
-    let resource = compiled
-        .rule
-        .selector
-        .resource
-        .as_ref()
-        .context("sharing resource is missing")?;
+    let resource = compiled.rule.selector.resource.as_ref();
     let evidence = match &compiled.rule.effect {
         n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Http) => {
             let selected = projected
@@ -28,8 +23,10 @@ pub(crate) fn validate_finite_sharing(
                 case_source,
                 replay_report,
                 &crate::replay::HttpCrossCaseSelector {
-                    host: resource.endpoint.host.clone(),
-                    port: resource.endpoint.port,
+                    host: resource
+                        .map(|resource| resource.endpoint.host.clone())
+                        .or_else(|| compiled.rule.selector.http_host.clone()),
+                    port: resource.map(|resource| resource.endpoint.port),
                     method: selected.method,
                     path: selected.path,
                 },
@@ -46,8 +43,8 @@ pub(crate) fn validate_finite_sharing(
                 case_source,
                 replay_report,
                 &crate::replay::redis::shared_read::RedisSharedReadSelector {
-                    host: resource.endpoint.host.clone(),
-                    port: resource.endpoint.port,
+                    host: resource.map(|resource| resource.endpoint.host.clone()),
+                    port: resource.map(|resource| resource.endpoint.port),
                     read,
                 },
             )?

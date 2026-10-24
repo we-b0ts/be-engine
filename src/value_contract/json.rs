@@ -413,7 +413,12 @@ impl Comparator<'_> {
                 && !source.is_object()
                 && verified
                     .iter()
-                    .all(|(_, field)| field.rule_id == crate::policy::GLOBAL_JSON_ID)
+                    .any(|(_, field)| field.rule_id == crate::policy::GLOBAL_JSON_ID)
+                && verified
+                    .iter()
+                    .filter(|(_, field)| field.rule_id != crate::policy::GLOBAL_JSON_ID)
+                    .count()
+                    <= 1
             {
                 let mut staged = decisions.clone();
                 for (index, field) in &verified {

@@ -31,7 +31,6 @@ For a value that is a plain scalar, declare its format under `redis.keys`:
 
 ```yaml
 redis:
-  database: 0
   keys:
     task-run-monitor:v2:as-of: {kind: time, formats: [unix_seconds]}
     device:identity-lock:*: {kind: identity, formats: [{hex: 32}]}
@@ -39,9 +38,10 @@ redis:
 ```
 
 These entries select scalar formats. They do not declare an application lock,
-a business model, a Lua program or an extra command sequence. Database selection
-is shared by the key map. Structured JSON values use the global JSON map instead
-of repeating fields for each key.
+a business model or a Lua program. Key patterns have no resource/database
+selectors; actual physical Source/Target identity remains checked. Ordered
+commands and key-local behavior can be declared on the same entry when Source
+proves them. Structured JSON values use the global JSON map.
 
 ## Identity consistency
 
@@ -57,30 +57,38 @@ The engine does not need to recognize a lock or interpret the Lua script. Script
 bytes, keys, options, TTLs, source lanes and finite invocation counts remain
 checked. Failed matching candidates never publish an identity relation.
 
-## Signed JSON values
+## Tokens and URL values
 
-Signature-bearing fields also belong to the global content strategy:
+Verified tokens reference the shared root signing profiles:
 
 ```yaml
+signatures:
+  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
 json:
   fields:
+    /access_token: {kind: jwt}
+    /metadata/auth_token: {kind: jwt}
+    /authorize_url: {kind: url, formats: [url]}
+    /session_id: {kind: identity, formats: [uuid]}
     /data/*/plugins/*/download_path: {kind: url, formats: [aws_sigv4]}
-    /access_token:
-      kind: jwt
-      formats:
-        - algorithm: HS256
-          signing_key: {kind: startup, source: {kind: target_env, name: SECRET_KEY}}
-          nonces: [{pointer: /jti, format: {kind: uuid_v4}}]
 ```
 
-Source token metadata selects the signature format. A changed Target token must
-satisfy that algorithm, the frozen selected key, claim checks and nonce identity
-consistency. Optional nonce claims are selected from Source presence. Other
-claims remain strict. Declared signed companion fields retain their relationship
-to the token, including in derived cached deliveries. Key bytes stay private.
+`kind: jwt` defaults to the explicit `signatures.default` profile. It verifies
+HMAC signatures, relative NumericDates and stable/declared claim content using
+a frozen private key context. Complete Source-equal tokens require complete
+Target-equal tokens across carriers. Global RS256 currently rejects; exact
+native recorded-public-key assertions remain available. Old authored identity
+`formats: [jwt]` is rejected; a JWT field needs its named verification profile.
 
-AWS SigV4 URL comparison validates its declared date/signature shape and strict
-URL remainder; without the signing secret it does not authenticate the S3 HMAC.
+Generic `url` comparison reuses global field formats for decoded query text
+values and keeps unselected URL bytes exact; it needs no business URL template
+or binding name. AWS SigV4 comparison checks date/signature shape and strict
+URL remainder, without claiming to authenticate its HMAC without the secret.
+
+API request positions explicitly authorize re-signing. Additional response
+nonce echoes and signed expiry companions retain their API-position declarations
+and existing native checks. See [signature profiles](signature-profiles.md).
+Multipart, DOCX, WSS path derivation and AES envelopes retain their typed owners.
 
 ## Protocol behavior
 
@@ -92,12 +100,14 @@ key/container/hash field. This requires successful delivery and ordering proof
 on both Source and Target. An unpublished, ambiguous or future write cannot
 supply a cached time. This mechanism does not grant extra reads or mutations.
 
-Rules that authorize finite shared initialization reads, known stream chunking,
-read commutation or expiry refresh remain under `redis.rules`. They describe
-recording/replay admission differences and do not duplicate JSON field formats.
+Key-local APPEND, read commutation, expiry refresh and current-identity
+read-back behavior belong under `redis.keys`. Finite process initialization
+reads belong under `localcache.requests`; actual process tasks use
+`process_dependencies.tasks.<Source-task-name>.requests`. HTTP lifetime entries
+require an explicit host. These lifetimes do not duplicate value formats.
 There is no authored `redis_lock` effect or separate lock-token state machine.
 
 Use the ordinary `backend-rewrite rule plan --file … --evidence …` and
-`rule apply <plan-id>` transaction for policy changes. Applying a format strategy
+`rule apply --plan <plan-id>` transaction for policy changes. Applying a format strategy
 retains the obligation to run genuine Target replay; derived deliveries do not
 count as independent Target evidence. Recordings remain immutable.

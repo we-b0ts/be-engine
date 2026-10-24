@@ -17,6 +17,7 @@ pub struct TrafficPolicy {
     pub redis: Option<super::RedisPolicy>,
     pub http: Option<super::HttpPolicy>,
     pub async_api: Option<BTreeMap<String, super::AsyncApiRule>>,
+    pub signatures: BTreeMap<String, super::SignatureDefinition>,
     pub resources: BTreeMap<String, super::ResourceDeclaration>,
     pub rules: Vec<super::PolicyRule>,
 }
@@ -31,6 +32,7 @@ impl Default for TrafficPolicy {
             redis: None,
             http: None,
             async_api: None,
+            signatures: BTreeMap::new(),
             resources: BTreeMap::new(),
             rules: Vec::new(),
         }

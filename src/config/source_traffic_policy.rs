@@ -64,32 +64,6 @@ impl SourceTrafficPolicyConfig {
         }
     }
 
-    #[cfg(test)]
-    pub fn repository_defaults() -> Self {
-        Self {
-            version: SOURCE_TRAFFIC_POLICY_VERSION,
-            http: SourceTrafficHttpPolicyConfig::default(),
-            http_response_rewrite: Vec::new(),
-            breeze_capture: Vec::new(),
-            async_api:BTreeMap::new(),
-            process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
-                name: "breeze_vintage".to_string(),
-                authorities: vec![
-                    "config.api.demo.test".to_string(),
-                    "static.config.api.demo.test".to_string(),
-                    "register.kailash.demo.test".to_string(),
-                ],
-                methods: vec!["GET".to_string()],
-                path_prefixes: vec![
-                    "/1/config/service".to_string(),
-                    "/naming/service".to_string(),
-                ],
-                source_revision: String::new(),
-                source_evidence: "traffic-e2e system default: Weibo Breeze Vintage configuration and naming refresh are process-owned".to_string(),
-            }],
-        }
-    }
-
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self::load_with_fingerprints(path.as_ref())?.0)
     }
@@ -121,7 +95,7 @@ impl SourceTrafficPolicyConfig {
             self.version,
             SOURCE_TRAFFIC_POLICY_VERSION
         );
-        crate::policy::compile_async_api(&self.async_api, None, None)?;
+        crate::policy::compile_async_api(&self.async_api)?;
         let mut snapshots = BTreeSet::new();
         for capture in &self.breeze_capture {
             ensure!(
@@ -215,9 +189,10 @@ mod tests {
     }
 
     #[test]
-    fn repository_defaults_use_global_http_policy() {
-        let rules = SourceTrafficPolicyConfig::repository_defaults();
+    fn initial_policy_has_no_implicit_service_ownership() {
+        let rules = SourceTrafficPolicyConfig::empty();
         assert_eq!(rules.http, SourceTrafficHttpPolicyConfig::default());
+        assert!(rules.process_owned_dependencies.is_empty());
         rules.validate().unwrap();
     }
 

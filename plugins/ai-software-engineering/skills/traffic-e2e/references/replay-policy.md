@@ -33,7 +33,7 @@ Declare time, identity, protocol or single-unit duration `formats` and unordered
 semantics once per logical pointer, regardless of APIs, SSE events, tables or cache keys. JSON payloads
 are recognized automatically. Root `mysql` enables native time metadata;
 `mysql.tables` declares remaining explicit scalar formats. Redis scalar values
-use `redis.keys` patterns and optional `redis.database`; JSON objects still use
+use `redis.keys` patterns across physical databases; JSON objects still use
 the single JSON field map. Redis causal and stateful native effects belong under
 `redis.rules`, using the same typed rules and Source proofs as other native
 effects. A rules-only Redis section does not change scalar permissions. Source clocks resolve
@@ -49,8 +49,8 @@ complete-value graph. Per-API request-header timestamp declarations are retired.
 Use `async_api` only for recording lifecycle: select an API and original request
 literal fields through `when`, and list successful terminal resources under
 `end`. A Redis terminal may declare `occurrence` (default 1) for repeated success
-on the same physical endpoint, database and key. Databases inherit root MySQL or
-Redis scopes unless stated. Failure and request deadlines use engine defaults;
+on the same physical endpoint, database and key. A terminal can explicitly
+select its physical database; omitted database selectors match any Source database. Failure and request deadlines use engine defaults;
 they are not rule options. This change requires fresh recording evidence.
 Replay retains async case ownership until the finite recorded dependencies are
 actually consumed. Older complete Source inventories must independently prove
@@ -79,12 +79,14 @@ its required explicit `utc_offset`.
 
 Use `kind: url, formats: [aws_sigv4]` for signed S3-style JSON URLs: signing date,
 credential date and signature shape are validated while static URL components
-stay exact. JSON JWTs use `kind: identity, formats: [jwt]`. The complete token participates
-in automatic identity correspondence; global comparison does not verify its
-signature, load keys, inspect business claims or rewrite its payload. Only an
-explicit native input transformation that actually modifies a token must verify
-and re-sign it, with its precise delivered input registered privately before HTTP. Keep these formats under `json.fields`, including Redis JSON
-values; do not repeat them under `redis.rules`.
+stay exact. JSON JWTs use `kind: jwt` with the explicit default or named
+`signatures` profile. Runtime key snapshots authenticate HMAC signatures,
+NumericDates and stable/declared claims while preserving complete-token
+correspondence across carriers. Old authored identity `formats: [jwt]` is
+rejected; there is no keyless JWT policy mode. `api` request positions explicitly
+authorize time translation and re-signing; API response positions retain extra
+nonce/expiry relationships. Keep ordinary formats under `json.fields`, including
+Redis JSON values. See [signature profiles](../../../../../docs/signature-profiles.md).
 
 The coordinator accepts one rule, a list, or a complete typed document:
 
@@ -119,8 +121,9 @@ Every decoded JSON carrier uses root `json.fields`, including HTTP/SSE, MySQL
 JSON-valued columns and cache payloads. Unknown encodings compare exact bytes.
 Source-recognized JSON requires valid Target JSON; format errors never fall back
 to opaque comparison. Root `mysql` enables DATE/DATETIME/TIMESTAMP inference;
-`mysql.database` optionally scopes the physical database; `mysql.tables` fields
-use table-only patterns and describe exceptional scalar formats. Native SQL
+`mysql.tables` fields use table-only patterns across databases and describe
+exceptional scalar formats. Source and Target physical connection identities
+still match. Native SQL
 origin mapping remains conservative and does not guess units from a column name.
 
 ```yaml
@@ -184,8 +187,8 @@ Declare actual final accesses proved from Source. The end entries are
 alternatives. SQL matches the entire normalized statement and fixed literals;
 `?` selects one scalar rather than a SQL fragment or table name. Redis selects
 the command and physical key, with optional `occurrence` for repeated access to
-that same endpoint/database/key. Databases inherit their respective root
-declarations. A case-owned dependency failure or the common request deadline
+that same endpoint/database/key. Terminal entries can explicitly select a
+physical database. A case-owned dependency failure or the common request deadline
 also completes recording, with no authored timeout or failure switch. Keep
 the finite dependencies in the Case; do not replace this lifecycle with
 process-owned exemptions. See [recording](../../../../../docs/recording.md).

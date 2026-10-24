@@ -6,6 +6,8 @@ use crate::value_contract::{
     json::{AnchorClocks, Comparison},
 };
 #[cfg(test)]
+mod signature_tests;
+#[cfg(test)]
 mod tests;
 
 impl RequestContracts {
@@ -95,12 +97,40 @@ impl RequestContracts {
                 self.preview_identity_pairs(case, &anchors)?,
             )?;
         }
-        let decision = combined.identity.expect("identity delivery proposal");
         for (pointer, value) in pointers.iter().zip(values) {
             *logical
                 .pointer_mut(pointer)
                 .context("global identity delivery field disappeared")? = value;
         }
-        Ok((decision, pointers))
+        let query_plan = crate::value_contract::global_protocol::url::query_plan(global);
+        for pointer in crate::value_contract::global_protocol::url::selected(global, source)? {
+            let Some(value) = source.pointer(&pointer) else {
+                continue;
+            };
+            let Ok(document) = crate::value_contract::global_protocol::url::Document::parse(value)
+            else {
+                continue;
+            };
+            let mut query = document.logical.clone();
+            let preview = self.with_identity_proposals(combined.identity.iter())?;
+            let (nested, _) = preview.translate_identity_plan(
+                case,
+                &document.logical,
+                &mut query,
+                &query_plan,
+            )?;
+            self.merge_identity_decision(&mut combined, nested)?;
+            let rebuilt = Value::String(document.rebuild(&query)?);
+            if logical.pointer(&pointer) != Some(&rebuilt) {
+                *logical
+                    .pointer_mut(&pointer)
+                    .context("global URL delivery field disappeared")? = rebuilt;
+                pointers.push(pointer);
+            }
+        }
+        Ok((
+            combined.identity.expect("identity delivery proposal"),
+            pointers,
+        ))
     }
 }

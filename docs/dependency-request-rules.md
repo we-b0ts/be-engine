@@ -1,7 +1,13 @@
 # Generated dependency request fields
 
-Current native queue, subscription, RPC and signed-URL contracts are documented
-in [Generated Redis request values](redis-generated-requests.md).
+Current JSON fields use the single global `json.fields` strategy. Scalar Redis
+values, bounded key formats, ordered commands and supported state permissions
+use `redis.keys` without resource/database declarations. Finite initialization
+requests use `localcache.requests`; actual process tasks use
+`process_dependencies.tasks.<Source-task-name>.requests`, with an explicit host
+for HTTP entries. See [Generated Redis request values](redis-generated-requests.md)
+and [key declarations](redis-key-contracts.md). The remaining native/historical
+examples do not replace this current authoring model.
 
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI

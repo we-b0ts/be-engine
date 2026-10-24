@@ -6,7 +6,7 @@ use crate::policy_evidence::{
 };
 
 fn proposal() -> serde_json::Value {
-    json!({"format":"traffic-policy/v2","redis":{"database":0,"keys":{"as-of":{"kind":"time","formats":["unix_seconds"]}}}})
+    json!({"format":"traffic-policy/v2","redis":{"keys":{"as-of":{"kind":"time","formats":["unix_seconds"]}}}})
 }
 
 fn resource() -> Resource {

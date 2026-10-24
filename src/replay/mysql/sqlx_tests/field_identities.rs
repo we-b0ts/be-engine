@@ -9,7 +9,6 @@ const WRONG: &str = "44444444-4444-4444-8444-444444444444";
 
 const POLICY: &str = r#"format: traffic-policy/v2
 mysql:
-  database: appdb
   tables:
     widgets:
       pattern: widgets

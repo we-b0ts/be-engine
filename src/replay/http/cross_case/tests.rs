@@ -2,6 +2,7 @@ use super::tests::{send_request, spawn_http_replay_with_policy, write_http_case}
 use super::*;
 use crate::HttpCrossCaseSelector;
 use crate::replay::policy::test_fixture::ManagedFixtureDirectory as TempDir;
+use hyper::client::conn::http1;
 use serde_json::json;
 use std::{
     fs,
@@ -39,14 +40,23 @@ async fn sharing_proof_checks_records_beyond_the_bounded_candidate_preview() {
     finalized_report(&runtime, &report).await;
     task.abort();
     let selector = HttpCrossCaseSelector {
-        host: HOST.into(),
-        port: 80,
+        host: Some(HOST.into()),
+        port: Some(80),
         method: "POST".into(),
         path: "/token".into(),
     };
     let verified = cross_case::verify_candidate(&consumer, &report, &selector).unwrap();
     assert_eq!(verified["matching_exchanges"], 65);
     assert_eq!(verified["complete"], true);
+    let global = HttpCrossCaseSelector {
+        host: None,
+        port: None,
+        ..selector.clone()
+    };
+    assert_eq!(
+        cross_case::verify_candidate(&consumer, &report, &global).unwrap()["matching_exchanges"],
+        65
+    );
     let mut invalid = record.clone();
     invalid["response_body"]["truncated"] = json!(true);
     fs::write(
@@ -120,6 +130,70 @@ async fn call(addr: std::net::SocketAddr, path: &str, body: &str) -> Response<In
     .await
 }
 
+fn install_run_network_manifest(root: &Path, consumer: &Path) {
+    // The real Recorder publishes one endpoint inventory for the full run.
+    // Derive that inventory from these Source fixtures before the HTTP helper
+    // supplies its default consumer-only inventory.
+    super::super::write_test_recording_network_manifest(root);
+    let name = crate::recording_network::RECORDING_NETWORK_FILENAME;
+    fs::copy(root.join(name), consumer.join(name)).unwrap();
+}
+
+/// A gateway socket already belongs to one physical destination. Exercise a
+/// different recorded destination through its own real TCP transport, rather
+/// than trying to change that destination by changing the HTTP Host header.
+async fn call_source_target(
+    runtime: &Arc<super::super::ReplayRuntime>,
+    host: &str,
+    port: u16,
+    path: &str,
+    body: &str,
+) -> Response<Incoming> {
+    let stream = source_target_stream(runtime, host, port).await;
+    let authority = if port == 80 {
+        host.to_owned()
+    } else {
+        format!("{host}:{port}")
+    };
+    send_request(TokioIo::new(stream), &authority, path, body).await
+}
+
+async fn source_target_stream(
+    runtime: &Arc<super::super::ReplayRuntime>,
+    host: &str,
+    port: u16,
+) -> TcpStream {
+    let mut target = runtime
+        .state
+        .lock()
+        .await
+        .targets
+        .iter()
+        .find(|target| target.host == host && target.port == port)
+        .expect("recorded physical HTTP target")
+        .clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (client, server) = tokio::join!(
+        TcpStream::connect(listener.local_addr().unwrap()),
+        listener.accept()
+    );
+    let (server, peer) = server.unwrap();
+    let state = runtime.state.clone();
+    let ca = runtime.ca.clone();
+    tokio::spawn(async move {
+        if target.protocol == ReplayProtocol::Auto {
+            target.protocol = super::super::auto_protocol::detect(&server)
+                .await
+                .unwrap()
+                .expect("Target sends a detectable HTTP request");
+        }
+        super::handle_http_replay_connection(server, peer, target, state, ca)
+            .await
+            .unwrap();
+    });
+    client.unwrap()
+}
+
 async fn finalized_report(runtime: &super::super::ReplayRuntime, path: &Path) {
     let mut state = runtime.state.lock().await;
     state.active_case_id = None;
@@ -160,8 +234,8 @@ async fn unmatched_discovers_other_api_without_serving_it_and_plan_apply_enables
         replay_report_path: report,
         rule_id: "token".into(),
         selector: crate::HttpCrossCaseSelector {
-            host: HOST.into(),
-            port: 80,
+            host: Some(HOST.into()),
+            port: Some(80),
             method: "POST".into(),
             path: "/token".into(),
         },
@@ -192,6 +266,197 @@ async fn unmatched_discovers_other_api_without_serving_it_and_plan_apply_enables
         StatusCode::BAD_GATEWAY
     );
     task.abort();
+}
+
+#[tokio::test]
+async fn resource_free_http_sharing_keeps_endpoint_headers_and_finite_consumption_strict() {
+    let (temp, _, consumer) = fixture().await;
+    let other = temp.path().join("apis/download/other-origin");
+    write_http_case(
+        &other,
+        "fake_ip_http",
+        "other.example.test",
+        "/token?audience=erp",
+        BODY,
+        "other-response",
+    )
+    .await;
+    fs::write(
+        other.join("request.json"),
+        json!({"method":"GET","uri":"/other"}).to_string(),
+    )
+    .unwrap();
+    fs::write(other.join("expected-response.json"), "{}").unwrap();
+    install_run_network_manifest(temp.path(), &consumer);
+    let path = temp.path().join("global-sharing.yaml");
+    fs::write(
+        &path,
+        r#"format: traffic-policy/v2
+rules:
+- id: shared-token
+  match: {operation: POST, path: /token}
+  effect: {kind: finite_sharing, protocol: http}
+"#,
+    )
+    .unwrap();
+    let (_addr, runtime, task) =
+        spawn_http_replay_with_policy(&consumer, vec![], Some(path), None).await;
+    let (mut sender, connection) =
+        http1::handshake(TokioIo::new(source_target_stream(&runtime, HOST, 80).await))
+            .await
+            .unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let with_extra_credentials = sender
+        .send_request(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/token?audience=erp")
+                .header(hyper::header::HOST, HOST)
+                .header(hyper::header::AUTHORIZATION, "Bearer unexpected")
+                .body(Full::new(Bytes::from_static(BODY.as_bytes())))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        with_extra_credentials.status(),
+        StatusCode::BAD_GATEWAY,
+        "a missing Source credential is an exact absence, not an optional identity header"
+    );
+    assert_eq!(runtime.state.lock().await.http_events.matched_count, 0);
+    assert_eq!(
+        call_source_target(&runtime, HOST, 80, "/token?audience=erp", BODY)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        call_source_target(&runtime, HOST, 80, "/token?audience=erp", BODY)
+            .await
+            .status(),
+        StatusCode::BAD_GATEWAY,
+        "the same request on another Source endpoint cannot replace an exhausted local entry"
+    );
+    let other = call_source_target(
+        &runtime,
+        "other.example.test",
+        80,
+        "/token?audience=erp",
+        BODY,
+    )
+    .await;
+    assert_eq!(other.status(), StatusCode::OK);
+    assert_eq!(runtime.state.lock().await.http_events.matched_count, 2);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_host_only_http_cache_uses_source_ports_and_excludes_other_hosts() {
+    let (temp, _, consumer) = fixture().await;
+    for (case, authority) in [
+        ("another-port", format!("{HOST}:8080")),
+        ("foreign-host", "foreign.example.test".into()),
+    ] {
+        let origin = temp.path().join("apis/cache").join(case);
+        write_http_case(
+            &origin,
+            "fake_ip_http",
+            &authority,
+            "/token?audience=erp",
+            BODY,
+            "token",
+        )
+        .await;
+        fs::write(
+            origin.join("request.json"),
+            json!({"method":"GET","uri":format!("/{case}")}).to_string(),
+        )
+        .unwrap();
+        fs::write(origin.join("expected-response.json"), "{}").unwrap();
+    }
+    install_run_network_manifest(temp.path(), &consumer);
+    let path = temp.path().join("host-cache.yaml");
+    fs::write(&path,format!("format: traffic-policy/v2\nrules:\n- id: host-token\n  match: {{host: {HOST}, operation: POST, path: /token}}\n  effect: {{kind: finite_sharing, protocol: http}}\n")).unwrap();
+    let (_addr, runtime, task) =
+        spawn_http_replay_with_policy(&consumer, vec![], Some(path), None).await;
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .http_exchanges
+            .iter()
+            .filter(|exchange| exchange.shared_origin.is_some())
+            .count(),
+        2
+    );
+    for port in [80, 8080] {
+        let response = call_source_target(&runtime, HOST, port, "/token?audience=erp", BODY).await;
+        assert_eq!(response.status(), StatusCode::OK, "{HOST}:{port}");
+    }
+    let foreign = call_source_target(
+        &runtime,
+        "foreign.example.test",
+        80,
+        "/token?audience=erp",
+        BODY,
+    )
+    .await;
+    assert_eq!(foreign.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        call_source_target(&runtime, HOST, 80, "/token?audience=erp", BODY)
+            .await
+            .status(),
+        StatusCode::BAD_GATEWAY
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn lazy_shared_http_skip_lines_are_selected_from_real_source_ports() {
+    let (_temp, origin, _) = fixture().await;
+    let path = origin.join("dependencies.jsonl");
+    let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut other_port = original.clone();
+    other_port["id"] = json!(uuid::Uuid::new_v4());
+    other_port["authority"] = json!(format!("{HOST}:8080"));
+    let mut foreign = original.clone();
+    foreign["id"] = json!(uuid::Uuid::new_v4());
+    foreign["authority"] = json!("foreign.example.test");
+    fs::write(&path, format!("{original}\n{other_port}\n{foreign}\n")).unwrap();
+    let index = crate::dependency_index::load_file(&path).unwrap();
+    let mut reader = crate::dependency_index::RecordReader::new(1024 * 1024);
+    let selector = HttpCrossCaseSelector {
+        host: Some(HOST.into()),
+        port: None,
+        method: "POST".into(),
+        path: "/token".into(),
+    };
+    assert_eq!(
+        cross_case::selected_source_lines(
+            &path,
+            &index,
+            &mut reader,
+            std::slice::from_ref(&selector)
+        )
+        .unwrap(),
+        BTreeSet::from([1, 2])
+    );
+    assert_eq!(
+        cross_case::selected_source_lines(
+            &path,
+            &index,
+            &mut reader,
+            &[HttpCrossCaseSelector {
+                port: Some(8080),
+                ..selector
+            }]
+        )
+        .unwrap(),
+        BTreeSet::from([2])
+    );
 }
 
 #[tokio::test]
@@ -318,8 +583,8 @@ async fn old_report_only_hints_and_changed_evidence_rejects_apply() {
         replay_report_path: report.clone(),
         rule_id: "token".into(),
         selector: crate::HttpCrossCaseSelector {
-            host: HOST.into(),
-            port: 80,
+            host: Some(HOST.into()),
+            port: Some(80),
             method: "POST".into(),
             path: "/token".into(),
         },
@@ -344,6 +609,19 @@ async fn old_report_only_hints_and_changed_evidence_rejects_apply() {
     fs::write(&report, old.to_string()).unwrap();
     let evidence = cross_case::discover(&consumer, &report, true).unwrap();
     assert_eq!(evidence["candidates"][0]["request_match"], "unavailable");
+    assert!(
+        cross_case::verify_candidate(
+            &consumer,
+            &report,
+            &HttpCrossCaseSelector {
+                host: None,
+                port: None,
+                ..feedback.selector.clone()
+            }
+        )
+        .is_err(),
+        "an unscoped declaration still needs exact Target request evidence"
+    );
     assert!(crate::plan_http_cross_case(feedback).is_err());
     task.abort();
 }

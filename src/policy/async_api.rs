@@ -1,5 +1,5 @@
 //! Recording lifecycle declarations; completion never relaxes replay values.
-use super::{Endpoint, MysqlPolicy, RedisPolicy};
+use super::Endpoint;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,8 +86,6 @@ fn is_one(value: &usize) -> bool {
 
 pub fn compile_async_api(
     rules: &BTreeMap<String, AsyncApiRule>,
-    mysql: Option<&MysqlPolicy>,
-    redis: Option<&RedisPolicy>,
 ) -> Result<BTreeMap<String, AsyncApiRule>> {
     ensure!(rules.len() <= 256, "async_api exceeds 256 API selectors");
     let mut normalized = rules.clone();
@@ -145,9 +143,6 @@ pub fn compile_async_api(
                             "SQL ? matches one scalar value, never a physical identifier"
                         );
                     }
-                    if end.database.is_none() {
-                        end.database = mysql.and_then(|mysql| mysql.database.clone());
-                    }
                     if let Some(database) = &end.database {
                         ensure!(
                             !database.is_empty()
@@ -181,9 +176,6 @@ pub fn compile_async_api(
                             && end.key.bytes().filter(|byte| *byte == b'*').count() <= 1,
                         "async Redis key requires a bounded physical key or one wildcard"
                     );
-                    if end.database.is_none() {
-                        end.database = redis.and_then(|redis| redis.database);
-                    }
                     ensure!(
                         end.database.is_none_or(|database| database >= 0),
                         "async Redis database must be nonnegative"

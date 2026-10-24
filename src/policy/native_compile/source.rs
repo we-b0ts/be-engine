@@ -93,6 +93,9 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
         }
         NativeEffect::ProcessOwned(effect) => {
             empty_match(rule)?;
+            if let Some(task) = &effect.task_name {
+                text(task, "process task name", 128)?;
+            }
             if !effect.source_revision.is_empty() {
                 revision(&effect.source_revision)?;
             }
@@ -226,14 +229,29 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
             );
             match effect {
                 FiniteSharingEffect::Http => {
-                    resource(&rule.selector, Protocol::Http)?;
+                    if rule.selector.resource.is_some() {
+                        resource(&rule.selector, Protocol::Http)?;
+                    } else {
+                        ensure!(
+                            rule.selector.key.is_none()
+                                && rule.selector.sql.is_none()
+                                && rule.selector.tables.is_empty()
+                                && rule.selector.table_patterns.is_empty()
+                                && rule.selector.table_series.is_none(),
+                            "HTTP sharing cannot select Redis keys or SQL"
+                        );
+                    }
                     ensure!(
                         rule.selector.operation.is_some() && rule.selector.path.is_some(),
                         "HTTP sharing requires exact method and path"
                     );
                 }
                 FiniteSharingEffect::Redis { hash_field } => {
-                    resource(&rule.selector, Protocol::Redis)?;
+                    if rule.selector.resource.is_some() {
+                        resource(&rule.selector, Protocol::Redis)?;
+                    } else {
+                        validate_discovered_redis_key(&rule.selector)?;
+                    }
                     ensure!(
                         rule.selector
                             .key

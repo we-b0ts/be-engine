@@ -510,12 +510,8 @@ is unclear.
   `replay/http/request_headers` retains general audit evidence, protected-value
   handling and unselected-header modes. Its time-reference child resolves
   independent request starts; its fingerprint child identifies immutable inputs.
-  `policy/native/http_client_metadata` owns the closed SDK-name schema;
-  `native_compile/http_request` validates its explicit consumer scope and field
-  ownership. `replay/policy/http_client_metadata` shares endpoint/method/path
-  selection between audit and protected witness preflight; the matcher supplies
-  Source API/condition selection and usage accounting. The header audit retains
-  observational differences without selecting exchanges or changing delivery.
+  Ordinary SDK headers retain strict presence and value comparison. Global
+  header formats validate values without granting header omission permissions.
   The unified rule transaction owns global header authoring and complete Source
   coverage; protocol adapters retain framing, signature and finite behavior.
 - `gateway/motan` owns primary Motan request admission, fixed-response routing,
@@ -1200,6 +1196,16 @@ explicit repository-wide audit.
 
 
 ## Unified policy responsibilities
+
+- `policy/signatures` owns named algorithm/key declarations and the private
+  immutable key registry. Pure compilation validates references without startup
+  I/O; Replay and plan initialization resolve the existing managed key snapshots
+  once. `policy/authoring/signatures` lowers API token locations to the existing
+  JWT/MD5 owners and renders only lossless generated shapes. Global JWT leaves
+  reuse authenticated parsing and NumericDate comparison in `request_rules/jwt`,
+  then compare claims through the shared JSON policy and publish complete token
+  and claim identity proposals atomically. Global formats allow historical
+  tokens; explicitly generated native responses retain their issuance checks.
 
 - `policy/{schema,native,native_compile,strict_map,capability}` owns closed typed
   contracts, Source scope and pure validation. Unknown combinations reject before

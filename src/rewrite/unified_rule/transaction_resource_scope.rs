@@ -283,7 +283,7 @@ fn resource_scope_checks_native_http_source_on_other_apis() {
     ] {
         let fixture = Fixture::new();
         let mut event = json!({"event_type":"http_exchange","id":"foreign-http",
-            "scheme":"http","authority":"client.test:8080","method":"POST","uri":"/responses",
+            "scheme":"http","authority":"client.test:8080","method":"POST","uri":"/responses?generated_at=1792108800",
             "request_body":body(json!({"input":"hello"})),"request_headers":{"x-stainless-lang":["python"]},
             "response_status":200,"response_headers":{},"response_body":body(json!({})),
             "timestamp":"2026-10-16T00:00:00Z","request_started_at":"2026-10-16T00:00:00Z","duration_ms":0,"outcome":"response"});
@@ -306,9 +306,9 @@ fn resource_scope_checks_native_http_source_on_other_apis() {
         foreign(&fixture, &event);
         write(
             &fixture.proposal,
-            json!({"id":"sdk","match":{"resource":{"protocol":"http","endpoint":"client.test:8080"},
-            "operation":"POST","path":"/responses"},"effect":{"kind":"http_client_metadata","headers":["x-stainless-lang"]},
-            "proof":{"source":"sdk.py:headers; consumer.py:route","fact":"The consumer never reads SDK runtime metadata"}}),
+            json!({"id":"query-clock","match":{"resource":{"protocol":"http","endpoint":"client.test:8080"},
+            "operation":"POST","path":"/responses"},"effect":{"kind":"http_request","query":{"generated_at":{"relative_time":"unix_seconds"}}},
+            "proof":{"source":"client.py:request","fact":"Source sends the current dependency request clock in generated_at"}}),
         );
         fixture.confirm();
         let planned = fixture.plan();
@@ -322,7 +322,7 @@ fn resource_scope_checks_native_http_source_on_other_apis() {
                     .is_none()
             );
             assert_eq!(
-                planned.traffic_e2e_report["preflight"]["rules"]["sdk"],
+                planned.traffic_e2e_report["preflight"]["rules"]["query-clock"],
                 if scenario == "valid" { 2 } else { 1 }
             );
         }

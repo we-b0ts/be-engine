@@ -36,25 +36,32 @@ fn atom(value: &Value) -> bool {
 fn inline(value: &Value) -> Result<Option<String>> {
     if let Value::Mapping(map) = value
         && ((map.contains_key("kind") && map.contains_key("formats"))
-            || (map.contains_key("resource")
-                && [
-                    "append_stream",
-                    "read_commutation",
-                    "expiry_refresh",
-                    "read_back",
-                    "finite_sharing",
-                ]
-                .iter()
-                .any(|field| map.contains_key(*field))))
+            || map.contains_key("key")
+                && matches!(
+                    map.get("kind").and_then(Value::as_str),
+                    Some("jwt" | "md5_sorted_fields")
+                )
+            || map.get("kind").and_then(Value::as_str) == Some("time_window")
+            || [
+                "append_stream",
+                "read_commutation",
+                "expiry_refresh",
+                "read_back",
+                "key_format",
+                "commands",
+            ]
+            .iter()
+            .any(|field| map.contains_key(*field)))
         && let Some(flow) = format_flow(value)?
     {
         return Ok((flow.len() <= 120).then_some(flow));
     }
     let result = match value {
         Value::Mapping(map)
-            if (map.len() <= 1
+            if (map.len() <= 4
                 || map.contains_key("relative_time")
                 || map.contains_key("request_time")
+                || (map.contains_key("operation") && map.contains_key("key"))
                 || map.contains_key("resource") && map.contains_key("column")
                 || map.contains_key("resource")
                     && map.contains_key("key")

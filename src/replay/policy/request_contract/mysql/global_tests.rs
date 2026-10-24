@@ -9,7 +9,7 @@ fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire(
     let compiled = crate::policy::parse_and_compile_policy(&json!({
         "format":"traffic-policy/v2",
         "json":{"fields":{"/item_id":{"kind":"identity","formats":["uuid"]},"/created_at":{"kind":"time","formats":["unix_seconds"]}}},
-        "mysql":{"database":"app","tables":{"tasks":{"pattern":"tasks","fields":{"id":{"kind":"identity","formats":["uuid"]}}}}}
+        "mysql":{"tables":{"tasks":{"pattern":"tasks","fields":{"id":{"kind":"identity","formats":["uuid"]}}}}}
     }).to_string()).unwrap();
     let mut owner = RequestContracts::default();
     owner.configure_compiled(Some(Arc::new(compiled))).unwrap();

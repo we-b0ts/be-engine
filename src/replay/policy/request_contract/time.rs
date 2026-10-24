@@ -4,12 +4,45 @@ use crate::value_contract::time::{self, TimeMode, TimestampFormat};
 use chrono::{FixedOffset, Timelike};
 use config::{RequestTimestampFormat as Format, TimeField};
 
-/// A validated timestamp pair and its explicitly declared relationship scope.
+const AUTOMATIC_REDIS_GROUP_PREFIX: &str = "auto-redis-argument-";
+
+/// A validated timestamp pair and its declared or Source-derived relationship.
 #[derive(Debug, Clone)]
 pub(super) struct ComparedTime {
     pub(super) source: i128,
     pub(super) actual: i128,
     pub(super) group: Option<String>,
+}
+
+pub(super) fn automatic_redis(rule: &TimeField) -> bool {
+    rule.clock_group
+        .as_deref()
+        .is_some_and(|group| group.starts_with(AUTOMATIC_REDIS_GROUP_PREFIX))
+}
+
+/// Source chooses JSON-scalar or raw-text encoding before formats are applied.
+/// Exact values need no clocks; valid timestamps still contribute copy checks.
+pub(super) fn compare_wire_format(
+    source: &[u8],
+    actual: &[u8],
+    rule: &TimeField,
+    anchor: crate::replay::assertion::RequestTimes,
+) -> Result<Option<ComparedTime>> {
+    ensure!(
+        automatic_redis(rule),
+        "wire-format time comparison requires an automatic Redis declaration"
+    );
+    let Some(scalar) = crate::value_contract::redis_scalar::decode(source)? else {
+        ensure!(source == actual, "unrecognized Redis time bytes changed");
+        return Ok(None);
+    };
+    let target = scalar.target(actual)?;
+    if source == actual || scalar.logical == target {
+        return Ok(timestamp(&scalar.logical, rule)
+            .ok()
+            .map(|source| compared_pair(source, source, rule)));
+    }
+    compare(&scalar.logical, &target, rule, anchor).map(Some)
 }
 
 pub(super) fn offset(rule: &TimeField) -> Result<FixedOffset> {
@@ -45,11 +78,24 @@ pub(super) fn compare(
     config::tolerance(&rule.tolerance)?;
     time::compare_timestamp_nanos(pair.0, pair.1, TimeMode::PreserveRelative, anchor)
         .map_err(|_| anyhow::anyhow!("request timestamp differs from its recorded relative time or is missing its request anchor"))?;
-    Ok(ComparedTime {
-        source: pair.0,
-        actual: pair.1,
-        group: rule.clock_group.clone(),
-    })
+    Ok(compared_pair(pair.0, pair.1, rule))
+}
+
+fn compared_pair(source: i128, actual: i128, rule: &TimeField) -> ComparedTime {
+    ComparedTime {
+        source,
+        actual,
+        group: rule.clock_group.as_ref().map(|group| {
+            if group.starts_with(AUTOMATIC_REDIS_GROUP_PREFIX) {
+                // Compact command declarations describe only formats. Copies
+                // share an internal scope by their normalized Source instant;
+                // distinct Source instants retain independent relative shifts.
+                format!("{AUTOMATIC_REDIS_GROUP_PREFIX}{source}")
+            } else {
+                group.clone()
+            }
+        }),
+    }
 }
 
 pub(super) fn timestamp(value: &Value, rule: &TimeField) -> Result<i128> {

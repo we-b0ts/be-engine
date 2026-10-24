@@ -158,7 +158,6 @@ fn prepare_global_values(
 }
 
 fn prepare_scalar_values(
-    database: i64,
     command: &str,
     source_args: &[Vec<u8>],
     source: &[u8],
@@ -174,7 +173,7 @@ fn prepare_scalar_values(
         let Some(payload) = value.payload else {
             continue;
         };
-        let Some(field) = policy.field(database, value.key)? else {
+        let Some(field) = policy.field(value.key)? else {
             continue;
         };
         let Some(scalar) = redis_scalar::decode_field(payload, field)? else {
@@ -223,7 +222,6 @@ pub(crate) fn redis_delivered_scalar_time_copies(
         port: read.port,
     };
     let values = prepare_scalar_values(
-        read.database,
         read.command,
         read.source_args,
         read.source_response,
@@ -443,7 +441,6 @@ impl RequestContracts {
         };
         if let Some(policy) = self.redis_policy() {
             values.extend(prepare_scalar_values(
-                context.database,
                 context.command,
                 source_args,
                 source,

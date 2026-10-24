@@ -3,6 +3,111 @@ use serde_json::json;
 mod dependency_clocks;
 mod lset;
 
+#[test]
+fn global_key_sequences_keep_endpoint_database_and_user_state_separate() {
+    let mut declared = time_rule();
+    declared.target = Default::default();
+    declared.case_selector = None;
+    let runtime = runtime(declared);
+    let check_at =
+        |target: &TargetKey, database, username, command, source: &[&str], actual: &[&str]| {
+            let mut context =
+                RedisRequestContext::without_exchange("case", target, database, command);
+            context.username = username;
+            context.recorded_at = DateTime::from_timestamp(1000, 0);
+            context.actual_at = DateTime::from_timestamp(2000, 0);
+            runtime
+                .preview_redis_legacy(&context, &args(source), &args(actual))
+                .expect("global key command")
+        };
+    let first = TargetKey {
+        host: "cache.test".into(),
+        port: 6379,
+    };
+    let zadd = ["presence:1", "1090.25", "active"];
+    let shifted_zadd = ["presence:1", "2090.25", "active"];
+    let zrem = ["presence:1", "-inf", "1000.25"];
+    let shifted_zrem = ["presence:1", "-inf", "2000.25"];
+    runtime
+        .commit(check_at(&first, 1, Some("alice"), "ZADD", &zadd, &shifted_zadd).unwrap())
+        .unwrap();
+    for (target, database, username) in [
+        (
+            TargetKey {
+                host: "other.test".into(),
+                port: 6379,
+            },
+            1,
+            Some("alice"),
+        ),
+        (
+            TargetKey {
+                host: "cache.test".into(),
+                port: 6380,
+            },
+            1,
+            Some("alice"),
+        ),
+        (first.clone(), 2, Some("alice")),
+        (first.clone(), 1, Some("bob")),
+    ] {
+        assert!(
+            check_at(
+                &target,
+                database,
+                username,
+                "ZREMRANGEBYSCORE",
+                &zrem,
+                &shifted_zrem
+            )
+            .is_err(),
+            "another physical scope cannot borrow the first scope's preceding write"
+        );
+        runtime
+            .commit(check_at(&target, database, username, "ZADD", &zadd, &shifted_zadd).unwrap())
+            .unwrap();
+        runtime
+            .commit(
+                check_at(
+                    &target,
+                    database,
+                    username,
+                    "ZREMRANGEBYSCORE",
+                    &zrem,
+                    &shifted_zrem,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    let normalized = TargetKey {
+        host: "CACHE.TEST.".into(),
+        port: 6379,
+    };
+    runtime
+        .commit(
+            check_at(
+                &normalized,
+                1,
+                Some("alice"),
+                "ZREMRANGEBYSCORE",
+                &zrem,
+                &shifted_zrem,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .state
+            .lock()
+            .unwrap()
+            .sequences
+            .values()
+            .all(|sequence| sequence.next == 0)
+    );
+}
+
 pub(super) fn rule(redis: Value) -> ReplayDependencyRule {
     serde_json::from_value(json!({"id":"write-contract","protocol":"redis","target":{"host":"cache.test","port":6379},"case":{"method":"PUT","path":"/presence/*"},"source_evidence":"Presence:update uses current Unix seconds and preserves its expiry interval","redis":redis})).unwrap()
 }

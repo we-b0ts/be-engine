@@ -113,16 +113,17 @@ fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
         "read_commutation",
         "expiry_refresh",
         "read_back",
-        "finite_sharing",
+        "commands",
+        "key_format",
     ] {
-        let mut entry = json!({"resource":"cache"});
-        entry[behavior] = if behavior == "finite_sharing" {
-            json!({"operation":"GET"})
-        } else {
-            json!(true)
+        let mut entry = json!({});
+        entry[behavior] = match behavior {
+            "commands" => json!(["SET"]),
+            "key_format" => json!({"kind":"identity","formats":["uuid"]}),
+            _ => json!(true),
         };
-        let mut proposal = json!({"format":"traffic-policy/v2", "redis":{"keys":{"current":entry}},
-            "resources":{"cache":{"protocol":"redis","endpoint":"cache.test:6379","database":0}}});
+        let mut proposal =
+            json!({"format":"traffic-policy/v2", "redis":{"keys":{"current":entry}}});
         assert!(
             validate_proposal(&proposal.to_string()).is_err(),
             "{behavior}"
@@ -144,4 +145,61 @@ fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
         .to_string(),
     )
     .unwrap();
+}
+
+#[test]
+fn dependency_lifetime_plans_require_local_evidence_for_each_request() {
+    let proof =
+        json!({"source":"cache.py:42","fact":"Source shares only these finite recorded requests"});
+    for process in [false, true] {
+        let requests = if process {
+            json!([
+                {"http":{"host":"auth.example.test","method":"GET","path":"/refresh"},"proof":proof},
+                {"http":{"host":"keys.example.test","method":"GET","path":"/keys"}}
+            ])
+        } else {
+            json!([
+                {"redis":{"operation":"HGET","key":"token_v2","field":"client"},"proof":proof},
+                {"http":{"host":"auth.example.test","method":"GET","path":"/keys"}}
+            ])
+        };
+        let mut proposal = if process {
+            json!({"format":"traffic-policy/v2", "source_revision":format!("sha256:{}", "1".repeat(64)),
+                "process_dependencies":{"tasks":{"refresh_keys":{"requests":requests}}}})
+        } else {
+            json!({"format":"traffic-policy/v2", "localcache":{"requests":requests}})
+        };
+        assert!(validate_proposal(&proposal.to_string()).is_err());
+        let requests = if process {
+            &mut proposal["process_dependencies"]["tasks"]["refresh_keys"]["requests"]
+        } else {
+            &mut proposal["localcache"]["requests"]
+        };
+        requests[1]["proof"] = proof.clone();
+        validate_proposal(&proposal.to_string()).unwrap();
+        let document = crate::policy::parse_policy(&proposal.to_string()).unwrap();
+        SourceProofSnapshot::capture(&document).unwrap();
+        let rendered = crate::policy::render_policy(&document).unwrap();
+        assert!(!rendered.contains("proof:"));
+        assert!(validate_proposal(&rendered).is_err());
+    }
+}
+
+#[test]
+fn named_api_signature_positions_require_own_plan_proof_without_runtime_evidence() {
+    let mut proposal = json!({"format":"traffic-policy/v2",
+        "signatures":{"default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}},
+        "api":{"*":{"request":{"headers":{"authorization":{"scheme":"bearer"}}}}}
+    });
+    assert!(validate_proposal(&proposal.to_string()).is_err());
+    proposal["api"]["*"]["request"]["headers"]["authorization"]["proof"] = json!({
+        "source":"auth.py:42","fact":"Source authenticates and reuses the request-relative session JWT"});
+    validate_proposal(&proposal.to_string()).unwrap();
+    let policy = crate::policy::parse_policy(&proposal.to_string()).unwrap();
+    SourceProofSnapshot::capture(&policy).unwrap();
+    let runtime = crate::policy::render_policy(&policy).unwrap();
+    assert!(runtime.contains("signatures:"));
+    assert!(runtime.contains("api:"));
+    assert!(!runtime.contains("proof:"));
+    assert!(validate_proposal(&runtime).is_err());
 }

@@ -6,6 +6,7 @@ pub(super) struct Binding {
     pub case: String,
     pub rule: String,
     pub entry: usize,
+    pub target_endpoint: TargetKey,
     pub database: i64,
     pub username: Option<String>,
     pub key: Vec<u8>,
@@ -43,6 +44,7 @@ impl ReadBackState {
                     old.case == next.case
                         && old.rule == next.rule
                         && old.entry == next.entry
+                        && old.target_endpoint == next.target_endpoint
                         && old.database == next.database
                         && old.username == next.username
                         && old.key == next.key
@@ -78,7 +80,7 @@ impl ReadBackState {
         keys: (&[u8], &[u8]),
         pointer: &str,
         source: &Value,
-    ) -> Result<&Binding> {
+    ) -> Result<Option<&Binding>> {
         let connection = context
             .connection_id
             .context("read_back needs original read connection identity")?;
@@ -88,22 +90,28 @@ impl ReadBackState {
         let started = context
             .recorded_at
             .context("read_back needs original read start")?;
-        let mut selected = self.bindings.iter().filter(|binding| {
+        let origins = self.bindings.iter().filter(|binding| {
             binding.case == context.case
                 && binding.rule == rule
                 && binding.entry == entry
+                && binding.target_endpoint.port == context.target.port
+                && binding.target_endpoint.host
+                    == crate::replay::normalize_host(&context.target.host)
                 && binding.database == context.database
                 && binding.username.as_deref() == context.username
                 && binding.key == keys.0
-                && binding.target_key == keys.1
                 && binding.pointer == pointer
-                && &binding.source == source
                 && if binding.connection == connection {
                     binding.sequence < sequence
                 } else {
                     binding.completed <= started
                 }
         });
+        if origins.clone().next().is_none() {
+            return Ok(None);
+        }
+        let mut selected =
+            origins.filter(|binding| binding.target_key == keys.1 && &binding.source == source);
         let binding = selected.next().context(
             "read_back has no preceding successfully matched write for the Source read value",
         )?;
@@ -111,7 +119,7 @@ impl ReadBackState {
             selected.all(|other| other.target == binding.target),
             "ambiguous read_back write origin"
         );
-        Ok(binding)
+        Ok(Some(binding))
     }
 
     pub(super) fn commit(&mut self, pending: Vec<Binding>) {
@@ -123,6 +131,7 @@ impl ReadBackState {
                 old.case == value.case
                     && old.rule == value.rule
                     && old.entry == value.entry
+                    && old.target_endpoint == value.target_endpoint
                     && old.database == value.database
                     && old.username == value.username
                     && old.key == value.key
@@ -138,6 +147,8 @@ impl ReadBackState {
 
 fn size(binding: &Binding) -> usize {
     binding.key.len()
+        + binding.target_endpoint.host.len()
+        + std::mem::size_of::<u16>()
         + binding.username.as_ref().map_or(0, String::len)
         + binding.target_key.len()
         + binding.pointer.len()

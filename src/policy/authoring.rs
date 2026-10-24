@@ -1,5 +1,6 @@
 //! The unified transaction owns policy authoring; historical DTOs only recover journals.
 mod contracts;
+mod dependency_lifetimes;
 mod document;
 mod proof;
 mod redis_keys;
@@ -7,6 +8,7 @@ mod redis_keys;
 mod redis_tests;
 mod render;
 mod resources;
+mod signatures;
 #[cfg(test)]
 mod tests;
 mod walk;

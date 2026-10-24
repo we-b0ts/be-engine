@@ -124,6 +124,10 @@ impl RequestContracts {
                             case: context.case.into(),
                             rule: rule.id.clone(),
                             entry: index,
+                            target_endpoint: TargetKey {
+                                host: crate::replay::normalize_host(&context.target.host),
+                                port: context.target.port,
+                            },
                             database: context.database,
                             username: context.username.map(str::to_owned),
                             key: key.clone(),
@@ -210,6 +214,16 @@ impl RequestContracts {
                         pointer,
                         &value,
                     )?;
+                    let Some(binding) = binding else {
+                        ensure!(
+                            crate::policy::native::is_key_only_read_back(rule),
+                            "read_back has no preceding successfully matched write for the Source read value"
+                        );
+                        // A global key declaration does not invent an owned write
+                        // for historical input. Its ordinary finite response then
+                        // follows global scalar identity delivery/anchoring.
+                        continue;
+                    };
                     if pointer.is_empty() {
                         *payload = binding
                             .target

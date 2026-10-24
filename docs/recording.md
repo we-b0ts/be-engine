@@ -88,8 +88,8 @@ second successful access to the same physical key, database and endpoint when
 Source uses the same operation during initialization and final cleanup. Distinct
 keys and mirrored evidence cannot be combined to reach that count.
 Optional database and endpoint selectors
-restrict the physical resource; omitted databases inherit the root MySQL or
-Redis declaration.
+restrict the physical resource; omitted database selectors match any Source
+database. Source and Target still use the same physical connection identity.
 
 Source request JSON selects the asynchronous lifecycle. Dependencies remain in
 the ordinary Case after the primary response is sent. Any declared terminal

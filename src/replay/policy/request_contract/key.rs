@@ -15,6 +15,7 @@ pub(super) struct BindingScope {
     host: String,
     port: u16,
     database: i64,
+    username: Option<String>,
 }
 impl BindingScope {
     pub(super) fn belongs_to(&self, case: &str) -> bool {
@@ -29,22 +30,20 @@ pub(in crate::replay) struct KeyBindingReport {
     pub host: String,
     pub port: u16,
     pub database: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
     pub source_fingerprint: String,
     pub target_fingerprint: String,
 }
 pub(super) type PendingBinding = (BindingScope, String, String);
 
-fn scope(case: &str, rule: &ReplayDependencyRule, database: i64) -> BindingScope {
+fn scope(context: &RedisRequestContext<'_>) -> BindingScope {
     BindingScope {
-        case: case.into(),
-        host: rule
-            .target
-            .host
-            .as_ref()
-            .expect("validated endpoint")
-            .to_ascii_lowercase(),
-        port: rule.target.port.expect("validated endpoint"),
-        database,
+        case: context.case.into(),
+        host: crate::replay::normalize_host(&context.target.host),
+        port: context.target.port,
+        database: context.database,
+        username: context.username.map(str::to_owned),
     }
 }
 fn fingerprint(value: &str) -> String {
@@ -61,6 +60,24 @@ fn value<'a>(text: &'a str, template: &str) -> Result<&'a str> {
         "invalid identity slot"
     );
     Ok(extracted)
+}
+
+fn selected_identity<'a>(
+    text: &'a str,
+    selector: &crate::replay::redis::key_selector::RedisValueKeySelector,
+) -> Result<Option<&'a str>> {
+    use crate::replay::redis::key_selector::RedisValueKeySelector;
+    let (prefix, suffix) = match selector {
+        RedisValueKeySelector::Affix { prefix, suffix }
+        | RedisValueKeySelector::Numeric { prefix, suffix } => (prefix, suffix),
+        RedisValueKeySelector::Exact { .. } => return Ok(None),
+    };
+    let middle = text
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+        .context("captured Redis identity is outside its physical key selector")?;
+    ensure!(!middle.is_empty(), "captured Redis key identity is empty");
+    Ok(Some(middle))
 }
 fn shaped(value: &str, format: &KeyFormat) -> bool {
     match format {
@@ -92,7 +109,7 @@ impl RequestContracts {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn compare_key(
         &self,
-        case: &str,
+        context: &RedisRequestContext<'_>,
         rule: &ReplayDependencyRule,
         selector: &super::config::RedisRequestSelector,
         source: &[u8],
@@ -100,6 +117,7 @@ impl RequestContracts {
         clocks: crate::replay::assertion::RequestTimes,
         decision: &mut Decision,
     ) -> Result<()> {
+        let case = context.case;
         let Some(contract) = &selector.key_contract else {
             ensure!(
                 source == actual
@@ -171,7 +189,7 @@ impl RequestContracts {
                     shaped(a, format) && shaped(b, format),
                     "key identity format changed"
                 );
-                let scope = scope(case, rule, selector.database);
+                let scope = scope(context);
                 let state = self.state.lock().expect("request contracts");
                 let pairs = state
                     .key_bindings
@@ -209,6 +227,15 @@ impl RequestContracts {
                 );
                 drop(state);
                 self.observe_native_identity(case, a, b, decision)?;
+                if let (Some(source), Some(target)) = (
+                    selected_identity(left, &selector.key)?,
+                    selected_identity(right, &selector.key)?,
+                ) {
+                    // A format's literal prefix is part of its complete typed
+                    // identity, just as it is in a JSON field. The random
+                    // suffix alone cannot establish that cross-carrier pair.
+                    self.observe_native_identity(case, source, target, decision)?;
+                }
                 if left.len() <= 1024 && right.len() <= 1024 {
                     self.observe_native_identity(case, left, right, decision)?;
                 }
@@ -220,7 +247,7 @@ impl RequestContracts {
             } => self.compare_identity(
                 case,
                 rule,
-                selector.database,
+                context.database,
                 &IdentityReference {
                     template: template.clone(),
                     transform: *transform,
@@ -313,7 +340,7 @@ impl RequestContracts {
                     host: s.host.clone(),
                     port: s.port,
                     database: s.database,
-
+                    username: s.username.clone(),
                     source_fingerprint: fingerprint(a),
                     target_fingerprint: fingerprint(b),
                 })

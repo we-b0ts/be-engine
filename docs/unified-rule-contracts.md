@@ -24,12 +24,26 @@ Time comparisons preserve relative differences. JSON payloads are recognized
 automatically in supported carriers, including MySQL columns; no per-column,
 API, SSE event or cache-key JSON declaration is required. Root `mysql` enables
 native time metadata inference; `mysql.tables` declares other scalar formats.
+MySQL table fields and Redis key declarations need no repeated resource/database
+selectors. `redis.keys` also describes supported key-local state and ordered
+commands. `http.headers` formats retain strict header presence, count and order;
+there is no absence waiver or generic SDK-header whitelist.
 Identity correspondence is internal: equal complete typed Source IDs must be
 equal Target IDs and distinct Source IDs cannot merge. Prefixes and scalar
 types are preserved. Reads reuse established Target IDs and anchor unknown inputs.
 
-Contextual declarations and native effects remain available for additional
-relationships, typed PB schemas, signatures and finite state. Supplied global
+Dependency lifetimes use `localcache.requests` and
+`process_dependencies.tasks.<actual-Source-task-name>.requests`; HTTP entries
+require a host and process classification requires immutable `source_revision`.
+One task can contain requests from multiple protocols. Native effects remain
+for additional relationships, typed PB schemas, signed-input/JWT cryptography,
+multipart, DOCX, WSS path derivation and AES envelopes. Named `signatures`
+profiles and `api` positions deduplicate existing signing owners; global
+`kind: jwt` additionally verifies HMAC signatures and claims through the same
+frozen key context. The old authored identity `formats: [jwt]` syntax is rejected;
+JWT declarations require `kind: jwt` and a named verification profile.
+See [signature profiles](signature-profiles.md). Global JSON inference does not
+automatically cover multipart/DOCX/WSS/AES compound formats. Supplied global
 `json` and `mysql` sections replace their whole section through plan/apply;
 omitted sections are preserved. See [global field formats](resource-field-contracts.md)
 for the current schema and complete examples. The inventory below records the
@@ -55,25 +69,14 @@ Keep three value surfaces explicit:
 | `dependency.response` | Select the recorded dependency input and, when explicitly authorized, materialize a delivery copy for Target. There is normally no Target-produced response to compare here. | Deliver recorded evidence with its original outcome and timing. |
 | `api.response` | Compare the recorded primary response oracle with the actual Target primary response. | Strict status, headers, structure and unselected content. |
 
-Ordinary `api.response` body contracts apply only when the Source has an ordinary
-response body. SSE, NDJSON and other recorded interactions retain their separate
-strict event/order/closure assertions; an empty carrier body is not JSON and body
-contracts do not authorize changes inside interaction messages. Header date and
-header JWT contracts still apply to interaction responses. A body rule must have
-at least one complete ordinary Source witness; interaction cases never count as
-successful body validations. Request-body `when` conditions use authenticated
-in-memory request views, including private interaction requests. Planning freezes
-the original encrypted artifacts and managed key; neither planning nor application
-writes decrypted recordings. Applying a rule still requires genuine Replay.
-
-Explicit `slot: {sse_data: <exact-event-name>}` rules provide JSON value
-contracts for SSE interaction data. Data-only streams can additionally select
-Source JSON `/type` with `slot: {sse_data: {event: message, json_type: response.completed}}`.
-Target types remain exact. These rules use the same API selector, Source-only
-request condition, proof and time kernel as ordinary bodies, with their own
-field ownership. Event order/count, SSE event/id/retry, unselected data and
-closure remain strict. Interaction rules never supply ordinary body witnesses.
-See [SSE value contracts](sse-value-contracts.md) for authoring and limits.
+Global JSON formats apply wherever the protocol owner recognizes complete JSON,
+including ordinary bodies and SSE data. Event presence/order, SSE envelopes,
+closure, status, headers and unselected content stay strict. An absent field
+has no positive witness; an incomplete payload cannot invent a complete body.
+Native interaction or compound contracts retain their own typed evidence and
+field ownership. Planning uses protected immutable artifacts and independent
+Target observations; it never rewrites recordings. See
+[SSE value contracts](sse-value-contracts.md).
 
 Inbound request JWT translation, Source capture admission, Source response
 rewrite, process ownership, API-origin attribution, finite sharing and snapshot
@@ -83,16 +86,13 @@ not reorder a GET response, authorize a reusable read, or classify unused work.
 
 ## Resource scope across APIs
 
-Task: `rMyn5SlKQg`. New dependency value rules and native resource effects select
-the resource and physical data location without `match.api`. Generic resource
-fields do not require an operation or SQL template; contextual native effects
-retain their own operation/statement selection. Discovery and
-planning omit that field from these rules. The API that owns a rewrite issue
-still identifies the transaction and its evidence; it does not limit resource
-access contracts. Root inbound request-body `when` conditions cannot be used on
-new resource rules. API response assertions and inbound adaptation retain their
-API scopes. Existing explicitly API-scoped rules retain their original scope
-when reapplied or extended; planning never silently widens a prior proof.
+Global content declarations are independent of the API and resource carrying
+the value. MySQL scalar formats select table patterns/columns; Redis scalar,
+key and command declarations select bounded key patterns. The adapters still
+pair actual endpoint, database, authentication and protocol identity before
+comparing content. Additional native causal or cryptographic effects retain
+their precise physical and API scopes. Planning must never silently broaden
+those constraints when compacting a declaration.
 
 Resource preflight scans the complete immutable recording for matching cases,
 including cases belonging to other APIs. It validates their Source values and
@@ -198,7 +198,8 @@ new modules and any touched file approaching 1000 lines.
 
 Root `json.fields` is the sole authored description of decoded JSON fields.
 Root `mysql.tables` describes scalar column formats that SQL metadata cannot
-infer; root `redis.keys` describes scalar cache values by key pattern. JSON-valued SQL columns and cache values need no declaration. Native SQL
+infer; root `redis.keys` describes scalar cache values and key-local behavior by
+key pattern, without authored resource/database selectors. JSON-valued SQL columns and cache values need no declaration. Native SQL
 DATE/DATETIME/TIMESTAMP metadata supplies ordinary temporal semantics when the
 root `mysql` policy is enabled. The [field guide](resource-field-contracts.md)
 defines exact syntax, null/missing behavior and format selection.
@@ -249,10 +250,10 @@ proposal, the outer proof states the Source fact and nested `contract`/`proof`
 pairs supply independently auditable facts. Published policies contain the
 contracts alone. The annotated examples below describe plan inputs.
 
-Source-proven nonbehavioral SDK request headers use the scoped
-[`http_client_metadata` effect](http-client-metadata.md). The consumer and its
-middleware must not use the selected names for business behavior; unknown headers
-remain strict and the audit retains observations with the authorizing rule ID.
+Ordinary request headers, including SDK headers, retain strict presence and
+value comparison. Policies cannot waive missing headers or downgrade them to
+observations. Global HTTP field formats may compare generated values while
+preserving the native header presence requirement.
 
 MySQL JSON time fields can select variable-length arrays with exact wildcard
 leaves, for example `mysql_values.values.1: {kind: json, fields:
@@ -397,22 +398,22 @@ For Source/Target values `S`, `T` and trusted anchors `As`, `At`:
   require exactly equal Target instants; distinct Source instants may have
   translation-offset differences of at most one microsecond. The five-second
   anchor window is not a replacement for this relationship check.
-- Integrate master `f82a7b6` clock groups without weakening this default.
-  `clock_group` is optional on timestamp contracts. Absent names share a strict
-  group; explicit different groups require Source proof of independent clock
-  reads. Each field still satisfies its own fixed anchor window, and each group
-  retains copy equality and one-microsecond shift consistency.
+- Ordinary global fields and declarative Redis command arguments expose no
+  authored clock groups. Equal normalized Source instants in command arguments
+  require equal Target instants internally; distinct Source instants remain
+  independent within the fixed window. Additional native causal contracts retain
+  their proven explicit clock relationships.
 - Preserve sequence-level relationships for scalar and nested JSON script
   timestamps. Validate script digest/body, numkeys, KEYS, ARGV and selected
   indices together without evaluating Lua.
 
-Resource identity fields retain their eligible physical locations, format and
+Declared identity formats retain their eligible complete values and
 case-local one-to-one Source/Target mapping. Native identity/nonce effects also
 retain their capture, lifetime and allowed reference endpoints. Candidate previews
 stage decisions without changing live state. A failed stable field, signature,
 time relation, element pairing or protocol admission discards those decisions.
-PUBLISH UUID and JSON time checks commit atomically, including selectors resolved
-on the original payload before canonicalization can change positions.
+Global PUBLISH JSON identity/time checks commit atomically. Original payload
+structure determines pointer selection before reconstruction changes bytes.
 
 Unordered means multiset equality. Preserve duplicates, cardinality and element
 associations. Composite unordered/time/identity matching must stage element

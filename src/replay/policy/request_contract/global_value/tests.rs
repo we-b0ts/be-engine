@@ -34,6 +34,129 @@ json:
     owner
 }
 
+fn url_owner() -> RequestContracts {
+    let mut owner = owner();
+    let compiled = crate::policy::parse_and_compile_policy(
+        r#"format: traffic-policy/v2
+json:
+  fields:
+    /session_id: {kind: identity, formats: [uuid]}
+    /authorize_url: {kind: url, formats: [url]}
+    /links/*: {kind: url, formats: [url]}
+"#,
+    )
+    .unwrap();
+    owner.configure_compiled(Some(Arc::new(compiled))).unwrap();
+    owner
+}
+
+#[test]
+fn url_query_delivery_shares_one_uncommitted_identity_with_root_and_other_urls() {
+    let owner = url_owner();
+    let original = serde_json::json!({"session_id":A,
+        "authorize_url":format!("https://auth.test/authorize?session_id={A}&keep=x%20y#fixed"),
+        "links":[format!("https://auth.test/other?session_id={A}")]
+    });
+    let bytes = serde_json::to_vec(&original).unwrap();
+    let delivery = crate::replay::contract_value::Delivery::prepare_global(
+        &bytes,
+        owner.global_json().unwrap(),
+        Default::default(),
+    )
+    .unwrap();
+    assert!(delivery.has_identities());
+    let (rendered, decision) = delivery
+        .render_with_identities(Utc::now(), &owner, "case")
+        .unwrap();
+    assert!(
+        !owner.has_identities("case"),
+        "rendering must not publish candidate correspondences"
+    );
+    let value: Value = serde_json::from_slice(&rendered).unwrap();
+    let id = value["session_id"].as_str().unwrap();
+    assert_eq!(
+        value["authorize_url"],
+        format!("https://auth.test/authorize?session_id={id}&keep=x%20y#fixed")
+    );
+    assert_eq!(
+        value["links"][0],
+        format!("https://auth.test/other?session_id={id}")
+    );
+    let compared = owner
+        .compare_global_value(&bytes, &rendered, &[], Default::default())
+        .unwrap();
+    assert!(compared.passed(), "{:?}", compared.differences);
+    owner.commit_identity(decision).unwrap();
+    let (again, _) = delivery
+        .render_with_identities(Utc::now(), &owner, "case")
+        .unwrap();
+    assert_eq!(rendered, again);
+}
+
+#[test]
+fn a_url_only_redis_echo_reuses_the_accepted_primary_json_identity() {
+    let owner = url_owner();
+    let before = serde_json::json!({"session_id":A}).to_string();
+    let after = serde_json::json!({"session_id":X}).to_string();
+    let comparison = owner
+        .compare_global_value(before.as_bytes(), after.as_bytes(), &[], Default::default())
+        .unwrap();
+    owner
+        .commit_identity(owner.identity_decision("case", &comparison).unwrap())
+        .unwrap();
+    let source = serde_json::json!({"authorize_url":format!("https://auth.test/authorize?session_id={A}&keep=x%20y")}).to_string();
+    let response = [
+        format!("${}\r\n", source.len()).as_bytes(),
+        source.as_bytes(),
+        b"\r\n",
+    ]
+    .concat();
+    let key = vec![b"url:cache".to_vec()];
+    let prepared = owner
+        .prepare_redis_delivery(
+            "case",
+            "case",
+            &TargetKey {
+                host: "cache.test".into(),
+                port: 6379,
+            },
+            8,
+            None,
+            "GET",
+            &key,
+            &key,
+            &response,
+            None,
+            None,
+            None,
+            uuid::Uuid::new_v4(),
+            1,
+        )
+        .unwrap()
+        .unwrap();
+    let delivered = prepared.render(Utc::now()).unwrap();
+    let payload = super::super::redis_bulk_payload(&delivered)
+        .unwrap()
+        .unwrap();
+    let value: Value = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(
+        value["authorize_url"],
+        format!("https://auth.test/authorize?session_id={X}&keep=x%20y")
+    );
+    let unchanged = owner
+        .compare_global_value(
+            source.as_bytes(),
+            source.as_bytes(),
+            &[],
+            Default::default(),
+        )
+        .unwrap();
+    assert!(
+        owner.identity_decision("case", &unchanged).is_err(),
+        "a byte-equal URL must not escape an already accepted Source-to-Target id relation"
+    );
+}
+
 fn payload(path: bool, id: &str) -> Vec<u8> {
     serde_json::to_vec(&if path {
         serde_json::json!({"item":{"id":id},"stable":true})

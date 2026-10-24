@@ -1,4 +1,4 @@
-//! Global JSON identities treat complete JWTs as opaque values across real HTTP.
+//! Global JWT verification retains real HTTP envelope and finite-consumption checks.
 use super::*;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::json;
@@ -39,11 +39,13 @@ fn body(now: i64, request_id: &str) -> Value {
 }
 
 fn rule() -> Value {
-    json!({"format":"traffic-policy/v2","json":{"fields":{
+    json!({"format":"traffic-policy/v2","signatures":{
+        "default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}
+    },"json":{"fields":{
         "/metadata/request_id":{"kind":"identity","formats":[{"hex":8}]},
-        "/metadata/auth_token":{"kind":"identity","formats":["jwt"]},
-        "/metadata/skill_identity_token":{"kind":"identity","formats":["jwt"]},
-        "/metadata/token_copy":{"kind":"identity","formats":["jwt"]}
+        "/metadata/auth_token":{"kind":"jwt"},
+        "/metadata/skill_identity_token":{"kind":"jwt"},
+        "/metadata/token_copy":{"kind":"jwt"}
     }}})
 }
 
@@ -61,6 +63,11 @@ impl Fixture {
         let root = temp.path().to_path_buf();
         let local = root.join(".traffic-e2e/local");
         std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(
+            root.join(crate::repository::LOCAL_TARGET_ENV_PATH),
+            format!("SECRET_KEY={KEY}\n"),
+        )
+        .unwrap();
         // The original request evidence uses the same managed encryption boundary
         // as production. Signing material remains a separate private startup input.
         let key_path = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
@@ -152,20 +159,16 @@ async fn send(addr: SocketAddr, host: &str, uri: &str, body: &str) -> (StatusCod
 }
 
 #[tokio::test]
-async fn global_http_jwt_formats_preserve_full_identity_and_finite_consumption_without_keys() {
+async fn global_http_jwt_verification_preserves_full_identity_and_finite_consumption() {
     let fixture = Fixture::new(vec![], body(SOURCE, "a1b2c3d4")).await;
-    assert!(!fixture.root.join(".traffic-e2e/local/target.env").exists());
-    let (addr, runtime, task) = fixture.spawn().await;
-    let mut valid = body(Utc::now().timestamp(), "e5f6a7b8");
-    // Signatures, algorithms and claims belong to the opaque complete identity.
-    // No startup signing material is configured or read by the engine.
-    let opaque = token(
-        json!({"sub":"other-user","custom":true}),
-        Algorithm::HS512,
-        "another-key",
+    assert!(
+        fixture
+            .root
+            .join(crate::repository::LOCAL_TARGET_ENV_PATH)
+            .is_file()
     );
-    valid["metadata"]["auth_token"] = json!(opaque);
-    valid["metadata"]["token_copy"] = valid["metadata"]["auth_token"].clone();
+    let (addr, runtime, task) = fixture.spawn().await;
+    let valid = body(Utc::now().timestamp(), "e5f6a7b8");
     let mut rejected = Vec::new();
     for (pointer, value) in [
         ("/model", json!("changed")),
@@ -173,6 +176,30 @@ async fn global_http_jwt_formats_preserve_full_identity_and_finite_consumption_w
         ("/metadata/request_id", json!("bad")),
         ("/metadata/request_id", json!("g1234567")),
         ("/metadata/auth_token", json!("not-a-jwt")),
+        (
+            "/metadata/auth_token",
+            json!(token(
+                claims(Utc::now().timestamp(), false),
+                Algorithm::HS512,
+                KEY
+            )),
+        ),
+        (
+            "/metadata/auth_token",
+            json!(token(
+                claims(Utc::now().timestamp(), false),
+                Algorithm::HS256,
+                "wrong-key"
+            )),
+        ),
+        (
+            "/metadata/auth_token",
+            json!(token(
+                json!({"sub":"other-user","roles":["reader"],"exp":Utc::now().timestamp()+3600}),
+                Algorithm::HS256,
+                KEY
+            )),
+        ),
         ("/metadata/auth_token", Value::Null),
         (
             "/metadata/token_copy",
@@ -245,7 +272,7 @@ async fn global_http_jwt_formats_preserve_full_identity_and_finite_consumption_w
 }
 
 #[tokio::test]
-async fn global_http_jwt_identity_composes_with_time_and_unordered_business_fields() {
+async fn global_http_jwt_verification_composes_with_time_and_unordered_business_fields() {
     let fields = json!({"/requested_at":{"kind":"time","formats":["unix_seconds"]},"/tools":{"kind":"unordered"}});
     let mut source = body(SOURCE, "a1b2c3d4");
     source["requested_at"] = json!(SOURCE);
@@ -285,7 +312,7 @@ async fn global_http_jwt_identity_composes_with_time_and_unordered_business_fiel
             .report()
             .global_formats[0]
             .time_validations,
-        1
+        5
     );
     drop(state);
     task.abort();
@@ -293,7 +320,7 @@ async fn global_http_jwt_identity_composes_with_time_and_unordered_business_fiel
 }
 
 #[tokio::test]
-async fn repeated_http_requests_share_complete_jwt_correspondence_without_token_rewrites() {
+async fn repeated_http_requests_require_the_same_verified_complete_jwt_correspondence() {
     let mut fixture = Fixture::new(vec![], body(SOURCE, "a1b2c3d4")).await;
     let event: Value = serde_json::from_slice(&fixture.original).unwrap();
     let mut second = event.clone();
@@ -301,12 +328,15 @@ async fn repeated_http_requests_share_complete_jwt_correspondence_without_token_
     fixture.original = format!("{event}\n{second}\n").into_bytes();
     std::fs::write(fixture.case.join("dependencies.jsonl"), &fixture.original).unwrap();
     let (addr, runtime, task) = fixture.spawn().await;
-    let valid = body(SOURCE + 100, "e5f6a7b8");
+    let now = Utc::now().timestamp();
+    let valid = body(now, "e5f6a7b8");
     assert_eq!(
         send(addr, HOST, URI, &valid.to_string()).await.0,
         StatusCode::OK
     );
-    let conflicting = body(SOURCE + 200, "e5f6a7b8");
+    // Both signatures and relative times are valid; the complete Source token
+    // must still retain its first accepted Target counterpart.
+    let conflicting = body(now + 1, "e5f6a7b8");
     assert_eq!(
         send(addr, HOST, URI, &conflicting.to_string()).await.0,
         StatusCode::BAD_GATEWAY

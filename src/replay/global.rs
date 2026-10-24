@@ -203,7 +203,7 @@ pub(super) async fn load(
                 }
                 DependencyRecord::HttpExchange(mut record) => {
                     record.decrypt_request_headers(path)?;
-                    http::register_global_exchange(*record, reference, http, targets)?;
+                    http::register_global_exchange(*record, reference, http, targets, rules)?;
                 }
                 DependencyRecord::RedisExchange(record) => {
                     redis.register_global_exchange(*record, reference, targets, rules)?

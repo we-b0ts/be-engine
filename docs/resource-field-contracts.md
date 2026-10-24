@@ -18,7 +18,6 @@ json:
     /members: {kind: unordered}
     /items/*/waitingDurationSeconds: {kind: duration, formats: [seconds]}
 mysql:
-  database: app
   tables:
     tasks:
       pattern: tasks
@@ -29,7 +28,6 @@ mysql:
       fields:
         owner_id: {kind: identity, formats: [uuid]}
 redis:
-  database: 0
   keys:
     task-run-monitor:v2:as-of: {kind: time, formats: [unix_seconds]}
 rules: []
@@ -74,7 +72,7 @@ literal and token lengths for hex/base64url are bounded to 1 through 1024 charac
 For a compound string ID, use a stable literal prefix plus the string format,
 e.g. `{prefix: 'chat:streaming:block_content:', format: string}`. The complete
 value participates in the shared correspondence; its embedded parts do not
-introduce authored captures or groups. A JWT uses the whole-token identity format below.
+introduce authored captures or groups. JWT verification and internal complete-token correspondence are described below.
 
 Forwarded and fixed scalar IDs stay exact when they match no generated format.
 Their equal values still reserve an internal identity anchor. This prevents the
@@ -108,32 +106,47 @@ and status or other unselected members remain strict.
 
 ## JSON protocol formats
 
-A JWT is one complete identity value:
+JWT verification refers to a named signature profile:
 
 ```yaml
+signatures:
+  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
+  oidc: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: OIDC_STATE_SECRET_KEY}}
 json:
   fields:
-    /access_token: {kind: identity, formats: [jwt]}
-    /refresh_token: {kind: identity, formats: [jwt]}
+    /access_token: {kind: jwt}
+    /refresh_token: {kind: jwt}
+    /state: {kind: jwt, signature: oidc}
+    /authorize_url: {kind: url, formats: [url]}
     /headers/origin: {kind: identity, formats: [{string: 255}]}
     /download_path: {kind: url, formats: [aws_sigv4]}
 ```
 
-`jwt` validates compact token syntax up to 64 KiB. It does not verify a
-signature, load a key, compare business claims or change the payload. Identical
-complete Source tokens must correspond to identical Target tokens throughout
-the case, just like UUIDs. Different signing keys, claims and clock values do
-not create additional JSON policy conditions. Dependency reads deliver an
-already established complete Target token; an unknown historical input remains
-anchored to its original token.
+`kind: jwt` defaults to the explicitly declared `default` profile. The engine
+loads its private key snapshot once, verifies HMAC signatures and relative
+NumericDates, compares stable claims and applies global scalar/array formats
+to declared claim paths. Complete Source-equal tokens must remain Target-equal
+across carriers. Recognized equal tokens also authenticate; a failed candidate
+commits no token or claim identities. Global RS256 verification currently fails
+closed; exact native recorded-public-key checks remain available.
 
-Only a native inbound transformation that actually changes a JWT's time claims
-needs its declared signing key and re-signing procedure. The managed runner
-registers the actual derived token at its precise request send timestamp before
-sending HTTP. Replay independently reconstructs that input from immutable
-Source, the compiled native transformation and frozen startup keys. Only the
-verified complete-token pair can override a fixed input anchor; unrelated
-inputs remain exact. The private delivery is not independent Target evidence.
+The old authored `{kind: identity, formats: [jwt]}` syntax is rejected.
+JWT fields use `kind: jwt` with a declared profile; there is no keyless or
+syntax-only JWT policy alternative.
+
+`api` declares the exact request header/query/body positions that actually need
+translation and re-signing. Additional response nonce echoes and signed expiry
+companions remain at their API positions and lower to the existing crypto
+owners. Unknown historical dependency inputs are not arbitrarily re-signed.
+See [signature profiles](signature-profiles.md) for the complete syntax,
+startup inputs and strict planning boundaries.
+
+`url` parses a complete URL or path/query value and applies the same global
+field formats to decoded query parameters. For example, `/session_id` describes
+a query parameter with that name as well as a JSON member at that pointer. Query
+values are text strings; scheme, host, path, fragment, unselected components and
+unmodified escaping remain exact. URL fields join the same identity graph as
+ordinary JSON fields. This does not infer a signature algorithm or key.
 
 `aws_sigv4` checks the request-relative signing date, a 64-character lowercase
 hexadecimal signature, and the credential date segment. Scheme, authority,
@@ -214,36 +227,55 @@ expiry arguments under JSON or Redis scalar field formats.
 
 ## Redis scalar values
 
-Root `redis.keys` declares scalar value formats by physical key pattern. The
-optional `redis.database` selects one observed database; omitting it covers
-recorded Redis databases. Each pattern supports at most one `*` wildcard.
-Matched values use the same `kind` and `formats` as JSON and MySQL scalar fields.
+Root `redis.keys` declares scalar value formats and key-local behavior by
+bounded key pattern, without resource aliases or database selectors. Each
+pattern supports at most one `*` wildcard. Actual Source/Target endpoint,
+database, authentication and protocol identities still have to match.
+
+```yaml
+redis:
+  keys:
+    'task:current:*': {kind: identity, formats: [uuid], read_back: true}
+    'task:content:*': {append_stream: true, expiry_refresh: true}
+    'task:cancel:*': {read_commutation: true}
+    'task:counter:*': {commands: [INCRBY, EXPIRE]}
+    'task:events:*':
+      commands:
+        - operation: ZADD
+          arguments:
+            1: {kind: time, formats: [unix_seconds]}
+```
 
 The Source scalar encoding fixes Target representation: a JSON number remains
 a number, a quoted JSON string remains quoted, and a plain UTF-8 UUID or date
-remains text. Structured JSON values use the global JSON field map. Unknown
-binary values stay exact. Equal scalars need no format or time validation, and
-identity values retain equality anchors. Extra arguments, keys, hash fields,
-container shape and expiry semantics retain protocol checks.
+remains text. Structured JSON values use the global JSON field map; JSON paths
+are never repeated under a key. Unknown binary values stay exact. Equal scalars
+need no format or time validation, and equal identities retain equality anchors.
+Extra arguments, keys, hash fields, container shape and expiry remain strict.
 
-A supplied scalar `redis` section replaces its complete key-format map in
-plan/apply; `redis: {keys: {}}` clears it. A JSON path is never repeated under a
-Redis key. Stateful Redis effects, including ordered streams, key derivation and
-write/read lifetimes, are grouped under `redis.rules`. They compile into the
-same native rule list and retain their finite state. Source proof is frozen in
-the separate plan record; the published policy contains no evidence metadata.
-A section containing only `redis.rules` adds native rules without creating or
-clearing scalar permissions. The renderer groups Redis effects there automatically;
-other native effects remain under root `rules`.
+`commands` is an ordered list, with one-based value-argument indexes (the key is
+separate). Each time argument declares one format. The engine relates equal
+Source instants internally; no binding, relation or clock group is authored.
+EVAL/EVALSHA entries retain their exact script digest. `key_format` optionally
+describes a generated wildcard key segment; see [key contracts](redis-key-contracts.md).
+Key-local permissions retain their complete Source state and finite-inventory
+validation. They are not exemptions for asynchronous work.
+
+A supplied `redis` section replaces its complete scalar map in plan/apply;
+`redis: {keys: {}}` clears it. Key-local behaviors compile to the existing native
+owners. Advanced native rules are retained only for relationships not covered
+by this declaration. Source proof is frozen in the separate plan record; the
+published policy contains no evidence metadata.
 
 ## MySQL scalar fields
 
 `mysql.tables` is needed only for explicit scalar semantics that cannot be
 inferred from native column metadata, such as identity formats. Each entry has
 a local descriptive name, a physical `pattern`, and column `fields` using the
-same `kind` and `formats` syntax. `mysql.database` optionally scopes one exact
-physical database. Patterns contain table names or table wildcards, without a
-database prefix. Overlapping declarations must agree.
+same `kind` and `formats` syntax. Patterns contain table names or table
+wildcards, without repeated database or resource selectors. The engine still
+pairs actual Source/Target physical databases and tables. Overlapping
+declarations must agree.
 
 A root `mysql: {}` enables automatic native time inference without scalar
 declarations. DATE, DATETIME and TIMESTAMP inference uses recorded wire types and physical
@@ -261,6 +293,43 @@ Unsupported expressions and ambiguous joins do not grant field permissions.
 Source and Target must still use the same physical relation and preserve
 unselected predicates, values, transaction boundaries and finite exchanges.
 
+## Dependency lifetimes
+
+Content formats do not authorize shared or process-level dependency lifetimes.
+Declare those requests separately:
+
+```yaml
+source_revision: source-image-v1
+localcache:
+  requests:
+    - redis: {operation: HGET, key: token_v2, field: '3061639762'}
+    - http: {host: auth.example.com, method: GET, path: /.well-known/jwks.json}
+process_dependencies:
+  tasks:
+    refresh_signing_keys:
+      requests:
+        - http: {host: auth.example.com, method: GET, path: /keys/}
+        - redis: {ports: [6379], operation: GET, keys: [{kind: exact, value: refresh_flag}]}
+```
+
+`localcache.requests` identifies finite initialization requests shared by the
+Source process. It declares dependency requests, not cache objects or arbitrary
+cached responses. HTTP entries require an explicit host, method and path;
+Redis entries require an exact GET key or HGET key/field. Request identity,
+response inventory and successful delivery remain finite.
+
+`process_dependencies.tasks` uses actual logical task names from Source code.
+One task can contain requests from several protocols. HTTP entries require a
+host plus `method`/`path`, or bounded `methods`/`path_prefixes` lists. A host
+selects its observed port; no default port is invented. Actual endpoint pairing
+remains strict. MySQL process entries retain their precise SQL selector and
+transaction members, with resource aliases where needed. Root `source_revision`
+binds this classification to immutable Source behavior. Task names are labels
+for real Source work, not a way to create new tasks or exempt unknown traffic.
+Each proposed entry requires its independent Source proof; runtime rendering
+removes it. Lifetime declarations do not implement destination state, change
+payload comparisons or relax finite consumption.
+
 ## Time comparison and dependency delivery
 
 Global time declarations use relative differences; no authored relation is
@@ -276,8 +345,10 @@ retain their original bytes. Ordinary response assertion compares independently
 observed values. Original recordings are never modified, and successful wire
 delivery remains distinct from constructing a derived response.
 
-Native effects under `rules` retain typed PB schemas, signatures, state
-transitions and additional clock relationships. Resource aliases identify the
+Native effects under `rules` retain typed PB schemas, signed-input and JWT
+cryptographic checks, multipart, DOCX, WSS path derivation, encrypted AES
+envelopes and additional causal relationships. These compound formats are not
+automatically covered by global JSON inference. Resource aliases identify the
 protocol endpoint, database and user for those effects. Ordinary JSON formats
 belong in the global map; API, SSE, table and cache selectors do not duplicate
 them. Extra native constraints still validate their owned fields and unselected
@@ -299,7 +370,8 @@ http:
     x-request-id: {kind: identity, formats: [uuid]}
 ```
 
-Presence, repeated-value counts and order stay strict. Header identities join
+Presence, repeated-value counts and order stay strict. There is no header
+absence waiver or generic SDK-header exception. Header identities join
 the same complete-value graph as JSON and storage identities. Protected
 unavailable Source headers remain exact. See [header formats](http-header-formats.md).
 

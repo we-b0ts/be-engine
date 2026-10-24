@@ -6,15 +6,24 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
     if entries.is_empty() {
         return Ok(());
     }
-    let resource = resource(&rule.selector, Protocol::Redis)?;
-    ensure!(
-        resource
-            .database
-            .as_ref()
-            .and_then(super::super::Database::index)
-            .is_some(),
-        "Redis read_back requires an explicit database"
-    );
+    if rule.selector.resource.is_some() {
+        let resource = resource(&rule.selector, Protocol::Redis)?;
+        ensure!(
+            resource
+                .database
+                .as_ref()
+                .and_then(super::super::Database::index)
+                .is_some(),
+            "Redis read_back requires an explicit database"
+        );
+    } else {
+        ensure!(
+            crate::policy::native::is_key_only_read_back(rule)
+                || matches!(rule.effect, NativeEffect::RedisSequence(_)),
+            "resource-less read_back requires a canonical key state or Redis sequence owner"
+        );
+        validate_discovered_redis_key(&rule.selector)?;
+    }
     ensure!(
         rule.selector.key.is_some(),
         "Redis read_back requires an explicit write key selector"

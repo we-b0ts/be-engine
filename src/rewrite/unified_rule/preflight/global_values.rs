@@ -1,7 +1,7 @@
 //! Full-recording format coverage, independent of API ownership. Source self
 //! validation never counts as an independently observed Target witness.
 use super::*;
-use crate::policy::{CompiledNativeRule, GLOBAL_JSON_ID};
+use crate::policy::GLOBAL_JSON_ID;
 use crate::value_contract::time_copies::TimeCopyStore;
 use crate::value_contract::{global, json::Comparison, time::ClockPair};
 mod headers;
@@ -526,14 +526,7 @@ fn compare_prepared(
     {
         match dependency::protocol(event) {
             Some(Protocol::Http) => {
-                let native = selected_native(context)?;
-                crate::replay::http_validate_contract_witness(
-                    source,
-                    native_target,
-                    surface,
-                    &native,
-                    clocks,
-                )?;
+                crate::replay::http_validate_witness(source, native_target, surface, clocks)?;
             }
             Some(Protocol::Memcached) => {
                 let keys = before
@@ -571,33 +564,6 @@ fn compare_prepared(
         comparison.merge_and_validate(checked);
     }
     Ok(comparison)
-}
-
-fn selected_native<'a>(context: &CompareContext<'a>) -> Result<Vec<&'a CompiledNativeRule>> {
-    let Some(request) = context.request else {
-        return Ok(context
-            .policy
-            .native
-            .iter()
-            .filter(|rule| rule.rule.selector.api.is_none())
-            .collect());
-    };
-    let method = request["method"]
-        .as_str()
-        .context("Source API method unavailable")?;
-    let uri: hyper::Uri = request["uri"]
-        .as_str()
-        .context("Source API URI unavailable")?
-        .parse()?;
-    let body = capture(&request["body"])
-        .ok()
-        .and_then(|bytes| crate::json_value::parse(&bytes));
-    Ok(crate::replay::native_response_selected(
-        context.policy,
-        method,
-        uri.path(),
-        body.as_ref(),
-    ))
 }
 
 fn observed_resource(event: &Value) -> Result<crate::policy::Resource> {

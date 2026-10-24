@@ -115,12 +115,8 @@ fn temporal(column: &RecordedMysqlColumn) -> Option<Temporal> {
     }
 }
 
-fn native_scope(policy: &CompiledPolicy, database: Option<&str>) -> bool {
-    (policy.mysql.is_some() || policy.global_json.is_some())
-        && policy
-            .mysql
-            .as_ref()
-            .is_none_or(|mysql| mysql.matches_database(database))
+fn native_scope(policy: &CompiledPolicy) -> bool {
+    policy.mysql.is_some() || policy.global_json.is_some()
 }
 
 pub(in crate::replay) struct RequestContext<'a> {
@@ -151,8 +147,7 @@ impl RequestContext<'_> {
         use crate::mysql::sql::Token;
         if let Some(mysql) = &self.policy.mysql
             && let Some(origin) = origin
-            && let Some(field) =
-                mysql.field(origin.database.as_deref(), &origin.table, &origin.column)?
+            && let Some(field) = mysql.field(&origin.table, &origin.column)?
         {
             let source = native_scalar(source)?;
             let target = native_scalar(target)?;
@@ -169,10 +164,7 @@ impl RequestContext<'_> {
                 inferred: false,
             }));
         }
-        let database = origin
-            .and_then(|origin| origin.database.as_deref())
-            .or(self.identity.database.as_deref());
-        if native_scope(self.policy, database) {
+        if native_scope(self.policy) {
             if let Some(temporal) =
                 origin.and_then(|origin| self.metadata.temporal(self.identity, origin))
             {
@@ -527,8 +519,7 @@ pub(super) fn response_selection(
     let origin = fields::response_origin(response, index, analysis.as_deref());
     if let Some(mysql) = &policy.mysql
         && let Some(origin) = &origin
-        && let Some(field) =
-            mysql.field(origin.database.as_deref(), &origin.table, &origin.column)?
+        && let Some(field) = mysql.field(&origin.table, &origin.column)?
     {
         let source = scalar_value(source)?;
         let contract = field
@@ -542,13 +533,8 @@ pub(super) fn response_selection(
             inferred: false,
         }));
     }
-    if native_scope(
-        policy,
-        origin
-            .as_ref()
-            .and_then(|origin| origin.database.as_deref())
-            .or(database),
-    ) && let Some(temporal) = temporal(column)
+    if native_scope(policy)
+        && let Some(temporal) = temporal(column)
     {
         return temporal_selection(scalar_value(source)?, scalar_value(target)?, temporal)
             .map(Some);

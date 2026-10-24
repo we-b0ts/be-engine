@@ -6,8 +6,8 @@ fn every_request_rule_requires_fresh_replay_and_process_rules_do_not() {
     let request_rules = [
         Spec::HttpCrossCase {
             selector: crate::HttpCrossCaseSelector {
-                host: "http.test".into(),
-                port: 80,
+                host: Some("http.test".into()),
+                port: Some(80),
                 method: "GET".into(),
                 path: "/read".into(),
             },

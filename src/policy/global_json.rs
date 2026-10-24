@@ -20,6 +20,8 @@ pub struct JsonPolicy {
 pub struct CompiledJsonPolicy {
     pub fields: BTreeMap<String, GlobalField>,
     pub fingerprint: String,
+    #[serde(skip)]
+    pub(crate) signatures: super::signatures::SignatureRegistry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,7 +39,21 @@ pub enum GlobalField {
     Url {
         formats: Vec<super::GlobalUrlFormat>,
     },
+    Jwt {
+        #[serde(
+            default = "default_signature",
+            skip_serializing_if = "is_default_signature"
+        )]
+        signature: String,
+    },
     Unordered,
+}
+
+fn default_signature() -> String {
+    "default".into()
+}
+fn is_default_signature(name: &str) -> bool {
+    name == "default"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,7 +184,7 @@ impl GlobalTimeFormat {
 
 impl GlobalField {
     pub(crate) fn is_identity(&self) -> bool {
-        matches!(self, Self::Identity { .. })
+        matches!(self, Self::Identity { .. } | Self::Jwt { .. })
     }
     pub fn validate(&self) -> Result<()> {
         match self {
@@ -220,6 +236,9 @@ impl GlobalField {
                             (1..=1024).contains(&length),
                             "identity base64url requires 1..1024 characters"
                         ),
+                        IdentityFormat::Jwt => anyhow::bail!(
+                            "JWT identity syntax is retired; use kind: jwt with a named signatures definition"
+                        ),
                         _ => {}
                     }
                 }
@@ -227,6 +246,10 @@ impl GlobalField {
             Self::Url { formats } => {
                 ensure!(formats.len() == 1, "URL requires one known protocol format")
             }
+            Self::Jwt { signature } => ensure!(
+                !signature.is_empty() && signature.len() <= 128,
+                "JWT requires a bounded named signature"
+            ),
             Self::Duration { formats } => ensure!(
                 formats.len() == 1,
                 "duration requires exactly one unambiguous unit format"
@@ -334,7 +357,9 @@ impl GlobalField {
                     })
                 })
                 .context("Source value matches no declared identity format"),
-            Self::Url { .. } => anyhow::bail!("URL protocol leaves use the prepared verifier"),
+            Self::Url { .. } | Self::Jwt { .. } => {
+                anyhow::bail!("protocol leaves use the prepared verifier")
+            }
             Self::Duration { formats } => {
                 ensure!(
                     !source.is_object() && !source.is_array(),
@@ -379,6 +404,13 @@ fn exact_scalar(source: &Value) -> FieldContract {
 
 impl JsonPolicy {
     pub fn compile(&self) -> Result<CompiledJsonPolicy> {
+        self.compile_with_signatures(&BTreeMap::new())
+    }
+
+    pub(crate) fn compile_with_signatures(
+        &self,
+        signatures: &BTreeMap<String, super::SignatureDefinition>,
+    ) -> Result<CompiledJsonPolicy> {
         ensure!(
             self.fields.len() <= 4096,
             "json.fields accepts at most 4096 fields"
@@ -400,7 +432,18 @@ impl JsonPolicy {
         }
         Ok(CompiledJsonPolicy {
             fields: self.fields.clone(),
-            fingerprint: super::digest("traffic-policy/global-json/v1", self)?,
+            fingerprint: super::digest("traffic-policy/global-json/v1", &(self, signatures))?,
+            signatures: super::signatures::SignatureRegistry::new(
+                signatures,
+                &self
+                    .fields
+                    .values()
+                    .filter_map(|field| match field {
+                        GlobalField::Jwt { signature } => Some(signature.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            )?,
         })
     }
 }
@@ -457,6 +500,25 @@ impl CompiledJsonPolicy {
         let mut fields = Vec::new();
         for (pattern, field) in &self.fields {
             if matches!(field, GlobalField::Url { .. }) {
+                continue;
+            }
+            if matches!(field, GlobalField::Jwt { .. }) {
+                if identity_only {
+                    for pointer in crate::value_contract::delivery::select(pattern, source)? {
+                        let value = source.pointer(&pointer).context("JWT field disappeared")?;
+                        if crate::value_contract::global_protocol::is_jwt(value) {
+                            fields.push((
+                                pointer,
+                                FieldContract::Identity {
+                                    prefix: String::new(),
+                                    format: IdentityFormat::Jwt,
+                                },
+                            ));
+                        } else if !value.is_null() && !value.is_array() && !value.is_object() {
+                            fields.push((pointer, FieldContract::IdentityAnchor));
+                        }
+                    }
+                }
                 continue;
             }
             if identity_only && !field.is_identity() {

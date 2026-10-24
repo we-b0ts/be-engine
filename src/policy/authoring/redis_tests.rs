@@ -44,7 +44,7 @@ fn redis_native_namespace_flattens_to_one_runtime_and_keeps_no_empty_scalar_poli
 #[test]
 fn redis_scalar_settings_and_stateful_rules_share_author_section_without_duplicate_ownership() {
     let mut raw = base();
-    raw["redis"] = json!({"database":0,"keys":{"as-of":{"kind":"time","formats":["unix_seconds"]}},"rules":[native_redis()]});
+    raw["redis"] = json!({"keys":{"as-of":{"kind":"time","formats":["unix_seconds"]}},"rules":[native_redis()]});
     let policy = parse_policy(&raw.to_string()).unwrap();
     assert_eq!(policy.rules.len(), 1);
     assert_eq!(policy.redis.as_ref().unwrap().keys.len(), 1);

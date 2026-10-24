@@ -1,6 +1,7 @@
 use super::super::append::tests::{event, request, rule as append_rule, state};
 use super::*;
 use serde_json::{Value, json};
+mod applicability;
 
 fn read_rule(epochs: bool) -> Value {
     let mut r = json!({"id":"current-state","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"operation":"SET","key":{"kind":"affix","prefix":"current:"}},
@@ -251,7 +252,7 @@ fn a_nil_only_case_key_cannot_gain_a_write_or_a_future_identity() {
     let (_root, mut s) = state(&events, vec![read_rule(true)]);
     assert_eq!(perform(&mut s, "GET", &[b"current:1"]), b"$-1\r\n");
     assert_eq!(perform(&mut s, "GET", &[b"current:1"]), b"$-1\r\n");
-    assert_eq!(perform(&mut s, "GET", &[b"current:1"]), b"$-1\r\n");
+    assert!(request(&mut s, "GET", &[b"current:1"]).is_err());
     assert!(request(&mut s, "SET", &[b"current:1", b"new"]).is_err());
     assert!(request(&mut s, "GET", &[b"current:2"]).is_err());
 }

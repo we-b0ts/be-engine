@@ -88,6 +88,19 @@ pub(super) fn verify(
     selected: &BTreeSet<String>,
 ) -> Result<Preflight> {
     source::validate_project(root, policy)?;
+    if let Some(global) = &policy.global_json {
+        global.signatures.prepare(root)?;
+        for key in global.signatures.resolved_keys() {
+            for (path, digest) in key.witnesses() {
+                bundle.freeze(path)?;
+                ensure!(
+                    bundle.artifacts[path].sha256 == *digest,
+                    "JWT startup input changed while freezing plan evidence"
+                );
+            }
+            key.ensure_current()?;
+        }
+    }
     let mut result = Preflight::default();
     identities::require_replay(policy, selected, &mut result);
     source::verify(root, state, bundle, policy, selected, &mut result)?;

@@ -8,11 +8,18 @@
 > evidence and lifecycle constraints described here remain mandatory.
 
 For current ordinary fields, prefer [global identity formats](resource-field-contracts.md#automatic-identity-correspondence).
-Declare JSON pointers once globally and explicit MySQL scalar formats only where
-needed. The engine infers correspondence from complete typed Source values;
+Declare JSON pointers once globally, explicit MySQL scalar formats by table
+pattern/column only where needed, and scalar Redis formats by bounded key pattern.
+Redis key declarations need no resource/database selectors; complete JSON uses
+the global map. The engine infers correspondence from complete typed Source values;
 rules do not name identity groups. Native key/template tokens participate in
 the same internal case correspondence. The capture/reference mechanisms below
-remain for additional templates, derivation and stateful behavior.
+remain only for additional typed relationships not covered by the current
+global formats or compact Redis key behavior. Finite initialization dependencies
+use `localcache.requests`; actual process task dependencies use
+`process_dependencies.tasks.<Source-task-name>.requests`, with an explicit host
+for HTTP entries. The remainder of this page documents native/historical
+mechanisms, not the ordinary declaration workflow.
 
 A source-generated name can appear in a uniqueness SELECT, an INSERT's scalar
 and JSON values, and a Redis cache key. One capture binds its recorded value to
@@ -335,7 +342,6 @@ json:
     /item_id: {kind: identity, formats: [uuid]}
     /created_at: {kind: time, formats: [unix_seconds]}
 mysql:
-  database: app
   tables:
     items:
       pattern: items

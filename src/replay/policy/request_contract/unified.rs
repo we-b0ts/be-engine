@@ -63,6 +63,23 @@ impl RequestContracts {
         &mut self,
         compiled: Option<Arc<CompiledPolicy>>,
     ) -> Result<()> {
+        if let Some(global) = compiled
+            .as_ref()
+            .and_then(|policy| policy.global_json.as_ref())
+            && global.signatures.needs_prepare()
+        {
+            let root = match self
+                .input_origin
+                .as_ref()
+                .context("JWT runtime input origin unavailable")?
+            {
+                derived_inputs::InputOrigin::Root(root) => root.clone(),
+                derived_inputs::InputOrigin::Policy(policy) => {
+                    crate::config::resolve_unified_policy_root(policy)?
+                }
+            };
+            global.signatures.prepare(&root)?;
+        }
         self.compiled = compiled;
         Ok(())
     }
@@ -232,6 +249,42 @@ impl RequestContracts {
             return false;
         };
         let guard = super::super::native_projection::NativeScopeGuard::from_rule(&rule.rule);
+        if let Some(host) = &rule.rule.selector.http_host
+            && (protocol != Protocol::Http
+                || crate::replay::normalize_host(host)
+                    != crate::replay::normalize_host(&target.host))
+        {
+            return false;
+        }
+        if rule.rule.selector.resource.is_none()
+            && matches!(
+                rule.rule.effect,
+                crate::policy::NativeEffect::FiniteSharing(
+                    crate::policy::native::FiniteSharingEffect::Http
+                )
+            )
+        {
+            return protocol == Protocol::Http
+                && guard.matches_case(&anchor.method, &anchor.path, anchor.source_body.as_ref());
+        }
+        if rule.rule.selector.resource.is_none()
+            && (matches!(
+                rule.rule.effect,
+                crate::policy::NativeEffect::RedisAppendStream
+                    | crate::policy::NativeEffect::RedisExpiryRefresh(_)
+                    | crate::policy::NativeEffect::RedisReadCommutation(_)
+                    | crate::policy::NativeEffect::RedisSequence(_)
+                    | crate::policy::NativeEffect::FiniteSharing(
+                        crate::policy::native::FiniteSharingEffect::Redis { .. }
+                    )
+            ) || crate::policy::native::is_key_only_read_back(&rule.rule))
+        {
+            return protocol == Protocol::Redis
+                && database
+                    .and_then(crate::policy::Database::index)
+                    .is_some_and(|observed| observed >= 0)
+                && guard.matches_case(&anchor.method, &anchor.path, anchor.source_body.as_ref());
+        }
         guard.matches_case(&anchor.method, &anchor.path, anchor.source_body.as_ref())
             && guard.matches_capture_resource(protocol, target, database, username)
     }

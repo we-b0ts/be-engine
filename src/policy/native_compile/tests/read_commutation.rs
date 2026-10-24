@@ -8,12 +8,7 @@ fn rule() -> Value {
 
 #[test]
 fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
-    for path in [
-        "/match/resource",
-        "/match/resource/database",
-        "/match/key",
-        "/match/operation",
-    ] {
+    for path in ["/match/resource/database", "/match/key", "/match/operation"] {
         let mut rule = rule();
         let (parent, key) = path.rsplit_once('/').unwrap();
         rule.pointer_mut(parent)
@@ -45,6 +40,12 @@ fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
     let mut other = rule();
     other["effect"]["optional"] = json!(true);
     assert!(compile(vec![other]).is_err());
+    let mut discovered = rule();
+    discovered["match"]
+        .as_object_mut()
+        .unwrap()
+        .remove("resource");
+    assert!(compile(vec![discovered]).is_ok());
 }
 
 fn compile(rules: Vec<Value>) -> anyhow::Result<crate::policy::CompiledPolicy> {

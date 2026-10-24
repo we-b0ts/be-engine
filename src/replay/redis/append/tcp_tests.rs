@@ -30,7 +30,21 @@ async fn state_observations_support_merged_batches_over_real_tcp() {
     replay_tcp(false, false, Some(&[b"abcd"])).await;
 }
 
+#[tokio::test]
+async fn key_only_append_and_expiry_rechunk_over_real_tcp() {
+    replay_tcp_scope(false, false, Some(&[b"a", b"b", b"cd"]), true).await;
+}
+
 async fn replay_tcp(reject_first: bool, commute_reads: bool, observation_chunks: Option<&[&[u8]]>) {
+    replay_tcp_scope(reject_first, commute_reads, observation_chunks, false).await;
+}
+
+async fn replay_tcp_scope(
+    reject_first: bool,
+    commute_reads: bool,
+    observation_chunks: Option<&[&[u8]]>,
+    key_only: bool,
+) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let case = root.join(".traffic-e2e/local/artifacts/recordings/run/apis/tasks/case");
@@ -80,6 +94,18 @@ async fn replay_tcp(reject_first: bool, commute_reads: bool, observation_chunks:
     }
     if commute_reads {
         rules.push(crate::replay::redis::read_commutation::tests::rule());
+    }
+    if key_only {
+        for rule in &mut rules {
+            if matches!(
+                rule["effect"]["kind"].as_str(),
+                Some("redis_append_stream" | "redis_expiry_refresh")
+            ) {
+                let selector = rule["match"].as_object_mut().unwrap();
+                selector.remove("resource");
+                selector.remove("api");
+            }
+        }
     }
     std::fs::write(
         root.join(".traffic-e2e/policy.yaml"),

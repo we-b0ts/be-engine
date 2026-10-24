@@ -81,6 +81,10 @@ pub(in crate::replay) fn project_native(
     for compiled in rules {
         let rule = &compiled.rule;
         match &rule.effect {
+            n::NativeEffect::Identity(_) if n::is_key_only_read_back(rule) => {
+                // Key-only read state uses globally declared scalar identities
+                // and the causal write ledger, with no legacy capture model.
+            }
             n::NativeEffect::Identity(effect) => output
                 .document
                 .dynamic_values
@@ -99,8 +103,7 @@ pub(in crate::replay) fn project_native(
             // Native protocol owners consume these typed effects directly.
             n::NativeEffect::RedisAppendStream
             | n::NativeEffect::RedisReadCommutation(_)
-            | n::NativeEffect::RedisExpiryRefresh(_)
-            | n::NativeEffect::HttpClientMetadata(_) => (),
+            | n::NativeEffect::RedisExpiryRefresh(_) => (),
             n::NativeEffect::InputJwt(effect) => input(&mut output, rule, effect)?,
             // The inbound runtime consumes this typed effect directly; no
             // legacy request-rule document represents custom signatures.
@@ -115,11 +118,20 @@ pub(in crate::replay) fn project_native(
 }
 
 fn dependency_rule(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
-    let resource = rule
-        .selector
-        .resource
-        .as_ref()
-        .context("native dependency has no resource")?;
+    let resource = rule.selector.resource.as_ref();
+    let protocol = resource
+        .map(|resource| resource.protocol)
+        .or(match &rule.effect {
+            n::NativeEffect::RedisSequence(_)
+            | n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis { .. }) => {
+                Some(crate::policy::Protocol::Redis)
+            }
+            n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Http) => {
+                Some(crate::policy::Protocol::Http)
+            }
+            _ => None,
+        })
+        .context("native dependency has no resource or protocol owner")?;
     Ok(ReplayDependencyRule {
         id: rule.id.clone(),
         when: condition(rule.when.as_ref()),
@@ -139,15 +151,17 @@ fn dependency_rule(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                 })
             })
             .transpose()?,
-        protocol: match resource.protocol {
+        protocol: match protocol {
             crate::policy::Protocol::Http => DependencyProtocol::Http,
             crate::policy::Protocol::Redis => DependencyProtocol::Redis,
             crate::policy::Protocol::Memcached => DependencyProtocol::Memcached,
             crate::policy::Protocol::Mysql => DependencyProtocol::Mysql,
         },
         target: TargetSelector {
-            host: Some(resource.endpoint.host.clone()),
-            port: Some(resource.endpoint.port),
+            host: resource
+                .map(|resource| resource.endpoint.host.clone())
+                .or_else(|| rule.selector.http_host.clone()),
+            port: resource.map(|resource| resource.endpoint.port),
         },
         mysql: None,
         http: None,

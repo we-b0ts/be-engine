@@ -58,6 +58,8 @@ pub enum CaptureResponseContract {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessOwnedEffect {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_name: Option<String>,
     pub source_revision: String,
     pub selector: ProcessSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]

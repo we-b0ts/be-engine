@@ -111,16 +111,6 @@ pub(crate) fn validate_witness(
     surface: Surface,
     clocks: AnchorClocks,
 ) -> Result<()> {
-    validate_contract_witness(source, target, surface, &[], clocks)
-}
-
-pub(crate) fn validate_contract_witness(
-    source: &[u8],
-    target: &[u8],
-    surface: Surface,
-    native: &[&crate::policy::CompiledNativeRule],
-    clocks: AnchorClocks,
-) -> Result<()> {
     let mut source = parse(source)?;
     let mut target = parse(target)?;
     ensure!(
@@ -146,30 +136,8 @@ pub(crate) fn validate_contract_witness(
         );
         let expected: HeaderSnapshot = serde_json::from_value(source["request_headers"].clone())?;
         let actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
-        let metadata = crate::replay::policy::http_client_metadata::selected_headers(
-            native.iter().copied(),
-            &TargetKey {
-                host: source["endpoint"]["host"]
-                    .as_str()
-                    .context("HTTP Source host missing")?
-                    .into(),
-                port: u16::try_from(
-                    source["endpoint"]["port"]
-                        .as_u64()
-                        .context("HTTP Source port missing")?,
-                )?,
-            },
-            source["method"]
-                .as_str()
-                .context("HTTP Source method missing")?,
-            source["uri"].as_str().context("HTTP Source URI missing")?,
-        );
         ensure!(
-            if metadata.is_empty() {
-                request_headers::native_contract_match(&expected, &actual)
-            } else {
-                request_headers::native_contract_match_with_metadata(&expected, &actual, &metadata)
-            },
+            request_headers::native_contract_match(&expected, &actual),
             "HTTP request native header contract differs"
         );
         ensure!(

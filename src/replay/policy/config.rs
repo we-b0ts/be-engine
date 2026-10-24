@@ -277,6 +277,22 @@ pub(in crate::replay) struct LoadedReplayPolicy {
     pub(in crate::replay) fingerprint: String,
 }
 
+impl LoadedReplayPolicy {
+    pub(in crate::replay) fn prepare_signatures(&self) -> Result<()> {
+        if let Some(global) = self
+            .compiled
+            .as_ref()
+            .and_then(|policy| policy.global_json.as_ref())
+            && global.signatures.needs_prepare()
+        {
+            global
+                .signatures
+                .prepare(&crate::config::resolve_unified_policy_root(&self.path)?)?;
+        }
+        Ok(())
+    }
+}
+
 pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationReport> {
     let loaded = load_replay_policy(path)?;
     let compiled = loaded
@@ -316,7 +332,6 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
                             crate::policy::NativeEffect::Identity(_)
                                 | crate::policy::NativeEffect::RedisSequence(_)
                                 | crate::policy::NativeEffect::HttpRequest(_)
-                                | crate::policy::NativeEffect::HttpClientMetadata(_)
                                 | crate::policy::NativeEffect::MysqlValues(_)
                                 | crate::policy::NativeEffect::FiniteSharing(_)
                         )
@@ -474,8 +489,8 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                     .as_ref()
                     .context("recording_run scope requires HTTP selector")?;
                 crate::replay::http_cross_case::HttpCrossCaseSelector {
-                    host: rule.target.host.clone().unwrap_or_default(),
-                    port: rule.target.port.unwrap_or_default(),
+                    host: rule.target.host.clone(),
+                    port: rule.target.port,
                     method: http.method.clone(),
                     path: http.path.clone(),
                 }
@@ -576,7 +591,7 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                 rule.id
             );
             ensure!(
-                rule.target.host.is_some(),
+                rule.target.host.is_some() || rule.replay_scope == ReplayScope::RecordingRun,
                 "HTTP rule {:?} requires target.host",
                 rule.id
             );

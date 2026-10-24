@@ -79,81 +79,33 @@ fn bounded_string_format_keeps_original_maximum_without_weakening_generic_string
 }
 
 #[test]
-fn jwt_is_a_complete_identity_format_without_signature_claim_or_clock_checks() {
-    let policy = plan(
-        "  /access_token: {kind: identity, formats: [jwt]}\n  /copy: {kind: identity, formats: [jwt]}\n",
-    );
-    let source = crate::request_rules::tests::token(
-        json!({"iat":1000,"exp":1060,"role":"reader"}),
-        "source-key",
-    );
-    // A different signing key and different business claims are deliberately
-    // irrelevant to a whole-token identity correspondence.
-    let target =
-        crate::request_rules::tests::token(json!({"iat":3,"exp":4,"role":"writer"}), "target-key");
-    let before = json!({"access_token":source,"copy":source});
-    let after = json!({"access_token":target,"copy":target});
-    let checked =
-        global::compare_logical(&before, &after, &policy, &[], Default::default()).unwrap();
-    assert!(checked.passed(), "{:?}", checked.differences);
-    assert_eq!(checked.identity_pairs().len(), 1);
-    assert!(checked.time_validations.is_empty());
-    let mut inconsistent = after.clone();
-    inconsistent["copy"] = json!(crate::request_rules::tests::token(
-        json!({"exp":7}),
-        "third-key"
-    ));
-    assert!(
-        !global::compare_logical(&before, &inconsistent, &policy, &[], Default::default())
-            .unwrap()
-            .passed()
-    );
-    assert!(
-        !global::compare_logical(
-            &before,
-            &json!({"access_token":"malformed","copy":"malformed"}),
-            &policy,
-            &[],
-            Default::default()
-        )
-        .unwrap()
-        .passed()
-    );
-    assert!(
-        global::compare_logical(
-            &json!({"access_token":"malformed"}),
-            &json!({"access_token":"malformed"}),
-            &policy,
-            &[],
-            Default::default()
-        )
-        .unwrap()
-        .passed()
-    );
-}
-
-#[test]
 fn jwt_identity_preserves_large_whole_tokens_during_delivery() {
     use crate::value_contract::identities::{
-        IdentityDecision, IdentityDelivery, IdentityStore, PreparedIdentityDelivery,
+        IdentityDecision, IdentityDelivery, IdentityPair, IdentityStore, PreparedIdentityDelivery,
     };
-    let policy = plan("  /access_token: {kind: identity, formats: [jwt]}\n");
-    let source = crate::request_rules::tests::token(json!({"payload":"x".repeat(4096)}), "source");
-    let target =
-        crate::request_rules::tests::token(json!({"different":"y".repeat(4096)}), "target");
+    let source = crate::request_rules::tests::token(
+        json!({"payload":"x".repeat(4096),"iat":1000,"exp":1060}),
+        "key",
+    );
+    let target = crate::request_rules::tests::token(
+        json!({"payload":"x".repeat(4096),"iat":2000,"exp":2060}),
+        "key",
+    );
     assert!(source.len() > 1024);
-    let checked = global::compare_logical(
-        &json!({"access_token":source}),
-        &json!({"access_token":target}),
-        &policy,
-        &[],
-        Default::default(),
-    )
-    .unwrap();
-    assert!(checked.passed());
+    // Delivery receives an already authenticated complete-token pair from its
+    // crypto owner. This internal format is not an authored keyless JWT mode.
     let mut store = IdentityStore::default();
     store
-        .commit(IdentityDecision::prepare("case", checked.identity_pairs()).unwrap())
+        .commit(
+            IdentityDecision::prepare(
+                "case",
+                vec![IdentityPair {
+                    source: json!(source).to_string(),
+                    target: json!(target).to_string(),
+                }],
+            )
+            .unwrap(),
+        )
         .unwrap();
     let value = json!(source);
     let prepared = PreparedIdentityDelivery::prepare(IdentityDelivery {

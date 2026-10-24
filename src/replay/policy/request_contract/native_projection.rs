@@ -12,14 +12,9 @@ pub(in crate::replay::policy) fn sequence(
     rule: &n::NativeRule,
     effect: &n::RedisSequenceEffect,
 ) -> Result<config::RedisRequestSelector> {
-    let resource = rule
-        .selector
-        .resource
-        .as_ref()
-        .context("sequence resource is absent")?;
+    let resource = rule.selector.resource.as_ref();
     let selector = config::RedisRequestSelector {
-        database: resource.database.as_ref().and_then(crate::policy::Database::index)
-            .context("atomic Redis sequence requires an explicit database")?,
+        database: resource.and_then(|resource|resource.database.as_ref()).and_then(crate::policy::Database::index),
         key: super::super::native_projection::key(rule.selector.key.as_ref().context("sequence key is absent")?),
         key_contract: effect.key.as_ref().map(|value| key_contract(&value.contract)),
         commands: effect.commands.iter().map(|command| {

@@ -60,6 +60,19 @@ pub(super) async fn fixture_with_response(
     duration_ms: u64,
     response: Option<(&str, &str)>,
 ) -> Fixture {
+    fixture_with_records(timeout_ms, duration_ms, response, true).await
+}
+
+pub(super) async fn fixture_empty() -> Fixture {
+    fixture_with_records(None, 0, None, false).await
+}
+
+async fn fixture_with_records(
+    timeout_ms: Option<u64>,
+    duration_ms: u64,
+    response: Option<(&str, &str)>,
+    include_dependency: bool,
+) -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("apis");
     let connection = Uuid::new_v4();
@@ -67,7 +80,7 @@ pub(super) async fn fixture_with_response(
         tokio::fs::create_dir_all(root.join(case)).await.unwrap();
         tokio::fs::write(
             root.join(case).join("dependencies.jsonl"),
-            if case == "case-a" {
+            if case == "case-a" && include_dependency {
                 let mut event = dependency(connection, duration_ms);
                 if let Some((kind, raw)) = response {
                     event["response_kind"] = kind.into();

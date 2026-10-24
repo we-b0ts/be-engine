@@ -27,8 +27,6 @@ mod global_formats_transaction;
 mod header_transaction;
 #[path = "transaction_http_body_jwt.rs"]
 mod http_body_jwt_transaction;
-#[path = "transaction_http_client_metadata.rs"]
-mod http_client_metadata_transaction;
 #[path = "transaction_identity_references.rs"]
 mod identity_references_transaction;
 #[path = "transaction_interaction.rs"]

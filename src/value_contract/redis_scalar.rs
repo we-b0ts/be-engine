@@ -145,6 +145,7 @@ pub(crate) fn compare(
 
 pub(crate) fn plan(field: &GlobalField) -> crate::policy::CompiledJsonPolicy {
     crate::policy::CompiledJsonPolicy {
+        signatures: Default::default(),
         fields: std::collections::BTreeMap::from([(String::new(), field.clone())]),
         fingerprint: String::new(),
     }

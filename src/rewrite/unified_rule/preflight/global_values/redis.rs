@@ -140,14 +140,13 @@ fn compare_value(
     target: &[u8],
     context: &CompareContext<'_>,
 ) -> Result<Comparison> {
-    if let Some(database) = event["database"].as_i64()
-        && let Some(field) = context
-            .policy
-            .redis
-            .as_ref()
-            .map(|policy| policy.field(database, before.key))
-            .transpose()?
-            .flatten()
+    if let Some(field) = context
+        .policy
+        .redis
+        .as_ref()
+        .map(|policy| policy.field(before.key))
+        .transpose()?
+        .flatten()
         && crate::value_contract::redis_scalar::decode_field(source, field)?.is_some()
     {
         let mut comparison = compare_scalar(event, before, after, source, target, field, context)?;

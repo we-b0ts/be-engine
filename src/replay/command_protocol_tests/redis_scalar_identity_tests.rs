@@ -69,7 +69,6 @@ async fn scalar_formats_share_complete_values_with_script_argv_without_special_l
         &policy,
         r#"format: traffic-policy/v2
 redis:
-  database: 0
   keys:
     'lock:item:*': {kind: identity, formats: [{hex: 32}]}
 "#,

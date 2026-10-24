@@ -242,3 +242,57 @@ async fn only_deadline_completion_waits_for_the_source_stop_clock() {
         );
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn confirmed_target_stop_skips_attribution_idle_for_plain_and_interaction_cases() {
+    for interaction in [false, true] {
+        let fixture = super::tests::fixture_empty().await;
+        source_request(&fixture.root).await;
+        if interaction {
+            let path = fixture.root.join("case-a/request.json");
+            let mut request: serde_json::Value =
+                serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+            request["interaction"] =
+                serde_json::to_value(crate::interaction::model::InputTranscript::new(
+                    crate::interaction::model::Protocol::Sse,
+                    crate::interaction::policy::InteractionPolicy::default(),
+                ))
+                .unwrap();
+            tokio::fs::write(path, request.to_string()).await.unwrap();
+        }
+        tokio::fs::write(
+            fixture.root.join("case-a/async-api-observation.json"),
+            json!({"version":1,"complete":true,"inventory_complete":true,"end_reason":"resource",
+                "request_timeout_ms":1000,"source_stop_required":true,"source_stop_after_ms":0,
+                "cleanup_refs":[],"completed_refs":[]})
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let state = fixture.runtime.state.clone();
+        state.lock().await.case_dependency_post_response_window = Duration::from_secs(60);
+        assert_eq!(
+            begin_case(&command("begin"), state.clone()).await["ok"],
+            true
+        );
+        assert_eq!(
+            end_case(&command("end_stopped"), state.clone()).await["ok"],
+            false,
+            "the idle shortcut requires prior stop preparation"
+        );
+        assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
+        prepare_target_stop(&state, "case-a").await.unwrap();
+        let started = Instant::now();
+        let response = end_case(&command("end_stopped"), state.clone()).await;
+        assert_eq!(
+            response["ok"], true,
+            "interaction={interaction}: {response}"
+        );
+        assert_eq!(
+            started.elapsed(),
+            Duration::ZERO,
+            "confirmed stop cannot add an attribution window or exhaust the fixed cleanup budget"
+        );
+        assert_eq!(state.lock().await.active_case_id, None);
+    }
+}

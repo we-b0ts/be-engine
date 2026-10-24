@@ -269,6 +269,7 @@ fn selector(value: &MatchSpec) -> NativeMatch {
     NativeMatch {
         api: value.api.clone(),
         resource: value.resource.clone(),
+        http_host: None,
         operation: value.operation.clone(),
         key: value.key.as_ref().map(key),
         path: value.path.clone(),

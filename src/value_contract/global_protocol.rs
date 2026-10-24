@@ -2,6 +2,8 @@
 use super::json::{LeafContext, LeafObservations, VerifiedField};
 use crate::policy::{CompiledJsonPolicy, GLOBAL_JSON_ID, GlobalField, GlobalUrlFormat};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+pub(crate) mod jwt;
+pub(crate) mod url;
 type Check<'a> = Box<dyn Fn(LeafContext<'_>) -> Result<LeafObservations, String> + 'a>;
 pub(crate) struct ProtocolChecks<'a> {
     checks: Vec<(String, Check<'a>)>,
@@ -24,6 +26,15 @@ pub(crate) fn checks<'a>(
 ) -> anyhow::Result<ProtocolChecks<'a>> {
     let mut checks: Vec<(String, Check<'a>)> = Vec::new();
     for (pattern, field) in &plan.fields {
+        if let GlobalField::Jwt { signature } = field {
+            for pointer in super::delivery::select(pattern, source)? {
+                checks.push((
+                    pointer,
+                    Box::new(move |context| jwt::compare(context, plan, signature)),
+                ));
+            }
+            continue;
+        }
         let GlobalField::Url { formats } = field else {
             continue;
         };
@@ -37,11 +48,14 @@ pub(crate) fn checks<'a>(
             checks.push((
                 pointer,
                 Box::new(move |context| {
-                    if context.source == context.target {
+                    if context.source == context.target
+                        && formats.first() != Some(&GlobalUrlFormat::Url)
+                    {
                         return Ok(LeafObservations::default());
                     }
                     match formats.first() {
                         Some(GlobalUrlFormat::AwsSigv4) => aws_sigv4(context),
+                        Some(GlobalUrlFormat::Url) => url::compare(context, plan),
                         None => Err("URL format unavailable".into()),
                     }
                 }),
@@ -80,6 +94,26 @@ pub(crate) fn is_jwt(value: &serde_json::Value) -> bool {
         && claims.is_object()
         && decode(parts[2])
             .is_some_and(|signature| !signature.is_empty() || header["alg"] == "none")
+}
+
+/// Recognition is intentionally broader than authentication: duplicate JSON
+/// members or a disallowed algorithm cannot turn a compact JWS into an exact
+/// equality fallback. The authenticated parser still rejects those documents.
+pub(crate) fn looks_like_jwt(value: &serde_json::Value) -> bool {
+    let Some(token) = value.as_str().filter(|token| token.len() <= 64 * 1024) else {
+        return false;
+    };
+    let parts = token.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return false;
+    }
+    parts.iter().take(2).all(|part| {
+        URL_SAFE_NO_PAD
+            .decode(part)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .is_some_and(|value| value.is_object())
+    })
 }
 
 fn aws_sigv4(context: LeafContext<'_>) -> Result<LeafObservations, String> {

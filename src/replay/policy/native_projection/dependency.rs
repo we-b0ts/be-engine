@@ -8,10 +8,7 @@ use crate::policy::{TimeAnchor, TimeRelation, TimestampFormat};
 pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
     let mut projected = dependency_rule(rule)?;
     let selector = &rule.selector;
-    let resource = selector
-        .resource
-        .as_ref()
-        .context("dependency resource is absent")?;
+    let resource = selector.resource.as_ref();
     match &rule.effect {
         n::NativeEffect::RedisSequence(effect) => {
             projected.redis = Some(r::RedisSelector::Requests(
@@ -59,6 +56,7 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
             });
         }
         n::NativeEffect::MysqlValues(effect) => {
+            let resource = resource.context("MySQL dependency resource is absent")?;
             let sql_values = effect
                 .values
                 .iter()
@@ -134,10 +132,8 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                                 .clone()
                                 .context("shared Redis command is absent")?,
                             database: resource
-                                .database
-                                .as_ref()
-                                .and_then(crate::policy::Database::index)
-                                .context("shared Redis database is absent")?,
+                                .and_then(|resource| resource.database.as_ref())
+                                .and_then(crate::policy::Database::index),
                             key: key(selector
                                 .key
                                 .as_ref()

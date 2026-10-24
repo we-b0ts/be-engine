@@ -299,16 +299,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                 add(S::ApiResponse, L::Body, location, collection);
             }
         }
-        NativeEffect::HttpClientMetadata(effect) => {
-            for header in &effect.headers {
-                add(
-                    S::DependencyRequest,
-                    L::Header(header.clone()),
-                    OwnedLocation::Scalar,
-                    false,
-                );
-            }
-        }
         NativeEffect::HttpRequest(effect) => {
             for parameter in effect.query.keys() {
                 add(

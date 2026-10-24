@@ -9,18 +9,12 @@ pub const GLOBAL_REDIS_ID: &str = "global.redis";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RedisPolicy {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub database: Option<i64>,
     #[serde(default, deserialize_with = "super::strict_map::unique_map")]
     pub keys: BTreeMap<String, GlobalField>,
 }
 
 impl RedisPolicy {
     pub(crate) fn validate(&self) -> Result<()> {
-        ensure!(
-            self.database.is_none_or(|value| value >= 0),
-            "Redis database must be nonnegative"
-        );
         ensure!(self.keys.len() <= 4096, "redis.keys exceeds 4096 entries");
         for (pattern, field) in &self.keys {
             ensure!(
@@ -52,10 +46,7 @@ impl RedisPolicy {
         Ok(())
     }
 
-    pub(crate) fn field(&self, database: i64, key: &[u8]) -> Result<Option<&GlobalField>> {
-        if self.database.is_some_and(|expected| expected != database) {
-            return Ok(None);
-        }
+    pub(crate) fn field(&self, key: &[u8]) -> Result<Option<&GlobalField>> {
         let mut result = None;
         for (pattern, field) in &self.keys {
             if matches(pattern, key) {
@@ -97,15 +88,14 @@ mod tests {
 
     #[test]
     fn scalar_key_patterns_are_physical_bounded_and_unambiguous() {
-        let policy: RedisPolicy = serde_yaml::from_str(
-            "database: 0\nkeys:\n  'clock:*': {kind: time, formats: [unix_seconds]}\n",
-        )
-        .unwrap();
+        let policy: RedisPolicy =
+            serde_yaml::from_str("keys:\n  'clock:*': {kind: time, formats: [unix_seconds]}\n")
+                .unwrap();
         policy.validate().unwrap();
-        assert!(policy.field(0, b"clock:record").unwrap().is_some());
-        assert!(policy.field(1, b"clock:record").unwrap().is_none());
-        assert!(policy.field(0, b"other").unwrap().is_none());
+        assert!(policy.field(b"clock:record").unwrap().is_some());
+        assert!(policy.field(b"other").unwrap().is_none());
         for invalid in [
+            "database: 0\nkeys: {}",
             "keys: {'a*b*c': {kind: time, formats: [unix_seconds]}}",
             "keys: {'clock:*': {kind: time, formats: [unix_seconds]}, 'clock:item': {kind: identity, formats: [uuid]}}",
             "keys: {'clock': {kind: unordered}}",

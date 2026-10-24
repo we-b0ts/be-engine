@@ -1,13 +1,13 @@
 //! Closed contracts for stateful identities, signatures and acquisition effects.
 //! The compiler retains these as typed effects; protocol owners never reparse YAML.
-mod http_client_metadata;
 mod input;
+mod read_back;
 mod response;
 mod source;
 mod stateful;
 
-pub use http_client_metadata::*;
 pub use input::*;
+pub use read_back::is_key_only_read_back;
 pub use response::*;
 pub use source::*;
 pub use stateful::*;
@@ -117,6 +117,8 @@ pub struct NativeMatch {
     pub api: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<Resource>,
+    #[serde(default, rename = "host", skip_serializing_if = "Option::is_none")]
+    pub http_host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -174,7 +176,6 @@ pub enum NativeEffect {
     ResponseGenerated(GeneratedEffect),
     ResponseBody(BodyEffect),
     HttpRequest(HttpRequestEffect),
-    HttpClientMetadata(HttpClientMetadataEffect),
     MysqlValues(MysqlValuesEffect),
     InputJwt(InputJwtEffect),
     InputSignedTimestamp(InputSignedTimestampEffect),

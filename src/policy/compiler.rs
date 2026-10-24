@@ -17,6 +17,7 @@ pub struct CompiledPolicy {
     pub redis: Option<RedisPolicy>,
     pub http: Option<HttpPolicy>,
     pub async_api: BTreeMap<String, AsyncApiRule>,
+    pub signatures: BTreeMap<String, SignatureDefinition>,
     pub rules: Vec<CompiledRule>,
     pub native: Vec<CompiledNativeRule>,
     pub fingerprints: PolicyFingerprints,
@@ -94,10 +95,11 @@ fn compile_expanded(
         expanded_rules.len() <= 4096,
         "policy contains more than 4096 rules"
     );
+    super::signatures::validate(&document.signatures)?;
     let global_json = document
         .json
         .as_ref()
-        .map(JsonPolicy::compile)
+        .map(|json| json.compile_with_signatures(&document.signatures))
         .transpose()?;
     if let Some(mysql) = &document.mysql {
         mysql.validate()?;
@@ -110,11 +112,7 @@ fn compile_expanded(
         .as_ref()
         .map(HttpPolicy::compile)
         .transpose()?;
-    let async_api = compile_async_api(
-        &document.async_api.clone().unwrap_or_default(),
-        document.mysql.as_ref(),
-        document.redis.as_ref(),
-    )?;
+    let async_api = compile_async_api(&document.async_api.clone().unwrap_or_default())?;
     let mut ids = BTreeSet::new();
     let mut rules = Vec::with_capacity(expanded_rules.len());
     let mut native = vec![];
@@ -171,6 +169,7 @@ fn compile_expanded(
         redis: document.redis.clone(),
         http,
         async_api: async_api.clone(),
+        signatures: document.signatures.clone(),
         fingerprints: PolicyFingerprints {
             full: digest(
                 "traffic-policy/full/v2",
@@ -181,6 +180,7 @@ fn compile_expanded(
                     &document.redis,
                     &document.http,
                     &document.async_api,
+                    &document.signatures,
                 ),
             )?,
             runtime: digest(
@@ -192,6 +192,7 @@ fn compile_expanded(
                     &document.redis,
                     &document.http,
                     &async_api,
+                    &document.signatures,
                     native
                         .iter()
                         .filter(|rule| {

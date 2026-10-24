@@ -116,21 +116,21 @@ fn matches(policy: &CompiledPolicy, ids: &BTreeSet<String>, event: &Value) -> Re
             }
             continue;
         }
-        if matches!(
-            rule.rule.effect,
-            NativeEffect::HttpRequest(_) | NativeEffect::HttpClientMetadata(_)
-        ) && (rule
-            .rule
-            .selector
-            .operation
-            .as_deref()
-            .is_some_and(|method| event["method"].as_str() != Some(method))
-            || rule.rule.selector.path.as_deref().is_some_and(|path| {
-                !event["uri"]
-                    .as_str()
-                    .and_then(|raw| raw.parse::<hyper::Uri>().ok())
-                    .is_some_and(|uri| crate::path_pattern::matches_path_pattern(path, uri.path()))
-            }))
+        if matches!(rule.rule.effect, NativeEffect::HttpRequest(_))
+            && (rule
+                .rule
+                .selector
+                .operation
+                .as_deref()
+                .is_some_and(|method| event["method"].as_str() != Some(method))
+                || rule.rule.selector.path.as_deref().is_some_and(|path| {
+                    !event["uri"]
+                        .as_str()
+                        .and_then(|raw| raw.parse::<hyper::Uri>().ok())
+                        .is_some_and(|uri| {
+                            crate::path_pattern::matches_path_pattern(path, uri.path())
+                        })
+                }))
         {
             continue;
         }

@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use super::*;
 mod append;
 mod conditional_identity;
-mod http_client_metadata;
 mod http_request;
 mod identity_delivery;
 mod mysql_json;
@@ -319,5 +318,34 @@ fn domains_keep_capture_and_ownership_separate_from_payload_comparison() {
     assert_eq!(compile_native(&rule).unwrap().domain, NativeDomain::Capture);
     assert!(native_field_claims(&rule).is_empty());
     rule.selector.api = Some("GET /tasks/*".into());
+    assert!(compile_native(&rule).is_err());
+}
+
+#[test]
+fn shared_http_host_is_literal_and_never_assumes_a_port() {
+    let mut rule = path_rule();
+    rule.selector = NativeMatch {
+        http_host: Some("metadata.example.test".into()),
+        operation: Some("GET".into()),
+        path: Some("/metadata".into()),
+        ..Default::default()
+    };
+    rule.effect = NativeEffect::FiniteSharing(FiniteSharingEffect::Http);
+    compile_native(&rule).unwrap();
+    for invalid in [
+        "",
+        "*.example.test",
+        "https://example.test",
+        "example.test:443",
+        "example.test/path",
+        "two hosts",
+    ] {
+        rule.selector.http_host = Some(invalid.into());
+        assert!(compile_native(&rule).is_err(), "{invalid}");
+    }
+    rule.selector.http_host = Some("metadata.example.test".into());
+    rule.selector.key = Some(NativeKeySelector::Exact {
+        value: "foreign".into(),
+    });
     assert!(compile_native(&rule).is_err());
 }

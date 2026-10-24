@@ -135,7 +135,6 @@ fn dependency_effect(effect: &NativeEffect) -> bool {
             | NativeEffect::RedisExpiryRefresh(_)
             | NativeEffect::RedisSequence(_)
             | NativeEffect::HttpRequest(_)
-            | NativeEffect::HttpClientMetadata(_)
             | NativeEffect::MysqlValues(_)
             | NativeEffect::InputJwt(_)
             | NativeEffect::InputSignedTimestamp(_)

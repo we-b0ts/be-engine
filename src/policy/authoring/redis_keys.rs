@@ -10,10 +10,11 @@ use crate::policy::native::{
     NativeKeySelector, RedisExpiryRefreshEffect, RedisReadCommutationEffect,
 };
 use crate::policy::{
-    Database, GlobalField, NativeEffect, NativeMatch, NativeRule, PolicyRule, Proof, Protocol,
-    Resource, ResourceDeclaration,
+    GlobalField, NativeEffect, NativeMatch, NativeRule, PolicyRule, Proof, Resource,
 };
 
+mod commands;
+mod key_format;
 mod stateful;
 
 const ID_PREFIX: &str = "redis.key.";
@@ -21,7 +22,6 @@ const ID_PREFIX: &str = "redis.key.";
 #[derive(Debug)]
 pub(super) struct Entry {
     scalar: Option<GlobalField>,
-    resource: Option<String>,
     behaviors: Vec<Behavior>,
     proof: Option<Proof>,
 }
@@ -32,7 +32,10 @@ enum Behavior {
     ReadCommutation,
     ExpiryRefresh,
     ReadBack,
-    FiniteSharing(stateful::Sharing),
+    Commands {
+        key_format: Option<key_format::KeyFormat>,
+        declarations: commands::Commands,
+    },
 }
 
 impl Behavior {
@@ -42,19 +45,24 @@ impl Behavior {
             Self::ReadCommutation => "read_commutation",
             Self::ExpiryRefresh => "expiry_refresh",
             Self::ReadBack => "read_back",
-            Self::FiniteSharing(_) => "finite_sharing",
+            Self::Commands { .. } => "commands",
         }
     }
-    fn operation(&self) -> &str {
+    fn operation(&self) -> Option<&str> {
         match self {
-            Self::Append => "APPEND",
-            Self::ReadCommutation => "GET",
-            Self::ExpiryRefresh => "EXPIRE",
-            Self::ReadBack => "SET",
-            Self::FiniteSharing(value) => &value.operation,
+            Self::Append => Some("APPEND"),
+            Self::ReadCommutation => Some("GET"),
+            Self::ExpiryRefresh => Some("EXPIRE"),
+            Self::ReadBack => Some("SET"),
+            Self::Commands { .. } => None,
         }
     }
-    fn effect(&self, resource: &Resource, proof: Option<&Proof>) -> Result<NativeEffect> {
+    fn effect(
+        &self,
+        pattern: &str,
+        resource: Option<&Resource>,
+        proof: Option<&Proof>,
+    ) -> Result<NativeEffect> {
         Ok(match self {
             Self::Append => NativeEffect::RedisAppendStream,
             Self::ReadCommutation => {
@@ -62,7 +70,25 @@ impl Behavior {
             }
             Self::ExpiryRefresh => NativeEffect::RedisExpiryRefresh(RedisExpiryRefreshEffect {}),
             Self::ReadBack => stateful::lower_read_back(resource, proof),
-            Self::FiniteSharing(value) => stateful::lower_sharing(value)?.1,
+            Self::Commands {
+                key_format,
+                declarations,
+            } => {
+                use crate::policy::native::{Proven, RedisSequenceEffect};
+                NativeEffect::RedisSequence(RedisSequenceEffect {
+                    key: key_format
+                        .as_ref()
+                        .map(|format| {
+                            Ok::<_, anyhow::Error>(Proven {
+                                contract: format.lower(pattern)?,
+                                proof: proof.cloned(),
+                            })
+                        })
+                        .transpose()?,
+                    commands: declarations.lower(proof)?,
+                    read_back: vec![],
+                })
+            }
         })
     }
 }
@@ -72,10 +98,6 @@ impl<'de> Deserialize<'de> for Entry {
         let mut fields: BTreeMap<String, Value> =
             crate::policy::strict_map::unique_map(deserializer)?;
         let result = (|| -> Result<Self> {
-            let resource = fields
-                .remove("resource")
-                .map(serde_yaml::from_value)
-                .transpose()?;
             let proof = fields
                 .remove("proof")
                 .map(serde_yaml::from_value)
@@ -96,10 +118,23 @@ impl<'de> Deserialize<'de> for Entry {
                     behaviors.push(behavior);
                 }
             }
-            if let Some(value) = fields.remove("finite_sharing") {
-                let mut sharing = serde_yaml::from_value::<stateful::Sharing>(value)?;
-                sharing.operation = stateful::lower_sharing(&sharing)?.0;
-                behaviors.push(Behavior::FiniteSharing(sharing));
+            let key_format = fields
+                .remove("key_format")
+                .map(serde_yaml::from_value::<key_format::KeyFormat>)
+                .transpose()?;
+            let commands = fields
+                .remove("commands")
+                .map(serde_yaml::from_value::<commands::Commands>)
+                .transpose()?;
+            ensure!(
+                key_format.is_none() || commands.is_some(),
+                "Redis key_format requires its command declarations"
+            );
+            if let Some(declarations) = commands {
+                behaviors.push(Behavior::Commands {
+                    key_format,
+                    declarations,
+                });
             }
             let scalar = if fields.is_empty() {
                 None
@@ -120,20 +155,11 @@ impl<'de> Deserialize<'de> for Entry {
                 "Redis key declaration is empty"
             );
             ensure!(
-                resource.is_none() || !behaviors.is_empty(),
-                "Redis resource selects key behavior; scalar formats use the global key namespace"
-            );
-            ensure!(
-                behaviors.is_empty() || resource.is_some(),
-                "Redis key behavior requires a named resource"
-            );
-            ensure!(
                 proof.is_none() || !behaviors.is_empty(),
                 "Redis scalar declarations do not accept behavior proof"
             );
             Ok(Self {
                 scalar,
-                resource,
                 behaviors,
                 proof,
             })
@@ -169,23 +195,23 @@ fn selector(pattern: &str) -> Result<NativeKeySelector> {
 
 fn lower(
     pattern: &str,
-    resource: Resource,
+    resource: Option<Resource>,
     behavior: &Behavior,
     proof: Option<Proof>,
 ) -> Result<NativeRule> {
-    let semantic_effect = behavior.effect(&resource, None)?;
+    let semantic_effect = behavior.effect(pattern, resource.as_ref(), None)?;
     let digest = Sha256::digest(serde_json::to_vec(&(
         &resource,
         pattern,
         behavior.name(),
         semantic_effect,
     ))?);
-    let effect = behavior.effect(&resource, proof.as_ref())?;
+    let effect = behavior.effect(pattern, resource.as_ref(), proof.as_ref())?;
     Ok(NativeRule {
         id: format!("{ID_PREFIX}{}.{digest:x}", behavior.name()),
         selector: NativeMatch {
-            resource: Some(resource),
-            operation: Some(behavior.operation().into()),
+            resource,
+            operation: behavior.operation().map(str::to_owned),
             key: Some(selector(pattern)?),
             ..Default::default()
         },
@@ -197,44 +223,16 @@ fn lower(
 
 pub(super) fn expand(
     entries: BTreeMap<String, Entry>,
-    database: Option<i64>,
-    resources: &BTreeMap<String, ResourceDeclaration>,
 ) -> Result<(BTreeMap<String, GlobalField>, Vec<Value>)> {
     ensure!(entries.len() <= 4096, "redis.keys exceeds 4096 entries");
     let mut scalars = BTreeMap::new();
     let mut rules = Vec::new();
     for (pattern, entry) in entries {
         if !entry.behaviors.is_empty() {
-            let name = entry
-                .resource
-                .as_ref()
-                .expect("validated behavior resource");
-            let mut resource = resources
-                .get(name)
-                .with_context(|| format!("unknown Redis key resource {name:?}"))?
-                .resource
-                .clone();
-            ensure!(
-                resource.protocol == Protocol::Redis,
-                "Redis key behavior requires a Redis resource"
-            );
-            if resource.database.is_none() {
-                resource.database = database.map(Database::Index);
-            }
-            ensure!(
-                matches!(resource.database, Some(Database::Index(0..))),
-                "Redis key behavior requires an explicit numeric database"
-            );
-            if entry.scalar.is_some() {
-                ensure!(
-                    database.is_none_or(|db| resource.database == Some(Database::Index(db))),
-                    "combined Redis scalar and behavior declarations must select the same database"
-                );
-            }
             for behavior in entry.behaviors {
                 rules.push(serde_yaml::to_value(lower(
                     &pattern,
-                    resource.clone(),
+                    None,
                     &behavior,
                     entry.proof.clone(),
                 )?)?);
@@ -253,59 +251,49 @@ pub(super) fn generated(rule: &PolicyRule) -> bool {
 
 /// Only the exact generated shape folds back; arbitrary native rules retain
 /// their declared selector, conditions and Source-proof boundary.
-pub(super) fn compact(
-    rule: &PolicyRule,
-    resources: &BTreeMap<String, ResourceDeclaration>,
-    root: &mut Mapping,
-) -> Result<bool> {
+pub(super) fn compact(rule: &PolicyRule, root: &mut Mapping) -> Result<bool> {
     let Some(native) = rule.as_native().filter(|_| generated(rule)) else {
         return Ok(false);
     };
-    let Some(resource) = &native.selector.resource else {
+    if native.selector.resource.is_some() {
         return Ok(false);
-    };
-    let behavior = match &native.effect {
-        NativeEffect::RedisAppendStream => Behavior::Append,
-        NativeEffect::RedisReadCommutation(_) => Behavior::ReadCommutation,
-        NativeEffect::RedisExpiryRefresh(_) => Behavior::ExpiryRefresh,
-        effect if stateful::is_read_back(effect, resource) => Behavior::ReadBack,
-        effect => {
-            if let Some(sharing) = stateful::sharing(
-                effect,
-                native.selector.operation.as_deref().unwrap_or_default(),
-            ) {
-                Behavior::FiniteSharing(sharing)
-            } else {
-                return Ok(false);
-            }
-        }
-    };
+    }
+    let resource = None;
     let pattern = match &native.selector.key {
         Some(NativeKeySelector::Exact { value }) => value.clone(),
         Some(NativeKeySelector::Affix { prefix, suffix }) => format!("{prefix}*{suffix}"),
         _ => return Ok(false),
     };
+    let behavior = match &native.effect {
+        NativeEffect::RedisAppendStream => Behavior::Append,
+        NativeEffect::RedisReadCommutation(_) => Behavior::ReadCommutation,
+        NativeEffect::RedisExpiryRefresh(_) => Behavior::ExpiryRefresh,
+        effect if stateful::is_read_back(effect, None) => Behavior::ReadBack,
+        NativeEffect::RedisSequence(effect) if effect.read_back.is_empty() => {
+            let key_format = if let Some(key) = &effect.key {
+                let Some(format) = key_format::reverse(&pattern, &key.contract)? else {
+                    return Ok(false);
+                };
+                Some(format)
+            } else {
+                None
+            };
+            let Some(declarations) = commands::Commands::reverse(&effect.commands)? else {
+                return Ok(false);
+            };
+            Behavior::Commands {
+                key_format,
+                declarations,
+            }
+        }
+        _ => return Ok(false),
+    };
     let mut semantic = native.clone();
     semantic.proof = None;
-    semantic.effect = behavior.effect(resource, None)?;
-    if semantic != lower(&pattern, resource.clone(), &behavior, None)? {
+    semantic.effect = behavior.effect(&pattern, resource, None)?;
+    if semantic != lower(&pattern, resource.cloned(), &behavior, None)? {
         return Ok(false);
     }
-    let database = root
-        .get("redis")
-        .and_then(|redis| redis.get("database"))
-        .and_then(Value::as_i64);
-    let name = resources
-        .iter()
-        .find(|(_, entry)| {
-            let mut candidate = entry.resource.clone();
-            if candidate.database.is_none() {
-                candidate.database = database.map(Database::Index);
-            }
-            candidate == *resource
-        })
-        .map(|(name, _)| name)
-        .context("generated Redis key behavior lost its named resource")?;
     let redis = root
         .entry("redis".into())
         .or_insert_with(|| Value::Mapping(Mapping::new()))
@@ -321,17 +309,22 @@ pub(super) fn compact(
         .or_insert_with(|| Value::Mapping(Mapping::new()))
         .as_mapping_mut()
         .context("Redis key declaration requires a mapping")?;
-    ensure!(
-        entry
-            .get("resource")
-            .is_none_or(|prior| prior.as_str() == Some(name)),
-        "one Redis key declaration cannot combine different resource scopes"
-    );
-    entry.insert("resource".into(), name.clone().into());
-    let value = if let Behavior::FiniteSharing(sharing) = &behavior {
-        serde_yaml::to_value(sharing)?
-    } else {
-        Value::Bool(true)
+    let value = match &behavior {
+        Behavior::Commands {
+            key_format,
+            declarations,
+        } => {
+            if let Some(format) = key_format {
+                ensure!(
+                    entry
+                        .insert("key_format".into(), serde_yaml::to_value(format)?)
+                        .is_none(),
+                    "duplicate Redis key format owner"
+                );
+            }
+            serde_yaml::to_value(declarations)?
+        }
+        _ => Value::Bool(true),
     };
     ensure!(
         entry.insert(behavior.name().into(), value).is_none(),

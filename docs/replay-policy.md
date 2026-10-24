@@ -15,26 +15,46 @@ An empty policy is:
 
 ```yaml
 format: traffic-policy/v2
-resources: {}
-responses: {}
 rules: []
 ```
 
-Declare stable physical data semantics once under `resources` and API output
-fields under `responses`. Refer to named resources and reuse field strategies
-through `field_ref` in contextual rules. See
-[resource-owned field contracts](resource-field-contracts.md) for the schema,
-SQL-independent selection, Redis carriers, conditions and clock relationships.
-Declarations lower to the same `api.response`, `dependency.request` and
-`dependency.response` contracts; native effects retain their explicit identity,
-input, acquisition, ownership or sharing owner.
-Keep `fact` within 200 UTF-8 bytes and `source` within three file references;
-use a list for multiple files. Capture-path rules come first and may omit
-`source`. A common document-level `source_revision` is emitted only once.
-The policy is not first-match-wins. Unknown fields, unsupported combinations,
-duplicate IDs and conflicting field ownership are rejected before execution.
-For explicit Redis GET/LRANGE delivery from matched Target writes, update the
-existing native write rule as described in [Redis read-back](redis-read-back.md).
+Declare decoded content once under `json.fields`. The same pointers cover
+HTTP requests/responses, SSE data and complete JSON values in MySQL, Redis and
+other supported carriers. Unknown encodings compare exact bytes. Native SQL
+temporal metadata supplies ordinary time semantics when `mysql` is enabled;
+`mysql.tables` adds remaining scalar formats by table pattern and column.
+`redis.keys` combines scalar formats, bounded key formats and ordered command
+or state declarations, without resource/database aliases. `http.headers`
+declares scalar header formats with strict presence, count and order. No
+header-absence waiver exists.
+
+The engine preserves complete typed identity correspondence internally: equal
+Source values require equal Target values, including across carriers. There is
+no authored binding, `field_ref`, null/exact fallback, time relation or clock
+group for ordinary formats. See [global field formats](resource-field-contracts.md).
+
+Dependency lifetimes remain separate from content. `localcache.requests`
+identifies finite process initialization reads; HTTP entries require a host.
+`process_dependencies.tasks.<actual-Source-task-name>.requests` groups real
+process work across protocols and requires root `source_revision`. `async_api`
+records an asynchronous API as one complete finite case through its end resource,
+dependency failure or engine deadline. These are not payload exemptions.
+
+Native rules remain for uncovered compound formats, typed PB schemas,
+cryptographic transformations and additional causal checks. Multipart, DOCX,
+WSS path derivation and AES envelopes retain their existing typed contracts.
+Named `signatures` profiles centralize algorithms and private startup key
+references. Global `kind: jwt` verifies HMAC signatures and claims across carriers;
+`api` positions declare actual input re-signing and additional response nonce/expiry
+checks through the existing typed owners. The old authored identity
+`formats: [jwt]` syntax is rejected; use `kind: jwt`. See
+[signature profiles](signature-profiles.md).
+
+Runtime policy contains no `proof` metadata. Annotated plan proposals carry
+independent Source evidence; facts are bounded to 200 UTF-8 bytes and sources to
+three file references. Root `source_revision` is an immutable Source identity.
+Unknown fields, duplicate declarations, unsupported combinations and conflicting
+ownership reject before execution. The policy is not first-match-wins.
 
 See [unified rule contracts](unified-rule-contracts.md) for all three surfaces,
 JSON/PB reuse, native examples, module boundaries, precision, evidence and plan
@@ -58,12 +78,12 @@ available. Continuation commands are bound to the active issue and reject stale
 queries. Empty candidates do not establish a missing engine capability.
 
 Bounded dependency operations also expose supported APPEND, finite nil-read
-commutation, expiry-refresh and Redis/MySQL read-back mechanisms with their
+commutation, expiry-refresh and Redis state/read-back mechanisms with their
 Source proof requirements. These hints identify capabilities to investigate;
 they never authorize changed values, ordering or call counts.
 
 The coordinator proposes a rule, a rule list or an authored v2 document containing
-resource/response declarations and contextual rules:
+global format/lifetime declarations and any additional native rules:
 
 ```text
 backend-rewrite rule plan --file rule.yaml --evidence <current-evidence-id>
@@ -97,9 +117,9 @@ replacement rules and whole-policy diff. Unselected rules remain unchanged.
 Publication reuses the original policy compare-and-swap, frozen witnesses,
 durable write intent and recovery, and requires fresh genuine Replay. A change
 proposal is not a persisted policy format. Ordinary rule documents remain
-additive; omitting an old rule or declaration never deletes it. Declaration
-amendments preserve existing resource identity, proofs and fields; unsupported
-replacement or deletion rejects rather than silently broadening permission.
+additive; omitting an old rule or declaration never deletes it. Supplied global format sections replace their complete section atomically;
+omission preserves the existing section. Native rule replacement stays
+explicit and evidence-bound.
 Capture HTTP consolidation must preserve the exact existing path union, Source
 revision and selectors. Breeze capture and ordered Source-response rewrites
 cannot be deleted or replaced through this value-rule transaction. Prospective

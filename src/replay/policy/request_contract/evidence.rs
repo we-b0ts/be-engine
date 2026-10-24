@@ -251,8 +251,8 @@ pub(in crate::replay::policy) fn verify_capture(
                 .target
                 .host
                 .as_ref()
-                .is_none_or(|host| !host.eq_ignore_ascii_case(&candidate.host))
-            || rule.target.port != Some(candidate.port)
+                .is_some_and(|host| !host.eq_ignore_ascii_case(&candidate.host))
+            || rule.target.port.is_some_and(|port| port != candidate.port)
         {
             continue;
         }
@@ -276,18 +276,19 @@ pub(in crate::replay::policy) fn verify_capture(
             Ok(bytes)
         };
         let request: Value = serde_json::from_slice(&read(dir.join("request.json"), witnesses)?)?;
-        let Some(scope) = &rule.case_selector else {
-            continue;
-        };
         if rule
             .when
             .as_ref()
             .is_some_and(|condition| !condition.matches_request(&request))
-            || request["method"] != scope.method
-            || !super::super::pattern::path_pattern_matches(
-                &scope.path,
-                &super::super::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
-            )
+            || rule.case_selector.as_ref().is_some_and(|scope| {
+                request["method"] != scope.method
+                    || !super::super::pattern::path_pattern_matches(
+                        &scope.path,
+                        &super::super::pattern::uri_path(
+                            request["uri"].as_str().unwrap_or_default(),
+                        ),
+                    )
+            })
         {
             continue;
         }
@@ -322,7 +323,10 @@ pub(in crate::replay::policy) fn verify_capture(
                     source_input_error,
                     source_uri: request["uri"].as_str().unwrap_or_default().to_owned(),
                     source_body,
-                    method: scope.method.clone(),
+                    method: request["method"]
+                        .as_str()
+                        .context("Source method missing")?
+                        .into(),
                     path: super::super::pattern::uri_path(request["uri"].as_str().unwrap()),
                     recorded,
                     actual: Some(candidate.actual_anchor),
@@ -381,7 +385,9 @@ pub(in crate::replay::policy) fn verify_capture(
                 else {
                     continue;
                 };
-                if selector.database != candidate.database
+                if selector
+                    .database
+                    .is_some_and(|database| database != candidate.database)
                     || selector
                         .commands
                         .iter()
@@ -582,7 +588,7 @@ fn validate_source_commands(
     for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
         let event: Value = serde_json::from_slice(line)?;
         if event["event_type"] != "redis_exchange"
-            || event["database"] != selector.database
+            || event["database"] != candidate.database
             || event["target_host"] != candidate.host
             || event["target_port"] != candidate.port
             || event["replay_safe"] != true

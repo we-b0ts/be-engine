@@ -70,7 +70,7 @@ impl RequestContracts {
                 .all(|sequence| sequence.next == 0),
             "Source atomic sequence is incomplete"
         );
-        for key in self.keys.values() {
+        for key in self.signing_keys() {
             key.ensure_current()?;
         }
         Ok(())

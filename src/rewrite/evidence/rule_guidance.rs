@@ -2,7 +2,6 @@
 use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint};
 use super::*;
 mod generated_values;
-mod http_client_metadata;
 mod resource_fields;
 mod stateful_dependencies;
 pub(super) use generated_values::has_response_jwt;
@@ -132,13 +131,6 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             "Unused dependency calls are not evidence of process ownership and can be detached API work. Prove the unique API origin, typed request-body predicates and captured SQL identity; linked scripts, transaction members and resource calls retain their own proof. process_owned is an ownership effect and cannot be inferred from a value codec or a shared task ID. Target failures and finite consumption stay required.",
         );
     }
-    if http_client_metadata::has_difference(facts) {
-        add(
-            "http_client_metadata",
-            "http_client_metadata",
-            "SDK metadata header differences remain strict until explicitly authorized. protected=false concerns confidentiality, not acceptance. Trace both the SDK generator and the downstream consumer/middleware. If these exact names have no application, authentication, routing or idempotency role, declare http_client_metadata with API, endpoint, method, path and exact supported header names. The audit retains differences as observations with a rule ID; do not emulate another language's SDK identity. Source proof, complete per-name witnesses and fresh Replay are required. See docs/http-client-metadata.md.",
-        );
-    }
     for (protocol, capability) in [
         ("http", "resource_field_contract"),
         ("redis", "resource_field_contract"),
@@ -243,9 +235,6 @@ pub(super) fn applicable_rule_planners(
         if complete_candidates(facts, name) {
             add("dependency_value", capability);
         }
-    }
-    if http_client_metadata::has_difference(facts) {
-        add("dependency_value", "http_client_metadata");
     }
     if facts["cross_case_candidates"]["candidates"]
         .as_array()

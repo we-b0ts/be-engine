@@ -18,10 +18,23 @@ pub(super) fn visit_matching(
     file: &Path,
     keys: &std::collections::BTreeSet<String>,
     reader: &mut crate::dependency_index::RecordReader,
+    visitor: impl FnMut(usize, RecordedHttpExchange) -> Result<()>,
+) -> Result<()> {
+    visit_matching_or_all(file, Some(keys), reader, visitor)
+}
+
+pub(super) fn visit_matching_or_all(
+    file: &Path,
+    keys: Option<&std::collections::BTreeSet<String>>,
+    reader: &mut crate::dependency_index::RecordReader,
     mut visitor: impl FnMut(usize, RecordedHttpExchange) -> Result<()>,
 ) -> Result<()> {
     let index = crate::dependency_index::load_file(file)?;
-    for entry in index.http.iter().filter(|entry| keys.contains(&entry.key)) {
+    for entry in index
+        .http
+        .iter()
+        .filter(|entry| keys.is_none_or(|keys| keys.contains(&entry.key)))
+    {
         let raw = reader.read(file, &index.stamp, &entry.location)?;
         let mut record: RecordedHttpExchange = serde_json::from_slice(&raw)?;
         record.decrypt_request_headers(file)?;

@@ -1,6 +1,5 @@
 use super::*;
 use serde_json::json;
-mod http_client_metadata;
 mod lset;
 mod protocols;
 mod read_back;

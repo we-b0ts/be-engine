@@ -8,7 +8,6 @@ json:
     /id: {kind: identity, formats: [{prefix: text-, format: decimal}]}
     /at: {kind: time, formats: [unix_seconds]}
 redis:
-  database: 0
   keys:
     'clock:*': {kind: time, formats: [unix_seconds]}
     'text:*': {kind: identity, formats: [{prefix: text-, format: decimal}]}

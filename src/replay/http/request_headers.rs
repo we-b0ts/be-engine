@@ -56,8 +56,6 @@ pub(in crate::replay) struct HeaderDifferenceReport {
     source_request_started_at: Option<chrono::DateTime<Utc>>,
     target_request_started_at: chrono::DateTime<Utc>,
     recorded_request_fingerprint: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rule_id: Option<String>,
     expected: HeaderObservation,
     actual: HeaderObservation,
 }
@@ -114,14 +112,6 @@ pub(in crate::replay) fn exact_contract_match(
 /// Match the native audit's acceptance modes. Body contracts cannot turn
 /// presence-only credentials or observational negotiation into exact values.
 pub(super) fn native_contract_match(expected: &HeaderSnapshot, actual: &HeaderSnapshot) -> bool {
-    native_contract_match_with_metadata(expected, actual, &BTreeMap::new())
-}
-
-pub(super) fn native_contract_match_with_metadata(
-    expected: &HeaderSnapshot,
-    actual: &HeaderSnapshot,
-    metadata: &BTreeMap<String, String>,
-) -> bool {
     let expected = normalized(expected);
     let actual = normalized(actual);
     let connection_headers = [&expected, &actual]
@@ -134,11 +124,7 @@ pub(super) fn native_contract_match_with_metadata(
     expected.keys().chain(actual.keys()).all(|name| {
         let before = expected.get(name);
         let after = actual.get(name);
-        match if metadata.contains_key(name) {
-            Mode::Observe
-        } else {
-            mode(name, &connection_headers)
-        } {
+        match mode(name, &connection_headers) {
             Mode::Ignore | Mode::Observe => true,
             Mode::Presence => before.is_some() == after.is_some(),
             Mode::SourcePresence => before.is_none() || after.is_some(),
@@ -226,31 +212,6 @@ impl ReplayState {
         let expected = normalized(&exchange.record.request_headers);
         let actual = normalized(actual);
         let source_time_reference = time_reference::source(&exchange.record);
-        let metadata = self
-            .replay_policy
-            .as_ref()
-            .map(|policy| {
-                let context = crate::replay::policy::HttpPolicyContext {
-                    request_times: crate::replay::assertion::RequestTimes {
-                        source: source_time_reference,
-                        target: Some(request_started_at),
-                    },
-                    case_id: self.active_case_id.as_deref(),
-                    target: &exchange.identity.target,
-                    method: &exchange.record.method,
-                    recorded_uri: &exchange.record.uri,
-                    actual_uri: &exchange.record.uri,
-                };
-                if exchange.source == ReplaySource::Case
-                    && exchange.case_id == self.active_case_id
-                    && exchange.shared_origin.is_none()
-                {
-                    policy.http_client_metadata_headers(&context)
-                } else {
-                    BTreeMap::new()
-                }
-            })
-            .unwrap_or_default();
         let mut witness_fingerprint = None;
         let connection_headers = [&expected, &actual]
             .into_iter()
@@ -268,11 +229,7 @@ impl ReplayState {
             .matched_details
             .next_event_index(self.active_case_id.as_deref());
         for name in names {
-            let mode = if metadata.contains_key(name) {
-                Mode::Observe
-            } else {
-                mode(name, &connection_headers)
-            };
+            let mode = mode(name, &connection_headers);
             let recorded = expected.get(name);
             let sent = actual.get(name);
             if mode == Mode::Ignore {
@@ -342,7 +299,6 @@ impl ReplayState {
                 recorded_request_fingerprint: witness_fingerprint
                     .get_or_insert_with(|| fingerprint::recorded_fingerprint(&exchange.record))
                     .clone(),
-                rule_id: metadata.get(name).cloned(),
                 expected,
                 actual,
             };
@@ -354,13 +310,6 @@ impl ReplayState {
             } else {
                 self.http_events.header_observations.push(report);
             }
-        }
-        if let Some(policy) = &mut self.replay_policy {
-            let observed = metadata
-                .into_iter()
-                .filter(|(name, _)| expected.contains_key(name) || actual.contains_key(name))
-                .collect();
-            policy.commit_http_client_metadata(&observed);
         }
     }
 }

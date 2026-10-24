@@ -30,9 +30,17 @@ impl NativeScopeGuard {
         database: Option<&Database>,
         username: Option<&str>,
     ) -> bool {
-        self.selector.resource.as_ref().is_some_and(|resource| {
-            matches_resource(resource, protocol, target, database, username)
-        })
+        if let Some(host) = &self.selector.http_host
+            && (protocol != Protocol::Http
+                || crate::replay::normalize_host(host)
+                    != crate::replay::normalize_host(&target.host))
+        {
+            return false;
+        }
+        self.selector.resource.as_ref().map_or_else(
+            || self.selector.http_host.is_some() && protocol == Protocol::Http,
+            |resource| matches_resource(resource, protocol, target, database, username),
+        )
     }
 
     pub(in crate::replay) fn matches_reference_resource(
@@ -77,6 +85,36 @@ mod tests {
         Endpoint, EqualsPredicate, SourceCondition, SourcePredicate, SourceScalar,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn host_only_http_scope_filters_host_and_keeps_ports_discovered() {
+        let guard = NativeScopeGuard {
+            id: "cache".into(),
+            selector: NativeMatch {
+                http_host: Some("Metadata.Example.Test".into()),
+                ..Default::default()
+            },
+            when: None,
+            references: vec![],
+        };
+        for port in [80, 443, 8080] {
+            let target = TargetKey {
+                host: "metadata.example.test.".into(),
+                port,
+            };
+            assert!(guard.matches_capture_resource(Protocol::Http, &target, None, None));
+            assert!(!guard.matches_capture_resource(Protocol::Redis, &target, None, None));
+        }
+        assert!(!guard.matches_capture_resource(
+            Protocol::Http,
+            &TargetKey {
+                host: "other.example.test".into(),
+                port: 443
+            },
+            None,
+            None
+        ));
+    }
 
     #[test]
     fn native_scopes_keep_method_source_condition_database_and_auth_independent() {

@@ -10,6 +10,8 @@ mod source;
 mod trace;
 pub(in crate::replay) use source::validate_source;
 #[cfg(test)]
+mod key_scope_tests;
+#[cfg(test)]
 mod recorded_tests;
 #[cfg(test)]
 mod tcp_tests;

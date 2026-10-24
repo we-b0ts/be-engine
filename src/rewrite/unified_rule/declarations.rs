@@ -19,6 +19,16 @@ pub(super) fn merge(document: &mut TrafficPolicy, proposed: &TrafficPolicy) -> R
     if proposed.async_api.is_some() {
         candidate.async_api = proposed.async_api.clone();
     }
+    for (name, signature) in &proposed.signatures {
+        if let Some(current) = candidate.signatures.get(name) {
+            ensure!(
+                current == signature,
+                "existing signature definition changed; use a new signature name and explicitly replace the affected API positions"
+            );
+        } else {
+            candidate.signatures.insert(name.clone(), signature.clone());
+        }
+    }
     for (name, resource) in &proposed.resources {
         if let Some(current) = candidate.resources.get(name) {
             ensure!(
@@ -38,6 +48,24 @@ pub(super) fn merge(document: &mut TrafficPolicy, proposed: &TrafficPolicy) -> R
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn named_signature_changes_cannot_silently_rebind_existing_api_permissions() {
+        let parse = |name: &str, variable: &str| {
+            crate::policy::parse_policy(&json!({
+            "format":"traffic-policy/v2", "signatures":{
+                name:{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":variable}}
+            }
+        }).to_string()).unwrap()
+        };
+        let mut policy = parse("default", "SESSION_SECRET");
+        let before = policy.clone();
+        assert!(merge(&mut policy, &parse("default", "OTHER_SECRET")).is_err());
+        assert_eq!(policy, before);
+        assert!(!merge(&mut policy, &before).unwrap());
+        assert!(merge(&mut policy, &parse("oidc", "OIDC_SECRET")).unwrap());
+        assert_eq!(policy.signatures.len(), 2);
+    }
 
     #[test]
     fn global_sections_replace_instead_of_accumulating_old_field_strategies() {
@@ -60,8 +88,7 @@ mod tests {
     fn redis_section_replaces_atomically_and_can_clear_last_scalar_format() {
         let parse = |keys: Value| {
             crate::policy::parse_policy(
-                &json!({"format":"traffic-policy/v2","redis":{"database":0,"keys":keys}})
-                    .to_string(),
+                &json!({"format":"traffic-policy/v2","redis":{"keys":keys}}).to_string(),
             )
             .unwrap()
         };

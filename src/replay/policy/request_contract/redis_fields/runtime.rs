@@ -102,7 +102,7 @@ impl RequestContracts {
         use crate::value_contract::redis_scalar;
         let scalar = if value.stored {
             self.redis_policy()
-                .map(|policy| policy.field(database, value.key))
+                .map(|policy| policy.field(value.key))
                 .transpose()?
                 .flatten()
                 .map(|field| {
@@ -142,6 +142,7 @@ impl RequestContracts {
         };
         if json_constraint {
             let empty = crate::policy::CompiledJsonPolicy {
+                signatures: Default::default(),
                 fields: Default::default(),
                 fingerprint: String::new(),
             };

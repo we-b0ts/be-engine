@@ -9,8 +9,6 @@ use super::GlobalField;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MysqlPolicy {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub database: Option<String>,
     #[serde(default, deserialize_with = "super::strict_map::unique_map")]
     pub tables: BTreeMap<String, GlobalMysqlTable>,
 }
@@ -26,12 +24,6 @@ pub struct GlobalMysqlTable {
 impl MysqlPolicy {
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
-            self.database
-                .as_ref()
-                .is_none_or(|database| identifier(database)),
-            "mysql.database requires an exact ASCII database identifier"
-        );
-        ensure!(
             self.tables.len() <= 4096,
             "mysql.tables exceeds 4096 entries"
         );
@@ -42,7 +34,7 @@ impl MysqlPolicy {
             );
             ensure!(
                 valid_pattern(&table.pattern),
-                "MySQL table pattern requires an ASCII table identifier with an optional * wildcard; declare its database in mysql.database"
+                "MySQL table pattern requires an ASCII table identifier with an optional * wildcard"
             );
             ensure!(
                 !table.fields.is_empty() && table.fields.len() <= 4096,
@@ -84,15 +76,7 @@ impl MysqlPolicy {
         Ok(())
     }
 
-    pub(crate) fn field(
-        &self,
-        database: Option<&str>,
-        table: &str,
-        column: &str,
-    ) -> Result<Option<&GlobalField>> {
-        if !self.matches_database(database) {
-            return Ok(None);
-        }
+    pub(crate) fn field(&self, table: &str, column: &str) -> Result<Option<&GlobalField>> {
         let mut result = None;
         for declaration in self.tables.values() {
             let selected = wildcard(&declaration.pattern, table);
@@ -110,12 +94,6 @@ impl MysqlPolicy {
             }
         }
         Ok(result)
-    }
-
-    pub(crate) fn matches_database(&self, database: Option<&str>) -> bool {
-        self.database
-            .as_deref()
-            .is_none_or(|selected| database == Some(selected))
     }
 }
 
@@ -190,33 +168,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn physical_patterns_use_actual_schema_and_table() {
+    fn physical_table_patterns_apply_without_an_authored_database() {
         let policy: MysqlPolicy = serde_yaml::from_str(
-            "database: task\ntables:\n  tasks:\n    pattern: tasks_*\n    fields:\n      id: {kind: identity, formats: [uuid]}\n",
+            "tables:\n  tasks:\n    pattern: tasks_*\n    fields:\n      id: {kind: identity, formats: [uuid]}\n",
         ).unwrap();
         policy.validate().unwrap();
-        assert!(
-            policy
-                .field(Some("task"), "tasks_001", "id")
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            policy
-                .field(Some("other"), "tasks_001", "id")
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            policy
-                .field(Some("task"), "tasks_001", "count")
-                .unwrap()
-                .is_none()
-        );
+        assert!(policy.field("tasks_001", "id").unwrap().is_some());
+        assert!(policy.field("other", "id").unwrap().is_none());
+        assert!(policy.field("tasks_001", "count").unwrap().is_none());
     }
 
     #[test]
     fn declarations_reject_duplicate_columns_and_unsupported_syntax() {
+        assert!(serde_yaml::from_str::<MysqlPolicy>("database: task\ntables: {}\n").is_err());
         assert!(serde_yaml::from_str::<MysqlPolicy>("tables: {t: {pattern: tasks, fields: {id: {kind: identity, formats: [uuid]}, id: {kind: identity, formats: [uuid]}}}}").is_err());
         for pattern in ["a.b.c", "a/**", "", "task**", "1task"] {
             assert!(!valid_pattern(pattern));

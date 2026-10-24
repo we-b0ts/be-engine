@@ -189,3 +189,154 @@ fn groups_preserve_rigid_relations_and_do_not_infer_clock_identity_from_equal_va
         .is_err()
     );
 }
+
+#[test]
+fn automatic_redis_groups_preserve_equal_source_instants_across_formats_and_arguments() {
+    let mut seconds = rule("unix_seconds");
+    seconds.clock_group = Some(format!("{AUTOMATIC_REDIS_GROUP_PREFIX}13"));
+    let mut milliseconds = rule("unix_milliseconds");
+    milliseconds.clock_group = Some(format!("{AUTOMATIC_REDIS_GROUP_PREFIX}14"));
+    let first = compare(&json!(1000.25), &json!(2000.25), &seconds, clocks()).unwrap();
+    let same = compare(
+        &json!(1_000_250),
+        &json!(2_000_250),
+        &milliseconds,
+        clocks(),
+    )
+    .unwrap();
+    assert_eq!(first.source, same.source);
+    assert_eq!(first.group, same.group);
+    validate_relationships(&[first.clone(), same]).unwrap();
+    // Each timestamp is individually within the relative window. A copy must
+    // still preserve exactly the same Target instant, even at another index.
+    let conflict = compare(
+        &json!(1_000_250),
+        &json!(2_000_251),
+        &milliseconds,
+        clocks(),
+    )
+    .unwrap();
+    assert!(validate_relationships(&[first, conflict]).is_err());
+}
+
+#[test]
+fn automatic_redis_groups_leave_different_source_instants_independent_and_bounded() {
+    let mut generated = rule("unix_seconds");
+    generated.clock_group = Some(format!("{AUTOMATIC_REDIS_GROUP_PREFIX}13"));
+    let first = compare(&json!(1000.25), &json!(2000.25), &generated, clocks()).unwrap();
+    let later = compare(&json!(1000.75), &json!(2001.5), &generated, clocks()).unwrap();
+    assert_ne!(
+        first.group, later.group,
+        "one argument can hold independent clock reads"
+    );
+    validate_relationships(&[first.clone(), later]).unwrap();
+    for boundary in [1995.75, 2005.75] {
+        let later = compare(&json!(1000.75), &json!(boundary), &generated, clocks()).unwrap();
+        validate_relationships(&[first.clone(), later]).unwrap();
+    }
+    for outside in [1995.749999, 2005.750001] {
+        assert!(compare(&json!(1000.75), &json!(outside), &generated, clocks()).is_err());
+    }
+}
+
+#[test]
+fn explicit_and_unnamed_legacy_groups_keep_their_rigid_shift_relationship() {
+    for group in [None, Some("event")] {
+        let mut declared = rule("unix_seconds");
+        declared.clock_group = group.map(str::to_owned);
+        let first = compare(&json!(1000.25), &json!(2000.25), &declared, clocks()).unwrap();
+        let different_shift =
+            compare(&json!(1000.75), &json!(2001.5), &declared, clocks()).unwrap();
+        assert!(validate_relationships(&[first.clone(), different_shift]).is_err());
+        let same_shift = compare(&json!(1000.75), &json!(2000.75), &declared, clocks()).unwrap();
+        validate_relationships(&[first, same_shift]).unwrap();
+    }
+}
+
+fn automatic_rule(format: &str, index: usize) -> TimeField {
+    let mut field = rule(format);
+    field.clock_group = Some(format!("{AUTOMATIC_REDIS_GROUP_PREFIX}{index}"));
+    field
+}
+
+#[test]
+fn automatic_wire_equality_needs_no_clock_or_matching_format() {
+    let field = automatic_rule("unix_seconds", 13);
+    let same = compare_wire_format(b"1000", b"1000", &field, Default::default())
+        .unwrap()
+        .unwrap();
+    assert_eq!(same.source, same.actual);
+    // Source's JSON scalar codec can also establish logical equality.
+    assert!(
+        compare_wire_format(b"1000.0", b"1000.00", &field, Default::default())
+            .unwrap()
+            .is_some()
+    );
+    for bytes in [b"never".as_slice(), b"null", b"[]", b"\xff"] {
+        assert!(
+            compare_wire_format(bytes, bytes, &field, Default::default())
+                .unwrap()
+                .is_none()
+        );
+    }
+    // Explicit legacy timestamp contracts retain their anchor requirement.
+    assert!(
+        compare(
+            &json!(1000),
+            &json!(1000),
+            &rule("unix_seconds"),
+            Default::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn automatic_wire_format_compares_raw_rfc3339_without_changing_source_codec() {
+    let field = automatic_rule("rfc3339", 13);
+    for (source, actual) in [
+        (
+            b"1970-01-01T00:16:40Z".as_slice(),
+            b"1970-01-01T00:33:20Z".as_slice(),
+        ),
+        (br#""1970-01-01T00:16:40Z""#, br#""1970-01-01T00:33:20Z""#),
+    ] {
+        let compared = compare_wire_format(source, actual, &field, clocks())
+            .unwrap()
+            .unwrap();
+        assert_eq!(compared.actual - compared.source, 1_000_000_000_000);
+        assert!(compare_wire_format(source, actual, &field, Default::default()).is_err());
+    }
+    for (source, actual) in [
+        (
+            b"1970-01-01T00:16:40Z".as_slice(),
+            br#""1970-01-01T00:33:20Z""#.as_slice(),
+        ),
+        (
+            br#""1970-01-01T00:16:40Z""#.as_slice(),
+            b"1970-01-01T00:33:20Z".as_slice(),
+        ),
+        (b"never".as_slice(), b"1970-01-01T00:33:20Z".as_slice()),
+        (b"never".as_slice(), b"later".as_slice()),
+        (b"\xff".as_slice(), b"\xfe".as_slice()),
+    ] {
+        assert!(compare_wire_format(source, actual, &field, clocks()).is_err());
+    }
+}
+
+#[test]
+fn equal_wire_timestamps_still_anchor_source_copy_relationships() {
+    let seconds = automatic_rule("unix_seconds", 13);
+    let milliseconds = automatic_rule("unix_milliseconds", 14);
+    let first = compare_wire_format(b"1000", b"1000", &seconds, Default::default())
+        .unwrap()
+        .unwrap();
+    let same = compare_wire_format(b"1000000", b"1000000", &milliseconds, Default::default())
+        .unwrap()
+        .unwrap();
+    validate_relationships(&[first.clone(), same]).unwrap();
+    let changed = compare_wire_format(b"1000000", b"2000000", &milliseconds, clocks())
+        .unwrap()
+        .unwrap();
+    assert!(validate_relationships(&[first, changed]).is_err());
+}

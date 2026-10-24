@@ -9,7 +9,7 @@ fn policy() -> CompiledPolicy {
     crate::policy::parse_and_compile_policy(&json!({
         "format":"traffic-policy/v2",
         "json":{"fields":{"/item_id":{"kind":"identity","formats":["uuid"]}}},
-        "mysql":{"database":"app","tables":{"tasks":{"pattern":"tasks","fields":{"id":{"kind":"identity","formats":["uuid"]}}}}}
+        "mysql":{"tables":{"tasks":{"pattern":"tasks","fields":{"id":{"kind":"identity","formats":["uuid"]}}}}}
     }).to_string()).unwrap()
 }
 
@@ -247,7 +247,7 @@ fn mysql_json_needs_no_table_or_column_codec_declaration() {
 }
 
 #[test]
-fn mysql_database_limits_scalar_and_native_inference_without_limiting_json() {
+fn mysql_formats_apply_across_databases_while_physical_pairing_stays_strict() {
     let policy = policy();
     let source = record(&format!("UPDATE other.tasks SET id='{A}'"));
     assert!(
@@ -257,7 +257,18 @@ fn mysql_database_limits_scalar_and_native_inference_without_limiting_json() {
             &source,
             &format!("UPDATE other.tasks SET id='{X}'")
         )
-        .is_err()
+        .unwrap()
+        .passed()
+    );
+    assert!(
+        compare(
+            &policy,
+            Metadata::default(),
+            &source,
+            &format!("UPDATE foreign_db.tasks SET id='{X}'")
+        )
+        .is_err(),
+        "a shared scalar format cannot change the physical SQL database"
     );
     let mut read = temporal_record("DATETIME", "datetime", "2020-01-01 00:00:01");
     read.response.columns[0].database = Some("other".into());
@@ -272,7 +283,21 @@ fn mysql_database_limits_scalar_and_native_inference_without_limiting_json() {
             Some("app"),
             clocks()
         )
-        .is_err()
+        .unwrap()
+        .passed()
+    );
+    target.columns[0].database = Some("foreign_db".into());
+    assert!(
+        compare_response(
+            &policy,
+            &read.response,
+            &target,
+            None,
+            Some("app"),
+            clocks()
+        )
+        .is_err(),
+        "time inference cannot change the physical result-column origin"
     );
 }
 

@@ -10,8 +10,7 @@ mod prefix;
 mod stream;
 mod witness;
 pub(crate) use witness::{
-    source_witness, validate_contract_witness, validate_witness, witness_metadata_matches,
-    witness_value,
+    source_witness, validate_witness, witness_metadata_matches, witness_value,
 };
 
 pub(super) struct RequestView<'a> {

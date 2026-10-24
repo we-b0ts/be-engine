@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::{Mapping, Value};
 
-use super::{proof, redis_keys, resources, walk};
+use super::{dependency_lifetimes, proof, redis_keys, resources, signatures, walk};
 use crate::policy::{PolicyRule, TrafficPolicy};
 
 #[derive(Deserialize)]
@@ -20,6 +20,14 @@ struct Document {
     redis: Option<RedisDocument>,
     #[serde(default)]
     http: Option<crate::policy::HttpPolicy>,
+    #[serde(default)]
+    localcache: Option<dependency_lifetimes::Declaration>,
+    #[serde(default)]
+    process_dependencies: Option<dependency_lifetimes::ProcessDeclaration>,
+    #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
+    signatures: std::collections::BTreeMap<String, crate::policy::SignatureDefinition>,
+    #[serde(default)]
+    api: Option<signatures::ApiDefinitions>,
     #[serde(default, deserialize_with = "optional_async_api")]
     async_api: Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRule>>,
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
@@ -31,8 +39,6 @@ struct Document {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RedisDocument {
-    #[serde(default)]
-    database: Option<i64>,
     #[serde(default, deserialize_with = "redis_keys")]
     keys: Option<std::collections::BTreeMap<String, redis_keys::Entry>>,
     #[serde(default, deserialize_with = "redis_rules")]
@@ -69,9 +75,17 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
                 proof::revision(revision)?;
             }
             resources::validate(&document.resources)?;
-            let (redis, nested_rules) = redis_document(document.redis, &document.resources)?;
+            crate::policy::signatures::validate(&document.signatures)?;
+            let (redis, nested_rules) = redis_document(document.redis)?;
             let mut declared_rules = document.rules;
             declared_rules.extend(nested_rules);
+            declared_rules.extend(signatures::expand(document.api, &document.signatures)?);
+            declared_rules.extend(dependency_lifetimes::expand(
+                document.localcache,
+                document.process_dependencies,
+                document.source_revision.as_deref(),
+                &document.resources,
+            )?);
             let mut rules = Vec::with_capacity(declared_rules.len());
             for mut rule in declared_rules {
                 let id = rule
@@ -93,6 +107,7 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
                 redis,
                 http: document.http,
                 async_api: document.async_api,
+                signatures: document.signatures,
                 resources: document.resources,
                 rules,
             })
@@ -103,21 +118,16 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
 
 fn redis_document(
     value: Option<RedisDocument>,
-    resources: &std::collections::BTreeMap<String, crate::policy::ResourceDeclaration>,
 ) -> Result<(Option<crate::policy::RedisPolicy>, Vec<Value>)> {
     let Some(value) = value else {
         return Ok((None, vec![]));
     };
-    let has_settings = value.database.is_some() || value.keys.is_some();
-    let (keys, generated) =
-        redis_keys::expand(value.keys.unwrap_or_default(), value.database, resources)?;
+    let has_settings = value.keys.is_some();
+    let (keys, generated) = redis_keys::expand(value.keys.unwrap_or_default())?;
     let policy = if !has_settings && value.rules.is_some() {
         None
     } else {
-        Some(crate::policy::RedisPolicy {
-            database: value.database,
-            keys,
-        })
+        Some(crate::policy::RedisPolicy { keys })
     };
     let mut rules = value.rules.unwrap_or_default();
     rules.extend(generated);
@@ -128,8 +138,13 @@ fn sort_rules(rules: &mut [PolicyRule]) {
     rules.sort_by_key(|rule| {
         (
             redis_rule(rule),
-            redis_keys::generated(rule),
-            if redis_keys::generated(rule) {
+            redis_keys::generated(rule)
+                || dependency_lifetimes::generated(rule)
+                || signatures::generated(rule),
+            if redis_keys::generated(rule)
+                || dependency_lifetimes::generated(rule)
+                || signatures::generated(rule)
+            {
                 rule.id().to_owned()
             } else {
                 String::new()
@@ -187,6 +202,7 @@ pub(crate) fn expanded(document: &TrafficPolicy) -> Result<TrafficPolicy> {
         redis: document.redis.clone(),
         http: document.http.clone(),
         async_api: document.async_api.clone(),
+        signatures: document.signatures.clone(),
         resources: document.resources.clone(),
         rules,
     })
@@ -230,6 +246,12 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
     if let Some(async_api) = &document.async_api {
         root.insert("async_api".into(), serde_yaml::to_value(async_api)?);
     }
+    if !document.signatures.is_empty() {
+        root.insert(
+            "signatures".into(),
+            serde_yaml::to_value(&document.signatures)?,
+        );
+    }
     if !document.resources.is_empty() {
         root.insert(
             "resources".into(),
@@ -251,7 +273,13 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
     let remaining = document.rules.iter().filter(|rule| !matches!(rule,
         PolicyRule::Native(rule) if matches!(rule.effect, crate::policy::NativeEffect::CaptureHttp(_))));
     for rule in capture_first.chain(remaining) {
-        if redis_keys::compact(rule, &document.resources, &mut root)? {
+        if signatures::compact(rule, &document.signatures, &mut root)? {
+            continue;
+        }
+        if dependency_lifetimes::compact(rule, &document.resources, &mut root)? {
+            continue;
+        }
+        if redis_keys::compact(rule, &mut root)? {
             continue;
         }
         let belongs_redis = redis_rule(rule);

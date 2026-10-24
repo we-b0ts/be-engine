@@ -9,14 +9,16 @@ rules: []
 
 # Example replacement for the empty document above:
 # format: traffic-policy/v2
+# signatures:
+#   default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
 # json:
 #   fields:
 #     /task_id: {kind: identity, formats: [uuid]}
+#     /access_token: {kind: jwt}
 #     /updated_at: {kind: time, formats: [unix_seconds]}
 #     /blocks/*/timestamp: {kind: time, formats: [unix_milliseconds]}
 #     /members: {kind: unordered}
 # mysql:
-#   database: app
 #   tables:
 #     tasks:
 #       pattern: tasks
@@ -27,12 +29,35 @@ rules: []
 #       fields:
 #         owner_id: {kind: identity, formats: [uuid]}
 # redis:
-#   database: 0
 #   keys:
 #     task-run-monitor:v2:as-of: {kind: time, formats: [unix_seconds]}
+#     'task:current:*': {kind: identity, formats: [uuid], read_back: true}
+#     'task:content:*': {append_stream: true, expiry_refresh: true}
+#     'task:cancel:*': {read_commutation: true}
+#     'task:counter:*': {commands: [INCRBY, EXPIRE]}
+#     'task:events:*':
+#       commands:
+#         - operation: ZADD
+#           arguments:
+#             1: {kind: time, formats: [unix_seconds]}
+# api:
+#   '*':
+#     request:
+#       headers:
+#         authorization: {signature: default, scheme: bearer}
 # http:
 #   headers:
 #     x-amz-date: {kind: time, formats: [amz_date]}
+# localcache:
+#   requests:
+#     - redis: {operation: HGET, key: token_v2, field: '3061639762'}
+#     - http: {host: auth.example.com, method: GET, path: /.well-known/jwks.json}
+# source_revision: immutable-source-image-v1
+# process_dependencies:
+#   tasks:
+#     refresh_signing_keys: # Use the actual logical task name from Source.
+#       requests:
+#         - http: {host: auth.example.com, method: GET, path: /keys/}
 # async_api:
 #   POST /jobs:
 #     when: {/background: true}
@@ -42,5 +67,9 @@ rules: []
 # rules: []
 #
 # JSON payloads are inferred across carriers. SQL temporal types use recorded
-# metadata, without per-column time declarations. Native stateful Redis effects
-# belong under redis.rules; JSON field formats remain in the single JSON map.
+# metadata, without per-column time declarations. Redis key-local behavior uses
+# redis.keys; finite initialization requests and actual process task requests
+# use their separate lifetime declarations. HTTP header presence remains strict.
+# Signatures profiles and API positions reuse strict native crypto owners.
+# Multipart, DOCX, WSS paths and AES envelopes retain native typed rules;
+# global JSON inference does not cover those formats.

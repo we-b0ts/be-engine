@@ -90,12 +90,22 @@ JSON-valued columns are recognized automatically; native MySQL time types use
 protocol metadata. Declare otherwise explicit scalar formats under
 `mysql.tables.<name>.fields` with a physical `pattern`. Identity correspondence
 is maintained internally from complete typed Source values; rules describe
-formats only. Retain additional contextual/stateful effects in `rules` and
-existing typed resource declarations. See
+formats only. `redis.keys` combines scalar formats, key formats, ordered
+commands and supported key-local state permissions without resource/database
+selectors. `http.headers` retains strict presence/count/order; missing SDK
+headers are not waivable. `localcache.requests` identifies finite initialization
+reads; `process_dependencies.tasks.<actual-Source-task-name>.requests` groups
+real process work across protocols. HTTP lifetime entries require a host.
+Named root `signatures` profiles centralize algorithms and private startup key
+references. Global `kind: jwt` verifies HMAC signatures/NumericDates and retains
+complete-token correspondence. The old authored identity `formats: [jwt]` is
+rejected; there is no keyless JWT policy mode. `api` positions explicitly declare
+input re-signing and extra response nonce/expiry checks. Multipart, DOCX, WSS
+path derivation and AES envelopes retain their existing native typed rules. See
 [resource-field contracts](../../../../docs/resource-field-contracts.md) for
-schema, supported carriers, conditions and clock relationships. Current bounded
+schema, supported carriers and dependency lifetime boundaries. Current bounded
 evidence supplies discovery and capability metadata; it does not supply Source proof. During managed rewrites, the backend-rewrite skill owns the single
-`rule plan --file ... --evidence ...` / `rule apply <plan-id>` transaction.
+`rule plan --file ... --evidence ...` / `rule apply --plan <plan-id>` transaction.
 Plans expand the complete rule, protect unselected evidence and expose remaining
 Replay, reclassification or recording obligations. Source self-validation does
 not create independent Target evidence. Protocol framing, sessions and finite
@@ -103,7 +113,7 @@ consumption remain with the protocol owner.
 
 API route-pattern bootstrap retains `traffic-e2e config recorder ...
 case-path-patterns`. It updates capture effects in the same policy and preserves
-unrelated rules and proofs. Old verification/Source document formats and
+unrelated runtime permissions and separate plan evidence. Old verification/Source document formats and
 codec-specific rule planners are retired.
 
 ## Engine Capability Diagnosis

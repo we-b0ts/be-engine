@@ -44,10 +44,14 @@ pub(crate) fn promote_redis_sharing(
         resource: Some(p::Resource {
             protocol: p::Protocol::Redis,
             endpoint: p::Endpoint {
-                host: shared.host,
-                port: shared.port,
+                host: shared
+                    .host
+                    .context("sharing fixture requires a physical host")?,
+                port: shared
+                    .port
+                    .context("sharing fixture requires a physical port")?,
             },
-            database: Some(p::Database::Index(shared.read.database)),
+            database: shared.read.database.map(p::Database::Index),
             username: None,
         }),
         operation: Some(shared.read.command),

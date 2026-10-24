@@ -53,6 +53,16 @@ pub(super) fn validate(
                 ) {
                     return false;
                 }
+                if rule.rule.selector.resource.is_none() {
+                    return runtime.request_contracts.native_rule_scope_matches(
+                        &rule.rule.id,
+                        Some(case.id),
+                        crate::policy::Protocol::Redis,
+                        &target,
+                        Some(&Database::Index(database)),
+                        username,
+                    );
+                }
                 let guard = NativeScopeGuard::from_rule(&rule.rule);
                 guard.matches_case(
                     case.request["method"].as_str().unwrap_or_default(),

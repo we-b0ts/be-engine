@@ -135,7 +135,6 @@ impl RequestContracts {
 
     pub(in crate::replay::policy::request_contract) fn scalar_delivery(
         &self,
-        database: i64,
         key: &[u8],
         payload: &[u8],
         clocks: AnchorClocks,
@@ -143,7 +142,7 @@ impl RequestContracts {
         let Some(policy) = self.redis_policy() else {
             return Ok(None);
         };
-        let Some(field) = policy.field(database, key)? else {
+        let Some(field) = policy.field(key)? else {
             return Ok(None);
         };
         let Some(source) = redis_scalar::decode_field(payload, field)? else {

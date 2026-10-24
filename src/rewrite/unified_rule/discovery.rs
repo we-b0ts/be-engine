@@ -216,7 +216,7 @@ impl Drafts {
             "source_response_kind":event["response"]["status"],"physical_fields":physical,
             "needs_sql_template":false,"needs_physical_location":unavailable,"needs_schema":false,
             "source_intent_required":true,
-            "instruction":"MySQL JSON payloads use root json.fields automatically. Native DATE/DATETIME/TIMESTAMP metadata is inferred when mysql is enabled; historical and invalid scalar inputs stay exact unless a valid differing value is proved. mysql.database scopes the physical database, and mysql.tables declares remaining scalar formats. Table patterns contain table names, without a database prefix. No JSON column codec or SQL statement template is needed. Unknown physical origins grant no scalar permission."}));
+            "instruction":"MySQL JSON payloads use root json.fields automatically. Native DATE/DATETIME/TIMESTAMP metadata is inferred when mysql is enabled; historical and invalid scalar inputs stay exact unless a valid differing value is proved. mysql.tables declares remaining scalar formats across databases; recorded and Target physical connection identities must still match. Table patterns contain table names, without a database prefix. No JSON column codec or SQL statement template is needed. Unknown physical origins grant no scalar permission."}));
         Ok(())
     }
 }

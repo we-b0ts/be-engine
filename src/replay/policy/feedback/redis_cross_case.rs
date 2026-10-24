@@ -90,15 +90,8 @@ pub fn plan_redis_cross_case(feedback: RedisCrossCaseFeedback) -> Result<RedisCr
         anyhow::bail!("Redis cross-case requires an existing GET/HGET shared-read rule");
     };
     let selector = RedisSharedReadSelector {
-        host: rule
-            .target
-            .host
-            .clone()
-            .context("Redis cross-case rule has no host")?,
-        port: rule
-            .target
-            .port
-            .context("Redis cross-case rule has no port")?,
+        host: rule.target.host.clone(),
+        port: rule.target.port,
         read: read.clone(),
     };
     rule.replay_scope = ReplayScope::RecordingRun;

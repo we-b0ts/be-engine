@@ -13,7 +13,6 @@ async fn mysql_time_shift_delivers_relative_expiry_through_tls_text_and_prepared
             exchange("SELECT expires_at,owner FROM leases WHERE id=7",response)];
         let policy = r#"format: traffic-policy/v2
 mysql:
-  database: appdb
   tables:
     leases:
       pattern: leases

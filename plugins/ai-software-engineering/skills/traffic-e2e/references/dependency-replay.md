@@ -35,21 +35,25 @@ source code or harmless protocol formatting does not by itself imply a mismatch.
 
 Classify ambiguous dependencies only from source ownership, bootstrap timing,
 recorder metadata, or replay evidence. Required side effects remain required.
-For source-proven API-independent HTTP work, use the guarded narrow background
-workflow and re-record; existing dirty cases are never retroactively
-reclassified. `allowed_unused_http_hosts` remains a host-wide compatibility
-exception for older recordings. Target calls that are neither matched by an
-exchange nor claimed by the narrow zero-byte TCP behavior below remain dirty.
-Unsupported exchanges always remain dirty.
+For Source-proven process work, use
+`process_dependencies.tasks.<actual-Source-task-name>.requests`; one task can
+group requests from several protocols. HTTP entries require a host, method
+and path scope. Finite initialization reads belong to `localcache.requests`,
+not a cache-object declaration or host-wide unused exemption. The ordinary
+plan/apply workflow preserves original provenance and returns the required
+Replay/Recording obligations; never edit recorded attribution manually.
+Unmatched Target calls and unsupported exchanges remain dirty.
 
 ## Coverage
 
-Completion requires no unexplained unmatched target calls, unused case
-exchanges, unsupported or unsafe dependency operations, or missing required
-side effects. `allowed_unused_case_http_exchanges` are acceptable only when the
-report also records the source-controlled recorder config, named recording
-rule, and exact configured host. HTTP response compatibility alone is
-insufficient.
+Completion requires no unexplained unmatched Target calls, unused case
+exchanges, unsupported/unsafe operations or missing required side effects.
+Global JSON, scalar and header formats change selected value comparisons only;
+actual endpoint/database/authentication/protocol pairing and finite consumption
+remain checked. Headers, including SDK metadata, retain strict presence and
+multiplicity. A lifetime declaration does not certify Target cache behavior or
+implement initial loading, refresh, fallback or readiness. HTTP response
+compatibility alone is insufficient.
 
 Use `dependencies-summary.json`, when present, as a human and agent checklist;
 do not make target project code parse it to decide behavior or manufacture

@@ -129,7 +129,7 @@ fn wildcard_optional_selection_is_source_driven_and_format_choice_is_ordered() {
 
 #[test]
 fn redis_scalar_formats_roundtrip_and_change_only_comparison_identities() {
-    let raw = "format: traffic-policy/v2\nredis:\n  database: 0\n  keys:\n    'task-run-monitor:v2:as-of': {kind: time, formats: [unix_seconds]}\n    'session:*': {kind: identity, formats: [uuid]}\n";
+    let raw = "format: traffic-policy/v2\nredis:\n  keys:\n    'task-run-monitor:v2:as-of': {kind: time, formats: [unix_seconds]}\n    'session:*': {kind: identity, formats: [uuid]}\n";
     let policy = parse_policy(raw).unwrap();
     let compiled = compile_policy(&policy).unwrap();
     let rendered = render_policy(&policy).unwrap();
@@ -145,6 +145,20 @@ fn redis_scalar_formats_roundtrip_and_change_only_comparison_identities() {
         compiled.fingerprints.classification,
         changed.fingerprints.classification
     );
+}
+
+#[test]
+fn global_mysql_and_redis_formats_reject_retired_database_selectors() {
+    for body in [
+        "mysql: {database: app, tables: {}}",
+        "redis: {database: 0, keys: {}}",
+    ] {
+        assert!(parse_policy(&format!("format: traffic-policy/v2\n{body}\n")).is_err());
+    }
+    let policy = parse_policy("format: traffic-policy/v2\nmysql: {}\nredis: {}\n").unwrap();
+    let rendered = render_policy(&policy).unwrap();
+    assert!(!rendered.contains("database:"));
+    assert_eq!(parse_policy(&rendered).unwrap(), policy);
 }
 
 #[test]
@@ -182,14 +196,15 @@ fn bounded_string_identity_format_roundtrips_with_optional_literal_prefix() {
 }
 
 #[test]
-fn url_and_jwt_identity_formats_roundtrip_without_carrier_ownership() {
-    let raw = "format: traffic-policy/v2\njson:\n  fields:\n    /download_path: {kind: url, formats: [aws_sigv4]}\n    /headers/origin: {kind: identity, formats: [{string: 255}]}\n    /access_token: {kind: identity, formats: [jwt]}\n";
+fn url_and_authenticated_jwt_formats_roundtrip_without_carrier_ownership() {
+    let raw = "format: traffic-policy/v2\nsignatures:\n  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}\njson:\n  fields:\n    /download_path: {kind: url, formats: [aws_sigv4]}\n    /headers/origin: {kind: identity, formats: [{string: 255}]}\n    /access_token: {kind: jwt}\n";
     let policy = parse_policy(raw).unwrap();
     let compiled = compile_policy(&policy).unwrap();
     let rendered = render_policy(&policy).unwrap();
     assert_eq!(parse_policy(&rendered).unwrap(), policy);
     assert!(compiled.native.is_empty());
-    assert!(rendered.contains("/access_token: {kind: identity, formats: [jwt]}"));
+    assert!(rendered.contains("/access_token: {kind: jwt}"));
+    assert!(rendered.contains("signatures:"));
     assert!(!rendered.contains("signing_key"));
     assert!(!rendered.contains("claims"));
 }
@@ -237,5 +252,24 @@ fn bounded_random_string_formats_cover_all_existing_native_lengths() {
         let raw = format!("format: traffic-policy/v2\njson:\n  fields:\n    /id: {field}\n");
         assert!(parse_policy(&raw).is_ok());
         assert!(parse_policy(&raw.replace("1024", "1025")).is_err());
+    }
+}
+
+#[test]
+fn authored_opaque_jwt_identity_formats_are_retired_in_every_scalar_carrier() {
+    for formats in ["[jwt]", "[{prefix: 'Bearer ', format: jwt}]", "[uuid, jwt]"] {
+        for declaration in [
+            format!("json: {{fields: {{'/token': {{kind: identity, formats: {formats}}}}}}}"),
+            format!("redis: {{keys: {{token: {{kind: identity, formats: {formats}}}}}}}"),
+            format!(
+                "mysql: {{tables: {{tokens: {{pattern: tokens, fields: {{token: {{kind: identity, formats: {formats}}}}}}}}}}}"
+            ),
+            format!("http: {{headers: {{authorization: {{kind: identity, formats: {formats}}}}}}}"),
+        ] {
+            let error = parse_policy(&format!("format: traffic-policy/v2\n{declaration}\n"))
+                .err()
+                .unwrap();
+            assert!(format!("{error:#}").contains("kind: jwt"), "{error:#}");
+        }
     }
 }

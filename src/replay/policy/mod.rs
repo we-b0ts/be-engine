@@ -95,8 +95,8 @@ pub(in crate::replay) fn http_cross_case_rules(
             (
                 r.id,
                 crate::replay::HttpCrossCaseSelector {
-                    host: r.target.host.unwrap(),
-                    port: r.target.port.unwrap(),
+                    host: r.target.host,
+                    port: r.target.port,
                     method: http.method,
                     path: http.path,
                 },
@@ -133,8 +133,8 @@ pub(in crate::replay) fn redis_cross_case_rules(
             Some((
                 rule.id,
                 crate::replay::redis::shared_read::RedisSharedReadSelector {
-                    host: rule.target.host.expect("validated Redis host"),
-                    port: rule.target.port.expect("validated Redis port"),
+                    host: rule.target.host,
+                    port: rule.target.port,
                     read,
                 },
             ))
@@ -145,8 +145,6 @@ pub(in crate::replay) fn redis_cross_case_rules(
 pub use feedback::{
     HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
 };
-
-pub(in crate::replay) mod http_client_metadata;
 
 mod redis_value;
 

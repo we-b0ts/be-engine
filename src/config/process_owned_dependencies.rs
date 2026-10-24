@@ -420,9 +420,10 @@ fn rules_overlap(
             },
         ) => {
             left_authorities.iter().any(|left| {
-                right_authorities
-                    .iter()
-                    .any(|right| normalize_authority(left) == normalize_authority(right))
+                right_authorities.iter().any(|right| {
+                    matching::authority_matches(left, right)
+                        || matching::authority_matches(right, left)
+                })
             }) && left_methods.iter().any(|left| {
                 right_methods
                     .iter()

@@ -7,8 +7,11 @@ Source owner. Rules live in the single file named by `project.policy`; default
 `json.fields`. APIs, SSE data, MySQL JSON columns and Redis values share it;
 JSON carriers require no repeated codec declaration. Enable `mysql` for native
 DATE/DATETIME/TIMESTAMP metadata inference and use `mysql.tables` only for other
-explicit scalar formats. Keep additional contextual/stateful behavior under
-`rules`. See [global field formats](../../../../../docs/resource-field-contracts.md).
+explicit scalar formats by table/column without repeated database selectors.
+Use `redis.keys` for scalar formats, key formats, ordered commands and supported
+key-local state behavior; omit resource/database selectors. `http.headers`
+formats retain strict presence/count/order; missing SDK headers require a Target
+fix, not a policy waiver. Additional uncovered compound behavior stays native. See [global field formats](../../../../../docs/resource-field-contracts.md).
 At the first relevant mismatch, inspect the existing global paths and require
 Source-proven time/identity formats or unordered semantics. An identity rule
 only describes a format; correspondence is maintained internally from complete
@@ -26,10 +29,10 @@ backend-rewrite rule apply --plan <returned-plan-id>
 ```
 
 The proposal may be one rule, a list, or a full `traffic-policy/v2` authored
-document containing `json`, `mysql` and contextual `rules`. A supplied `json`
-or `mysql` section replaces that whole section atomically; omission preserves
-it. `json: {fields: {}}` clears JSON formats. Legacy resource/response amendments
-retain their supported additive semantics.
+document containing global formats, dependency lifetimes and any additional
+native `rules`. Supplied `json`, `mysql`, `redis` and `http` format sections
+replace their whole section atomically; omission preserves it.
+`json: {fields: {}}` clears JSON formats. Native replacement IDs remain explicit.
 Review affected surfaces, immutable Source scope, complete coverage, staged
 relationships, strict remainder, residual failures and verification obligations.
 Discovery drafts prefill observed selectors and request missing Source facts;
@@ -41,8 +44,15 @@ For ordinary JSON fields, declare each root-relative pointer once with
 may include literal prefixes. Equal complete typed Source IDs must remain equal
 in Target across supported fields and carriers, while distinct IDs cannot merge.
 The engine establishes that correspondence internally. Reads reuse established
-Target IDs and anchor unknown inputs. Derived keys/URLs, hashes, signatures and
-finite state retain additional typed effects and evidence requirements.
+Target IDs and anchor unknown inputs. Generic URL fields use `kind: url` with
+`formats: [url]`; decoded query text uses the same global pointer formats.
+Verified JWT fields use `kind: jwt` with an optional named `signature` profile;
+root `signatures` defines the algorithm and startup key once. The old authored
+identity `formats: [jwt]` syntax is rejected; there is no keyless JWT policy mode.
+`api` request positions explicitly authorize re-signing; response positions retain
+nonce echoes and signed expiry companion checks through existing typed owners. Multipart, DOCX, WSS path
+derivation and AES envelopes also remain native; no automatic global support
+is implied. See [signature profiles](../../../../../docs/signature-profiles.md).
 
 Use `mysql.tables.<logical-name>` with a physical `pattern` and column `fields`
 for explicit scalar identities or formats that native metadata cannot infer.
@@ -101,38 +111,50 @@ Use `case-pattern` for pre-inventory capture catalog bootstrap. The Source-gap
 `route`/`recorder-capture` workflows below remain explicit acquisition owners and
 write the same unified policy atomically. They are not value relaxations.
 
-## Redis APPEND Streams
+## Redis Key Behavior And Dependency Lifetimes
 
-For Source-proven nonempty APPEND buffering, use `effect.kind: redis_append_stream`
-with an explicit Redis resource/database and key selector. Require ordered
-byte concatenation and observation/reset boundary proof; differing chunk sizes
-alone are insufficient. Complete Source preflight checks cumulative RESP lengths
-and preserves fresh Replay obligations. Other calls, including expiry refreshes,
-retain ordinary finite matching. See [APPEND streams](../../../../../docs/redis-append-stream.md).
+Declare `append_stream: true`, `read_commutation: true`, `expiry_refresh: true`
+or scalar identity `read_back: true` on a bounded `redis.keys` pattern. No API,
+resource alias or database selector is needed. The engine retains actual
+endpoint/database/authentication partitions and complete causal Source proof.
+APPEND preserves all ordered bytes and read/reset fences; finite nil polling
+retains its call counts; positive TTL refresh retains exact TTLs; current-ID
+read-back cannot borrow a future/deleted identity. Historical reads before an
+owned successful SET stay finite. Inspect the earliest Target admission error.
 
-## Redis Independent Polling
+`commands` lists ordered Redis operations. Selected scalar time arguments use
+one format; script operations retain exact script digests. Optional `key_format`
+describes a generated wildcard key segment. Complete JSON values always use
+root `json.fields`. Do not author bindings, shared clock groups or relations.
+See [key declarations](../../../../../docs/redis-key-contracts.md),
+[APPEND](../../../../../docs/redis-append-stream.md),
+[read-back](../../../../../docs/redis-read-back.md) and
+[state observations](../../../../../docs/redis-state-observations.md).
 
-For Source-proven cancellation polling concurrent with unrelated writes,
-`effect.kind: redis_read_commutation` permits finite nil GET observations to
-cross their incidental connection order. Require an explicit Redis
-resource/database and key selector plus the independent-task Source proof.
-Complete preflight rejects non-nil reads, mutations, ambiguous key access and
-stateful read lanes. Every recorded read remains required; this does not
-authorize optional or extra polling. Use the unified plan/apply transaction and
-fresh Replay before attributing any remaining count mismatch. See
-[finite read commutation](../../../../../docs/redis-read-commutation.md).
+Keep dependency lifetime classification separate from formats:
 
-## Redis Read-back
+```yaml
+source_revision: immutable-source-image-v1
+localcache:
+  requests:
+    - redis: {operation: HGET, key: token_v2, field: '3061639762'}
+    - http: {host: auth.example.com, method: GET, path: /.well-known/jwks.json}
+process_dependencies:
+  tasks:
+    refresh_signing_keys:
+      requests:
+        - http: {host: auth.example.com, method: GET, path: /keys/}
+```
 
-Global JSON and scalar MySQL identity formats provide mapped same-Case read delivery
-and unknown-input anchors. For additional native Redis write-then-read flows,
-update the existing `identity`
-or `redis_sequence` rule with `effect.read_back`; do not duplicate its capture
-or introduce a Target cache to compensate for a recorded generated ID. Require
-the worker's exact same-key write/read Source proof and selected fields. GET
-can return the matched SET value; LRANGE can return selected RPUSH/LSET JSON
-fields. Planning requires positive complete Source witnesses and Apply retains
-fresh Replay obligations. See [Redis read-back](../../../../../docs/redis-read-back.md).
+Use actual logical Source task names; one task may contain requests from several
+protocols. `localcache.requests` declares finite initialization dependencies, not
+cache objects or blanket reusable responses. HTTP lifetime entries require a
+host, and actual observed ports remain paired. MySQL process requests keep
+precise SQL selectors and transaction boundaries. Each proposed entry supplies
+independent Source proof; runtime output omits evidence metadata. These
+classifications do not implement initial load, refresh, fallback or readiness
+state in Target. `async_api` separately records one finite asynchronous case
+through its configured end resource, dependency failure or engine deadline.
 
 ## Recorder Capture
 

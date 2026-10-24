@@ -90,27 +90,27 @@ fn motan_event(
 fn http_rule_matches_authority_method_and_path_without_weakening_query_identity() {
     let rule = BackgroundDependencyRuleConfig::Http {
         name: "config-refresh".to_string(),
-        authorities: vec!["CONFIG.API.demo.test".to_string()],
+        authorities: vec!["CONFIG.INTERNAL".to_string()],
         methods: vec!["GET".to_string()],
-        path_prefixes: vec!["/1/config/service".to_string()],
+        path_prefixes: vec!["/refresh".to_string()],
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
     };
 
     assert!(rule.matches(&http_event(
-        "config.api.demo.test",
+        "config.internal",
         "GET",
-        "/1/config/service?action=lookup&group=large"
+        "/refresh?action=lookup&group=large"
     )));
     assert!(!rule.matches(&http_event(
-        "config.api.demo.test",
+        "config.internal",
         "POST",
-        "/1/config/service?action=lookup"
+        "/refresh?action=lookup"
     )));
     assert!(!rule.matches(&http_event(
-        "other.api.demo.test",
+        "other.internal",
         "GET",
-        "/1/config/service?action=lookup"
+        "/refresh?action=lookup"
     )));
 }
 
@@ -122,9 +122,9 @@ fn parses_and_validates_http_background_rules() {
         process_owned_dependencies:
         - name: config-refresh
           protocol: http
-          authorities: [config.api.demo.test]
+          authorities: [config.internal]
           methods: [GET]
-          path_prefixes: [/1/config/service]
+          path_prefixes: [/refresh]
           source_revision: 0123456789abcdef
           source_evidence: src/config/refresh.rs:42 scheduled refresh
         "#,
@@ -152,9 +152,9 @@ fn inline_process_owned_dependencies_are_rejected() {
         [[recording.process_owned_dependencies]]
         name = "legacy-config-refresh"
         protocol = "http"
-        authorities = ["config.api.demo.test"]
+        authorities = ["config.internal"]
         methods = ["GET"]
-        path_prefixes = ["/1/config/service"]
+        path_prefixes = ["/refresh"]
         source_revision = "0123456789abcdef"
         source_evidence = "src/config/refresh.rs:42 scheduled refresh"
         "#,
@@ -266,7 +266,7 @@ fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
     let mut config = AppConfig {
         process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
             name: "too-broad".to_string(),
-            authorities: vec!["config.api.demo.test".to_string()],
+            authorities: vec!["config.internal".to_string()],
             methods: Vec::new(),
             path_prefixes: vec!["/".to_string()],
             source_revision: "0123456789abcdef".to_string(),
@@ -278,7 +278,7 @@ fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
 
     config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Http {
         name: "invalid-path".to_string(),
-        authorities: vec!["config.api.demo.test".to_string()],
+        authorities: vec!["config.internal".to_string()],
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/lookup?group=x".to_string()],
         source_revision: "0123456789abcdef".to_string(),
@@ -287,30 +287,27 @@ fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
     assert!(config.validate().is_err());
 
     let rule = BackgroundDependencyRuleConfig::Http {
-        name: "breeze_vintage".to_string(),
+        name: "config-poll".to_string(),
         authorities: vec![
-            "config.api.demo.test".to_string(),
-            "static.config.api.demo.test".to_string(),
+            "config.internal".to_string(),
+            "mirror.config.internal".to_string(),
         ],
         methods: vec!["GET".to_string()],
-        path_prefixes: vec![
-            "/1/config/service".to_string(),
-            "/naming/service".to_string(),
-        ],
+        path_prefixes: vec!["/refresh".to_string(), "/health-cache".to_string()],
         source_revision: "0123456789abcdef".to_string(),
-        source_evidence: "traffic-e2e system default: Breeze Vintage background".to_string(),
+        source_evidence: "src/config/refresh.rs:42 explicit process scheduler".to_string(),
     };
     config.process_owned_dependencies = vec![rule.clone()];
     config.validate().unwrap();
     assert!(rule.matches(&http_event(
-        "config.api.demo.test",
+        "config.internal",
         "GET",
-        "/naming/service?action=lookup"
+        "/health-cache?action=lookup"
     )));
     assert!(rule.matches(&http_event(
-        "static.config.api.demo.test",
+        "mirror.config.internal",
         "GET",
-        "/1/config/service?action=getsign"
+        "/refresh?action=getsign"
     )));
 
     let mut overlapping = rule;
@@ -323,9 +320,9 @@ fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
     else {
         panic!("expected HTTP background rule");
     };
-    *name = "overlapping-vintage".to_string();
-    *authorities = vec!["config.api.demo.test".to_string()];
-    *path_prefixes = vec!["/naming/service".to_string()];
+    *name = "overlapping-config-poll".to_string();
+    *authorities = vec!["config.internal".to_string()];
+    *path_prefixes = vec!["/health-cache".to_string()];
     config.process_owned_dependencies.push(overlapping);
     assert!(config.validate().is_err());
 
@@ -336,7 +333,7 @@ fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
                 .map(|index| format!("config-{index}.example.test"))
                 .collect(),
             methods: vec!["GET".to_string()],
-            path_prefixes: vec!["/1/config/service".to_string()],
+            path_prefixes: vec!["/refresh".to_string()],
             source_revision: "0123456789abcdef".to_string(),
             source_evidence: "bounded selector test".to_string(),
         }],
@@ -383,4 +380,94 @@ fn memcached_initial_load_accepts_u64_profile_keys() {
         b'.',
         b"profile",
     ));
+}
+
+#[test]
+fn process_http_host_scope_keeps_recorded_ports_and_explicit_port_selectors_distinct() {
+    let mut rule = BackgroundDependencyRuleConfig::Http {
+        name: "refresh-keys".into(),
+        authorities: vec!["AUTH.EXAMPLE.COM".into()],
+        methods: vec!["GET".into()],
+        path_prefixes: vec!["/keys".into()],
+        source_revision: "0123456789abcdef".into(),
+        source_evidence: String::new(),
+    };
+    for authority in [
+        "auth.example.com",
+        "auth.example.com:80",
+        "auth.example.com:443",
+        "auth.example.com:8443",
+    ] {
+        assert!(
+            rule.matches(&http_event(authority, "GET", "/keys/current")),
+            "{authority}"
+        );
+        assert!(
+            rule.matches_http_request("GET", &"/keys/current".parse().unwrap(), Some(authority)),
+            "{authority}"
+        );
+        assert!(
+            rule.matches_http_request(
+                "GET",
+                &format!("https://{authority}/keys/current").parse().unwrap(),
+                None
+            ),
+            "{authority}"
+        );
+    }
+    assert!(!rule.matches(&http_event("auth.example.com.evil:443", "GET", "/keys")));
+    assert!(!rule.matches_http_request(
+        "POST",
+        &"/keys".parse().unwrap(),
+        Some("auth.example.com:443")
+    ));
+    assert!(!rule.matches_http_request(
+        "GET",
+        &"/other".parse().unwrap(),
+        Some("auth.example.com:443")
+    ));
+    let BackgroundDependencyRuleConfig::Http { authorities, .. } = &mut rule else {
+        unreachable!()
+    };
+    *authorities = vec!["auth.example.com:8443".into()];
+    for authority in [
+        "auth.example.com",
+        "auth.example.com:80",
+        "auth.example.com:443",
+    ] {
+        assert!(
+            !rule.matches(&http_event(authority, "GET", "/keys")),
+            "{authority}"
+        );
+        assert!(
+            !rule.matches_http_request("GET", &"/keys".parse().unwrap(), Some(authority)),
+            "{authority}"
+        );
+    }
+    assert!(rule.matches(&http_event("auth.example.com:8443", "GET", "/keys")));
+    let mut host_rule = rule.clone();
+    let BackgroundDependencyRuleConfig::Http {
+        name, authorities, ..
+    } = &mut host_rule
+    else {
+        unreachable!()
+    };
+    *name = "host-refresh".into();
+    *authorities = vec!["auth.example.com".into()];
+    assert!(
+        validate(&[host_rule, rule.clone()]).is_err(),
+        "host wildcard and explicit port overlap"
+    );
+    let mut other_port = rule.clone();
+    let BackgroundDependencyRuleConfig::Http {
+        name, authorities, ..
+    } = &mut other_port
+    else {
+        unreachable!()
+    };
+    *name = "other-port-refresh".into();
+    *authorities = vec!["auth.example.com:9443".into()];
+    validate(&[rule, other_port]).unwrap();
+    assert!(matching::authority_matches("[::1]", "[::1]:8443"));
+    assert!(!matching::authority_matches("[::1]:443", "[::1]:8443"));
 }

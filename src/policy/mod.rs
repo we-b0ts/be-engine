@@ -28,6 +28,8 @@ mod native_compile;
 mod proof;
 pub use proof::{MAX_PROOF_FACT_BYTES, MAX_PROOF_SOURCE_REFERENCES};
 mod schema;
+pub(crate) mod signatures;
+pub use signatures::SignatureDefinition;
 mod strict_map;
 mod time_scope;
 pub use time_scope::ClockScope;

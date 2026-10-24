@@ -1,4 +1,4 @@
-//! Global complete-token formats use the sealed transaction without signing inputs.
+//! Global JWT verification freezes signing inputs in the sealed plan transaction.
 use super::*;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 
@@ -49,10 +49,12 @@ fn prepare(fixture: &Fixture, invalid_token: Option<bool>) -> (PathBuf, Vec<u8>,
     fs::write(&dependencies, format!("{event}\n")).unwrap();
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","json":{"fields":{
+        json!({"format":"traffic-policy/v2","signatures":{
+            "default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}
+        },"json":{"fields":{
             "/metadata/request_id":{"kind":"identity","formats":[{"hex":8}]},
-            "/metadata/auth_token":{"kind":"identity","formats":["jwt"]},
-            "/metadata/skill_identity_token":{"kind":"identity","formats":["jwt"]}
+            "/metadata/auth_token":{"kind":"jwt"},
+            "/metadata/skill_identity_token":{"kind":"jwt"}
         }}}),
     );
     // The installed historical attempt represents the same startup inputs.
@@ -67,13 +69,32 @@ fn prepare(fixture: &Fixture, invalid_token: Option<bool>) -> (PathBuf, Vec<u8>,
 }
 
 #[test]
-fn global_http_token_formats_plan_apply_without_scope_or_signing_keys() {
-    for invalid_signature in [None, Some(false), Some(true)] {
+fn global_http_jwt_plans_authenticate_source_and_freeze_the_private_signing_key() {
+    for scenario in ["apply", "bad-auth-token", "bad-skill-token", "changed-key"] {
         let fixture = Fixture::new();
+        let invalid_signature = match scenario {
+            "bad-auth-token" => Some(false),
+            "bad-skill-token" => Some(true),
+            _ => None,
+        };
         let (dependencies, recording, oracle) = prepare(&fixture, invalid_signature);
         fixture.confirm();
-        let plan = fixture.plan().unwrap();
-        assert_eq!(plan.traffic_e2e_report["rule_ids"], json!(["global.json"]));
+        let plan = fixture.plan();
+        if invalid_signature.is_some() {
+            assert!(
+                plan.is_err(),
+                "invalid Source token must fail complete preflight"
+            );
+            continue;
+        }
+        let plan = plan.unwrap();
+        assert!(
+            plan.traffic_e2e_report["rule_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|id| id == "global.json")
+        );
         assert!(
             plan.traffic_e2e_report["expanded_rules"]
                 .as_array()
@@ -89,7 +110,7 @@ fn global_http_token_formats_plan_apply_without_scope_or_signing_keys() {
             .root()
             .join(crate::repository::LOCAL_TARGET_ENV_PATH);
         assert!(
-            !fixture
+            fixture
                 .state()
                 .rule_plan
                 .as_ref()
@@ -101,6 +122,14 @@ fn global_http_token_formats_plan_apply_without_scope_or_signing_keys() {
                 .iter()
                 .any(|artifact| artifact.path == env)
         );
+        let public = serde_json::to_string(&plan.traffic_e2e_report).unwrap();
+        assert!(!public.contains(KEY));
+        assert!(!public.contains(&token(false, KEY)));
+        if scenario == "changed-key" {
+            fs::write(&env, "SECRET_KEY=changed-after-planning\n").unwrap();
+            assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
+            continue;
+        }
         let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
         assert_eq!(
             applied.traffic_e2e_report["status"],
@@ -108,7 +137,8 @@ fn global_http_token_formats_plan_apply_without_scope_or_signing_keys() {
         );
         assert!(fixture.state().rule_replay_pending);
         let policy = fs::read_to_string(fixture.policy()).unwrap();
-        assert!(policy.contains("jwt"));
+        assert!(policy.contains("kind: jwt"));
+        assert!(policy.contains("signatures:"));
         assert!(!policy.contains("http_request"));
         assert!(!policy.contains(KEY));
         assert_eq!(fs::read(&dependencies).unwrap(), recording);

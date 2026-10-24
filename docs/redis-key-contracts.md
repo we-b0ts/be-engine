@@ -1,32 +1,53 @@
-# Redis key request contracts
+# Redis key declarations
 
-Current key-local permissions use `redis.keys` without an API selector:
+Use `redis.keys` for bounded key-local formats and behavior, without API,
+resource aliases or database selectors:
 
 ```yaml
 redis:
-  database: 0
   keys:
-    'chat:streaming:*': {resource: cache, append_stream: true, expiry_refresh: true}
-    'chat:cancel:*': {resource: cache, read_commutation: true}
+    'chat:streaming:*': {append_stream: true, expiry_refresh: true}
+    'chat:cancel:*': {read_commutation: true}
     'chat:streaming:text_block:*':
       kind: identity
       formats: [{prefix: text-, format: decimal}]
-      resource: cache
       read_back: true
-    token_v2:
-      resource: tauth_cache
-      finite_sharing: {operation: HGET, hash_field: '3061639762'}
+    'task:counter:*': {commands: [INCRBY, EXPIRE]}
+    'task:events:*':
+      commands:
+        - operation: ZADD
+          arguments:
+            1: {kind: time, formats: [unix_seconds]}
+    'request:*':
+      key_format: {kind: identity, formats: [{hex: 32}]}
+      commands: [SET]
+localcache:
+  requests:
+    - redis: {operation: HGET, key: token_v2, field: '3061639762'}
 ```
 
-Resources retain the physical endpoint, database and authentication scope of
-each operation permission. Scalar `kind`/`formats` declarations retain their
-global key namespace; JSON values are recognized and use `json.fields`.
-`read_back` selects the existing same-key SET/DEL/GET state epochs, including
-variable GET counts. Append preserves the complete byte stream across chunks;
-read commutation retains finite read counts; expiry refresh preserves the key
-lifetime and fixed TTL. These permissions use the existing Source inventory
-validators and protocol owners. They do not exempt asynchronous dependencies.
-Plan proposals supply a local `proof`; runtime rendering omits that evidence.
+`kind`/`formats` describe scalar values; complete JSON values are recognized
+and use `json.fields`. `key_format` describes the wildcard segment of a key
+and requires its ordered `commands` list. A time-window key uses
+`key_format: {kind: time_window, seconds: 60}`. Command arguments are one-based
+value positions after the key. Time arguments declare one format; the engine
+infers equal Source instants internally without authored clock groups. EVALSHA
+requires its exact `script: {sha1: ...}`; EVAL requires `script: {sha256: ...}`.
+Scripts, numkeys, KEYS and unselected ARGV remain strict.
+
+`read_back: true` supports current raw SET identity/GET states, including proven
+variable GET counts. APPEND preserves the complete byte stream across chunks;
+read commutation retains finite read counts; expiry refresh preserves key
+lifetimes and fixed TTL. Actual endpoint, database, authentication, protocol,
+causal ordering and finite inventory are still checked independently. A format
+declaration cannot merge state between physical resources.
+
+`localcache.requests` separately identifies finite process initialization reads.
+It does not declare value formats or arbitrary reusable cache responses.
+Source proof belongs on annotated plan declarations; runtime rendering omits
+it. Use the normal `rule plan --file … --evidence …` transaction and fresh Replay.
+The native semantic notes below describe additional derivations not covered by
+the compact key syntax; their old commands and YAML are not current authoring.
 
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI

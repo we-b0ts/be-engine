@@ -442,3 +442,135 @@ fn read_back_compiler_rejects_unowned_fields_operations_and_duplicate_native_own
             .unwrap();
     assert!(crate::policy::compile_policy(&document).is_err());
 }
+
+fn key_only_rule() -> Value {
+    let mut rule = identity_rule();
+    let selector = rule["match"].as_object_mut().unwrap();
+    selector.remove("api");
+    selector.remove("resource");
+    rule["effect"]["references"] = json!([]);
+    rule["effect"]["read_back"][0]["state_epochs"] = json!(true);
+    rule
+}
+
+#[test]
+fn key_only_read_back_skips_legacy_capture_and_partitions_causal_writes_by_physical_resource() {
+    let compiled = policy(vec![key_only_rule()]);
+    assert!(crate::policy::native::is_key_only_read_back(
+        &compiled.native[0].rule
+    ));
+    let projected =
+        crate::replay::policy::native_projection::project_native(&compiled.native).unwrap();
+    assert!(projected.document.dynamic_values.is_empty());
+    let runtime = runtime(vec![key_only_rule()]);
+    let a = target();
+    let source = args(&["current:7", "old"]);
+    let actual = args(&["current:7", "new"]);
+    let write = context(&a, "SET", 1);
+    runtime
+        .commit_redis_read_back_write(
+            runtime
+                .preview_redis_read_back_write(
+                    &write,
+                    &source,
+                    &actual,
+                    b"+OK\r\n",
+                    write.recorded_at,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+    let reads = args(&["current:7"]);
+    for remote in [
+        TargetKey {
+            host: a.host.clone(),
+            port: a.port + 1,
+        },
+        TargetKey {
+            host: "other.test".into(),
+            port: a.port,
+        },
+    ] {
+        let read = context(&remote, "GET", 2);
+        assert!(
+            runtime
+                .prepare_redis_read_back(&read, &reads, &reads, &bulk(b"old"))
+                .unwrap()
+                .is_none(),
+            "an identical value at another endpoint cannot borrow a Case write"
+        );
+    }
+    let mut another_db = context(&a, "GET", 2);
+    another_db.database = 1;
+    assert!(
+        runtime
+            .prepare_redis_read_back(&another_db, &reads, &reads, &bulk(b"old"))
+            .unwrap()
+            .is_none()
+    );
+    let mut another_user = context(&a, "GET", 2);
+    another_user.username = Some("reader");
+    assert!(
+        runtime
+            .prepare_redis_read_back(&another_user, &reads, &reads, &bulk(b"old"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        runtime
+            .prepare_redis_read_back(&context(&a, "GET", 2), &reads, &reads, &bulk(b"unseen"))
+            .is_err(),
+        "a prior owned write cannot become historical input when its Source value differs"
+    );
+    assert!(
+        runtime
+            .prepare_redis_read_back(
+                &context(&a, "GET", 2),
+                &reads,
+                &args(&["current:8"]),
+                &bulk(b"old")
+            )
+            .is_err(),
+        "an owned Source key cannot change its paired Target key"
+    );
+    let b = TargetKey {
+        host: "other.test".into(),
+        port: a.port,
+    };
+    let connection = uuid::Uuid::new_v4();
+    let mut write = context(&b, "SET", 1);
+    write.connection_id = Some(connection);
+    let source_b = args(&["current:7", "second"]);
+    let actual_b = args(&["current:7", "target-second"]);
+    runtime
+        .commit_redis_read_back_write(
+            runtime
+                .preview_redis_read_back_write(
+                    &write,
+                    &source_b,
+                    &actual_b,
+                    b"+OK\r\n",
+                    write.recorded_at,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+    let mut read = context(&b, "GET", 2);
+    read.connection_id = Some(connection);
+    assert_eq!(
+        runtime
+            .prepare_redis_read_back(&read, &reads, &reads, &bulk(b"second"))
+            .unwrap()
+            .unwrap()
+            .response,
+        bulk(b"target-second")
+    );
+    assert_eq!(
+        runtime
+            .prepare_redis_read_back(&context(&a, "GET", 2), &reads, &reads, &bulk(b"old"))
+            .unwrap()
+            .unwrap()
+            .response,
+        bulk(b"new")
+    );
+}

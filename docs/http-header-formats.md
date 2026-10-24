@@ -10,7 +10,9 @@ http:
 ```
 
 Header names are case-insensitive. Presence, occurrence count and order stay
-strict. Identical Source and Target values pass directly; changed times must
+strict. There is no header-absence waiver, including for SDK metadata such
+as `x-stainless-*`; those headers are not a generic ignored prefix. Identical
+Source and Target values pass directly; changed times must
 satisfy the shared relative-time kernel against independent recorded Source
 and observed Target request clocks.
 Framing and integrity headers, including Content-Length, Content-Encoding,

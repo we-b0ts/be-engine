@@ -132,6 +132,7 @@ pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
     Ok(super::rule(
         value.name().into(),
         n::NativeEffect::ProcessOwned(n::ProcessOwnedEffect {
+            task_name: None,
             source_revision: revision,
             selector,
             origin,

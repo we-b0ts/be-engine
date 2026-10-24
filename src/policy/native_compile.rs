@@ -127,7 +127,6 @@ impl NativeEffect {
             Self::ResponseGenerated(_) => "generated_response",
             Self::ResponseBody(_) => "structured_response",
             Self::HttpRequest(_) => "http_request_contract",
-            Self::HttpClientMetadata(_) => "scoped_http_client_metadata",
             Self::MysqlValues(_) => "sql_value_contract",
             Self::InputJwt(_) => "input_token_rebase",
             Self::InputSignedTimestamp(_) => "input_signed_timestamp_rebase",
@@ -143,6 +142,29 @@ impl NativeEffect {
 fn validate_match(selector: &NativeMatch) -> Result<()> {
     if let Some(api) = &selector.api {
         api_parts(api)?;
+    }
+    if let Some(host) = &selector.http_host {
+        let authority = host.parse::<hyper::http::uri::Authority>().ok();
+        ensure!(host.len() <= 255 && !host.contains('*')
+            && authority.is_some_and(|authority|authority.host() == host && authority.port().is_none()),
+            "HTTP host selector requires a literal host without port, path or wildcard");
+        ensure!(
+            selector
+                .resource
+                .as_ref()
+                .is_none_or(|resource| resource.protocol == Protocol::Http
+                    && resource
+                        .endpoint
+                        .host
+                        .trim_end_matches('.')
+                        .eq_ignore_ascii_case(host.trim_end_matches('.')))
+                && selector.key.is_none()
+                && selector.sql.is_none()
+                && selector.tables.is_empty()
+                && selector.table_patterns.is_empty()
+                && selector.table_series.is_none(),
+            "HTTP host selector cannot select a non-HTTP resource, key or SQL"
+        );
     }
     if let Some(resource) = &selector.resource {
         resource.endpoint.validate()?;
@@ -225,15 +247,19 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
         NativeEffect::Identity(effect) => validate_identity(rule, effect),
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
         NativeEffect::RedisReadCommutation(_) | NativeEffect::RedisExpiryRefresh(_) => {
-            let resource = resource(selector, Protocol::Redis)?;
-            ensure!(
-                resource
-                    .database
-                    .as_ref()
-                    .and_then(crate::policy::Database::index)
-                    .is_some(),
-                "Redis observations require an explicit numeric Redis database"
-            );
+            if selector.resource.is_none() {
+                validate_discovered_redis_key(selector)?;
+            } else {
+                let resource = resource(selector, Protocol::Redis)?;
+                ensure!(
+                    resource
+                        .database
+                        .as_ref()
+                        .and_then(crate::policy::Database::index)
+                        .is_some(),
+                    "Redis observations require an explicit numeric Redis database"
+                );
+            }
             ensure!(
                 selector.operation.as_deref()
                     == Some(
@@ -252,15 +278,19 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
             Ok(())
         }
         NativeEffect::RedisAppendStream => {
-            resource(selector, Protocol::Redis)?;
-            ensure!(
-                selector
-                    .resource
-                    .as_ref()
-                    .and_then(|r| r.database.as_ref())
-                    .is_some(),
-                "append stream requires an explicit Redis database"
-            );
+            if selector.resource.is_some() {
+                resource(selector, Protocol::Redis)?;
+                ensure!(
+                    selector
+                        .resource
+                        .as_ref()
+                        .and_then(|r| r.database.as_ref())
+                        .is_some(),
+                    "append stream requires an explicit Redis database"
+                );
+            } else {
+                validate_discovered_redis_key(selector)?;
+            }
             ensure!(
                 selector.operation.as_deref() == Some("APPEND"),
                 "append stream requires operation APPEND"
@@ -367,9 +397,6 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
             Ok(())
         }
         NativeEffect::HttpRequest(effect) => http_request::validate(selector, effect),
-        NativeEffect::HttpClientMetadata(effect) => {
-            http_request::validate_client_metadata(selector, effect)
-        }
         NativeEffect::MysqlValues(effect) => {
             resource(selector, Protocol::Mysql)?;
             ensure!(
@@ -444,7 +471,25 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
     }
 }
 
+/// These protocol owners discover physical lanes from immutable Source
+/// exchanges. Their key namespace must not mix HTTP or SQL selectors.
+fn validate_discovered_redis_key(selector: &NativeMatch) -> Result<()> {
+    ensure!(
+        selector.http_host.is_none()
+            && selector.path.is_none()
+            && selector.sql.is_none()
+            && selector.tables.is_empty()
+            && selector.table_patterns.is_empty()
+            && selector.table_series.is_none(),
+        "key-only Redis behavior cannot select HTTP paths or SQL"
+    );
+    Ok(())
+}
+
 fn validate_identity(rule: &NativeRule, effect: &IdentityEffect) -> Result<()> {
+    if crate::policy::native::is_key_only_read_back(rule) {
+        return Ok(());
+    }
     let resource = rule
         .selector
         .resource
@@ -549,7 +594,11 @@ fn validate_identity(rule: &NativeRule, effect: &IdentityEffect) -> Result<()> {
 }
 
 fn validate_sequence(rule: &NativeRule, sequence: &RedisSequenceEffect) -> Result<()> {
-    resource(&rule.selector, Protocol::Redis)?;
+    if rule.selector.resource.is_some() {
+        resource(&rule.selector, Protocol::Redis)?;
+    } else {
+        validate_discovered_redis_key(&rule.selector)?;
+    }
     ensure!(
         rule.selector.operation.is_none(),
         "an atomic sequence declares operations in its commands"

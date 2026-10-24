@@ -10,7 +10,6 @@ fn stateful(rule: &CompiledNativeRule) -> bool {
         | NativeEffect::RedisReadCommutation(_)
         | NativeEffect::RedisExpiryRefresh(_)
         | NativeEffect::HttpRequest(_)
-        | NativeEffect::HttpClientMetadata(_)
         | NativeEffect::InputJwt(_)
         | NativeEffect::InputSignedTimestamp(_) => true,
         NativeEffect::MysqlValues(effect) => !effect.params.is_empty(),

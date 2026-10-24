@@ -9,40 +9,31 @@ content bytes.
 
 ## Current generated identity
 
-Enable the explicit runtime permission on the raw SET-to-GET read-back:
+Declare the scalar identity format and `read_back: true` on one key pattern:
 
 ```yaml
-read_back:
-  - operation: GET
-    write_operation: SET
-    argument_index: 1
-    state_epochs: true
+redis:
+  keys:
+    'task:current:*': {kind: identity, formats: [uuid], read_back: true}
 ```
 
-The containing identity rule retains its explicit API, resource, database,
-user and bounded key selector. Original write capture, references and read-back
-contract remain in place. Only raw SET identity to GET supports `state_epochs`;
-JSON fields and list reads keep their finite contracts.
+The engine retains actual Case, endpoint, database, authentication and protocol
+partitions internally. No authored API/resource/database, binding or
+`state_epochs` field is needed. Only current raw SET identity to GET is covered
+by this key-local state permission; additional native list/compound contracts
+retain their own finite behavior.
 
-The ordinary rule plan/apply transaction accepts this one-way addition to an
-already installed finite read-back declaration. Keep the declaration in its
-original position and preserve its write/read contract. In the submitted plan
-proposal, attach a separate local `proof: {source: ..., fact: ...}` to this
-read-back declaration. Its evidence describes complete Case-owned SET/DEL
-lifetimes and variable read counts. The plan freezes that evidence separately;
-published `policy.yaml` contains only `state_epochs: true`. Removing an installed
-state permission is rejected by additive updates. Planning checks the complete Source trace again and
-Apply requires fresh genuine Replay.
+An annotated plan requires Source proof for complete owned SET/DEL lifetimes,
+causal clocks and variable read counts, including a positive write-to-read
+witness. Published policy omits that evidence. Historical GETs before the first
+supported successful SET keep their finite slots and fence the first mutation;
+a profile without an owned SET gains no reusable reads. Within an owned state,
+GET must equal the latest SET value or nil after DEL.
 
-Source must start absent and prove every GET
-equals the latest SET value or nil after DEL. Only unconditional SET, GET,
-successful DEL/UNLINK and positive TTL refreshes are supported on these keys.
-Implicit expiry, unknown initial nonempty values, other mutations, unknown
-scripts, transactional lanes, overlapping Global/Case/user ownership and
-ambiguous clocks reject the complete proof. No partial permission is installed.
-The declaration retains the ordinary positive write-to-read proof across its
-selected Source inventory; a Case whose selected key stays absent may use its
-proven nil state without inventing a write.
+Only unconditional SET, GET, successful DEL/UNLINK and positive TTL refreshes
+are supported in the owned state. Implicit expiry, unknown writers or mutations,
+ambiguous script key access, transactional lanes, overlapping ownership and
+ambiguous clocks reject the proof. No partial permission is installed.
 
 At runtime a GET uses the currently claimed Source SET/DEL state and the Target
 identity already bound by the matched SET. It cannot take an identity from a
@@ -54,23 +45,15 @@ still has unused Source reads. All mutations retain ordinary finite matching.
 ## Positive TTL refresh
 
 ```yaml
-id: task-stream-ttl
-match:
-  api: POST /tasks
-  resource:
-    protocol: redis
-    endpoint: cache.example:6379
-    database: 0
-    username: default
-  operation: EXPIRE
-  key: {kind: affix, prefix: 'task:stream:'}
-effect: {kind: redis_expiry_refresh}
-proof:
-  source: app/session.py:1210
-  fact: >-
-    Buffered writes refresh one fixed positive TTL. Scheduling changes the
-    refresh count; this Case has no expiry observer or external key owner.
+redis:
+  keys:
+    'task:stream:*': {expiry_refresh: true}
 ```
+
+The proposed key proof must establish one fixed positive TTL, complete owned
+lifetimes and absence of expiry observers or external writers. Key-local
+APPEND and expiry permissions can share one entry; actual physical resources
+remain independent.
 
 All selected Source EXPIREs must return integer 1 on a key established by a
 successful ordinary Case SET, APPEND or list creation. The TTL and complete

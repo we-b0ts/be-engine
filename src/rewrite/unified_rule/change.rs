@@ -55,7 +55,8 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
             || change.policy.mysql.is_some()
             || change.policy.redis.is_some()
             || change.policy.http.is_some()
-            || change.policy.async_api.is_some(),
+            || change.policy.async_api.is_some()
+            || !change.policy.signatures.is_empty(),
         "policy changes require explicit replacement declarations or rules with Source proof"
     );
     crate::policy::compile_policy(&change.policy)?;

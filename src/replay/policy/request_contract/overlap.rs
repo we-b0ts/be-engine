@@ -24,8 +24,12 @@ pub(in crate::replay::policy) fn validate(
                     .host
                     .as_ref()
                     .zip(other.target.host.as_ref())
-                    .is_none_or(|(a, b)| !a.eq_ignore_ascii_case(b))
-                || rule.target.port != other.target.port
+                    .is_some_and(|(a, b)| !a.eq_ignore_ascii_case(b))
+                || rule
+                    .target
+                    .port
+                    .zip(other.target.port)
+                    .is_some_and(|(a, b)| a != b)
             {
                 continue;
             }
@@ -37,7 +41,7 @@ pub(in crate::replay::policy) fn validate(
             }
             let overlap = match (&rule.redis, &other.redis) {
                 (Some(RedisSelector::Requests(a)), Some(RedisSelector::Requests(b))) => {
-                    a.database == b.database
+                    a.database.zip(b.database).is_none_or(|(a, b)| a == b)
                         && a.key.overlaps(&b.key)
                         && a.commands
                             .iter()
@@ -85,9 +89,9 @@ pub(in crate::replay::policy) fn validate(
                     rule.target
                         .host
                         .as_ref()
-                        .is_some_and(|h| h.eq_ignore_ascii_case(&target.host))
-                        && rule.target.port == Some(target.port)
-                        && a.database == *database
+                        .is_none_or(|h| h.eq_ignore_ascii_case(&target.host))
+                        && rule.target.port.is_none_or(|port| port == target.port)
+                        && a.database.is_none_or(|selected| selected == *database)
                         && a.key.overlaps(key)
                         && a.commands
                             .iter()

@@ -4,12 +4,8 @@ use super::*;
 #[derive(Default)]
 pub(super) struct Coverage {
     references: BTreeSet<(String, usize)>,
-    headers: BTreeSet<(String, String)>,
 }
 impl Coverage {
-    pub(super) fn header(&mut self, id: &str, name: &str) {
-        self.headers.insert((id.into(), name.into()));
-    }
     pub(super) fn references(&mut self, hits: impl IntoIterator<Item = (String, usize)>) {
         self.references.extend(hits);
     }
@@ -30,26 +26,14 @@ impl Coverage {
                 "native rule {} has no positive complete Source evidence",
                 rule.id
             );
-            match &rule.effect {
-                NativeEffect::HttpClientMetadata(effect) => {
-                    for name in &effect.headers {
-                        ensure!(
-                            self.headers.contains(&(rule.id.clone(), name.clone())),
-                            "HTTP client metadata rule {} header {name} has no complete positive Source witness",
-                            rule.id
-                        );
-                    }
+            if let NativeEffect::Identity(effect) = &rule.effect {
+                for index in 0..effect.references.len() {
+                    ensure!(
+                        self.references.contains(&(rule.id.clone(), index)),
+                        "native identity {} reference resource {index} has no use after a Source capture",
+                        rule.id
+                    );
                 }
-                NativeEffect::Identity(effect) => {
-                    for index in 0..effect.references.len() {
-                        ensure!(
-                            self.references.contains(&(rule.id.clone(), index)),
-                            "native identity {} reference resource {index} has no use after a Source capture",
-                            rule.id
-                        );
-                    }
-                }
-                _ => (),
             }
         }
         Ok(())

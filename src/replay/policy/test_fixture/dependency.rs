@@ -217,13 +217,13 @@ pub(super) fn convert(
                 .context("fixture Redis selector absent")?;
             let database = match redis {
                 super::super::redis_value::RedisSelector::Requests(value) => value.database,
-                super::super::redis_value::RedisSelector::TimeShift(value) => value.database,
+                super::super::redis_value::RedisSelector::TimeShift(value) => Some(value.database),
                 super::super::redis_value::RedisSelector::SharedRead(value) => value.database,
             };
             let resource = inventory.resource(
                 p::Protocol::Redis,
                 &rule.target,
-                Some(p::Database::Index(database)),
+                database.map(p::Database::Index),
                 None,
                 None,
             )?;

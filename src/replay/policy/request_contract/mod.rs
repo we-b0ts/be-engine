@@ -92,7 +92,16 @@ impl CaseAnchor {
     }
 }
 
-type SequenceKey = (String, String, Vec<u8>);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SequenceKey {
+    case: String,
+    rule: String,
+    host: String,
+    port: u16,
+    database: i64,
+    username: Option<String>,
+    source_key: Vec<u8>,
+}
 
 #[derive(Default)]
 struct State {
@@ -207,14 +216,22 @@ impl RequestContracts {
     pub(in crate::replay::policy) fn signing_keys(
         &self,
     ) -> Vec<crate::request_rules::keys::ResolvedSigningKey> {
-        self.keys.values().cloned().collect()
+        self.keys
+            .values()
+            .cloned()
+            .chain(
+                self.global_json()
+                    .into_iter()
+                    .flat_map(|global| global.signatures.resolved_keys()),
+            )
+            .collect()
     }
     pub(in crate::replay) fn begin_case(&self, id: &str) {
         let mut state = self.state.lock().expect("request contracts");
         if let Some(case) = state.cases.get_mut(id) {
             case.actual = None;
         }
-        state.sequences.retain(|(case, _, _), _| case != id);
+        state.sequences.retain(|key, _| key.case != id);
         state.key_bindings.retain(|scope, _| !scope.belongs_to(id));
         state.key_binding_proofs.retain(|proof| proof.case_id != id);
         state.candidates.retain(|c| c.case_id != id);
@@ -283,8 +300,8 @@ impl RequestContracts {
                     && r.target
                         .host
                         .as_ref()
-                        .is_some_and(|host| host.eq_ignore_ascii_case(&target.host))
-                    && r.target.port == Some(target.port)
+                        .is_none_or(|host| host.eq_ignore_ascii_case(&target.host))
+                    && r.target.port.is_none_or(|port| port == target.port)
                     && r.case_selector.as_ref().is_none_or(|selector| {
                         selector.method == anchor.method
                             && super::pattern::path_pattern_matches(&selector.path, &anchor.path)
@@ -456,15 +473,20 @@ pub(in crate::replay::policy) fn validate(rule: &ReplayDependencyRule) -> Result
         return Ok(());
     }
     ensure!(
-        rule.replay_scope == super::config::ReplayScope::Case && rule.case_selector.is_some(),
+        rule.replay_scope == super::config::ReplayScope::Case
+            && (rule.case_selector.is_some() || rule.protocol == DependencyProtocol::Redis),
         "request contracts require an explicit inbound case method/path and case scope"
     );
     ensure!(
-        rule.target
-            .host
-            .as_ref()
-            .is_some_and(|host| !host.is_empty() && !host.contains(['*', '/', ' ']))
-            && rule.target.port.is_some_and(|port| port > 0),
+        rule.protocol == DependencyProtocol::Redis
+            && rule.target.host.is_none()
+            && rule.target.port.is_none()
+            || rule
+                .target
+                .host
+                .as_ref()
+                .is_some_and(|host| !host.is_empty() && !host.contains(['*', '/', ' ']))
+                && rule.target.port.is_some_and(|port| port > 0),
         "request contracts require an exact endpoint"
     );
     crate::config::process_owned_dependencies::validate_optional_source_evidence(

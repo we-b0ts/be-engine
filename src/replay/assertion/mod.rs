@@ -56,9 +56,9 @@ pub(crate) struct ResponseAssertionRuntime {
 
 impl ResponseAssertionRuntime {
     pub(crate) fn load(policy: &Path) -> Result<Self> {
-        Ok(Self {
-            policy: load_replay_policy(policy)?,
-        })
+        let policy = load_replay_policy(policy)?;
+        policy.prepare_signatures()?;
+        Ok(Self { policy })
     }
 
     pub(crate) fn assert_recorded_response(
@@ -219,6 +219,7 @@ fn assert_recorded_response_with_policy(
     actual_bytes: &[u8],
     policy: &LoadedReplayPolicy,
 ) -> Result<ResponseAssertionCaseReport> {
+    policy.prepare_signatures()?;
     let decrypted_request =
         crate::request_headers::decrypt_request_bytes(request_bytes, &options.request)?;
     let request_bytes = decrypted_request.as_deref().unwrap_or(request_bytes);

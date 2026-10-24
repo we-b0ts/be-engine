@@ -10,10 +10,12 @@ fn http_request_json_authoring_is_rejected_and_global_formats_need_no_http_scope
         "resource":{"protocol":"http","endpoint":"upstream.test:80"},"operation":"POST","path":"/send"},
         "effect":{"kind":"http_request","json":{"/token":{"kind":"jwt","algorithm":"HS256","signing_key":{"kind":"target_env","name":"SECRET"}}}},"proof":proof}]});
     assert!(policy::parse_policy(&old.to_string()).is_err());
-    let global = json!({"format":"traffic-policy/v2","json":{"fields":{
+    let global = json!({"format":"traffic-policy/v2","signatures":{
+        "default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}
+    },"json":{"fields":{
         "/metadata/request_id":{"kind":"identity","formats":[{"hex":8}]},
-        "/metadata/auth_token":{"kind":"identity","formats":["jwt"]},
-        "/metadata/skill_identity_token":{"kind":"identity","formats":["jwt"]}
+        "/metadata/auth_token":{"kind":"jwt"},
+        "/metadata/skill_identity_token":{"kind":"jwt"}
     }}});
     let compiled =
         policy::compile_policy(&policy::parse_policy(&global.to_string()).unwrap()).unwrap();

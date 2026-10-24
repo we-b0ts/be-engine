@@ -5,7 +5,6 @@ use sqlx::Executor;
 fn policy() -> String {
     r#"format: traffic-policy/v2
 mysql:
-  database: appdb
   tables:
     blocks:
       pattern: blocks

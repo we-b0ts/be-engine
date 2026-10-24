@@ -4,28 +4,19 @@ An independent polling task can interleave a `GET` with delayed writes on a
 pooled Redis connection. Requiring that incidental wire order can deadlock a
 Target whose polling and flush tasks run at different speeds.
 
-`redis_read_commutation` explicitly permits selected, finite nil observations
-to commute with unrelated commands. It requires a Redis endpoint,
-database and bounded key selector:
+Declare `read_commutation: true` to permit selected, finite nil observations
+to commute with unrelated commands:
 
 ```yaml
-id: task-cancel-observations
-match:
-  resource:
-    protocol: redis
-    endpoint: cache.example:6379
-    database: 0
-    username: default
-  operation: GET
-  key: {kind: numeric, prefix: 'task:cancel:'}
-effect: {kind: redis_read_commutation}
-proof:
-  source: app/poller.py:12; app/emitter.py:45
-  fact: >-
-    Source runs cancellation polling independently of its delayed content flush.
-    Missing cancellation flags have no ordering relation to unrelated content
-    writes. Every recorded read remains a required dependency.
+redis:
+  keys:
+    'task:cancel:*': {read_commutation: true}
 ```
+
+The annotated plan supplies independent Source proof of the polling task,
+complete nil responses and independence from delayed writes. Runtime rendering
+omits proof. Key patterns have no resource or database selectors; actual
+Source/Target endpoint, database, authentication and protocol remain exact.
 
 The native planner and Replay share complete Source validation for each
 selected Case/key. All selected GET responses must be RESP nil bulk values.
@@ -50,7 +41,7 @@ needs its own evidence and decision. In particular, a recorded cancellation
 transition must never be replaced by an always-false observation.
 
 Use the ordinary `backend-rewrite rule plan --file ... --evidence ...` and
-`rule apply <plan-id>` transaction. Source self-validation authorizes a fresh
+`rule apply --plan <plan-id>` transaction. Source self-validation authorizes a fresh
 Replay obligation, never a successful Target result. Runtime dependency-rule
 reports include `kind: redis_read_commutation` and actual successful use counts;
 individual matches retain their original Source sequence and Target arrival

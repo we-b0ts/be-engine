@@ -634,11 +634,18 @@ pub(super) async fn end_case(
     } else {
         dependency_tail::deadline(&state, case_id).await
     };
+    // A confirmed stopped Target cannot start another Case dependency. Keep
+    // waiting for admitted I/O below, without an extra attribution idle window.
+    let attribution_window = if stopped {
+        Duration::ZERO
+    } else {
+        post_response_window
+    };
     let cleanup = async {
         let interaction =
-            interaction::drain(&state, case_id, &case_dir, post_response_window, deadline).await?;
-        if !interaction && !post_response_window.is_zero() {
-            tokio::time::sleep(post_response_window).await;
+            interaction::drain(&state, case_id, &case_dir, attribution_window, deadline).await?;
+        if !interaction && !attribution_window.is_zero() {
+            tokio::time::sleep(attribution_window).await;
         }
         dependency_tail::drain(&state, case_id).await
     };

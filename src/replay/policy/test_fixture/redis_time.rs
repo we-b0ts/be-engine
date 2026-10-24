@@ -50,7 +50,7 @@ impl RedisTimeShiftRead {
     pub(in crate::replay) fn shared(&self) -> crate::replay::redis::shared_read::RedisSharedRead {
         crate::replay::redis::shared_read::RedisSharedRead {
             command: self.command.clone(),
-            database: self.database,
+            database: Some(self.database),
             key: self.key.clone(),
             hash_field: self.hash_field.clone(),
         }
@@ -64,8 +64,8 @@ impl RedisTimeShiftSelector {
         &self,
     ) -> crate::replay::redis::shared_read::RedisSharedReadSelector {
         crate::replay::redis::shared_read::RedisSharedReadSelector {
-            host: self.host.clone(),
-            port: self.port,
+            host: Some(self.host.clone()),
+            port: Some(self.port),
             read: self.read.shared(),
         }
     }

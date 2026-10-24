@@ -57,21 +57,26 @@ fn typed_failures_and_lane_blockers_supply_scoped_capability_discovery() {
 }
 
 #[test]
-fn read_back_guidance_explains_additive_updates_and_distinct_count_authority() {
+fn read_back_guidance_explains_key_local_state_and_finite_historical_reads() {
     let facts = json!({"clusters":[{"protocol":"redis","operations":{"GET":1}}]});
     let hints = hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts);
     let finite = hints
         .iter()
         .find(|h| h.capability == "redis_read_back")
         .unwrap();
-    assert!(finite.hint.contains("Update the existing write rule"));
+    assert!(finite.hint.contains("redis.keys"));
+    assert!(finite.hint.contains("read_back: true"));
     assert!(finite.hint.contains("finite counts"));
     let state = hints
         .iter()
         .find(|h| h.capability == "redis_state_observations")
         .unwrap();
-    assert!(state.hint.contains("add state_epochs proof"));
-    assert!(state.hint.contains("otherwise unchanged declaration"));
+    assert!(state.hint.contains("independent Source proof"));
+    assert!(
+        state
+            .hint
+            .contains("Historical reads before the first owned SET stay finite")
+    );
     assert!(state.hint.contains("positive write-to-read witness"));
 }
 

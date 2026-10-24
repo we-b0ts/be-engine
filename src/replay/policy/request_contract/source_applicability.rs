@@ -72,7 +72,9 @@ impl RequestContracts {
                     continue;
                 }
                 let matches = if let Some(RedisSelector::Requests(selector)) = &rule.redis {
-                    selector.database == event["database"]
+                    selector
+                        .database
+                        .is_none_or(|database| event["database"].as_i64() == Some(database))
                         && selector
                             .commands
                             .iter()

@@ -1,11 +1,11 @@
 # Redis scalar formats
 
 Structured JSON values always use the single root `json.fields` strategy.
-Scalar stored values use physical key patterns and the same format vocabulary:
+Scalar stored values use bounded key patterns and the same format vocabulary,
+without resource aliases or database selectors:
 
 ```yaml
 redis:
-  database: 0
   keys:
     'device:identity-lock:*': {kind: identity, formats: [{hex: 32}]}
     'task-run-monitor:v2:as-of': {kind: time, formats: [unix_seconds]}
@@ -25,3 +25,9 @@ Successful JSON writes also retain bounded temporal counterparts at their exact
 physical key/container/hash field. A later read can reuse one only when the
 Source value agrees, both request timelines follow the completed write, and the
 Target counterpart is unambiguous. Immutable recordings remain unchanged.
+
+Key-local APPEND, read-back, polling order, expiry-refresh and ordered command
+permissions can share the same `redis.keys` entry. Initialization sharing is a
+dependency lifetime under `localcache.requests`; JSON value fields stay global.
+Actual endpoint/database/authentication partitions remain exact. See
+[key declarations](redis-key-contracts.md) for the current syntax.

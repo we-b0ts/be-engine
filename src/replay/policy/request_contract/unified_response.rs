@@ -147,7 +147,7 @@ impl RequestContracts {
             value.payload.is_none_or(|payload| {
                 let scalar = self
                     .redis_policy()
-                    .and_then(|policy| policy.field(database, value.key).ok().flatten())
+                    .and_then(|policy| policy.field(value.key).ok().flatten())
                     .is_some()
                     && crate::value_contract::redis_scalar::decode(payload)
                         .is_ok_and(|value| value.is_some());
@@ -188,21 +188,20 @@ impl RequestContracts {
                 let Some(payload) = value.payload else {
                     continue;
                 };
-                let delivery = if let Some(scalar) =
-                    self.scalar_delivery(database, value.key, payload, clocks)?
-                {
-                    ValueDelivery::Scalar(Box::new(scalar))
-                } else if let Some(global) = self.global_json()
-                    && crate::json_value::parse(payload).is_some()
-                {
-                    let copies =
-                        self.redis_known_times(&context, value, target_value, global, clocks)?;
-                    ValueDelivery::Json(Box::new(
-                        Delivery::prepare_global(payload, global, clocks)?.with_copies(copies),
-                    ))
-                } else {
-                    continue;
-                };
+                let delivery =
+                    if let Some(scalar) = self.scalar_delivery(value.key, payload, clocks)? {
+                        ValueDelivery::Scalar(Box::new(scalar))
+                    } else if let Some(global) = self.global_json()
+                        && crate::json_value::parse(payload).is_some()
+                    {
+                        let copies =
+                            self.redis_known_times(&context, value, target_value, global, clocks)?;
+                        ValueDelivery::Json(Box::new(
+                            Delivery::prepare_global(payload, global, clocks)?.with_copies(copies),
+                        ))
+                    } else {
+                        continue;
+                    };
                 let range = value
                     .response
                     .clone()

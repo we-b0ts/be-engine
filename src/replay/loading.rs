@@ -117,14 +117,14 @@ impl ReplayRuntime {
         if let Some(path) = global_debug_path {
             load_motan_debug_file(&path, &mut motan, &mut targets).await?;
         }
-        let shared_http_keys: BTreeSet<_> = config
+        let shared_http_selectors: Vec<_> = config
             .policy_path
             .as_deref()
             .map(policy::http_cross_case_rules)
             .transpose()?
             .unwrap_or_default()
-            .iter()
-            .map(|(_, s)| crate::dependency_index::http_key(&s.host, s.port, &s.method, &s.path))
+            .into_iter()
+            .map(|(_, selector)| selector)
             .collect();
         let mut deferred_files = BTreeMap::new();
         for (index, case) in cases.values().enumerate() {
@@ -135,28 +135,27 @@ impl ReplayRuntime {
             if lazy {
                 let path = case.dependencies_path.clone();
                 let cache = reader.clone();
-                let (file_index, startup) = tokio::task::spawn_blocking(move || -> Result<_> {
-                    let index = crate::dependency_index::load_file(&path)?;
-                    let records = deferred::startup_records(
-                        &path,
-                        &index,
-                        &mut *cache
+                let shared_http = shared_http_selectors.clone();
+                let (file_index, startup, shared_lines) =
+                    tokio::task::spawn_blocking(move || -> Result<_> {
+                        let index = crate::dependency_index::load_file(&path)?;
+                        let mut cache = cache
                             .lock()
-                            .map_err(|_| anyhow!("dependency cache lock poisoned"))?,
-                    )?;
-                    Ok((index, records))
-                })
-                .await
-                .context("case startup index task failed")??;
+                            .map_err(|_| anyhow!("dependency cache lock poisoned"))?;
+                        let records = deferred::startup_records(&path, &index, &mut cache)?;
+                        let shared_lines = http_cross_case::selected_source_lines(
+                            &path,
+                            &index,
+                            &mut cache,
+                            &shared_http,
+                        )?;
+                        Ok((index, records, shared_lines))
+                    })
+                    .await
+                    .context("case startup index task failed")??;
                 deferred::register_index_targets(&file_index, &mut targets)?;
                 let mut skip: BTreeSet<_> = startup.iter().map(|(line, _)| *line).collect();
-                skip.extend(
-                    file_index
-                        .http
-                        .iter()
-                        .filter(|entry| shared_http_keys.contains(&entry.key))
-                        .map(|entry| entry.location.line),
-                );
+                skip.extend(shared_lines);
                 dependencies::register_dependency_records(
                     &case.dependencies_path,
                     startup,

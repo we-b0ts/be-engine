@@ -43,8 +43,8 @@ pub(super) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
     }
     if let RedisSelector::SharedRead(read) = redis {
         let selector = crate::replay::redis::shared_read::RedisSharedReadSelector {
-            host: rule.target.host.clone().unwrap_or_default(),
-            port: rule.target.port.unwrap_or_default(),
+            host: rule.target.host.clone(),
+            port: rule.target.port,
             read: read.clone(),
         };
         selector.validate()?;
@@ -72,13 +72,17 @@ pub(super) fn validate_overlaps(rules: &[ReplayDependencyRule]) -> Result<()> {
             let Some(other_redis) = &other.redis else {
                 continue;
             };
-            if rule.target.port != other.target.port
+            if rule
+                .target
+                .port
+                .zip(other.target.port)
+                .is_some_and(|(a, b)| a != b)
                 || rule
                     .target
                     .host
                     .as_ref()
                     .zip(other.target.host.as_ref())
-                    .is_none_or(|(a, b)| !a.eq_ignore_ascii_case(b))
+                    .is_some_and(|(a, b)| !a.eq_ignore_ascii_case(b))
             {
                 continue;
             }
