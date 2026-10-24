@@ -101,7 +101,7 @@ fn invalid_signatures_and_ambiguous_or_incomplete_json_are_never_reissued() {
 fn compiler_rejects_unbounded_and_overlapping_signature_recipes() {
     let compile = |rule: Value| {
         crate::policy::compile_policy(
-            &serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[rule]})).unwrap(),
+            &serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[rule]})).unwrap(),
         )
     };
     assert!(compile(definition()).is_ok());
@@ -129,7 +129,7 @@ fn compiler_rejects_unbounded_and_overlapping_signature_recipes() {
     let mut second = definition();
     second["id"] = "overlap".into();
     let policy =
-        serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[definition(),second]}))
+        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[definition(),second]}))
             .unwrap();
     assert!(crate::policy::compile_policy(&policy).is_err());
 }
@@ -147,7 +147,7 @@ async fn genuine_http_send_uses_source_signature_and_keeps_recording_immutable()
     let policy = temp.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        json!({"format":"traffic-policy/v1","rules":[definition()]}).to_string(),
+        json!({"format":"traffic-policy/v2","rules":[definition()]}).to_string(),
     )
     .unwrap();
     let path = temp.path().join("request.json");

@@ -31,7 +31,7 @@ fn target() -> tempfile::TempDir {
     );
     fs::write(
         root.path().join(".traffic-e2e/policy.yaml"),
-        "format: traffic-policy/v1\nrules: []\n",
+        "format: traffic-policy/v2\nrules: []\n",
     )
     .unwrap();
     fs::write(root.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
@@ -153,7 +153,7 @@ fn reports_configuration_paths_relative_to_a_nested_target() {
     );
     fs::write(
         target_root.join(".traffic-e2e/policy.yaml"),
-        "format: traffic-policy/v1\nrules: []\n",
+        "format: traffic-policy/v2\nrules: []\n",
     )
     .unwrap();
     fs::write(target_root.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();

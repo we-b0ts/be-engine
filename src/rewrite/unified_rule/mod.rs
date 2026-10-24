@@ -18,6 +18,7 @@ use super::{
 use crate::policy::{PolicyRule, TrafficPolicy, compile_policy, parse_policy};
 
 mod change;
+mod declarations;
 pub(super) mod discovery;
 mod manifest;
 mod preflight;
@@ -33,10 +34,10 @@ pub struct RewriteUnifiedRulePlanOptions {
 
 fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
     let value: serde_yaml::Value = serde_yaml::from_str(input)
-        .context("expected a rule, rule list, or traffic-policy/v1 document")?;
+        .context("expected a rule, rule list, or traffic-policy/v2 document")?;
     let document = if value.get("rules").is_some() || value.get("format").is_some() {
         serde_yaml::from_value::<TrafficPolicy>(value)
-            .context("invalid traffic-policy/v1 proposal")?
+            .context("invalid traffic-policy/v2 proposal")?
     } else {
         let rules = if value.is_sequence() {
             serde_yaml::from_value::<Vec<PolicyRule>>(value)
@@ -51,6 +52,7 @@ fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
             format: crate::policy::POLICY_FORMAT.into(),
             source_revision: None,
             rules,
+            ..Default::default()
         }
     };
     compile_policy(&document)?;
@@ -133,14 +135,17 @@ fn plan(
     let mut change = change::parse(&input)?;
     let proposed = &mut change.policy;
     ensure!(
-        !proposed.rules.is_empty(),
-        "rule proposal must contain explicit Source-proven rules"
+        !proposed.rules.is_empty()
+            || !proposed.resources.is_empty()
+            || !proposed.responses.is_empty(),
+        "policy proposal must contain resource fields, response declarations or explicit rules"
     );
     let (_, config) = crate::e2e_run::resolve_project(root)?;
     let original = fs::read_to_string(&config.replay_policy)?;
     let mut document = parse_policy(&original).context(
-        "unified authoring requires a traffic-policy/v1 policy; no legacy fallback is used",
+        "unified authoring requires a traffic-policy/v2 policy; no legacy fallback is used",
     )?;
+    let before = compile_policy(&document)?;
     proposal::prepare_scopes(proposed, &document, &state.api)?;
     if let Some(revision) = &document.source_revision {
         ensure!(
@@ -153,15 +158,29 @@ fn plan(
         proposed.source_revision = Some(revision.clone());
         *proposed = crate::policy::expand_policy(proposed)?;
     }
-    let rule_ids = proposed
-        .rules
+    let mut rule_ids = crate::policy::effective_rules(proposed)?
         .iter()
         .map(|r| r.id().to_owned())
         .collect::<BTreeSet<_>>();
     let replaced_rules = change.remove_from(&mut document, &state.api)?;
-    let changed =
-        proposal::merge(&mut document, change.policy.rules)? || !replaced_rules.is_empty();
+    let declarations_changed = declarations::merge(&mut document, &change.policy)?;
+    let rules_changed = proposal::merge(&mut document, change.policy.rules)?;
+    let changed = declarations_changed || rules_changed || !replaced_rules.is_empty();
     let compiled = compile_policy(&document)?;
+    rule_ids.extend(
+        compiled
+            .rules
+            .iter()
+            .filter(|rule| !before.rules.iter().any(|old| old == *rule))
+            .map(|rule| rule.rule.id.clone()),
+    );
+    rule_ids.extend(
+        compiled
+            .native
+            .iter()
+            .filter(|rule| !before.native.iter().any(|old| old == *rule))
+            .map(|rule| rule.rule.id.clone()),
+    );
     let current = crate::validate_replay_policy(&config.replay_policy)?;
     ensure!(
         state.replay_identity.as_ref() == Some(&fingerprint::replay_identity(root)?),
@@ -253,12 +272,15 @@ impl UnifiedRulePlanRecord {
         let expanded = parse_policy(&self.updated)
             .and_then(|p| compile_policy(&p))
             .ok();
-        let rules = parse_policy(&self.updated).ok().map(|p| {
-            p.rules
-                .into_iter()
-                .filter(|r| self.rule_ids.contains(r.id()))
-                .collect::<Vec<_>>()
-        });
+        let rules = parse_policy(&self.updated)
+            .and_then(|p| crate::policy::effective_rules(&p))
+            .ok()
+            .map(|rules| {
+                rules
+                    .into_iter()
+                    .filter(|r| self.rule_ids.contains(r.id()))
+                    .collect::<Vec<_>>()
+            });
         json!({"kind":"unified", "status":if !self.changed() && applied {"applied_no_change"} else if !self.changed() {"planned_no_change"} else if applied && self.preflight.needs_recording() {"applied_pending_recording"} else if applied {"applied_pending_replay"} else {self.preflight.status()},
             "applied":applied, "changed":self.original != self.updated,
             "rule_ids":self.rule_ids, "replaced_rules":self.replaced_rules, "preflight":self.preflight,
@@ -294,8 +316,8 @@ pub(super) fn apply(
         super::rule_replay::request(state);
         if record.preflight.needs_recording() {
             let policy = parse_policy(&record.updated)?;
-            let proof = policy
-                .rules
+            let effective = crate::policy::effective_rules(&policy)?;
+            let proof = effective
                 .iter()
                 .filter(|rule| record.rule_ids.contains(rule.id()))
                 .map(|rule| format!("{}: {}", rule.proof().source, rule.proof().fact))

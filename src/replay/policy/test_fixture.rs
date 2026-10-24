@@ -85,6 +85,7 @@ fn convert_document(
         format: p::POLICY_FORMAT.into(),
         source_revision: None,
         rules,
+        ..Default::default()
     })
 }
 
@@ -92,7 +93,7 @@ fn convert_document(
 pub(crate) fn write_policy(path: impl AsRef<Path>, yaml: impl AsRef<[u8]>) -> Result<()> {
     let path = path.as_ref();
     let yaml = std::str::from_utf8(yaml.as_ref())?;
-    let policy = if yaml.contains("traffic-policy/v1") {
+    let policy = if yaml.contains("traffic-policy/v2") {
         p::parse_policy(yaml)?
     } else {
         convert_legacy_policy(yaml, path.parent())?

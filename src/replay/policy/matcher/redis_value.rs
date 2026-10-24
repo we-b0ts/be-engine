@@ -120,6 +120,7 @@ impl ReplayPolicyRuntime {
         for id in ids {
             decision.usage.entry(id.clone()).or_default().validations += 1;
         }
-        self.commit(case_id, decision);
+        self.commit(case_id, decision)
+            .expect("value usage accounting carries no identity proposals");
     }
 }

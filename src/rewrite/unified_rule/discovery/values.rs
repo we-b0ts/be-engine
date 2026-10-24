@@ -62,19 +62,19 @@ impl Drafts {
                 return Ok(());
             }
         }
-        let format = if source.is_number() && target.is_number() {
+        let formats: &[&str] = if source.is_number() && target.is_number() {
             match source.as_i64().unwrap_or(0) {
-                946_684_800_000_000.. => Some("unix_microseconds"),
-                946_684_800_000.. => Some("unix_milliseconds"),
-                946_684_800.. => Some("unix_seconds"),
-                _ => None,
+                946_684_800_000_000.. => &["unix_microseconds"],
+                946_684_800_000.. => &["unix_milliseconds"],
+                946_684_800.. => &["unix_seconds"],
+                _ => &[],
             }
         } else if source.is_string() && target.is_string() {
-            Some("rfc3339")
+            &["rfc3339", "sql_datetime", "iso8601_naive"]
         } else {
-            None
+            &[]
         };
-        if let Some(format) = format {
+        for format in formats {
             let mut contract = json!({"kind":"time","format":format,"relation":"preserve_offset"});
             let typed: FieldContract = serde_json::from_value(contract.clone())?;
             let observed = if base["surface"] == "api.response" {

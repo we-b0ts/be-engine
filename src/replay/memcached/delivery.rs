@@ -70,7 +70,7 @@ pub(super) async fn deliver_memcached_exchange(
     }
     let mut replay = state.lock().await;
     if let Some(policy) = replay.replay_policy.as_mut() {
-        policy.commit(matched.report.case_id.as_deref(), decision);
+        policy.commit(matched.report.case_id.as_deref(), decision)?;
     }
     replay.memcached.complete_exchange(matched);
     Ok(false)

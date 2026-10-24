@@ -81,7 +81,10 @@ Use the same `binding` for `/item_id` in the relevant delta events and `/item/id
 in done events, with their own exact event selectors and Source proof. A Source
 identity must always map to the same Target identity, and distinct Source
 identities cannot collapse into one Target identity. Bindings are fresh for
-each case comparison and are shared across rule IDs in that interaction only.
+each replay case and may be shared with declared MySQL, Redis and response
+identity fields in that case. Standalone interaction comparison has its own
+isolated binding state. Declare the complete eligible location inventory
+together; no generator-first capture rule is required for ordinary fields.
 The binding's format must be consistent throughout the policy; different literal
 prefixes can refer to the same underlying identity. Prefix bytes stay exact.
 `decimal` requires a positive canonical u64 string; digit count may differ.
@@ -93,13 +96,14 @@ on the format and hex length. No arbitrary string or inferred random-ID contract
 is supported. Each binding is bounded to
 4096 entities per interaction.
 
-An identity bijection does **not** prove database derivation or a relationship
-to dependency requests/results. For `msg_{subtask_id}`, trace the actual Source
-subtask allocation and Replay identity ownership before authorizing a change.
-If Replay fixes that subtask ID, its derived message ID must stay exact or be
-fixed in Target. A different displayed ID is insufficient proof for a rule.
-External identity, SQL, dependency, authentication and consumption obligations
-retain their own checks.
+A shared binding preserves observed equality and distinctness at explicitly
+declared eligible locations; it does not infer database derivation from a field
+name. For `msg_{subtask_id}`, trace Source allocation and declare the actual
+identity locations and format, or keep the derived value exact. An ID delivered
+from a dependency without an established mapping is anchored to that input.
+A different displayed ID is insufficient proof of variability. Explicit
+derivation, external identity, authentication and consumption obligations retain
+their own checks. See [resource identity fields](resource-field-contracts.md#identity-domains-and-read-delivery).
 
 Discovery groups JSON-bearing SSE slots by their explicit Source `/type` when
 present and exposes observed time/unordered drafts without
@@ -120,8 +124,11 @@ reported under `bounded_analysis.nonresumable_limits`.
 SSE selectors and authoring instructions even when no time/unordered draft is
 found. Use those bindings to trace Source generation and prove explicit identity
 rules; an empty candidate list does not mean the engine lacks SSE support.
-Include every identity reference, including IDs nested in terminal response
-output. Missing events and event order require Target diagnosis. If
+Include every eligible identity location, including IDs nested in terminal
+response output and corresponding MySQL/Redis fields, in the same proposal.
+The Source trace supplies the concrete equality relationships; the proposal
+supplies their domain, format and variability proof. Missing events and event
+order require Target diagnosis. If
 `policy_freshness.requires_fresh_replay` is true, follow its coordinator refresh
 command before planning against new evidence.
 

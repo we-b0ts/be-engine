@@ -6,16 +6,49 @@ use crate::policy::{
     Codec, CompiledNativeRule, CompiledRule, FieldContract, KeySelector, MatchSpec, Slot, Surface,
 };
 
+fn implicit_identity_delivery(rule: &CompiledRule) -> bool {
+    rule.rule.surface == Surface::DependencyResponse
+        && rule
+            .rule
+            .contract
+            .values()
+            .any(|field| matches!(field.unconditional(), FieldContract::Identity { .. }))
+}
+
 pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRule]) -> Result<()> {
     validate_body_codecs(value, native)?;
-    let read_back = native
+    let redis_read_back = native
         .iter()
         .filter(|rule| !rule.rule.effect.redis_read_back().is_empty())
+        .map(|rule| rule.rule.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let identity_read_back = native
+        .iter()
+        .filter(|rule| {
+            !rule.rule.effect.redis_read_back().is_empty()
+                || matches!(&rule.rule.effect, crate::policy::NativeEffect::Identity(effect)
+                    if !effect.mysql_read_back.is_empty())
+        })
         .map(|rule| rule.rule.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let delivery = value
         .iter()
         .filter(|rule| rule.rule.delivery.is_some())
+        .map(|rule| rule.rule.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let identity_delivery = value
+        .iter()
+        .filter(|rule| implicit_identity_delivery(rule))
+        .map(|rule| rule.rule.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let observations = value
+        .iter()
+        .filter(|rule| {
+            rule.rule.surface == Surface::DependencyResponse
+                && matches!(rule.rule.slot, Slot::SqlField(_) | Slot::RedisValue(_))
+                && rule.delivery_time.is_empty()
+                && !implicit_identity_delivery(rule)
+        })
         .map(|rule| rule.rule.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let mut claims = vec![];
@@ -34,6 +67,7 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
                     other.hash_field.as_ref(),
                 )
                 || !scopes_overlap(&claim.selector, &other.selector)?
+                || !physical_slots_overlap(claim, other)
                 || crate::policy::compiler::disjoint_conditions(
                     claim.when.as_ref(),
                     other.when.as_ref(),
@@ -47,17 +81,31 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
             {
                 continue;
             }
+            if observations.contains(claim.rule_id.as_str())
+                && redis_read_back.contains(other.rule_id.as_str())
+                || observations.contains(other.rule_id.as_str())
+                    && redis_read_back.contains(claim.rule_id.as_str())
+            {
+                continue;
+            }
             anyhow::ensure!(
                 claim.surface != ClaimSurface::DependencyResponse
-                    || !(read_back.contains(claim.rule_id.as_str())
+                    || !(redis_read_back.contains(claim.rule_id.as_str())
                         && delivery.contains(other.rule_id.as_str())
-                        || read_back.contains(other.rule_id.as_str())
-                            && delivery.contains(claim.rule_id.as_str())),
-                "Redis read_back cannot share a response with another delivery owner: {:?} / {:?}",
+                        || redis_read_back.contains(other.rule_id.as_str())
+                            && delivery.contains(claim.rule_id.as_str())
+                        || identity_read_back.contains(claim.rule_id.as_str())
+                            && identity_delivery.contains(other.rule_id.as_str())
+                        || identity_read_back.contains(other.rule_id.as_str())
+                            && identity_delivery.contains(claim.rule_id.as_str())),
+                "native read_back cannot share a response with another delivery owner: {:?} / {:?}",
                 claim.rule_id,
                 other.rule_id
             );
             let overlap = locations_overlap(&claim.location, &other.location);
+            if overlap && equivalent_context(value, native, claim, other) {
+                continue;
+            }
             if overlap && !container_child(claim, other) && !container_child(other, claim) {
                 anyhow::bail!(
                     "field ownership conflicts between rules {:?} and {:?} in {:?}: {:?} / {:?}",
@@ -71,6 +119,42 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
         }
     }
     Ok(())
+}
+
+fn equivalent_context(
+    value: &[CompiledRule],
+    native: &[CompiledNativeRule],
+    left: &NativeFieldClaim,
+    right: &NativeFieldClaim,
+) -> bool {
+    let (declared, contextual) = if value.iter().any(|rule| {
+        rule.rule.id == left.rule_id
+            && matches!(rule.rule.slot, Slot::SqlField(_) | Slot::RedisValue(_))
+    }) {
+        (left, right)
+    } else if value.iter().any(|rule| {
+        rule.rule.id == right.rule_id
+            && matches!(rule.rule.slot, Slot::SqlField(_) | Slot::RedisValue(_))
+    }) {
+        (right, left)
+    } else {
+        return false;
+    };
+    if !native.iter().any(|rule| rule.rule.id == contextual.rule_id) {
+        return false;
+    }
+    if declared.location != contextual.location {
+        return false;
+    }
+    if !super::contracts::same_position(declared, contextual) {
+        return false;
+    }
+    let (Some(declared_contract), Some(contextual_contract)) =
+        (&declared.contract, &contextual.contract)
+    else {
+        return false;
+    };
+    super::contracts::same_strategy(declared_contract, contextual_contract)
 }
 
 /// Container/child composition is valid only with one common typed codec view.
@@ -129,12 +213,13 @@ fn validate_body_codecs(value: &[CompiledRule], native: &[CompiledNativeRule]) -
     Ok(())
 }
 
-fn value_claims(compiled: &CompiledRule) -> Result<Vec<NativeFieldClaim>> {
+pub(super) fn value_claims(compiled: &CompiledRule) -> Result<Vec<NativeFieldClaim>> {
     let rule = &compiled.rule;
     rule.contract
         .iter()
         .map(|(pointer, contract)| {
             let location = match &rule.codec {
+                Codec::Scalar => OwnedLocation::Scalar,
                 Codec::Json => OwnedLocation::JsonPointer {
                     pointer: pointer.clone(),
                 },
@@ -176,9 +261,12 @@ fn value_claims(compiled: &CompiledRule) -> Result<Vec<NativeFieldClaim>> {
                     Slot::Value => NativeOwnedSlot::Value,
                     Slot::SqlValue(index) => NativeOwnedSlot::SqlValue(*index),
                     Slot::SqlColumn(name) => NativeOwnedSlot::SqlColumn(name.clone()),
+                    Slot::SqlField(name) => NativeOwnedSlot::SqlField(name.clone()),
+                    Slot::RedisValue(container) => NativeOwnedSlot::RedisValue(*container),
                 },
                 location,
                 collection: matches!(contract, FieldContract::Unordered),
+                contract: Some(contract.clone()),
             })
         })
         .collect()
@@ -244,6 +332,33 @@ fn scopes_overlap(left: &NativeMatch, right: &NativeMatch) -> Result<bool> {
 }
 
 fn sql_overlap(left: &NativeMatch, right: &NativeMatch) -> Result<bool> {
+    if left
+        .resource
+        .as_ref()
+        .is_some_and(|r| r.protocol == crate::policy::Protocol::Mysql)
+        && right
+            .resource
+            .as_ref()
+            .is_some_and(|r| r.protocol == crate::policy::Protocol::Mysql)
+        && (left.sql.is_none() || right.sql.is_none())
+    {
+        let matcher = |selector: &NativeMatch| {
+            (!selector.tables.is_empty()
+                || !selector.table_patterns.is_empty()
+                || selector.table_series.is_some())
+            .then(|| {
+                crate::config::mysql_tables::TableMatcher::new(
+                    &selector.tables,
+                    &selector.table_patterns,
+                    selector.table_series.as_ref(),
+                )
+            })
+            .transpose()
+        };
+        if let (Some(a), Some(b)) = (matcher(left)?, matcher(right)?) {
+            return Ok(a.overlaps(&b));
+        }
+    }
     let (Some(a), Some(b)) = (&left.sql, &right.sql) else {
         return Ok(true);
     };
@@ -285,6 +400,162 @@ fn sql_overlap(left: &NativeMatch, right: &NativeMatch) -> Result<bool> {
 
 pub(crate) fn value_sql_scopes_overlap(left: &MatchSpec, right: &MatchSpec) -> bool {
     sql_overlap(&selector(left), &selector(right)).unwrap_or(true)
+}
+
+pub(crate) fn value_sql_slots_overlap(
+    left: &crate::policy::Rule,
+    right: &crate::policy::Rule,
+) -> bool {
+    let slot = |slot: &Slot| match slot {
+        Slot::SqlField(name) => Some(NativeOwnedSlot::SqlField(name.clone())),
+        Slot::SqlValue(index) => Some(NativeOwnedSlot::SqlValue(*index)),
+        Slot::SqlColumn(name) => Some(NativeOwnedSlot::SqlColumn(name.clone())),
+        _ => None,
+    };
+    match (slot(&left.slot), slot(&right.slot)) {
+        (Some(a), Some(b)) => sql_slots_overlap(
+            &selector(&left.selector),
+            &a,
+            &selector(&right.selector),
+            &b,
+        ),
+        _ => true,
+    }
+}
+
+fn physical_slots_overlap(left: &NativeFieldClaim, right: &NativeFieldClaim) -> bool {
+    redis_slots_overlap(left, right)
+        && sql_slots_overlap(&left.selector, &left.slot, &right.selector, &right.slot)
+}
+
+fn redis_slots_overlap(left: &NativeFieldClaim, right: &NativeFieldClaim) -> bool {
+    use crate::policy::RedisContainer;
+    let (container, selected) = match (&left.slot, &right.slot) {
+        (NativeOwnedSlot::RedisValue(a), NativeOwnedSlot::RedisValue(b)) => return a == b,
+        (NativeOwnedSlot::RedisValue(container), _) => (container, right),
+        (_, NativeOwnedSlot::RedisValue(container)) => (container, left),
+        _ => return true,
+    };
+    let Some(operation) = selected.selector.operation.as_deref() else {
+        return true;
+    };
+    match (selected.surface, container) {
+        (ClaimSurface::DependencyRequest, RedisContainer::String) => {
+            matches!(operation, "SET" | "SETEX" | "PSETEX" | "MSET")
+        }
+        (ClaimSurface::DependencyRequest, RedisContainer::Hash) => {
+            matches!(operation, "HSET" | "HMSET")
+        }
+        (ClaimSurface::DependencyRequest, RedisContainer::List) => {
+            matches!(operation, "RPUSH" | "LPUSH" | "LSET")
+        }
+        (ClaimSurface::DependencyResponse, RedisContainer::String) => {
+            matches!(operation, "GET" | "MGET")
+        }
+        (ClaimSurface::DependencyResponse, RedisContainer::Hash) => {
+            matches!(operation, "HGET" | "HMGET" | "HGETALL")
+        }
+        (ClaimSurface::DependencyResponse, RedisContainer::List) => {
+            matches!(operation, "LRANGE" | "LINDEX")
+        }
+        _ => false,
+    }
+}
+
+fn sql_slots_overlap(
+    left: &NativeMatch,
+    left_slot: &NativeOwnedSlot,
+    right: &NativeMatch,
+    right_slot: &NativeOwnedSlot,
+) -> bool {
+    let (physical, column, selected, slot) = match (left_slot, right_slot) {
+        (
+            NativeOwnedSlot::SqlField(column),
+            NativeOwnedSlot::SqlValue(_) | NativeOwnedSlot::SqlColumn(_),
+        ) => (left, column, right, right_slot),
+        (
+            NativeOwnedSlot::SqlValue(_) | NativeOwnedSlot::SqlColumn(_),
+            NativeOwnedSlot::SqlField(column),
+        ) => (right, column, left, left_slot),
+        _ => return true,
+    };
+    let Some(sql) = &selected.sql else {
+        return true;
+    };
+    const MARKER: &str = "__traffic_field_table__";
+    let template_marker = sql.contains("{{table}}") && !sql.contains(MARKER);
+    let Some(tokens) = crate::mysql::sql::bounds::statement(&sql.replace("{{table}}", MARKER))
+    else {
+        return true;
+    };
+    let database = selected
+        .resource
+        .as_ref()
+        .and_then(|r| r.database.as_ref())
+        .and_then(crate::policy::Database::name);
+    let matches = |field: &crate::mysql::sql::field_bindings::FieldIdentity| {
+        field.column.eq_ignore_ascii_case(column)
+            && physical
+                .resource
+                .as_ref()
+                .and_then(|r| r.database.as_ref())
+                .and_then(crate::policy::Database::name)
+                .zip(field.database.as_deref())
+                .is_none_or(|(a, b)| a == b)
+            && (template_marker && field.table == MARKER
+                || crate::config::mysql_tables::TableMatcher::new(
+                    &physical.tables,
+                    &physical.table_patterns,
+                    physical.table_series.as_ref(),
+                )
+                .map_or(true, |tables| tables.matches(&field.table)))
+    };
+    match slot {
+        NativeOwnedSlot::SqlValue(index) => {
+            let Some(position) = tokens
+                .iter()
+                .enumerate()
+                .filter(|(_, token)| matches!(token, crate::mysql::sql::Token::Placeholder))
+                .nth(*index)
+                .map(|(index, _)| index)
+            else {
+                return true;
+            };
+            crate::mysql::sql::field_bindings::resolve(&tokens, database).is_none_or(|bindings| {
+                let fields = bindings
+                    .iter()
+                    .filter(|binding| binding.token_index == position)
+                    .collect::<Vec<_>>();
+                fields.is_empty() || fields.into_iter().any(|binding| matches(&binding.field))
+            })
+        }
+        NativeOwnedSlot::SqlColumn(name) => crate::mysql::sql::field_bindings::projection_columns(
+            &tokens, database,
+        )
+        .is_none_or(|columns| {
+            let originals = columns
+                .iter()
+                .filter(|(_, field)| {
+                    field
+                        .as_ref()
+                        .is_some_and(|field| field.column.eq_ignore_ascii_case(name))
+                })
+                .collect::<Vec<_>>();
+            let candidates = if originals.is_empty() {
+                columns
+                    .iter()
+                    .filter(|(label, _)| label.eq_ignore_ascii_case(name))
+                    .collect::<Vec<_>>()
+            } else {
+                originals
+            };
+            candidates.is_empty()
+                || candidates
+                    .iter()
+                    .any(|(_, field)| field.as_ref().is_none_or(&matches))
+        }),
+        _ => true,
+    }
 }
 
 fn disjoint<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {

@@ -66,7 +66,7 @@ fn real_array_elements_and_cases_share_one_proof_required_draft() {
     let mut rule = candidate["draft_rule"].clone();
     rule["proof"] = json!({"source":"fixture.rs:create_blocks","fact":"Source independently reads the request-relative creation clock for each block; IDs, order and other values remain exact"});
     let policy =
-        serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[rule]})).unwrap();
+        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[rule]})).unwrap();
     crate::policy::compile_policy(&policy).unwrap();
 }
 
@@ -234,4 +234,37 @@ fn changed_array_cardinality_does_not_supply_a_time_or_unordered_draft() {
     let mut drafts = Drafts::default();
     observe(&mut drafts, block_times(1, 0), block_times(2, 60), "case");
     assert!(drafts.values.is_empty());
+}
+
+#[test]
+fn naive_sql_and_json_times_are_only_proof_required_drafts_with_real_clock_validation() {
+    for (source, target, format) in [
+        ("2026-10-16 08:00:01", "2026-10-16 08:01:01", "sql_datetime"),
+        (
+            "2026-10-16T08:00:01",
+            "2026-10-16T08:01:01",
+            "iso8601_naive",
+        ),
+    ] {
+        let mut drafts = Drafts::default();
+        observe(
+            &mut drafts,
+            json!({"at":source}),
+            json!({"at":target}),
+            "case",
+        );
+        assert_eq!(drafts.values.len(), 1);
+        let draft = &drafts.values[0];
+        assert_eq!(draft["draft_rule"]["contract"]["/at"]["format"], format);
+        assert_eq!(draft["plan_ready"], false);
+        assert_eq!(draft["source_proof_required"], true);
+        let mut invalid = Drafts::default();
+        observe(
+            &mut invalid,
+            json!({"at":source}),
+            json!({"at":"2026-10-17 08:01:01"}),
+            "wrong-offset",
+        );
+        assert!(invalid.values.is_empty());
+    }
 }

@@ -419,7 +419,7 @@ fn policy_requires_endpoint_source_proof_and_disjoint_selectors() {
         "proof":{"source":"locks.rs:acquire/release","fact":"Source uses random ownership tokens and compare-delete"}});
     let parse = |rules: serde_json::Value| {
         crate::policy::parse_policy(
-            &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+            &json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
         )
     };
     parse(json!([rule])).unwrap();

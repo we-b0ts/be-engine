@@ -167,3 +167,65 @@ fn fixed_hex_identity_validates_both_sides_and_preserves_shared_bijection() {
     state.merge_and_validate(compare("msg_0123456789ac", target));
     assert!(!state.passed());
 }
+
+#[test]
+fn numeric_ids_share_tokens_with_string_positions_without_relaxing_scalar_types() {
+    let contract = FieldContract::Identity {
+        binding: "entity".into(),
+        prefix: String::new(),
+        format: IdentityFormat::Decimal,
+    };
+    let compare = |source: Value, target: Value| {
+        super::super::compare(
+            &source,
+            &target,
+            &[Field {
+                rule_id: "numeric",
+                pointer: "",
+                contract: &contract,
+            }],
+            AnchorClocks::default(),
+        )
+    };
+    let mut numeric = compare(json!(11), json!(1011));
+    assert!(numeric.passed());
+    numeric.merge_and_validate(compare(json!("11"), json!("1011")));
+    assert!(numeric.passed());
+    numeric.merge_and_validate(compare(json!("11"), json!("1012")));
+    assert!(!numeric.passed());
+    for (source, target) in [
+        (json!(11), json!("1011")),
+        (json!("11"), json!(1011)),
+        (json!(0), json!(10)),
+        (json!(-1), json!(10)),
+        (json!(1.0), json!(10)),
+    ] {
+        assert!(!compare(source, target).passed());
+    }
+}
+
+#[test]
+fn base64url_tokens_require_the_declared_length_and_url_safe_alphabet() {
+    let contract = FieldContract::Identity {
+        binding: "session".into(),
+        prefix: String::new(),
+        format: IdentityFormat::Base64Url(8),
+    };
+    let compare = |source: &str, target: &str| {
+        super::super::compare(
+            &json!(source),
+            &json!(target),
+            &[Field {
+                rule_id: "session",
+                pointer: "",
+                contract: &contract,
+            }],
+            AnchorClocks::default(),
+        )
+    };
+    assert!(compare("abCD12_-", "zyXW98_-").passed());
+    for bad in ["abCD12+_", "abCD12/8", "abCD12==", "short", "overlong12"] {
+        assert!(!compare("abCD12_-", bad).passed());
+        assert!(!compare(bad, "abCD12_-").passed());
+    }
+}

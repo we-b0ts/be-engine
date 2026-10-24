@@ -4,7 +4,7 @@ use crate::policy::*;
 #[test]
 fn conditional_duration_reuses_pb_types_and_preserves_inactive_wire_identity() {
     let input = r#"
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
 - id: waiting-duration
   surface: api.response

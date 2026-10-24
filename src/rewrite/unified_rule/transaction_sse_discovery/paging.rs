@@ -243,14 +243,29 @@ fn mysql_resultset_binding_survives_an_earlier_ok_response_and_exposes_read_back
     assert_eq!(mysql[1]["source_response_kind"], "resultset");
     assert_ne!(mysql[0]["witness_id"], mysql[1]["witness_id"]);
     for entry in &mysql {
-        assert_eq!(entry["needs_sql_template"], true);
-        assert!(entry["binding"]["match"].get("sql").is_none());
-        assert!(entry["binding"]["match"].get("table_series").is_none());
-        let instruction = entry["instruction"].as_str().unwrap();
-        assert!(instruction.contains("prove a bounded table_series"));
-        assert!(instruction.contains("AS {{table}}_suffix"));
-        assert!(instruction.contains("do not enumerate witnessed shards"));
+        assert_eq!(entry["needs_sql_template"], false);
+        assert_eq!(entry["needs_schema"], true);
+        assert_eq!(entry["source_intent_required"], true);
+        for key in ["sql", "operation", "table_series"] {
+            assert!(entry["binding"]["match"].get(key).is_none());
+        }
+        assert_eq!(entry["physical_fields"]["complete_coverage"], false);
     }
+    assert_eq!(mysql[0]["needs_physical_binding"], true);
+    assert!(
+        mysql[0]["physical_fields"]["fields"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(mysql[1]["needs_physical_binding"], false);
+    let fields = mysql[1]["physical_fields"]["fields"].as_array().unwrap();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0]["database"], "app");
+    assert_eq!(fields[0]["table"], "tasks");
+    assert_eq!(fields[0]["column"], "payload");
+    assert_eq!(fields[0]["slot"], json!({"sql_field":"payload"}));
+    assert!(fields[0].get("codec").is_none());
     assert!(
         evidence
             .rule_hints

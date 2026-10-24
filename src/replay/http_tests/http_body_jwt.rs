@@ -108,7 +108,7 @@ impl Fixture {
         rules.extend(extra_rules);
         crate::replay::write_policy_fixture(
             &policy,
-            json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+            json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
         )
         .unwrap();
         Self {

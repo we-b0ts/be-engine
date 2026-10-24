@@ -678,7 +678,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
     ) {
         queries.push((QUERY_HTTP_REQUESTS, "Inspect failed HTTP dependency requests, exact Source/Target body differences, and complete protected body pages"));
-        queries.push((QUERY_UNIFIED_RULE_CANDIDATES,"Discover bounded typed rule drafts from complete observed JSON differences, or enter a Source-proven field"));
+        queries.push((QUERY_UNIFIED_RULE_CANDIDATES,"Inspect physical field bindings and bounded strategy drafts; inventory Source-owned time, duration, unordered and identity locations together"));
     }
     queries
 }
@@ -691,8 +691,8 @@ pub(super) fn unified_rule_hint(
         .into_iter()
         .find(|q| q.query_id.ends_with("unified-rule-candidates"))?;
     Some(super::evidence_model::RewriteRuleHint {
-        capability:"unified_value_contract".into(),rule:"traffic-policy/v1".into(),
-        hint:"Inspect observed typed rule drafts, or enter a specific Source-proven field. Fill the self-contained rule's proof, then plan and apply through the returned commands; bounded drafts never establish complete coverage or successful Replay.".into(),
+        capability:"unified_value_contract".into(),rule:"traffic-policy/v2".into(),
+        hint:"Inspect source_entry.bindings and existing declarations at the first relevant mismatch, including when no draft exists. Inventory Source-proven time, duration, unordered or identity semantics by physical resource field; response fields retain their API envelope. For an identity, collect all eligible MySQL/Redis/response locations, format and case-local binding together instead of adding SQL/argument exceptions or waiting for separate capture/reference failures. Runtime relations follow observed Source values; eligibility still requires Source proof. Plan the declaration document once with any extra native relationships, inspect coverage and residual failures, apply and complete genuine Replay. Bounded discovery never establishes complete coverage or permission.".into(),
         help:command.command,
     })
 }

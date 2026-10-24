@@ -25,7 +25,7 @@ async fn successful_stream_cases_reuse_the_running_target_and_normal_case_contro
     config.replay_loading.lazy_cases = false;
     std::fs::write(
         &config.replay_policy,
-        "format: traffic-policy/v1\nrules: []\n",
+        "format: traffic-policy/v2\nrules: []\n",
     )
     .unwrap();
     let runtime = CaseExecutionRuntime {

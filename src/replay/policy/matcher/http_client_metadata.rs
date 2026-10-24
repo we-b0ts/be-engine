@@ -36,7 +36,8 @@ impl ReplayPolicyRuntime {
         for id in headers.values() {
             decision.usage.entry(id.clone()).or_default().validations += 1;
         }
-        self.commit(None, decision);
+        self.commit(None, decision)
+            .expect("SDK metadata accounting carries no value proposals");
     }
 
     pub(super) fn http_client_metadata_reports(

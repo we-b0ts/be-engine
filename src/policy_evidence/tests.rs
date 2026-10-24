@@ -153,7 +153,25 @@ fn derived_dependency_delivery_is_not_an_independent_target_observation() {
     metadata.target_role = TargetRole::DerivedDelivery;
     assert!(
         store
-            .record(metadata, &artifacts, b"source", Some(b"derived"))
+            .record(metadata.clone(), &artifacts, b"source", Some(b"derived"))
             .is_ok()
+    );
+    metadata.target_role = TargetRole::DeliveredInput;
+    assert!(
+        store
+            .record(
+                metadata.clone(),
+                &artifacts,
+                b"source",
+                Some(b"wire-delivered")
+            )
+            .is_ok()
+    );
+    metadata.surface = Surface::ApiResponse;
+    metadata.source_role = SourceRole::ApiResponse;
+    assert!(
+        store
+            .record(metadata, &artifacts, b"source", Some(b"wire-delivered"))
+            .is_err()
     );
 }

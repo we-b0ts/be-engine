@@ -22,11 +22,14 @@ use crate::{
 
 mod api;
 pub(super) mod dependency;
+mod identities;
 mod mysql_candidates;
 mod payload;
+mod redis_fields;
 mod resource;
 mod session;
 mod source;
+mod time_copies;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Preflight {
@@ -85,6 +88,7 @@ pub(super) fn verify(
 ) -> Result<Preflight> {
     source::validate_project(root, policy)?;
     let mut result = Preflight::default();
+    identities::require_replay(policy, selected, &mut result);
     source::verify(root, state, bundle, policy, selected, &mut result)?;
     let (scope, mut foreign) = resource::prepare(root, state, bundle, policy, selected)?;
     payload::verify(root, bundle, policy, selected, &mut result)?;
@@ -98,8 +102,21 @@ pub(super) fn verify(
 
     session::verify(root, bundle, policy, selected, &mut result)?;
     for id in selected {
+        let declaration_covered = policy.origins.get(id).is_some_and(|origin| {
+            // A field declaration applies to reads and writes. One observed
+            // physical field proves its schema; explicit input rewriting still
+            // needs a response witness of its own.
+            let comparison_only = policy
+                .rules
+                .iter()
+                .any(|rule| rule.rule.id == *id && rule.delivery_time.is_empty());
+            comparison_only
+                && policy.origins.iter().any(|(peer, other_origin)| {
+                    origin == other_origin && result.rules.get(peer).is_some_and(|count| *count > 0)
+                })
+        });
         ensure!(
-            result.rules.get(id).is_some_and(|n| *n > 0),
+            result.rules.get(id).is_some_and(|n| *n > 0) || declaration_covered,
             "rule {id:?} selects no complete Source witness in this attempt"
         );
     }

@@ -44,7 +44,7 @@ pub(in crate::replay::redis) fn state(
     let policy = root.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+        json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
     )
     .unwrap();
     let runtime = crate::replay::ReplayPolicyRuntime::load(

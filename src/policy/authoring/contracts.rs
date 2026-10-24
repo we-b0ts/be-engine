@@ -16,6 +16,14 @@ pub(super) fn transform(value: &mut Value, tagged: bool, compact: bool) -> Resul
         !map.contains_key("anchor"),
         "anchor is not configurable; time contracts use the corresponding dependency request start"
     );
+    if !compact {
+        ensure!(
+            map.get("clock_group")
+                .and_then(Value::as_str)
+                .is_none_or(|group| !group.starts_with("schema.")),
+            "schema. clock groups are reserved for implicit field clocks"
+        );
+    }
     if !compact && map.get("relation").and_then(Value::as_str) == Some("preserve_offset") {
         remove_relative_offset(map)?;
     }

@@ -1,22 +1,68 @@
-//! Recorded Redis input validation and explicit JSON/PB delivery copies.
+//! Recorded Redis storage values and explicit delivery copies with exact RESP remainder.
 use super::*;
-use crate::policy::{Protocol, Surface};
+use crate::policy::{Slot, Surface};
 use crate::replay::contract_value::Delivery;
 
 #[derive(Debug, Clone)]
+struct PreparedValue {
+    range: std::ops::Range<usize>,
+    header_len: usize,
+    delivery: Delivery,
+}
+
+#[derive(Debug, Clone)]
 pub(in crate::replay) struct PreparedRedisDelivery {
+    owner: RequestContracts,
+    case: String,
     observation_id: uuid::Uuid,
     original: Vec<u8>,
-    value: Delivery,
+    values: Vec<PreparedValue>,
     witness: Option<crate::policy_evidence::WitnessMetadata>,
 }
 
 impl PreparedRedisDelivery {
     pub(in crate::replay) fn render(&self, now: DateTime<Utc>) -> Result<Vec<u8>> {
-        let body = self.value.render(now)?;
-        let mut response = format!("${}\r\n", body.len()).into_bytes();
-        response.extend(body);
-        response.extend_from_slice(b"\r\n");
+        let mut response = Vec::with_capacity(self.original.len());
+        let mut previous = 0;
+        let mut identities = None::<crate::value_contract::identities::IdentityDecision>;
+        for value in &self.values {
+            ensure!(
+                value.range.start >= previous,
+                "overlapping Redis delivery values"
+            );
+            response.extend_from_slice(&self.original[previous..value.range.start]);
+            let body = if value.delivery.has_identities() {
+                let (body, decision) =
+                    value
+                        .delivery
+                        .render_with_identities(now, &self.owner, &self.case)?;
+                if let Some(identities) = &mut identities {
+                    identities.merge(decision)?;
+                } else {
+                    identities = Some(decision);
+                }
+                body
+            } else {
+                value.delivery.render(now)?
+            };
+            if body.len() == value.range.len() - value.header_len - 2 {
+                response.extend_from_slice(
+                    &self.original[value.range.start..value.range.start + value.header_len],
+                );
+            } else {
+                response.extend_from_slice(format!("${}\r\n", body.len()).as_bytes());
+            }
+            response.extend(body);
+            response.extend_from_slice(b"\r\n");
+            previous = value.range.end;
+        }
+        response.extend_from_slice(&self.original[previous..]);
+        if let Some(identities) = identities {
+            // Reserve the complete response atomically before any ID reaches
+            // another Target connection. A failed wire write keeps this
+            // conservative anchor until the case ends.
+            self.owner.commit_identity(identities)?;
+        }
         Ok(response)
     }
 }
@@ -38,51 +84,73 @@ impl RequestContracts {
         connection_id: uuid::Uuid,
         sequence: u64,
     ) -> Option<Result<PreparedRedisDelivery>> {
-        let compiled = self.compiled_rules()?;
-        let rules =
-            compiled
-                .rules
-                .iter()
-                .filter(|compiled| {
-                    let rule = &compiled.rule;
-                    rule.surface == Surface::DependencyResponse
-                        && self.matches_compiled_case(compiled, Some(case))
-                        && rule.selector.resource.as_ref().is_some_and(|r| {
-                            r.protocol == Protocol::Redis
-                                && r.endpoint.host.eq_ignore_ascii_case(&target.host)
-                                && r.endpoint.port == target.port
-                                && r.database
-                                    .as_ref()
-                                    .is_none_or(|d| d.index() == Some(database))
-                                && r.username.as_deref().is_none_or(|u| Some(u) == username)
-                        })
-                        && rule.selector.operation.as_deref() == Some(command)
-                        && rule.selector.hash_field.as_ref().is_none_or(|field| {
-                            args.get(1).is_some_and(|value| field.matches(value))
-                        })
-                        && rule
-                            .selector
-                            .key
-                            .as_ref()
-                            .is_some_and(|key| args.first().is_some_and(|bytes| key.matches(bytes)))
-                })
-                .collect::<Vec<_>>();
-        if rules.is_empty() {
+        self.compiled_rules()?;
+        let context = RedisRequestContext {
+            case,
+            target,
+            database,
+            username,
+            command,
+            recorded_at: source_started,
+            actual_at: actual_started,
+            connection_id: Some(connection_id),
+            sequence: Some(sequence),
+            observation_id: None,
+        };
+        let scoped = self.scoped_compiled_redis(&context, Surface::DependencyResponse);
+        if scoped.is_empty() {
             return None;
         }
-        let payload = match redis_bulk_payload(response) {
-            Ok(Some(value)) => value,
-            Ok(None) => return None,
+        let identities = redis_fields::response_identities(command, args).ok()?;
+        if identities.iter().all(|value| {
+            Self::filter_redis_value_rules(&scoped, &context, value)
+                .iter()
+                .all(|rule| {
+                    matches!(rule.rule.slot, Slot::RedisValue(_))
+                        && rule.delivery_time.is_empty()
+                        && !crate::value_contract::identities::rules_have_identity(&[rule])
+                })
+        }) {
+            return None;
+        }
+        let values = match redis_field_values(command, args, Some(response)) {
+            Ok(values) => values,
             Err(error) => return Some(Err(error)),
         };
+        let selected = values
+            .iter()
+            .filter_map(|value| {
+                let payload = value.payload.as_ref()?;
+                let rules = Self::filter_redis_value_rules(&scoped, &context, value);
+                let rules = rules
+                    .into_iter()
+                    .filter(|rule| {
+                        !matches!(rule.rule.slot, Slot::RedisValue(_))
+                            || !rule.delivery_time.is_empty()
+                            || crate::value_contract::identities::rules_have_identity(&[rule])
+                    })
+                    .collect::<Vec<_>>();
+                (!rules.is_empty()).then_some((value, payload, rules))
+            })
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return None;
+        }
         Some((|| {
-            ensure!(
-                matches!(command, "GET" | "HGET"),
-                "unsupported Redis response value operation"
-            );
             let clocks =
                 self.contract_clocks(Some(case), source_started, actual_started, observed, None);
-            let value = Delivery::prepare(&payload, &rules, clocks)?;
+            let mut prepared = Vec::new();
+            for (value, payload, rules) in &selected {
+                let range = value
+                    .response
+                    .clone()
+                    .context("Redis delivery value position missing")?;
+                prepared.push(PreparedValue {
+                    header_len: range.len() - payload.len() - 2,
+                    range,
+                    delivery: Delivery::prepare(payload, rules, clocks)?,
+                });
+            }
             let witness = self.witnesses.as_ref().map(|_| {
                 use crate::policy_evidence::*;
                 WitnessMetadata {
@@ -96,7 +164,7 @@ impl RequestContracts {
                         sequence: Some(sequence),
                     },
                     resource: Some(crate::policy::Resource {
-                        protocol: Protocol::Redis,
+                        protocol: crate::policy::Protocol::Redis,
                         endpoint: crate::policy::Endpoint {
                             host: target.host.clone(),
                             port: target.port,
@@ -105,7 +173,7 @@ impl RequestContracts {
                         username: username.map(str::to_owned),
                     }),
                     operation: command.into(),
-                    slot: crate::policy::Slot::Value,
+                    slot: selected[0].2[0].rule.slot.clone(),
                     clocks: WitnessClocks {
                         case: ClockPair {
                             source: clocks.case.source,
@@ -123,9 +191,11 @@ impl RequestContracts {
                 }
             });
             Ok(PreparedRedisDelivery {
+                owner: self.clone(),
+                case: case.into(),
                 observation_id: uuid::Uuid::new_v4(),
                 original: response.into(),
-                value,
+                values: prepared,
                 witness,
             })
         })())
@@ -147,10 +217,22 @@ impl RequestContracts {
                 delivered,
             )?;
         }
-        self.commit(Decision::from_value_comparison(
-            prepared.value.validation().clone(),
-        ));
-        Ok(())
+        let mut decision = Decision::default();
+        for value in &prepared.values {
+            let comparison = value.delivery.validation();
+            for id in &comparison.evaluated {
+                if !decision.ids.contains(id) {
+                    decision.ids.push(id.clone());
+                }
+            }
+            for (id, count) in &comparison.time_validations {
+                *decision
+                    .unified_time_validations
+                    .entry(id.clone())
+                    .or_default() += count;
+            }
+        }
+        self.commit(decision)
     }
 }
 

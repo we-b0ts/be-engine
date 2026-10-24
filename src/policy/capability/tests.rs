@@ -57,7 +57,7 @@ fn repeated_messages_never_infer_a_scalar_type_for_an_unbound_descendant() {
 #[test]
 fn memcached_operation_availability_is_identical_for_json_and_protobuf() {
     let json = r#"
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
   - id: cache
     surface: dependency.request

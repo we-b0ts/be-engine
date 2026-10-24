@@ -11,7 +11,7 @@ pub(super) fn identity_rule() -> Value {
 
 fn policy(rules: Vec<Value>) -> crate::policy::CompiledPolicy {
     crate::policy::compile_policy(
-        &serde_json::from_value(json!({"format":"traffic-policy/v1","rules":rules})).unwrap(),
+        &serde_json::from_value(json!({"format":"traffic-policy/v2","rules":rules})).unwrap(),
     )
     .unwrap()
 }
@@ -416,7 +416,7 @@ fn read_back_compiler_rejects_unowned_fields_operations_and_overlapping_delivery
         .unwrap()
         .remove("api");
     let document: crate::policy::TrafficPolicy =
-        serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[resource_rule]}))
+        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[resource_rule]}))
             .unwrap();
     assert!(crate::policy::compile_policy(&document).is_ok());
     for mutate in 0..4 {
@@ -430,7 +430,7 @@ fn read_back_compiler_rejects_unowned_fields_operations_and_overlapping_delivery
             }
         }
         let document: crate::policy::TrafficPolicy =
-            serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[definition]}))
+            serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[definition]}))
                 .unwrap();
         assert!(crate::policy::compile_policy(&document).is_err());
     }
@@ -438,7 +438,7 @@ fn read_back_compiler_rejects_unowned_fields_operations_and_overlapping_delivery
     let mut overlap = definition.clone();
     overlap["id"] = json!("duplicate");
     let document: crate::policy::TrafficPolicy =
-        serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[definition,overlap]}))
+        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[definition,overlap]}))
             .unwrap();
     assert!(crate::policy::compile_policy(&document).is_err());
     let mut definition = identity_rule();
@@ -449,7 +449,7 @@ fn read_back_compiler_rejects_unowned_fields_operations_and_overlapping_delivery
         "slot":"value","codec":"json","contract":{"/expires_at":{"kind":"time","format":"rfc3339","relation":"preserve_offset"}},
         "delivery":{"rebase_time":["/expires_at"]},"proof":definition["proof"]});
     let document: crate::policy::TrafficPolicy =
-        serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[definition, other]}))
+        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[definition, other]}))
             .unwrap();
     let error = crate::policy::compile_policy(&document).unwrap_err();
     assert!(

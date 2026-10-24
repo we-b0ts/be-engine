@@ -205,7 +205,7 @@ fn reclassification_reuses_only_classification_changes_and_never_upgrades_legacy
                 crate::e2e_run::test_session::classify_stream(target.path());
             }
             "verification" => {
-                let document = serde_json::json!({"format":"traffic-policy/v1","rules":[{
+                let document = serde_json::json!({"format":"traffic-policy/v2","rules":[{
                     "id":"response-items","surface":"api.response","match":{"api":"GET /api"},
                     "slot":"body","codec":"json","contract":{"/items":{"kind":"unordered"}},
                     "proof":{"source":"handler.rs:12","fact":"Source emits these items from a set"}
@@ -287,7 +287,7 @@ fn reclassification_fixture() -> (
     fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
     fs::write(
         target.path().join(".traffic-e2e/policy.yaml"),
-        "format: traffic-policy/v1\nrules: []\n",
+        "format: traffic-policy/v2\nrules: []\n",
     )
     .unwrap();
     git_ok(target.path(), &["init"]);

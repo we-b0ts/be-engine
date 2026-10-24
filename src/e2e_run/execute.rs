@@ -636,7 +636,7 @@ async fn execute_case(
             "failed to prepare replay request for case {case_id}: {error:#}"
         )),
     };
-    let response_assertion = if let Some(response_assertions) = &runtime.response_assertions {
+    let mut response_assertion = if let Some(response_assertions) = &runtime.response_assertions {
         if let (Ok(actual_bytes), Ok(case_view)) = (&assertion_command, &case_view) {
             let expected_response = super::source_response::path(case_dir);
             std::fs::read(&expected_response)
@@ -673,6 +673,23 @@ async fn execute_case(
             "legacy target-owned assertion has no response report"
         ))
     };
+    if let Ok(report) = &mut response_assertion
+        && report.passed
+        && let Err(error) = crate::replay::check_response_identities(
+            &state.replay_session,
+            case_id,
+            &report.identity_pairs,
+        )
+        .await
+    {
+        report.passed = false;
+        let mut difference = crate::replay::ResponseDifference::body_value_mismatch();
+        difference.pointer = "$identity".into();
+        report.differences.push(difference);
+        state.push_error(format!(
+            "case {case_id} identity relations failed: {error:#}"
+        ));
+    }
     state.cases[case_index].response_unavailable_reason = assertion_command
         .as_ref()
         .err()

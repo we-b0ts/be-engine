@@ -1,9 +1,17 @@
 # Generated Redis request values
 
-Use Source-backed `traffic-policy/v1` rules and the ordinary
+Use Source-backed `traffic-policy/v2` rules and the ordinary
 `backend-rewrite rule plan --file … --evidence …` / `rule apply <plan-id>`
 transaction. Source validation and successful Apply retain the obligation to
 run genuine Target Replay. These contracts never edit the recording.
+
+For ordinary stored fields, start with resource-owned key/container/value
+declarations from the [field guide](resource-field-contracts.md). Declare time,
+duration, unordered or identity semantics once across supported commands,
+including LSET. A shared identity binding can relate Redis values to MySQL and
+response fields. Native examples below describe additional key/channel,
+derivation, signature and command-sequence behavior; they are not a reason to
+repeat every stored field at an argument ordinal.
 
 ## Queue messages and result channels
 
@@ -19,8 +27,9 @@ Native `redis_sequence` JSON fields support:
   The maximum must be 1 through 1024. `length` and `max_length` cannot coexist.
 
 Every selected field requires generation proof. These random shape contracts do
-not create cross-message identity bindings. Fields referring to the same task
-must instead use an explicit identity capture and references.
+not create cross-message identity bindings. Ordinary value fields referring to
+the same task use a shared resource identity binding. Key/channel subjects and
+embedded transformations retain their explicit native capture/reference owner.
 
 `SUBSCRIBE` and `UNSUBSCRIBE` support an explicit single-subject key capture or
 reference, in addition to existing SET key identities. For example, capture a

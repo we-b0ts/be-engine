@@ -93,7 +93,7 @@ fn records() -> Vec<Value> {
 #[tokio::test]
 async fn unchanged_historical_key_replays_http_and_tls_sql_without_extra_configuration() {
     tokio::time::timeout(Duration::from_secs(20), async {
-        let policy = r#"format: traffic-policy/v1
+        let policy = r#"format: traffic-policy/v2
 rules:
 - id: preserved-key
   match:

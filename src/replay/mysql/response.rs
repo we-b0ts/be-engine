@@ -87,6 +87,7 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
             MysqlPacket {
                 sequence_id,
                 payload: column_definition_payload(&RecordedMysqlColumn {
+                    database: None,
                     name: format!("param_{}", index + 1),
                     table: None,
                     table_alias: None,
@@ -346,7 +347,9 @@ pub(in crate::replay) fn column_definition_payload(column: &RecordedMysqlColumn)
 
     let mut payload = Vec::new();
     payload.extend_from_slice(&lenenc_bytes(b"def"));
-    payload.extend_from_slice(&lenenc_bytes(b""));
+    payload.extend_from_slice(&lenenc_bytes(
+        column.database.as_deref().unwrap_or_default().as_bytes(),
+    ));
     payload.extend_from_slice(&lenenc_bytes(
         column
             .table_alias

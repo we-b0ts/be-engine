@@ -83,7 +83,7 @@ async fn replay_tcp(reject_first: bool, commute_reads: bool, observation_chunks:
     }
     std::fs::write(
         root.join(".traffic-e2e/policy.yaml"),
-        json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+        json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
     )
     .unwrap();
     crate::replay::write_test_recording_network_manifest(root);

@@ -14,7 +14,7 @@ fn rule(kind: &str) -> Value {
 
 fn compile(rules: Vec<Value>) -> Result<crate::policy::CompiledPolicy> {
     crate::policy::parse_and_compile_policy(&serde_yaml::to_string(
-        &json!({"format":"traffic-policy/v1","rules":rules}),
+        &json!({"format":"traffic-policy/v2","rules":rules}),
     )?)
 }
 
@@ -31,6 +31,7 @@ fn conditional_identity_scopes_round_trip_and_allow_only_provably_disjoint_branc
             .into_iter()
             .map(|r| PolicyRule::Native(Box::new(r.rule)))
             .collect(),
+        ..crate::policy::TrafficPolicy::default()
     };
     let yaml = crate::policy::render_policy(&document).unwrap();
     assert_eq!(crate::policy::parse_policy(&yaml).unwrap(), document);

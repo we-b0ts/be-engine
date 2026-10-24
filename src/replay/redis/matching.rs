@@ -9,6 +9,8 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
     pub(super) fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
+        let original_source = exchange.args.as_slice();
+        let original_actual = args;
         if exchange.source == ReplaySource::Case
             && exchange.shared_rule_id.is_none()
             && let Some(case) = exchange.case_id.as_deref()
@@ -79,7 +81,9 @@ impl RedisReplayState {
             .as_ref()
             .map_or(exchange.args.as_slice(), |n| n.source.as_slice());
         let actual = normalized.as_ref().map_or(args, |n| n.actual.as_slice());
-        if let Some(result) = self.request_preview(exchange, source, actual) {
+        if let Some(result) =
+            self.request_preview(exchange, source, actual, original_source, original_actual)
+        {
             return result.is_ok();
         }
         if let Some(normalized) = normalized {
@@ -401,6 +405,21 @@ impl RedisReplayState {
             && !exchange.record.cache_snapshot_hit
             && exchange.record.cache_snapshot_rule.is_none()
             && exchange.record.outcome == crate::DependencyExchangeOutcome::Response;
+        let time_read = if read_back_eligible {
+            self.request_contracts
+                .prepare_redis_time_read(
+                    &read_back_context,
+                    &exchange.args,
+                    args,
+                    &response,
+                    exchange.record.timestamp,
+                )
+                .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: format!("stored field read provenance failed: {error:#}"),
+                })?
+        } else {
+            None
+        };
         let (read_back, read_back_write) = if read_back_eligible {
             (
                 self.request_contracts
@@ -514,7 +533,13 @@ impl RedisReplayState {
             comparison_args
         };
         let request_decision = self
-            .request_preview(&normalized_exchange, &normalized_exchange.args, arguments)
+            .request_preview(
+                &normalized_exchange,
+                &normalized_exchange.args,
+                arguments,
+                &exchange.args,
+                args,
+            )
             .transpose()
             .expect("selected Redis request contract was validated");
         let response = if matches!(command, "SUBSCRIBE" | "UNSUBSCRIBE")
@@ -562,7 +587,11 @@ impl RedisReplayState {
             if let Some(comparison) = comparison {
                 rule_ids.extend(self.publish_rules.commit_json(comparison));
             }
-            self.request_contracts.commit(decision);
+            self.request_contracts.commit(decision).map_err(|error| {
+                CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: format!("Redis resource relationship commit failed: {error:#}"),
+                }
+            })?;
         }
         let rpc_response = self.pubsub.claim(&self.exchanges[index], args);
         let requires_binding =
@@ -588,6 +617,7 @@ impl RedisReplayState {
             observation,
             append: None,
             read_back,
+            time_read,
             request_started_at: self.request_observed_at,
             unified_delivery,
             rpc_push: exchange.rpc_push,
@@ -678,6 +708,7 @@ impl RedisReplayState {
             request_started_at: self.request_observed_at,
             unified_delivery: None,
             read_back: None,
+            time_read: None,
             rpc_push: None,
             rpc_response: None,
             publish_duration_ms: exchange.record.duration_ms,

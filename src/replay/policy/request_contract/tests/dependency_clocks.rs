@@ -39,7 +39,7 @@ fn dependency_clocks_support_faster_batches_and_never_fall_back_to_api_clocks() 
             .preview_redis_context(&context, &source, &actual)
             .unwrap()
             .unwrap();
-        runtime.commit(decision);
+        runtime.commit(decision).unwrap();
         assert!(
             runtime
                 .preview_redis_context(&context, &source, &command(target_clock + 6))

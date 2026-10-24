@@ -21,7 +21,7 @@ fn finite_sharing_rejects_patterned_redis_identity() {
             "/timestamp":{"contract":{"format":"unix_milliseconds","relation":"preserve_offset"},"proof":proof}}}});
     let parse = |rule: Value| {
         crate::policy::parse_policy(
-            &json!({"format":"traffic-policy/v1","rules":[rule]}).to_string(),
+            &json!({"format":"traffic-policy/v2","rules":[rule]}).to_string(),
         )
     };
     parse(rule.clone()).unwrap();

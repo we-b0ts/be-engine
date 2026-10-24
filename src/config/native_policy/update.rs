@@ -8,6 +8,7 @@ pub(crate) fn empty_policy() -> Result<String> {
         format: crate::policy::POLICY_FORMAT.into(),
         source_revision: None,
         rules: Vec::new(),
+        ..Default::default()
     })
 }
 

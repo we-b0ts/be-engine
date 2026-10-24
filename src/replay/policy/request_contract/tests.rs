@@ -19,6 +19,8 @@ pub(super) fn runtime(rule: ReplayDependencyRule) -> RequestContracts {
     state.cases.insert(
         "case".into(),
         CaseAnchor {
+            source_uri: String::new(),
+            source_input_error: None,
             source_body: None,
             conditions: BTreeSet::new(),
             method: "PUT".into(),
@@ -78,7 +80,7 @@ fn fractional_times_use_independent_request_anchors_and_preserve_each_update_dif
             &["presence:1", &actual, "active"],
         )
         .unwrap();
-        runtime.commit(decision);
+        runtime.commit(decision).unwrap();
         assert!(
             check(
                 &runtime,
@@ -88,15 +90,17 @@ fn fractional_times_use_independent_request_anchors_and_preserve_each_update_dif
             )
             .is_err()
         );
-        runtime.commit(
-            check(
-                &runtime,
-                "ZREMRANGEBYSCORE",
-                &["presence:1", "-inf", &(1000.0 + increment).to_string()],
-                &["presence:1", "-inf", &(2000.0 + increment).to_string()],
+        runtime
+            .commit(
+                check(
+                    &runtime,
+                    "ZREMRANGEBYSCORE",
+                    &["presence:1", "-inf", &(1000.0 + increment).to_string()],
+                    &["presence:1", "-inf", &(2000.0 + increment).to_string()],
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
+            .unwrap();
     }
     assert!(
         check(
@@ -190,7 +194,9 @@ fn two_signed_jwts_and_json_time_are_validated_atomically_with_strict_stable_fie
     ]));
     let source = session(1000, "d9428888-122b-4d10-9c62-0b7bdca327a1");
     let actual = session(2000, "bf54c745-3da7-4ebc-9c32-fda7fd5a9bd2");
-    runtime.commit(check_session(&runtime, &source, &actual, "300").unwrap());
+    runtime
+        .commit(check_session(&runtime, &source, &actual, "300").unwrap())
+        .unwrap();
     assert!(check_session(&runtime, &source, &actual, "300").is_ok());
     assert!(check_session(&runtime, &source, &actual, "301").is_err());
     let mut changed = actual.clone();
@@ -294,7 +300,9 @@ fn script_argv_times_require_identity_keys_units_and_consistent_parameter_deltas
     let runtime = runtime(spec);
     let source = [sha, "1", "presence:1", "1000250", "1090250", "stable"];
     let actual = [sha, "1", "presence:1", "2000250", "2090250", "stable"];
-    runtime.commit(check(&runtime, "EVALSHA", &source, &actual).unwrap());
+    runtime
+        .commit(check(&runtime, "EVALSHA", &source, &actual).unwrap())
+        .unwrap();
     for (index, value) in [
         (0, "different-script"),
         (1, "2"),
@@ -424,7 +432,7 @@ fn rpush_timestamp_rules_compose_with_explicit_integer_id_captures() {
         .unwrap()
         .unwrap();
     dynamic.commit("case", normalized.decision);
-    runtime.commit(decision);
+    runtime.commit(decision).unwrap();
     let changed = args(&["events", r#"{"id":10,"timestamp":2000,"stable":"keep"}"#]);
     assert!(
         dynamic

@@ -42,6 +42,8 @@ impl Fixture {
         runtime.state.lock().unwrap().cases.insert(
             "case".into(),
             CaseAnchor {
+                source_uri: String::new(),
+                source_input_error: None,
                 source_body: None,
                 conditions: BTreeSet::new(),
                 method: "PUT".into(),

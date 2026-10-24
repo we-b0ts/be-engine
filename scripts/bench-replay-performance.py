@@ -76,7 +76,7 @@ def make_fixture(project, kind, args):
         key.write_text(base64.b64encode(os.urandom(32)).decode())
         key.chmod(0o600)
         policy = project / ".traffic-e2e/policy.yaml"
-        text = "format: traffic-policy/v1\nsource_revision: benchmark-v1\nrules:\n"
+        text = "format: traffic-policy/v2\nsource_revision: benchmark-v1\nrules:\n"
         for number in range(19):
             text += (f"- id: global-write-time-{number}\n"
                      f"  match:\n    resource: {{protocol: mysql, endpoint: '{host}:{port}', database: benchmark, username: root}}\n"

@@ -39,7 +39,7 @@ fn sql_value_table_series_public_plan_apply_keeps_nullable_conditions_and_exact_
             let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
                 write(
                     &root.join(".traffic-e2e/policy.yaml"),
-                    json!({"format":"traffic-policy/v1","rules":[updated()]}),
+                    json!({"format":"traffic-policy/v2","rules":[updated()]}),
                 );
                 vec![]
             });
@@ -132,7 +132,7 @@ fn sql_value_table_discovery_retains_source_entry_for_unrelated_target_statement
         let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v1","rules":[completed()]}),
+                json!({"format":"traffic-policy/v2","rules":[completed()]}),
             );
             vec![]
         });

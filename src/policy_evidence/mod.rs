@@ -88,6 +88,8 @@ pub(crate) enum SourceRole {
 pub(crate) enum TargetRole {
     IndependentTargetObservation,
     DerivedDelivery,
+    /// Successful wire completion proves an input, never Target generation.
+    DeliveredInput,
     Unavailable,
 }
 
@@ -102,15 +104,18 @@ impl WitnessMetadata {
             self.source_role == source,
             "policy witness Source role disagrees with its surface"
         );
-        let target = if !has_target {
-            TargetRole::Unavailable
+        let valid = if !has_target {
+            self.target_role == TargetRole::Unavailable
         } else if self.surface == Surface::DependencyResponse {
-            TargetRole::DerivedDelivery
+            matches!(
+                self.target_role,
+                TargetRole::DerivedDelivery | TargetRole::DeliveredInput
+            )
         } else {
-            TargetRole::IndependentTargetObservation
+            self.target_role == TargetRole::IndependentTargetObservation
         };
         ensure!(
-            self.target_role == target,
+            valid,
             "derived delivery cannot become independent Target proof"
         );
         Ok(())

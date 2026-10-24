@@ -595,7 +595,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             directory.path().join(".traffic-e2e/policy.yaml"),
-            "format: traffic-policy/v1\nrules: []\n",
+            "format: traffic-policy/v2\nrules: []\n",
         )
         .unwrap();
         let mut args = replay_args(Some(directory.path().to_path_buf()), None);

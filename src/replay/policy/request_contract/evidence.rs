@@ -329,6 +329,9 @@ pub(in crate::replay::policy) fn verify_capture(
                 dynamic
             })
             .clone();
+        let source_body = super::unified::source_body(&request);
+        let source_input_error =
+            super::identity_inputs::capture_error(&request, source_body.as_ref());
         runtime
             .state
             .lock()
@@ -337,7 +340,9 @@ pub(in crate::replay::policy) fn verify_capture(
             .insert(
                 candidate.case_id.clone(),
                 CaseAnchor {
-                    source_body: super::unified::source_body(&request),
+                    source_input_error,
+                    source_uri: request["uri"].as_str().unwrap_or_default().to_owned(),
+                    source_body,
                     method: scope.method.clone(),
                     path: super::super::pattern::uri_path(request["uri"].as_str().unwrap()),
                     recorded,

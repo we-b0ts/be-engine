@@ -21,7 +21,7 @@ fn broad_rule_cannot_relax_a_selected_json_type_discriminator() {
         "slot":slot,"codec":"json","contract":contract,
         "proof":{"source":"synthetic.py:1","fact":"Synthetic identity generation for strict discriminator regression"}}));
     let compiled = crate::policy::parse_and_compile_policy(
-        &serde_yaml::to_string(&json!({"format":"traffic-policy/v1","rules":rules})).unwrap(),
+        &serde_yaml::to_string(&json!({"format":"traffic-policy/v2","rules":rules})).unwrap(),
     )
     .unwrap();
     let selected = compiled.rules.iter().collect::<Vec<_>>();

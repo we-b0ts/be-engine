@@ -715,8 +715,12 @@ async fn match_memcached_request(
         observed_at,
     }) {
         Ok(matched) => {
-            if let Some(policy) = replay_policy {
-                policy.commit(active_case_id.as_deref(), matched.policy_decision.clone());
+            if let Some(policy) = replay_policy
+                && policy
+                    .commit(active_case_id.as_deref(), matched.policy_decision.clone())
+                    .is_err()
+            {
+                return None;
             }
             Some(matched)
         }

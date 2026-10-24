@@ -36,6 +36,7 @@ pub(crate) fn render_initial(config: &SourceTrafficPolicyConfig) -> Result<Strin
         format: crate::policy::POLICY_FORMAT.into(),
         source_revision: None,
         rules: rules.into_iter().map(Into::into).collect(),
+        ..Default::default()
     };
     crate::policy::compile_policy(&document)?;
     crate::policy::render_policy(&document)
@@ -353,6 +354,7 @@ fn origin_source(origin: &n::ApiOrigin) -> Result<super::ApiTriggerSource> {
             .iter()
             .map(|(pointer, value)| {
                 let value = match value {
+                    crate::policy::SourceScalar::Null => serde_json::Value::Null,
                     crate::policy::SourceScalar::Bool(value) => (*value).into(),
                     crate::policy::SourceScalar::Number(value) => value.clone().into(),
                     crate::policy::SourceScalar::String(value) => value.clone().into(),

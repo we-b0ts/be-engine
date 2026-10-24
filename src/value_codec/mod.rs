@@ -15,6 +15,7 @@ pub(crate) struct CodecView;
 #[derive(Debug, Clone)]
 pub(crate) struct CodecPlan {
     protobuf: Option<Arc<protobuf::Schema>>,
+    scalar: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -34,9 +35,10 @@ impl CodecPlan {
     pub(crate) fn compile(codec: &Codec) -> Result<Self> {
         Ok(Self {
             protobuf: match codec {
-                Codec::Json => None,
+                Codec::Json | Codec::Scalar => None,
                 Codec::Protobuf(codec) => Some(protobuf::schema(codec)?),
             },
+            scalar: matches!(codec, Codec::Scalar),
         })
     }
 
@@ -58,6 +60,10 @@ impl CodecPlan {
                 (logical, Some(document))
             }
         };
+        ensure!(
+            !self.scalar || (!logical.is_array() && !logical.is_object()),
+            "native scalar codec rejects structured payloads"
+        );
         Ok(DecodedValue {
             logical,
             original: bytes.to_vec(),

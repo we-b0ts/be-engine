@@ -545,9 +545,14 @@ impl ReplayState {
                     .dynamic_values
                     .commit(case, matching_dynamic_decision);
             }
-            policy.commit(active_case_id.as_deref(), matching_policy_decision);
+            policy
+                .commit(active_case_id.as_deref(), matching_policy_decision)
+                .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?;
             if let Some(decision) = matching_request_decision {
-                policy.request_contracts.commit(decision);
+                policy
+                    .request_contracts
+                    .commit(decision)
+                    .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?;
             }
         }
         let detail = MatchedHttpExchangeReport {

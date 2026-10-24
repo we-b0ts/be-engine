@@ -268,7 +268,7 @@ impl ReplayState {
                         let sql_value_decision = self.replay_policy.as_ref().and_then(|policy| {
                             policy
                                 .request_contracts
-                                .preview_mysql_values(
+                                .preview_mysql_values_with_raw(
                                     active_case_id.as_deref(),
                                     identity,
                                     &exchange.record,
@@ -277,6 +277,20 @@ impl ReplayState {
                                     params,
                                     request_observed_at,
                                     policy,
+                                    dynamic.as_ref().and_then(|_| {
+                                        let raw = &self.mysql.exchanges[index].record;
+                                        (raw.sql != exchange.record.sql
+                                            || raw.params != exchange.record.params
+                                            || observed_sql != sql
+                                            || observed_params != params)
+                                            .then_some(
+                                                policy::request_contract::RawMysqlIdentityRequest {
+                                                    source: raw,
+                                                    target_sql: observed_sql,
+                                                    target_params: observed_params,
+                                                },
+                                            )
+                                    }),
                                 )
                                 .or_else(|| {
                                     policy.preview_mysql_sql_values(&MysqlPolicyContext {
@@ -466,6 +480,23 @@ impl ReplayState {
                                 return None;
                             }
                         };
+                        let mut time_copy_delivery = if let (Some(policy), Some(case)) =
+                            (&self.replay_policy, active_case_id.as_deref())
+                        {
+                            match contracts::time_copies::prepare(
+                                &policy.request_contracts,
+                                case,
+                                identity,
+                                &self.mysql.exchanges[index].record,
+                                &exchange.record.response,
+                                observed_sql,
+                            ) {
+                                Ok(prepared) => prepared,
+                                Err(_) => continue,
+                            }
+                        } else {
+                            None
+                        };
                         if exchange.source == ReplaySource::Case
                             && let Some(policy) = &self.replay_policy
                         {
@@ -508,6 +539,24 @@ impl ReplayState {
                         } else {
                             None
                         };
+                        if let Some(prepared) = &mut time_copy_delivery
+                            && prepared
+                                .prepare_witness(
+                                    &self.mysql.exchanges[index].record,
+                                    identity,
+                                    contracts::ObservedRequest {
+                                        observation_id,
+                                        command,
+                                        sql: observed_sql,
+                                        params: observed_params,
+                                        started_at: request_observed_at,
+                                    },
+                                    value_delivery.as_ref(),
+                                )
+                                .is_err()
+                        {
+                            continue;
+                        }
                         let identity_delivery = if source == ReplaySource::Case {
                             if let Some(policy) = &self.replay_policy {
                                 match policy.dynamic_values.prepare_mysql_identity_delivery(
@@ -525,14 +574,13 @@ impl ReplayState {
                         } else {
                             None
                         };
-                        self.mysql.exchanges[index].status =
-                            if exchange.record.outcome.is_client_terminated() {
-                                ReplayExchangeStatus::AwaitingClientTermination
-                            } else {
-                                ReplayExchangeStatus::Responding
-                            };
-                        self.refresh_mysql_global_report(index);
                         if let Some(policy) = &mut self.replay_policy {
+                            if policy
+                                .commit(active_case_id.as_deref(), policy_decision)
+                                .is_err()
+                            {
+                                continue;
+                            }
                             if let (Some(case_id), Some(normalized)) =
                                 (active_case_id.as_deref(), dynamic.as_ref())
                             {
@@ -540,8 +588,14 @@ impl ReplayState {
                                     .dynamic_values
                                     .commit(case_id, normalized.decision.clone());
                             }
-                            policy.commit(active_case_id.as_deref(), policy_decision);
                         }
+                        self.mysql.exchanges[index].status =
+                            if exchange.record.outcome.is_client_terminated() {
+                                ReplayExchangeStatus::AwaitingClientTermination
+                            } else {
+                                ReplayExchangeStatus::Responding
+                            };
+                        self.refresh_mysql_global_report(index);
                         let owned_global = self.mysql.foreign.contains_key(&index)
                             || (exchange.source == ReplaySource::Global
                                 && exchange
@@ -584,6 +638,7 @@ impl ReplayState {
                                 None
                             },
                             value_delivery,
+                            time_copy_delivery,
                             identity_delivery,
                             response_time_shift_rules,
                             source: exchange.source,

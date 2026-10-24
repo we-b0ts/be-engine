@@ -23,13 +23,13 @@ fn append_capability_requires_explicit_scope_and_exclusive_payload_ownership() {
             .unwrap()
             .remove(key);
         let result = crate::policy::parse_policy(
-            &json!({"format":"traffic-policy/v1","rules":[rule]}).to_string(),
+            &json!({"format":"traffic-policy/v2","rules":[rule]}).to_string(),
         )
         .and_then(|p| crate::policy::compile_policy(&p));
         assert!(result.is_err(), "{path}");
     }
     let policy = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v1","rules":[rule()]}).to_string(),
+        &json!({"format":"traffic-policy/v2","rules":[rule()]}).to_string(),
     )
     .unwrap();
     let compiled = crate::policy::compile_policy(&policy).unwrap();
@@ -40,7 +40,7 @@ fn append_capability_requires_explicit_scope_and_exclusive_payload_ownership() {
     let mut other = rule();
     other["id"] = json!("other");
     let result = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v1","rules":[rule(),other]}).to_string(),
+        &json!({"format":"traffic-policy/v2","rules":[rule(),other]}).to_string(),
     )
     .and_then(|policy| crate::policy::compile_policy(&policy));
     assert!(result.is_err());

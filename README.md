@@ -91,7 +91,7 @@ Recording is external to rewrite. Place completed batches in
 `.traffic-e2e/regression.yaml` to pin a batch.
 Missing evidence returns an input requirement, never a recording executor.
 
-All rule effects use one source-controlled `traffic-policy/v1` document, named
+All rule effects use one source-controlled `traffic-policy/v2` document, named
 by `project.policy` (normally `.traffic-e2e/policy.yaml`). Bounded evidence
 returns available capabilities and a rule-discovery query. Inspect the Source
 facts, write a self-contained proposal, then use `backend-rewrite rule plan
@@ -101,9 +101,12 @@ reclassification, or recording. Process-owned classification preserves the
 immutable recording; selectors that change bootstrap snapshots require fresh
 recording. See [unified rules](docs/unified-rule-contracts.md).
 
-Authoring may inherit proof inside a rule, declare a shared `source_revision`,
-and use optional named time abbreviations. Complete explicit contracts remain
-supported; plan/evidence always contain fully expanded effective rules.
+Declare named resources and their physical field contracts once under `resources`,
+and API output fields under `responses`. New supported SQL shapes and Redis
+commands inherit those field contracts. Contextual and stateful effects remain
+in `rules`, referencing resources and field strategies where appropriate.
+Proof can inherit within its resource/response subtree or rule; plan/evidence
+contain fully expanded effective rules. See [resource fields](docs/resource-field-contracts.md).
 
 `backend-rewrite` emits one compact JSON object per command by default; use
 global `--pretty` for interactive inspection. Normal `next` and `status`
@@ -291,7 +294,7 @@ The initialized policy starts empty; each justified rule carries its own Source
 proof. For example, a source-proven route pattern is a capture effect:
 
 ```yaml
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
   - id: user-route
     match: {}

@@ -1,4 +1,4 @@
-//! Typed traffic-policy/v1 rules. Authoring defaults expand before compilation.
+//! Typed traffic-policy/v2 rules. Authoring defaults expand before compilation.
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -6,13 +6,30 @@ use super::ClockScope;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub const POLICY_FORMAT: &str = "traffic-policy/v1";
+pub const POLICY_FORMAT: &str = "traffic-policy/v2";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrafficPolicy {
     pub format: String,
     pub source_revision: Option<String>,
+    pub resources: BTreeMap<String, super::ResourceDeclaration>,
+    pub responses: BTreeMap<String, super::ResponseDeclaration>,
+    /// Authoring reference sites survive typed normalization and write-back.
+    pub field_references: BTreeMap<String, Vec<super::FieldReferenceUse>>,
     pub rules: Vec<super::PolicyRule>,
+}
+
+impl Default for TrafficPolicy {
+    fn default() -> Self {
+        Self {
+            format: POLICY_FORMAT.into(),
+            source_revision: None,
+            resources: BTreeMap::new(),
+            responses: BTreeMap::new(),
+            field_references: BTreeMap::new(),
+            rules: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,6 +69,18 @@ pub enum Slot {
     Value,
     SqlValue(usize),
     SqlColumn(String),
+    /// A physical column, independent of statement shape or bind position.
+    SqlField(String),
+    /// The logical value of the selected Redis storage container.
+    RedisValue(RedisContainer),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RedisContainer {
+    String,
+    Hash,
+    List,
 }
 
 /// Select using immutable Source framing and, explicitly, its business JSON type.
@@ -89,6 +118,11 @@ impl Slot {
     pub(crate) fn overlaps(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::SseData(a), Self::SseData(b)) => a.overlaps(b),
+            (Self::SqlField(a), Self::SqlField(b)) => a.eq_ignore_ascii_case(b),
+            (Self::RedisValue(_), Self::RedisValue(_) | Self::Value)
+            | (Self::Value, Self::RedisValue(_)) => true,
+            (Self::SqlField(_), Self::SqlValue(_) | Self::SqlColumn(_))
+            | (Self::SqlValue(_) | Self::SqlColumn(_), Self::SqlField(_)) => true,
             _ => self == other,
         }
     }
@@ -101,6 +135,8 @@ enum SlotDocument {
     SseData { sse_data: SseSelector },
     SqlValue { sql_value: usize },
     SqlColumn { sql_column: String },
+    SqlField { sql_field: String },
+    RedisValue { redis_value: RedisContainer },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +154,8 @@ impl From<SlotDocument> for Slot {
             SlotDocument::SseData { sse_data } => Self::SseData(sse_data),
             SlotDocument::SqlValue { sql_value } => Self::SqlValue(sql_value),
             SlotDocument::SqlColumn { sql_column } => Self::SqlColumn(sql_column),
+            SlotDocument::SqlField { sql_field } => Self::SqlField(sql_field),
+            SlotDocument::RedisValue { redis_value } => Self::RedisValue(redis_value),
         }
     }
 }
@@ -130,6 +168,8 @@ impl From<Slot> for SlotDocument {
             Slot::SseData(sse_data) => Self::SseData { sse_data },
             Slot::SqlValue(sql_value) => Self::SqlValue { sql_value },
             Slot::SqlColumn(sql_column) => Self::SqlColumn { sql_column },
+            Slot::SqlField(sql_field) => Self::SqlField { sql_field },
+            Slot::RedisValue(redis_value) => Self::RedisValue { redis_value },
         }
     }
 }
@@ -183,7 +223,7 @@ pub struct Resource {
     pub username: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
     Http,
@@ -325,6 +365,7 @@ impl KeySelector {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "CodecDocument", into = "CodecDocument")]
 pub enum Codec {
+    Scalar,
     Json,
     Protobuf(ProtobufCodec),
 }
@@ -374,12 +415,14 @@ pub enum ProtobufType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 enum CodecDocument {
-    Builtin(JsonCodecName),
+    Builtin(BuiltinCodecName),
     Protobuf(ProtobufDocument),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum JsonCodecName {
+enum BuiltinCodecName {
+    #[serde(rename = "scalar")]
+    Scalar,
     #[serde(rename = "json")]
     Json,
 }
@@ -401,7 +444,8 @@ struct ProtobufDocument {
 impl From<CodecDocument> for Codec {
     fn from(value: CodecDocument) -> Self {
         match value {
-            CodecDocument::Builtin(_) => Self::Json,
+            CodecDocument::Builtin(BuiltinCodecName::Json) => Self::Json,
+            CodecDocument::Builtin(BuiltinCodecName::Scalar) => Self::Scalar,
             CodecDocument::Protobuf(value) => Self::Protobuf(ProtobufCodec {
                 fields: value.fields,
             }),
@@ -412,7 +456,8 @@ impl From<CodecDocument> for Codec {
 impl From<Codec> for CodecDocument {
     fn from(value: Codec) -> Self {
         match value {
-            Codec::Json => Self::Builtin(JsonCodecName::Json),
+            Codec::Json => Self::Builtin(BuiltinCodecName::Json),
+            Codec::Scalar => Self::Builtin(BuiltinCodecName::Scalar),
             Codec::Protobuf(value) => Self::Protobuf(ProtobufDocument {
                 kind: ProtobufCodecName::Protobuf,
                 fields: value.fields,
@@ -430,7 +475,7 @@ pub enum FieldContract {
         contract: Box<FieldContract>,
     },
     Unordered,
-    /// Source-proven generated/derived identity, shared within one interaction.
+    /// Source-proven generated/derived identity, shared across one replay case.
     Identity {
         binding: String,
         #[serde(default)]
@@ -463,6 +508,8 @@ pub enum IdentityFormat {
     Uuid,
     /// Exact number of lowercase hexadecimal characters after the literal prefix.
     Hex(usize),
+    /// Exact number of unpadded, URL-safe base64 characters.
+    Base64Url(usize),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -470,6 +517,7 @@ pub enum IdentityFormat {
 enum IdentityFormatDocument {
     Named(IdentityFormatName),
     Hex { hex: usize },
+    Base64Url { base64url: usize },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -485,6 +533,7 @@ impl From<IdentityFormatDocument> for IdentityFormat {
             IdentityFormatDocument::Named(IdentityFormatName::Decimal) => Self::Decimal,
             IdentityFormatDocument::Named(IdentityFormatName::Uuid) => Self::Uuid,
             IdentityFormatDocument::Hex { hex } => Self::Hex(hex),
+            IdentityFormatDocument::Base64Url { base64url } => Self::Base64Url(base64url),
         }
     }
 }
@@ -495,6 +544,7 @@ impl From<IdentityFormat> for IdentityFormatDocument {
             IdentityFormat::Decimal => Self::Named(IdentityFormatName::Decimal),
             IdentityFormat::Uuid => Self::Named(IdentityFormatName::Uuid),
             IdentityFormat::Hex(hex) => Self::Hex { hex },
+            IdentityFormat::Base64Url(base64url) => Self::Base64Url { base64url },
         }
     }
 }
@@ -532,7 +582,7 @@ impl FieldContract {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FieldCondition {
-    /// One parent step followed by an exact JSON Pointer, e.g. ../status.
+    /// The field itself (.) or one exact sibling pointer, e.g. ../status.
     pub relative_pointer: String,
     #[serde(
         default,
@@ -688,6 +738,7 @@ pub enum SourceScalar {
     Bool(bool),
     Number(serde_json::Number),
     String(String),
+    Null,
 }
 
 impl SourceCondition {

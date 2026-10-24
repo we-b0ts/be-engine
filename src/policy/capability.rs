@@ -130,6 +130,7 @@ pub fn validate_contract_binding(
             ensure!(!peer.repeated, "Source condition sibling must be a scalar");
             for expected in when.values() {
                 let compatible = match expected {
+                    super::SourceScalar::Null => false,
                     super::SourceScalar::Bool(_) => peer.field_type == ProtobufType::Bool,
                     super::SourceScalar::String(_) => peer.field_type == ProtobufType::String,
                     super::SourceScalar::Number(_) => numeric(peer.field_type),
@@ -182,7 +183,9 @@ pub fn validate_contract_binding(
             "duration requires a numeric scalar Protobuf field at {path:?}"
         ),
         FieldContract::Conditional { .. } => unreachable!("handled before codec binding"),
-        FieldContract::Identity { .. } => anyhow::bail!("SSE identity contracts require JSON"),
+        FieldContract::Identity { .. } => {
+            anyhow::bail!("identity contracts require JSON or a physical SQL scalar")
+        }
     }
     Ok(())
 }

@@ -72,7 +72,7 @@ pub(super) fn validate(
             prepared.source == prepared.actual,
             "Source HTTP field comparison changed values"
         );
-        runtime.request_contracts.commit(prepared.decision);
+        runtime.request_contracts.commit(prepared.decision)?;
     }
     coverage.references(
         runtime
@@ -155,7 +155,7 @@ pub(super) fn validate(
         .map_err(anyhow::Error::msg)?;
         timestamps.push(id);
     }
-    runtime.commit(Some(case.id), decision);
+    runtime.commit(Some(case.id), decision)?;
     runtime.commit_http_header_timestamps(&timestamps);
     let observed = runtime
         .http_client_metadata_headers(&context)

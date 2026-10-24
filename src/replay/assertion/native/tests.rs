@@ -100,7 +100,7 @@ fn signed_native_tokens_compose_inside_unordered_items_without_speculative_nonce
 fn protobuf_container_rule_and_generic_child_time_share_one_strict_codec() {
     let policy = crate::policy::parse_policy(
         r#"
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
 - id: child-time
   surface: api.response

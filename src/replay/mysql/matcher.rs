@@ -317,7 +317,12 @@ impl ReplayState {
                             "COM_QUERY" | "COM_STMT_EXECUTE"
                         )
                         && self.replay_policy.as_ref().is_some_and(|policy| {
-                            policy.mysql_sql_values_metadata_matches(&MysqlPolicyContext {
+                            policy.request_contracts.mysql_fields_metadata_matches(
+                                case,
+                                identity,
+                                &exchange.record,
+                                sql,
+                            ) || policy.mysql_sql_values_metadata_matches(&MysqlPolicyContext {
                                 request_times: crate::replay::assertion::RequestTimes {
                                     source: contracts::source_started(&exchange.record),
                                     target: None,

@@ -42,7 +42,7 @@ fn published_jwt_evidence_survives_first_publish_replacement_and_retired_authori
             .unwrap();
         }
         let policy = root.join(".traffic-e2e/policy.yaml");
-        fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
+        fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
         let token = |now| {
             jsonwebtoken::encode(
                 &jsonwebtoken::Header::default(),
@@ -219,7 +219,7 @@ fn install_project(root: &std::path::Path) {
     fs::write(directory.join("Dockerfile.target"), "FROM scratch\n").unwrap();
     fs::write(
         directory.join("policy.yaml"),
-        "format: traffic-policy/v1\nrules: []\n",
+        "format: traffic-policy/v2\nrules: []\n",
     )
     .unwrap();
     let options = E2eRunInitOptions {

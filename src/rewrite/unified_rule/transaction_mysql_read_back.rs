@@ -50,7 +50,7 @@ fn mysql_identity_read_back_public_extension_requires_each_causal_source_field_a
             crate::platform::encryption_key::load_or_create(root).unwrap();
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v1","rules":[identity(false)]}),
+                json!({"format":"traffic-policy/v2","rules":[identity(false)]}),
             );
             let mut events = events(scenario != "missing-read");
             if scenario == "before-capture" {
@@ -126,7 +126,7 @@ fn mysql_identity_read_back_public_alias_template_covers_multiple_source_shards(
         crate::platform::encryption_key::load_or_create(root).unwrap();
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v1","rules":[identity(false)]}),
+            json!({"format":"traffic-policy/v2","rules":[identity(false)]}),
         );
         let mut events = events(true);
         let mut second_read = events[2].clone();
@@ -178,7 +178,7 @@ fn mysql_identity_read_back_public_time_plan_restores_only_attested_selected_del
         let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v1","rules":[identity(scenario!="missing-read-permission")]}),
+                json!({"format":"traffic-policy/v2","rules":[identity(scenario!="missing-read-permission")]}),
             );
             vec![]
         });

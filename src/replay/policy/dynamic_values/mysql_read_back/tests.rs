@@ -21,7 +21,7 @@ fn fixture_with(mut definition: Value) -> DynamicValues {
     definition["effect"]["mysql_read_back"][0]["templates"] =
         json!({"/blocks/*/key":"content:{value}"});
     let compiled = crate::policy::compile_policy(
-        &serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[definition]}))
+        &serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[definition]}))
             .unwrap(),
     )
     .unwrap();
@@ -136,7 +136,7 @@ fn mysql_identity_read_back_alias_family_rejects_overlapping_exact_result_owners
             "proof":{"source":"other.py:1","fact":"Another contract selects the stored identity leaf"}
         });
         let policy = serde_json::from_value(
-            json!({"format":"traffic-policy/v1","rules":[identity.clone(),other]}),
+            json!({"format":"traffic-policy/v2","rules":[identity.clone(),other]}),
         )
         .unwrap();
         assert_eq!(
@@ -275,7 +275,7 @@ fn mysql_identity_read_back_admission_rejects_unbounded_unowned_and_overlapping_
             rules.push(json!({"id":"other","surface":"dependency.response","match":{"api":"POST /api","resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"},"operation":"COM_QUERY","sql":"SELECT payload FROM {{table}} WHERE id=?","table_series":{"prefix":"results_","start":0,"end":9,"width":4}},"slot":{"sql_column":"payload"},"codec":"json","contract":{"/blocks/*/id":{"relative_time":"rfc3339"}},"proof":{"source":"other.py:1","fact":"An incompatible owner selects the same leaf"}}));
         }
         let result = serde_json::from_value::<crate::policy::TrafficPolicy>(
-            json!({"format":"traffic-policy/v1","rules":rules}),
+            json!({"format":"traffic-policy/v2","rules":rules}),
         )
         .map_err(anyhow::Error::from)
         .and_then(|policy| crate::policy::compile_policy(&policy));

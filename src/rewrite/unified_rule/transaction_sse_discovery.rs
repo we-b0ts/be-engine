@@ -151,13 +151,25 @@ fn identity_only_differences_offer_source_guidance_without_inferred_permission()
             .unwrap()
             .is_empty()
     );
-    let hint = evidence
-        .rule_hints
-        .iter()
-        .find(|h| h.capability == "sse_data_contract")
-        .unwrap();
-    assert!(hint.hint.contains("Source generator/lifetime proof"));
-    assert!(hint.hint.contains("Missing events"));
+    let inventory = &evidence.facts["source_entry"]["identity_inventory"];
+    assert_eq!(inventory["scope"], "case");
+    assert_eq!(inventory["relationship"], "bijective_renaming");
+    assert_eq!(inventory["observations_define_relations"], true);
+    assert_eq!(inventory["automatic_permission"], false);
+    for capability in ["sse_data_contract", "resource_field_contract"] {
+        assert!(
+            evidence
+                .rule_hints
+                .iter()
+                .any(|hint| hint.capability == capability)
+        );
+    }
+    assert!(
+        evidence
+            .applicable_rule_planners
+            .iter()
+            .any(|planner| planner.capability == "resource_field_contract")
+    );
 }
 
 #[test]

@@ -74,12 +74,16 @@ is unclear.
   diagnostics, with bounded payload previews and raw JSON differences. It does
   not persist plaintext, apply value rules or change assertion outcomes.
 
-- `policy/schema` owns the strict self-contained `traffic-policy/v1` document.
+- `policy/schema` and `policy/declarations` own the strict `traffic-policy/v2`
+  authored document. `policy/authoring` resolves named resources, field references,
+  local proof inheritance and compact contracts; `policy/lowering` maps resource
+  fields and API response declarations into the existing typed rule IR.
   `policy/proof` owns shared proof byte limits and bounded Source references;
   authoring resolves local inheritance and common document revision context.
   `policy/compiler` owns typed capability validation, field ownership and
-  semantic effect fingerprints; neither module reads evidence or changes runtime
-  state. `policy/condition` owns Source sibling predicate validation, selection,
+  semantic effect fingerprints, prepared endpoint indices, table matchers and codec
+  plans; these modules neither read evidence nor change runtime state.
+  `policy/condition` owns Source self/sibling predicate validation, selection,
   Target discriminator equality and conservative disjointness shared by value
   fields and native Redis identity captures. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
   relations. Its `calendar` child preserves civil-day distances using independent
@@ -110,6 +114,17 @@ is unclear.
   `assertion/jwt/url` owns strict URL remainder and signed nonce echoes. Body and
   header adapters reuse the same private key snapshots and JWT verifier. Header
   ownership never implies a JSON body codec or a response-status exemption.
+
+- `mysql/sql/field_bindings` owns conservative physical database/table/column
+  resolution from real statement syntax and its bounded, literal-free analysis
+  cache. Protocol request/response adapters map those origins to live values,
+  reuse per-statement analysis and preserve strict unselected SQL and finite
+  consumption. The cache never stores live values, clocks or matching decisions.
+  MySQL recording preserves wire schema and original column origins; response
+  fallback uses direct projections only when old metadata is sufficient.
+- `rewrite/unified_rule/declarations` owns additive authored-graph merges and
+  proof-preserving amendments; discovery supplies bounded physical-field
+  suggestions without inferring codecs, table families or Source intent.
 
 - `replay/report/sql_summary` owns bounded original SQL excerpts for diagnostics,
   including outer SELECT bodies when long projections hide the predicates.
@@ -1160,7 +1175,7 @@ explicit repository-wide audit.
   expands only typed contract locations, preserving business literals and the
   complete rule/proof IR used by compilation, plans and evidence. Rendering
   verifies compiled equality after a parse round trip.
-- `value_contract/{json,encoded,time,generated,delivery}` owns pure values, whole
+- `value_contract/{json,encoded,time,generated,delivery,identities}` owns pure values, whole
   element pairing, microsecond relationships, conditional fields and staged
   nonces/templates. Keys are borrowed immutable inputs; bytes and plaintext do
   not enter errors or reports.
@@ -1168,6 +1183,13 @@ explicit repository-wide audit.
   clock scopes. `value_contract/json/clock_scope` resolves immutable array
   coordinates or identity fingerprints; the existing comparison owner retains
   relation budgets and cross-message validation.
+  `value_contract/identities` owns bounded case/domain renaming proposals,
+  equality and injectivity, and historical input anchors. The request-contract
+  identity adapter commits accepted proposals and translates only declared
+  physical leaves. MySQL result and Redis RESP owners retain wire framing and
+  publish complete delivery batches before bytes become visible. The private
+  `replay/control/identity` bridge joins runner-owned response constraints to
+  dependency state before case cleanup; generated tokens never enter reports.
 - `replay/policy/native_projection` translates typed effects to existing domain
   data. Its SourceSession exercises a complete immutable Source trace in private
   state; it cannot claim live Target work or certify Target correctness.
@@ -1198,7 +1220,8 @@ explicit repository-wide audit.
   or dropping header date/JWT validation.
   `replay/assertion/interaction/contracts` owns the explicit SSE envelope/data
   adapter shared by Source/Target preflight and Replay; `value_contract/json/identity`
-  owns bounded case-local identity bijections. Policy SSE slots retain separate
+  owns pure payload identity comparisons, while the case store retains accepted
+  relationships across physical observations. Policy SSE slots retain separate
   event/body field ownership. `unified_rule/discovery/primary` owns authenticated
   primary-response observations, scheduled before dependencies for response issues
   within the shared discovery budget. Its `page` sibling owns bounded scan and
@@ -1233,5 +1256,5 @@ explicit repository-wide audit.
   pair while retaining failed cross-row search edges as evidence.
 - Historical feedback DTOs may remain as domain data or journal recovery inputs.
   Their old authoring entrypoints reject and production loaders accept only
-  `traffic-policy/v1`. Test-only explicit fixture migration is not a reader
+  `traffic-policy/v2`. Test-only explicit fixture migration is not a reader
   fallback and cannot produce project proof.

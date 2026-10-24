@@ -283,19 +283,33 @@ fn sql_template_slot_keeps_other_literals_and_requires_explicit_discovery_bindin
         fixture.confirm();
         let evidence = fixture.evidence();
         assert!(
-            evidence.facts["candidates"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|candidate| candidate["rule"]["match"]["resource"]["protocol"] != "mysql")
+            evidence.facts["candidates"].as_array().unwrap().iter().all(
+                |candidate| candidate["draft_rule"]["match"]["resource"]["protocol"] != "mysql"
+            )
         );
-        assert!(
-            evidence.facts["source_entry"]["bindings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|binding| binding["needs_sql_template"] == true)
-        );
+        let binding = evidence.facts["source_entry"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|binding| binding["binding"]["match"]["resource"]["protocol"] == "mysql")
+            .unwrap();
+        assert_eq!(binding["needs_sql_template"], false);
+        assert_eq!(binding["needs_physical_binding"], false);
+        assert_eq!(binding["needs_schema"], true);
+        assert_eq!(binding["source_intent_required"], true);
+        for key in ["api", "sql", "operation", "table_series"] {
+            assert!(binding["binding"]["match"].get(key).is_none());
+        }
+        let fields = binding["physical_fields"]["fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 2);
+        for (field, column) in fields.iter().zip(["payload", "tenant"]) {
+            assert_eq!(field["database"], "app");
+            assert_eq!(field["table"], "cache");
+            assert_eq!(field["column"], column);
+            assert_eq!(field["slot"], json!({"sql_field":column}));
+            assert!(field.get("codec").is_none());
+        }
+        assert_eq!(binding["physical_fields"]["complete_coverage"], false);
         let result = fixture.plan();
         if change_tenant {
             assert!(result.is_err());
@@ -482,4 +496,42 @@ fn response_compare_contract_does_not_implicitly_authorize_delivery_rewrites() {
             assert_eq!(plan.traffic_e2e_report["verified"], false);
         }
     }
+}
+
+#[test]
+fn sql_discovery_rejects_a_witness_database_that_differs_from_its_source_exchange() {
+    let fixture = Fixture::new();
+    let mut rule = dependency_rule("mysql", "db.test:3306", "COM_QUERY");
+    rule["match"]["resource"]["database"] = json!("configured_db");
+    rule["match"]["resource"]["username"] = json!("worker");
+    rule["match"]["sql"] = json!("INSERT INTO cache(payload) VALUES (?)");
+    rule["slot"] = json!({"sql_value":0});
+    write(&fixture.proposal, rule);
+    let event = json!({"event_type":"mysql_exchange","connection_id":uuid::Uuid::nil(),"query_sequence":1,
+        "target_host":"db.test","target_port":3306,"database":"observed_db","username":"worker","command":"COM_QUERY",
+        "sql":"INSERT INTO cache(payload) VALUES ('{\"members\":[1,2]}')",
+        "response":{"status":"ok"},"timestamp":"2026-10-16T00:00:00Z","duration_ms":0,"outcome":"response"});
+    // install deliberately seals a mismatched metadata DB from the proposal;
+    // the source request envelope itself carries only SQL/params and clocks.
+    install(&fixture, event, |raw| raw);
+    fixture.confirm();
+    let overview = query_rewrite_evidence_for_scope(
+        fixture.context(),
+        &RewriteWorkScope::Api { api: "/api".into() },
+    )
+    .unwrap();
+    let query = overview
+        .rule_hints
+        .iter()
+        .find(|hint| hint.capability == "unified_value_contract")
+        .unwrap()
+        .help
+        .argv
+        .last()
+        .unwrap();
+    let error = query_rewrite_evidence(fixture.context(), query).unwrap_err();
+    assert!(
+        format!("{error:#}")
+            .contains("protocol identity differs from its immutable Source exchange")
+    );
 }

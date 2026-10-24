@@ -49,8 +49,10 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
         "replaced rule IDs must not be blank"
     );
     ensure!(
-        !change.policy.rules.is_empty(),
-        "policy changes require explicit replacement rules with Source proof"
+        !change.policy.rules.is_empty()
+            || !change.policy.resources.is_empty()
+            || !change.policy.responses.is_empty(),
+        "policy changes require explicit replacement declarations or rules with Source proof"
     );
     crate::policy::compile_policy(&change.policy)?;
     Ok(Proposal {
@@ -116,6 +118,9 @@ impl Proposal {
         document
             .rules
             .retain(|rule| !self.replace_rules.contains(rule.id()));
+        document
+            .field_references
+            .retain(|id, _| !self.replace_rules.contains(id));
         Ok(removed)
     }
 }
@@ -150,7 +155,7 @@ mod tests {
 
     fn change(replace: serde_json::Value) -> serde_json::Value {
         json!({"format":CHANGE_FORMAT,"replace_rules":replace,
-            "policy":{"format":"traffic-policy/v1","rules":[rule("merged","GET /api")]}})
+            "policy":{"format":"traffic-policy/v2","rules":[rule("merged","GET /api")]}})
     }
 
     #[test]
@@ -219,7 +224,7 @@ mod tests {
         .unwrap();
         for paths in [json!(["/a/*", "/b/*"]), json!(["/a/*"]), json!(["/**"])] {
             let input = json!({"format":CHANGE_FORMAT,"replace_rules":["capture-a","capture-b"],
-                "policy":{"format":"traffic-policy/v1","rules":[capture("capture", paths.clone())]}});
+                "policy":{"format":"traffic-policy/v2","rules":[capture("capture", paths.clone())]}});
             let proposal = parse(&input.to_string()).unwrap();
             let mut document = original.clone();
             let result = proposal.remove_from(&mut document, "GET /api");

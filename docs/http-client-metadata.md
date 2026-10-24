@@ -7,7 +7,7 @@ the selected consumer, including middleware, to prove that these names do not
 participate in authentication, routing, idempotency or application behavior.
 
 ```yaml
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
   - id: responses-sdk-metadata
     match:

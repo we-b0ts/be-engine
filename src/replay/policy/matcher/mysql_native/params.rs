@@ -111,7 +111,7 @@ mod tests {
         std::fs::write(directory.join("expected-response.json"), "{}").unwrap();
         let proof = json!({"source":"source.py:save","fact":"Source mints a UUID, keeps it for later updates, and stores the request-relative creation instant"});
         let resource = json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app"});
-        let document = json!({"format":"traffic-policy/v1","rules":[
+        let document = json!({"format":"traffic-policy/v2","rules":[
             {"id":"created","match":{"api":"POST /events","resource":resource,"sql":"INSERT INTO events (id,created) VALUES (?,?)"},"effect":{"kind":"mysql_values","params":{"0":{"contract":{"kind":"uuid_v4","binding":"event"},"proof":proof}},"values":{"1":{"contract":{"kind":"time","format":"sql_datetime","relation":"preserve_offset","utc_offset":"+00:00"},"proof":proof}}},"proof":proof},
             {"id":"updated","match":{"api":"POST /events","resource":resource,"sql":"UPDATE events SET label=? WHERE id=?"},"effect":{"kind":"mysql_values","params":{"1":{"contract":{"kind":"reference","binding":"event"},"proof":proof}}},"proof":proof}
         ]});
@@ -149,6 +149,7 @@ mod tests {
         let failed = candidate(first).replace("00:00:00.123456", "00:00:20.123456");
         assert!(
             !compare(
+                Some("app"),
                 Some(source),
                 None,
                 Some(&failed),
@@ -174,6 +175,7 @@ mod tests {
         drop(unused);
         let actual = candidate("00000000-0000-4000-8000-000000000003");
         let comparison = compare(
+            Some("app"),
             Some(source),
             None,
             Some(&actual),
@@ -195,7 +197,7 @@ mod tests {
         )
         .unwrap();
         decision.merge_value_comparison(comparison, &selected);
-        runtime.commit(Some("case"), decision);
+        runtime.commit(Some("case"), decision).unwrap();
         let source =
             "UPDATE events SET label='checked' WHERE id='00000000-0000-4000-8000-000000000001'";
         let correct =
@@ -207,6 +209,7 @@ mod tests {
             .unwrap()];
         assert!(
             compare(
+                Some("app"),
                 Some(source),
                 None,
                 Some(correct),
@@ -256,6 +259,7 @@ mod tests {
         );
         assert!(
             compare(
+                Some("app"),
                 Some(source),
                 None,
                 Some(&correct.replace("label='checked'", "label='wrong'")),

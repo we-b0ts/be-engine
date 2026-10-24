@@ -7,6 +7,16 @@ use base64::engine::general_purpose::STANDARD;
 mod transaction_status;
 
 #[test]
+fn column_origins_preserve_wire_schema_independently_of_connection_database() {
+    let column = parse_column_definition(&column_def("updated_at", MYSQL_TYPE_DATETIME)).unwrap();
+    assert_eq!(column.database.as_deref(), Some("test"));
+    assert_eq!(column.table.as_deref(), Some("t"));
+    assert_eq!(column.column.as_deref(), Some("updated_at"));
+    let serialized = serde_json::to_value(column).unwrap();
+    assert_eq!(serialized["database"], "test");
+}
+
+#[test]
 fn rollback_ok_preserves_server_transaction_status_without_guessing_truncated_flags() {
     for (payload, expected) in [
         (vec![0, 0, 0, 0, 0, 0, 0], Some(0)),

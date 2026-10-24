@@ -2,10 +2,53 @@ use super::*;
 use serde_json::{Value, json};
 
 #[test]
+fn mixed_native_response_preserves_private_identity_constraints_without_report_tokens() {
+    let temp = tempfile::tempdir().unwrap();
+    let policy = temp.path().join("policy.yaml");
+    std::fs::write(&policy, r#"format: traffic-policy/v2
+responses:
+  session:
+    api: POST /sessions
+    proof: {source: 'handler.rs:20', fact: 'The response returns the generated session identity stored in the cache'}
+    body:
+      codec: json
+      fields:
+        /id: {kind: identity, binding: session, format: uuid}
+rules:
+  - id: nonce
+    match: {api: POST /sessions}
+    effect:
+      kind: response_generated
+      fields:
+        /nonce: {kind: random, format: hex, length: 4}
+    proof: {source: 'handler.rs:21', fact: 'This independent generated nonce retains its lowercase hexadecimal representation'}
+"#).unwrap();
+    let loaded = load_replay_policy(&policy).unwrap();
+    let source_id = "11111111-1111-4111-8111-111111111111";
+    let target_id = "99999999-9999-4999-8999-999999999999";
+    let capture = |id: &str, nonce: &str| json!({"encoding":"utf8","data":json!({"id":id,"nonce":nonce,"stable":true}).to_string(),"truncated":false});
+    let report = assert_recorded_response_with_policy(
+        ResponseAssertionOptions {case_id:"case".into(),request:temp.path().join("request.json"),expected_response:temp.path().join("expected.json"),actual_response:temp.path().join("actual.json"),policy},
+        &serde_json::to_vec(&json!({"method":"POST","uri":"/sessions","timestamp":"2020-01-01T00:00:00Z"})).unwrap(),
+        &serde_json::to_vec(&json!({"status":200,"body":capture(source_id,"aaaa")})).unwrap(),
+        &serde_json::to_vec(&json!({"version":1,"status":200,"request_sent_at":"2020-01-01T00:00:01Z","body":capture(target_id,"bbbb")})).unwrap(),
+        &loaded,
+    ).unwrap();
+    assert!(report.passed, "{:?}", report.differences);
+    assert_eq!(report.identity_pairs.len(), 1);
+    assert_eq!(report.identity_pairs[0].source, source_id);
+    assert_eq!(report.identity_pairs[0].target, target_id);
+    let persisted = serde_json::to_string(&report).unwrap();
+    assert!(!persisted.contains("identity_pairs"));
+    assert!(!persisted.contains(source_id));
+    assert!(!persisted.contains(target_id));
+}
+
+#[test]
 fn new_policy_compares_json_without_weakening_status_or_stable_values() {
     let temp = tempfile::tempdir().unwrap();
     let policy = temp.path().join("policy.yaml");
-    std::fs::write(&policy,r#"format: traffic-policy/v1
+    std::fs::write(&policy,r#"format: traffic-policy/v2
 rules:
   - id: session-response
     surface: api.response

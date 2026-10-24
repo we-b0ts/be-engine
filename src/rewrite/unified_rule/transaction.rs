@@ -19,6 +19,8 @@ mod change_transaction;
 mod concurrency_transaction;
 #[path = "transaction_conditional_identity.rs"]
 mod conditional_identity_transaction;
+#[path = "transaction_declarations.rs"]
+mod declarations_transaction;
 #[path = "transaction_dependency.rs"]
 mod dependency_transaction;
 #[path = "transaction_header.rs"]
@@ -64,7 +66,7 @@ fn compact_proposals_expand_source_proof_in_public_plan_apply_and_keep_stale_gua
         let fixture = Fixture::new();
         fs::write(
             fixture.policy(),
-            "format: traffic-policy/v1\nsource_revision: source\nrules: []\n",
+            "format: traffic-policy/v2\nsource_revision: source\nrules: []\n",
         )
         .unwrap();
         let mut rule = super::rule();
@@ -78,7 +80,7 @@ fn compact_proposals_expand_source_proof_in_public_plan_apply_and_keep_stale_gua
         assert_eq!(expanded["contract"]["/members"]["kind"], "unordered");
         assert_eq!(plan.traffic_e2e_report["verified"], false);
         if stale {
-            let bytes = "format: traffic-policy/v1\nsource_revision: changed-source\nrules: []\n";
+            let bytes = "format: traffic-policy/v2\nsource_revision: changed-source\nrules: []\n";
             fs::write(fixture.policy(), bytes).unwrap();
             assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
             assert_eq!(fs::read_to_string(fixture.policy()).unwrap(), bytes);
@@ -158,7 +160,7 @@ impl Fixture {
         )
         .unwrap();
         let policy = root.join(".traffic-e2e/policy.yaml");
-        fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
+        fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
         let source = root.join(".traffic-e2e/local/artifacts/recordings/recording");
         let case = source.join("apis/api/case-1");
         fs::create_dir_all(&case).unwrap();

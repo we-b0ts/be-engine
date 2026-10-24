@@ -682,7 +682,7 @@ fn rule_help_exposes_one_document_and_actual_evidence_for_every_domain() {
     let help = Cli::try_parse_from(["test", "rule", "plan", "--help"])
         .unwrap_err()
         .to_string();
-    for required in ["--file", "--evidence", "traffic-policy/v1"] {
+    for required in ["--file", "--evidence", "traffic-policy/v2"] {
         assert!(help.contains(required), "{help}");
     }
     for retired in [

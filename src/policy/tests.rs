@@ -11,7 +11,7 @@ fn json_rule(surface: &str) -> String {
         "api: GET /sessions\n      resource: {protocol: redis, endpoint: 'cache:6379', database: 0}\n      operation: GET\n      key: {prefix: 'session:'}"
     };
     format!(
-        "format: traffic-policy/v1\nrules:\n  - id: session\n    surface: {surface}\n    match:\n      {selector}\n    slot: {}\n    codec: json\n    contract:\n      /expires_at: {{kind: time, format: unix_microseconds, relation: preserve_offset}}\n    proof: {{source: 'src/session.rs:12-18', fact: 'Expiry is request time plus a fixed lifetime'}}\n",
+        "format: traffic-policy/v2\nrules:\n  - id: session\n    surface: {surface}\n    match:\n      {selector}\n    slot: {}\n    codec: json\n    contract:\n      /expires_at: {{kind: time, format: unix_microseconds, relation: preserve_offset}}\n    proof: {{source: 'src/session.rs:12-18', fact: 'Expiry is request time plus a fixed lifetime'}}\n",
         if surface == "api.response" {
             "body"
         } else {
@@ -72,7 +72,7 @@ fn delivery_reuses_only_same_rule_declared_timestamps() {
 fn unknown_fields_unsupported_contracts_and_duplicate_paths_fail_closed() {
     let raw = json_rule("api.response");
     for invalid in [
-        raw.replace("format: traffic-policy/v1", "format: traffic-policy/v2"),
+        raw.replace("format: traffic-policy/v2", "format: traffic-policy/v1"),
         raw.replace("codec: json", "codec: json\n    ignore: true"),
         raw.replace("kind: time", "kind: random"),
         raw.replace("relation: preserve_offset", "relation: ignore"),
@@ -345,7 +345,7 @@ fn protobuf_bindings_cannot_hide_scalar_ancestors_or_repeated_message_scope() {
 #[test]
 fn malformed_rule_errors_identify_the_rule_and_typed_field() {
     let error = parse_policy(
-        r#"format: traffic-policy/v1
+        r#"format: traffic-policy/v2
 rules:
   - id: wrong-native
     match: {api: GET /test}
@@ -393,7 +393,7 @@ fn documented_self_contained_examples_compile() {
     let mut examples = 0;
     for block in document.split("```yaml\n").skip(1) {
         let yaml = block.split("```").next().unwrap();
-        if yaml.starts_with("format: traffic-policy/v1") {
+        if yaml.starts_with("format: traffic-policy/v2") {
             parse_policy(yaml)
                 .unwrap_or_else(|error| panic!("documented policy is invalid: {error:#}"));
             examples += 1;

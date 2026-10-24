@@ -105,7 +105,7 @@ async fn real_http_discovery_plan_apply_and_finite_replay() {
     crate::replay::policy::test_fixture::install_http_unordered(feedback(&case, &policy, &report))
         .unwrap();
     let text = fs::read_to_string(&policy).unwrap();
-    assert!(text.contains("format: traffic-policy/v1"));
+    assert!(text.contains("format: traffic-policy/v2"));
     assert!(!text.contains("query:"));
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
@@ -277,7 +277,7 @@ async fn endpoint_and_schema_validation_reject_unreviewed_rule_expansion() {
         .unwrap();
     let original = fs::read_to_string(&policy).unwrap();
     for invalid in [
-        original.replace("traffic-policy/v1", "traffic-policy/v2"),
+        original.replace("traffic-policy/v2", "traffic-policy/v1"),
         original.replace("/department_ids:", "/bad~escape:"),
         original.replace("path: /membership", "path: /membership*"),
         original.replace(

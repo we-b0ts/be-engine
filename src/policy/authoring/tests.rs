@@ -46,7 +46,7 @@ fn configured_time_anchors_reject_in_compact_full_and_nested_contracts() {
 
 #[test]
 fn duration_and_encrypted_duration_do_not_require_or_accept_an_anchor() {
-    let raw = r#"format: traffic-policy/v1
+    let raw = r#"format: traffic-policy/v2
 rules:
 - id: duration
   surface: api.response
@@ -79,7 +79,7 @@ rules:
 
 #[test]
 fn rendered_policy_omits_default_path_modes_and_calendar_timezones() {
-    let raw = r#"format: traffic-policy/v1
+    let raw = r#"format: traffic-policy/v2
 rules:
 - id: object-key
   match:
@@ -124,7 +124,7 @@ rules:
 }
 
 fn sql_policy() -> &'static str {
-    r#"format: traffic-policy/v1
+    r#"format: traffic-policy/v2
 source_revision: source-v1
 rules:
 - id: task-time
@@ -182,7 +182,7 @@ fn local_inheritance_expands_every_contract_and_partial_override_without_crossin
 fn compact_and_fully_explicit_documents_have_identical_effects_proofs_and_identities() {
     let compact = parse_policy(sql_policy()).unwrap();
     let full = format!(
-        "format: traffic-policy/v1\nrules:\n{}",
+        "format: traffic-policy/v2\nrules:\n{}",
         serde_yaml::to_string(&compact.rules).unwrap()
     );
     let expanded = parse_policy(&full).unwrap();
@@ -232,7 +232,7 @@ fn conflicting_revisions_empty_overrides_duplicate_slots_and_mixed_abbreviations
 
 #[test]
 fn declared_revision_is_explicit_in_capture_effects_and_changes_the_full_identity() {
-    let raw = r#"format: traffic-policy/v1
+    let raw = r#"format: traffic-policy/v2
 source_revision: source-v1
 rules:
 - id: capture
@@ -279,7 +279,7 @@ fn all_three_surfaces_and_protobuf_reuse_the_same_time_abbreviation() {
         ),
     ] {
         let raw = format!(
-            r#"format: traffic-policy/v1
+            r#"format: traffic-policy/v2
 source_revision: source-v1
 rules:
 - id: session
@@ -347,7 +347,7 @@ fn renderer_retains_quoted_text_and_rejects_multiline_proofs_as_before() {
 fn renderer_quotes_flow_delimiters_in_native_key_patterns_and_keeps_them_exact() {
     let revision = format!("sha256:{}", "1".repeat(64));
     let raw = format!(
-        r#"format: traffic-policy/v1
+        r#"format: traffic-policy/v2
 source_revision: {revision}
 rules:
 - id: redis-maintenance
@@ -381,6 +381,7 @@ fn standalone_rule_proposals_inherit_proof_and_get_revision_context_before_compa
         format: POLICY_FORMAT.into(),
         source_revision: policy.source_revision.clone(),
         rules: vec![rule],
+        ..TrafficPolicy::default()
     })
     .unwrap();
     assert_eq!(proposed.rules, policy.rules);

@@ -31,6 +31,8 @@ use crate::replay::json_order as json;
 pub(in crate::replay) use cross_case::load as load_cross_case;
 mod api_origin;
 pub(in crate::replay) mod append;
+#[cfg(test)]
+mod field_identity_tests;
 mod key_access;
 pub(in crate::replay) mod key_selector;
 #[cfg(test)]
@@ -162,6 +164,7 @@ struct MatchedRedisExchange {
     observation: Option<observations::Prepared>,
     append: Option<append::PreparedAppend>,
     read_back: Option<super::policy::request_contract::PreparedReadBack>,
+    time_read: Option<super::policy::request_contract::PreparedRedisTimeRead>,
     request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     unified_delivery: Option<super::policy::request_contract::PreparedRedisDelivery>,
     rpc_push: Option<usize>,

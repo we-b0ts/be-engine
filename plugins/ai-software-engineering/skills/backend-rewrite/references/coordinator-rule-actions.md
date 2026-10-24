@@ -3,7 +3,15 @@
 Only the confirmed workflow coordinator plans/applies rules. Require the worker's
 Source conclusions and exact proposed selectors; return semantic questions to the
 Source owner. Rules live in the single file named by `project.policy`; default
-`.traffic-e2e/policy.yaml`. Keep each rule self-contained with inline proof.
+`.traffic-e2e/policy.yaml`. Declare stable physical fields under `resources`, API
+output fields under `responses`, and contextual/stateful behavior under `rules`.
+Reuse named resources and `field_ref`; proof inherits only within its declaration
+subtree or rule. See [resource-field contracts](../../../../../docs/resource-field-contracts.md).
+At the first relevant value mismatch, request the worker's physical field
+inventory and Source semantics together: time format/relation, duration
+unit/branch, unordered consumer behavior, or every eligible location of a shared
+identity. Inspect existing declarations before adding an owner. A missing
+mechanical draft does not postpone a Source-proven proposal.
 See [unified rule contracts](../../../../../docs/unified-rule-contracts.md) and
 [worker diagnosis](api-implementer-rule-diagnosis.md).
 
@@ -16,16 +24,32 @@ backend-rewrite rule plan --file rule.yaml --evidence <current-evidence-id>
 backend-rewrite rule apply --plan <returned-plan-id>
 ```
 
-The proposal may be one rule, a list, or a full `traffic-policy/v1` document.
+The proposal may be one rule, a list, or a full `traffic-policy/v2` authored
+document containing `resources`, `responses` and contextual `rules`. Additive
+amendments preserve existing declaration identity, fields and proofs; omissions
+never delete permissions. Unsupported declaration replacements reject.
 Review affected surfaces, immutable Source scope, complete coverage, staged
 relationships, strict remainder, residual failures and verification obligations.
 Discovery drafts prefill observed selectors and request missing Source facts;
 a candidate never authorizes its own proof. PB requires actual typed schema
 bindings. Do not guess clock units, a timezone, a key source or random permissions.
 
+For ordinary identity fields, plan the complete eligible MySQL/Redis/response
+inventory with one case-local `binding` and a consistent format. Source values
+define equality and distinctness at runtime; a specific creation SQL or first
+capture event is unnecessary. Reads deliver established Target IDs and anchor
+unknown inputs. Do not split this into capture, Replay and one-reference-at-a-time
+plans. Mixed fixed/external IDs require expressible eligibility guards; keep
+existing narrow native owners when a whole-column declaration would broaden
+permission. Derived keys/URLs, hashes, signatures and finite state retain their
+additional typed effects and their own evidence requirements.
+
 For new dependency value rules and native resource effects, omit `match.api`.
-Select the protocol, endpoint, database/user, operation, SQL/key and value slot
-from Source behavior. The API identifies the issue and transaction only; root
+Select protocol, endpoint, database/user and the physical data position from
+Source behavior. MySQL field declarations select tables/columns independently
+of SQL; Redis declarations select key/container/hash-field and decoded path.
+Contextual native effects keep their required operation/statement selectors and
+can reference declared strategies through `field_ref`. The API identifies the issue and transaction only; root
 inbound `when` predicates cannot scope a new resource rule. Review complete
 cross-API Source coverage and each API's independent Target evidence. Missing
 Target evidence requires genuine Replay. Keep explicit `calendar_date`
@@ -43,9 +67,10 @@ capability hints still require independent Source conclusions and full planning.
 
 For SSE, inspect discovery's `source_entry.bindings` for exact event/type slots
 even if there is no mechanical candidate. Require the worker's Source clock or
-identity generator/lifetime proof and include every referring event/pointer,
-including terminal output. A shared identity `binding` preserves equality and
-injectivity across frames; missing events and event order remain strict. See
+identity variability/eligibility proof and include every eligible event/pointer,
+including terminal output and related resource fields. A shared case-local
+identity `binding` preserves equality and injectivity across those locations;
+missing events and event order remain strict. See
 [SSE value contracts](../../../../../docs/sse-value-contracts.md).
 When `policy_freshness.requires_fresh_replay` is true, follow its refresh command
 and scheduling gates before planning; discovery observations remain diagnostic.
@@ -105,7 +130,9 @@ fresh Replay before attributing any remaining count mismatch. See
 
 ## Redis Read-back
 
-For Source-proven Redis write-then-read flows, update the existing `identity`
+Ordinary resource identity fields already provide mapped same-Case read delivery
+and unknown-input anchors. For additional native Redis write-then-read flows,
+update the existing `identity`
 or `redis_sequence` rule with `effect.read_back`; do not duplicate its capture
 or introduce a Target cache to compensate for a recorded generated ID. Require
 the worker's exact same-key write/read Source proof and selected fields. GET

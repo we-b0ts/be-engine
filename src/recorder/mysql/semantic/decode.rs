@@ -465,7 +465,7 @@ pub(super) fn parse_stmt_prepare_ok(payload: &[u8]) -> Option<PrepareOkPacket> {
 
 pub(super) fn parse_column_definition(payload: &[u8]) -> Option<MysqlColumn> {
     let (_catalog, offset) = read_lenenc_string(payload, 0)?;
-    let (_schema, offset) = read_lenenc_string(payload, offset)?;
+    let (schema, offset) = read_lenenc_string(payload, offset)?;
     let (table, offset) = read_lenenc_string(payload, offset)?;
     let (org_table, offset) = read_lenenc_string(payload, offset)?;
     let (name, offset) = read_lenenc_string(payload, offset)?;
@@ -478,6 +478,7 @@ pub(super) fn parse_column_definition(payload: &[u8]) -> Option<MysqlColumn> {
     let decimals = *payload.get(offset + 9)?;
     Some(MysqlColumn {
         name,
+        database: empty_to_none(schema),
         table: empty_to_none(org_table).or_else(|| empty_to_none(table)),
         column: empty_to_none(org_name),
         family: mysql_column_family(column_type_code, charset, flags).to_string(),

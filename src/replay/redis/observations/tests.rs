@@ -259,7 +259,7 @@ fn a_nil_only_case_key_cannot_gain_a_write_or_a_future_identity() {
 #[test]
 fn state_observation_schema_requires_proof_and_keeps_the_closed_effects() {
     let compile = |r: Value| {
-        crate::policy::parse_policy(&json!({"format":"traffic-policy/v1","rules":[r]}).to_string())
+        crate::policy::parse_policy(&json!({"format":"traffic-policy/v2","rules":[r]}).to_string())
             .and_then(|p| crate::policy::compile_policy(&p))
     };
     let mut read = read_rule(true);

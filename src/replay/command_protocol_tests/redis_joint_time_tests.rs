@@ -268,7 +268,7 @@ async fn conditional_redis_capture_replays_mixed_blocks_times_references_and_fin
     let policy = temp.path().join(".traffic-e2e/policy.yaml");
     std::fs::write(
         &policy,
-        serde_yaml::to_string(&json!({"format":"traffic-policy/v1","rules":[identity,time]}))
+        serde_yaml::to_string(&json!({"format":"traffic-policy/v2","rules":[identity,time]}))
             .unwrap(),
     )
     .unwrap();

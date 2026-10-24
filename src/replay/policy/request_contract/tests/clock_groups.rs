@@ -137,15 +137,17 @@ fn named_window_group_stays_rigid_across_commands_and_resets_after_each_sequence
     let runtime = runtime(rule);
     for shift in [1000.0, 1002.0] {
         let first = (1090.25 + shift).to_string();
-        runtime.commit(
-            check(
-                &runtime,
-                "ZADD",
-                &["presence:1", "1090.25", "active"],
-                &["presence:1", &first, "active"],
+        runtime
+            .commit(
+                check(
+                    &runtime,
+                    "ZADD",
+                    &["presence:1", "1090.25", "active"],
+                    &["presence:1", &first, "active"],
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
+            .unwrap();
         let wrong = (1001.25 + shift).to_string();
         assert!(
             check(
@@ -157,14 +159,16 @@ fn named_window_group_stays_rigid_across_commands_and_resets_after_each_sequence
             .is_err()
         );
         let correct = (1000.25 + shift).to_string();
-        runtime.commit(
-            check(
-                &runtime,
-                "ZREMRANGEBYSCORE",
-                &["presence:1", "-inf", "1000.25"],
-                &["presence:1", "-inf", &correct],
+        runtime
+            .commit(
+                check(
+                    &runtime,
+                    "ZREMRANGEBYSCORE",
+                    &["presence:1", "-inf", "1000.25"],
+                    &["presence:1", "-inf", &correct],
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
+            .unwrap();
     }
 }

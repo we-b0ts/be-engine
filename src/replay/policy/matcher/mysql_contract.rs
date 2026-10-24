@@ -25,6 +25,7 @@ pub(crate) fn validate_selector(selector: &crate::policy::MatchSpec) -> Result<u
 }
 
 pub(crate) fn compare_values(
+    database: Option<&str>,
     source_sql: Option<&str>,
     source_params: Option<&[RecordedMysqlValue]>,
     target_sql: Option<&str>,
@@ -33,6 +34,7 @@ pub(crate) fn compare_values(
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
     super::mysql_native::compare(
+        database,
         source_sql,
         source_params,
         target_sql,
@@ -62,6 +64,25 @@ pub(crate) fn selected_value(
 
 pub(crate) fn witness_matches(event: &Value, rule: &CompiledRule) -> Result<bool> {
     let record: crate::replay::RecordedMysqlExchange = serde_json::from_value(event.clone())?;
+    if matches!(rule.rule.slot, Slot::SqlField(_)) {
+        if rule.rule.surface == crate::policy::Surface::DependencyResponse {
+            return Ok(!crate::replay::mysql::contracts::fields::response_indices(
+                &record.response,
+                rule,
+                record.sql.as_deref(),
+                record.database.as_deref(),
+            )?
+            .is_empty());
+        }
+        let tokens = mysql_values::materialized(record.sql.as_deref(), record.params.as_deref())
+            .map_err(anyhow::Error::msg)?;
+        return Ok(!super::mysql_native::fields::positions(
+            rule,
+            &tokens,
+            record.database.as_deref(),
+        )?
+        .is_empty());
+    }
     let template = SqlValueTemplate::from_value_selector(&rule.rule.selector)?;
     let source = mysql_values::materialized(record.sql.as_deref(), record.params.as_deref())
         .map_err(anyhow::Error::msg)?;

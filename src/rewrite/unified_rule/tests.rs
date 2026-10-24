@@ -26,7 +26,7 @@ fn single_list_and_document_use_the_same_schema_and_compiler() {
         expected
     );
     assert_eq!(
-        parse_proposal(&json!({"format":"traffic-policy/v1","rules":[rule()]}).to_string())
+        parse_proposal(&json!({"format":"traffic-policy/v2","rules":[rule()]}).to_string())
             .unwrap(),
         expected
     );

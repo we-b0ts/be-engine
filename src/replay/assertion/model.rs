@@ -336,7 +336,7 @@ impl ResponseDifference {
         }
     }
 
-    pub(super) fn body_value_mismatch() -> Self {
+    pub(crate) fn body_value_mismatch() -> Self {
         Self {
             pointer: "$body".to_string(),
             kind: ResponseDifferenceKind::ValueMismatch,
@@ -372,6 +372,9 @@ impl ResponseDifference {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseAssertionCaseReport {
+    /// Private runner-to-replay constraints; never persist generated tokens in reports.
+    #[serde(skip)]
+    pub(crate) identity_pairs: Vec<crate::value_contract::identities::IdentityPair>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applied_header_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -438,6 +441,7 @@ impl ResponseAssertionCaseReport {
     ) -> Self {
         Self {
             version: 3,
+            identity_pairs: Vec::new(),
             applied_header_rule_ids: Vec::new(),
             unused_applicable_header_rule_ids: Vec::new(),
             header_date_candidates: Vec::new(),

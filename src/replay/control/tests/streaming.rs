@@ -139,6 +139,7 @@ fn command(command: &str, case_id: &str) -> ReplayControlRequest {
         case_id: Some(case_id.into()),
         fail_on_dirty: true,
         fail_on_incomplete: false,
+        identity_pairs: Vec::new(),
     }
 }
 
@@ -303,6 +304,7 @@ async fn background_spans_cases() {
         case_id: None,
         fail_on_dirty: true,
         fail_on_incomplete: true,
+        identity_pairs: Vec::new(),
     };
     let (pending, report) = finalize_replay(&finalize, runtime.state.clone()).await;
     assert_eq!(pending["ok"], false);

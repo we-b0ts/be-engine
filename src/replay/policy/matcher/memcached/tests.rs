@@ -27,7 +27,7 @@ fn json_and_protobuf_values_share_contracts_and_independent_dependency_start_clo
         std::fs::write(case_dir.join("expected-response.json"), "{}").unwrap();
         std::fs::write(case_dir.join("dependencies.jsonl"), "").unwrap();
         let policy_path = temp.path().join("policy.yaml");
-        std::fs::write(&policy_path, format!(r#"format: traffic-policy/v1
+        std::fs::write(&policy_path, format!(r#"format: traffic-policy/v2
 rules:
   - id: cache-write
     surface: dependency.request
@@ -77,7 +77,7 @@ rules:
         };
         let decision = runtime.preview_memcached(&context).unwrap();
         assert_eq!(decision.value_contracts.len(), 1);
-        runtime.commit(Some("case"), decision);
+        runtime.commit(Some("case"), decision).unwrap();
         let report = runtime.report();
         let entry = report
             .dependency_rules

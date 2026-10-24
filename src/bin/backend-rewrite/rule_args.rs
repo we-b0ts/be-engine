@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Args)]
 pub(super) struct RulePlanArgs {
-    /// One rule, a rule list, or a traffic-policy/v1 document with inline Source proof.
+    /// One rule, a rule list, or a traffic-policy/v2 document with inline Source proof.
     #[arg(long, visible_alias = "rules", value_name = "RULES_YAML")]
     pub(super) file: PathBuf,
     /// Coordinator-issued evidence for the active issue and actual attempt.

@@ -222,7 +222,7 @@ fn overlapping_selectors_and_rule_id_collisions_are_rejected_by_the_shared_compi
         "proof":{"source":"service.py:216","fact":"Source builds membership from a set"}});
     let compile = |rules: Value| {
         crate::policy::parse_policy(
-            &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+            &json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
         )
     };
     compile(json!([rule])).unwrap();

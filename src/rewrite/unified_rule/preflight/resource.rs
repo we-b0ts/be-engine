@@ -107,8 +107,13 @@ impl ResourceRecord {
 /// Keep complete envelopes and traces for matching cases. Native preselection
 /// retains related reads and mutations; the Source session proves exact slots.
 fn matches(policy: &CompiledPolicy, ids: &BTreeSet<String>, event: &Value) -> Result<bool> {
-    for rule in policy.rules.iter().filter(|r| ids.contains(&r.rule.id)) {
-        if dependency::selects(rule, event)? {
+    for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
+        let candidates = policy
+            .rules
+            .iter()
+            .filter(|rule| ids.contains(&rule.rule.id) && rule.rule.surface == surface)
+            .collect::<Vec<_>>();
+        if !dependency::selected_rules(&candidates, event)?.is_empty() {
             return Ok(true);
         }
     }

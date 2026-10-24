@@ -153,6 +153,17 @@ pub(super) async fn deliver_redis_exchange(
         );
         return Err(error.into());
     }
+    let delivered_at = chrono::Utc::now();
+    if let Some(read) = &matched.time_read
+        && let Err(error) = read.publish(response, delivered_at)
+    {
+        state
+            .lock()
+            .await
+            .redis
+            .fail_exchange(matched, error.to_string());
+        return Err(error);
+    }
     let state_ref = state;
     let mut state = state_ref.lock().await;
     if let Some(delivery) = &matched.read_back
@@ -173,6 +184,19 @@ pub(super) async fn deliver_redis_exchange(
     {
         state.redis.fail_exchange(matched, error.to_string());
         return Err(error);
+    }
+    if let Some(read) = &matched.time_read {
+        // Ordinary Case responses remain resident and immutable. Publish the
+        // scalar pairs only after the final native/schema bytes reached TCP.
+        let original = &state.redis.exchanges[matched.index].response;
+        if let Err(error) = state
+            .redis
+            .request_contracts
+            .record_redis_time_read_witness(read, Some(original), response, delivered_at)
+        {
+            state.redis.fail_exchange(matched, error.to_string());
+            return Err(error);
+        }
     }
     if let (Some(shift), Some((_, offset_milliseconds))) = (&matched.response_time_shift, rendered)
     {

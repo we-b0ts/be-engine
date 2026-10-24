@@ -9,6 +9,7 @@ pub(super) fn prepare_scopes(
     existing: &TrafficPolicy,
     active_api: &str,
 ) -> Result<()> {
+    super::declarations::validate_response_scope(document, active_api)?;
     for rule in &mut document.rules {
         let legacy_scope = existing
             .rules
@@ -117,7 +118,7 @@ mod tests {
     use serde_json::{Value, json};
 
     fn document(rule: Value) -> TrafficPolicy {
-        serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[rule]})).unwrap()
+        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[rule]})).unwrap()
     }
 
     #[test]

@@ -96,7 +96,7 @@ fn recorded_generated_rpc_and_celery_source_contracts_validate_without_changing_
                 ]
             };
             let document = crate::policy::parse_policy(
-                &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+                &json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
             )
             .unwrap();
             let compiled = crate::policy::compile_policy(&document).unwrap();

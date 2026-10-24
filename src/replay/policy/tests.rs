@@ -122,7 +122,7 @@ dependency_rules:
         .preview_mysql_sql_values(&context(&actual))
         .unwrap()
         .unwrap();
-    runtime.commit(Some(CASE_ID), decision);
+    runtime.commit(Some(CASE_ID), decision).unwrap();
     assert_eq!(runtime.report().dependency_rules[0].time_validations, 2);
 
     let changed_stable_json = values(&[
@@ -174,7 +174,7 @@ fn rejects_removed_version_two_policy_contract() {
     .unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("traffic-policy/v1"));
+    assert!(format!("{error:#}").contains("traffic-policy/v2"));
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn rejects_legacy_rules_key() {
     .unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("traffic-policy/v1"));
+    assert!(format!("{error:#}").contains("traffic-policy/v2"));
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn rejects_policy_without_expected_response_contract() {
     fs::write(&path, "version: 1\ndependency_rules: []\n").unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(error.to_string().contains("traffic-policy/v1"));
+    assert!(error.to_string().contains("traffic-policy/v2"));
 }
 
 #[test]
@@ -297,7 +297,7 @@ fn binds_and_references_runtime_mysql_uuid() {
     );
     assert!(runtime.allows_mysql_sql_difference(&insert_context));
     let insert = preview_mysql_contract(&runtime, &insert_context, now).unwrap();
-    runtime.commit(Some(CASE_ID), insert);
+    runtime.commit(Some(CASE_ID), insert).unwrap();
 
     let recorded_update = values(&[json!("11111111-1111-4111-8111-111111111111")]);
     let actual_update = values(&[json!("22222222-2222-4222-8222-222222222222")]);
@@ -316,7 +316,7 @@ fn binds_and_references_runtime_mysql_uuid() {
         now,
     )
     .unwrap();
-    runtime.commit(Some(CASE_ID), update);
+    runtime.commit(Some(CASE_ID), update).unwrap();
 
     let report = runtime.report();
     assert!(report.unused_applicable_dependency_rule_ids.is_empty());
@@ -409,7 +409,7 @@ fn rejects_changed_reference_and_out_of_window_time() {
         now,
     )
     .unwrap();
-    runtime.commit(Some(CASE_ID), decision);
+    runtime.commit(Some(CASE_ID), decision).unwrap();
     let wrong_update = values(&[json!("33333333-3333-4333-8333-333333333333")]);
     let recorded_update = values(&[json!("11111111-1111-4111-8111-111111111111")]);
     assert!(
@@ -460,7 +460,7 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
             actual_observed_at: actual_at,
         })
         .unwrap();
-    runtime.commit(Some(CASE_ID), decision);
+    runtime.commit(Some(CASE_ID), decision).unwrap();
 
     let report = runtime.report();
     assert_eq!(report.dependency_rules[0].matches, 1);
@@ -684,7 +684,7 @@ fn scoped_and_unscoped_rules_compose_on_disjoint_mysql_params() {
         Utc::now(),
     )
     .unwrap();
-    runtime.commit(Some(CASE_ID), decision);
+    runtime.commit(Some(CASE_ID), decision).unwrap();
 
     let report = runtime.report();
     assert_eq!(report.dependency_rules[0].matches, 1);
