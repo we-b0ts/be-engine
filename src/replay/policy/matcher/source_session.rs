@@ -56,6 +56,7 @@ impl ReplayPolicyRuntime {
                 requests,
             )?;
         request_contracts.configure_compiled(Some(compiled.clone()))?;
+        dynamic_values.configure_identities(request_contracts.clone());
         let mut usage: BTreeMap<String, DependencyRuleUsage> = document
             .dependency_rules
             .iter()
@@ -86,7 +87,6 @@ impl ReplayPolicyRuntime {
             cases,
             applicable_dependency_rule_ids: BTreeSet::new(),
             recorded_mysql_rule_applicability: BTreeMap::new(),
-            bindings: BTreeMap::new(),
         })
     }
 }

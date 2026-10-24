@@ -103,14 +103,6 @@ impl Fixture {
             original,
         }
     }
-
-    fn plan(&self) -> Result<crate::GeneratedValueRulePlan> {
-        plan_dependency_request_rule(DependencyRequestRuleFeedback {
-            policy_path: self.policy.clone(),
-            rule: rule(),
-            replay_report: self.report.clone(),
-        })
-    }
 }
 
 #[tokio::test]
@@ -125,22 +117,17 @@ async fn json_time_planner_pairs_nine_candidates_and_fresh_replay_consumes_each_
     )
     .await;
     let report: Value = serde_json::from_slice(&std::fs::read(&fixture.report).unwrap()).unwrap();
+    let witnesses: crate::policy_evidence::WitnessManifest =
+        serde_json::from_value(report["policy_witnesses"].clone()).unwrap();
     assert_eq!(
-        report["replay_policy"]["request_contract_candidates"]
-            .as_array()
+        witnesses
+            .witness_entries()
             .unwrap()
-            .len(),
+            .filter(|entry| entry.as_ref().is_ok_and(|entry| entry.has_target()))
+            .count(),
         9
     );
-    assert!(
-        fixture
-            .plan()
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("retired")
-    );
-    crate::replay::install_dependency_rule_fixture(&fixture.policy, rule()).unwrap();
+    crate::replay::write_policy_fixture(&fixture.policy, rule().to_string()).unwrap();
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&fixture.case, vec![], Some(fixture.policy.clone()), None)
             .await;
@@ -159,8 +146,9 @@ async fn json_time_planner_pairs_nine_candidates_and_fresh_replay_consumes_each_
         let state = runtime.state.lock().await;
         assert!(!state.snapshot_report().is_dirty());
         let policy = state.replay_policy.as_ref().unwrap().report();
-        assert_eq!(policy.dependency_rules[0].matches, 3);
-        assert_eq!(policy.dependency_rules[0].time_validations, 6);
+        assert_eq!(policy.global_formats[0].id, "global.json");
+        assert_eq!(policy.global_formats[0].validations, 3);
+        assert_eq!(policy.global_formats[0].time_validations, 6);
     }
     assert_eq!(
         send(
@@ -186,7 +174,7 @@ async fn json_time_planner_rejects_invalid_times_even_after_a_valid_pair() {
         let mut body = query_body(QUERIES[1], now);
         match invalid {
             "stale" => body = query_body(QUERIES[1], now - 30),
-            "relationship" => body["start"] = json!(now - 299),
+            "relationship" => body["start"] = json!(now - 294),
             "numeric-type" => body["start"] = json!((now - 300) as f64),
             "missing" => {
                 body.as_object_mut().unwrap().remove("start");
@@ -194,8 +182,43 @@ async fn json_time_planner_rejects_invalid_times_even_after_a_valid_pair() {
             _ => unreachable!(),
         }
         let fixture = Fixture::capture(vec![query_body(QUERIES[0], now), body]).await;
+        crate::replay::write_policy_fixture(&fixture.policy, rule().to_string()).unwrap();
         let policy = std::fs::read(&fixture.policy).unwrap();
-        assert!(fixture.plan().is_err(), "{invalid}");
+        let (addr, _, task) = spawn_http_replay_with_policy(
+            &fixture.case,
+            vec![],
+            Some(fixture.policy.clone()),
+            None,
+        )
+        .await;
+        let now = Utc::now().timestamp();
+        let mut invalid_body = query_body(QUERIES[1], now);
+        match invalid {
+            "stale" => invalid_body = query_body(QUERIES[1], now - 30),
+            "relationship" => invalid_body["start"] = json!(now - 294),
+            "numeric-type" => invalid_body["start"] = json!((now - 300) as f64),
+            "missing" => {
+                invalid_body.as_object_mut().unwrap().remove("start");
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            send(addr, "/query", invalid_body.to_string(), "Bearer secret").await,
+            StatusCode::BAD_GATEWAY,
+            "{invalid}"
+        );
+        assert_eq!(
+            send(
+                addr,
+                "/query",
+                query_body(QUERIES[1], Utc::now().timestamp()).to_string(),
+                "Bearer secret"
+            )
+            .await,
+            StatusCode::OK,
+            "rejection must leave the Source exchange available: {invalid}"
+        );
+        task.abort();
         assert_eq!(std::fs::read(&fixture.policy).unwrap(), policy);
     }
 }
@@ -209,7 +232,31 @@ async fn json_time_planner_requires_at_least_one_pair_with_matching_stable_field
             "extra" => json!(1),
             _ => json!("changed"),
         };
-        let fixture = Fixture::capture(vec![actual]).await;
-        assert!(fixture.plan().is_err(), "{field}");
+        let fixture = Fixture::capture(vec![actual.clone()]).await;
+        crate::replay::write_policy_fixture(&fixture.policy, rule().to_string()).unwrap();
+        let (addr, _, task) = spawn_http_replay_with_policy(
+            &fixture.case,
+            vec![],
+            Some(fixture.policy.clone()),
+            None,
+        )
+        .await;
+        assert_eq!(
+            send(addr, "/query", actual.to_string(), "Bearer secret").await,
+            StatusCode::BAD_GATEWAY,
+            "{field}"
+        );
+        assert_eq!(
+            send(
+                addr,
+                "/query",
+                query_body(QUERIES[0], Utc::now().timestamp()).to_string(),
+                "Bearer secret"
+            )
+            .await,
+            StatusCode::OK,
+            "rejection must leave the Source exchange available: {field}"
+        );
+        task.abort();
     }
 }

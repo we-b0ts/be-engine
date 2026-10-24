@@ -1,17 +1,14 @@
 //! Temporal leaves become copy evidence only after the read reaches the wire.
 use super::*;
-use crate::policy::{CompiledRule, Slot, Surface};
+use crate::policy::{Slot, Surface};
 use crate::value_codec::CodecPlan;
-use crate::value_contract::{
-    encoded,
-    json::VerifiedTimeCopy,
-    time_copies::{self, TimeCopyLookup, TimeCopyPosition, TimeCopyRecord, TimeCopyStore},
-};
+use crate::value_contract::time_copies::{self, TimeCopyLookup, TimeCopyPosition, TimeCopyRecord};
 use sha2::{Digest, Sha256};
 
 const MAX_LEAVES: usize = 4096;
 const MAX_IDENTITIES: usize = 1024 * 1024;
 
+#[derive(Clone, Copy)]
 pub(crate) struct RedisTimeRead<'a> {
     pub host: &'a str,
     pub port: u16,
@@ -38,8 +35,14 @@ struct ReadValue {
     key: Vec<u8>,
     hash_field: Option<Vec<u8>>,
     payload_digest: [u8; 32],
-    plan: Arc<CodecPlan>,
+    plan: ReadPlan,
     leaves: Vec<Leaf>,
+}
+
+#[derive(Clone, Debug)]
+enum ReadPlan {
+    Json(Arc<CodecPlan>),
+    Scalar { json: bool },
 }
 
 /// Pending reads keep small temporal leaves and identities, never JSON bodies.
@@ -103,67 +106,13 @@ impl PreparedRedisTimeRead {
     }
 }
 
-fn eligible(rule: &CompiledRule) -> bool {
-    time_copies::schema_rule(&rule.rule.id)
-        && rule.rule.surface == Surface::DependencyResponse
-        && matches!(rule.rule.slot, Slot::RedisValue(_))
-        && rule
-            .rule
-            .contract
-            .values()
-            .any(|field| field.unconditional().time().is_some())
-}
-
-fn selects(rule: &CompiledRule, value: &RedisFieldValue<'_>) -> bool {
-    eligible(rule)
-        && matches!(rule.rule.slot, Slot::RedisValue(container) if container == value.container)
-        && rule
-            .rule
-            .selector
-            .key
-            .as_ref()
-            .is_some_and(|key| key.matches(value.key))
-        && rule.rule.selector.hash_field.as_ref().is_none_or(|field| {
-            value.hash_field.is_some_and(|value| field.matches(value)) || value.hash_field.is_none()
-        })
-}
-
-fn prepare_values(
-    target: &TargetKey,
-    database: i64,
+fn prepare_global_values(
     command: &str,
     source_args: &[Vec<u8>],
     source: &[u8],
-    rules: &[&CompiledRule],
+    global: &crate::policy::CompiledJsonPolicy,
+    clocks: crate::value_contract::json::AnchorClocks,
 ) -> Result<Vec<ReadValue>> {
-    let rules = rules
-        .iter()
-        .copied()
-        .filter(|rule| {
-            rule.rule
-                .selector
-                .resource
-                .as_ref()
-                .is_some_and(|resource| {
-                    resource.protocol == crate::policy::Protocol::Redis
-                        && resource.endpoint.host.eq_ignore_ascii_case(&target.host)
-                        && resource.endpoint.port == target.port
-                        && resource
-                            .database
-                            .as_ref()
-                            .is_none_or(|db| db.index() == Some(database))
-                })
-        })
-        .collect::<Vec<_>>();
-    if !rules.iter().any(|rule| eligible(rule)) {
-        return Ok(vec![]);
-    }
-    if !response_identities(command, source_args)?
-        .iter()
-        .any(|value| rules.iter().any(|rule| selects(rule, value)))
-    {
-        return Ok(vec![]);
-    }
     let values = redis_field_values(command, source_args, Some(source))?;
     let mut prepared = Vec::new();
     let mut leaf_count = 0usize;
@@ -172,32 +121,20 @@ fn prepare_values(
         let Some(payload) = value.payload else {
             continue;
         };
-        let selected = rules
-            .iter()
-            .copied()
-            .filter(|rule| selects(rule, value))
-            .collect::<Vec<_>>();
-        if selected.is_empty() {
+        if crate::json_value::parse(payload).is_none() {
             continue;
         }
-        let plan = encoded::prepared_codec(&selected)?;
+        let plan = Arc::new(CodecPlan::compile(&crate::policy::Codec::Json)?);
         let decoded = plan.decode(payload)?;
-        let mut leaves = Vec::new();
-        let mut strategies =
-            BTreeMap::<String, (Arc<str>, Arc<crate::policy::TimeContract>)>::new();
-        for rule in selected {
-            for leaf in time_copies::leaves(&decoded.logical, rule)? {
-                let (pattern, time) = strategies
-                    .entry(leaf.pattern.clone())
-                    .or_insert_with(|| (Arc::from(leaf.pattern.as_str()), Arc::new(leaf.time)));
-                leaves.push(Leaf {
-                    pattern: Arc::clone(pattern),
-                    pointer: leaf.pointer,
-                    value: leaf.value,
-                    time: Arc::clone(time),
-                });
-            }
-        }
+        let leaves = time_copies::global_leaves(&decoded.logical, global, clocks)?
+            .into_iter()
+            .map(|leaf| Leaf {
+                pattern: Arc::from(leaf.pattern),
+                pointer: leaf.pointer,
+                value: leaf.value,
+                time: Arc::new(leaf.time),
+            })
+            .collect::<Vec<_>>();
         if leaves.is_empty() {
             continue;
         }
@@ -213,11 +150,122 @@ fn prepare_values(
             key: value.key.to_vec(),
             hash_field: value.hash_field.map(<[u8]>::to_vec),
             payload_digest: Sha256::digest(payload).into(),
-            plan,
+            plan: ReadPlan::Json(plan),
             leaves,
         });
     }
     Ok(prepared)
+}
+
+fn prepare_scalar_values(
+    database: i64,
+    command: &str,
+    source_args: &[Vec<u8>],
+    source: &[u8],
+    policy: &crate::policy::RedisPolicy,
+    clocks: crate::value_contract::json::AnchorClocks,
+) -> Result<Vec<ReadValue>> {
+    use crate::value_contract::redis_scalar;
+    let values = redis_field_values(command, source_args, Some(source))?;
+    let mut prepared = Vec::new();
+    let mut count = 0usize;
+    let mut identities = 0usize;
+    for (ordinal, value) in values.iter().enumerate() {
+        let Some(payload) = value.payload else {
+            continue;
+        };
+        let Some(field) = policy.field(database, value.key)? else {
+            continue;
+        };
+        let Some(scalar) = redis_scalar::decode_field(payload, field)? else {
+            continue;
+        };
+        let leaves =
+            time_copies::global_leaves(&scalar.logical, &redis_scalar::plan(field), clocks)?
+                .into_iter()
+                .map(|leaf| Leaf {
+                    pattern: Arc::from(leaf.pattern),
+                    pointer: leaf.pointer,
+                    value: leaf.value,
+                    time: Arc::new(leaf.time),
+                })
+                .collect::<Vec<_>>();
+        if leaves.is_empty() {
+            continue;
+        }
+        count += leaves.len();
+        identities += value.key.len() + value.hash_field.map_or(0, <[u8]>::len);
+        ensure!(
+            count <= MAX_LEAVES && identities <= MAX_IDENTITIES,
+            "Redis pending scalar time read exceeds its bounded capacity"
+        );
+        prepared.push(ReadValue {
+            ordinal,
+            container: value.container,
+            key: value.key.to_vec(),
+            hash_field: value.hash_field.map(<[u8]>::to_vec),
+            payload_digest: Sha256::digest(payload).into(),
+            plan: ReadPlan::Scalar { json: scalar.json },
+            leaves,
+        });
+    }
+    Ok(prepared)
+}
+
+pub(crate) fn redis_delivered_scalar_time_copies(
+    read: RedisTimeRead<'_>,
+    policy: &crate::policy::RedisPolicy,
+    clocks: crate::value_contract::json::AnchorClocks,
+    record: &mut CopyRecorder<'_>,
+) -> Result<usize> {
+    let target = TargetKey {
+        host: read.host.into(),
+        port: read.port,
+    };
+    let values = prepare_scalar_values(
+        read.database,
+        read.command,
+        read.source_args,
+        read.source_response,
+        policy,
+        clocks,
+    )?;
+    record_values(
+        &target,
+        read.database,
+        read.command,
+        read.target_args,
+        read.delivered_response,
+        &values,
+        record,
+    )
+}
+
+pub(super) fn redis_scalar_time_write_lookups(
+    position: TimeCopyPosition<'_>,
+    source: &crate::value_contract::redis_scalar::Scalar,
+    field: &crate::policy::GlobalField,
+    clocks: crate::value_contract::json::AnchorClocks,
+) -> Result<Vec<TimeCopyLookup>> {
+    Ok(time_copies::global_leaves(
+        &source.logical,
+        &crate::value_contract::redis_scalar::plan(field),
+        clocks,
+    )?
+    .into_iter()
+    .filter_map(|leaf| {
+        TimeCopyLookup::new_time(
+            &leaf.time,
+            position,
+            position,
+            &leaf.pattern,
+            &leaf.pattern,
+            &leaf.value,
+            crate::policy::GLOBAL_REDIS_ID,
+        )
+        .map(|lookup| lookup.at(&leaf.pointer, &leaf.pattern))
+    })
+    .collect())
 }
 
 type CopyRecorder<'a> = dyn FnMut(
@@ -258,7 +306,16 @@ fn record_values(
         let decoded = if <[u8; 32]>::from(Sha256::digest(payload)) == value.payload_digest {
             None
         } else {
-            Some(value.plan.decode(payload)?)
+            Some(match &value.plan {
+                ReadPlan::Json(plan) => plan.decode(payload)?.logical,
+                ReadPlan::Scalar { json: true } => crate::json_value::parse(payload)
+                    .context("delivered Redis scalar JSON is invalid")?,
+                ReadPlan::Scalar { json: false } => Value::String(
+                    std::str::from_utf8(payload)
+                        .context("delivered Redis scalar is not UTF-8")?
+                        .into(),
+                ),
+            })
         };
         let source_position = TimeCopyPosition::Redis {
             host: &target.host,
@@ -271,7 +328,7 @@ fn record_values(
         let target_position = redis_time_position(&target.host, target.port, database, after);
         for leaf in &value.leaves {
             let observed = match &decoded {
-                Some(decoded) => decoded.logical.pointer(&leaf.pointer),
+                Some(decoded) => decoded.pointer(&leaf.pointer),
                 None => Some(&leaf.value),
             };
             let Some(observed) = observed else {
@@ -293,24 +350,22 @@ fn record_values(
     Ok(recorded)
 }
 
-/// Both adapters and offline evidence reconstruction use the same carrier proof.
-/// The recorder receives only bounded scalar pairs, after one decode per value.
-pub(crate) fn redis_delivered_time_copies(
+pub(crate) fn redis_delivered_global_time_copies(
     read: RedisTimeRead<'_>,
-    rules: &[&CompiledRule],
+    plan: &crate::policy::CompiledJsonPolicy,
+    clocks: crate::value_contract::json::AnchorClocks,
     record: &mut CopyRecorder<'_>,
 ) -> Result<usize> {
     let target = TargetKey {
         host: read.host.into(),
         port: read.port,
     };
-    let values = prepare_values(
-        &target,
-        read.database,
+    let values = prepare_global_values(
         read.command,
         read.source_args,
         read.source_response,
-        rules,
+        plan,
+        clocks,
     )?;
     record_values(
         &target,
@@ -339,60 +394,27 @@ pub(crate) fn redis_time_position<'a>(
     }
 }
 
-pub(crate) fn redis_time_write_proofs(
-    store: &TimeCopyStore,
-    case: &str,
-    source_position: TimeCopyPosition<'_>,
-    target_position: TimeCopyPosition<'_>,
+pub(super) fn redis_global_time_write_lookups(
+    position: TimeCopyPosition<'_>,
     source: &crate::value_codec::DecodedValue,
-    rules: &[&CompiledRule],
-) -> Result<Vec<VerifiedTimeCopy>> {
-    if !store.has_case(case) {
-        return Ok(vec![]);
-    }
-    let mut proofs = Vec::new();
-    for rule in rules {
-        for leaf in time_copies::leaves(&source.logical, rule)? {
-            if let Some(proof) = store.proof_for_source_time(
-                &leaf.time,
-                case,
-                source_position,
-                target_position,
-                &leaf.pattern,
-                &leaf.pattern,
-                &leaf.value,
-                &rule.rule.id,
-            ) {
-                proofs.push(proof.at(&leaf.pointer, &leaf.pattern));
-            }
-        }
-    }
-    Ok(proofs)
-}
-
-pub(super) fn redis_time_write_lookups(
-    source_position: TimeCopyPosition<'_>,
-    target_position: TimeCopyPosition<'_>,
-    source: &crate::value_codec::DecodedValue,
-    rules: &[&CompiledRule],
+    global: &crate::policy::CompiledJsonPolicy,
+    clocks: crate::value_contract::json::AnchorClocks,
 ) -> Result<Vec<TimeCopyLookup>> {
-    let mut lookups = Vec::new();
-    for rule in rules {
-        for leaf in time_copies::leaves(&source.logical, rule)? {
-            if let Some(lookup) = TimeCopyLookup::new_time(
+    Ok(time_copies::global_leaves(&source.logical, global, clocks)?
+        .into_iter()
+        .filter_map(|leaf| {
+            TimeCopyLookup::new_time(
                 &leaf.time,
-                source_position,
-                target_position,
+                position,
+                position,
                 &leaf.pattern,
                 &leaf.pattern,
                 &leaf.value,
-                &rule.rule.id,
-            ) {
-                lookups.push(lookup.at(&leaf.pointer, &leaf.pattern));
-            }
-        }
-    }
-    Ok(lookups)
+                crate::policy::GLOBAL_JSON_ID,
+            )
+            .map(|lookup| lookup.at(&leaf.pointer, &leaf.pattern))
+        })
+        .collect())
 }
 
 impl RequestContracts {
@@ -404,15 +426,35 @@ impl RequestContracts {
         source: &[u8],
         completed: Option<DateTime<Utc>>,
     ) -> Result<Option<PreparedRedisTimeRead>> {
-        let rules = self.scoped_compiled_redis(context, Surface::DependencyResponse);
-        let values = prepare_values(
-            context.target,
-            context.database,
-            context.command,
-            source_args,
-            source,
-            &rules,
-        )?;
+        if self.global_json().is_none() && self.redis_policy().is_none() {
+            return Ok(None);
+        }
+        let clocks = self.contract_clocks(
+            Some(context.case),
+            context.recorded_at,
+            context.actual_at,
+            completed,
+            None,
+        );
+        let mut values = if let Some(global) = self.global_json() {
+            prepare_global_values(context.command, source_args, source, global, clocks)?
+        } else {
+            Vec::new()
+        };
+        if let Some(policy) = self.redis_policy() {
+            values.extend(prepare_scalar_values(
+                context.database,
+                context.command,
+                source_args,
+                source,
+                policy,
+                clocks,
+            )?);
+        }
+        ensure!(
+            values.iter().map(|value| value.leaves.len()).sum::<usize>() <= MAX_LEAVES,
+            "Redis pending time read exceeds its bounded capacity"
+        );
         if values.is_empty() {
             return Ok(None);
         }
@@ -473,18 +515,6 @@ impl RequestContracts {
             witness,
             observation: context.observation_id.unwrap_or_else(uuid::Uuid::new_v4),
         }))
-    }
-
-    #[cfg(test)]
-    pub(in crate::replay) fn commit_redis_time_read(
-        &self,
-        prepared: &PreparedRedisTimeRead,
-        source: Option<&[u8]>,
-        delivered: &[u8],
-        at: DateTime<Utc>,
-    ) -> Result<()> {
-        prepared.publish(delivered, at)?;
-        self.record_redis_time_read_witness(prepared, source, delivered, at)
     }
 
     pub(in crate::replay) fn record_redis_time_read_witness(

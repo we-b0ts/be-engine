@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -31,26 +32,23 @@ use crate::replay::json_order as json;
 pub(in crate::replay) use cross_case::load as load_cross_case;
 mod api_origin;
 pub(in crate::replay) mod append;
+pub(crate) mod expiration;
 #[cfg(test)]
 mod field_identity_tests;
 mod key_access;
 pub(in crate::replay) mod key_selector;
 #[cfg(test)]
 mod lane_tests;
-pub(crate) mod lock;
 mod matching;
-#[cfg(test)]
-mod native_scope_tests;
 mod native_source;
 pub(in crate::replay) mod observations;
-pub(crate) mod publish;
 pub(in crate::replay) mod pubsub;
 #[cfg(test)]
 mod read_back_tests;
 pub(in crate::replay) mod read_commutation;
 mod report_inventory;
 mod request_order;
-pub(crate) mod time_shift;
+pub(crate) mod shared_read;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
 use matching::redis_authentication_hint;
@@ -62,6 +60,7 @@ use super::report::command::{
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
 mod delivery;
 mod evidence;
+mod lifecycle;
 use delivery::deliver_redis_exchange;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +72,8 @@ pub(super) struct RecordedConnection {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct RecordedExchange {
+    #[serde(skip)]
+    lifecycle_cleanup: bool,
     // Subscription aliases retain event identity without changing existing
     // Redis rule/evidence fingerprints, which serialize this projection.
     #[serde(default, skip_serializing)]
@@ -99,6 +100,8 @@ pub(super) struct RecordedExchange {
     #[serde(default)]
     duration_ms: u64,
     replay_safe: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parse_warnings: Vec<String>,
     #[serde(default)]
     cache_snapshot_rule: Option<String>,
     #[serde(default)]
@@ -145,7 +148,6 @@ struct ReplayExchange {
     subscription_alias: bool,
     response_evidence: Option<crate::dependency_index::RecordRef>,
     rpc_push: Option<usize>,
-    response_time_shift: Option<time_shift::ResponseShift>,
     shared_rule_id: Option<String>,
     source: ReplaySource,
     case_id: Option<String>,
@@ -165,12 +167,11 @@ struct MatchedRedisExchange {
     append: Option<append::PreparedAppend>,
     read_back: Option<super::policy::request_contract::PreparedReadBack>,
     time_read: Option<super::policy::request_contract::PreparedRedisTimeRead>,
-    request_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    time_write: Option<super::policy::request_contract::PreparedRedisTimeWrite>,
     unified_delivery: Option<super::policy::request_contract::PreparedRedisDelivery>,
     rpc_push: Option<usize>,
     rpc_response: Option<Vec<u8>>,
     publish_duration_ms: u64,
-    response_time_shift: Option<time_shift::ResponseShift>,
     index: usize,
     connection_id: Uuid,
     response: Vec<u8>,
@@ -182,6 +183,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    pub(super) shared_source_directories: BTreeMap<String, PathBuf>,
     observations: observations::Observations,
     read_commutation: read_commutation::ReadCommutation,
     append_streams: append::AppendStreams,
@@ -190,14 +192,8 @@ pub(super) struct RedisReplayState {
     pub(in crate::replay) pubsub: pubsub::PubSubState,
     pub(super) request_contracts: super::policy::request_contract::RequestContracts,
     pub(super) dynamic_values: super::policy::dynamic_values::DynamicValues,
-    time_shifts: Vec<time_shift::TimeShiftObservation>,
     connection_scopes: ConnectionScopes,
-    pub(super) value_rules: Vec<value::ValueRule>,
     unordered_value: value::evidence::OrderEvidence,
-    lock_tokens: lock::LockTokens,
-    lock_evidence: lock::evidence::LockEvidence,
-    publish_rules: publish::PublishRules,
-    publish_evidence: publish::evidence::PublishEvidence,
     exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
     pub(super) events: RedisReplayEvents,
@@ -338,7 +334,7 @@ impl RedisReplayState {
         validate_recorded_exchange(
             "redis_exchange",
             &record.command,
-            record.replay_safe,
+            record.replay_safe || record.lifecycle_cleanup,
             record.response.truncated || record.args.iter().any(|capture| capture.truncated),
         )?;
         let args = record
@@ -421,7 +417,6 @@ impl RedisReplayState {
             subscription_alias: false,
             response_evidence: None,
             rpc_push,
-            response_time_shift: None,
             shared_rule_id: None,
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -492,10 +487,7 @@ impl RedisReplayState {
             state_observations: self.observations.reports(),
             state_observations_omitted: self.observations.omitted(),
             pubsub: self.pubsub.report(),
-            time_shifts: self.time_shifts.clone(),
             unordered_value: Some(self.unordered_value.clone()),
-            lock_tokens: Some(self.lock_evidence.clone()),
-            publish: Some(self.publish_evidence.clone()),
             connections: self.events.connections,
             matched_count: self.events.matched_count,
             matched: self.events.matched.clone(),
@@ -617,6 +609,19 @@ pub(super) async fn handle_connection(
                 return Err(error);
             }
         };
+        let stopping = {
+            let state = state.lock().await;
+            state.target_session_stopped
+                || state.async_case_quiescing()
+                || state
+                    .active_case_id
+                    .as_ref()
+                    .is_some_and(|case| state.target_stop_prepared.contains(case))
+        };
+        if stopping {
+            control.reset()?;
+            return Ok(());
+        }
         if redis_is_unsupported(&command) {
             let mut replay_state = state.lock().await;
             let case_id = replay_state.active_case_id.clone();
@@ -711,7 +716,8 @@ pub(super) async fn handle_connection(
             ) {
                 Ok(matched) => {
                     if let Some(policy) = &mut state.replay_policy {
-                        policy.commit_redis_value(active_case_id.as_deref(), &matched.rule_ids);
+                        policy
+                            .commit_redis_rule_usage(active_case_id.as_deref(), &matched.rule_ids);
                     }
                     if matched.requires_binding {
                         connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
@@ -863,6 +869,9 @@ fn validate_subscription_exchange(
     args: &[Vec<u8>],
     response: &[u8],
 ) -> Result<()> {
+    if record.lifecycle_cleanup {
+        return Ok(());
+    }
     if !is_pubsub_command(&record.command) || record.outcome.termination().is_some() {
         return Ok(());
     }

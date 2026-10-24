@@ -119,12 +119,7 @@ fn key_contract(value: &n::NativeKeyContract) -> key::KeyContract {
             separator: *separator,
             segment_index: *segment_index,
         },
-        n::NativeKeyContract::Capture {
-            binding,
-            template,
-            format,
-        } => key::KeyContract::Capture {
-            binding: binding.clone(),
+        n::NativeKeyContract::Capture { template, format } => key::KeyContract::Capture {
             template: template.clone(),
             format: match format {
                 n::KeyIdentityFormat::Hex { bytes } => key::KeyFormat::Hex { bytes: *bytes },
@@ -135,7 +130,6 @@ fn key_contract(value: &n::NativeKeyContract) -> key::KeyContract {
             },
         },
         n::NativeKeyContract::Reference(value) => key::KeyContract::Reference {
-            binding: value.binding.clone(),
             template: value.template.clone(),
             transform: transform(value.transform),
         },
@@ -144,7 +138,6 @@ fn key_contract(value: &n::NativeKeyContract) -> key::KeyContract {
 
 fn reference(value: &n::IdentityReference) -> key::IdentityReference {
     key::IdentityReference {
-        binding: value.binding.clone(),
         template: value.template.clone(),
         transform: transform(value.transform),
     }

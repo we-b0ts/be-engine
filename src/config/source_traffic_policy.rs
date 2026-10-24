@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +28,8 @@ pub struct SourceTrafficPolicyConfig {
     pub breeze_capture: Vec<SourceTrafficBreezeCaptureConfig>,
     #[serde(default)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub async_api: BTreeMap<String, crate::policy::AsyncApiRule>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -58,6 +60,7 @@ impl SourceTrafficPolicyConfig {
             http_response_rewrite: Vec::new(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: Vec::new(),
+            async_api: BTreeMap::new(),
         }
     }
 
@@ -68,6 +71,7 @@ impl SourceTrafficPolicyConfig {
             http: SourceTrafficHttpPolicyConfig::default(),
             http_response_rewrite: Vec::new(),
             breeze_capture: Vec::new(),
+            async_api:BTreeMap::new(),
             process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
                 name: "breeze_vintage".to_string(),
                 authorities: vec![
@@ -117,6 +121,7 @@ impl SourceTrafficPolicyConfig {
             self.version,
             SOURCE_TRAFFIC_POLICY_VERSION
         );
+        crate::policy::compile_async_api(&self.async_api, None, None)?;
         let mut snapshots = BTreeSet::new();
         for capture in &self.breeze_capture {
             ensure!(
@@ -179,6 +184,7 @@ impl SourceTrafficPolicyConfig {
             .extend(self.http_response_rewrite.iter().cloned());
         config.http_response_rewrite.validate()?;
         config.process_owned_dependencies = self.process_owned_dependencies.clone();
+        config.async_api = self.async_api.clone();
         Ok(())
     }
 }

@@ -130,8 +130,10 @@ impl NativeResponseContext {
                     if effect.location.is_none() {
                         output.add_codec(crate::policy::Codec::Json)?;
                     }
-                    let jwt =
-                        crate::replay::policy::native_projection::project_jwt(effect, &rule.proof)?;
+                    let jwt = crate::replay::policy::native_projection::project_jwt(
+                        effect,
+                        rule.proof.as_ref(),
+                    )?;
                     let resource = match &effect.signing_key {
                         crate::policy::native::ResponseSigningKey::RecordedPublicKey {
                             resource,
@@ -250,6 +252,17 @@ impl NativeResponseContext {
         rules: &[&CompiledRule],
         clocks: AnchorClocks,
     ) -> Result<Comparison> {
+        self.compare_encoded_global(source, target, rules, None, clocks)
+    }
+
+    pub(crate) fn compare_encoded_global(
+        &self,
+        source: &[u8],
+        target: &[u8],
+        rules: &[&CompiledRule],
+        global: Option<&crate::policy::CompiledJsonPolicy>,
+        clocks: AnchorClocks,
+    ) -> Result<Comparison> {
         let codec = self.payload_codec(rules)?;
         let (source, target) = if matches!(codec, crate::policy::Codec::Protobuf(_)) {
             super::protobuf::payload_pair(source, target)?
@@ -258,7 +271,7 @@ impl NativeResponseContext {
         };
         let source = crate::value_codec::CodecView::decode(&codec, source)?;
         let target = crate::value_codec::CodecView::decode(&codec, target)?;
-        let paths = self
+        let mut paths = self
             .fields
             .iter()
             .map(|(_, pointer, _)| pointer.clone())
@@ -270,6 +283,25 @@ impl NativeResponseContext {
                     .chain(field.rule.ttl.iter().cloned())
             }))
             .collect::<Vec<_>>();
+        if let Some(global) = global {
+            paths.extend(
+                global
+                    .fields_with_clocks(&source.logical, clocks)?
+                    .into_iter()
+                    .map(|(pointer, _)| pointer),
+            );
+        }
+        let protocol_checks = global
+            .map(|plan| crate::value_contract::global_protocol::checks(plan, &source.logical))
+            .transpose()?;
+        if let Some(checks) = &protocol_checks {
+            paths.extend(
+                checks
+                    .fields()
+                    .into_iter()
+                    .map(|field| field.pointer.to_owned()),
+            );
+        }
         let source_paths =
             crate::value_contract::encoded::comparison_paths(&source.logical, rules)?
                 .into_iter()
@@ -280,10 +312,11 @@ impl NativeResponseContext {
                 .into_iter()
                 .chain(paths.iter().cloned())
                 .collect::<Vec<_>>();
-        self.compare_values(
+        self.compare_values_global(
             &source.comparison_value(&source_paths),
             &target.comparison_value(&target_paths),
             rules,
+            global,
             clocks,
         )
     }
@@ -349,6 +382,7 @@ impl NativeResponseContext {
         self.compare_values(source, target, rules, clocks)
     }
 
+    #[cfg(test)]
     fn compare_values(
         &self,
         source: &Value,
@@ -356,7 +390,22 @@ impl NativeResponseContext {
         rules: &[&CompiledRule],
         clocks: AnchorClocks,
     ) -> Result<Comparison> {
+        self.compare_values_global(source, target, rules, None, clocks)
+    }
+
+    fn compare_values_global(
+        &self,
+        source: &Value,
+        target: &Value,
+        rules: &[&CompiledRule],
+        global: Option<&crate::policy::CompiledJsonPolicy>,
+        clocks: AnchorClocks,
+    ) -> Result<Comparison> {
         self.ensure_current()?;
+        let global_fields = global
+            .map(|plan| plan.comparison_fields(source, target, clocks))
+            .transpose()?
+            .unwrap_or_default();
         let mut fields = rules
             .iter()
             .flat_map(|rule| {
@@ -375,6 +424,18 @@ impl NativeResponseContext {
             pointer,
             contract,
         }));
+        for (pointer, contract) in &global_fields {
+            if !fields
+                .iter()
+                .any(|field| field.pointer == pointer && field.contract == contract)
+            {
+                fields.push(Field {
+                    rule_id: crate::policy::GLOBAL_JSON_ID,
+                    pointer,
+                    contract,
+                });
+            }
+        }
         let generated = self
             .generated
             .iter()
@@ -443,6 +504,24 @@ impl NativeResponseContext {
                         }
                         Ok(LeafObservations {
                             time_validations: if token { validated.time_validations } else { 0 },
+                            identities: if token {
+                                std::iter::once(
+                                    super::jwt::identity_pair(rule, source, target).map_err(
+                                        |error| format!("JWT identity rejected: {error:?}"),
+                                    )?,
+                                )
+                                .chain(validated.nonces.iter().map(|nonce| {
+                                    crate::value_contract::identities::IdentityPair {
+                                        source: serde_json::to_string(&nonce.source)
+                                            .expect("validated nonce string"),
+                                        target: serde_json::to_string(&nonce.target)
+                                            .expect("validated nonce string"),
+                                    }
+                                }))
+                                .collect()
+                            } else {
+                                vec![]
+                            },
                             nonces: if token {
                                 validated
                                     .nonces
@@ -480,7 +559,7 @@ impl NativeResponseContext {
                 }),
             ));
         }
-        let verified = callbacks
+        let mut verified = callbacks
             .iter()
             .map(|(id, pointer, verifier)| VerifiedField {
                 rule_id: id,
@@ -488,8 +567,19 @@ impl NativeResponseContext {
                 verifier: verifier.as_ref(),
             })
             .collect::<Vec<_>>();
+        let protocol_checks = global
+            .map(|plan| crate::value_contract::global_protocol::checks(plan, source))
+            .transpose()?;
+        if let Some(checks) = &protocol_checks {
+            verified.extend(checks.fields());
+        }
         let mut result =
             json::compare_with_verified(source, target, &fields, &generated, &verified, clocks);
+        if !global_fields.is_empty() {
+            result
+                .evaluated
+                .insert(crate::policy::GLOBAL_JSON_ID.into());
+        }
         result.evaluated.extend(self.codec_ids.iter().cloned());
         Ok(result)
     }

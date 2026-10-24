@@ -13,24 +13,6 @@ pub(in crate::rewrite) enum RewriteDependencyRuleSpec {
     RedisCrossCase {
         rule_id: String,
     },
-    RedisTimeShift {
-        selector: crate::RedisTimeShiftSelector,
-    },
-    HttpHeaderTimestamp {
-        selector: crate::HttpHeaderTimestampSelector,
-    },
-    HttpUnordered {
-        selector: crate::HttpUnorderedSelector,
-    },
-    RedisLock {
-        selector: crate::RedisLockSelector,
-    },
-    RedisPublish {
-        selector: crate::RedisPublishSelector,
-    },
-    RedisUnordered {
-        selector: crate::RedisUnorderedSelector,
-    },
     HttpCrossCase {
         selector: crate::HttpCrossCaseSelector,
     },
@@ -107,12 +89,6 @@ impl RewriteDependencyRuleSpec {
         matches!(
             self,
             Self::RedisCrossCase { .. }
-                | Self::RedisTimeShift { .. }
-                | Self::HttpHeaderTimestamp { .. }
-                | Self::HttpUnordered { .. }
-                | Self::RedisLock { .. }
-                | Self::RedisPublish { .. }
-                | Self::RedisUnordered { .. }
                 | Self::HttpCrossCase { .. }
                 | Self::MysqlSqlTime { .. }
                 | Self::MemcachedProtobufTimestamp { .. }

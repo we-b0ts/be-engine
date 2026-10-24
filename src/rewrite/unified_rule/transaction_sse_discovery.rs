@@ -92,17 +92,21 @@ fn response_discovery_reaches_sse_before_dependency_budget_is_exhausted() {
     assert_eq!(facts["bounded_analysis"]["limited"], true);
     assert!(facts["observations_examined"].as_u64().unwrap() <= 256);
     assert!(facts["candidates"].as_array().unwrap().iter().any(|c| {
-        c["draft_rule"]["slot"]["sse_data"]["json_type"] == "response.created"
-            && c["draft_rule"]["contract"]["/response/created_at"]["kind"] == "time"
+        c["draft_policy"]["json"]["fields"]["/response/created_at"]["kind"] == "time"
     }));
-    let binding = facts["source_entry"]["bindings"]
+    let binding = facts["source_entry"]["locations"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|b| b["binding"]["slot"]["sse_data"]["json_type"] == "response.output_item.added")
+        .find(|b| b["location"]["slot"]["sse_data"]["json_type"] == "response.output_item.added")
         .unwrap();
     assert_eq!(binding["source_intent_required"], true);
-    assert!(binding["instruction"].as_str().unwrap().contains("binding"));
+    assert!(
+        binding["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("json.fields")
+    );
     assert!(evidence.rule_hints.iter().any(|hint| {
         hint.capability == "sse_data_contract" && hint.hint.contains("terminal output")
     }));
@@ -125,7 +129,7 @@ fn dependency_issue_retains_dependency_priority() {
     fixture.store().save(&state).unwrap();
     let facts = fixture.evidence().facts;
     assert_eq!(
-        facts["source_entry"]["bindings"][0]["binding"]["surface"],
+        facts["source_entry"]["locations"][0]["location"]["surface"],
         "dependency.request"
     );
     assert_eq!(facts["observations_examined"], 256);
@@ -146,7 +150,7 @@ fn identity_only_differences_offer_source_guidance_without_inferred_permission()
     let evidence = fixture.evidence();
     assert_eq!(evidence.facts["candidate_count"], 0);
     assert!(
-        !evidence.facts["source_entry"]["bindings"]
+        !evidence.facts["source_entry"]["locations"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -183,7 +187,7 @@ fn stale_sse_evidence_keeps_discovery_but_routes_to_refresh_instead_of_plan() {
         true
     );
     assert!(
-        !evidence.facts["source_entry"]["bindings"]
+        !evidence.facts["source_entry"]["locations"]
             .as_array()
             .unwrap()
             .is_empty()

@@ -25,6 +25,7 @@ pub(super) fn reject_inline(path: &Path, raw: &str) -> Result<()> {
             "recording.process_owned_dependencies",
         )?;
     }
+    reject_key(recorder, "async_api", "async_api")?;
     reject_http_fields(recorder)?;
     reject_breeze_fields(recorder)
 }

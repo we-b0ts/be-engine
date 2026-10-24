@@ -289,7 +289,6 @@ fn response_jwt_url_validates_nonce_declarations_and_composite_field_ownership()
         "expiry_overlap",
         "expiry_ancestor",
         "expiry_array_scope",
-        "timestamp_overlap",
         "query_name",
         "expiry_type",
     ] {

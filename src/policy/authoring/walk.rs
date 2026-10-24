@@ -4,10 +4,9 @@ use serde_yaml::{Mapping, Value};
 
 use super::{contracts, proof};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Shape {
     Leaf,
-    Field,
     Time,
     SqlValue,
     SqlTime,
@@ -16,14 +15,12 @@ enum Shape {
     Plaintext,
     SequenceArgument,
     SequenceField,
-    HttpJsonField,
     SequenceCommand,
     IdentityCapture,
     PathSegment,
     PathField,
     Origin,
     ProcessSelector,
-    SqlResponse,
     RedisReadBack,
     CaptureResponse,
 }
@@ -32,6 +29,7 @@ pub(crate) fn expand_rule(value: &mut Value, revision: Option<&str>) -> Result<(
     Walker {
         revision,
         compact: false,
+        require_proof: false,
     }
     .rule(value)
 }
@@ -39,6 +37,18 @@ pub(super) fn compact_rule(value: &mut Value, revision: Option<&str>) -> Result<
     Walker {
         revision,
         compact: true,
+        require_proof: false,
+    }
+    .rule(value)
+}
+
+/// Source evidence belongs to a plan proposal, independently of the runtime
+/// policy produced by rendering that proposal.
+pub(crate) fn require_source_proof(value: &mut Value, revision: Option<&str>) -> Result<()> {
+    Walker {
+        revision,
+        compact: false,
+        require_proof: true,
     }
     .rule(value)
 }
@@ -46,6 +56,7 @@ pub(super) fn compact_rule(value: &mut Value, revision: Option<&str>) -> Result<
 struct Walker<'a> {
     revision: Option<&'a str>,
     compact: bool,
+    require_proof: bool,
 }
 
 impl Walker<'_> {
@@ -62,19 +73,16 @@ impl Walker<'_> {
         } else {
             proof::expand(raw, None, self.revision)?
         };
+        ensure!(
+            !self.require_proof || !own.is_null(),
+            "rule plan requires independent Source proof for each proposed native rule"
+        );
         if let Some(effect) = map.get_mut("effect") {
             self.effect(effect, &own)?;
-        } else if let Some(fields) = map.get_mut("contract") {
-            self.fields(fields, Shape::Field, false, &own, 0)?;
         }
-        map.insert(
-            "proof".into(),
-            if self.compact {
-                proof::compact(&own, None, self.revision).expect("root proof")
-            } else {
-                own
-            },
-        );
+        if !self.compact && !own.is_null() {
+            map.insert("proof".into(), own);
+        }
         Ok(())
     }
 
@@ -82,7 +90,7 @@ impl Walker<'_> {
         ensure!(depth < 128, "authoring contract nesting exceeds 128 levels");
         let mut raw = std::mem::replace(value, Value::Null);
         let local = raw.as_mapping_mut().and_then(|map| map.remove("proof"));
-        let own = proof::expand(local, Some(parent), self.revision)?;
+        let own = proof::expand(local.clone(), Some(parent), self.revision)?;
         let mut contract = if let Some(map) = raw.as_mapping_mut()
             && let Some(contract) = map.remove("contract")
         {
@@ -94,26 +102,29 @@ impl Walker<'_> {
         } else {
             raw
         };
+        ensure!(
+            !self.require_proof || !own.is_null(),
+            "rule plan requires Source proof for every declared permission"
+        );
+        if self.require_proof
+            && shape == Shape::RedisReadBack
+            && contract.get("state_epochs").and_then(Value::as_bool) == Some(true)
+        {
+            let epoch_proof = proof::expand(local, None, self.revision)?;
+            ensure!(
+                !epoch_proof.is_null(),
+                "state_epochs plan permission requires its own Source proof on the read_back declaration"
+            );
+        }
         self.node(&mut contract, shape, &own, depth + 1)?;
         if self.compact {
-            let local = proof::compact(&own, Some(parent), self.revision);
-            if let Some(map) = contract.as_mapping_mut() {
-                if let Some(local) = local {
-                    map.insert("proof".into(), local);
-                }
-                *value = contract;
-            } else if let Some(local) = local {
-                let mut map = Mapping::new();
-                map.insert("contract".into(), contract);
-                map.insert("proof".into(), local);
-                *value = Value::Mapping(map);
-            } else {
-                *value = contract;
-            }
+            *value = contract;
         } else {
             let mut map = Mapping::new();
             map.insert("contract".into(), contract);
-            map.insert("proof".into(), own);
+            if !own.is_null() {
+                map.insert("proof".into(), own);
+            }
             *value = Value::Mapping(map);
         }
         Ok(())
@@ -200,7 +211,6 @@ impl Walker<'_> {
             "identity" => {
                 self.one(map, "capture", Shape::IdentityCapture, false, parent, 0)?;
                 self.list(map, "references", Shape::Leaf, true, parent, 0)?;
-                self.list(map, "mysql_read_back", Shape::Leaf, true, parent, 0)?;
                 self.list(map, "read_back", Shape::RedisReadBack, true, parent, 0)?;
             }
             "redis_sequence" => {
@@ -221,12 +231,10 @@ impl Walker<'_> {
             "http_request" => {
                 self.field_map(map, "headers", Shape::Time, parent, 0)?;
                 self.field_map(map, "query", Shape::GeneratedValue, parent, 0)?;
-                self.field_map(map, "json", Shape::HttpJsonField, parent, 0)?;
             }
             "mysql_values" => {
                 self.field_map(map, "values", Shape::SqlValue, parent, 0)?;
                 self.field_map(map, "params", Shape::GeneratedValue, parent, 0)?;
-                self.field_map(map, "response_time", Shape::SqlResponse, parent, 0)?;
             }
             "capture_http" => proof::source_effect(map, self.revision, self.compact)?,
             "capture_http_response" => {
@@ -247,8 +255,7 @@ impl Walker<'_> {
         ensure!(depth < 128, "authoring contract nesting exceeds 128 levels");
         if matches!(
             shape,
-            Shape::Field
-                | Shape::Time
+            Shape::Time
                 | Shape::SqlValue
                 | Shape::SqlTime
                 | Shape::GeneratedValue
@@ -266,7 +273,6 @@ impl Walker<'_> {
             return Ok(());
         };
         match shape {
-            Shape::Field => self.one(map, "contract", Shape::Field, false, parent, depth)?,
             Shape::SqlValue => self.field_map(map, "fields", Shape::SqlTime, parent, depth)?,
             Shape::SequenceArgument => {
                 self.field_map(map, "fields", Shape::SequenceField, parent, depth)?
@@ -275,7 +281,6 @@ impl Walker<'_> {
                 self.list(map, "nonces", Shape::Leaf, true, parent, depth)?;
                 self.field_map(map, "query", Shape::SequenceField, parent, depth)?;
             }
-            Shape::HttpJsonField => self.list(map, "nonces", Shape::Leaf, true, parent, depth)?,
             Shape::SequenceCommand => {
                 self.one(map, "script", Shape::Leaf, true, parent, depth)?;
                 self.field_map(map, "arguments", Shape::SequenceArgument, parent, depth)?;
@@ -311,17 +316,7 @@ impl Walker<'_> {
                 self.list(map, "transaction_members", Shape::Leaf, true, parent, depth)?;
                 self.one(map, "script", Shape::Leaf, true, parent, depth)?;
             }
-            Shape::SqlResponse => self.one(map, "time", Shape::Time, false, parent, depth)?,
-            Shape::RedisReadBack => {
-                if let Some(epoch) = map.get_mut("state_epochs") {
-                    let own = proof::expand(Some(epoch.clone()), None, self.revision)?;
-                    *epoch = if self.compact {
-                        proof::compact(&own, None, self.revision).expect("explicit state proof")
-                    } else {
-                        own
-                    };
-                }
-            }
+            Shape::RedisReadBack => (),
             Shape::CaptureResponse => {
                 self.list(map, "pointers", Shape::Leaf, true, parent, depth)?
             }

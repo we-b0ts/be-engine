@@ -273,6 +273,21 @@ pub(super) async fn stop_target_runtime(
     layout: &RunLayout,
     state: &mut ActiveRunState,
 ) -> Result<()> {
+    stop_target_process(layout, state, true).await
+}
+
+pub(super) async fn stop_target_at_case_boundary(
+    layout: &RunLayout,
+    state: &mut ActiveRunState,
+) -> Result<()> {
+    stop_target_process(layout, state, false).await
+}
+
+async fn stop_target_process(
+    layout: &RunLayout,
+    state: &mut ActiveRunState,
+    require_clean_exit: bool,
+) -> Result<()> {
     let container = state
         .target_container_name
         .clone()
@@ -290,7 +305,7 @@ pub(super) async fn stop_target_runtime(
         state.target_anchor_name = None;
     }
     ensure!(
-        evidence.exit_code == 0,
+        !require_clean_exit || evidence.exit_code == 0,
         "target exited with {} after SIGTERM",
         evidence.exit_code
     );

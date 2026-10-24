@@ -69,38 +69,11 @@ pub(super) fn convert(
                 };
                 values.insert(*slot, proven(value, &rule.source_evidence));
             }
-            let response_time = mysql
-                .response_time_shift
-                .iter()
-                .map(|(column, field)| {
-                    (
-                        column.clone(),
-                        proven(
-                            n::SqlResponseTime {
-                                time: n::NativeTime {
-                                    format: p::TimestampFormat::SqlDatetime,
-                                    relation: p::TimeRelation::PreserveOffset,
-                                    anchor: p::TimeAnchor::DependencyRequestStart,
-                                    utc_offset: Some("+00:00".into()),
-                                    clock_group: None,
-                                    clock_scope: Default::default(),
-                                },
-                                preserve_values: field.preserve_values.clone(),
-                            },
-                            &rule.source_evidence,
-                        ),
-                    )
-                })
-                .collect();
             output.push(
                 native(
                     &rule.id,
                     selector,
-                    n::NativeEffect::MysqlValues(n::MysqlValuesEffect {
-                        params,
-                        values,
-                        response_time,
-                    }),
+                    n::NativeEffect::MysqlValues(n::MysqlValuesEffect { params, values }),
                     &rule.source_evidence,
                     when,
                 )
@@ -128,62 +101,7 @@ pub(super) fn convert(
                 );
                 return Ok(output);
             }
-            if !http.json.is_empty() {
-                let mut contract = http
-                    .json
-                    .unordered
-                    .iter()
-                    .map(|field| (field.pointer.clone(), p::FieldContract::Unordered))
-                    .collect::<BTreeMap<_, _>>();
-                contract.extend(http.json.time.iter().map(|(pointer, time)| {
-                    (
-                        pointer.clone(),
-                        time_field(&n::NativeTime {
-                            anchor: p::TimeAnchor::DependencyRequestStart,
-                            ..request_time(time)
-                        }),
-                    )
-                }));
-                output.push(
-                    value(
-                        &rule.id,
-                        p::Surface::DependencyRequest,
-                        p::MatchSpec {
-                            api: api.clone(),
-                            resource: Some(resource.clone()),
-                            operation: Some(http.method.clone()),
-                            path: Some(http.path.clone()),
-                            ..Default::default()
-                        },
-                        p::Slot::Body,
-                        p::Codec::Json,
-                        contract,
-                        value_semantics(&rule.source_evidence, when.clone(), None),
-                    )
-                    .into(),
-                );
-            }
-            if !http.headers.is_empty() || !http.query.is_empty() || http.multipart.is_some() {
-                let headers = http
-                    .headers
-                    .iter()
-                    .map(|(name, field)| {
-                        (
-                            name.clone(),
-                            proven(
-                                n::NativeTime {
-                                    format: response::format(field.format()),
-                                    relation: p::TimeRelation::RequestWindow,
-                                    anchor: p::TimeAnchor::DependencyRequestStart,
-                                    utc_offset: None,
-                                    clock_group: None,
-                                    clock_scope: Default::default(),
-                                },
-                                &rule.source_evidence,
-                            ),
-                        )
-                    })
-                    .collect();
+            if !http.query.is_empty() || http.multipart.is_some() {
                 let query = http
                     .query
                     .iter()
@@ -200,14 +118,9 @@ pub(super) fn convert(
                         Ok((name.clone(), proven(value, &rule.source_evidence)))
                     })
                     .collect::<Result<_>>()?;
-                let id = if http.json.is_empty() {
-                    rule.id.clone()
-                } else {
-                    format!("{}-envelope", rule.id)
-                };
                 output.push(
                     native(
-                        &id,
+                        &rule.id,
                         n::NativeMatch {
                             api,
                             resource: Some(resource),
@@ -216,9 +129,7 @@ pub(super) fn convert(
                             ..Default::default()
                         },
                         n::NativeEffect::HttpRequest(n::HttpRequestEffect {
-                            headers,
                             query,
-                            json: Default::default(),
                             multipart_boundary: http.multipart.is_some(),
                         }),
                         &rule.source_evidence,
@@ -307,7 +218,7 @@ pub(super) fn convert(
             let database = match redis {
                 super::super::redis_value::RedisSelector::Requests(value) => value.database,
                 super::super::redis_value::RedisSelector::TimeShift(value) => value.database,
-                _ => 0,
+                super::super::redis_value::RedisSelector::SharedRead(value) => value.database,
             };
             let resource = inventory.resource(
                 p::Protocol::Redis,
@@ -339,58 +250,73 @@ pub(super) fn convert(
                         .into(),
                     );
                 }
-                R::Lock(lock) => {
-                    selector.key = Some(native_key(&lock.lock.key));
+                R::SharedRead(read) => {
+                    selector.operation = Some(read.command.clone());
+                    selector.key = Some(native_key(&read.key));
+                    let hash_field = read
+                        .hash_field
+                        .as_ref()
+                        .map(|field| match field {
+                            crate::replay::RedisValueKeySelector::Exact { value } => {
+                                Ok(value.clone())
+                            }
+                            _ => anyhow::bail!("shared fixture hash field must be exact"),
+                        })
+                        .transpose()?;
                     output.push(
                         native(
                             &rule.id,
                             selector,
-                            n::NativeEffect::RedisLock,
-                            &lock.lock.source_evidence,
-                            when,
-                        )
-                        .into(),
-                    );
-                }
-                R::Publish(publish) => {
-                    selector.operation = Some("PUBLISH".into());
-                    selector.key = Some(n::NativeKeySelector::Exact {
-                        value: publish.publish.channel.clone(),
-                    });
-                    output.push(
-                        native(
-                            &rule.id,
-                            selector,
-                            n::NativeEffect::RedisPublishIdentity(n::PublishIdentityEffect {
-                                uuid_index: publish.publish.uuid_index,
-                                uuid_field: publish.publish.uuid_field.clone(),
+                            n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis {
+                                hash_field,
                             }),
-                            &publish.publish.source_evidence,
+                            &rule.source_evidence,
                             when,
                         )
                         .into(),
                     );
                 }
                 R::TimeShift(read) => {
+                    // Fixture-only migration: content formats become the single
+                    // global JSON map. Finite sharing carries no JSON fields.
+                    let contract = read
+                        .response_json
+                        .iter()
+                        .map(|(pointer, field)| {
+                            (
+                                pointer.clone(),
+                                time_field(&redis_time(
+                                    field.format,
+                                    p::TimeAnchor::DependencyRequestStart,
+                                )),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    let delivery = Some(p::Delivery {
+                        rebase_time: contract.keys().cloned().collect(),
+                    });
+                    output.push(
+                        value(
+                            &rule.id,
+                            p::Surface::DependencyResponse,
+                            p::MatchSpec {
+                                api: api.clone(),
+                                resource: Some(resource),
+                                operation: Some(read.command.clone()),
+                                key: Some(key(&read.key)),
+                                hash_field: read.hash_field.as_ref().map(key),
+                                ..Default::default()
+                            },
+                            p::Slot::Value,
+                            p::Codec::Json,
+                            contract,
+                            value_semantics(&rule.source_evidence, when.clone(), delivery),
+                        )
+                        .into(),
+                    );
                     if rule.replay_scope == old::ReplayScope::RecordingRun {
                         selector.operation = Some(read.command.clone());
                         selector.key = Some(native_key(&read.key));
-                        let response_time = read
-                            .response_json
-                            .iter()
-                            .map(|(pointer, field)| {
-                                (
-                                    pointer.clone(),
-                                    proven(
-                                        redis_time(
-                                            field.format,
-                                            p::TimeAnchor::DependencyRequestStart,
-                                        ),
-                                        &rule.source_evidence,
-                                    ),
-                                )
-                            })
-                            .collect();
                         let hash_field = read
                             .hash_field
                             .as_ref()
@@ -398,120 +324,22 @@ pub(super) fn convert(
                                 crate::replay::RedisValueKeySelector::Exact { value } => {
                                     Ok(value.clone())
                                 }
-                                _ => {
-                                    anyhow::bail!("test fixture shared field requires exact field")
-                                }
+                                _ => anyhow::bail!("shared fixture hash field must be exact"),
                             })
                             .transpose()?;
                         output.push(
                             native(
-                                &rule.id,
+                                &format!("{}-sharing", rule.id),
                                 selector,
                                 n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis {
                                     hash_field,
-                                    response_time,
                                 }),
                                 &rule.source_evidence,
                                 when,
                             )
                             .into(),
                         );
-                    } else {
-                        let contract = read
-                            .response_json
-                            .iter()
-                            .map(|(pointer, field)| {
-                                (
-                                    pointer.clone(),
-                                    time_field(&redis_time(
-                                        field.format,
-                                        p::TimeAnchor::DependencyRequestStart,
-                                    )),
-                                )
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        let delivery = Some(p::Delivery {
-                            rebase_time: contract.keys().cloned().collect(),
-                        });
-                        output.push(
-                            value(
-                                &rule.id,
-                                p::Surface::DependencyResponse,
-                                p::MatchSpec {
-                                    api,
-                                    resource: Some(resource),
-                                    operation: Some(read.command.clone()),
-                                    key: Some(key(&read.key)),
-                                    hash_field: read.hash_field.as_ref().map(key),
-                                    ..Default::default()
-                                },
-                                p::Slot::Value,
-                                p::Codec::Json,
-                                contract,
-                                value_semantics(&rule.source_evidence, when, delivery),
-                            )
-                            .into(),
-                        );
                     }
-                }
-                R::Value(value_rule) => {
-                    let mut contract = BTreeMap::new();
-                    let mut protobuf = BTreeMap::new();
-                    let mut json = false;
-                    for field in &value_rule.unordered {
-                        match &field.field {
-                            crate::replay::RedisUnorderedField::Json { pointer } => {
-                                json = true;
-                                contract.insert(pointer.clone(), p::FieldContract::Unordered);
-                            }
-                            crate::replay::RedisUnorderedField::Protobuf {
-                                field_path,
-                                element_type,
-                                display_path,
-                            } => {
-                                let alias = if display_path.starts_with('/') {
-                                    display_path.clone()
-                                } else {
-                                    format!("/{}", display_path.replace('.', "/"))
-                                };
-                                protobuf.insert(
-                                    alias.clone(),
-                                    p::ProtobufField {
-                                        field_path: field_path.0.clone(),
-                                        field_type: response::protobuf(*element_type).into(),
-                                        repeated: true,
-                                    },
-                                );
-                                contract.insert(alias, p::FieldContract::Unordered);
-                            }
-                        }
-                    }
-                    ensure!(
-                        !json || protobuf.is_empty(),
-                        "fixture cannot mix payload codecs"
-                    );
-                    output.push(
-                        value(
-                            &rule.id,
-                            p::Surface::DependencyRequest,
-                            p::MatchSpec {
-                                api,
-                                resource: Some(resource),
-                                operation: Some("SET".into()),
-                                key: Some(key(&value_rule.key)),
-                                ..Default::default()
-                            },
-                            p::Slot::Value,
-                            if json {
-                                p::Codec::Json
-                            } else {
-                                p::Codec::Protobuf(p::ProtobufCodec { fields: protobuf })
-                            },
-                            contract,
-                            value_semantics(&rule.source_evidence, when, None),
-                        )
-                        .into(),
-                    );
                 }
             }
         }
@@ -520,30 +348,14 @@ pub(super) fn convert(
 }
 
 fn generated(value: &old::DynamicValueRule) -> Result<n::GeneratedValue> {
-    if let Some(reference) = &value.reference {
-        return Ok(n::GeneratedValue::Reference {
-            binding: reference.clone(),
-        });
-    }
     if let Some(time) = &value.time {
         return Ok(n::GeneratedValue::Time(super::time(time)?));
     }
     Ok(match value.validate {
-        Some(old::ValueValidator::Uuid) => n::GeneratedValue::Uuid {
-            binding: value.bind.clone(),
-        },
-        Some(old::ValueValidator::UuidV4) => n::GeneratedValue::UuidV4 {
-            binding: value.bind.clone(),
-        },
-        Some(old::ValueValidator::NonEmpty) => n::GeneratedValue::NonEmpty {
-            binding: value.bind.clone(),
-        },
-        None => n::GeneratedValue::Bind {
-            binding: value
-                .bind
-                .clone()
-                .context("generated fixture requires a binding or explicit validation")?,
-        },
+        Some(old::ValueValidator::Uuid) => n::GeneratedValue::Uuid {},
+        Some(old::ValueValidator::UuidV4) => n::GeneratedValue::UuidV4 {},
+        Some(old::ValueValidator::NonEmpty) => n::GeneratedValue::NonEmpty {},
+        None => n::GeneratedValue::NonEmpty {},
     })
 }
 
@@ -560,29 +372,24 @@ fn sequence(value: &request::RedisRequestSelector, fact: &str) -> Result<n::Redi
                     separator: *separator,
                     segment_index: *segment_index,
                 },
-                identity::KeyContract::Capture {
-                    binding,
-                    template,
-                    format,
-                } => n::NativeKeyContract::Capture {
-                    binding: binding.clone(),
-                    template: template.clone(),
-                    format: match format {
-                        identity::KeyFormat::Hex { bytes } => {
-                            n::KeyIdentityFormat::Hex { bytes: *bytes }
-                        }
-                        identity::KeyFormat::Base64url { bytes } => {
-                            n::KeyIdentityFormat::Base64url { bytes: *bytes }
-                        }
-                        identity::KeyFormat::UuidV4 => n::KeyIdentityFormat::UuidV4,
-                    },
-                },
+                identity::KeyContract::Capture { template, format } => {
+                    n::NativeKeyContract::Capture {
+                        template: template.clone(),
+                        format: match format {
+                            identity::KeyFormat::Hex { bytes } => {
+                                n::KeyIdentityFormat::Hex { bytes: *bytes }
+                            }
+                            identity::KeyFormat::Base64url { bytes } => {
+                                n::KeyIdentityFormat::Base64url { bytes: *bytes }
+                            }
+                            identity::KeyFormat::UuidV4 => n::KeyIdentityFormat::UuidV4,
+                        },
+                    }
+                }
                 identity::KeyContract::Reference {
-                    binding,
                     template,
                     transform,
                 } => n::NativeKeyContract::Reference(n::IdentityReference {
-                    binding: binding.clone(),
                     template: template.clone(),
                     transform: transform_kind(*transform),
                 }),
@@ -613,7 +420,7 @@ fn sequence(value: &request::RedisRequestSelector, fact: &str) -> Result<n::Redi
                                         }
                                         request::JsonField::Identity(field) => {
                                             n::SequenceField::Identity(n::IdentityReference {
-                                                binding: field.identity.binding.clone(),
+
                                                 template: field.identity.template.clone(),
                                                 transform: transform_kind(field.identity.transform),
                                             })
@@ -706,18 +513,18 @@ fn transform_kind(value: identity::Transform) -> n::IdentityTransform {
     }
 }
 fn redis_time(
-    value: crate::replay::redis::time_shift::RedisTimestampFormat,
+    value: crate::replay::policy::test_fixture::redis_time::RedisTimestampFormat,
     anchor: p::TimeAnchor,
 ) -> n::NativeTime {
     n::NativeTime {
         format: match value {
-            crate::replay::redis::time_shift::RedisTimestampFormat::UnixSeconds => {
+            crate::replay::policy::test_fixture::redis_time::RedisTimestampFormat::UnixSeconds => {
                 p::TimestampFormat::UnixSeconds
             }
-            crate::replay::redis::time_shift::RedisTimestampFormat::UnixMilliseconds => {
+            crate::replay::policy::test_fixture::redis_time::RedisTimestampFormat::UnixMilliseconds => {
                 p::TimestampFormat::UnixMilliseconds
             }
-            crate::replay::redis::time_shift::RedisTimestampFormat::Rfc3339 => {
+            crate::replay::policy::test_fixture::redis_time::RedisTimestampFormat::Rfc3339 => {
                 p::TimestampFormat::Rfc3339
             }
         },

@@ -4,11 +4,20 @@ use super::*;
 use base64::Engine as _;
 use tokio::net::TcpStream;
 
-async fn redis_capture(state: AppState) -> (SocketAddr, JoinHandle<()>, JoinHandle<()>) {
+async fn redis_capture(
+    state: AppState,
+) -> (
+    SocketAddr,
+    JoinHandle<()>,
+    JoinHandle<()>,
+    std::sync::Arc<tokio::sync::Notify>,
+) {
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_address = upstream.local_addr().unwrap();
     let recorder = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let recorder_address = recorder.local_addr().unwrap();
+    let observed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let request_observed = observed.clone();
     let server = tokio::spawn(async move {
         for turn in 1..=2 {
             let (mut socket, _) = upstream.accept().await.unwrap();
@@ -16,7 +25,9 @@ async fn redis_capture(state: AppState) -> (SocketAddr, JoinHandle<()>, JoinHand
             let mut request = vec![0; expected.len()];
             socket.read_exact(&mut request).await.unwrap();
             assert_eq!(request, expected.as_bytes());
-            // The exchange starts inside the 100ms window and finishes after it.
+            request_observed.notify_one();
+            // The real request is admitted before the primary closes; its
+            // delayed response exercises ownership across that closure.
             tokio::time::sleep(Duration::from_millis(140)).await;
             socket.write_all(b"$2\r\nok\r\n").await.unwrap();
         }
@@ -41,11 +52,10 @@ async fn redis_capture(state: AppState) -> (SocketAddr, JoinHandle<()>, JoinHand
             .unwrap();
         }
     });
-    (recorder_address, server, capture)
+    (recorder_address, server, capture, observed)
 }
 
 async fn late_dependency(address: SocketAddr, turn: usize) {
-    tokio::time::sleep(Duration::from_millis(20)).await;
     let mut socket = TcpStream::connect(address).await.unwrap();
     socket
         .write_all(format!("*2\r\n$3\r\nGET\r\n$6\r\nlate-{turn}\r\n").as_bytes())
@@ -56,7 +66,13 @@ async fn late_dependency(address: SocketAddr, turn: usize) {
     assert_eq!(&response, b"$2\r\nok\r\n");
 }
 
-async fn source_connection(stream: TcpStream, protocol: Protocol, turn: usize) {
+async fn source_connection(
+    stream: TcpStream,
+    protocol: Protocol,
+    turn: usize,
+    dependency: SocketAddr,
+    observed: std::sync::Arc<tokio::sync::Notify>,
+) {
     if protocol == Protocol::Sse {
         let mut stream = stream;
         read_head(&mut stream).await;
@@ -64,13 +80,18 @@ async fn source_connection(stream: TcpStream, protocol: Protocol, turn: usize) {
         stream
             .write_all(
                 format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{body}\r\n",
                     body.len()
                 )
                 .as_bytes(),
             )
             .await
             .unwrap();
+        let pending = tokio::spawn(late_dependency(dependency, turn));
+        observed.notified().await;
+        stream.write_all(b"0\r\n\r\n").await.unwrap();
+        drop(stream);
+        pending.await.unwrap();
     } else {
         let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
         socket.send(Message::Text(format!("0{{\"sid\":\"session-{turn}\",\"upgrades\":[],\"pingInterval\":1000,\"pingTimeout\":1000}}").into())).await.unwrap();
@@ -83,6 +104,8 @@ async fn source_connection(stream: TcpStream, protocol: Protocol, turn: usize) {
             socket.next().await.unwrap().unwrap(),
             Message::Text(format!("421[\"ask\",{turn}]").into())
         );
+        let pending = tokio::spawn(late_dependency(dependency, turn));
+        observed.notified().await;
         socket
             .send(Message::Text(format!("431[{turn}]").into()))
             .await
@@ -93,6 +116,7 @@ async fn source_connection(stream: TcpStream, protocol: Protocol, turn: usize) {
             other => panic!("unexpected interaction cleanup: {other:?}"),
         }
         let _ = socket.close(None).await;
+        pending.await.unwrap();
     }
 }
 
@@ -158,12 +182,11 @@ async fn consecutive_cases(protocol: Protocol) {
             .case_dependency_post_response_window_ms,
         100
     );
-    let (dependency, server, capture) = redis_capture(state.clone()).await;
+    let (dependency, server, capture, observed) = redis_capture(state.clone()).await;
     let source = tokio::spawn(async move {
         for turn in 1..=2 {
             let (stream, _) = listener.accept().await.unwrap();
-            source_connection(stream, protocol, turn).await;
-            late_dependency(dependency, turn).await;
+            source_connection(stream, protocol, turn, dependency, observed.clone()).await;
         }
         // The Source service stays alive after both connection-scoped cases.
         std::future::pending::<()>().await;

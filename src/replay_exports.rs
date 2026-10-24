@@ -40,39 +40,10 @@ pub use crate::replay::{
     plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 
-pub use crate::replay::HttpUnorderedSelector;
-
-pub use crate::replay::{
-    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
-};
-
-pub use crate::replay::{
-    RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftRead, RedisTimeShiftReport,
-    RedisTimeShiftSelector, RedisTimestampFormat, RelativeTime, RelativeTimeField,
-    plan_redis_time_shift,
-};
+#[cfg(test)]
+pub(crate) use crate::replay::{RedisTimeShiftFeedback, RedisTimeShiftSelector};
 
 pub use crate::replay::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
-
-pub use crate::replay::{
-    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
-};
-
-pub use crate::replay::HttpHeaderTimestampSelector;
-
-pub use crate::replay::{
-    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
-    plan_http_header_timestamp,
-};
-
-pub use crate::replay::RedisLockSelector;
-
-pub use crate::replay::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};
-
-pub use crate::replay::{
-    RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, RedisPublishSelector,
-    plan_redis_publish,
-};
 
 pub use crate::replay::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 

@@ -49,10 +49,7 @@ pub(super) fn validate(
             compiled.native.iter().any(|rule| {
                 if !matches!(
                     rule.rule.effect,
-                    NativeEffect::Identity(_)
-                        | NativeEffect::RedisSequence(_)
-                        | NativeEffect::RedisLock
-                        | NativeEffect::RedisPublishIdentity(_)
+                    NativeEffect::Identity(_) | NativeEffect::RedisSequence(_)
                 ) {
                     return false;
                 }
@@ -111,7 +108,9 @@ pub(super) fn validate(
             normalized.source == normalized.actual,
             "Source identity self validation changed values"
         );
-        runtime.dynamic_values.commit(case.id, normalized.decision);
+        runtime
+            .dynamic_values
+            .commit(case.id, normalized.decision)?;
     }
     let clock = started(event)?;
     let context = RedisRequestContext {

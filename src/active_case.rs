@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::recorder::{CaseContext, CaseInvalidation};
 
 mod activity;
+mod async_api;
 mod observation;
 mod publication;
 mod recovery;
@@ -46,6 +47,7 @@ struct ActiveCaseRegistration {
     source_completed: bool,
     observation: Option<Arc<CaseObservation>>,
     stream_tail: Option<Arc<StreamTail>>,
+    async_api: Option<Arc<async_api::AsyncObservation>>,
 }
 
 pub(crate) struct ActiveCaseGuard {
@@ -146,6 +148,7 @@ impl ActiveCaseRegistry {
             source_completed: false,
             observation: None,
             stream_tail: None,
+            async_api: None,
         });
         self.active_count.send_replace(state.active.len());
         Ok(ActiveCaseGuard {
@@ -303,6 +306,7 @@ impl ActiveCaseRegistry {
             .iter_mut()
             .find(|registration| registration.case.id == case_id)?;
         if !registration.accepting_dependencies
+            && registration.async_api.is_none()
             && !registration
                 .stream_tail
                 .as_ref()
@@ -335,6 +339,9 @@ impl ActiveCaseRegistry {
             return self
                 .drain_recovering_case(case_id, post_response_window, timeout)
                 .await;
+        }
+        if let Some(result) = self.drain_async_api(case_id, timeout).await {
+            return result;
         }
         if let Some(result) = self.drain_stream_tail(case_id, timeout).await {
             return result;
@@ -636,6 +643,7 @@ mod tests {
                 source_completed: false,
                 observation: None,
                 stream_tail: None,
+                async_api: None,
             });
             state.active.push(ActiveCaseRegistration {
                 case: second,
@@ -646,6 +654,7 @@ mod tests {
                 source_completed: false,
                 observation: None,
                 stream_tail: None,
+                async_api: None,
             });
         }
 

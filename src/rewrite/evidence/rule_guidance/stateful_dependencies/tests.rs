@@ -76,32 +76,18 @@ fn read_back_guidance_explains_additive_updates_and_distinct_count_authority() {
 }
 
 #[test]
-fn mysql_read_back_requires_mysql_read_facts_and_preserves_source_causality() {
-    let facts = json!({"clusters":[{"protocol":"mysql","operations":{"COM_STMT_EXECUTE":1},"representative":{"difference":{
+fn ordinary_mysql_reads_need_no_native_delivery_rule_or_select_template() {
+    let facts = json!({"clusters":[{"protocol":"mysql","operations":{"COM_QUERY":1},"representative":{"difference":{
         "expected":{"presence":"present","signature":{"sql_summary":"SELECT payload FROM records WHERE id=?"}}}}}]});
-    assert_eq!(capabilities(&facts), vec!["mysql_read_back"]);
-    let hint = &hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts)[0].hint;
-    assert!(hint.contains("must already be an authorized reference"));
-    assert!(hint.contains("completed before the Source read"));
-    assert!(hint.contains("derived delivery is not independent Target evidence"));
-    assert!(hint.contains("SELECTs remain finite"));
-    assert!(hint.contains("Source-proven sharded ORM SELECT"));
-    assert!(hint.contains("bounded table_series"));
-    assert!(hint.contains("AS {{table}}_suffix"));
-    assert!(hint.contains("Do not enumerate witnessed shards"));
-    assert!(hint.contains("numeric object keys stay literal"));
-
-    let facts = json!({"clusters":[{"protocol":"mysql","reason":"unused_recorded","operations":{"COM_QUERY":1},"representative":{"difference":{
-        "expected":{"presence":"present","signature":{"sql_summary":{"preview":"SELECT records.payload AS records_payload, records.id AS records_id …","truncated":true,"select_body":{"preview":"FROM records WHERE id=?","truncated":false}}}}}}}]});
-    assert_eq!(capabilities(&facts), vec!["mysql_read_back"]);
+    assert!(capabilities(&facts).is_empty());
 }
 
 #[test]
 fn unified_source_bindings_expose_supported_delivery_without_inventing_target_evidence() {
-    let facts = json!({"source_entry":{"bindings":[
-        {"binding":{"surface":"dependency.response","match":{"resource":{"protocol":"mysql"},"operation":"COM_QUERY"},"slot":{"sql_column":"payload"}},"source_intent_required":true},
-        {"binding":{"surface":"dependency.request","match":{"resource":{"protocol":"redis"},"operation":"APPEND"},"slot":"value"}},
-        {"binding":{"surface":"dependency.response","match":{"resource":{"protocol":"redis"},"operation":"GET"},"slot":"value"}}
+    let facts = json!({"source_entry":{"locations":[
+        {"location":{"surface":"dependency.response","match":{"resource":{"protocol":"mysql"},"operation":"COM_QUERY"},"slot":{"sql_column":"payload"}},"source_intent_required":true},
+        {"location":{"surface":"dependency.request","match":{"resource":{"protocol":"redis"},"operation":"APPEND"},"slot":"value"}},
+        {"location":{"surface":"dependency.response","match":{"resource":{"protocol":"redis"},"operation":"GET"},"slot":"value"}}
     ]}});
     let root = Path::new("/target");
     let hints = hints(root, QUERY_UNIFIED_RULE_CANDIDATES, &facts);
@@ -109,7 +95,6 @@ fn unified_source_bindings_expose_supported_delivery_without_inventing_target_ev
     assert_eq!(
         found,
         vec![
-            "mysql_read_back",
             "redis_append_stream",
             "redis_read_back",
             "redis_read_commutation",
@@ -131,30 +116,15 @@ fn unified_source_bindings_expose_supported_delivery_without_inventing_target_ev
     assert!(
         planners
             .iter()
-            .any(|planner| planner.capability == "mysql_read_back")
+            .all(|planner| planner.capability != "mysql_read_back")
     );
     assert!(capabilities(&facts).is_empty());
 }
 
 #[test]
-fn source_mysql_resultsets_reveal_capability_before_a_value_contract_is_configured() {
-    let mut facts = json!({"source_entry":{"bindings":[{"binding":{"surface":"dependency.response","match":{"resource":{"protocol":"mysql"},"operation":"COM_QUERY"}},"source_response_kind":"resultset","needs_sql_template":true,"needs_slot":true}]}});
-    let root = Path::new("/target");
-    assert_eq!(
-        hints(root, QUERY_UNIFIED_RULE_CANDIDATES, &facts)[0].capability,
-        "mysql_read_back"
-    );
-    for status in ["ok", "error", "unknown"] {
-        facts["source_entry"]["bindings"][0]["source_response_kind"] = status.into();
-        assert!(hints(root, QUERY_UNIFIED_RULE_CANDIDATES, &facts).is_empty());
-    }
-    facts["source_entry"]["bindings"][0]["source_response_kind"] = "resultset".into();
-    facts["source_entry"]["bindings"][0]["binding"]["surface"] = "dependency.request".into();
-    assert!(hints(root, QUERY_UNIFIED_RULE_CANDIDATES, &facts).is_empty());
-    facts["source_entry"]["bindings"][0]["binding"]["surface"] = "dependency.response".into();
-    facts["source_entry"]["bindings"][0]["binding"]["match"]["resource"]["protocol"] =
-        "http".into();
-    assert!(hints(root, QUERY_UNIFIED_RULE_CANDIDATES, &facts).is_empty());
+fn global_mysql_content_has_no_per_select_read_back_planner() {
+    let facts = json!({"source_entry":{"locations":[{"location":{"surface":"dependency.response","match":{"resource":{"protocol":"mysql"},"operation":"COM_QUERY"}},"source_response_kind":"resultset"}]}});
+    assert!(hints(Path::new("/target"), QUERY_UNIFIED_RULE_CANDIDATES, &facts).is_empty());
 }
 
 #[test]

@@ -5,10 +5,13 @@ use crate::policy_evidence::{SourceIdentity, SourceRole, TargetRole, WitnessMeta
 use crate::value_contract::json::AnchorClocks;
 #[cfg(test)]
 mod attachment_tests;
+mod headers;
+mod prefix;
+mod stream;
 mod witness;
 pub(crate) use witness::{
-    source_witness, validate_contract_witness, validate_witness, witness_matches,
-    witness_metadata_matches, witness_value,
+    source_witness, validate_contract_witness, validate_witness, witness_metadata_matches,
+    witness_value,
 };
 
 pub(super) struct RequestView<'a> {
@@ -108,23 +111,27 @@ pub(super) fn record_target(
 pub(super) fn preview_request(
     policy: &ReplayPolicyRuntime,
     exchange: &ReplayHttpExchange,
+    active_case: Option<&str>,
     actual: &RequestView<'_>,
     validated_query_params: &[String],
     diagnostic: &mut Option<Value>,
 ) -> Option<Result<crate::replay::policy::request_contract::Decision>> {
-    if exchange.source != ReplaySource::Case || exchange.shared_origin.is_some() {
+    let ordinary = exchange.source == ReplaySource::Case && exchange.shared_origin.is_none();
+    if !ordinary
+        && policy.request_contracts.global_json().is_none()
+        && policy
+            .request_contracts
+            .compiled_rules()
+            .is_none_or(|policy| policy.http.is_none())
+    {
         return None;
     }
-    let rules = policy.request_contracts.http_value_rules(
-        Surface::DependencyRequest,
-        exchange.case_id.as_deref(),
-        &exchange.identity.target,
-        actual.method.as_str(),
-        actual.uri.path(),
-    );
-    if rules.is_empty() {
-        return None;
-    }
+    let case = if ordinary {
+        exchange.case_id.as_deref()
+    } else {
+        active_case
+    }?;
+    policy.request_contracts.global_json()?;
     Some((|| {
         anyhow::ensure!(
             uri_mismatch_reason(
@@ -137,17 +144,22 @@ pub(super) fn preview_request(
         );
         let source = decode_body(&exchange.record.request_body)?;
         let clocks = policy.request_contracts.contract_clocks(
-            exchange.case_id.as_deref(),
+            Some(case),
             request_headers::time_reference::source(&exchange.record),
             Some(actual.started_at),
             None,
             None,
         );
-        let comparison =
-            crate::replay::contract_value::compare(&source, actual.body, &rules, clocks)?;
+        let comparison = policy.request_contracts.compare_global_case_value(
+            case,
+            &source,
+            actual.body,
+            &[],
+            clocks,
+        )?;
         *diagnostic = Some(serde_json::json!({
             "source_exchange_id":exchange.record.id,
-            "selected_rule_ids":rules.iter().map(|rule| &rule.rule.id).collect::<Vec<_>>(),
+            "selected_rule_ids":comparison.evaluated,
             "comparison":comparison,
             "passed":comparison.passed(),
             "source_comparison_body_sha256":crate::policy_evidence::digest(&source),
@@ -159,99 +171,178 @@ pub(super) fn preview_request(
             "HTTP request body contract failed: {:?}",
             comparison.differences
         );
-        Ok(crate::replay::policy::request_contract::Decision::from_value_comparison(comparison))
+        let identity = policy
+            .request_contracts
+            .identity_decision(case, &comparison)?;
+        let mut decision =
+            crate::replay::policy::request_contract::Decision::from_value_comparison(comparison);
+        decision.identity = Some(identity);
+        Ok(decision)
     })())
 }
 
 pub(super) fn materialize_response(
-    policy: &ReplayPolicyRuntime,
+    owner: &crate::replay::policy::request_contract::RequestContracts,
     exchange: &mut ReplayHttpExchange,
+    active_case: Option<&str>,
     request_started_at: chrono::DateTime<Utc>,
 ) -> Result<DependencyRuleDecision> {
+    if exchange.record.cleanup_authorized && exchange.record.response_stream.is_some() {
+        return prefix::materialize(owner, exchange, active_case, request_started_at);
+    }
     let mut decision = DependencyRuleDecision::default();
-    if policy.request_contracts.compiled_rules().is_none()
-        || exchange.source != ReplaySource::Case
-        || exchange.shared_origin.is_some()
+    if owner.compiled_rules().is_none()
+        || upstream_failure::is_recorded(&exchange.record)
         || exchange.record.outcome.is_client_terminated()
         || exchange.record.outcome.is_server_terminated()
     {
         return Ok(decision);
     }
-    let Some(case) = exchange.case_id.as_deref() else {
+    let ordinary = exchange.source == ReplaySource::Case && exchange.shared_origin.is_none();
+    if !ordinary
+        && owner.global_json().is_none()
+        && owner
+            .compiled_rules()
+            .is_none_or(|policy| policy.http.is_none())
+    {
+        return Ok(decision);
+    }
+    let Some(case) = (if ordinary {
+        exchange.case_id.as_deref()
+    } else {
+        active_case
+    }) else {
         return Ok(decision);
     };
-    let rules = policy.request_contracts.http_value_rules(
-        Surface::DependencyResponse,
-        Some(case),
-        &exchange.identity.target,
-        &exchange.record.method,
-        &uri_path_only(&exchange.record.uri),
-    );
     let source = witness::from_record(&exchange.record, Surface::DependencyResponse)?;
-    let Some(payload) = witness_value(&serde_json::to_vec(&source)?, Surface::DependencyResponse)?
-    else {
-        return Ok(decision);
-    };
+    let payload_slot = witness_value(&serde_json::to_vec(&source)?, Surface::DependencyResponse)?;
+    let payload = payload_slot.clone().unwrap_or_default();
     let delivered_at = Utc::now();
-    let clocks = policy.request_contracts.contract_clocks(
+    let clocks = owner.contract_clocks(
         Some(case),
         request_headers::time_reference::source(&exchange.record),
         Some(request_started_at),
         exchange.record.timestamp,
         Some(delivered_at),
     );
-    let value = if rules.is_empty() {
-        payload.clone()
-    } else {
-        if rules.iter().any(|rule| !rule.delivery_time.is_empty()) {
-            anyhow::ensure!(
-                !witness::has_integrity_headers(exchange.record.response_headers.as_ref()),
-                "HTTP body rebase requires a typed owner for its payload digest or signature headers"
-            );
-        }
-        let delivery = crate::replay::contract_value::Delivery::prepare(&payload, &rules, clocks)?;
-        let value = delivery.render(delivered_at)?;
-        decision.value_contracts.push(
-            crate::replay::policy::request_contract::Decision::from_value_comparison(
-                delivery.validation().clone(),
-            ),
+    let value = materialize_value(owner, case, &payload, clocks, delivered_at, &mut decision)?;
+    if value != payload {
+        anyhow::ensure!(
+            !witness::has_integrity_headers(exchange.record.response_headers.as_ref()),
+            "HTTP body rebase requires a typed owner for its payload digest or signature headers"
         );
-        value
-    };
-    let native_headers = response_headers_for_payload(
+    }
+    let mut native_headers = response_headers_for_payload(
         exchange.record.response_headers.as_ref(),
         value.len(),
         delivered_at,
     );
+    let expected_native_headers = request_headers::capture(&native_headers);
+    if let Some(validation) = headers::materialize(
+        owner,
+        case,
+        exchange.record.response_headers.as_ref(),
+        &mut native_headers,
+        clocks,
+        delivered_at,
+    )? {
+        decision.value_contracts.push(validation);
+    }
+    anyhow::ensure!(
+        expected_native_headers == request_headers::capture(&native_headers)
+            || !witness::has_integrity_headers(exchange.record.response_headers.as_ref()),
+        "HTTP header rebase requires a typed owner for its digest or signature headers"
+    );
     let mut target = source.clone();
-    target["response_body"] = STANDARD.encode(&value).into();
+    if payload_slot.is_some() {
+        target["response_body"] = STANDARD.encode(&value).into();
+    }
     target["response_headers"] = serde_json::to_value(request_headers::capture(&native_headers))?;
     target["response_delivered_at"] = serde_json::to_value(delivered_at)?;
     validate_witness(
         &serde_json::to_vec(&source)?,
-        &serde_json::to_vec(&target)?,
+        &serde_json::to_vec(&headers::native_validation_target(
+            &target,
+            &expected_native_headers,
+            owner,
+        )?)?,
         Surface::DependencyResponse,
         clocks,
     )?;
-    policy.request_contracts.record_value_witness(
-        metadata(
-            &exchange.record,
-            case,
-            Surface::DependencyResponse,
-            TargetRole::DerivedDelivery,
-            clocks,
-        )?,
-        &serde_json::to_vec(&source)?,
-        Some(&serde_json::to_vec(&target)?),
-    )?;
-    exchange.record.response_body = Some(RecordedBodyCapture {
-        encoding: "base64".into(),
-        truncated: false,
-        stored_len: Some(value.len()),
-        data: STANDARD.encode(value),
-    });
+    if ordinary {
+        owner.record_value_witness(
+            metadata(
+                &exchange.record,
+                case,
+                Surface::DependencyResponse,
+                TargetRole::DerivedDelivery,
+                clocks,
+            )?,
+            &serde_json::to_vec(&source)?,
+            Some(&serde_json::to_vec(&target)?),
+        )?;
+    }
+    if value != payload
+        && let Some(stream) = &mut exchange.record.response_stream
+    {
+        stream::remap(stream, &payload, &value)?;
+    }
+
+    if payload_slot.is_some() {
+        exchange.record.response_body = Some(RecordedBodyCapture {
+            encoding: "base64".into(),
+            truncated: false,
+            stored_len: Some(value.len()),
+            data: STANDARD.encode(value),
+        });
+    }
     exchange.record.response_headers = Some(request_headers::capture(&native_headers));
     Ok(decision)
+}
+
+/// Render only fully decoded values. Unknown/partial payloads keep exact bytes.
+fn materialize_value(
+    owner: &crate::replay::policy::request_contract::RequestContracts,
+    case: &str,
+    payload: &[u8],
+    clocks: AnchorClocks,
+    delivered_at: chrono::DateTime<Utc>,
+    decision: &mut DependencyRuleDecision,
+) -> Result<Vec<u8>> {
+    let global = owner
+        .global_json()
+        .filter(|_| crate::json_value::parse(payload).is_some());
+    let sse = owner
+        .global_json()
+        .filter(|_| crate::value_codec::sse::Document::decode(payload).is_ok());
+    let value = if let Some(plan) = sse {
+        let delivery = crate::replay::contract_value::SseDelivery::prepare(payload, plan, clocks)?;
+        let (value, validation) = delivery.render(delivered_at, owner, case)?;
+        decision.value_contracts.push(validation);
+        value
+    } else if global.is_none() {
+        payload.to_vec()
+    } else {
+        let delivery = crate::replay::contract_value::Delivery::prepare_global(
+            payload,
+            global.context("JSON field plan missing")?,
+            clocks,
+        )?;
+        let mut validation =
+            crate::replay::policy::request_contract::Decision::from_value_comparison(
+                delivery.validation().clone(),
+            );
+        let value = if delivery.has_identities() {
+            let (value, identity) = delivery.render_with_identities(delivered_at, owner, case)?;
+            validation.identity = Some(identity);
+            value
+        } else {
+            delivery.render(delivered_at)?
+        };
+        decision.value_contracts.push(validation);
+        value
+    };
+    Ok(value)
 }
 
 pub(in crate::replay) fn observe_source(
@@ -262,7 +353,6 @@ pub(in crate::replay) fn observe_source(
 ) -> Result<()> {
     let mut record: RecordedHttpExchange = serde_json::from_value(event.clone())?;
     record.decrypt_request_headers(key_context)?;
-    let identity = identity_from_record(&record)?;
     let clocks = contracts.contract_clocks(
         Some(case),
         request_headers::time_reference::source(&record),
@@ -271,33 +361,75 @@ pub(in crate::replay) fn observe_source(
         None,
     );
     for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-        let rules = contracts.http_value_rules(
-            surface,
-            Some(case),
-            &identity.target,
-            &record.method,
-            &uri_path_only(&record.uri),
-        );
+        if surface == Surface::DependencyResponse && upstream_failure::is_recorded(&record) {
+            // The proxy-generated 502 has no upstream header/body format slot.
+            // Its finite request is still compared and consumed normally.
+            continue;
+        }
+        if let Some(plan) = contracts
+            .compiled_rules()
+            .and_then(|policy| policy.http.as_ref())
+        {
+            let headers = if surface == Surface::DependencyRequest {
+                Some(&record.request_headers)
+            } else {
+                record.response_headers.as_ref()
+            };
+            if let Some(headers) = headers {
+                let validation =
+                    crate::value_contract::http_headers::compare(headers, headers, plan, clocks)?;
+                anyhow::ensure!(validation.passed(), "Source HTTP header shape is invalid");
+                contracts.observe_value_slot_applicable(validation.evaluated);
+            }
+        }
+        if surface == Surface::DependencyResponse
+            && (record.outcome != crate::DependencyExchangeOutcome::Response
+                || record.error.is_some()
+                || record
+                    .response_stream
+                    .as_ref()
+                    .is_some_and(|stream| !stream.complete))
+        {
+            // Captured prefixes may prove decoded field shapes, but never a
+            // complete dependency response for independent plan witnesses.
+            if let Some(body) = &record.response_body {
+                observe_known_value(contracts, &decode_body(body)?, clocks)?;
+            }
+            continue;
+        }
         let source = witness::from_record(&record, surface)?;
         let bytes = serde_json::to_vec(&source)?;
-        match witness_value(&bytes, surface)? {
-            Some(payload) => {
-                if !rules.is_empty() {
-                    let validation =
-                        crate::replay::contract_value::Delivery::prepare(&payload, &rules, clocks)?;
-                    contracts.observe_value_slot_applicable(
-                        validation.validation().evaluated.iter().cloned(),
-                    );
-                }
-            }
-            None => contracts
-                .observe_value_slot_unavailable(rules.iter().map(|rule| rule.rule.id.clone())),
+        if let Some(payload) = witness_value(&bytes, surface)? {
+            observe_known_value(contracts, &payload, clocks)?;
         }
         contracts.record_value_witness(
             metadata(&record, case, surface, TargetRole::Unavailable, clocks)?,
             &bytes,
             None,
         )?;
+    }
+    Ok(())
+}
+
+fn observe_known_value(
+    contracts: &crate::replay::policy::request_contract::RequestContracts,
+    payload: &[u8],
+    clocks: AnchorClocks,
+) -> Result<()> {
+    if let Some(global) = contracts
+        .global_json()
+        .filter(|_| crate::json_value::parse(payload).is_some())
+    {
+        let validation =
+            crate::replay::contract_value::Delivery::prepare_global(payload, global, clocks)?;
+        contracts.observe_value_slot_applicable(validation.validation().evaluated.iter().cloned());
+    } else if let Some(plan) = contracts
+        .global_json()
+        .filter(|_| crate::value_codec::sse::Document::decode(payload).is_ok())
+    {
+        let validation =
+            crate::replay::contract_value::SseDelivery::prepare(payload, plan, clocks)?;
+        contracts.observe_value_slot_applicable(validation.validation().evaluated.iter().cloned());
     }
     Ok(())
 }

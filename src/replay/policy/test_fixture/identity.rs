@@ -191,7 +191,6 @@ pub(super) fn convert(rule: &d::DynamicValueRule, inventory: &Inventory) -> Resu
         &rule.id,
         selector,
         n::NativeEffect::Identity(n::IdentityEffect {
-            mysql_read_back: vec![],
             read_back: vec![],
             value_type: match rule.value_type {
                 d::DynamicValueType::String => n::IdentityType::String,

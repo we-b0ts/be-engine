@@ -8,31 +8,16 @@ const HISTORICAL: &str = "22222222-2222-4222-8222-222222222222";
 const WRONG: &str = "44444444-4444-4444-8444-444444444444";
 
 const POLICY: &str = r#"format: traffic-policy/v2
-resources:
-  db:
-    protocol: mysql
-    endpoint: 127.0.0.1:3306
-    database: appdb
-    username: root
-    proof: {source: 'models.rs:10-30', fact: 'Generated entity ids are copied across the row and JSON payload'}
-    tables:
-      widgets:
-        tables: [widgets]
-        fields:
-          id: {kind: identity, binding: widget, format: uuid}
-          payload:
-            codec: json
-            fields:
-              /id: {kind: identity, binding: widget, format: uuid}
-responses:
-  widget:
-    api: GET /users
-    proof: {source: 'handler.rs:20-30', fact: 'The response returns the same generated entity id'}
-    body:
-      codec: json
+mysql:
+  database: appdb
+  tables:
+    widgets:
+      pattern: widgets
       fields:
-        /id: {kind: identity, binding: widget, format: uuid}
-rules: []
+        id: {kind: identity, formats: [uuid]}
+json:
+  fields:
+    /id: {kind: identity, formats: [uuid]}
 "#;
 
 fn body(id: &str) -> String {
@@ -157,16 +142,12 @@ async fn mysql_field_ids_survive_reads_and_response_control_without_sql_template
             }
         });
         let policy = crate::policy::parse_and_compile_policy(POLICY).unwrap();
-        let rules = policy
-            .rules
-            .iter()
-            .filter(|rule| rule.rule.surface == crate::policy::Surface::ApiResponse)
-            .collect::<Vec<_>>();
         let compare = |id: &str| {
-            crate::value_contract::encoded::compare(
+            crate::value_contract::global::compare(
                 json!({"id":SOURCE}).to_string().as_bytes(),
                 json!({"id":id}).to_string().as_bytes(),
-                &rules,
+                policy.global_json.as_ref().unwrap(),
+                &[],
                 Default::default(),
             )
             .unwrap()

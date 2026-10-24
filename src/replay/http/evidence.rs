@@ -35,7 +35,11 @@ impl RecordedHttpExchange {
                 body.stored_len.is_none_or(|stored| stored == payload_len),
                 "materialized HTTP stream payload does not match its stored length"
             );
-            stream.validate(payload_len)?;
+            if self.cleanup_authorized {
+                stream.validate_prefix(payload_len)?;
+            } else {
+                stream.validate(payload_len)?;
+            }
         }
         Ok(())
     }

@@ -21,6 +21,16 @@ impl AppState {
         started: Instant,
         request_timeout: Duration,
     ) {
+        if let Some(scope) = crate::recorder::async_api::AsyncScope::for_primary(
+            &self.config().async_api,
+            method,
+            uri,
+            body,
+        ) {
+            self.inner
+                .active_cases
+                .configure_async_api(case_id, scope, started, request_timeout);
+        }
         let idle = Duration::from_millis(self.config().recording.api_origin_dependency_idle_ms);
         // Response headers may declare a stream only after dependencies have
         // started. Capture their request lifetimes from primary admission.
@@ -244,6 +254,27 @@ impl AppState {
             .active_cases
             .drain_case_dependencies(case_id, post_response_window, timeout)
             .await;
+        if let Some((case, report)) = self.inner.active_cases.async_api_report(case_id) {
+            if let Err(error) = self
+                .recorder()
+                .write_case_json(&case, "async-api-observation.json", &report)
+                .await
+            {
+                self.begin_case_quiescing();
+                return Some(CaseInvalidation::new(
+                    "recording_observation_failure",
+                    format!("failed to persist async API completion: {error}"),
+                ));
+            }
+            if report["inventory_complete"] != true {
+                self.begin_case_quiescing();
+                return Some(CaseInvalidation::new(
+                    "async_api_inventory_incomplete",
+                    "async API dependency inventory exceeded its bound or encountered an unsupported replay protocol",
+                ));
+            }
+            return self.active_case_invalidation(case_id);
+        }
         let stream_tail_report = self.inner.active_cases.stream_tail_report(case_id);
         let has_stream_tail = stream_tail_report.is_some();
         if let Some((case, mut report)) = stream_tail_report {

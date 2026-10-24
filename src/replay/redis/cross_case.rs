@@ -52,7 +52,7 @@ fn recorded_fingerprint(record: &RecordedExchange, args: &[Vec<u8>]) -> String {
 pub(in crate::replay) fn verify_candidate(
     source: &Path,
     report_path: &Path,
-    selector: &time_shift::RedisTimeShiftSelector,
+    selector: &shared_read::RedisSharedReadSelector,
 ) -> Result<Value> {
     selector.validate()?;
     exact_read(selector)?;
@@ -150,7 +150,7 @@ pub(in crate::replay) fn verify_candidate(
     }))
 }
 
-pub(in crate::replay) fn exact_read(selector: &time_shift::RedisTimeShiftSelector) -> Result<()> {
+pub(in crate::replay) fn exact_read(selector: &shared_read::RedisSharedReadSelector) -> Result<()> {
     use super::key_selector::RedisValueKeySelector;
     ensure!(
         matches!(selector.read.key, RedisValueKeySelector::Exact { .. })
@@ -166,7 +166,7 @@ pub(in crate::replay) fn exact_read(selector: &time_shift::RedisTimeShiftSelecto
 
 fn shareable(
     record: &RecordedExchange,
-    selector: &time_shift::RedisTimeShiftSelector,
+    _selector: &shared_read::RedisSharedReadSelector,
 ) -> Result<()> {
     ensure!(
         record.global_dependency_reason.is_none()
@@ -174,7 +174,19 @@ fn shareable(
             && !record.cache_snapshot_hit,
         "Redis cross-case requires an ordinary case-owned read"
     );
-    time_shift::ResponseShift::prepare(record, &[("cross-case".into(), selector.read.clone())])?;
+    ensure!(
+        record.replay_safe
+            && !record.session_setup
+            && record.outcome == DependencyExchangeOutcome::Response
+            && record.response_kind == "bulk_string"
+            && !record.response.truncated
+            && record.args.iter().all(|arg| !arg.truncated),
+        "Redis sharing requires a complete successful ordinary bulk read"
+    );
+    ensure!(
+        crate::replay::redis_bulk_payload(&record.response.decode()?)?.is_some(),
+        "Redis sharing requires one complete bulk response"
+    );
     Ok(())
 }
 
@@ -275,6 +287,14 @@ pub(in crate::replay) fn load(
                 selected.push((rule_id.clone(), record));
             }
         }
+        if !selected.is_empty() {
+            state.shared_source_directories.insert(
+                origin.clone(),
+                file.parent()
+                    .context("shared Source directory is absent")?
+                    .to_owned(),
+            );
+        }
         let mut selected_lanes = BTreeMap::<Uuid, usize>::new();
         for (_, record) in &selected {
             *selected_lanes.entry(record.connection_id).or_default() += 1;
@@ -320,7 +340,7 @@ pub(in crate::replay) fn load(
     Ok(())
 }
 
-fn selector_key(selector: &time_shift::RedisTimeShiftSelector) -> Result<String> {
+fn selector_key(selector: &shared_read::RedisSharedReadSelector) -> Result<String> {
     use super::key_selector::RedisValueKeySelector;
     let RedisValueKeySelector::Exact { value } = &selector.read.key else {
         anyhow::bail!("cross-case requires exact key");

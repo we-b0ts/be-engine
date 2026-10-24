@@ -77,7 +77,10 @@ pub(super) async fn record_exchange(
         id: Uuid::new_v4(),
         connection_id,
         sequence: pending.sequence,
-        timestamp: Utc::now(),
+        timestamp: pending
+            .ended_at
+            .map(crate::dependency::termination::observed_wall_time)
+            .unwrap_or_else(Utc::now),
         request_started_at: pending.request_started_at,
         client_addr: context.client_addr.clone(),
         target_host: context.target_host.clone(),

@@ -11,6 +11,44 @@ use super::aggregate::{
 };
 
 #[test]
+fn connection_failure_inventory_survives_summary_and_dependency_evidence() {
+    for (field, dirty) in [
+        ("unused_case", true),
+        ("failed_case", true),
+        ("matched", false),
+    ] {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("recording");
+        let mut report = report_value(6, &source.join("api"), &[("case-a", "ended")], 0);
+        report["connect_failures"] = json!({"matched_count":2,"unused_case":[],"failed_case":[]});
+        if dirty {
+            report["connect_failures"][field] = json!([{"case_id":"case-a","id":uuid::Uuid::new_v4(),"target":{"host":"cache.test","port":6379}}]);
+        }
+        assert_eq!(
+            super::build_dependency_evidence(&report)
+                .case_event_counts
+                .is_empty(),
+            !dirty
+        );
+        write_report(&source, "api", report);
+        let aggregate = aggregate_replay_reports(&source).unwrap();
+        assert_eq!(aggregate.is_dirty(), dirty);
+        assert_eq!(
+            aggregate.counts.events.network.matched_connection_failures,
+            2
+        );
+        assert_eq!(
+            aggregate.counts.events.network.unused_connection_failures,
+            usize::from(field == "unused_case")
+        );
+        assert_eq!(
+            aggregate.counts.events.network.failed_connection_failures,
+            usize::from(field == "failed_case")
+        );
+    }
+}
+
+#[test]
 fn mysql_transaction_semantics_are_reported_without_relabeling_historical_reports() {
     for semantics in [None, Some("first_write_through_end_v1")] {
         let temp = TempDir::new().unwrap();

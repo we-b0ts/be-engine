@@ -39,15 +39,5 @@ fn sources(rule: &ReplayDependencyRule) -> Vec<(String, SigningKeySource)> {
             }
         }
     }
-    if let Some(http) = &rule.http {
-        for (pointer, field) in &http.json.fields {
-            if let crate::policy::HttpJsonField::Jwt { signing_key, .. } = field {
-                sources.push((
-                    pointer.clone(),
-                    super::super::native_projection::startup_key(signing_key),
-                ));
-            }
-        }
-    }
     sources
 }

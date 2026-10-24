@@ -84,10 +84,14 @@ target repair, migration route, blocker status, or completion state.
 ## Unified Policy Boundary
 
 `project.policy` names one `traffic-policy/v2` document, normally
-`.traffic-e2e/policy.yaml`. Declare persistent physical fields under `resources`
-and API output fields under `responses`; retain contextual/stateful effects in
-`rules`. Named resource references and `field_ref` reuse identity and strategy
-without duplicating them per SQL or command. See
+`.traffic-e2e/policy.yaml`. Declare one global JSON field-format map under
+`json.fields`, independent of APIs, SSE events, database columns and cache keys.
+JSON-valued columns are recognized automatically; native MySQL time types use
+protocol metadata. Declare otherwise explicit scalar formats under
+`mysql.tables.<name>.fields` with a physical `pattern`. Identity correspondence
+is maintained internally from complete typed Source values; rules describe
+formats only. Retain additional contextual/stateful effects in `rules` and
+existing typed resource declarations. See
 [resource-field contracts](../../../../docs/resource-field-contracts.md) for
 schema, supported carriers, conditions and clock relationships. Current bounded
 evidence supplies discovery and capability metadata; it does not supply Source proof. During managed rewrites, the backend-rewrite skill owns the single

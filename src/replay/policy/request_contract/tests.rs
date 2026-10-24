@@ -431,7 +431,7 @@ fn rpush_timestamp_rules_compose_with_explicit_integer_id_captures() {
         )
         .unwrap()
         .unwrap();
-    dynamic.commit("case", normalized.decision);
+    dynamic.commit("case", normalized.decision).unwrap();
     runtime.commit(decision).unwrap();
     let changed = args(&["events", r#"{"id":10,"timestamp":2000,"stable":"keep"}"#]);
     assert!(

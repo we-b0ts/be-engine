@@ -14,18 +14,19 @@ use serde_json::Value;
 
 use super::manifest::Bundle;
 use crate::{
-    policy::{CompiledPolicy, CompiledRule, NativeEffect, Protocol, Surface},
+    policy::{CompiledPolicy, NativeEffect, Protocol, Surface},
     policy_evidence::{TargetRole, WitnessManifest},
     rewrite::model::RewriteState,
     value_contract::json::AnchorClocks,
 };
 
 mod api;
+mod async_api;
 pub(super) mod dependency;
+mod global_values;
 mod identities;
 mod mysql_candidates;
 mod payload;
-mod redis_fields;
 mod resource;
 mod session;
 mod source;
@@ -91,32 +92,44 @@ pub(super) fn verify(
     identities::require_replay(policy, selected, &mut result);
     source::verify(root, state, bundle, policy, selected, &mut result)?;
     let (scope, mut foreign) = resource::prepare(root, state, bundle, policy, selected)?;
+    global_values::verify(root, bundle, policy, selected, &mut result)?;
+    global_values::global_trace(state, bundle, policy, selected, &mut result)?;
     payload::verify(root, bundle, policy, selected, &mut result)?;
     let resource_ids = resource::selected(policy, selected);
     for other in &mut foreign {
+        global_values::verify(root, other, policy, &resource_ids, &mut result)?;
         payload::verify(root, other, policy, &resource_ids, &mut result)?;
         bundle.cases.append(&mut other.cases);
         bundle.artifacts.append(&mut other.artifacts);
     }
     result.resource_scope = scope;
+    async_api::verify(bundle, policy, selected, &mut result)?;
 
     session::verify(root, bundle, policy, selected, &mut result)?;
     for id in selected {
-        let declaration_covered = policy.origins.get(id).is_some_and(|origin| {
-            // A field declaration applies to reads and writes. One observed
-            // physical field proves its schema; explicit input rewriting still
-            // needs a response witness of its own.
-            let comparison_only = policy
-                .rules
-                .iter()
-                .any(|rule| rule.rule.id == *id && rule.delivery_time.is_empty());
-            comparison_only
-                && policy.origins.iter().any(|(peer, other_origin)| {
-                    origin == other_origin && result.rules.get(peer).is_some_and(|count| *count > 0)
-                })
-        });
+        let cleared_global = id == crate::policy::GLOBAL_JSON_ID
+            && policy
+                .global_json
+                .as_ref()
+                .is_some_and(|json| json.fields.is_empty())
+            || id == "global.mysql"
+                && policy
+                    .mysql
+                    .as_ref()
+                    .is_some_and(|mysql| mysql.tables.is_empty())
+            || id == "global.redis"
+                && policy
+                    .redis
+                    .as_ref()
+                    .is_some_and(|redis| redis.keys.is_empty())
+            || id == crate::policy::GLOBAL_HTTP_ID
+                && policy
+                    .http
+                    .as_ref()
+                    .is_some_and(|http| http.headers.is_empty())
+            || id == crate::policy::ASYNC_API_ID && policy.async_api.is_empty();
         ensure!(
-            result.rules.get(id).is_some_and(|n| *n > 0) || declaration_covered,
+            result.rules.get(id).is_some_and(|n| *n > 0) || cleared_global,
             "rule {id:?} selects no complete Source witness in this attempt"
         );
     }

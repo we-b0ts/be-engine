@@ -1,5 +1,4 @@
 mod mysql;
-pub(in crate::replay) mod mysql_response;
 mod mysql_time;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -128,8 +127,6 @@ pub(super) struct MysqlSelector {
     pub(super) params: BTreeMap<usize, DynamicValueRule>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) sql_values: BTreeMap<usize, MysqlTimeValueRule>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) response_time_shift: BTreeMap<String, mysql_response::MysqlResponseTimeField>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -151,13 +148,6 @@ pub(super) struct MysqlTimeFieldRule {
 pub(super) struct HttpSelector {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) multipart: Option<super::request_contract::config::MultipartRule>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) headers: BTreeMap<String, super::http_headers::HttpHeaderRule>,
-    #[serde(
-        default,
-        skip_serializing_if = "super::http_json::HttpJsonRules::is_empty"
-    )]
-    pub(super) json: super::http_json::HttpJsonRules,
     pub(super) method: String,
     pub(super) path: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -305,6 +295,19 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
             .map(|r| r.rule.id.clone())
             .chain(
                 compiled
+                    .global_json
+                    .iter()
+                    .map(|_| crate::policy::GLOBAL_JSON_ID.to_owned()),
+            )
+            .chain(compiled.mysql.iter().map(|_| "global.mysql".to_owned()))
+            .chain(
+                compiled
+                    .redis
+                    .iter()
+                    .map(|_| crate::policy::GLOBAL_REDIS_ID.to_owned()),
+            )
+            .chain(
+                compiled
                     .native
                     .iter()
                     .filter(|rule| {
@@ -312,8 +315,6 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
                             rule.rule.effect,
                             crate::policy::NativeEffect::Identity(_)
                                 | crate::policy::NativeEffect::RedisSequence(_)
-                                | crate::policy::NativeEffect::RedisLock
-                                | crate::policy::NativeEffect::RedisPublishIdentity(_)
                                 | crate::policy::NativeEffect::HttpRequest(_)
                                 | crate::policy::NativeEffect::HttpClientMetadata(_)
                                 | crate::policy::NativeEffect::MysqlValues(_)
@@ -328,6 +329,12 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
             .iter()
             .filter(|r| r.rule.surface == crate::policy::Surface::ApiResponse)
             .map(|r| r.rule.id.clone())
+            .chain(
+                compiled
+                    .global_json
+                    .iter()
+                    .map(|_| crate::policy::GLOBAL_JSON_ID.to_owned()),
+            )
             .chain(
                 compiled
                     .native
@@ -393,8 +400,6 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     validate_response_rules(&document.response_rules)?;
     super::request_contract::validate_overlaps(document)?;
     super::redis_value::validate_overlaps(&document.dependency_rules)?;
-    super::http_json::validate_overlaps(&document.dependency_rules)?;
-    super::http_headers::validate_overlaps(&document.dependency_rules)?;
     let mut ids = document
         .dynamic_values
         .iter()
@@ -409,26 +414,9 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
             document.version >= 3 || rule.redis.is_none(),
             "Redis value rules require policy version 3"
         );
-        ensure!(
-            document.version >= 3
-                || rule
-                    .mysql
-                    .as_ref()
-                    .is_none_or(|mysql| mysql.response_time_shift.is_empty()),
-            "MySQL response time shift requires policy version 3"
-        );
         validate_rule(rule)?;
         super::request_contract::validate(rule)?;
-        super::http_json::validate(rule)?;
-        super::http_headers::validate(rule)?;
-        ensure!(
-            document.version >= 3 || rule.http.as_ref().is_none_or(|h| h.headers.is_empty()),
-            "HTTP header timestamp rules require policy version 3"
-        );
-        ensure!(
-            document.version >= 3 || rule.http.as_ref().is_none_or(|h| h.json.is_empty()),
-            "HTTP JSON rules require policy version 3"
-        );
+
         ensure!(
             ids.insert(rule.id.as_str()),
             "duplicate replay policy rule id {:?}",
@@ -501,7 +489,7 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                 ensure!(
                     matches!(
                         rule.redis.as_ref(),
-                        Some(super::redis_value::RedisSelector::TimeShift(_))
+                        Some(super::redis_value::RedisSelector::SharedRead(_))
                     ),
                     "Redis recording_run scope requires a GET/HGET time-shift selector"
                 );
@@ -510,12 +498,7 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
         }
     } else {
         ensure!(
-            rule.source_evidence.is_empty()
-                || super::request_contract::is_request_rule(rule)
-                || rule
-                    .mysql
-                    .as_ref()
-                    .is_some_and(|mysql| !mysql.response_time_shift.is_empty()),
+            rule.source_evidence.is_empty() || super::request_contract::is_request_rule(rule),
             "dependency source_evidence requires recording_run scope"
         );
     }
@@ -567,15 +550,11 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
                 rule.id
             );
             ensure!(
-                !mysql.params.is_empty()
-                    || !mysql.sql_values.is_empty()
-                    || !mysql.response_time_shift.is_empty(),
-                "MySQL rule {:?} must configure params, sql_values or response_time_shift",
+                !mysql.params.is_empty() || !mysql.sql_values.is_empty(),
+                "MySQL rule {:?} must configure params or sql_values",
                 rule.id
             );
-            if !mysql.response_time_shift.is_empty() {
-                mysql_response::validate_rule(rule)?;
-            } else if !mysql.sql_values.is_empty() {
+            if !mysql.sql_values.is_empty() {
                 mysql::validate_selector(mysql)?;
             } else {
                 ensure!(
@@ -612,11 +591,9 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
             );
             ensure!(
                 !http.query.is_empty()
-                    || !http.headers.is_empty()
-                    || !http.json.is_empty()
                     || http.multipart.is_some()
                     || rule.replay_scope == ReplayScope::RecordingRun,
-                "HTTP rule {:?} must configure query fields, JSON rules, header rules or recording_run scope",
+                "HTTP rule {:?} must configure query fields, multipart or recording_run scope",
                 rule.id
             );
             for (name, field) in &http.query {
@@ -704,6 +681,9 @@ fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
 }
 
 fn validate_source_evidence(value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Ok(());
+    }
     ensure!(
         !value.is_empty() && value.trim() == value,
         "source_evidence must be non-empty and trimmed"

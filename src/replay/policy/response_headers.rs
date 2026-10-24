@@ -63,7 +63,9 @@ impl ResponseHeaderDateRule {
             "response header date format must be a supported fixed-width calendar date"
         );
         super::config::parse_timezone(&self.timezone)?;
-        crate::config::process_owned_dependencies::validate_source_evidence(&self.source_evidence)?;
+        crate::config::process_owned_dependencies::validate_optional_source_evidence(
+            &self.source_evidence,
+        )?;
         Ok(())
     }
 }

@@ -25,6 +25,19 @@ impl RequestContracts {
         store.set_record_clocks(clocks);
         store.record_batch(case, records)
     }
+    pub(super) fn time_copy_deliveries(
+        &self,
+        case: &str,
+        lookups: Vec<TimeCopyLookup>,
+        clocks: crate::value_contract::time::ClockPair,
+    ) -> Result<Vec<(serde_json::Value, VerifiedTimeCopy)>> {
+        let mut store = self.time_copies.lock().expect("time copies");
+        store.set_lookup_clocks(clocks);
+        lookups
+            .iter()
+            .filter_map(|lookup| store.delivery_prepared(case, lookup).transpose())
+            .collect()
+    }
     /// Callers prepare hashes and paths without holding the store mutex.
     pub(in crate::replay) fn time_copy_proofs(
         &self,

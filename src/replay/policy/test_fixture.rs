@@ -10,6 +10,7 @@ use crate::policy::{self as p, native as n};
 mod dependency;
 mod feedback;
 mod identity;
+pub(crate) mod redis_time;
 mod response;
 pub(crate) use feedback::*;
 
@@ -81,10 +82,40 @@ fn convert_document(
             .into(),
         );
     }
+    let mut fields = BTreeMap::new();
+    let mut native_rules = Vec::new();
+    for rule in rules {
+        let p::PolicyRule::Value(rule) = rule else {
+            native_rules.push(rule);
+            continue;
+        };
+        ensure!(
+            matches!(rule.codec, p::Codec::Json),
+            "retired codec fixture requires a native projection or exact opaque comparison"
+        );
+        for (pointer, contract) in rule.contract {
+            let format = match contract {
+                p::FieldContract::Time {
+                    format, utc_offset, ..
+                } => p::GlobalField::Time {
+                    formats: vec![p::GlobalTimeFormat { format, utc_offset }],
+                },
+                p::FieldContract::Duration { unit, .. } => p::GlobalField::Duration {
+                    formats: vec![unit],
+                },
+                p::FieldContract::Unordered => p::GlobalField::Unordered,
+                _ => anyhow::bail!("fixture needs a direct global format declaration"),
+            };
+            if let Some(existing) = fields.insert(pointer, format.clone()) {
+                ensure!(existing == format, "fixture has conflicting global formats");
+            }
+        }
+    }
     Ok(p::TrafficPolicy {
         format: p::POLICY_FORMAT.into(),
         source_revision: None,
-        rules,
+        json: (!fields.is_empty()).then_some(p::JsonPolicy { fields }),
+        rules: native_rules,
         ..Default::default()
     })
 }
@@ -149,6 +180,13 @@ pub(crate) fn install_dependency_rule(path: &Path, rule: serde_json::Value) -> R
         path.parent(),
     )?;
     let mut policy = p::parse_policy(&std::fs::read_to_string(path)?)?;
+    if let Some(json) = added.json {
+        policy
+            .json
+            .get_or_insert_with(Default::default)
+            .fields
+            .extend(json.fields);
+    }
     for added in added.rules {
         policy.rules.retain(|rule| rule.id() != added.id());
         policy.rules.push(added);
@@ -169,7 +207,7 @@ fn proof(fact: &str) -> p::Proof {
 fn proven<T>(contract: T, fact: &str) -> n::Proven<T> {
     n::Proven {
         contract,
-        proof: proof(fact),
+        proof: Some(proof(fact)),
     }
 }
 fn native(
@@ -183,7 +221,7 @@ fn native(
         id: id.into(),
         selector,
         effect,
-        proof: proof(fact),
+        proof: Some(proof(fact)),
         when,
     }
 }

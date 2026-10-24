@@ -65,6 +65,77 @@ URI paths. Capture, HTTP response acquisition and process ownership effects are
 applied once at startup. Comparison rules in the same file do not enable Replay
 or change Source business behavior. HTTP include/exclude rules still apply.
 
+An API that returns before its work finishes can retain the ordinary Case with
+`async_api` in the same policy:
+
+```yaml
+async_api:
+  POST /api/v1/responses:
+    when: {/background: true}
+    end:
+      - mysql:
+          sql: "UPDATE jobs SET status = 'completed' WHERE id = ?"
+      - redis: {operation: DEL, key: 'job:finished:*'}
+```
+
+These are illustrative terminal resources; choose the actual final dependency
+from Source behavior. An initialization access that uses the same key or SQL
+cannot also identify completion. MySQL matches the full SQL structure and fixed
+literals, ignoring whitespace and keyword case. Each `?` matches one scalar;
+prepared parameters are decoded before matching. Redis matches the operation
+and physical key, with at most one `*`. An optional `occurrence: 2` waits for the
+second successful access to the same physical key, database and endpoint when
+Source uses the same operation during initialization and final cleanup. Distinct
+keys and mirrored evidence cannot be combined to reach that count.
+Optional database and endpoint selectors
+restrict the physical resource; omitted databases inherit the root MySQL or
+Redis declaration.
+
+Source request JSON selects the asynchronous lifecycle. Dependencies remain in
+the ordinary Case after the primary response is sent. Any declared terminal
+resource, any ordinary dependency failure, or the existing common request
+deadline completes observation. There is no policy timeout or failure toggle.
+Known process-owned traffic does not end or become part of the Case. A terminal
+access observed before the primary response finishes is retained without
+truncating that response.
+
+`async-api-observation.json` records `end_reason` as `resource`,
+`dependency_failure`, or `timeout`. The latter two stop Source through normal
+recording supervision so its detached worker cannot leak into another Case.
+Admitted I/O retains its original ownership until the real termination and queued
+evidence have drained. The ordinary Case and recording finish normally; this is
+not a recording invalidation. Capture corruption or incomplete primary HTTP
+traffic still follows the existing failure behavior.
+
+The observation stores the precise Source-stop offset and exact `cleanup_refs`
+for admitted requests still unfinished at that boundary. Original outcomes,
+errors and partial bytes remain in the semantic trace. Replay retains those
+requests through an engine-controlled Target stop and consumes them only after
+real Target transport termination. It does not turn Recorder cleanup into a
+business response, fabricate a proxy 502, or waive unstarted ordinary resources.
+Captured HTTP prefixes may reuse global formats for complete JSON/SSE values;
+partial or unknown bytes stay exact, and no unobserved response EOF is added.
+Capture limits and prefixes that were not flushed remain capture failures.
+
+An upstream TCP connection failure retains a semantic
+`dependency_connect_failure` observation with its physical endpoint, known
+protocol, duration and the connection reset actually delivered to Source.
+Replay consumes that finite observation through a real Target connection and
+reproduces its termination. Parser, capture-storage and protocol-corruption
+errors remain recording failures; a connection-failure case does not waive them.
+For an endpoint with both successful exchanges and a failed connection, Replay
+first requires consumption of the completed Source predecessors. Overlapping
+successful and failed connections without provable physical ownership are
+rejected explicitly rather than resetting an arbitrary Target connection.
+
+Replay keeps the Case active after the HTTP response until Target has consumed
+the complete finite dependency inventory. Recorded dependency failures replay
+as the same failure; completion does not permit a different Target error or
+missing accesses. Older published cases without the observation artifact can
+reuse their immutable inventory only when it proves a configured terminal
+resource or an observed dependency failure. An unproven end requires a complete
+recording rather than granting an asynchronous exemption.
+
 Recorder accumulates observed method/path identities only after successful case
 publication. At recording finalization, `recording-run.json` adds `api_methods`,
 mapping each recorded HTTP path or pattern to its sorted, unique method list.

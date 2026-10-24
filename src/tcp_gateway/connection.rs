@@ -260,29 +260,35 @@ async fn proxy_raw_tcp(
     let id = Uuid::new_v4();
     let started = Instant::now();
     let upstream_addr = routed_upstream_addr(&state, &entry, fake_addr.port())?;
-    let mut upstream = match TcpStream::connect(upstream_addr).await {
-        Ok(upstream) => upstream,
-        Err(err) => {
-            if options.record_connection {
-                record_tcp_connection(
-                    &state,
-                    TcpConnectionRecord {
-                        id,
-                        client_addr: client_addr.clone(),
-                        domain: Some(entry.domain.clone()),
-                        fake_addr,
-                        upstream_addr: Some(upstream_addr),
-                        client_to_server_bytes: 0,
-                        server_to_client_bytes: 0,
-                        duration_ms: started.elapsed().as_millis(),
-                        error: Some(err.to_string()),
-                    },
-                )
-                .await;
-            }
-            return Err(err).with_context(|| format!("failed to connect upstream {upstream_addr}"));
+    let mut upstream = if options.record_connection {
+        let protocol = match options
+            .detected_protocol
+            .or_else(|| protocol_hint(&state, fake_addr.port()))
+        {
+            Some(DetectedProtocol::Mysql) => "mysql",
+            Some(DetectedProtocol::Redis) => "redis",
+            _ => "tcp",
+        };
+        match crate::recorder::connect_failure::connect_upstream(
+            &state,
+            &client,
+            protocol,
+            (&entry.domain, fake_addr.port()),
+            upstream_addr,
+        )
+        .await
+        .with_context(|| format!("failed to connect upstream {upstream_addr}"))?
+        {
+            Some(stream) => stream,
+            None => return Ok(()),
+        }
+    } else {
+        tokio::select! {
+            upstream = TcpStream::connect(upstream_addr) => upstream?,
+            _ = state.inner.active_cases.wait_for_quiescing() => return Ok(()),
         }
     };
+
     upstream
         .set_nodelay(true)
         .context("failed to enable TCP_NODELAY for TCP gateway upstream")?;

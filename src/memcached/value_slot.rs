@@ -68,6 +68,14 @@ pub(crate) fn witness_values(bytes: &[u8], response: bool) -> Result<Vec<(Vec<u8
         }
         return Ok(vec![(key, decode(&envelope["value"])?)]);
     }
+    if !envelope["command"].as_str().is_some_and(|command| {
+        matches!(
+            command.to_ascii_lowercase().as_str(),
+            "get" | "gets" | "gat" | "gats"
+        )
+    }) {
+        return Ok(Vec::new());
+    }
     let frames = envelope["response_frames"]
         .as_array()
         .context("response witness has no frame inventory")?
@@ -233,6 +241,26 @@ fn token_ranges(line: &[u8]) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_replies_have_no_value_slot_and_malformed_gets_remain_errors() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let mut envelope = serde_json::json!({"protocol":"memcached","wire_protocol":"text","command":"set",
+            "key":STANDARD.encode(b"key"),"response_frames":[STANDARD.encode(b"STORED\r\n")]});
+        assert!(
+            witness_values(&serde_json::to_vec(&envelope).unwrap(), true)
+                .unwrap()
+                .is_empty()
+        );
+        envelope["command"] = "get".into();
+        assert!(witness_values(&serde_json::to_vec(&envelope).unwrap(), true).is_err());
+        envelope["response_frames"] =
+            serde_json::json!([STANDARD.encode(b"VALUE key 0 3\r\n123\r\nEND\r\n")]);
+        assert_eq!(
+            witness_values(&serde_json::to_vec(&envelope).unwrap(), true).unwrap(),
+            vec![(b"key".to_vec(), b"123".to_vec())]
+        );
+    }
 
     #[test]
     fn binary_patch_preserves_flags_key_opaque_and_cas() {

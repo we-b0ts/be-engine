@@ -38,6 +38,7 @@ pub(crate) struct LeafContext<'a> {
 pub(crate) struct LeafObservations {
     pub(crate) time_validations: usize,
     pub(crate) nonces: Vec<NonceIdentity>,
+    pub(crate) identities: Vec<crate::value_contract::identities::IdentityPair>,
 }
 
 pub(crate) struct NonceIdentity {
@@ -64,6 +65,29 @@ pub(super) fn verify(
 ) -> Result<(), Difference> {
     let observed =
         (field.verifier)(context).map_err(|error| difference(context.source_pointer, &error))?;
+    for pair in &observed.identities {
+        let source = serde_json::from_str(&pair.source).map_err(|_| {
+            difference(
+                context.source_pointer,
+                "invalid authenticated identity scalar",
+            )
+        })?;
+        let target = serde_json::from_str(&pair.target).map_err(|_| {
+            difference(
+                context.source_pointer,
+                "invalid authenticated identity scalar",
+            )
+        })?;
+        decisions
+            .identities
+            .observe(&source, &target)
+            .map_err(|_| {
+                difference(
+                    context.source_pointer,
+                    "authenticated nonce bijection changed",
+                )
+            })?;
+    }
     for nonce in &observed.nonces {
         let values = decisions
             .nonces
@@ -116,6 +140,7 @@ pub(super) fn compare(
 }
 
 fn merge(decisions: &mut Decisions, comparison: Comparison) -> Result<(), &'static str> {
+    decisions.identities.merge(comparison.identities)?;
     decisions.evaluated.extend(comparison.evaluated);
     for (rule_id, count) in comparison.time_validations {
         *decisions.time_validations.entry(rule_id).or_default() += count;
@@ -173,6 +198,7 @@ mod tests {
             );
             Ok(LeafObservations {
                 time_validations: 0,
+                identities: vec![],
                 nonces: vec![NonceIdentity::new(
                     "/nonce".into(),
                     context.source.as_str().unwrap(),

@@ -287,7 +287,10 @@ impl RequestContracts {
             "Redis resource field relationships changed: {:?}",
             resource_fields.differences
         );
-        decision.identity = Some(self.identity_decision(case, &resource_fields)?);
+        self.merge_identity_decision(
+            &mut decision,
+            self.identity_decision(case, &resource_fields)?,
+        )?;
         decision.ids.extend(resource_fields.evaluated);
         for (id, count) in resource_fields.time_validations {
             *decision.unified_time_validations.entry(id).or_default() += count;

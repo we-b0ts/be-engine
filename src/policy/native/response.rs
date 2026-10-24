@@ -147,8 +147,6 @@ pub struct TemplateToken {
     pub length: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decoded_bytes: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binding: Option<String>,
 }
 
 /// Cipher-only key resolution. JWT signing never consumes Source defaults.

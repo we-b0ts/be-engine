@@ -370,65 +370,45 @@ a time anchor, and missing anchors fail closed.
 
 ## HTTP JSON request timestamps
 
+HTTP JSON uses the one global field strategy, without a native HTTP body effect:
+
 ```yaml
-- id: query-window
-  protocol: http
-  case: {method: POST, path: /windows/*}
-  target: {host: metrics.internal, port: 443}
-  source_evidence: 'WindowClient:query sets end to current seconds and start to end minus its lookback'
-  http:
-    method: POST
-    path: /query
-    json:
-      time:
-        /start: {time: preserve_relative, format: unix_seconds}
-        /end: {time: preserve_relative, format: unix_seconds}
+format: traffic-policy/v2
+json:
+  fields:
+    /start: {kind: time, formats: [unix_seconds]}
+    /end: {kind: time, formats: [unix_seconds]}
 ```
 
-Each selected field preserves its offset from its own **dependency request**
-start, with the fixed inclusive 5s tolerance. The recorded anchor is
-`request_started_at`, or recorded completion minus duration for older captures;
-Replay captures the target anchor when the outbound HTTP request starts. Missing
-clocks fail closed. No configured clock, business-specific offset or outgoing
-request rewrite is involved. Fields within the same clock group (one shared
-unnamed group by default) must share the same shift within 1 microsecond,
-preserving the recorded start/end window. Independent reads can use the explicit
-`clock_group` contract above.
+The same paths apply to every decoded JSON carrier. Differing timestamps preserve
+relative offsets using independent request clocks and the fixed five-second
+tolerance. HTTP dependencies use their own request start, independently of the
+inbound API clock. Equal scalar values need no timestamp comparison; unknown
+formats remain exact. Missing fields on both sides are inactive, while a field
+present on only one side differs. Null remains exact.
 
-Supported formats are `unix_seconds`, `unix_milliseconds`, `unix_microseconds`,
-`rfc3339` and `iso8601_naive` as described below.
-JSON numeric categories remain checked. Select 1..32 exact non-root JSON
-pointers; wildcard and overlapping pointers are rejected. Bodies must be complete
-unique-member JSON of at most 1 MiB. Other JSON members, array ordering, path,
-query and identity headers remain exact, including authentication. The rule
-requires an explicit inbound case method/path and exact dependency host/port.
-Overlapping HTTP normalizations or dynamic captures at that endpoint and case
-are rejected. Case ownership and finite response consumption are unchanged.
-
-Discovery exposes `http_json_request_time` failure candidates without body or
-header values. Use the existing `rule plan --dependency-request RULE_JSON`,
-apply, then fresh Replay workflow below. Complete existing HTTP recordings can
-be reused without recording again.
-
-When several request bodies share an endpoint, planning pairs witnesses by all
-JSON fields outside the declared time pointers before validating timestamps.
-Candidates with different stable fields are skipped. A matching pair still
-requires valid timestamp types, request-relative times and parameter differences;
-planning requires at least one verified same-case pair. Fresh Replay continues
-to enforce stable fields and finite response consumption.
+All unselected JSON fields, HTTP method, endpoint, path, query, headers and finite
+consumption retain their comparisons. Use the unified `rule plan --file ...
+--evidence ...` and `rule apply` workflow, then fresh Replay. Original authenticated
+observations preserve complete payloads and distinguish independent Target
+requests from inputs delivered by Replay. Several Source bodies at one endpoint
+remain separate finite candidates; a format never establishes request ownership.
 
 ## HTTP multipart boundary
 
 ```yaml
+format: traffic-policy/v2
+rules:
 - id: multipart-upload
-  protocol: http
-  case: {method: POST, path: /attachments/*}
-  target: {host: upload.internal, port: 80}
-  source_evidence: 'Uploader:build generates a fresh multipart boundary'
-  http:
-    method: POST
+  match:
+    api: POST /attachments/*
+    resource: {protocol: http, endpoint: 'upload.internal:80'}
+    operation: POST
     path: /upload
-    multipart: {boundary: normalize}
+  effect: {kind: http_request, multipart_boundary: true}
+  proof:
+    source: Uploader:build
+    fact: Source generates a fresh multipart boundary.
 ```
 
 Only matching multipart delimiters and the Content-Type boundary may differ.

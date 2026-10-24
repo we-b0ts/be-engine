@@ -227,12 +227,20 @@ impl Capture {
             .flatten()
             .filter(|observed| self.context.accepts_server(*observed));
         let terminated = server.or(client);
-        self.error = capture_error.or(error).or_else(|| {
+        let source_stop = engine_stopped
+            && capture_error.is_none()
+            && self.prefix.is_complete()
+            && self
+                .context
+                .state
+                .inner
+                .active_cases
+                .source_stop_requested_for(&self.context.targets);
+        self.error = capture_error.or_else(|| {
             engine_stopped.then(|| {
-                "HTTP dependency response ended during engine cleanup before capture completed"
-                    .into()
+                "HTTP dependency response ended during engine cleanup before capture completed".into()
             })
-        });
+        }).or(error);
         if server.is_none()
             && client.is_some()
             && !self.prefix.is_complete()
@@ -271,6 +279,7 @@ impl Capture {
         event.timestamp = Utc::now();
         event.duration_ms = duration.as_millis();
         if let Some(observed) = terminated {
+            event.timestamp = crate::dependency::termination::observed_wall_time(observed.at);
             event.outcome = crate::DependencyExchangeOutcome::Terminated(observed.termination);
         }
         event.response_body = Some(crate::recorder::capture_body_with_original_len(
@@ -279,7 +288,7 @@ impl Capture {
         ));
         event.response_stream = Some(self.stream.clone());
         event.error = self.error.clone();
-        if !self.stream.complete {
+        if !self.stream.complete && !source_stop {
             let reason = event.error.as_deref().unwrap_or(
                 "HTTP dependency stream ended without EOF or observed client termination",
             );

@@ -1,5 +1,4 @@
 //! Assert independently observed semantic messages and complete connection closure.
-use crate::policy::CompiledRule;
 use crate::value_contract::json::{Comparison, Difference};
 use anyhow::{Result, ensure};
 use serde_json::Value;
@@ -55,11 +54,11 @@ use crate::interaction::model::{
 pub(super) fn compare(
     expected: Option<&OutputObservation>,
     actual: Option<&OutputObservation>,
-    rules: &[&CompiledRule],
+    global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
-    let checked = compare_outputs(expected, actual, rules, times)?;
+    let checked = compare_outputs_global(expected, actual, global, times)?;
     report.identity_pairs.extend(checked.identity_pairs());
     report.applied_body_rule_ids.extend(checked.evaluated);
     report.differences.extend(
@@ -72,10 +71,10 @@ pub(super) fn compare(
 }
 
 /// One adapter serves Source preflight, independent Target proof and Replay.
-pub(crate) fn compare_outputs(
+pub(crate) fn compare_outputs_global(
     expected: Option<&OutputObservation>,
     actual: Option<&OutputObservation>,
-    rules: &[&CompiledRule],
+    global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
 ) -> Result<Comparison> {
     let mut report = Comparison::default();
@@ -118,16 +117,37 @@ pub(crate) fn compare_outputs(
     }
     for (index, (expected, actual)) in expected_events.iter().zip(&actual_events).enumerate() {
         let pointer = format!("$interaction/events/{index}");
-        if sse && !rules.is_empty() {
+        if sse && global.is_some() {
             let first_difference = report.differences.len();
-            report.merge_and_validate(contracts::compare_message(
-                expected, actual, rules, times, &pointer,
-            ));
+            let mut comparison =
+                contracts::compare_message(expected, actual, global, times, &pointer);
+            comparison.scope_schema_clocks(index);
+            report.merge_and_validate(comparison);
             for diff in &mut report.differences[first_difference..] {
                 if diff.pointer.is_empty() {
                     diff.pointer = pointer.clone();
                 }
             }
+        } else if let Some(global) = global {
+            if expected.kind != actual.kind {
+                mismatch(&mut report, &pointer);
+            }
+            let mut comparison = crate::value_contract::global::compare(
+                &expected.decode()?,
+                &actual.decode()?,
+                global,
+                &[],
+                crate::value_contract::json::AnchorClocks {
+                    case: times,
+                    dependency: times,
+                    ..Default::default()
+                },
+            )?;
+            comparison.scope_schema_clocks(index);
+            for difference in &mut comparison.differences {
+                difference.pointer = format!("{pointer}/data{}", difference.pointer);
+            }
+            report.merge_and_validate(comparison);
         } else if expected != actual {
             mismatch(&mut report, &pointer);
         }

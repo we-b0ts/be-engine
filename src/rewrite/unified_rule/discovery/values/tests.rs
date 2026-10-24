@@ -44,29 +44,22 @@ fn real_array_elements_and_cases_share_one_proof_required_draft() {
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
     assert_eq!(
-        candidate["draft_rule"]["contract"]["/blocks/*/timestamp"]["clock_scope"],
-        "array_element"
+        candidate["draft_policy"]["json"]["fields"]["/blocks/*/timestamp"]["formats"],
+        json!(["unix_seconds"])
     );
-    assert_eq!(candidate["binding_count"], 8);
+    assert_eq!(candidate["location_count"], 8);
     assert_eq!(
-        candidate["bindings"][0],
+        candidate["locations"][0],
         json!({"witness_id":"case-a","pointer":"/blocks/0/timestamp"})
     );
     assert_eq!(
-        candidate["bindings"][7],
+        candidate["locations"][7],
         json!({"witness_id":"case-b","pointer":"/blocks/1/timestamp"})
     );
     assert_eq!(candidate["plan_ready"], false);
     assert_eq!(candidate["source_proof_required"], true);
-    assert_eq!(
-        candidate["draft_rule"]["proof"],
-        json!({"source":"","fact":""})
-    );
     assert_eq!(candidate["mechanism"], "time");
-    let mut rule = candidate["draft_rule"].clone();
-    rule["proof"] = json!({"source":"fixture.rs:create_blocks","fact":"Source independently reads the request-relative creation clock for each block; IDs, order and other values remain exact"});
-    let policy =
-        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[rule]})).unwrap();
+    let policy = serde_json::from_value(candidate["draft_policy"].clone()).unwrap();
     crate::policy::compile_policy(&policy).unwrap();
 }
 
@@ -82,7 +75,7 @@ fn numeric_object_keys_remain_literal_and_do_not_declare_an_array_clock() {
     assert_eq!(drafts.values.len(), 2);
     for (index, candidate) in drafts.values.iter().enumerate() {
         let pointer = format!("/blocks/{index}/at");
-        let contract = &candidate["draft_rule"]["contract"][&pointer];
+        let contract = &candidate["draft_policy"]["json"]["fields"][&pointer];
         assert_eq!(contract["kind"], "time");
         assert!(contract.get("clock_scope").is_none());
     }
@@ -96,14 +89,14 @@ fn nested_arrays_keep_real_array_boundaries_and_escaped_object_members() {
     let candidates = drafts.candidates();
     assert_eq!(candidates.len(), 1);
     assert_eq!(
-        candidates[0]["draft_rule"]["contract"]["/0/*/~0~1/*/at"]["clock_scope"],
-        "array_element"
+        candidates[0]["draft_policy"]["json"]["fields"]["/0/*/~0~1/*/at"]["formats"],
+        json!(["unix_seconds"])
     );
-    assert_eq!(candidates[0]["bindings"][0]["pointer"], "/0/0/~0~1/0/at");
+    assert_eq!(candidates[0]["locations"][0]["pointer"], "/0/0/~0~1/0/at");
 }
 
 #[test]
-fn array_draft_ids_ignore_case_order_and_element_count_and_bound_binding_summaries() {
+fn array_draft_ids_ignore_case_order_and_element_count_and_bound_location_summaries() {
     let mut first = Drafts::default();
     observe(
         &mut first,
@@ -146,16 +139,16 @@ fn array_draft_ids_ignore_case_order_and_element_count_and_bound_binding_summari
             .collect::<Vec<_>>()
     );
     let candidate = &first.candidates()[0];
-    assert_eq!(candidate["binding_count"], 26);
-    assert_eq!(candidate["bindings"].as_array().unwrap().len(), LIMIT);
-    assert_eq!(candidate["bindings_omitted"], 6);
+    assert_eq!(candidate["location_count"], 26);
+    assert_eq!(candidate["locations"].as_array().unwrap().len(), LIMIT);
+    assert_eq!(candidate["locations_omitted"], 6);
     observe(
         &mut first,
         block_times(25, 0),
         block_times(25, 60),
         "case-many",
     );
-    assert_eq!(first.candidates()[0]["binding_count"], 26);
+    assert_eq!(first.candidates()[0]["location_count"], 26);
 }
 
 #[test]
@@ -193,7 +186,7 @@ fn wildcard_candidate_paging_keeps_ids_and_no_identity_drafts_are_inferred() {
         all.values[0]["candidate_id"]
     );
     assert!(
-        next.values[0]["draft_rule"]["contract"]
+        next.values[0]["draft_policy"]["json"]["fields"]
             .get("/field20/*/at")
             .is_some()
     );
@@ -221,9 +214,9 @@ fn repeated_unordered_fields_merge_without_inventing_time_or_identity_permission
     );
     let candidates = drafts.candidates();
     assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0]["binding_count"], 2);
+    assert_eq!(candidates[0]["location_count"], 2);
     assert_eq!(
-        candidates[0]["draft_rule"]["contract"]["/items/*/members"],
+        candidates[0]["draft_policy"]["json"]["fields"]["/items/*/members"],
         json!({"kind":"unordered"})
     );
     assert_eq!(candidates[0]["plan_ready"], false);
@@ -255,7 +248,10 @@ fn naive_sql_and_json_times_are_only_proof_required_drafts_with_real_clock_valid
         );
         assert_eq!(drafts.values.len(), 1);
         let draft = &drafts.values[0];
-        assert_eq!(draft["draft_rule"]["contract"]["/at"]["format"], format);
+        assert_eq!(
+            draft["draft_policy"]["json"]["fields"]["/at"]["formats"],
+            json!([format])
+        );
         assert_eq!(draft["plan_ready"], false);
         assert_eq!(draft["source_proof_required"], true);
         let mut invalid = Drafts::default();
@@ -267,4 +263,34 @@ fn naive_sql_and_json_times_are_only_proof_required_drafts_with_real_clock_valid
         );
         assert!(invalid.values.is_empty());
     }
+}
+
+#[test]
+fn format_drafts_deduplicate_across_api_and_carrier_positions() {
+    let mut drafts = Drafts::default();
+    for (surface, api) in [
+        ("api.response", "GET /one"),
+        ("dependency.request", "POST /two"),
+    ] {
+        let base = json!({"surface":surface,"match":{"api":api},"slot":"body"});
+        let clocks = AnchorClocks {
+            dependency: clocks().case,
+            ..clocks()
+        };
+        drafts
+            .collect(
+                &json!({"at":1_760_572_800_i64}),
+                &json!({"at":1_760_572_860_i64}),
+                &JsonLocation::default(),
+                &base,
+                api,
+                clocks,
+                0,
+            )
+            .unwrap();
+    }
+    assert_eq!(drafts.seen.len(), 1);
+    let candidates = drafts.candidates();
+    assert_eq!(candidates[0]["location_count"], 2);
+    assert!(candidates[0]["draft_policy"].get("rules").is_none());
 }

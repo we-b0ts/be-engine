@@ -5,35 +5,47 @@ use serde_json::json;
 mod transaction;
 
 fn rule() -> serde_json::Value {
-    json!({"id":"members","surface":"api.response","match":{"api":"GET /api"},"slot":"body","codec":"json",
-        "contract":{"/members":{"kind":"unordered"}},"proof":{"source":"src/members.rs:12","fact":"Source uses an unordered set"}})
+    json!({"format":"traffic-policy/v2","json":{"fields":{"/members":{"kind":"unordered"}}}})
 }
 
 fn record(path: &Path) -> UnifiedRulePlanRecord {
     serde_json::from_value(json!({"policy":path,"original":"original","updated":"updated",
         "identity":{"workflow":"workflow","recording_run":"run","api":"GET /api","group":"group","source_revision":"source",
             "case_inventory":"inventory","case_source":"cases","attempt":1,"target_inputs":"target","engine":"engine"},
-        "artifacts":[],"preflight":{"source_validations":1,"independent_target_validations":0,"derived_delivery_validations":0,"missing_target_witnesses":1,"rules":{"members":1}},
-        "rule_ids":["members"]})).unwrap()
+        "artifacts":[],"preflight":{"source_validations":1,"independent_target_validations":0,"derived_delivery_validations":0,"missing_target_witnesses":1,"rules":{"global.json":1}},
+        "source_proofs":{"rules":[],"sha256":crate::policy_evidence::digest(b"[]")},
+        "rule_ids":["global.json"]})).unwrap()
 }
 
 #[test]
 fn single_list_and_document_use_the_same_schema_and_compiler() {
-    let single = rule();
+    let native = || {
+        json!({"id":"generated","match":{"api":"GET /api"},"effect":{"kind":"response_generated","fields":{
+        "/id":{"contract":{"kind":"uuid_v4"},"proof":{"source":"src/handler.rs:12","fact":"Source generates a response UUID"}}
+    }},"proof":{"source":"src/handler.rs:12","fact":"Source generates a response UUID"}})
+    };
+    let single = native();
     let expected = parse_proposal(&single.to_string()).unwrap();
     assert_eq!(
         parse_proposal(&json!([single]).to_string()).unwrap(),
         expected
     );
     assert_eq!(
-        parse_proposal(&json!({"format":"traffic-policy/v2","rules":[rule()]}).to_string())
+        parse_proposal(&json!({"format":"traffic-policy/v2","rules":[native()]}).to_string())
             .unwrap(),
         expected
     );
-    let mut no_proof = rule();
+    let mut no_proof = native();
     no_proof["proof"]["source"] = json!("");
     assert!(parse_proposal(&no_proof.to_string()).is_err());
-    assert!(parse_proposal(&json!([rule(), rule()]).to_string()).is_err());
+    assert!(parse_proposal(&json!([native(), native()]).to_string()).is_err());
+    let global =
+        json!({"format":"traffic-policy/v2","json":{"fields":{"/members":{"kind":"unordered"}}}});
+    assert_eq!(
+        parse_proposal(&global.to_string()).unwrap(),
+        parse_proposal(&json!({"format":"traffic-policy/v2","json":global["json"]}).to_string())
+            .unwrap()
+    );
 }
 
 #[test]

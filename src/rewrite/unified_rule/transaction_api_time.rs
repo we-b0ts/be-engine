@@ -3,28 +3,16 @@ use super::*;
 
 const SOURCE_START: i64 = 1_792_108_800;
 
-fn proposal(compact: bool) -> serde_json::Value {
-    let (relative, request) = if compact {
-        (
-            json!({"relative_time":"unix_seconds"}),
-            json!({"request_time":"unix_seconds"}),
-        )
-    } else {
-        (
-            json!({"kind":"time","format":"unix_seconds","relation":"preserve_offset"}),
-            json!({"kind":"time","format":"unix_seconds","relation":"request_window"}),
-        )
-    };
-    json!({"id":"response-clock","surface":"api.response","match":{"api":"GET /api"},
-        "slot":"body","codec":"json","contract":{
-            "/expires_at":relative,"/created_at":request,
-            "/remaining":{"kind":"duration","unit":"seconds"}},
-        "proof":{"source":"responses.py:create","fact":"Source uses the request clock for creation, expiry and remaining lifetime"}})
+fn proposal(_compact: bool) -> serde_json::Value {
+    json!({"format":"traffic-policy/v2","json":{"fields":{
+        "/expires_at":{"kind":"time","formats":["unix_seconds"]},
+        "/created_at":{"kind":"time","formats":["unix_seconds"]}
+    }}})
 }
 
 fn response(offset: i64) -> serde_json::Value {
     json!({"expires_at":SOURCE_START+3600+offset,"created_at":SOURCE_START+offset,
-        "remaining":3600+offset,"business":"exact"})
+        "remaining":3600,"business":"exact"})
 }
 
 fn fixture() -> Fixture {
@@ -71,7 +59,7 @@ fn api_time_plan_apply_validates_source_and_independent_target_request_clocks() 
         assert_eq!(report["preflight"]["source_validations"], 1);
         assert_eq!(report["preflight"]["independent_target_validations"], 1);
         assert_eq!(report["preflight"]["missing_target_witnesses"], 0);
-        assert_eq!(report["preflight"]["rules"]["response-clock"], 1);
+        assert_eq!(report["preflight"]["rules"]["global.json"], 1);
         assert_eq!(report["verified"], false);
         let applied = apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
         assert_eq!(
@@ -93,12 +81,12 @@ fn api_time_preflight_rejects_wrong_offsets_windows_and_unselected_values() {
         (
             "/created_at",
             json!(SOURCE_START + 70),
-            "timestamp is outside the fixed five-second anchor window",
+            "time difference does not preserve the anchor difference",
         ),
         (
             "/remaining",
             json!(3670),
-            "time difference does not preserve the anchor difference",
+            "unselected value or type changed",
         ),
         (
             "/business",

@@ -91,6 +91,16 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
     assert_eq!(fixture.releases.load(Ordering::SeqCst), 1);
     assert!(fixture.token.lock().unwrap().is_none());
     source.await.unwrap();
+    if record_streaming {
+        assert!(
+            state
+                .inner
+                .active_cases
+                .wait_for_no_active_case(Duration::from_secs(2))
+                .await,
+            "the recorded SSE case must publish before its admission guard is released"
+        );
+    }
     let run_dir = std::fs::read_dir(temp.path().join(".traffic-e2e/local/artifacts/recordings"))
         .unwrap()
         .next()
@@ -103,13 +113,6 @@ pub(super) async fn recording_policy_through_relay(record_streaming: bool) {
         assert!(!run_dir.join("failed").exists());
         return;
     }
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while !run_dir.join("apis/api-example").exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
     let case_dir = std::fs::read_dir(run_dir.join("apis/api-example"))
         .unwrap()
         .next()

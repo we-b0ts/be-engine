@@ -30,7 +30,6 @@ pub(in crate::replay) struct NativeScopeGuard {
     pub selector: n::NativeMatch,
     pub when: Option<SourceCondition>,
     pub references: Vec<crate::policy::Resource>,
-    pub mysql_read_back: Vec<n::MysqlIdentityReadBack>,
 }
 
 #[derive(Debug)]
@@ -51,14 +50,6 @@ impl NativeScopeGuard {
                     .references
                     .iter()
                     .map(|reference| reference.contract.resource.clone())
-                    .collect(),
-                _ => vec![],
-            },
-            mysql_read_back: match &rule.effect {
-                n::NativeEffect::Identity(effect) => effect
-                    .mysql_read_back
-                    .iter()
-                    .map(|entry| entry.contract.clone())
                     .collect(),
                 _ => vec![],
             },
@@ -95,8 +86,6 @@ pub(in crate::replay) fn project_native(
                 .dynamic_values
                 .push(identity::project(rule, effect)?),
             n::NativeEffect::RedisSequence(_)
-            | n::NativeEffect::RedisLock
-            | n::NativeEffect::RedisPublishIdentity(_)
             | n::NativeEffect::HttpRequest(_)
             | n::NativeEffect::MysqlValues(_)
             | n::NativeEffect::FiniteSharing(_) => output
@@ -287,7 +276,10 @@ fn scalar(value: &crate::policy::SourceScalar) -> serde_json::Value {
     }
 }
 
-fn proof(value: &crate::policy::Proof) -> String {
+fn proof(value: Option<&crate::policy::Proof>) -> String {
+    let Some(value) = value else {
+        return String::new();
+    };
     use sha2::{Digest, Sha256};
     // The domain projection carries only a compact lookup certificate. Complete
     // inline proof remains in the compiled rule and every plan artifact.

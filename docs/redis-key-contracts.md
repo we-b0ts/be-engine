@@ -1,5 +1,33 @@
 # Redis key request contracts
 
+Current key-local permissions use `redis.keys` without an API selector:
+
+```yaml
+redis:
+  database: 0
+  keys:
+    'chat:streaming:*': {resource: cache, append_stream: true, expiry_refresh: true}
+    'chat:cancel:*': {resource: cache, read_commutation: true}
+    'chat:streaming:text_block:*':
+      kind: identity
+      formats: [{prefix: text-, format: decimal}]
+      resource: cache
+      read_back: true
+    token_v2:
+      resource: tauth_cache
+      finite_sharing: {operation: HGET, hash_field: '3061639762'}
+```
+
+Resources retain the physical endpoint, database and authentication scope of
+each operation permission. Scalar `kind`/`formats` declarations retain their
+global key namespace; JSON values are recognized and use `json.fields`.
+`read_back` selects the existing same-key SET/DEL/GET state epochs, including
+variable GET counts. Append preserves the complete byte stream across chunks;
+read commutation retains finite read counts; expiry refresh preserves the key
+lifetime and fixed TTL. These permissions use the existing Source inventory
+validators and protocol owners. They do not exempt asynchronous dependencies.
+Plan proposals supply a local `proof`; runtime rendering omits that evidence.
+
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
 > syntax. Use the self-contained `traffic-policy/v2` rules, `project.policy`,
@@ -16,7 +44,7 @@ database and inbound `case: {method, path}`. Published recordings stay unchanged
 Keys outside a declared contract keep byte equality.
 An overlapping legacy `dynamic_values` capture cannot be combined with a key
 contract on the same command; declare selected JSON references in that key
-contract so comparison and binding commit stay atomic.
+contract so comparison and correspondence commit stay atomic.
 
 ## Fixed time windows
 
@@ -67,7 +95,6 @@ windows computed near inbound admission, rather than arbitrarily delayed jobs.
     key: {prefix: 'sessions:'}
     key_contract:
       kind: capture
-      binding: session-id
       template: 'sessions:{value}'
       format: {kind: base64url, bytes: 18}
     commands:
@@ -76,7 +103,7 @@ windows computed near inbound admission, rather than arbitrarily delayed jobs.
         1:
           json:
             /session_id:
-              identity: {binding: session-id, template: '{value}'}
+              identity: {template: '{value}'}
             /expires_at: {time: preserve_relative, format: rfc3339}
 ```
 
@@ -91,23 +118,22 @@ uses its existing independently captured inbound anchors and preserves the
 recorded expiry offset. Other JSON members, presence, scalar types, arrays,
 SET options and TTL remain exact. Null, missing and empty values do not collapse.
 
-Bindings commit only when the complete exchange matches and consumes its
+Correspondence commits only when the complete exchange matches and consumes its
 recorded response. A failed key, JSON field, time, TTL or stable argument commits
 nothing. Reusing a Source identity with a different target identity, or collapsing
-distinct Source identities onto one target identity, fails. Bindings are scoped
-to the case, endpoint, database and explicit name; a later case starts fresh.
+distinct Source identities onto one target identity, fails. Correspondence is scoped to
+the replay case; a later case starts fresh.
 
 A later SET can capture another key identity while referencing the earlier
-session binding in its JSON. For example, a digest-shaped ticket key can use
+session value in its JSON. For example, a digest-shaped ticket key can use
 `format: {kind: hex, bytes: 32}` while its `/session_id` field references
-`session-id`. A captured digest is an opaque identity: the format alone does
+the same Source value. A captured digest is an opaque identity: the format alone does
 not verify the preimage. If the preimage is already bound, an explicit reference
 can instead verify SHA256 derivation:
 
 ```yaml
 key_contract:
   kind: reference
-  binding: session-id
   template: 'session-hash:{value}'
   transform: sha256
 ```
@@ -128,9 +154,8 @@ evidence and policy identity and requires fresh Replay.
 
 For native key references whose evidence depends on an earlier committed capture,
 apply that capture and Replay before planning the dependent key reference.
-Ordinary resource identity fields instead declare their complete eligible
-MySQL/Redis/response inventory together; they do not require this staged key
-workflow. Reports retain native `key_bindings` as case/endpoint/name
+Ordinary global JSON and scalar MySQL identity formats infer correspondences
+from complete typed values internally; they do not require staged key planning. Reports retain native `key_bindings` as case/endpoint/name
 and Source/target fingerprints, without plaintext identities. A later plan can
 check its reference against that committed evidence. It cannot change or collapse
 an existing pair. Rule audits count matched captures and references separately.

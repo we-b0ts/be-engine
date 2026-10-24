@@ -409,7 +409,7 @@ fn read_back_lrange_translates_conditional_ids_and_copies_without_changing_other
 }
 
 #[test]
-fn read_back_compiler_rejects_unowned_fields_operations_and_overlapping_delivery() {
+fn read_back_compiler_rejects_unowned_fields_operations_and_duplicate_native_owners() {
     let mut resource_rule = identity_rule();
     resource_rule["match"]
         .as_object_mut()
@@ -441,19 +441,4 @@ fn read_back_compiler_rejects_unowned_fields_operations_and_overlapping_delivery
         serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[definition,overlap]}))
             .unwrap();
     assert!(crate::policy::compile_policy(&document).is_err());
-    let mut definition = identity_rule();
-    definition["effect"]["capture"]["json_pointer"] = json!("/id");
-    definition["effect"]["read_back"][0]["json_pointers"] = json!(["/id"]);
-    let other = json!({"id":"expiry","surface":"dependency.response","match":{
-        "api":"POST /tasks","resource":definition["match"]["resource"],"operation":"GET","key":{"prefix":"current:"}},
-        "slot":"value","codec":"json","contract":{"/expires_at":{"kind":"time","format":"rfc3339","relation":"preserve_offset"}},
-        "delivery":{"rebase_time":["/expires_at"]},"proof":definition["proof"]});
-    let document: crate::policy::TrafficPolicy =
-        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[definition, other]}))
-            .unwrap();
-    let error = crate::policy::compile_policy(&document).unwrap_err();
-    assert!(
-        error.to_string().contains("another delivery owner"),
-        "{error:#}"
-    );
 }

@@ -18,36 +18,6 @@ pub(crate) fn source_witness(
     Ok(serde_json::to_vec(&from_record(&record, surface)?)?)
 }
 
-pub(crate) fn witness_matches(event: &Value, rule: &crate::policy::CompiledRule) -> Result<bool> {
-    if event["event_type"] != "http_exchange" {
-        return Ok(false);
-    }
-    let record: RecordedHttpExchange = serde_json::from_value(event.clone())?;
-    let identity = identity_from_record(&record)?;
-    Ok(rule
-        .rule
-        .selector
-        .resource
-        .as_ref()
-        .is_some_and(|resource| {
-            resource.protocol == crate::policy::Protocol::Http
-                && resource
-                    .endpoint
-                    .host
-                    .eq_ignore_ascii_case(&identity.target.host)
-                && resource.endpoint.port == identity.target.port
-        })
-        && rule
-            .rule
-            .selector
-            .operation
-            .as_ref()
-            .is_some_and(|operation| operation.eq_ignore_ascii_case(&record.method))
-        && rule.rule.selector.path.as_ref().is_some_and(|path| {
-            crate::path_pattern::matches_path_pattern(path, &uri_path_only(&record.uri))
-        }))
-}
-
 pub(crate) fn witness_metadata_matches(event: &Value, metadata: &WitnessMetadata) -> Result<()> {
     let record: RecordedHttpExchange = serde_json::from_value(event.clone())?;
     let identity = identity_from_record(&record)?;
@@ -231,8 +201,8 @@ pub(crate) fn validate_contract_witness(
             source["response_delivered_at"] == serde_json::to_value(clocks.delivery.source)?,
             "HTTP Source response clock differs from its protected metadata"
         );
-        let target_body = witness_value(target_bytes(&target)?.as_slice(), surface)?
-            .context("HTTP response has no body slot")?;
+        let target_body =
+            witness_value(target_bytes(&target)?.as_slice(), surface)?.unwrap_or_default();
         let source_headers: Option<HeaderSnapshot> =
             serde_json::from_value(source["response_headers"].clone())?;
         ensure!(
@@ -276,6 +246,7 @@ pub(super) fn has_integrity_headers(headers: Option<&HeaderSnapshot>) -> bool {
             matches!(
                 name.to_ascii_lowercase().as_str(),
                 "content-md5"
+                    | "etag"
                     | "digest"
                     | "content-digest"
                     | "repr-digest"

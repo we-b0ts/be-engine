@@ -26,12 +26,15 @@ pub(super) struct StreamTail {
 #[derive(Debug, Default)]
 struct CompletedInventory {
     references: BTreeSet<CompletedRef>,
+    cleanup_refs: BTreeSet<CompletedRef>,
     exceeded: bool,
+    unsupported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(tag = "protocol", rename_all = "snake_case")]
 enum CompletedRef {
+    Connect { event_id: Uuid },
     Http { exchange_id: Uuid },
     Mysql { connection_id: Uuid, sequence: u64 },
     Redis { connection_id: Uuid, sequence: u64 },
@@ -43,6 +46,7 @@ impl CompletedRef {
             return None;
         }
         Some(match event {
+            RecorderEvent::DependencyConnectFailure(event) => Self::Connect { event_id: event.id },
             RecorderEvent::HttpExchange(exchange) => Self::Http {
                 exchange_id: exchange.id,
             },
@@ -91,6 +95,26 @@ impl StreamTailRequest {
 }
 
 impl StreamTail {
+    pub(super) fn completed_inventory(&self) -> (bool, serde_json::Value) {
+        let inventory = self
+            .completed
+            .lock()
+            .expect("stream tail inventory poisoned");
+        (
+            !inventory.exceeded && !inventory.unsupported,
+            serde_json::to_value(&inventory.references)
+                .expect("typed dependency references serialize"),
+        )
+    }
+
+    pub(super) fn cleanup_inventory(&self) -> serde_json::Value {
+        let inventory = self
+            .completed
+            .lock()
+            .expect("stream tail inventory poisoned");
+        serde_json::to_value(&inventory.cleanup_refs).expect("typed cleanup references serialize")
+    }
+
     pub(super) fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Acquire)
     }
@@ -152,44 +176,71 @@ impl ActiveCaseRegistry {
         }
     }
 
+    /// Only original case-owned requests may use the Source-stop lifecycle.
+    pub(crate) fn source_stop_requested_for(&self, targets: &DependencyTargets) -> bool {
+        let state = self.state.lock().expect("active case registry poisoned");
+        !targets.cases.is_empty()
+            && targets.cases.iter().all(|(target, _)| {
+                state
+                    .active
+                    .iter()
+                    .find(|case| case.case.id == target.id)
+                    .and_then(|case| case.async_api.as_ref())
+                    .is_some_and(|scope| scope.source_stop_requested())
+            })
+    }
+
     pub(crate) fn observe_stream_tail_event(
         &self,
         event: &RecorderEvent,
         targets: &DependencyTargets,
         recorded_in_case: bool,
     ) {
-        if !matches!(
-            event,
-            RecorderEvent::HttpExchange(_)
-                | RecorderEvent::MysqlExchange(_)
-                | RecorderEvent::RedisExchange(_)
-        ) {
-            return;
-        }
-        if !targets.stream_tail.is_empty()
-            && recorded_in_case
-            && let Some(reference) = CompletedRef::for_event(event)
-        {
+        if recorded_in_case {
+            let reference = CompletedRef::for_event(event);
             let state = self.state.lock().expect("active case registry poisoned");
             for (target, _) in &targets.cases {
-                let Some(tail) = state
-                    .active
-                    .iter()
-                    .find(|case| case.case.id == target.id)
-                    .and_then(|case| case.stream_tail.as_ref())
-                else {
+                let Some(case) = state.active.iter().find(|case| case.case.id == target.id) else {
+                    continue;
+                };
+                if targets.stream_tail.is_empty() && case.async_api.is_none() {
+                    continue;
+                }
+                let Some(tail) = case.stream_tail.as_ref() else {
                     continue;
                 };
                 let mut completed = tail
                     .completed
                     .lock()
                     .expect("stream tail inventory poisoned");
-                if completed.references.len() == MAX_COMPLETED_REFS
-                    && !completed.references.contains(&reference)
+                if let Some(reference) = &reference {
+                    if completed.references.len() == MAX_COMPLETED_REFS
+                        && !completed.references.contains(reference)
+                    {
+                        completed.exceeded = true;
+                    } else {
+                        completed.references.insert(reference.clone());
+                        if case
+                            .async_api
+                            .as_ref()
+                            .and_then(|scope| scope.source_stop_wall_time())
+                            .is_some_and(|stop| cleanup_candidate(event, stop))
+                        {
+                            completed.cleanup_refs.insert(reference.clone());
+                        }
+                    }
+                } else if case.async_api.is_some()
+                    && matches!(
+                        event,
+                        RecorderEvent::MemcachedExchange(_)
+                            | RecorderEvent::MotanExchange(_)
+                            | RecorderEvent::KafkaProduce(_)
+                            | RecorderEvent::KafkaFetch(_)
+                            | RecorderEvent::KafkaDelivery(_)
+                            | RecorderEvent::UdpDatagram(_)
+                    )
                 {
-                    completed.exceeded = true;
-                } else {
-                    completed.references.insert(reference.clone());
+                    completed.unsupported = true;
                 }
             }
         }
@@ -330,3 +381,42 @@ impl ActiveCaseRegistry {
 
 #[cfg(test)]
 mod tests;
+
+/// Source shutdown does not turn an unfinished dependency into a peer response.
+/// This context is recorded separately; original outcome/error bytes stay intact.
+fn cleanup_candidate(event: &RecorderEvent, stop: chrono::DateTime<chrono::Utc>) -> bool {
+    let ended_after_stop = match event {
+        RecorderEvent::DependencyConnectFailure(event) => event.timestamp >= stop,
+        RecorderEvent::HttpExchange(event) => event.timestamp >= stop,
+        RecorderEvent::RedisExchange(event) => event.timestamp >= stop,
+        RecorderEvent::MysqlExchange(event) => event.timestamp >= stop,
+        _ => false,
+    };
+    ended_after_stop
+        && match event {
+            RecorderEvent::DependencyConnectFailure(event) => {
+                event.failure_kind == "engine_cancelled"
+            }
+            RecorderEvent::HttpExchange(event) => {
+                event.outcome != crate::DependencyExchangeOutcome::Response
+                    || (event.response_status.is_none() && event.error.is_some())
+                    || event
+                        .response_stream
+                        .as_ref()
+                        .is_some_and(|stream| !stream.complete)
+            }
+            RecorderEvent::MysqlExchange(event) => {
+                event.outcome != crate::DependencyExchangeOutcome::Response
+                    || event.response.status == "incomplete"
+                    || event
+                        .parse_warnings
+                        .iter()
+                        .any(|warning| warning == "engine cleanup interrupted MySQL capture")
+            }
+            RecorderEvent::RedisExchange(event) => {
+                event.outcome != crate::DependencyExchangeOutcome::Response
+                    || (event.response_kind == "other" && !event.replay_safe)
+            }
+            _ => false,
+        }
+}

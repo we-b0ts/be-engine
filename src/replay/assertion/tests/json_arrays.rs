@@ -127,7 +127,7 @@ fn time_array_rules_fail_on_one_invalid_element_or_missing_request_time() {
             "timestamp",
             1700000000_i64,
             1700000066_i64,
-            ResponseDifferenceKind::TimestampOutsideRequestWindow,
+            ResponseDifferenceKind::DurationDeltaMismatch,
         ),
         (
             "duration",

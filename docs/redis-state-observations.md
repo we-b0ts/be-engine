@@ -9,30 +9,29 @@ content bytes.
 
 ## Current generated identity
 
-Add a separate Source proof to the existing raw SET-to-GET identity read-back:
+Enable the explicit runtime permission on the raw SET-to-GET read-back:
 
 ```yaml
 read_back:
   - operation: GET
     write_operation: SET
     argument_index: 1
-    state_epochs:
-      source: app/session.py:1201
-      fact: >-
-        Batch processing reads this Case-owned current identity. SET and DEL
-        change the identity; repeated reads between them have the same meaning.
+    state_epochs: true
 ```
 
 The containing identity rule retains its explicit API, resource, database,
 user and bounded key selector. Original write capture, references and read-back
-proof remain in place. Only raw SET identity to GET supports `state_epochs`;
+contract remain in place. Only raw SET identity to GET supports `state_epochs`;
 JSON fields and list reads keep their finite contracts.
 
 The ordinary rule plan/apply transaction accepts this one-way addition to an
 already installed finite read-back declaration. Keep the declaration in its
-original position and preserve its write/read contract and proof. Put the new
-state observation proof under `state_epochs`; replacing or removing an installed
-state proof is rejected. Planning checks the complete Source trace again and
+original position and preserve its write/read contract. In the submitted plan
+proposal, attach a separate local `proof: {source: ..., fact: ...}` to this
+read-back declaration. Its evidence describes complete Case-owned SET/DEL
+lifetimes and variable read counts. The plan freezes that evidence separately;
+published `policy.yaml` contains only `state_epochs: true`. Removing an installed
+state permission is rejected by additive updates. Planning checks the complete Source trace again and
 Apply requires fresh genuine Replay.
 
 Source must start absent and prove every GET

@@ -34,7 +34,15 @@ fn conditional_identity_scopes_round_trip_and_allow_only_provably_disjoint_branc
         ..crate::policy::TrafficPolicy::default()
     };
     let yaml = crate::policy::render_policy(&document).unwrap();
-    assert_eq!(crate::policy::parse_policy(&yaml).unwrap(), document);
+    assert_eq!(
+        crate::policy::compile_policy(&crate::policy::parse_policy(&yaml).unwrap())
+            .unwrap()
+            .fingerprints,
+        crate::policy::compile_policy(&document)
+            .unwrap()
+            .fingerprints
+    );
+    assert!(!yaml.contains("proof:"));
     let mut overlap = b.clone();
     overlap["effect"]["capture"]["when"] = a["effect"]["capture"]["when"].clone();
     assert!(compile(vec![a.clone(), overlap]).is_err());

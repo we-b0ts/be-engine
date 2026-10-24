@@ -41,6 +41,7 @@ use crate::DiscoveredTcpTarget;
 pub(crate) mod cross_case;
 mod evidence;
 mod identity;
+mod lifecycle;
 mod recording;
 pub(super) use evidence::register_global_exchange;
 pub(in crate::replay) mod request_headers;
@@ -86,6 +87,12 @@ pub(super) struct RecordedHttpExchange {
     response_stream: Option<crate::http::stream::ResponseStream>,
     #[serde(skip)]
     stream_delivery: Option<MatchedHttpExchangeReport>,
+    #[serde(skip)]
+    materialized_proxy_failure: bool,
+    #[serde(skip)]
+    cleanup_authorized: bool,
+    #[serde(skip)]
+    lifecycle_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     #[serde(default)]
     discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
     #[serde(default)]
@@ -127,6 +134,7 @@ pub(super) struct ReplayHttpExchange {
     record: RecordedHttpExchange,
     status: super::ReplayExchangeStatus,
     shared_origin: Option<cross_case::SharedOrigin>,
+    lifecycle_prefix: Option<Arc<crate::http::termination::PrefixDelivery>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -151,6 +159,8 @@ enum HttpReplayMatchError {
     Blackhole,
     BadGateway(String),
 }
+
+mod upstream_failure;
 
 #[derive(Debug, Default)]
 pub(super) struct HttpReplayEvents {
@@ -254,7 +264,11 @@ pub(super) fn register_http_exchange(
             Some(discovered.advertised_ip),
         )?;
     }
-    termination::validate_record(&record)?;
+    if record.cleanup_authorized {
+        lifecycle::validate_record(&record)?;
+    } else {
+        termination::validate_record(&record)?;
+    }
     let stream_mime = record
         .response_headers
         .as_ref()
@@ -294,11 +308,15 @@ pub(super) fn register_http_exchange(
         } else {
             decode_body(body)?.len()
         };
-        stream.validate(payload_len)?;
-        anyhow::ensure!(
-            record.error.is_none(),
-            "HTTP stream contains a capture error"
-        );
+        if record.cleanup_authorized {
+            stream.validate_prefix(payload_len)?;
+        } else {
+            stream.validate(payload_len)?;
+            anyhow::ensure!(
+                record.error.is_none(),
+                "HTTP stream contains a capture error"
+            );
+        }
     }
     let identity = identity_from_record(&record)?;
     let protocol = match identity.scheme {
@@ -331,6 +349,7 @@ pub(super) fn register_http_exchange(
         record,
         status: super::ReplayExchangeStatus::Available,
         shared_origin: None,
+        lifecycle_prefix: None,
     });
     Ok(())
 }

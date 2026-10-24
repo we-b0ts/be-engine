@@ -17,30 +17,6 @@ pub struct IdentityEffect {
     pub references: Vec<Proven<IdentityTarget>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_back: Vec<Proven<RedisReadBack>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mysql_read_back: Vec<Proven<MysqlIdentityReadBack>>,
-}
-
-/// Deliver previously captured identities in selected MySQL JSON result fields.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MysqlIdentityReadBack {
-    pub resource: Resource,
-    pub sql: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tables: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub table_patterns: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub table_series: Option<crate::MysqlTableSeries>,
-    pub column: String,
-    pub json_pointers: Vec<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        deserialize_with = "crate::policy::strict_map::unique_map"
-    )]
-    pub templates: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,8 +157,8 @@ pub struct RedisReadBack {
     pub json_pointers: Vec<String>,
     /// Source proof that GET observes the current SET/DEL state, rather than a
     /// required invocation count. Absent declarations retain finite reads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state_epochs: Option<crate::policy::Proof>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub state_epochs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -269,7 +245,6 @@ pub enum NativeKeyContract {
         segment_index: Option<usize>,
     },
     Capture {
-        binding: String,
         template: String,
         format: KeyIdentityFormat,
     },
@@ -287,7 +262,6 @@ pub enum KeyIdentityFormat {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityReference {
-    pub binding: String,
     pub template: String,
     pub transform: IdentityTransform,
 }
@@ -297,15 +271,6 @@ pub struct IdentityReference {
 pub enum IdentityTransform {
     Identity,
     Sha256,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PublishIdentityEffect {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub uuid_index: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub uuid_field: Option<String>,
 }
 
 impl NativeKeySelector {

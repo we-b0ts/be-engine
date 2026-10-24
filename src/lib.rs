@@ -185,15 +185,15 @@ pub use platform::{
     run_managed_recording_preflight,
 };
 pub use recorder::{
-    AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
-    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaFetchEvent,
-    KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent,
-    MotanConnectionEvent, MotanExchangeEvent, MysqlColumn, MysqlConnectionEvent,
-    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
-    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
-    ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
-    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
-    capture_case_body, redact_headers,
+    AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext,
+    DependencyConnectFailureEvent, HeaderMapSnapshot, HttpExchangeEvent, KafkaConnectionEvent,
+    KafkaDeliveryEvent, KafkaFetchEvent, KafkaHeaderCapture, KafkaProduceEvent,
+    MemcachedConnectionEvent, MemcachedExchangeEvent, MotanConnectionEvent, MotanExchangeEvent,
+    MysqlColumn, MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
+    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
+    ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
+    RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,
+    capture_body_with_original_len, capture_case_body, redact_headers,
 };
 pub use recording_api::RecordingApi;
 pub use recording_control::{
@@ -706,6 +706,11 @@ impl AppState {
             })
         });
         let event_type = event.kind();
+        self.inner.active_cases.observe_async_dependency_event(
+            &event,
+            &targets,
+            global_attribution.is_none(),
+        );
         self.inner.active_cases.observe_dependency_event(
             &event,
             &targets,

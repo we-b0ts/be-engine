@@ -6,7 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::time::ClockPair;
-use crate::policy::{CompiledRule, FieldContract, RedisContainer, TimeContract};
+use crate::policy::{RedisContainer, TimeContract};
 
 const MAX_CASE_COPIES: usize = 4096;
 const MAX_TOTAL_COPIES: usize = 32768;
@@ -89,7 +89,7 @@ fn scalar_hash(value: &Value) -> Option<[u8; 32]> {
     Some(Sha256::digest(serde_json::to_vec(value).ok()?).into())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CopyKey {
     source_position: [u8; 32],
     target_position: [u8; 32],
@@ -98,9 +98,11 @@ struct CopyKey {
     source: [u8; 32],
 }
 
+#[derive(Clone, Debug)]
 pub(crate) struct TimeCopyRecord {
     key: CopyKey,
     target: [u8; 32],
+    scalar: Option<Value>,
 }
 impl TimeCopyRecord {
     #[cfg(test)]
@@ -134,14 +136,18 @@ impl TimeCopyRecord {
         target: &Value,
     ) -> Result<Self> {
         let parsed = super::json::parse_time_pair(source, target, time)?;
-        Self::hashed(
+        let mut record = Self::hashed(
             source_position,
             target_position,
             source_pattern,
             target_pattern,
             parsed_hash(source, parsed.0),
             parsed_hash(target, parsed.1),
-        )
+        )?;
+        if scalar_hash(target).is_some() {
+            record.scalar = Some(target.clone());
+        }
+        Ok(record)
     }
     fn hashed(
         source_position: TimeCopyPosition<'_>,
@@ -164,6 +170,7 @@ impl TimeCopyRecord {
                 source,
             ),
             target,
+            scalar: None,
         })
     }
 }
@@ -263,6 +270,7 @@ struct CaseCopies {
 #[derive(Clone)]
 struct CopyValue {
     target: Option<[u8; 32]>,
+    scalar: Option<Value>,
     deliveries: Vec<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
 }
 impl CopyValue {
@@ -272,12 +280,17 @@ impl CopyValue {
     fn observe(
         &mut self,
         target: [u8; 32],
+        scalar: Option<Value>,
         delivery: (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
     ) {
         if self.target != Some(target) {
             self.target = None;
+            self.scalar = None;
             self.deliveries.clear();
             return;
+        }
+        if self.scalar.is_none() {
+            self.scalar = scalar;
         }
         // Keep real paired observations; independent minima can invent a read
         // that preceded the write in both executions when none actually did.
@@ -295,7 +308,7 @@ impl CopyValue {
 }
 
 /// Constructed by the read-provenance store; intentionally contains no payload.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct VerifiedTimeCopy {
     rule_id: String,
     source_pointer: String,
@@ -306,11 +319,23 @@ pub(crate) struct VerifiedTimeCopy {
 }
 
 impl VerifiedTimeCopy {
+    pub(crate) fn permits_value(
+        &self,
+        rule: &str,
+        source_pointer: &str,
+        target_pointer: &str,
+        source: &Value,
+        target: &Value,
+        time: &TimeContract,
+    ) -> bool {
+        self.permits(rule, source_pointer, target_pointer, source, target, time)
+    }
     pub(super) fn scope(&self) -> (&str, &str) {
         (&self.rule_id, &self.source_pointer)
     }
     /// SQL adapters prefix the physical field's logical path with its current
     /// comparison slot. The authenticated scalar pair remains immutable.
+    #[cfg(test)]
     pub(crate) fn at(mut self, source_pointer: &str, target_pattern: &str) -> Self {
         self.source_pointer = source_pointer.into();
         self.target_pattern = target_pattern.into();
@@ -411,10 +436,11 @@ impl TimeCopyStore {
                         .cloned()
                         .unwrap_or(CopyValue {
                             target: Some(record.target),
+                            scalar: record.scalar.clone(),
                             deliveries: vec![],
                         })
                 })
-                .observe(record.target, delivery);
+                .observe(record.target, record.scalar, delivery);
         }
         let removed = staged
             .keys()
@@ -468,6 +494,7 @@ impl TimeCopyStore {
         )
     }
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(crate) fn proof_for_source_time(
         &self,
         time: &TimeContract,
@@ -516,6 +543,25 @@ impl TimeCopyStore {
             typed: lookup.typed,
         })
     }
+    /// A known stored timestamp is reused only after the same paired observation
+    /// precedes this request in both executions. Ambiguity never invents a value.
+    pub(crate) fn delivery_prepared(
+        &self,
+        case: &str,
+        lookup: &TimeCopyLookup,
+    ) -> Result<Option<(Value, VerifiedTimeCopy)>> {
+        let Some(value) = self
+            .cases
+            .get(case)
+            .and_then(|case| case.entries.get(&lookup.key))
+        else {
+            return Ok(None);
+        };
+        let proof = self.proof_prepared(case, lookup).ok_or_else(|| {
+            anyhow::anyhow!("stored timestamp has ambiguous or unavailable causal provenance")
+        })?;
+        Ok(value.scalar.clone().map(|scalar| (scalar, proof)))
+    }
     #[allow(clippy::too_many_arguments)]
     #[cfg(test)]
     pub(crate) fn proof(
@@ -543,12 +589,7 @@ impl TimeCopyStore {
 }
 
 pub(crate) fn schema_rule(id: &str) -> bool {
-    id.strip_prefix("schema:").is_some_and(|id| {
-        id.len() == 64
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    })
+    id == crate::policy::GLOBAL_JSON_ID || id == "global.mysql" || id == "global.redis"
 }
 
 #[derive(Debug, Clone)]
@@ -559,40 +600,43 @@ pub(crate) struct TimeCopyLeaf {
     pub(crate) time: TimeContract,
 }
 
-/// One decode per carrier feeds this helper. Only active, valid model-owned
-/// timestamps enter provenance; absent, inactive and null fields do not.
-pub(crate) fn leaves(root: &Value, rule: &CompiledRule) -> Result<Vec<TimeCopyLeaf>> {
-    if !schema_rule(&rule.rule.id) {
-        return Ok(vec![]);
-    }
-    let mut out = Vec::new();
-    for (pattern, field) in &rule.rule.contract {
-        let Some(time) = field.unconditional().time() else {
+/// Source chooses each global format; retain the authored pointer pattern so
+/// equal stored values can be copied through independently shaped carriers.
+pub(crate) fn global_leaves(
+    root: &Value,
+    plan: &crate::policy::CompiledJsonPolicy,
+    clocks: super::json::AnchorClocks,
+) -> Result<Vec<TimeCopyLeaf>> {
+    let mut output = Vec::new();
+    for (pattern, field) in &plan.fields {
+        if !matches!(field, crate::policy::GlobalField::Time { .. }) {
             continue;
-        };
+        }
         for pointer in super::delivery::select(pattern, root)? {
-            if let FieldContract::Conditional { when, .. } = field
-                && !when.active(root, &pointer)?
-            {
-                continue;
-            }
             let Some(value) = root.pointer(&pointer) else {
                 continue;
             };
+            let selected = field.select_contract_with_clock(
+                value,
+                clocks.dependency.source.or(clocks.case.source),
+            )?;
+            let Some(time) = selected.time() else {
+                continue;
+            };
             super::json::parse_time_pair(value, value, &time)?;
-            out.push(TimeCopyLeaf {
+            output.push(TimeCopyLeaf {
                 pattern: pattern.clone(),
                 pointer,
                 value: value.clone(),
-                time: time.clone(),
+                time,
             });
             ensure!(
-                out.len() <= MAX_CASE_COPIES,
-                "time copy leaf enumeration exceeds its bound"
+                output.len() <= MAX_CASE_COPIES,
+                "global time copy leaf enumeration exceeds its bound"
             );
         }
     }
-    Ok(out)
+    Ok(output)
 }
 
 #[cfg(test)]

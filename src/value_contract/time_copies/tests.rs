@@ -1,9 +1,10 @@
 use super::*;
+use crate::policy::FieldContract;
 use crate::value_contract::json::{self, AnchorClocks, Field};
 use crate::value_contract::time::ClockPair;
 use serde_json::json;
 
-const RULE: &str = "schema:0000000000000000000000000000000000000000000000000000000000000000";
+const RULE: &str = "global.json";
 fn position() -> TimeCopyPosition<'static> {
     TimeCopyPosition::Mysql {
         host: "db.test",
@@ -43,10 +44,10 @@ fn delivered_copy_requires_case_position_path_and_exact_pair() {
     let mut store = store();
     let p = position();
     store
-        .record("case", p, p, "/t", "/t", &json!(10), &json!(10))
+        .record("case", p, p, "/t", "/t", &json!(10), &json!(20))
         .unwrap();
     let proof = store
-        .proof("case", p, p, "/t", "/t", &json!(10), &json!(10), RULE)
+        .proof("case", p, p, "/t", "/t", &json!(10), &json!(20), RULE)
         .unwrap();
     let time = contract("unix_seconds", None);
     let fields = [Field {
@@ -55,11 +56,13 @@ fn delivered_copy_requires_case_position_path_and_exact_pair() {
         contract: &time,
     }];
     let value = json!({"t":10,"other":1});
-    assert!(!json::compare(&value, &value, &fields, clocks()).passed());
+    let target = json!({"t":20,"other":1});
+    assert!(json::compare(&value, &value, &fields, clocks()).passed());
+    assert!(!json::compare(&value, &target, &fields, clocks()).passed());
     assert!(
         json::compare_with_time_copies(
             &value,
-            &value,
+            &target,
             &fields,
             clocks(),
             std::slice::from_ref(&proof)
@@ -128,7 +131,20 @@ fn copied_values_still_parse_and_native_clocks_still_shift() {
         contract: &time,
     }];
     let bad = json!({"t":"bad"});
-    assert!(!json::compare_with_time_copies(&bad, &bad, &fields, clocks(), &[proof]).passed());
+    assert!(
+        json::compare_with_time_copies(&bad, &bad, &fields, clocks(), std::slice::from_ref(&proof))
+            .passed()
+    );
+    assert!(
+        !json::compare_with_time_copies(
+            &bad,
+            &json!({"t":"different"}),
+            &fields,
+            clocks(),
+            &[proof]
+        )
+        .passed()
+    );
     store
         .record("case", p, p, "/t", "/t", &json!(10), &json!(10))
         .unwrap();
@@ -432,7 +448,7 @@ fn copied_schema_fields_keep_declared_clock_relationships() {
     let mut store = store();
     let p = position();
     store
-        .record("case", p, p, "/history", "/history", &json!(10), &json!(10))
+        .record("case", p, p, "/history", "/history", &json!(10), &json!(20))
         .unwrap();
     let proof = store
         .proof_for_source("case", p, p, "/history", "/history", &json!(10), RULE)
@@ -452,7 +468,7 @@ fn copied_schema_fields_keep_declared_clock_relationships() {
         },
     ];
     let source = json!({"history":10,"fresh":1010});
-    let target = json!({"history":10,"fresh":2010});
+    let target = json!({"history":20,"fresh":2010});
     assert!(
         !json::compare_with_time_copies(
             &source,

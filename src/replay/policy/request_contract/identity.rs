@@ -1,6 +1,5 @@
-//! Shared case bijections; candidates propose bindings and accepted observations commit.
+//! Shared case correspondences; only accepted observations commit candidate proposals.
 use super::*;
-use crate::policy::CompiledRule;
 use crate::value_contract::identities::{
     IdentityDecision, IdentityDelivery, IdentityPair, PreparedIdentityDelivery,
 };
@@ -35,6 +34,68 @@ impl RequestContracts {
         Ok(decision)
     }
 
+    pub(in crate::replay) fn merge_identity_decision(
+        &self,
+        decision: &mut Decision,
+        identity: IdentityDecision,
+    ) -> Result<()> {
+        if let Some(existing) = &mut decision.identity {
+            existing.merge(identity)?;
+        } else {
+            decision.identity = Some(identity);
+        }
+        self.identities
+            .lock()
+            .expect("identity contracts")
+            .validate(decision.identity.as_ref().expect("identity decision"))
+    }
+
+    pub(super) fn observe_native_identity(
+        &self,
+        case: &str,
+        source: &str,
+        target: &str,
+        decision: &mut Decision,
+    ) -> Result<()> {
+        let pair = IdentityPair {
+            source: crate::value_contract::json::identity_key(&Value::String(source.into()), "")
+                .map_err(|difference| anyhow::anyhow!(difference.reason))?,
+            target: crate::value_contract::json::identity_key(&Value::String(target.into()), "")
+                .map_err(|difference| anyhow::anyhow!(difference.reason))?,
+        };
+        let identity = self.preview_identity_pairs(case, &[pair])?;
+        self.merge_identity_decision(decision, identity)
+    }
+
+    pub(in crate::replay) fn knows_identity_value(
+        &self,
+        case: &str,
+        source: &Value,
+        target: &Value,
+    ) -> Result<bool> {
+        let pair = IdentityPair {
+            source: serde_json::to_string(source)?,
+            target: serde_json::to_string(target)?,
+        };
+        self.identities
+            .lock()
+            .expect("identity contracts")
+            .contains_pair(case, pair)
+    }
+
+    pub(super) fn knows_native_identity(
+        &self,
+        case: &str,
+        source: &str,
+        target: &str,
+    ) -> Result<bool> {
+        self.knows_identity_value(
+            case,
+            &Value::String(source.into()),
+            &Value::String(target.into()),
+        )
+    }
+
     pub(in crate::replay) fn commit_identity(&self, decision: IdentityDecision) -> Result<()> {
         if decision.is_empty() {
             return Ok(());
@@ -58,11 +119,34 @@ impl RequestContracts {
             .lock()
             .expect("identity contracts")
             .begin_case(case);
-        self.state
-            .lock()
-            .expect("request contracts")
-            .identity_inputs
-            .remove(case);
+        let mut state = self.state.lock().expect("request contracts");
+        state.identity_inputs.remove(case);
+        state.derived_inputs.remove(case);
+    }
+
+    /// Response delivery must see the selected request's proposals without
+    /// publishing them before the complete request/response candidate succeeds.
+    pub(in crate::replay) fn with_identity_proposals<'a>(
+        &self,
+        proposals: impl IntoIterator<Item = &'a IdentityDecision>,
+    ) -> Result<Self> {
+        let mut combined = Decision::default();
+        for proposal in proposals
+            .into_iter()
+            .filter(|proposal| !proposal.is_empty())
+        {
+            self.merge_identity_decision(&mut combined, proposal.clone())?;
+        }
+        let mut preview = self.clone();
+        if let Some(identity) = combined.identity {
+            preview.identities = Arc::new(Mutex::new(
+                self.identities
+                    .lock()
+                    .expect("identity contracts")
+                    .preview(identity)?,
+            ));
+        }
+        Ok(preview)
     }
 
     pub(in crate::replay) fn identity_deliveries(
@@ -86,48 +170,6 @@ impl RequestContracts {
             .lock()
             .expect("identity contracts")
             .deliveries(case, &prepared)
-    }
-
-    /// Reuse an already decoded carrier, retaining its wire bytes everywhere
-    /// outside the explicitly declared and Source-active identity leaves.
-    #[cfg(test)]
-    pub(in crate::replay) fn prepare_identity_payload(
-        &self,
-        case: &str,
-        decoded: &crate::value_codec::DecodedValue,
-        rules: &[&CompiledRule],
-    ) -> Result<(Vec<u8>, IdentityDecision)> {
-        let mut logical = decoded.logical.clone();
-        let (decision, pointers) =
-            self.translate_identity_logical(case, &decoded.logical, &mut logical, rules)?;
-        Ok((decoded.encode(&logical, &pointers)?, decision))
-    }
-
-    /// A protocol can apply time delivery first, then translate identities in
-    /// the same logical copy and encode the union of both allowed path sets.
-    pub(in crate::replay) fn translate_identity_logical(
-        &self,
-        case: &str,
-        source: &Value,
-        logical: &mut Value,
-        rules: &[&CompiledRule],
-    ) -> Result<(IdentityDecision, Vec<String>)> {
-        let selected = crate::value_contract::identities::select(source, rules)?;
-        let pointers = selected
-            .iter()
-            .map(|selected| selected.pointer.clone())
-            .collect::<Vec<_>>();
-        let entries = selected
-            .iter()
-            .map(|selected| selected.delivery)
-            .collect::<Vec<_>>();
-        let (values, decision) = self.identity_deliveries(case, &entries)?;
-        for (pointer, value) in pointers.iter().zip(values) {
-            *logical
-                .pointer_mut(pointer)
-                .context("identity delivery field disappeared")? = value;
-        }
-        Ok((decision, pointers))
     }
 }
 

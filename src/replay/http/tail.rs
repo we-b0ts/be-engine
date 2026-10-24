@@ -37,8 +37,17 @@ impl ReplayState {
         &self,
         index: usize,
     ) -> Option<super::super::ReplayExchangeStatus> {
-        self.http_exchanges
-            .get(index)
-            .map(|exchange| exchange.status)
+        self.http_exchanges.get(index).map(|exchange| {
+            if exchange.status == super::super::ReplayExchangeStatus::Responding
+                && exchange
+                    .lifecycle_prefix
+                    .as_ref()
+                    .is_some_and(|prefix| prefix.is_complete())
+            {
+                super::super::ReplayExchangeStatus::AwaitingClientTermination
+            } else {
+                exchange.status
+            }
+        })
     }
 }

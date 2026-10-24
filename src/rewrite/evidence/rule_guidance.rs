@@ -3,14 +3,9 @@ use super::super::evidence_model::{RewriteApplicableRulePlanner, RewriteRuleHint
 use super::*;
 mod generated_values;
 mod http_client_metadata;
-mod http_header_timestamp;
 mod resource_fields;
 mod stateful_dependencies;
 pub(super) use generated_values::has_response_jwt;
-
-pub(super) fn http_header_timestamp_candidates(facts: &Value) -> Vec<Value> {
-    http_header_timestamp::candidates(facts)
-}
 
 fn help(root: &Path) -> super::super::model::RewriteCommandSpec {
     super::super::action::command(
@@ -66,18 +61,18 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
     })
     };
     if query == QUERY_UNIFIED_RULE_CANDIDATES
-        && facts["source_entry"]["bindings"]
+        && facts["source_entry"]["locations"]
             .as_array()
             .is_some_and(|bindings| {
                 bindings
                     .iter()
-                    .any(|b| b["binding"]["slot"].get("sse_data").is_some())
+                    .any(|b| b["location"]["slot"].get("sse_data").is_some())
             })
     {
         add(
             "sse_data_contract",
             "sse_data",
-            "Review source_entry.bindings for exact slot.sse_data event/json_type selectors and declare output fields under responses. Contract pointers address data JSON. Prove time formats/clock relations, duration units/terminal branches, unordered collection semantics or identity variability. For identities, inventory every eligible MySQL/Redis/response position together and use one case-local binding domain; include terminal output. Observed Source equality and distinctness define the relations, rather than a mandatory capture event. Fixed or dependency-delivered identities remain anchored. Drafts never infer identity permission. Missing events and event order remain strict. See docs/sse-value-contracts.md.",
+            "Review source_entry.locations and declare JSON field formats once in root json.fields, including terminal output. The same map applies to ordinary bodies, SSE data, SQL JSON and cache JSON. Declare time formats, duration units, unordered collections or generated identity formats from Source behavior. The engine derives complete typed Source equality and distinctness internally across carriers. Immutable and dependency-delivered inputs remain anchored. Missing events, event order and unselected values stay strict. Drafts never infer identity permission. See docs/sse-value-contracts.md.",
         );
     }
     if query == QUERY_REPRESENTATIVES {
@@ -137,13 +132,6 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             "Unused dependency calls are not evidence of process ownership and can be detached API work. Prove the unique API origin, typed request-body predicates and captured SQL identity; linked scripts, transaction members and resource calls retain their own proof. process_owned is an ownership effect and cannot be inferred from a value codec or a shared task ID. Target failures and finite consumption stay required.",
         );
     }
-    if nonempty(&facts["http_header_timestamp_candidates"]) {
-        add(
-            "http_header_timestamp",
-            "header-timestamp",
-            "Trace source SDK header generation and declare a typed http_request header time contract with its own dependency request anchor, exact endpoint, method and path. Header presence, multiplicity and authentication remain checked.",
-        );
-    }
     if http_client_metadata::has_difference(facts) {
         add(
             "http_client_metadata",
@@ -152,14 +140,14 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         );
     }
     for (protocol, capability) in [
-        ("http", "http_json_unordered"),
-        ("redis", "redis_value_unordered"),
+        ("http", "resource_field_contract"),
+        ("redis", "resource_field_contract"),
     ] {
         if cluster(facts, protocol, "unmatched_target") {
             add(
                 capability,
                 "unordered",
-                "Inspect protected Source/Target value differences and prove the consumer treats the selected collection as unordered. For MySQL/Redis storage, declare the physical field once under resources with its JSON or typed PB codec; a different API, SQL shape or command needs no repeated contract. HTTP requests retain their exact resource, request surface and body slot. Preserve element associations and duplicate counts. A response declaration does not authorize an undeclared outbound field.",
+                "Inspect protected Source/Target differences and declare the collection once in root json.fields with kind: unordered. The same JSON path applies to requests, responses and stored JSON across APIs and transports. Preserve element associations, duplicate counts and unselected business fields. Native HTTP method, endpoint, path, query, headers and finite consumption stay checked. Use the unified rule plan/apply transaction with a complete policy proposal.",
             );
             add(
                 if protocol == "http" {
@@ -171,20 +159,6 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
                 "A matching exchange in another case is a sharing candidate. A finite_sharing effect needs complete Source inventory plus proof of shared initialization, refresh and side effects. Value contracts do not change ownership, snapshot admission or available responses.",
             );
         }
-    }
-    if nonempty(&facts["redis_lock_candidates"]["candidates"]) {
-        add(
-            "redis_lock",
-            "lock",
-            "Trace Source token generation and conditional release before declaring redis_lock. Matching SET NX or script shape is a candidate. Exact key/options, script identity, database/authentication, linked token equality and finite consumption remain checked.",
-        );
-    }
-    if nonempty(&facts["redis_publish_candidates"]["candidates"]) {
-        add(
-            "redis_publish",
-            "publish",
-            "Trace the PUBLISH identity generator and lifetime before declaring redis_publish_identity with its bounded exact channel and explicit identity position. All other bytes and case-local identity consistency remain checked.",
-        );
     }
     if facts["egress_rejections"]["rejected_packets_in_samples"]
         .as_u64()
@@ -263,17 +237,12 @@ pub(super) fn applicable_rule_planners(
         return planners;
     }
     for (name, capability) in [
-        ("redis_publish_candidates", "redis_publish"),
-        ("redis_lock_candidates", "redis_lock"),
-        ("http_unordered_candidates", "http_json_unordered"),
-        ("redis_unordered_candidates", "redis_value_unordered"),
+        ("http_unordered_candidates", "resource_field_contract"),
+        ("redis_unordered_candidates", "resource_field_contract"),
     ] {
         if complete_candidates(facts, name) {
             add("dependency_value", capability);
         }
-    }
-    if nonempty(&facts["http_header_timestamp_candidates"]) {
-        add("dependency_value", "http_header_timestamp");
     }
     if http_client_metadata::has_difference(facts) {
         add("dependency_value", "http_client_metadata");
@@ -443,7 +412,7 @@ mod http_unordered_tests {
             assert!(
                 !applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev")
                     .iter()
-                    .any(|p| p.capability == "http_json_unordered")
+                    .any(|p| p.capability == "resource_field_contract")
             );
         }
         facts["http_unordered_candidates"] = serde_json::json!({"candidates":[{"selector":{"pointer":"/department_ids"}}],"omitted_candidates":0});
@@ -455,7 +424,7 @@ mod http_unordered_tests {
             let planners = applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev");
             let planner = planners
                 .iter()
-                .find(|p| p.capability == "http_json_unordered")
+                .find(|p| p.capability == "resource_field_contract")
                 .unwrap();
             assert_eq!(planner.kind, "dependency_value");
             assert!(planner.command.argv.contains(&"--file".into()));
@@ -471,7 +440,7 @@ mod http_unordered_tests {
                 "ev"
             )
             .iter()
-            .any(|p| p.capability == "http_json_unordered")
+            .any(|p| p.capability == "resource_field_contract")
         );
     }
 }
@@ -497,7 +466,7 @@ mod redis_unordered_tests {
             assert!(
                 !applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev")
                     .iter()
-                    .any(|p| p.capability == "redis_value_unordered")
+                    .any(|p| p.capability == "resource_field_contract")
             );
         }
         facts["redis_unordered_candidates"] = serde_json::json!({"candidates":[{"selector":{"field":{"codec":"json","pointer":"/ids"}}}],"omitted_candidates":0});
@@ -509,7 +478,7 @@ mod redis_unordered_tests {
             let planners = applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "ev");
             let planner = planners
                 .iter()
-                .find(|p| p.capability == "redis_value_unordered")
+                .find(|p| p.capability == "resource_field_contract")
                 .unwrap();
             assert_eq!(planner.kind, "dependency_value");
             assert!(planner.command.argv.contains(&"--file".into()));
@@ -525,117 +494,7 @@ mod redis_unordered_tests {
                 "ev"
             )
             .iter()
-            .any(|p| p.capability == "redis_value_unordered")
-        );
-    }
-}
-
-#[cfg(test)]
-mod redis_lock_tests {
-    use super::*;
-    #[test]
-    fn lock_hint_requires_witness_and_planner_requires_complete_candidates_for_each_issue_kind() {
-        let root = Path::new("/target");
-        let mut facts =
-            serde_json::json!({"clusters":[{"protocol":"redis","reason":"unmatched_target"}]});
-        assert!(
-            !rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
-                .iter()
-                .any(|h| h.rule == "lock")
-        );
-        facts["redis_lock_candidates"] = serde_json::json!({"candidates":[{"selector":{"host":"redis.test","port":6379,"key":"lock:1"}}],"omitted_candidates":0});
-        assert!(
-            rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
-                .iter()
-                .any(|h| h.rule == "lock")
-        );
-        for kind in [
-            RewriteIssueKind::Dependency,
-            RewriteIssueKind::Response,
-            RewriteIssueKind::Replay,
-        ] {
-            let planners =
-                applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "current");
-            let planner = planners
-                .iter()
-                .find(|p| p.capability == "redis_lock")
-                .unwrap();
-            assert!(
-                planner.command.argv.contains(&"--file".into())
-                    && planner.command.argv.contains(&"current".into())
-            );
-            assert!(
-                !applicable_rule_planners(root, kind, QUERY_REPRESENTATIVES, &facts, "current")
-                    .iter()
-                    .any(|p| p.capability == "redis_lock")
-            );
-        }
-        facts["redis_lock_candidates"]["omitted_candidates"] = 1.into();
-        assert!(
-            !applicable_rule_planners(
-                root,
-                RewriteIssueKind::Dependency,
-                QUERY_DIRTY_CLUSTERS,
-                &facts,
-                "current"
-            )
-            .iter()
-            .any(|p| p.capability == "redis_lock")
-        );
-    }
-}
-
-#[cfg(test)]
-mod redis_publish_tests {
-    use super::*;
-    #[test]
-    fn publish_planner_requires_complete_uuid_witnesses_and_current_evidence() {
-        let root = Path::new("/target");
-        let mut facts =
-            serde_json::json!({"clusters":[{"protocol":"redis","reason":"unmatched_target"}]});
-        assert!(
-            !rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
-                .iter()
-                .any(|hint| hint.rule == "publish")
-        );
-        facts["redis_publish_candidates"] = serde_json::json!({"candidates":[{"selector":{"host":"redis.test","port":6379,"channel":"events","uuid_index":0}}],"omitted_candidates":0});
-        assert!(
-            rule_hints(root, QUERY_DIRTY_CLUSTERS, &facts)
-                .iter()
-                .any(|hint| hint.rule == "publish")
-        );
-        for kind in [
-            RewriteIssueKind::Response,
-            RewriteIssueKind::Dependency,
-            RewriteIssueKind::Replay,
-        ] {
-            let planners =
-                applicable_rule_planners(root, kind, QUERY_DIRTY_CLUSTERS, &facts, "current");
-            let planner = planners
-                .iter()
-                .find(|planner| planner.capability == "redis_publish")
-                .unwrap();
-            assert!(
-                planner.command.argv.contains(&"--file".into())
-                    && planner.command.argv.contains(&"current".into())
-            );
-            assert!(
-                !applicable_rule_planners(root, kind, QUERY_REPRESENTATIVES, &facts, "current")
-                    .iter()
-                    .any(|planner| planner.capability == "redis_publish")
-            );
-        }
-        facts["redis_publish_candidates"]["omitted_candidates"] = 1.into();
-        assert!(
-            !applicable_rule_planners(
-                root,
-                RewriteIssueKind::Dependency,
-                QUERY_DIRTY_CLUSTERS,
-                &facts,
-                "current"
-            )
-            .iter()
-            .any(|planner| planner.capability == "redis_publish")
+            .any(|p| p.capability == "resource_field_contract")
         );
     }
 }

@@ -37,16 +37,33 @@ pub(super) async fn response(
             .as_ref()
             .context("stream payload missing")?,
     )?);
-    stream.validate(payload.len())?;
+    if record.lifecycle_stop.is_some() {
+        stream.validate_prefix(payload.len())?;
+    } else {
+        stream.validate(payload.len())?;
+    }
     let status = record
         .response_status
         .and_then(|s| StatusCode::from_u16(s).ok())
         .context("stream response status missing")?;
     tokio::time::sleep_until(started + std::time::Duration::from_millis(stream.headers_ms)).await;
+    let payload_len = payload.len();
     let mut body = TimedBody::new(payload, stream.clone(), started);
     body.completion = Some(completion);
     body.client_prefix = client_prefix;
     body.server_close = server_close;
+    body.length_delimited = record.materialized_proxy_failure;
+    if body.length_delimited {
+        anyhow::ensure!(
+            body.stream.trailers.is_none()
+                && body
+                    .stream
+                    .chunks
+                    .last()
+                    .is_some_and(|chunk| chunk.at_ms == body.stream.end_ms),
+            "HTTP length-delimited failure must end with its final recorded payload frame"
+        );
+    }
     if body.stream.chunks.is_empty()
         && let Some(delivered) = &body.client_prefix
     {
@@ -56,7 +73,16 @@ pub(super) async fn response(
     *response.status_mut() = status;
     *response.headers_mut() =
         response_headers_for_payload(record.response_headers.as_ref(), 0, Utc::now());
-    response.headers_mut().remove(CONTENT_LENGTH);
+    if record.materialized_proxy_failure {
+        // The recording proxy's generated failure uses a Full body with its
+        // exact length. Timed delivery must retain that ordinary framing.
+        response.headers_mut().insert(
+            CONTENT_LENGTH,
+            hyper::header::HeaderValue::from(payload_len),
+        );
+    } else {
+        response.headers_mut().remove(CONTENT_LENGTH);
+    }
     Ok(response)
 }
 
@@ -67,6 +93,7 @@ struct TimedBody {
     started: tokio::time::Instant,
     timer: Pin<Box<tokio::time::Sleep>>,
     finished: bool,
+    length_delimited: bool,
     completion: Option<DeliveryCompletion>,
     client_prefix: Option<Arc<PrefixDelivery>>,
     server_close: Option<termination::ServerClose>,
@@ -87,6 +114,7 @@ impl TimedBody {
                 started + std::time::Duration::from_millis(at_ms),
             )),
             finished: false,
+            length_delimited: false,
             completion: None,
             client_prefix: None,
             server_close: None,
@@ -144,6 +172,14 @@ impl Body for TimedBody {
             this.timer
                 .as_mut()
                 .reset(this.started + std::time::Duration::from_millis(next_ms));
+            if this.length_delimited && this.next == this.stream.chunks.len() {
+                // Hyper completes Content-Length framing after the last data
+                // frame and can drop Body without asking for another EOF poll.
+                this.finished = true;
+                if let Some(completion) = &mut this.completion {
+                    completion.finish(Ok(()));
+                }
+            }
             return Poll::Ready(Some(Ok(Frame::data(bytes))));
         }
         this.finished = true;

@@ -245,6 +245,7 @@ pub(super) async fn load(
         targets,
         identities,
         rules,
+        &BTreeSet::new(),
     )?;
     Ok(())
 }

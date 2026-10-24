@@ -1,21 +1,21 @@
 //! A physical-field inventory is useful before a mechanical strategy draft exists.
 use super::*;
 
-fn has_source_bindings(query: &str, facts: &Value) -> bool {
+fn has_source_locations(query: &str, facts: &Value) -> bool {
     query == QUERY_UNIFIED_RULE_CANDIDATES
-        && facts["source_entry"]["bindings"]
+        && facts["source_entry"]["locations"]
             .as_array()
             .is_some_and(|bindings| !bindings.is_empty())
 }
 
 pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleHint> {
-    if !has_source_bindings(query, facts) {
+    if !has_source_locations(query, facts) {
         return Vec::new();
     }
     vec![RewriteRuleHint {
         capability: "resource_field_contract".into(),
         rule: "resource-fields".into(),
-        hint: "Inspect source_entry.bindings even when candidates is empty. First inventory the physical locations and Source semantics: MySQL database/table/column plus decoded pointer, Redis key/container/hash-field plus pointer, and response API/body or SSE event/pointer. Reuse existing declarations and codecs. Declare time format/relation, duration unit/branch, unordered consumer semantics or a generated identity's eligibility and format once at its owning field. Storage contracts have no API, SQL template or argument ordinal. For an identity, request every eligible location in one proposal and assign one case-local binding domain; runtime preserves the Source equality partition, including distinct IDs, across MySQL, Redis and response. Reads deliver an established Target ID; an unknown delivered ID anchors itself. A generator location is useful Source evidence, not a mandatory first capture rule. Mixed fixed/external IDs need proven eligibility guards; a whole-column declaration is unsafe when that distinction cannot be expressed, so retain its narrow native owner. Keep null/empty/sentinel values exact unless explicitly guarded. Native rules add only extra clock sharing, derivation, signatures, state transitions or finite behavior, using field_ref where supported. Plan the complete inventory together, inspect Source coverage and retained Target failures, then apply and finish genuine Replay. Discovery is bounded and never grants permission. See docs/resource-field-contracts.md.".into(),
+        hint: "Inspect source_entry.locations even when candidates is empty, then reuse or extend the global json.fields map. Declare time or identity formats and unordered semantics once per logical pointer, independent of APIs, SSE events, MySQL columns and Redis keys. JSON payloads are recognized automatically. HTTP headers use root http.headers, shared across APIs and endpoints, with case-insensitive names and strict presence/count/order. Enable mysql for native DATE/DATETIME/TIMESTAMP metadata; declare other scalar formats with mysql.tables.<name>.pattern and fields using the same kind/formats syntax. Scalar Redis values use redis.keys patterns and optional redis.database; structured JSON still uses the global JSON map. Source-equal complete typed IDs must be Target-equal; different Source IDs cannot collapse. The engine maintains these relationships internally across supported carriers. Read delivery reuses established Target IDs and anchors unknown inputs. Null/empty/sentinel values and immutable inputs retain their exact behavior. Native effects describe additional clock sharing, derivation, signatures, state transitions or finite behavior. Review complete Source coverage and independent Target evidence, apply, then finish genuine Replay. Discovery is bounded and never grants permission. See docs/resource-field-contracts.md.".into(),
         help: help(root),
     }]
 }
@@ -30,7 +30,7 @@ pub(super) fn planners(
     if !matches!(
         issue,
         RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-    ) || !has_source_bindings(query, facts)
+    ) || !has_source_locations(query, facts)
     {
         return Vec::new();
     }
@@ -47,10 +47,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn physical_bindings_offer_planning_without_a_mechanical_draft() {
+    fn physical_locations_offer_planning_without_a_mechanical_draft() {
         let root = Path::new("/target");
-        let facts = serde_json::json!({"candidates":[],"source_entry":{"bindings":[{
-            "binding":{"surface":"dependency.request","match":{"resource":{"protocol":"mysql"}}},
+        let facts = serde_json::json!({"candidates":[],"source_entry":{"locations":[{
+            "location":{"surface":"dependency.request","match":{"resource":{"protocol":"mysql"}}},
             "physical_fields":{"fields":[{"table":"tasks","column":"payload"}]}
         }]}});
         assert_eq!(
@@ -89,7 +89,7 @@ mod tests {
             hints(
                 root,
                 QUERY_UNIFIED_RULE_CANDIDATES,
-                &serde_json::json!({"candidates":[],"source_entry":{"bindings":[]}})
+                &serde_json::json!({"candidates":[],"source_entry":{"locations":[]}})
             )
             .is_empty()
         );

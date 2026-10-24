@@ -98,11 +98,9 @@ fn nested_arrays_keep_full_coordinates_and_object_numbers_remain_exact() {
 
 fn entity(source: Value, target: Value, array: bool) -> Comparison {
     let clock = time(ClockScope::Entity {
-        binding: "text-block".into(),
         relative_pointer: "../id".into(),
     });
     let identity = FieldContract::Identity {
-        binding: "text-block".into(),
         prefix: "text-".into(),
         format: crate::policy::IdentityFormat::Decimal,
     };

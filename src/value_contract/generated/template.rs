@@ -1,4 +1,4 @@
-//! Literal-preserving generated strings and response-local identity bindings.
+//! Literal-preserving generated strings with automatic case-local token identities.
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
@@ -82,6 +82,20 @@ fn extract<'a>(
     Ok(output)
 }
 
+pub(crate) fn valid_token(value: &str, token: &TemplateToken) -> bool {
+    if random_value(value, &token.format, token.length).is_err() {
+        return false;
+    }
+    token.decoded_bytes.is_none_or(|length| {
+        let decoded = match token.format {
+            RandomEncoding::Base64 => STANDARD.decode(value),
+            RandomEncoding::Base64url => URL_SAFE_NO_PAD.decode(value),
+            _ => return false,
+        };
+        decoded.is_ok_and(|bytes| bytes.len() == length)
+    })
+}
+
 pub(super) fn compare(
     source: &str,
     target: &str,
@@ -115,17 +129,13 @@ pub(super) fn compare(
         if field.contract.length.is_none() && source.len() != target.len() {
             return Err(GeneratedError::InvalidShape);
         }
-        if let Some(binding) = &field.contract.binding {
-            use sha2::{Digest, Sha256};
-            result
-                .nonce_relationships
-                .entry((rule_id.into(), format!("template:{binding}")))
-                .or_default()
-                .push((
-                    Sha256::digest(source.as_bytes()).into(),
-                    Sha256::digest(target.as_bytes()).into(),
-                ));
-        }
+        result
+            .identities
+            .observe(
+                &Value::String((*source).into()),
+                &Value::String((*target).into()),
+            )
+            .map_err(|_| GeneratedError::ContractMismatch)?;
     }
     Ok(result)
 }
@@ -136,26 +146,25 @@ mod tests {
     use crate::policy::native::GeneratedResponse;
     use serde_json::json;
 
-    fn field(binding: Option<&str>, bytes: usize) -> Proven<TemplateToken> {
+    fn field(bytes: usize) -> Proven<TemplateToken> {
         super::super::tests::proof(TemplateToken {
             format: RandomEncoding::Base64url,
             decoded_bytes: Some(bytes),
             length: None,
-            binding: binding.map(str::to_owned),
         })
     }
 
     #[test]
-    fn generated_url_keeps_host_path_query_and_session_binding() {
+    fn generated_url_keeps_host_path_query_and_automatic_session_identity() {
         let session = GeneratedResponse::Template {
             template: "vnc-{session}".into(),
-            fields: BTreeMap::from([("session".into(), field(Some("session"), 18))]),
+            fields: BTreeMap::from([("session".into(), field(18))]),
         };
         let url = GeneratedResponse::Template {
-            template: "wss://vnc.example/socket/{session}?ticket={ticket}".into(),
+            template: "wss://vnc.example/socket/{connection}?ticket={ticket}".into(),
             fields: BTreeMap::from([
-                ("session".into(), field(Some("session"), 18)),
-                ("ticket".into(), field(None, 32)),
+                ("connection".into(), field(18)),
+                ("ticket".into(), field(32)),
             ]),
         };
         let a = URL_SAFE_NO_PAD.encode([1u8; 18]);
@@ -171,7 +180,7 @@ mod tests {
                 key: None,
             },
             json::NativeField {
-                rule_id: "vnc",
+                rule_id: "link",
                 pointer: "/url",
                 contract: &url,
                 key: None,

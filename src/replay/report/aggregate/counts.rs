@@ -30,6 +30,21 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
     Ok(ReplayEventCounts {
         network: super::NetworkEventCounts {
             unrecorded_targets: optional_len(report, "unrecorded_targets", path)?,
+            matched_connection_failures: if let Some(value) = report.get("connect_failures") {
+                required_usize(value, "matched_count", path)?
+            } else {
+                0
+            },
+            unused_connection_failures: if let Some(value) = report.get("connect_failures") {
+                required_len(value, "unused_case", path)?
+            } else {
+                0
+            },
+            failed_connection_failures: if let Some(value) = report.get("connect_failures") {
+                required_len(value, "failed_case", path)?
+            } else {
+                0
+            },
         },
         mysql: MysqlEventCounts {
             connections: required_usize(report, "connections", path)?,

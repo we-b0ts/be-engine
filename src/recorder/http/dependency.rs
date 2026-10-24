@@ -58,7 +58,7 @@ impl HttpCaptureContext {
             return false;
         }
         let mut event = self.event.clone();
-        event.timestamp = Utc::now();
+        event.timestamp = crate::dependency::termination::observed_wall_time(observed.at);
         event.outcome = DependencyExchangeOutcome::Terminated(observed.termination);
         event.duration_ms = observed
             .at
@@ -132,6 +132,7 @@ impl Drop for PendingHttpCapture {
         };
         event.timestamp = Utc::now();
         if let Some(ended) = self.termination.cancelled() {
+            event.timestamp = crate::dependency::termination::observed_wall_time(ended.at);
             event.outcome = DependencyExchangeOutcome::Terminated(ended.termination);
             event.duration_ms = ended.at.saturating_duration_since(self.started).as_millis();
         } else {

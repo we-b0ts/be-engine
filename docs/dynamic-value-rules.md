@@ -7,14 +7,12 @@
 > [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
 > evidence and lifecycle constraints described here remain mandatory.
 
-For current ordinary MySQL/Redis/response fields, prefer
-[resource identity declarations](resource-field-contracts.md#identity-domains-and-read-delivery).
-Inventory every eligible physical location together, use a shared case-local
-binding and let observed Source values define equality and distinctness. No
-SQL template, value ordinal or generator-first capture is required for these
-fields. The native capture/reference machinery below remains for additional
-templates, derivation and stateful behavior; its binding namespace is separate.
-
+For current ordinary fields, prefer [global identity formats](resource-field-contracts.md#automatic-identity-correspondence).
+Declare JSON pointers once globally and explicit MySQL scalar formats only where
+needed. The engine infers correspondence from complete typed Source values;
+rules do not name identity groups. Native key/template tokens participate in
+the same internal case correspondence. The capture/reference mechanisms below
+remain for additional templates, derivation and stateful behavior.
 
 A source-generated name can appear in a uniqueness SELECT, an INSERT's scalar
 and JSON values, and a Redis cache key. One capture binds its recorded value to
@@ -56,12 +54,10 @@ rule to add a consumer, and do not modify the old root proof to describe the new
 consumer. Removal, reordering or replacement of existing relationships is not an
 additive update.
 
-When Source reads a previously generated identity from MySQL result JSON before
-reusing it, append an explicit `effect.mysql_read_back` declaration to the same
-native identity rule. Select its existing reference resource, complete SELECT,
-physical column and JSON pointers; include the Source write/read proof. This
-returns already bound Target identities on a derived response copy while
-retaining strict request references. See [MySQL identity read-back](mysql-identity-read-back.md).
+MySQL scalar columns use `mysql.tables`; JSON result values use the global
+`json.fields` declaration. Reads reuse complete identities already established
+in the same Case and retain unknown historical inputs. No per-SELECT read-back
+rule or embedded template is required.
 
 ```yaml
 version: 3
@@ -213,7 +209,7 @@ not infer references outside that selected request location. See the complete
 An object-store key can first appear in an HTTP PUT path before it is written
 to SQL. Select its decoded filename segment and declare which components are
 source-proven dynamic. The complete segment becomes one identity, so later
-SQL JSON values such as `attachments/<filename>` must reuse the same binding.
+SQL JSON values such as `attachments/<filename>` retain the same complete typed identity correspondence.
 
 ```yaml
 dependency_rules:
@@ -326,142 +322,34 @@ recordings before planning. Stale evidence suppresses planner hints and reports
 both policy fingerprints; it does not indicate an unsupported capture or
 recording version. See [policy freshness](replay-policy.md#policy-freshness-before-rule-planning).
 
-## Plan a generated MySQL identity with current-time values
+## Plan ordinary generated fields
 
-When the first capture statement also contains generated timestamps, plan the
-identity and its time selections together. Supply both source proofs explicitly:
+Declare generated scalar MySQL IDs under root `mysql.tables` and all decoded
+JSON fields under root `json.fields`. Native SQL temporal columns are inferred
+from metadata. For example:
 
-```bash
-backend-rewrite rule plan --evidence-id CURRENT_EVIDENCE_ID \
-  --dynamic-value '{"id":"pending-item-name","targets":[{"host":"db.example.test","port":3306}],"capture":{"protocol":"mysql","target":{"host":"db.example.test","port":3306},"database":"app","sql":"INSERT INTO items(name,created_at,updated_at,owner_id) VALUES(?,?,?,?)","value_index":0},"source_evidence":"NameFactory:create generates task-pending-{uuid.uuid4().hex}"}' \
-  --mysql-time '{"id":"item-write-times","time_values":[{"value_index":1},{"value_index":2}],"source_evidence":"ItemModel:created_at and updated_at default to datetime.now()"}'
-backend-rewrite rule apply RETURNED_PLAN_ID
+```yaml
+format: traffic-policy/v2
+json:
+  fields:
+    /item_id: {kind: identity, formats: [uuid]}
+    /created_at: {kind: time, formats: [unix_seconds]}
+mysql:
+  database: app
+  tables:
+    items:
+      pattern: items
+      fields:
+        id: {kind: identity, formats: [uuid]}
+rules: []
 ```
 
-`--mysql-time` requires a MySQL `--dynamic-value` capture. Its exact endpoint,
-database, SQL template and complete table selectors come from that capture;
-it cannot override them. One joint plan covers the declared table family without
-copying a rule per shard, and both halves retain the same physical-table check.
-The time rule uses ordinary endpoint/database/SQL scope, while the identity
-binding retains its API and case lifetime. The two rule ids must differ.
-An opaque generated name such as `task-pending-…` uses the default string
-contract; use `format: uuid_v4` only when the entire captured value is a UUID v4.
-
-The planner verifies one current-policy finalized report and one complete
-same-case source exchange against the actual unmatched request. The whole
-report may be incomplete after an engine rejection; the selected exchange and
-both captured request-time anchors must still be available. Only the declared
-identity location and time locations may differ. Stable SQL values, JSON
-members, endpoint, database and user remain checked. Existing committed identity
-bindings cannot be changed or collapsed. Each declared time must preserve its
-distance from its request anchor within the shared five-second window.
-
-Identity and time may use distinct SQL values or nonoverlapping exact JSON
-Pointers inside one value. Scalar overlap and equal/ancestor/descendant
-pointers are rejected. Existing conflicting SQL token ownership or parameter
-rules cannot be bypassed. A newly proposed identity never excuses a changed
-unselected string through substring replacement.
-
-Admission checks overlapping time ownership across the whole declared table
-range, including shards absent from the current witness. For a table-family
-plan, a legacy `params` rule in the same endpoint/database scope is conservatively
-rejected unless its fixed statement verb proves the operations disjoint. Wildcard
-verb prefixes or fragments cannot establish that proof. Revise that legacy
-contract before planning the family; exact-table planning retains its existing
-checks against the actual normalized witness.
-
-Preview contains both ordinary policy entries. Apply checks the frozen policy
-and original evidence, writes both entries atomically, and requires one fresh
-Replay using the existing recordings. It never writes an intermediate policy
-with only one half of the contract.
-
-## Plan a Redis JSON identity with current-time fields
-
-A single `SET` value or `RPUSH` element can contain a generated string identity,
-references to that identity, and a current timestamp. Plan these differences
-together using `--dynamic-value` and `--redis-time`. Both arguments take JSON,
-and `--redis-time` is mutually exclusive with `--mysql-time`.
-The plan writes two ordinary rules atomically and requires fresh Replay.
-
-For example, `identity.json` can declare:
-
-```json
-{
-  "id": "item-identity",
-  "targets": [{"host": "cache.internal", "port": 6379}],
-  "when": {"request_body_json": {"/mode": {"equals": "generated"}}},
-  "capture": {
-    "protocol": "redis",
-    "target": {"host": "cache.internal", "port": 6379},
-    "database": 0,
-    "command": "RPUSH",
-    "key": {"prefix": "items:", "numeric": true},
-    "argument_index": 1,
-    "json_pointer": "/id",
-    "references": [{
-      "json_pointer": "/content_key",
-      "template": "cache:payload:{key_middle}:{value}"
-    }],
-    "derived_from": {"json_pointer": "/timestamp", "prefix": "item-"}
-  },
-  "source_evidence": "Item:create generates its ID from current milliseconds and reuses it in the payload key"
-}
-```
-
-The companion `time.json` declares an independent rule ID, inbound method,
-exact time fields, and Source proof:
-
-```json
-{
-  "id": "item-time",
-  "method": "POST",
-  "time_values": [{"json_pointer": "/timestamp", "format": "unix_milliseconds"}],
-  "source_evidence": "Item:create writes the current request-relative millisecond timestamp"
-}
-```
-
-```bash
-backend-rewrite --target-root "$TARGET" rule plan \
-  --dynamic-value "$(cat identity.json)" --redis-time "$(cat time.json)" \
-  --evidence-id CURRENT_EVIDENCE
-backend-rewrite --target-root "$TARGET" rule apply RETURNED_PLAN_ID
-```
-
-The coordinator supplies the active API path. The companion inherits the identity capture's endpoint, database, command,
-key, argument index, inbound path and `when`. Its method must match the
-immutable Source request. Time formats are `unix_seconds`,
-`unix_milliseconds`, and `rfc3339`; the existing fixed five-second relative
-time window and relationships between selected clocks apply. This joint
-authoring currently supports `SET` and `RPUSH`; `HSET` time companions are
-rejected explicitly.
-
-`references` must be present for joint Redis planning; use `[]` when there are
-no references in the captured JSON. Each exact, non-root pointer owns one
-string field. A template contains exactly one `{value}` and optionally one
-`{key_middle}`. The latter requires the capture key's bounded numeric affixes.
-Source and Target must have identical complete capture keys. Each reference
-must equal its template rendered from its own side's identity and that same
-key middle. Prefixes, suffixes and other JSON fields stay strict. The first
-capture never uses its new identity to replace arbitrary substrings in other
-fields or arguments.
-
-Optional `derived_from` requires the captured identity to equal `prefix`
-followed by the canonical JSON integer at its selected pointer, on both
-Source and Target. The prefix can be omitted. That pointer must also be a
-Unix time field in the companion. Omit `derived_from` for independent random
-identities and clocks. Capture, reference and time pointers cannot overlap;
-at most 16 references and 32 time fields are supported, and templates are
-limited to 1024 bytes.
-
-Planning uses protected complete request witnesses rather than discovery
-hints. It checks a real identity difference, the inbound Source branch,
-all declared references and clocks, all stable fields, and existing and new
-case-local bindings. The report must be finalized and match the current
-policy; an incomplete overall Replay can still provide a valid failed
-request witness. Policy, report, Source request and dependency files are
-frozen through apply. Missing, truncated or changed evidence rejects the
-plan. New explicit-reference captures require this joint authoring path;
-legacy captures that omit `references` keep their existing behavior.
+Use `backend-rewrite rule plan --file … --evidence-id …`, inspect its concrete
+preview, then apply its plan ID. No authored binding or generator-first capture
+is required. Native key/URL derivations and signed values keep their additional
+Source proof; ordinary field formats remain global. See the
+[field guide](resource-field-contracts.md) for optional/null semantics, exact
+equal scalar anchors and verified read delivery.
 
 ## Runtime contract
 
@@ -479,7 +367,7 @@ legacy captures that omit `references` keep their existing behavior.
   References must follow a successful capture. Inbound and final response
   contracts continue to use their respective explicit rules.
 - Finite consumption, response delivery, connection ordering, authentication,
-  database and case ownership remain enforced. Redis lock/value and MySQL time
+  database and case ownership remain enforced. Redis value and MySQL time
   rules retain their own validations.
 - Each rule supports at most 256 distinct identities per case. Applicability
   and binding counts appear in the dependency rule report; unused applicable

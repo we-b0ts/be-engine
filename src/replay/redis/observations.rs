@@ -124,7 +124,7 @@ fn selected(effect: &NativeEffect) -> bool {
         || effect
             .redis_read_back()
             .iter()
-            .any(|r| r.contract.state_epochs.is_some())
+            .any(|r| r.contract.state_epochs)
 }
 
 impl RedisReplayState {
@@ -155,7 +155,7 @@ impl RedisReplayState {
                         .effect
                         .redis_read_back()
                         .iter()
-                        .any(|e| e.contract.state_epochs.is_some())
+                        .any(|e| e.contract.state_epochs)
                 {
                     Kind::Read
                 } else {

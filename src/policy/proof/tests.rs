@@ -2,9 +2,9 @@ use crate::policy::*;
 use serde_json::{Value, json};
 
 fn value_rule() -> Value {
-    json!({"id":"time","surface":"api.response","match":{"api":"GET /items"},
-        "slot":"body","codec":"json","contract":{"/time":{"relative_time":"unix_seconds"}},
-        "proof":{"source":"items.py:1","fact":"Source reads the current clock"}})
+    json!({"id":"time","match":{"api":"GET /items"},
+        "effect":{"kind":"response_generated","fields":{"/nonce":{"kind":"random","format":"hex","length":12}}},
+        "proof":{"source":"items.py:1","fact":"Source generates a random nonce"}})
 }
 
 fn native_rule() -> Value {
@@ -47,17 +47,18 @@ fn source_lists_are_bounded_and_inherit_one_document_revision() {
     let output = render_policy(&parsed).unwrap();
     assert_eq!(output.matches("source_revision:").count(), 1);
     assert!(!output.contains(" @ "));
-    let rendered: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
     assert_eq!(
-        rendered["rules"][0]["proof"]["source"]
-            .as_sequence()
+        super::references(&parsed.rules[0].proof().unwrap().source)
             .unwrap()
             .len(),
         3
     );
+    assert!(parse_policy(&output).unwrap().rules[0].proof().is_none());
     assert_eq!(
-        compile_policy(&parsed).unwrap(),
-        compile_policy(&parse_policy(&output).unwrap()).unwrap()
+        compile_policy(&parsed).unwrap().fingerprints,
+        compile_policy(&parse_policy(&output).unwrap())
+            .unwrap()
+            .fingerprints
     );
     for source in [
         json!([]),
@@ -72,7 +73,7 @@ fn source_lists_are_bounded_and_inherit_one_document_revision() {
 }
 
 #[test]
-fn only_capture_paths_can_omit_source_and_render_before_other_rules() {
+fn runtime_rules_omit_proofs_while_provided_plan_proofs_remain_validated() {
     let capture = json!({"id":"paths","match":{},"effect":{"kind":"capture_http","case_paths":["/items"]},
         "proof":{"fact":"Capture this route without granting comparison permission"}});
     let input =
@@ -83,14 +84,17 @@ fn only_capture_paths_can_omit_source_and_render_before_other_rules() {
     let output = render_policy(&parsed).unwrap();
     let reparsed = parse_policy(&output).unwrap();
     assert_eq!(reparsed.rules[0].id(), "paths");
-    assert!(reparsed.rules[0].proof().source.is_empty());
+    assert!(reparsed.rules[0].proof().is_none());
     assert_eq!(
-        compile_policy(&parsed).unwrap(),
-        compile_policy(&reparsed).unwrap()
+        compile_policy(&parsed).unwrap().fingerprints,
+        compile_policy(&reparsed).unwrap().fingerprints
     );
     let mut changed = reparsed.clone();
     if let PolicyRule::Native(rule) = &mut changed.rules[0] {
-        rule.proof.fact = "The same acquisition scope has a shorter explanation".into();
+        rule.proof = Some(Proof {
+            source: String::new(),
+            fact: "The same acquisition scope has a shorter explanation".into(),
+        });
     }
     assert_eq!(
         compile_policy(&changed).unwrap().fingerprints.capture,
@@ -98,24 +102,28 @@ fn only_capture_paths_can_omit_source_and_render_before_other_rules() {
     );
     for mut rule in [value_rule(), native_rule()] {
         rule["proof"].as_object_mut().unwrap().remove("source");
-        assert!(parse(vec![rule]).is_err());
+        assert!(parse(vec![rule.clone()]).is_err());
+        rule.as_object_mut().unwrap().remove("proof");
+        assert!(parse(vec![rule]).is_ok());
     }
 }
 
 #[test]
-fn bounded_fact_rendering_uses_at_most_two_complete_content_lines() {
+fn bounded_source_proof_is_retained_for_planning_and_excluded_from_runtime() {
     let fact = ["a".repeat(65), "b".repeat(65), "c".repeat(65)].join(" ");
     let mut rule = value_rule();
     rule["proof"]["fact"] = json!(fact);
     let policy = parse(vec![rule]).unwrap();
+    assert_eq!(policy.rules[0].proof().unwrap().fact, fact);
     let output = render_policy(&policy).unwrap();
-    let lines = output.lines().collect::<Vec<_>>();
-    let start = lines
-        .iter()
-        .position(|line| line.trim() == "fact: >-")
-        .unwrap();
-    assert_eq!(lines.len() - start - 1, 2);
-    assert_eq!(parse_policy(&output).unwrap(), policy);
+    assert!(!output.contains("proof:"));
+    assert!(!output.contains("fact:"));
+    assert_eq!(
+        compile_policy(&parse_policy(&output).unwrap())
+            .unwrap()
+            .fingerprints,
+        compile_policy(&policy).unwrap().fingerprints,
+    );
 }
 
 #[test]
@@ -126,13 +134,13 @@ fn state_epoch_proof_text_is_metadata_but_permission_presence_is_semantic() {
         "effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1},
             "references":[{"resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0}}],
             "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1,
-                "state_epochs":{"source":"session.py:10","fact":"Reads observe the current Case-owned SET/DEL state"}}]},
+                "state_epochs":true,"proof":{"source":"session.py:10","fact":"Reads observe the current Case-owned SET/DEL state"}}]},
         "proof":{"source":"session.py:1","fact":"Source stores a generated block id and later reads the same key"}});
     let before = compile_policy(&parse(vec![rule.clone()]).unwrap()).unwrap();
-    rule["effect"]["read_back"][0]["state_epochs"] = json!({"source":["session.py:10", "buffer.py:20"],"fact":"Buffered scheduling varies read counts inside the same Case-owned value lifetime"});
+    rule["effect"]["read_back"][0]["proof"] = json!({"source":["session.py:10", "buffer.py:20"],"fact":"Buffered scheduling varies read counts inside the same Case-owned value lifetime"});
     let changed = compile_policy(&parse(vec![rule.clone()]).unwrap()).unwrap();
     assert_eq!(before.fingerprints.runtime, changed.fingerprints.runtime);
-    assert_ne!(before.fingerprints.full, changed.fingerprints.full);
+    assert_eq!(before.fingerprints.full, changed.fingerprints.full);
     let shared = parse_policy(
         &json!({"format":"traffic-policy/v2","source_revision":"source-v1",
         "rules":[rule.clone()]})
@@ -144,12 +152,10 @@ fn state_epoch_proof_text_is_metadata_but_permission_presence_is_semantic() {
     assert!(!rendered.contains(" @ "));
     let yaml: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
     assert_eq!(
-        yaml["rules"][0]["effect"]["read_back"][0]["state_epochs"]["source"]
-            .as_sequence()
-            .unwrap()
-            .len(),
-        2
+        yaml["redis"]["rules"][0]["effect"]["read_back"][0]["state_epochs"].as_bool(),
+        Some(true)
     );
+    assert!(!rendered.contains("proof:"));
     rule["effect"]["read_back"][0]
         .as_object_mut()
         .unwrap()

@@ -154,7 +154,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 }
                 super::api_trigger::mysql::validate(rule)?;
                 validate_source_revision(source_revision)?;
-                validate_source_evidence(source_evidence)?;
+                validate_optional_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Http {
                 authorities,
@@ -170,7 +170,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 if !source_revision.is_empty() {
                     validate_source_revision(source_revision)?;
                 }
-                validate_source_evidence(source_evidence)?;
+                validate_optional_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Memcached {
                 breeze_identity,
@@ -199,7 +199,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 if !source_revision.is_empty() {
                     validate_source_revision(source_revision)?;
                 }
-                validate_source_evidence(source_evidence)?;
+                validate_optional_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Redis {
                 ports,
@@ -220,7 +220,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                     if !source_revision.is_empty() {
                         validate_source_revision(source_revision)?;
                     }
-                    validate_source_evidence(source_evidence)?;
+                    validate_optional_source_evidence(source_evidence)?;
                     continue;
                 }
                 if let BackgroundDependencyRuleConfig::Redis {
@@ -307,7 +307,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 if !source_revision.is_empty() {
                     validate_source_revision(source_revision)?;
                 }
-                validate_source_evidence(source_evidence)?;
+                validate_optional_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Motan {
                 group,
@@ -330,7 +330,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 if !source_revision.is_empty() {
                     validate_source_revision(source_revision)?;
                 }
-                validate_source_evidence(source_evidence)?;
+                validate_optional_source_evidence(source_evidence)?;
             }
         }
     }
@@ -359,6 +359,16 @@ fn validate_source_revision(source_revision: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Runtime DTOs may omit plan-only evidence. Explicit evidence, when present,
+/// retains the same bounded representation; authoring plans use the strict owner.
+pub(crate) fn validate_optional_source_evidence(source_evidence: &str) -> Result<()> {
+    if source_evidence.is_empty() {
+        Ok(())
+    } else {
+        validate_source_evidence(source_evidence)
+    }
 }
 
 pub(crate) fn validate_source_evidence(source_evidence: &str) -> Result<()> {

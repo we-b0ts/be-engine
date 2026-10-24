@@ -20,81 +20,86 @@ pub(super) fn arguments_match(
     if recorded.args == actual.args && recorded.extras == actual.extras {
         return true;
     }
-    if !command.eq_ignore_ascii_case("set") {
-        return false;
-    }
     match wire_protocol {
-        MemcachedWireProtocol::Text => text_set_arguments_match(
-            recorded.args,
-            actual.args,
-            recorded.extras,
-            actual.extras,
-            recorded.observed_at,
-            actual.observed_at,
-        ),
-        MemcachedWireProtocol::Binary => binary_set_arguments_match(
-            recorded.args,
-            actual.args,
-            recorded.extras,
-            actual.extras,
-            recorded.observed_at,
-            actual.observed_at,
-        ),
+        MemcachedWireProtocol::Text => text_arguments_match(command, recorded, actual),
+        MemcachedWireProtocol::Binary => binary_arguments_match(command, recorded, actual),
     }
 }
 
-fn text_set_arguments_match(
-    recorded_args: &[Vec<u8>],
-    actual_args: &[Vec<u8>],
-    recorded_extras: Option<&[u8]>,
-    actual_extras: Option<&[u8]>,
-    recorded_at: DateTime<Utc>,
-    actual_at: DateTime<Utc>,
+fn text_arguments_match(
+    command: &str,
+    recorded: ArgumentSnapshot<'_>,
+    actual: ArgumentSnapshot<'_>,
 ) -> bool {
-    if recorded_extras != actual_extras || recorded_args.len() != 3 || actual_args.len() != 3 {
+    if recorded.extras != actual.extras || recorded.args.len() != actual.args.len() {
         return false;
     }
-    if recorded_args[0] != actual_args[0] || recorded_args[2] != actual_args[2] {
+    let (index, valid_length) = match command.to_ascii_lowercase().as_str() {
+        "set" | "add" | "replace" => (1, recorded.args.len() == 3),
+        "cas" => (1, recorded.args.len() == 4),
+        "touch" | "flush_all" => (0, recorded.args.len() == 1),
+        "gat" | "gats" => (0, !recorded.args.is_empty()),
+        _ => return false,
+    };
+    if !valid_length
+        || !recorded
+            .args
+            .iter()
+            .zip(actual.args)
+            .enumerate()
+            .all(|(position, (a, b))| position == index || a == b)
+    {
         return false;
     }
-    let Some(recorded_expiration) = parse_text_expiration(&recorded_args[1]) else {
+    let Some(a) = parse_text_expiration(&recorded.args[index]) else {
         return false;
     };
-    let Some(actual_expiration) = parse_text_expiration(&actual_args[1]) else {
+    let Some(b) = parse_text_expiration(&actual.args[index]) else {
         return false;
     };
-    expiration_matches(
-        recorded_expiration,
-        actual_expiration,
-        recorded_at,
-        actual_at,
-    )
+    expiration_matches(a, b, recorded.observed_at, actual.observed_at)
 }
 
-fn binary_set_arguments_match(
-    recorded_args: &[Vec<u8>],
-    actual_args: &[Vec<u8>],
-    recorded_extras: Option<&[u8]>,
-    actual_extras: Option<&[u8]>,
-    recorded_at: DateTime<Utc>,
-    actual_at: DateTime<Utc>,
+fn binary_arguments_match(
+    command: &str,
+    recorded: ArgumentSnapshot<'_>,
+    actual: ArgumentSnapshot<'_>,
 ) -> bool {
-    if recorded_args != actual_args {
+    if recorded.args != actual.args {
         return false;
     }
-    let (Some(recorded), Some(actual)) = (recorded_extras, actual_extras) else {
+    let (length, offset, arithmetic) = match command.to_ascii_lowercase().as_str() {
+        "set" | "add" | "replace" => (8, 4, false),
+        "touch" | "gat" | "flush" => (4, 0, false),
+        "increment" | "decrement" => (20, 16, true),
+        _ => return false,
+    };
+    let (Some(a), Some(b)) = (recorded.extras, actual.extras) else {
         return false;
     };
-    if recorded.len() != 8 || actual.len() != 8 || recorded[..4] != actual[..4] {
+    if a.len() != length || b.len() != length || a[..offset] != b[..offset] {
         return false;
     }
-    let recorded_expiration = u32::from_be_bytes(recorded[4..8].try_into().unwrap());
-    let actual_expiration = u32::from_be_bytes(actual[4..8].try_into().unwrap());
+    let a = u32::from_be_bytes(
+        a[offset..offset + 4]
+            .try_into()
+            .expect("validated expiration size"),
+    );
+    let b = u32::from_be_bytes(
+        b[offset..offset + 4]
+            .try_into()
+            .expect("validated expiration size"),
+    );
+    // In arithmetic, all-one bits mean do not create a missing key. It is a
+    // protocol control value rather than an absolute Unix deadline.
+    if arithmetic && (a == u32::MAX || b == u32::MAX) {
+        return false;
+    }
     expiration_matches(
-        u64::from(recorded_expiration),
-        u64::from(actual_expiration),
-        recorded_at,
-        actual_at,
+        u64::from(a),
+        u64::from(b),
+        recorded.observed_at,
+        actual.observed_at,
     )
 }
 
@@ -280,5 +285,144 @@ mod tests {
             (&[], Some(&binary_extras(7, 1_700_086_400)), recorded_at,),
             (&[], Some(&binary_extras(8, 1_800_086_400)), actual_at,),
         ));
+    }
+
+    #[test]
+    fn every_supported_text_expiration_position_preserves_other_arguments() {
+        let source = observed_at(1_700_000_000);
+        let target = observed_at(1_800_000_000);
+        for command in ["set", "add", "replace", "cas"] {
+            let mut a = text_args("7", 1_700_000_060, 5);
+            let mut b = text_args("7", 1_800_000_060, 5);
+            if command == "cas" {
+                a.push(b"42".to_vec());
+                b.push(b"42".to_vec());
+            }
+            assert!(
+                matches(
+                    MemcachedWireProtocol::Text,
+                    command,
+                    (&a, None, source),
+                    (&b, None, target)
+                ),
+                "{command}"
+            );
+            b[0] = b"8".to_vec();
+            assert!(!matches(
+                MemcachedWireProtocol::Text,
+                command,
+                (&a, None, source),
+                (&b, None, target)
+            ));
+            if command == "cas" {
+                b[0] = a[0].clone();
+                b[3] = b"43".to_vec();
+                assert!(!matches(
+                    MemcachedWireProtocol::Text,
+                    command,
+                    (&a, None, source),
+                    (&b, None, target)
+                ));
+            }
+        }
+        for command in ["touch", "gat", "gats", "flush_all"] {
+            let mut a = vec![b"1700000060".to_vec()];
+            let mut b = vec![b"1800000060".to_vec()];
+            if matches!(command, "gat" | "gats") {
+                a.push(b"second-key".to_vec());
+                b.push(b"second-key".to_vec());
+            }
+            assert!(
+                matches(
+                    MemcachedWireProtocol::Text,
+                    command,
+                    (&a, None, source),
+                    (&b, None, target)
+                ),
+                "{command}"
+            );
+            if a.len() > 1 {
+                b[1] = b"another-key".to_vec();
+                assert!(!matches(
+                    MemcachedWireProtocol::Text,
+                    command,
+                    (&a, None, source),
+                    (&b, None, target)
+                ));
+            }
+        }
+        assert!(!matches(
+            MemcachedWireProtocol::Text,
+            "incr",
+            (&[b"1700000060".to_vec()], None, source),
+            (&[b"1800000060".to_vec()], None, target)
+        ));
+        assert!(!matches(
+            MemcachedWireProtocol::Text,
+            "append",
+            (&text_args("7", 1_700_000_060, 5), None, source),
+            (&text_args("7", 1_800_000_060, 5), None, target)
+        ));
+    }
+
+    #[test]
+    fn supported_binary_expiration_layouts_and_arithmetic_control_are_distinct() {
+        let source = observed_at(1_700_000_000);
+        let target = observed_at(1_800_000_000);
+        for command in [
+            "set",
+            "add",
+            "replace",
+            "touch",
+            "gat",
+            "flush",
+            "increment",
+            "decrement",
+        ] {
+            let extras = |expiration: u32| match command {
+                "set" | "add" | "replace" => binary_extras(7, expiration),
+                "increment" | "decrement" => [
+                    1_u64.to_be_bytes().as_slice(),
+                    10_u64.to_be_bytes().as_slice(),
+                    expiration.to_be_bytes().as_slice(),
+                ]
+                .concat(),
+                _ => expiration.to_be_bytes().to_vec(),
+            };
+            let a = extras(1_700_000_060);
+            let mut b = extras(1_800_000_060);
+            assert!(
+                matches(
+                    MemcachedWireProtocol::Binary,
+                    command,
+                    (&[], Some(&a), source),
+                    (&[], Some(&b), target)
+                ),
+                "{command}"
+            );
+            if matches!(command, "increment" | "decrement") {
+                b[7] = 2;
+                assert!(!matches(
+                    MemcachedWireProtocol::Binary,
+                    command,
+                    (&[], Some(&a), source),
+                    (&[], Some(&b), target)
+                ));
+                let sentinel = extras(u32::MAX);
+                let other = extras(u32::MAX - 1);
+                assert!(!matches(
+                    MemcachedWireProtocol::Binary,
+                    command,
+                    (&[], Some(&sentinel), source),
+                    (&[], Some(&other), observed_at(source.timestamp() - 1))
+                ));
+                assert!(matches(
+                    MemcachedWireProtocol::Binary,
+                    command,
+                    (&[], Some(&sentinel), source),
+                    (&[], Some(&sentinel), target)
+                ));
+            }
+        }
     }
 }

@@ -1,24 +1,28 @@
 //! Bounded case-local renaming shared by physical resource positions.
 //! Parsing and hashing are prepared before acquiring a runtime store mutex.
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::policy::{CompiledRule, FieldContract, IdentityFormat};
+use crate::policy::IdentityFormat;
 
 const MAX_CASE_ENTITIES: usize = 4096;
 const MAX_RUN_ENTITIES: usize = 32768;
 const MAX_PROPOSAL_PAIRS: usize = 16384;
+const MAX_PROPOSAL_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CASE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RUN_BYTES: usize = 64 * 1024 * 1024;
 type Fingerprint = [u8; 32];
 
 /// Private control/runtime data. Never include tokens in diagnostic reports.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct IdentityPair {
-    pub(crate) domain: String,
+    // Canonical JSON scalars preserve string/number types and full prefixes.
+    // These private keys are never authored or included in public reports.
     pub(crate) source: String,
     pub(crate) target: String,
 }
@@ -27,7 +31,6 @@ impl std::fmt::Debug for IdentityPair {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("IdentityPair")
-            .field("domain", &self.domain)
             .finish_non_exhaustive()
     }
 }
@@ -41,21 +44,33 @@ struct PreparedPair {
 
 impl PreparedPair {
     fn prepare(pair: IdentityPair) -> Result<Self> {
-        ensure!(
-            !pair.domain.is_empty()
-                && pair.domain.len() <= 64
-                && pair
-                    .domain
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte)),
-            "identity domain requires a bounded identifier"
-        );
-        ensure!(
-            [&pair.source, &pair.target]
-                .into_iter()
-                .all(|token| !token.is_empty() && token.len() <= 256 && token.is_ascii()),
-            "identity token exceeds its bounded representation"
-        );
+        let mut representation = None;
+        for encoded in [&pair.source, &pair.target] {
+            ensure!(
+                encoded.len() <= 64 * 1024 * 6 + 2,
+                "identity scalar exceeds its bounded representation"
+            );
+            let value: Value = serde_json::from_str(encoded)
+                .context("identity scalar requires its complete typed representation")?;
+            if pair.source != pair.target {
+                ensure!(
+                    value.is_i64()
+                        || value.is_u64()
+                        || value.as_str().is_some_and(|text| !text.is_empty()),
+                    "non-generated scalar identities only permit exact anchors"
+                );
+            }
+            let scalar_type = std::mem::discriminant(&value);
+            ensure!(
+                representation.is_none_or(|previous| previous == scalar_type),
+                "identity scalar representation changed"
+            );
+            representation = Some(scalar_type);
+            ensure!(
+                super::json::identity::key(&value, "").is_ok_and(|canonical| canonical == *encoded),
+                "identity scalar requires its complete typed representation"
+            );
+        }
         Ok(Self {
             source: Sha256::digest(pair.source.as_bytes()).into(),
             target: Sha256::digest(pair.target.as_bytes()).into(),
@@ -93,6 +108,14 @@ impl IdentityDecision {
             pairs.len() <= MAX_PROPOSAL_PAIRS,
             "identity proposal bound exceeded"
         );
+        ensure!(
+            pairs
+                .iter()
+                .map(|pair| pair.source.len() + pair.target.len())
+                .sum::<usize>()
+                <= MAX_PROPOSAL_BYTES,
+            "identity proposal byte bound exceeded"
+        );
         Ok(Self {
             case: case.to_owned(),
             pairs: pairs
@@ -111,27 +134,33 @@ impl IdentityDecision {
             self.pairs.len() + other.pairs.len() <= MAX_PROPOSAL_PAIRS,
             "identity proposal bound exceeded"
         );
+        ensure!(
+            self.pairs
+                .iter()
+                .chain(&other.pairs)
+                .map(|pair| pair.pair.source.len() + pair.pair.target.len())
+                .sum::<usize>()
+                <= MAX_PROPOSAL_BYTES,
+            "identity proposal byte bound exceeded"
+        );
         self.pairs.extend(other.pairs);
         Ok(())
     }
 }
 
-#[derive(Default)]
-struct Domain {
-    forward: BTreeMap<Fingerprint, (Fingerprint, String)>,
-    reverse: BTreeMap<Fingerprint, Fingerprint>,
-}
-
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Case {
-    domains: BTreeMap<String, Domain>,
+    forward: BTreeMap<Fingerprint, (Fingerprint, Arc<str>)>,
+    reverse: BTreeMap<Fingerprint, Fingerprint>,
     entities: usize,
+    bytes: usize,
 }
 
 #[derive(Default)]
 pub(crate) struct IdentityStore {
     cases: BTreeMap<String, Case>,
     entities: usize,
+    bytes: usize,
 }
 
 impl std::fmt::Debug for IdentityStore {
@@ -148,6 +177,7 @@ impl IdentityStore {
     pub(crate) fn begin_case(&mut self, case: &str) {
         if let Some(case) = self.cases.remove(case) {
             self.entities -= case.entities;
+            self.bytes -= case.bytes;
         }
     }
 
@@ -156,23 +186,32 @@ impl IdentityStore {
         self.cases.get(case).is_some_and(|case| case.entities > 0)
     }
 
-    /// Validate against committed bindings plus a small proposal-local overlay.
+    /// Validate committed correspondences plus a small proposal-local overlay.
     /// No state changes are visible until `commit` validates every pair again.
     pub(crate) fn validate(&self, decision: &IdentityDecision) -> Result<()> {
+        ensure!(
+            decision.pairs.len() <= MAX_PROPOSAL_PAIRS
+                && decision
+                    .pairs
+                    .iter()
+                    .map(|pair| pair.pair.source.len() + pair.pair.target.len())
+                    .sum::<usize>()
+                    <= MAX_PROPOSAL_BYTES,
+            "identity proposal bound exceeded"
+        );
         let case = self.cases.get(&decision.case);
         let mut forward = BTreeMap::new();
         let mut reverse = BTreeMap::new();
         let mut added = 0;
+        let mut added_bytes = 0;
         for pair in &decision.pairs {
-            let domain = case.and_then(|case| case.domains.get(&pair.pair.domain));
-            let source = (pair.pair.domain.as_str(), pair.source);
-            let target = (pair.pair.domain.as_str(), pair.target);
+            let source = pair.source;
+            let target = pair.target;
             ensure!(
-                domain
-                    .and_then(|domain| domain.forward.get(&pair.source))
+                case.and_then(|case| case.forward.get(&pair.source))
                     .is_none_or(|(target, _)| target == &pair.target)
-                    && domain
-                        .and_then(|domain| domain.reverse.get(&pair.target))
+                    && case
+                        .and_then(|case| case.reverse.get(&pair.target))
                         .is_none_or(|source| source == &pair.source)
                     && forward
                         .get(&source)
@@ -180,25 +219,62 @@ impl IdentityStore {
                     && reverse
                         .get(&target)
                         .is_none_or(|source| source == &pair.source),
-                "identity binding bijection changed"
+                "identity equality relationship changed"
             );
-            if domain.is_none_or(|domain| !domain.forward.contains_key(&pair.source))
+            if case.is_none_or(|case| !case.forward.contains_key(&pair.source))
                 && !forward.contains_key(&source)
             {
                 added += 1;
+                added_bytes += pair.pair.target.len();
             }
             forward.insert(source, pair.target);
             reverse.insert(target, pair.source);
         }
         ensure!(
             case.map_or(0, |case| case.entities) + added <= MAX_CASE_ENTITIES,
-            "identity binding exceeds 4096 entities per case"
+            "identity relationship exceeds 4096 entities per case"
         );
         ensure!(
             self.entities + added <= MAX_RUN_ENTITIES,
-            "identity binding exceeds 32768 entities per replay"
+            "identity relationship exceeds 32768 entities per replay"
+        );
+        ensure!(
+            case.map_or(0, |case| case.bytes) + added_bytes <= MAX_CASE_BYTES,
+            "identity relationship exceeds its per-case byte bound"
+        );
+        ensure!(
+            self.bytes + added_bytes <= MAX_RUN_BYTES,
+            "identity relationship exceeds its replay byte bound"
         );
         Ok(())
+    }
+
+    /// Isolated delivery view of an accepted candidate's staged relationships.
+    /// Shared token storage keeps this bounded snapshot independent of JWT size;
+    /// run counters retain all other cases so ordinary capacity checks still apply.
+    pub(crate) fn preview(&self, decision: IdentityDecision) -> Result<Self> {
+        self.validate(&decision)?;
+        let cases = self
+            .cases
+            .get(&decision.case)
+            .map(|case| BTreeMap::from([(decision.case.clone(), case.clone())]))
+            .unwrap_or_default();
+        let mut preview = Self {
+            cases,
+            entities: self.entities,
+            bytes: self.bytes,
+        };
+        preview.commit(decision)?;
+        Ok(preview)
+    }
+
+    pub(crate) fn contains_pair(&self, case: &str, pair: IdentityPair) -> Result<bool> {
+        let pair = PreparedPair::prepare(pair)?;
+        Ok(self
+            .cases
+            .get(case)
+            .and_then(|case| case.forward.get(&pair.source))
+            .is_some_and(|(target, _)| *target == pair.target))
     }
 
     pub(crate) fn commit(&mut self, decision: IdentityDecision) -> Result<()> {
@@ -208,14 +284,14 @@ impl IdentityStore {
         }
         let case = self.cases.entry(decision.case).or_default();
         for pair in decision.pairs {
-            let domain = case.domains.entry(pair.pair.domain).or_default();
-            if domain.forward.contains_key(&pair.source) {
+            if case.forward.contains_key(&pair.source) {
                 continue;
             }
-            domain
-                .forward
-                .insert(pair.source, (pair.target, pair.pair.target));
-            domain.reverse.insert(pair.target, pair.source);
+            case.bytes += pair.pair.target.len();
+            self.bytes += pair.pair.target.len();
+            case.forward
+                .insert(pair.source, (pair.target, pair.pair.target.into()));
+            case.reverse.insert(pair.target, pair.source);
             case.entities += 1;
             self.entities += 1;
         }
@@ -233,28 +309,21 @@ impl IdentityStore {
             !case.is_empty() && case.len() <= 512,
             "invalid identity case scope"
         );
-        let domains = self.cases.get(case).map(|case| &case.domains);
+        let committed = self.cases.get(case);
         let mut values = Vec::with_capacity(selected.len());
         let mut pairs = Vec::with_capacity(selected.len());
         for selected in selected {
-            let target = domains
-                .and_then(|domains| domains.get(&selected.binding))
-                .and_then(|domain| domain.forward.get(&selected.source_hash));
+            let target = committed.and_then(|case| case.forward.get(&selected.source_hash));
             let (target_hash, token) = target
-                .map(|(hash, token)| (*hash, token.as_str()))
+                .map(|(hash, token)| (*hash, token.as_ref()))
                 .unwrap_or((selected.source_hash, selected.source.as_str()));
-            values.push(if selected.numeric {
-                Value::from(
-                    token
-                        .parse::<u64>()
-                        .context("invalid numeric identity delivery")?,
-                )
-            } else {
-                Value::String(format!("{}{token}", selected.prefix))
-            });
+            let value: Value =
+                serde_json::from_str(token).context("invalid typed identity delivery")?;
+            super::json::identity::token(&value, &selected.prefix, selected.format, "")
+                .map_err(|difference| anyhow::anyhow!(difference.reason))?;
+            values.push(value);
             pairs.push(PreparedPair {
                 pair: IdentityPair {
-                    domain: selected.binding.clone(),
                     source: selected.source.clone(),
                     target: token.to_owned(),
                 },
@@ -277,7 +346,6 @@ impl IdentityStore {
 
 #[derive(Clone, Copy)]
 pub(crate) struct IdentityDelivery<'a> {
-    pub(crate) binding: &'a str,
     pub(crate) prefix: &'a str,
     pub(crate) format: IdentityFormat,
     pub(crate) value: &'a Value,
@@ -286,150 +354,29 @@ pub(crate) struct IdentityDelivery<'a> {
 impl IdentityDelivery<'_> {
     pub(crate) fn token(self) -> Result<String> {
         super::json::identity::token(self.value, self.prefix, self.format, "")
+            .map_err(|difference| anyhow::anyhow!(difference.reason))?;
+        super::json::identity::key(self.value, "")
             .map_err(|difference| anyhow::anyhow!(difference.reason))
     }
 }
 
 pub(crate) struct PreparedIdentityDelivery {
-    binding: String,
     prefix: String,
     source: String,
     source_hash: Fingerprint,
-    numeric: bool,
+    format: IdentityFormat,
 }
 
 impl PreparedIdentityDelivery {
     pub(crate) fn prepare(selected: IdentityDelivery<'_>) -> Result<Self> {
         let source = selected.token()?;
         Ok(Self {
-            binding: selected.binding.to_owned(),
             prefix: selected.prefix.to_owned(),
             source_hash: Sha256::digest(source.as_bytes()).into(),
             source,
-            numeric: selected.value.is_number(),
+            format: selected.format,
         })
     }
-}
-
-pub(crate) struct SelectedIdentity<'a> {
-    pub(crate) pointer: String,
-    pub(crate) delivery: IdentityDelivery<'a>,
-    pub(crate) condition: Option<&'a crate::policy::FieldCondition>,
-}
-
-pub(crate) fn rules_have_identity(rules: &[&CompiledRule]) -> bool {
-    rules.iter().any(|rule| {
-        rule.rule
-            .contract
-            .values()
-            .any(|contract| matches!(contract.unconditional(), FieldContract::Identity { .. }))
-    })
-}
-
-/// Select only declared, Source-active physical leaves; never scan other strings.
-pub(crate) fn select<'a>(
-    root: &'a Value,
-    rules: &[&'a CompiledRule],
-) -> Result<Vec<SelectedIdentity<'a>>> {
-    select_inner(root, rules, true)
-}
-
-/// A comparison-copy projection must also preserve the exact inactive branch.
-pub(crate) fn select_with_inactive<'a>(
-    root: &'a Value,
-    rules: &[&'a CompiledRule],
-) -> Result<Vec<SelectedIdentity<'a>>> {
-    select_inner(root, rules, false)
-}
-
-fn select_inner<'a>(
-    root: &'a Value,
-    rules: &[&'a CompiledRule],
-    active_only: bool,
-) -> Result<Vec<SelectedIdentity<'a>>> {
-    let mut selected = Vec::new();
-    let mut budget = 16384;
-    for rule in rules {
-        for (pattern, contract) in &rule.rule.contract {
-            let FieldContract::Identity {
-                binding,
-                prefix,
-                format,
-            } = contract.unconditional()
-            else {
-                continue;
-            };
-            for pointer in selected_pointers(pattern, root, &mut budget)? {
-                if active_only
-                    && let FieldContract::Conditional { when, .. } = contract
-                    && !when.active(root, &pointer)?
-                {
-                    continue;
-                }
-                selected.push(SelectedIdentity {
-                    condition: match contract {
-                        FieldContract::Conditional { when, .. } => Some(when),
-                        _ => None,
-                    },
-                    delivery: IdentityDelivery {
-                        binding,
-                        prefix,
-                        format: *format,
-                        value: root
-                            .pointer(&pointer)
-                            .context("identity field disappeared")?,
-                    },
-                    pointer,
-                });
-                ensure!(
-                    selected.len() <= MAX_CASE_ENTITIES,
-                    "identity leaf selection bound exceeded"
-                );
-            }
-        }
-    }
-    Ok(selected)
-}
-
-fn selected_pointers(pattern: &str, root: &Value, budget: &mut usize) -> Result<Vec<String>> {
-    fn walk(
-        parts: &[&str],
-        value: &Value,
-        pointer: String,
-        budget: &mut usize,
-        selected: &mut Vec<String>,
-    ) -> Result<()> {
-        ensure!(*budget > 0, "identity selector traversal bound exceeded");
-        *budget -= 1;
-        let Some((part, rest)) = parts.split_first() else {
-            ensure!(
-                selected.len() < MAX_CASE_ENTITIES,
-                "identity leaf selection bound exceeded"
-            );
-            selected.push(pointer);
-            return Ok(());
-        };
-        if *part == "*"
-            && let Some(array) = value.as_array()
-        {
-            for (index, value) in array.iter().enumerate() {
-                walk(rest, value, format!("{pointer}/{index}"), budget, selected)?;
-            }
-        } else if let Some(value) = value.pointer(&format!("/{part}")) {
-            walk(rest, value, format!("{pointer}/{part}"), budget, selected)?;
-        }
-        Ok(())
-    }
-    crate::policy::validate_pointer(pattern, true)?;
-    let mut selected = Vec::new();
-    walk(
-        &pattern.split('/').skip(1).collect::<Vec<_>>(),
-        root,
-        String::new(),
-        budget,
-        &mut selected,
-    )?;
-    Ok(selected)
 }
 
 #[cfg(test)]

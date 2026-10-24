@@ -138,6 +138,24 @@ impl<'a> Iterator for WitnessEntries<'a> {
 }
 
 impl<'a> WitnessEntry<'a> {
+    /// Canonical Source metadata deliberately carries no Target role. Read the
+    /// paired observation without expanding its complete protected payload.
+    pub(crate) fn target_role(&self) -> TargetRole {
+        match self {
+            Self::Legacy(witness) => witness.metadata.target_role,
+            Self::Observation {
+                graph,
+                association,
+                group,
+                ..
+            } => association
+                .map(|link| link.target)
+                .or_else(|| group.map(|group| group.target))
+                .and_then(|index| graph.targets.get(index))
+                .map_or(TargetRole::Unavailable, |target| target.metadata.role),
+        }
+    }
+
     pub(crate) fn target_observation_id(&self) -> Option<&'a str> {
         match self {
             Self::Legacy(witness) => witness.target_observation_id.as_deref(),

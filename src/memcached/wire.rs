@@ -299,16 +299,31 @@ fn parse_text_request(raw: Bytes) -> Result<MemcachedRequest> {
     let command = tokens[0].to_ascii_lowercase();
     let value_len = storage_value_len(&command, &tokens)?;
     let value = value_len.map(|len| raw[line_end + 2..line_end + 2 + len].to_vec());
-    let key = tokens.get(1).map(|value| value.as_bytes().to_vec());
+    let key_position = if matches!(command.as_str(), "gat" | "gats") {
+        2
+    } else {
+        1
+    };
+    let key = if command == "flush_all" {
+        None
+    } else {
+        tokens
+            .get(key_position)
+            .map(|value| value.as_bytes().to_vec())
+    };
     let noreply = command_supports_noreply(&command)
         && tokens
             .last()
             .is_some_and(|value| value.eq_ignore_ascii_case("noreply"));
     let args = tokens
         .iter()
-        .skip(2)
-        .filter(|value| !(noreply && value.eq_ignore_ascii_case("noreply")))
-        .map(|value| value.as_bytes().to_vec())
+        .enumerate()
+        .skip(1)
+        .filter(|(position, value)| {
+            (command == "flush_all" || *position != key_position)
+                && !(noreply && value.eq_ignore_ascii_case("noreply"))
+        })
+        .map(|(_, value)| value.as_bytes().to_vec())
         .collect();
     let cas = (command == "cas")
         .then(|| tokens.get(5).and_then(|value| value.parse().ok()))
@@ -442,6 +457,25 @@ fn binary_command_name(opcode: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn text_expiration_is_an_argument_for_get_and_touch_and_flush() {
+        for command in ["gat", "gats"] {
+            let raw = format!("{command} 1700000060 first second\r\n");
+            let mut reader = BufferedReader::new(raw.as_bytes(), 1024);
+            let request = read_text_request(&mut reader).await.unwrap().unwrap();
+            assert_eq!(request.key.as_deref(), Some(b"first".as_slice()));
+            assert_eq!(
+                request.args,
+                vec![b"1700000060".to_vec(), b"second".to_vec()]
+            );
+        }
+        let mut reader = BufferedReader::new(b"flush_all 1700000060 noreply\r\n".as_slice(), 1024);
+        let request = read_text_request(&mut reader).await.unwrap().unwrap();
+        assert!(request.key.is_none());
+        assert_eq!(request.args, vec![b"1700000060".to_vec()]);
+        assert!(request.noreply);
+    }
 
     #[tokio::test]
     async fn reads_text_storage_value_with_embedded_crlf() {

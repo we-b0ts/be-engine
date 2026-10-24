@@ -1,87 +1,24 @@
-# Redis PUBLISH UUID identity rules
+# Redis PUBLISH payload comparison
 
-> Authoring migration: the legacy YAML and flag-based commands below are
-> historical semantic references. They are not accepted configuration or CLI
-> syntax. Use the self-contained `traffic-policy/v2` rules, `project.policy`,
-> and `rule plan --file … --evidence …` described in
-> [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
-> evidence and lifecycle constraints described here remain mandatory.
-
-
-PUBLISH payloads can contain source-proven random publisher identities such as
-`uuid4().hex`. Exact argument matching rejects the target's new identity. A
-PUBLISH rule selects a textual UUID v4 by an exact field marker, or by its
-zero-based position among UUIDs, on one exact host, port and channel. The rule binds each
-recorded identity to one target identity and preserves distinct identities.
-Repeated messages from the same recorded publisher must use the same target UUID.
-
-Replay scans bounded byte payloads rather than executing or interpreting a
-message serializer. JSON, MessagePack and pickle payloads containing textual
-UUIDs can use the same rule. Hex and dashed UUID forms are supported; source and
-target must retain the same byte layout and UUID representation. Binary UUID
-values, other UUID versions, variable-width replacements and arbitrary dynamic
-fields are outside this capability. The channel, every unselected byte, Redis
-session identity, source lane order and finite consumption remain strict.
-
-Use finalized `dirty_clusters` evidence to inspect
-`facts.redis_publish_candidates`. A candidate proves that the payload differs
-only at one UUID position; it does not prove that this location is semantically
-random. Trace that position's generation and lifetime in source. Candidate
-reports contain fingerprints and selectors, not payloads or UUID values. Old
-reports require fresh Replay to collect these witnesses.
-
-```sh
-backend-rewrite --target-root /path/to/target dependency-rule plan redis publish \
-  --evidence-id evidence-current --rule-id publisher-identity \
-  --host redis.example.test --port 6379 --channel socketio --uuid-field host_id \
-  --source-evidence 'publisher.py:host_id uses uuid4().hex once per publisher'
-backend-rewrite --target-root /path/to/target dependency-rule apply PLAN_ID
-```
-
-Each plan requires a same-case UUID-only mismatch witness and immutable source
-exchange verification. Apply rechecks the policy, source exchanges and finalized
-report, then invalidates verification and requires fresh Replay. It retains
-request ownership. It neither changes recordings nor ignores the whole argument.
-
-Generated policy:
+PUBLISH JSON values use the same `json.fields` declarations as HTTP bodies,
+other Redis values, and MySQL JSON cells. No PUBLISH identity rule, payload
+position, channel-specific format declaration, or binding is required:
 
 ```yaml
-dependency_rules:
-  - id: publisher-identity
-    protocol: redis
-    target: {host: redis.example.test, port: 6379}
-    redis:
-      publish:
-        channel: socketio
-        uuid_field: host_id
-        source_evidence: 'publisher.py:host_id uses uuid4().hex once per publisher'
+json:
+  fields:
+    /host_id: {kind: identity, formats: [{hex: 32}]}
 ```
 
-`--uuid-field` requires one unique ASCII identifier marker in each payload. The
-selected UUID must follow it within eight non-word bytes, covering ordinary
-JSON field delimiters and compact binary string framing. Other UUIDs can precede
-the field, and the field can move between messages; they remain exact. Duplicate
-markers, embedded identifier fragments and non-UUID field values are rejected.
-For another fixed layout, use `--uuid-index` instead. These selectors are mutually
-exclusive. Fields are byte markers, not a general serializer or JSON Pointer.
+The engine detects JSON and checks its fields. Stable fields remain exact.
+When a Source identity repeats, its complete Target value must repeat too,
+including occurrences in other protocols within the same Case. Failed candidate
+comparisons do not commit identity correspondence or consume recorded exchanges.
 
-Payloads are limited to 1 MiB and 32 textual UUIDs. Distinct positions can have
-separate rules; overlapping selectors are rejected. Index and field selectors
-cannot be mixed on the same channel. Ambiguous runtime positions fail matching.
-Failed previews and lane blockers do not bind UUIDs. Ordinary PUBLISH uses a
-pooled connection; a lane containing transaction, subscription or retained
-session state still requires its original physical connection affinity.
+Redis channel selection, command framing, connection ordering, and finite
+response consumption remain protocol responsibilities. JSON format declarations
+do not change those obligations.
 
-`cargo test redis_publish` covers real RESP plan/apply, JSON and binary payloads,
-multiple sockets, strict channel/content checks, identity consistency, distinct
-publishers, lane blockers, stale evidence and finite consumption.
-
-## JSON time composition
-
-For source-generated timestamps in a JSON PUBLISH payload, combine the UUID
-rule with an explicit [dependency request time contract](dependency-request-rules.md#publish-json-timestamps-and-publisher-uuids).
-Selected messages are parsed as bounded unique-member JSON; only the declared
-UUID and time locations may differ. Publisher binding, stable field comparison,
-ordering and finite consumption remain strict and commit together after a full
-match. Messages without a selected Source time field retain this page's ordinary
-byte/UUID behavior. Binary payloads retain UUID-only support.
+Unknown binary payloads, including pickle, use exact byte comparison. The engine
+neither executes their deserializers nor rewrites textual UUID substrings inside
+them. Source recordings remain immutable.

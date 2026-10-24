@@ -205,11 +205,7 @@ fn reclassification_reuses_only_classification_changes_and_never_upgrades_legacy
                 crate::e2e_run::test_session::classify_stream(target.path());
             }
             "verification" => {
-                let document = serde_json::json!({"format":"traffic-policy/v2","rules":[{
-                    "id":"response-items","surface":"api.response","match":{"api":"GET /api"},
-                    "slot":"body","codec":"json","contract":{"/items":{"kind":"unordered"}},
-                    "proof":{"source":"handler.rs:12","fact":"Source emits these items from a set"}
-                }]});
+                let document = serde_json::json!({"format":"traffic-policy/v2","json":{"fields":{"/items":{"kind":"unordered"}}}});
                 crate::policy::compile_policy(&serde_json::from_value(document.clone()).unwrap())
                     .unwrap();
                 fs::write(

@@ -104,6 +104,25 @@ pub(super) fn observe(
             };
             let independent = identity_present
                 && witness.metadata.target_role == TargetRole::IndependentTargetObservation;
+            if resource.protocol == Protocol::Http {
+                let key = if witness.metadata.surface == crate::policy::Surface::DependencyRequest {
+                    "request_headers"
+                } else {
+                    "response_headers"
+                };
+                let before: Value = serde_json::from_slice(&source)?;
+                let after = target
+                    .as_deref()
+                    .filter(|_| independent)
+                    .map(serde_json::from_slice::<Value>)
+                    .transpose()?;
+                drafts.headers(
+                    &before[key],
+                    after.as_ref().map(|after| &after[key]),
+                    &witness.id,
+                    witness.metadata.clocks.comparison(),
+                )?;
+            }
             if witness
                 .metadata
                 .resource

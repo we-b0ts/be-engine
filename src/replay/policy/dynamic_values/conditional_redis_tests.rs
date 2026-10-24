@@ -75,7 +75,7 @@ fn conditional_redis_identity_keeps_inactive_blocks_strict_and_binds_only_active
         .unwrap()
         .unwrap();
     assert_eq!(compared.decision.pairs.len(), 1);
-    runtime.commit("case", compared.decision);
+    runtime.commit("case", compared.decision).unwrap();
     // References have no JSON type field: the existing binding still applies.
     let left = vec![b"content:text-1000".to_vec(), b"hello".to_vec()];
     let right = vec![b"content:text-2000".to_vec(), b"hello".to_vec()];
@@ -145,7 +145,7 @@ fn conditional_redis_identity_rejects_type_switches_corruption_derivation_and_bi
         )
         .unwrap()
         .unwrap();
-    runtime.commit("case", first.decision);
+    runtime.commit("case", first.decision).unwrap();
     for (source, target) in [(text(1000), text(2001)), (text(1001), text(2000))] {
         assert!(
             runtime

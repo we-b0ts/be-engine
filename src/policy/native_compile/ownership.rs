@@ -74,9 +74,6 @@ pub enum OwnedLocation {
     HeaderParameter {
         name: String,
     },
-    PayloadItem {
-        index: usize,
-    },
     JsonPointer {
         pointer: String,
     },
@@ -101,9 +98,7 @@ pub enum OwnedElement {
 }
 
 mod contracts;
-mod field_refs;
 mod validation;
-pub(crate) use field_refs::validate_field_references;
 pub use validation::validate_field_claims;
 pub(crate) use validation::value_sql_scopes_overlap;
 pub(crate) use validation::value_sql_slots_overlap;
@@ -229,9 +224,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             }
             operation_override.set(None);
         }
-        NativeEffect::RedisLock => {
-            add(S::DependencyRequest, L::Value, OwnedLocation::Scalar, false)
-        }
         NativeEffect::RedisAppendStream => {
             add(
                 S::DependencyRequest,
@@ -255,19 +247,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                 OwnedLocation::Scalar,
                 false,
             );
-        }
-        NativeEffect::RedisPublishIdentity(effect) => {
-            let location = effect
-                .uuid_field
-                .as_deref()
-                .map(|field| json(&format!("/{}", field.replace('~', "~0").replace('/', "~1"))))
-                .unwrap_or_else(|| {
-                    effect
-                        .uuid_index
-                        .map(|index| OwnedLocation::PayloadItem { index })
-                        .unwrap_or(OwnedLocation::Scalar)
-                });
-            add(S::DependencyRequest, L::Value, location, false);
         }
         NativeEffect::ResponseJwt(effect) => {
             if let Some(location) = &effect.location {
@@ -331,17 +310,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             }
         }
         NativeEffect::HttpRequest(effect) => {
-            for pointer in effect.json.keys() {
-                add(S::DependencyRequest, L::Body, json(pointer), false);
-            }
-            for header in effect.headers.keys() {
-                add(
-                    S::DependencyRequest,
-                    L::Header(header.to_ascii_lowercase()),
-                    OwnedLocation::Scalar,
-                    false,
-                );
-            }
             for parameter in effect.query.keys() {
                 add(
                     S::DependencyRequest,
@@ -388,14 +356,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                     }
                 }
             }
-            for column in effect.response_time.keys() {
-                add(
-                    S::DependencyResponse,
-                    L::SqlColumn(column.clone()),
-                    OwnedLocation::Scalar,
-                    false,
-                );
-            }
         }
         NativeEffect::InputJwt(effect) => {
             let slot = match &effect.location {
@@ -416,12 +376,7 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                 add(S::ApiInput, L::Body, json(pointer), false);
             }
         }
-        NativeEffect::FiniteSharing(FiniteSharingEffect::Redis { response_time, .. }) => {
-            for pointer in response_time.keys() {
-                add(S::DependencyResponse, L::Value, json(pointer), false);
-            }
-        }
-        NativeEffect::FiniteSharing(FiniteSharingEffect::Http)
+        NativeEffect::FiniteSharing(_)
         | NativeEffect::CaptureHttp(_)
         | NativeEffect::CaptureBreeze(_)
         | NativeEffect::CaptureHttpResponse(_)
@@ -448,7 +403,6 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             }
         }
     }
-    claims.extend(super::mysql_read_back::claims(rule));
     for claim in &mut claims {
         claim.contract = contracts::native_contract(rule, claim);
     }

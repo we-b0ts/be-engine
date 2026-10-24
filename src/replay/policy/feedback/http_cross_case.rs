@@ -89,8 +89,6 @@ pub fn plan_http_cross_case(feedback: HttpCrossCaseFeedback) -> Result<HttpCross
         },
         http: Some(HttpSelector {
             multipart: None,
-            headers: Default::default(),
-            json: Default::default(),
             method: feedback.selector.method.clone(),
             path: feedback.selector.path.clone(),
             query: Default::default(),

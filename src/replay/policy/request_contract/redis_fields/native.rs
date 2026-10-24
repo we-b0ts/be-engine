@@ -1,6 +1,5 @@
 //! Resource fields compose with prevalidated contextual Redis JSON leaves.
 use super::*;
-use crate::policy::{Codec, Surface};
 use crate::value_contract::json::{Comparison, Field, LeafObservations, VerifiedField};
 
 impl RequestContracts {
@@ -15,13 +14,11 @@ impl RequestContracts {
         source: &[u8],
         target: &[u8],
     ) -> Result<Option<Comparison>> {
-        let scoped = self.scoped_compiled_redis(context, Surface::DependencyRequest);
         let values = super::runtime::request_values(context.command, args)?;
         let Some(value) = values.iter().find(|value| value.argument == Some(argument)) else {
             return Ok(None);
         };
-        let rules = Self::filter_redis_value_rules(&scoped, context, value);
-        if rules.is_empty() {
+        if self.global_json().is_none() && self.redis_policy().is_none() {
             return Ok(None);
         }
         let clocks = self.contract_clocks(
@@ -31,7 +28,15 @@ impl RequestContracts {
             None,
             None,
         );
-        let comparison = crate::value_contract::encoded::compare(source, target, &rules, clocks)?;
+        let comparison = self.compare_redis_storage_value(
+            context.case,
+            context.target,
+            context.database,
+            value,
+            source,
+            target,
+            clocks,
+        )?;
         ensure!(
             comparison.passed(),
             "Redis resource value failed: {:?}",
@@ -53,32 +58,27 @@ impl RequestContracts {
         target: &Value,
         native: &BTreeSet<String>,
     ) -> Result<Option<Comparison>> {
-        let scoped = self.scoped_compiled_redis(context, Surface::DependencyRequest);
         let values = super::runtime::request_values(context.command, args)?;
         let Some(value) = values.iter().find(|value| value.argument == Some(argument)) else {
             return Ok(None);
         };
-        let rules = Self::filter_redis_value_rules(&scoped, context, value);
-        if rules.is_empty() {
+        let Some(global) = self.global_json() else {
             return Ok(None);
-        }
-        ensure!(
-            rules
-                .iter()
-                .all(|rule| matches!(rule.rule.codec, Codec::Json)),
-            "native JSON and resource declarations disagree on the Redis codec"
+        };
+        let clocks = self.contract_clocks(
+            Some(context.case),
+            context.recorded_at,
+            context.actual_at,
+            None,
+            None,
         );
-        let fields = rules
+        let selected_fields = global.comparison_fields(source, target, clocks)?;
+        let fields = selected_fields
             .iter()
-            .flat_map(|rule| {
-                rule.rule
-                    .contract
-                    .iter()
-                    .map(move |(pointer, contract)| Field {
-                        rule_id: &rule.rule.id,
-                        pointer,
-                        contract,
-                    })
+            .map(|(pointer, contract)| Field {
+                rule_id: crate::policy::GLOBAL_JSON_ID,
+                pointer,
+                contract,
             })
             .collect::<Vec<_>>();
         let mut selected = BTreeSet::new();
@@ -102,8 +102,12 @@ impl RequestContracts {
             }
             Ok(LeafObservations::default())
         };
-        let verified = native
-            .difference(&selected)
+        let mut verified = native
+            .iter()
+            .filter(|pointer| {
+                !selected.contains(*pointer)
+                    || selected_fields.iter().any(|(path, _)| path == *pointer)
+            })
             .map(|pointer| VerifiedField {
                 rule_id: "schema:redis-native-prevalidated",
                 pointer,
@@ -117,13 +121,38 @@ impl RequestContracts {
             None,
             None,
         );
-        let mut comparison = crate::value_contract::json::compare_with_verified(
-            source,
-            target,
-            &fields,
-            &[],
-            &verified,
-            clocks,
+        let copies = if value.stored
+            && self.has_time_copies(context.case)
+            && let Some(global) = self.global_json()
+        {
+            let position = super::time_copies::redis_time_position(
+                &context.target.host,
+                context.target.port,
+                context.database,
+                value,
+            );
+            let mut lookups = Vec::new();
+            for leaf in crate::value_contract::time_copies::global_leaves(source, global, clocks)? {
+                if let Some(lookup) = crate::value_contract::time_copies::TimeCopyLookup::new_time(
+                    &leaf.time,
+                    position,
+                    position,
+                    &leaf.pattern,
+                    &leaf.pattern,
+                    &leaf.value,
+                    crate::policy::GLOBAL_JSON_ID,
+                ) {
+                    lookups.push(lookup.at(&leaf.pointer, &leaf.pattern));
+                }
+            }
+            self.time_copy_proofs(context.case, lookups, clocks.dependency)
+        } else {
+            vec![]
+        };
+        let checks = crate::value_contract::global_protocol::checks(global, source)?;
+        verified.extend(checks.fields());
+        let mut comparison = crate::value_contract::json::compare_with_verified_time_copies(
+            source, target, &fields, &verified, clocks, &copies,
         );
         // This verifier grants no additional authored policy use.
         comparison

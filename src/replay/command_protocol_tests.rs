@@ -23,10 +23,10 @@ mod redis_connection_tests;
 mod redis_joint_time_tests;
 mod redis_key_contract_tests;
 mod redis_lane_tests;
-mod redis_lock_tests;
 mod redis_process_owned_tests;
 mod redis_publish_tests;
 mod redis_request_contract_tests;
+mod redis_scalar_identity_tests;
 mod redis_time_shift_tests;
 mod redis_value_tests;
 
@@ -283,7 +283,7 @@ async fn consumes_redis_timeout_only_after_client_close() {
 }
 
 #[tokio::test]
-async fn replays_memcached_set_with_a_case_relative_protobuf_timestamp() {
+async fn replays_memcached_set_with_opaque_protobuf_bytes_exactly() {
     let temp = tempfile::tempdir().unwrap();
     let key = temp
         .path()
@@ -342,36 +342,13 @@ async fn replays_memcached_set_with_a_case_relative_protobuf_timestamp() {
     .await
     .unwrap();
     let policy_path = temp.path().join("policy.yaml");
-    crate::replay::write_policy_fixture(
-        &policy_path,
-        r#"
-version: 1
-expected_response: assertions_only
-dependency_rules:
-  - id: user-info-loading-time
-    protocol: memcached
-    memcached:
-      resource:
-        kind: cache_service
-        port: 11211
-      command: set
-      key:
-        prefix: u
-        suffix: ''
-      protobuf:
-        timestamp_fields:
-          50:
-            mechanism: unix_seconds
-            source_evidence: UserInfoServiceBase.java:438 current time
-"#,
-    )
-    .unwrap();
+    std::fs::write(&policy_path,"format: traffic-policy/v2\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n").unwrap();
 
     let report_path = temp.path().join("report.json");
     let (addr, task) =
         spawn_replay_with_policy(&case_dir, Some(report_path.clone()), policy_path).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
-    let actual_value = protobuf_value(Utc::now().timestamp() as u64 + 3, b"stable");
+    let actual_value = recorded_value;
     client
         .write_all(&binary_set_request(42, b"u42", &actual_value))
         .await
@@ -382,9 +359,7 @@ dependency_rules:
     assert_eq!(u16::from_be_bytes(response[6..8].try_into().unwrap()), 0);
 
     let report = wait_for_matched_count(&report_path, "memcached", 1).await;
-    let rule = &report["replay_policy"]["dependency_rules"][0];
-    assert_eq!(rule["matches"], 1);
-    assert_eq!(rule["time_validations"], 1);
+    assert_eq!(report["memcached"]["matched"].as_array().unwrap().len(), 1);
     assert!(
         report["replay_policy"]["unused_applicable_dependency_rule_ids"]
             .as_array()

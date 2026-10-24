@@ -28,6 +28,10 @@ pub(crate) fn validate_index_record(value: &Value) -> Result<()> {
 }
 
 fn validate_outcome(value: &Value) -> Result<()> {
+    if value["event_type"] == "dependency_connect_failure" {
+        let failure: connect_failure::RecordedFailure = serde_json::from_value(value.clone())?;
+        failure.validate()?;
+    }
     if let Some(outcome) = value.get("outcome") {
         let outcome = serde_json::from_value::<crate::DependencyExchangeOutcome>(outcome.clone())?;
         outcome.validate()?;
@@ -70,6 +74,15 @@ pub(super) async fn load_dependency_file(
         .await
         .with_context(|| format!("failed to read dependency replay file {}", path.display()))?;
     let records = parse_dependency_records(path, &raw)?;
+    let cleanup = if source == ReplaySource::Case {
+        lifecycle_cleanup::load_refs(
+            path.parent()
+                .context("Case dependency file has no parent")?,
+        )
+        .await?
+    } else {
+        BTreeSet::new()
+    };
     register_dependency_records(
         path,
         records,
@@ -86,6 +99,7 @@ pub(super) async fn load_dependency_file(
         targets,
         connection_identities,
         process_owned_dependencies,
+        &cleanup,
     )
 }
 
@@ -123,7 +137,7 @@ pub(super) fn parse_dependency_records(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn register_dependency_records(
     path: &Path,
-    records: Vec<(usize, DependencyRecord)>,
+    mut records: Vec<(usize, DependencyRecord)>,
     skip: &BTreeSet<usize>,
     source: ReplaySource,
     case_id: Option<&str>,
@@ -137,7 +151,13 @@ pub(super) fn register_dependency_records(
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
+    cleanup: &BTreeSet<control::dependency_tail::RecordedReference>,
 ) -> Result<()> {
+    ensure!(
+        cleanup.is_empty() || source == ReplaySource::Case && case_id.is_some(),
+        "lifecycle cleanup has no exact Case owner"
+    );
+    lifecycle_cleanup::authorize(&mut records, cleanup)?;
     for (line, record) in &records {
         if skip.contains(line) {
             continue;
@@ -252,6 +272,14 @@ pub(super) fn register_dependency_records(
         let DependencyRecord::MysqlExchange(exchange) = record else {
             unreachable!("non-MySQL dependency records were handled above")
         };
+        ensure!(
+            exchange.lifecycle_cleanup
+                || !exchange
+                    .parse_warnings
+                    .iter()
+                    .any(|warning| warning == "engine cleanup interrupted MySQL capture"),
+            "MySQL engine cleanup record lacks its exact authenticated Source-stop scope"
+        );
         if exchange.outcome == crate::DependencyExchangeOutcome::Response
             && (exchange.command == "COM_PING" && exchange.response.status == "ok"
                 || exchange.command == "COM_STMT_PREPARE"

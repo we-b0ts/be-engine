@@ -9,7 +9,7 @@ fn read_rule(epochs: bool) -> Value {
           "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1}]},
         "proof":{"source":"session.py:1","fact":"Source reads the current block identity and changes it only through SET and DEL"}});
     if epochs {
-        r["effect"]["read_back"][0]["state_epochs"] = json!({"source":"session.py:10","fact":"Batch scheduling changes read counts; every read observes the same Case-owned current value until SET or DEL"});
+        r["effect"]["read_back"][0]["state_epochs"] = json!(true);
     }
     r
 }
@@ -257,13 +257,13 @@ fn a_nil_only_case_key_cannot_gain_a_write_or_a_future_identity() {
 }
 
 #[test]
-fn state_observation_schema_requires_proof_and_keeps_the_closed_effects() {
+fn state_observation_schema_is_closed_and_plan_proof_is_separate_from_runtime() {
     let compile = |r: Value| {
         crate::policy::parse_policy(&json!({"format":"traffic-policy/v2","rules":[r]}).to_string())
             .and_then(|p| crate::policy::compile_policy(&p))
     };
     let mut read = read_rule(true);
-    read["effect"]["read_back"][0]["state_epochs"]["fact"] = json!("");
+    read["effect"]["read_back"][0]["state_epochs"] = json!({"fact":""});
     assert!(compile(read).is_err());
     let mut read = read_rule(true);
     read["effect"]["capture"]["json_pointer"] = json!("/id");
@@ -274,7 +274,7 @@ fn state_observation_schema_requires_proof_and_keeps_the_closed_effects() {
         .unwrap()
         .remove("api");
     assert!(compile(resource_rule).is_ok());
-    for pointer in ["/match/resource/database", "/match/key", "/proof"] {
+    for pointer in ["/match/resource/database", "/match/key"] {
         let mut r = refresh_rule();
         let (parent, key) = pointer.rsplit_once('/').unwrap();
         r.pointer_mut(parent)
@@ -284,6 +284,14 @@ fn state_observation_schema_requires_proof_and_keeps_the_closed_effects() {
             .remove(key);
         assert!(compile(r).is_err());
     }
+    let mut no_proof = refresh_rule();
+    no_proof.as_object_mut().unwrap().remove("proof");
+    assert!(compile(no_proof.clone()).is_ok());
+    let document = crate::policy::parse_policy(
+        &json!({"format":"traffic-policy/v2","rules":[no_proof]}).to_string(),
+    )
+    .unwrap();
+    assert!(crate::policy::require_source_proofs(&document).is_err());
     let mut r = refresh_rule();
     r["effect"]["optional"] = json!(true);
     assert!(compile(r).is_err());

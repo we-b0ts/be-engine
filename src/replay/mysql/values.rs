@@ -587,6 +587,7 @@ pub(in crate::replay) fn mysql_bytes_or_utf8(
         kind: "bytes".to_string(),
         value: None,
         raw: Some(ReplayBodyCapture {
+            truncated: false,
             encoding: "base64".to_string(),
             data: STANDARD.encode(bytes),
         }),

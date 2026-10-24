@@ -113,6 +113,9 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
         }),
         response_stream: None,
         stream_delivery: None,
+        materialized_proxy_failure: false,
+        cleanup_authorized: false,
+        lifecycle_stop: None,
         discovered_tcp_targets: vec![DiscoveredTcpTarget {
             protocol: "motan".to_string(),
             alias: "vintage-node-10-145-1-107.trp.test".to_string(),
@@ -180,6 +183,9 @@ fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
         }),
         response_stream: None,
         stream_delivery: None,
+        materialized_proxy_failure: false,
+        cleanup_authorized: false,
+        lifecycle_stop: None,
         discovered_tcp_targets: vec![DiscoveredTcpTarget {
             protocol: "http".to_string(),
             alias: "http-10-145-1-107-8881.trp.test".to_string(),

@@ -23,6 +23,7 @@ pub(super) mod discovery;
 mod manifest;
 mod preflight;
 mod proposal;
+mod source_proof;
 #[cfg(test)]
 mod tests;
 
@@ -35,7 +36,14 @@ pub struct RewriteUnifiedRulePlanOptions {
 fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
     let value: serde_yaml::Value = serde_yaml::from_str(input)
         .context("expected a rule, rule list, or traffic-policy/v2 document")?;
-    let document = if value.get("rules").is_some() || value.get("format").is_some() {
+    let document = if value.get("rules").is_some()
+        || value.get("format").is_some()
+        || value.get("json").is_some()
+        || value.get("mysql").is_some()
+        || value.get("redis").is_some()
+        || value.get("http").is_some()
+        || value.get("async_api").is_some()
+    {
         serde_yaml::from_value::<TrafficPolicy>(value)
             .context("invalid traffic-policy/v2 proposal")?
     } else {
@@ -72,6 +80,7 @@ pub struct UnifiedRulePlanRecord {
     rule_ids: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     replaced_rules: Vec<PolicyRule>,
+    source_proofs: source_proof::SourceProofSnapshot,
 }
 
 pub fn plan_rewrite_unified_rule(
@@ -132,13 +141,19 @@ fn plan(
         crate::policy_evidence::digest(input.as_bytes()) == proposal.sha256,
         "rule proposal changed while loading"
     );
+    source_proof::validate_proposal(&input)?;
     let mut change = change::parse(&input)?;
+    crate::policy::require_source_proofs(&change.policy)?;
     let proposed = &mut change.policy;
     ensure!(
         !proposed.rules.is_empty()
             || !proposed.resources.is_empty()
-            || !proposed.responses.is_empty(),
-        "policy proposal must contain resource fields, response declarations or explicit rules"
+            || proposed.json.is_some()
+            || proposed.mysql.is_some()
+            || proposed.redis.is_some()
+            || proposed.http.is_some()
+            || proposed.async_api.is_some(),
+        "policy proposal must contain JSON/MySQL/Redis/HTTP formats, async capture, endpoint aliases or native rules"
     );
     let (_, config) = crate::e2e_run::resolve_project(root)?;
     let original = fs::read_to_string(&config.replay_policy)?;
@@ -162,6 +177,22 @@ fn plan(
         .iter()
         .map(|r| r.id().to_owned())
         .collect::<BTreeSet<_>>();
+    if proposed.json.is_some() {
+        rule_ids.insert(crate::policy::GLOBAL_JSON_ID.into());
+    }
+    if proposed.mysql.is_some() {
+        rule_ids.insert("global.mysql".into());
+    }
+    if proposed.redis.is_some() {
+        rule_ids.insert("global.redis".into());
+    }
+    if proposed.http.is_some() {
+        rule_ids.insert(crate::policy::GLOBAL_HTTP_ID.into());
+    }
+    if proposed.async_api.is_some() {
+        rule_ids.insert(crate::policy::ASYNC_API_ID.into());
+    }
+    let source_proofs = source_proof::SourceProofSnapshot::capture(proposed)?;
     let replaced_rules = change.remove_from(&mut document, &state.api)?;
     let declarations_changed = declarations::merge(&mut document, &change.policy)?;
     let rules_changed = proposal::merge(&mut document, change.policy.rules)?;
@@ -181,6 +212,9 @@ fn plan(
             .filter(|rule| !before.native.iter().any(|old| old == *rule))
             .map(|rule| rule.rule.id.clone()),
     );
+    if compiled.async_api != before.async_api {
+        rule_ids.insert(crate::policy::ASYNC_API_ID.into());
+    }
     let current = crate::validate_replay_policy(&config.replay_policy)?;
     ensure!(
         state.replay_identity.as_ref() == Some(&fingerprint::replay_identity(root)?),
@@ -205,6 +239,7 @@ fn plan(
         preflight,
         rule_ids,
         replaced_rules,
+        source_proofs,
     };
     let id = format!(
         "plan-{}",
@@ -264,6 +299,7 @@ impl UnifiedRulePlanRecord {
             }
         }
         let compiled = compile_policy(&parse_policy(&self.updated)?)?;
+        self.source_proofs.verify(&compiled)?;
         self.preflight.ensure_current(root, &compiled)?;
         Ok(())
     }
@@ -285,8 +321,8 @@ impl UnifiedRulePlanRecord {
             "applied":applied, "changed":self.original != self.updated,
             "rule_ids":self.rule_ids, "replaced_rules":self.replaced_rules, "preflight":self.preflight,
             "requires_fresh_replay":self.changed(), "requires_fresh_recording":self.changed() && self.preflight.needs_recording(), "verified":false,
-            "policy":self.policy, "evidence_artifacts":self.artifacts.len(),
-            "expanded_rules":rules, "effect_identity":expanded.as_ref().map(|p| &p.fingerprints),
+            "policy":self.policy, "evidence_artifacts":self.artifacts.len(), "source_proofs":self.source_proofs,
+            "expanded_rules":rules, "json":expanded.as_ref().and_then(|p| p.global_json.as_ref()), "mysql":expanded.as_ref().and_then(|p| p.mysql.as_ref()), "redis":expanded.as_ref().and_then(|p|p.redis.as_ref()), "http":expanded.as_ref().and_then(|p|p.http.as_ref()), "async_api":expanded.as_ref().map(|p| &p.async_api), "effect_identity":expanded.as_ref().map(|p| &p.fingerprints),
             "checks":{"full_source_inventory":true,"immutable_attempt_and_witnesses":true,"policy_compare_and_swap":true,
                 "source_field_types":true,"unselected_fields_and_arguments":true,"independent_and_derived_roles_separate":true},
             "diff":crate::config::rule_document::whole_file_diff(&self.policy, &self.original, &self.updated),
@@ -315,14 +351,7 @@ pub(super) fn apply(
     if record.original != record.updated {
         super::rule_replay::request(state);
         if record.preflight.needs_recording() {
-            let policy = parse_policy(&record.updated)?;
-            let effective = crate::policy::effective_rules(&policy)?;
-            let proof = effective
-                .iter()
-                .filter(|rule| record.rule_ids.contains(rule.id()))
-                .map(|rule| format!("{}: {}", rule.proof().source, rule.proof().fact))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let proof = record.source_proofs.summary(&record.rule_ids);
             super::dependency_rule::schedule_cache_snapshot_refresh(
                 root,
                 state,

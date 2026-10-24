@@ -1,40 +1,28 @@
 //! The unified transaction owns policy authoring; historical DTOs only recover journals.
 mod contracts;
 mod document;
-mod field_refs;
 mod proof;
+mod redis_keys;
+#[cfg(test)]
+mod redis_tests;
 mod render;
 mod resources;
 #[cfg(test)]
 mod tests;
 mod walk;
 
+pub use document::effective_rules;
 pub(crate) use document::expanded;
 pub use render::render_policy;
 pub(crate) use walk::expand_rule;
+pub(crate) use walk::require_source_proof;
 
-pub(super) fn transform_field(value: &mut serde_yaml::Value, compact: bool) -> anyhow::Result<()> {
-    transform_field_at(value, compact, 0)
-}
-
-fn transform_field_at(
-    value: &mut serde_yaml::Value,
-    compact: bool,
-    depth: usize,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(depth < 128, "field contract nesting exceeds 128 levels");
-    contracts::transform(value, true, compact)?;
-    if let Some(child) = value.get_mut("contract") {
-        transform_field_at(child, compact, depth + 1)?;
+pub fn require_source_proofs(document: &crate::policy::TrafficPolicy) -> anyhow::Result<()> {
+    for rule in &document.rules {
+        let mut value = serde_yaml::to_value(rule)?;
+        walk::require_source_proof(&mut value, document.source_revision.as_deref())?;
     }
     Ok(())
-}
-
-pub(super) fn resolve_declaration_proof(
-    value: serde_yaml::Value,
-    revision: Option<&str>,
-) -> anyhow::Result<serde_yaml::Value> {
-    proof::expand(Some(value), None, revision)
 }
 
 pub(crate) fn retired_authoring() -> anyhow::Result<()> {

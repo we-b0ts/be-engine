@@ -12,25 +12,18 @@ pub(crate) use witness::{source_witness, validate_witness};
 pub(super) fn request_arguments_match(
     policy: Option<&ReplayPolicyRuntime>,
     exchange: &ReplayExchange,
-    target: &TargetKey,
+    _target: &TargetKey,
     wire: MemcachedWireProtocol,
     request: &MemcachedRequest,
     observed_at: DateTime<Utc>,
 ) -> bool {
     let mut normalized = None;
     if wire == MemcachedWireProtocol::Text
-        && request.command.eq_ignore_ascii_case("set")
-        && policy.is_some_and(|policy| {
-            !policy
-                .memcached_compiled_rules(
-                    Surface::DependencyRequest,
-                    exchange.case_id.as_deref(),
-                    target,
-                    &request.command,
-                    request.key.as_deref(),
-                )
-                .is_empty()
-        })
+        && matches!(
+            request.command.to_ascii_lowercase().as_str(),
+            "set" | "add" | "replace" | "cas"
+        )
+        && policy.is_some_and(|policy| policy.request_contracts.global_json().is_some())
     {
         let (Some(source), Some(target)) = (&exchange.value, &request.value) else {
             return false;
@@ -66,7 +59,10 @@ pub(super) fn record_request(
     observation_id: Option<uuid::Uuid>,
 ) -> Result<()> {
     if policy.request_contracts.compiled_rules().is_none()
-        || !request.command.eq_ignore_ascii_case("set")
+        || !matches!(
+            request.command.to_ascii_lowercase().as_str(),
+            "set" | "add" | "replace" | "cas"
+        )
         || exchange.value.is_none()
         || request.value.is_none()
     {
@@ -163,28 +159,13 @@ pub(super) fn materialize_response(
     };
     let exchange = &state.memcached.exchanges[matched.index];
     let source_key = exchange.key.as_deref();
-    let mut keys = source_key.into_iter().collect::<Vec<_>>();
-    if matches!(exchange.record.command.as_str(), "get" | "gets") {
-        keys.extend(exchange.args.iter().map(Vec::as_slice));
-    }
-    let mut rules = Vec::new();
-    for key in keys {
-        for rule in policy.memcached_compiled_rules(
-            Surface::DependencyResponse,
-            matched.report.case_id.as_deref(),
-            &matched.report.target,
-            &exchange.record.command,
-            Some(key),
-        ) {
-            if !rules
-                .iter()
-                .any(|existing: &&crate::policy::CompiledRule| existing.rule.id == rule.rule.id)
-            {
-                rules.push(rule);
-            }
-        }
-    }
-    if rules.is_empty() {
+    let Some(global) = policy.request_contracts.global_json() else {
+        return Ok((
+            matched.response_frames.clone(),
+            DependencyRuleDecision::default(),
+        ));
+    };
+    if !matches!(exchange.record.command.as_str(), "get" | "gets") {
         return Ok((
             matched.response_frames.clone(),
             DependencyRuleDecision::default(),
@@ -197,7 +178,7 @@ pub(super) fn materialize_response(
     if exchange.record.no_response
         || exchange.record.outcome == DependencyExchangeOutcome::NoResponse
     {
-        return no_payload(matched, &rules);
+        return no_payload(matched);
     }
     anyhow::ensure!(
         exchange.record.outcome == DependencyExchangeOutcome::Response,
@@ -211,7 +192,7 @@ pub(super) fn materialize_response(
         &exchange.record.wire_protocol,
     )?;
     if source_slots.is_empty() {
-        return no_payload(matched, &rules);
+        return no_payload(matched);
     }
     anyhow::ensure!(
         source_slots.len() == target_slots.len(),
@@ -234,35 +215,34 @@ pub(super) fn materialize_response(
             target_slot.key.as_deref().or(source_key) == key,
             "Memcached response value association changed"
         );
-        let selected = rules
-            .iter()
-            .copied()
-            .filter(|rule| {
-                rule.rule
-                    .selector
-                    .key
-                    .as_ref()
-                    .is_some_and(|selector| key.is_some_and(|key| selector.matches(key)))
-            })
-            .collect::<Vec<_>>();
-        if selected.is_empty() {
+        let payload = &source_frames[slot.frame][slot.payload.clone()];
+        if crate::json_value::parse(payload).is_none() {
             continue;
         }
-        let delivery = crate::replay::contract_value::Delivery::prepare(
-            &source_frames[slot.frame][slot.payload.clone()],
-            &selected,
-            clocks,
-        )?;
-        let encoded = delivery.render(delivered_at)?;
-        decision.value_contracts.push(
+        let delivery =
+            crate::replay::contract_value::Delivery::prepare_global(payload, global, clocks)?;
+        let mut validation =
             crate::replay::policy::request_contract::Decision::from_value_comparison(
                 delivery.validation().clone(),
-            ),
-        );
+            );
+        let encoded = if delivery.has_identities() {
+            let case = matched
+                .report
+                .case_id
+                .as_deref()
+                .context("Memcached identity delivery requires a case")?;
+            let (encoded, identities) =
+                delivery.render_with_identities(delivered_at, &policy.request_contracts, case)?;
+            validation.identity = Some(identities);
+            encoded
+        } else {
+            delivery.render(delivered_at)?
+        };
+        decision.value_contracts.push(validation);
         edits.push((target_slot.clone(), encoded));
     }
     if edits.is_empty() {
-        return no_payload(matched, &rules);
+        return no_payload(matched);
     }
     edits.sort_by_key(|(slot, _)| {
         (
@@ -291,15 +271,6 @@ pub(super) fn materialize_response(
         let allowed = source_slots
             .iter()
             .filter_map(|slot| slot.key.clone().or_else(|| source_key.map(<[u8]>::to_vec)))
-            .filter(|key| {
-                rules.iter().any(|rule| {
-                    rule.rule
-                        .selector
-                        .key
-                        .as_ref()
-                        .is_some_and(|selector| selector.matches(key))
-                })
-            })
             .collect::<Vec<_>>();
         validate_witness(
             &serde_json::to_vec(&source)?,
@@ -325,10 +296,11 @@ pub(super) fn materialize_response(
 
 fn no_payload(
     matched: &MatchedMemcachedExchange,
-    rules: &[&crate::policy::CompiledRule],
 ) -> Result<(Vec<Vec<u8>>, DependencyRuleDecision)> {
-    tracing::debug!(rule_ids = ?rules.iter().map(|rule| &rule.rule.id).collect::<Vec<_>>(),
-        disposition = "no_payload", "Memcached response value slot is unavailable; preserving its protocol outcome");
+    tracing::debug!(
+        disposition = "no_payload",
+        "Memcached response value slot is unavailable; preserving its protocol outcome"
+    );
     Ok((
         matched.response_frames.clone(),
         DependencyRuleDecision::default(),
@@ -347,16 +319,6 @@ pub(in crate::replay) fn source_observation(
         return Ok(());
     }
     let record: RecordedExchange = serde_json::from_value(event.clone())?;
-    let key = record
-        .key
-        .as_ref()
-        .map(RecordedCapture::decode)
-        .transpose()?;
-    let args = record
-        .args
-        .iter()
-        .map(RecordedCapture::decode)
-        .collect::<Result<Vec<_>>>()?;
     let value = record
         .value
         .as_ref()
@@ -371,31 +333,17 @@ pub(in crate::replay) fn source_observation(
         Some(record.timestamp),
         None,
     );
-    let target = TargetKey {
-        host: record.target_host.clone(),
-        port: record.target_port,
-    };
-    let request_rules = contracts.memcached_compiled_rules(
-        Surface::DependencyRequest,
-        Some(case),
-        &target,
-        &record.command,
-        key.as_deref(),
-    );
-    if record.command.eq_ignore_ascii_case("set") && value.is_some() || !request_rules.is_empty() {
-        if let Some(value) = &value {
-            if !request_rules.is_empty() {
-                let checked = crate::replay::contract_value::Delivery::prepare(
-                    value,
-                    &request_rules,
-                    clocks,
-                )?;
-                contracts.observe_value_slot_applicable(checked.validation().evaluated.clone());
-            }
-        } else {
-            contracts.observe_value_slot_unavailable(
-                request_rules.iter().map(|rule| rule.rule.id.clone()),
-            );
+    if matches!(
+        record.command.to_ascii_lowercase().as_str(),
+        "set" | "add" | "replace" | "cas"
+    ) && value.is_some()
+    {
+        if let (Some(value), Some(global)) = (&value, contracts.global_json())
+            && crate::json_value::parse(value).is_some()
+        {
+            let checked =
+                crate::replay::contract_value::Delivery::prepare_global(value, global, clocks)?;
+            contracts.observe_value_slot_applicable(checked.validation().evaluated.clone());
         }
         contracts.record_value_witness(
             metadata(
@@ -410,33 +358,12 @@ pub(in crate::replay) fn source_observation(
         )?;
     }
     if matches!(record.command.as_str(), "get" | "gets") {
-        let mut response_rules = Vec::new();
-        for key in key
-            .as_deref()
-            .into_iter()
-            .chain(args.iter().map(Vec::as_slice))
-        {
-            for rule in contracts.memcached_compiled_rules(
-                Surface::DependencyResponse,
-                Some(case),
-                &target,
-                &record.command,
-                Some(key),
-            ) {
-                if !response_rules
-                    .iter()
-                    .any(|existing: &&crate::policy::CompiledRule| existing.rule.id == rule.rule.id)
-                {
-                    response_rules.push(rule);
-                }
-            }
-        }
         let frames = record
             .response_frames
             .iter()
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
-        let slots = if response_rules.is_empty() {
+        let slots = if contracts.global_json().is_none() {
             Vec::new()
         } else if record.no_response || record.outcome == DependencyExchangeOutcome::NoResponse {
             anyhow::ensure!(
@@ -452,37 +379,18 @@ pub(in crate::replay) fn source_observation(
             crate::memcached::value_slot::extract(&frames, &record.wire_protocol)?
         };
         let mut applicable = std::collections::BTreeSet::new();
-        let mut available = std::collections::BTreeSet::new();
         for slot in slots {
-            let selected = response_rules
-                .iter()
-                .copied()
-                .filter(|rule| {
-                    rule.rule.selector.key.as_ref().is_some_and(|selector| {
-                        slot.key
-                            .as_deref()
-                            .or(key.as_deref())
-                            .is_some_and(|key| selector.matches(key))
-                    })
-                })
-                .collect::<Vec<_>>();
-            if selected.is_empty() {
+            let payload = &frames[slot.frame][slot.payload];
+            let Some(global) = contracts
+                .global_json()
+                .filter(|_| crate::json_value::parse(payload).is_some())
+            else {
                 continue;
-            }
-            let checked = crate::replay::contract_value::Delivery::prepare(
-                &frames[slot.frame][slot.payload],
-                &selected,
-                clocks,
-            )?;
-            available.extend(selected.iter().map(|rule| rule.rule.id.clone()));
+            };
+            let checked =
+                crate::replay::contract_value::Delivery::prepare_global(payload, global, clocks)?;
             applicable.extend(checked.validation().evaluated.iter().cloned());
         }
-        contracts.observe_value_slot_unavailable(
-            response_rules
-                .iter()
-                .map(|rule| rule.rule.id.clone())
-                .filter(|id| !available.contains(id)),
-        );
         contracts.observe_value_slot_applicable(applicable);
         source["response_frames"] = encoded_frames(&frames);
         source["outcome"] = serde_json::to_value(record.outcome)?;

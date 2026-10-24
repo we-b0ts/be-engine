@@ -6,14 +6,9 @@ fn mixed_native_response_preserves_private_identity_constraints_without_report_t
     let temp = tempfile::tempdir().unwrap();
     let policy = temp.path().join("policy.yaml");
     std::fs::write(&policy, r#"format: traffic-policy/v2
-responses:
-  session:
-    api: POST /sessions
-    proof: {source: 'handler.rs:20', fact: 'The response returns the generated session identity stored in the cache'}
-    body:
-      codec: json
-      fields:
-        /id: {kind: identity, binding: session, format: uuid}
+json:
+  fields:
+    /id: {kind: identity, formats: [uuid]}
 rules:
   - id: nonce
     match: {api: POST /sessions}
@@ -36,8 +31,14 @@ rules:
     ).unwrap();
     assert!(report.passed, "{:?}", report.differences);
     assert_eq!(report.identity_pairs.len(), 1);
-    assert_eq!(report.identity_pairs[0].source, source_id);
-    assert_eq!(report.identity_pairs[0].target, target_id);
+    assert_eq!(
+        report.identity_pairs[0].source,
+        serde_json::to_string(source_id).unwrap()
+    );
+    assert_eq!(
+        report.identity_pairs[0].target,
+        serde_json::to_string(target_id).unwrap()
+    );
     let persisted = serde_json::to_string(&report).unwrap();
     assert!(!persisted.contains("identity_pairs"));
     assert!(!persisted.contains(source_id));
@@ -48,18 +49,16 @@ rules:
 fn new_policy_compares_json_without_weakening_status_or_stable_values() {
     let temp = tempfile::tempdir().unwrap();
     let policy = temp.path().join("policy.yaml");
-    std::fs::write(&policy,r#"format: traffic-policy/v2
-rules:
-  - id: session-response
-    surface: api.response
-    match: {api: 'GET /sessions/*'}
-    slot: body
-    codec: json
-    contract:
-      /members: {kind: unordered}
-      /expiry: {kind: time, format: unix_microseconds, relation: preserve_offset}
-    proof: {source: 'src/session.py:30 create', fact: 'Source serializes a set and computes expiry from the request clock.'}
-"#).unwrap();
+    std::fs::write(
+        &policy,
+        r#"format: traffic-policy/v2
+json:
+  fields:
+    /members: {kind: unordered}
+    /expiry: {kind: time, formats: [unix_microseconds]}
+"#,
+    )
+    .unwrap();
     let loaded = load_replay_policy(&policy).unwrap();
     let request = serde_json::to_vec(
         &json!({"method":"GET","uri":"/sessions/42","timestamp":"2026-10-16T00:00:00Z"}),

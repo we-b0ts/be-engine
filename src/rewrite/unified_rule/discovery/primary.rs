@@ -89,6 +89,16 @@ pub(super) fn observe(
         }) {
             source_pair = pair;
         }
+        drafts.headers(
+            &expected["headers"],
+            actual.as_ref().map(|actual| &actual["headers"]),
+            case["case_id"].as_str().unwrap_or("api-response"),
+            AnchorClocks {
+                case: source_pair.times,
+                dependency: source_pair.times,
+                ..Default::default()
+            },
+        )?;
         if !source_pair.body_available {
             if let Some(next_event) = interaction::observe(
                 drafts,

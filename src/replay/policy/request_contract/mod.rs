@@ -1,8 +1,8 @@
 //! Dependency request contracts: comparison copies, protected witnesses and case-local state.
 pub(crate) mod config;
+mod derived_inputs;
 pub(in crate::replay::policy) mod evidence;
-mod http_body;
-mod http_json;
+mod global_value;
 mod http_value;
 mod identity;
 mod identity_inputs;
@@ -10,8 +10,6 @@ mod jwt;
 pub(in crate::replay::policy) mod key;
 mod memcached;
 mod mysql;
-pub(in crate::replay) use mysql::RawMysqlIdentityRequest;
-mod mysql_selection;
 pub(in crate::replay::policy) mod native_projection;
 mod signing_keys;
 mod value_decision;
@@ -21,11 +19,11 @@ mod read_back;
 mod redis;
 mod redis_fields;
 pub(in crate::replay) use read_back::{PreparedReadBack, RedisReadBackReport};
-pub(in crate::replay) use redis_fields::PreparedRedisTimeRead;
-pub(crate) use redis_fields::response_identities as redis_response_identities;
+pub(in crate::replay) use redis_fields::{PreparedRedisTimeRead, PreparedRedisTimeWrite};
 pub(crate) use redis_fields::{RedisFieldValue, redis_field_values};
 pub(crate) use redis_fields::{
-    RedisTimeRead, redis_delivered_time_copies, redis_time_position, redis_time_write_proofs,
+    RedisTimeRead, redis_delivered_global_time_copies, redis_delivered_scalar_time_copies,
+    redis_time_position,
 };
 mod unified_response;
 mod url;
@@ -67,6 +65,33 @@ struct CaseAnchor {
     conditions: BTreeSet<String>,
     source_body: Option<Value>,
 }
+impl CaseAnchor {
+    fn from_request(dir: &Path, request: &Value, rules: &[ReplayDependencyRule]) -> Self {
+        let source_body = unified::source_body(request);
+        let source_input_error = identity_inputs::capture_error(request, source_body.as_ref());
+        Self {
+            method: request["method"].as_str().unwrap_or_default().into(),
+            path: super::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
+            source_uri: request["uri"].as_str().unwrap_or_default().into(),
+            source_input_error,
+            recorded: request["timestamp"]
+                .as_str()
+                .and_then(|value| value.parse().ok()),
+            actual: None,
+            dir: dir.into(),
+            conditions: super::case_condition::matching_rule_ids(
+                request,
+                rules.iter().filter_map(|rule| {
+                    rule.when
+                        .as_ref()
+                        .map(|condition| (rule.id.as_str(), condition))
+                }),
+            ),
+            source_body,
+        }
+    }
+}
+
 type SequenceKey = (String, String, Vec<u8>);
 
 #[derive(Default)]
@@ -78,14 +103,14 @@ struct State {
     identity_references: BTreeMap<String, usize>,
     cases: BTreeMap<String, CaseAnchor>,
     identity_inputs: BTreeMap<String, Arc<identity_inputs::InputIndex>>,
+    source_request_digests: BTreeMap<String, String>,
+    derived_inputs: BTreeMap<String, derived_inputs::AuthorizedInputs>,
     applicable: BTreeSet<String>,
     redis_applicability: source_applicability::RedisApplicability,
     usage: BTreeMap<String, usize>,
     time_validations: BTreeMap<String, usize>,
-    unavailable_value_slots: BTreeMap<String, usize>,
     candidates: Vec<Candidate>,
     sequences: BTreeMap<SequenceKey, Sequence>,
-    nonces: BTreeMap<(String, String, String), BTreeMap<String, String>>,
 }
 #[derive(Debug, Clone, Default)]
 struct Sequence {
@@ -96,15 +121,16 @@ struct Sequence {
 #[derive(Clone, Default)]
 pub(in crate::replay) struct RequestContracts {
     compiled: Option<Arc<crate::policy::CompiledPolicy>>,
-    mysql_selection: Arc<mysql_selection::MysqlSelection>,
+    input_origin: Option<derived_inputs::InputOrigin>,
     witnesses: Option<crate::policy_evidence::WitnessStore>,
     rules: Arc<Vec<ReplayDependencyRule>>,
     keys: Arc<BTreeMap<(String, String), crate::request_rules::keys::ResolvedSigningKey>>,
     state: Arc<Mutex<State>>,
     identities: Arc<Mutex<crate::value_contract::identities::IdentityStore>>,
-    identity_prefixes: Arc<BTreeMap<String, BTreeSet<String>>>,
     pub(in crate::replay) time_copies:
         Arc<Mutex<crate::value_contract::time_copies::TimeCopyStore>>,
+    pub(in crate::replay) mysql_automatic:
+        Arc<Mutex<crate::replay::mysql::contracts::automatic::Metadata>>,
 }
 impl std::fmt::Debug for RequestContracts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -121,7 +147,6 @@ pub(in crate::replay) struct Decision {
     pub ids: Vec<String>,
     time_validations: usize,
     sequence: Option<(SequenceKey, Sequence)>,
-    nonces: Vec<((String, String, String), String, String)>,
     unified_time_validations: BTreeMap<String, usize>,
 }
 impl RequestContracts {
@@ -151,36 +176,20 @@ impl RequestContracts {
             if !case.dir.join("request.json").is_file() {
                 continue;
             }
-            let request: Value =
-                serde_json::from_slice(&std::fs::read(case.dir.join("request.json"))?)?;
-            let source_body = unified::source_body(&request);
-            let source_input_error = identity_inputs::capture_error(&request, source_body.as_ref());
+            let raw = std::fs::read(case.dir.join("request.json"))?;
+            state
+                .source_request_digests
+                .insert(id.clone(), crate::policy_evidence::digest(&raw));
+            let request: Value = serde_json::from_slice(&raw)?;
             state.cases.insert(
                 id.clone(),
-                CaseAnchor {
-                    method: request["method"].as_str().unwrap_or_default().into(),
-                    path: super::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
-                    source_uri: request["uri"].as_str().unwrap_or_default().to_owned(),
-                    source_input_error,
-                    recorded: request["timestamp"].as_str().and_then(|v| v.parse().ok()),
-                    actual: None,
-                    dir: case.dir.clone(),
-                    conditions: super::case_condition::matching_rule_ids(
-                        &request,
-                        rules.iter().filter_map(|rule| {
-                            rule.when
-                                .as_ref()
-                                .map(|condition| (rule.id.as_str(), condition))
-                        }),
-                    ),
-                    source_body,
-                },
+                CaseAnchor::from_request(&case.dir, &request, rules),
             );
         }
         Ok(Self {
             compiled: None,
-            mysql_selection: Arc::default(),
             witnesses: None,
+            input_origin: Some(derived_inputs::InputOrigin::Policy(policy.to_owned())),
             rules: Arc::new(
                 rules
                     .iter()
@@ -191,8 +200,8 @@ impl RequestContracts {
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),
             identities: Arc::default(),
-            identity_prefixes: Arc::default(),
             time_copies: Arc::default(),
+            mysql_automatic: Arc::default(),
         })
     }
     pub(in crate::replay::policy) fn signing_keys(
@@ -206,11 +215,11 @@ impl RequestContracts {
             case.actual = None;
         }
         state.sequences.retain(|(case, _, _), _| case != id);
-        state.nonces.retain(|(case, _, _), _| case != id);
         state.key_bindings.retain(|scope, _| !scope.belongs_to(id));
         state.key_binding_proofs.retain(|proof| proof.case_id != id);
         state.candidates.retain(|c| c.case_id != id);
         state.read_back.begin_case(id);
+        state.derived_inputs.remove(id);
         drop(state);
         self.time_copies.lock().expect("time copies").begin_case(id);
         self.clear_identities(id);
@@ -302,9 +311,6 @@ impl RequestContracts {
         if let Some((key, sequence)) = decision.sequence {
             state.sequences.insert(key, sequence);
         }
-        for (key, source, actual) in decision.nonces {
-            state.nonces.entry(key).or_default().insert(source, actual);
-        }
         for (scope, source, actual) in decision.key_bindings {
             state
                 .key_bindings
@@ -318,10 +324,14 @@ impl RequestContracts {
         !self.rules.is_empty()
             || self.witnesses.is_some()
             || self.compiled.as_ref().is_some_and(|policy| {
-                policy
-                    .rules
-                    .iter()
-                    .any(|rule| rule.rule.surface != crate::policy::Surface::ApiResponse)
+                policy.global_json.is_some()
+                    || policy.mysql.is_some()
+                    || policy.redis.is_some()
+                    || policy.http.is_some()
+                    || policy
+                        .rules
+                        .iter()
+                        .any(|rule| rule.rule.surface != crate::policy::Surface::ApiResponse)
             })
     }
     pub(in crate::replay) fn candidates(&self) -> Vec<Candidate> {
@@ -357,8 +367,30 @@ impl RequestContracts {
                         .unwrap_or_default(),
                 }
             })
-            .chain(self.unified_reports(&state))
             .collect()
+    }
+    pub(in crate::replay) fn global_format_reports(
+        &self,
+    ) -> Vec<super::report::GlobalFormatReport> {
+        let Some(policy) = &self.compiled else {
+            return vec![];
+        };
+        let state = self.state.lock().expect("request contracts");
+        [
+            (policy.global_json.is_some(), crate::policy::GLOBAL_JSON_ID),
+            (policy.mysql.is_some(), "global.mysql"),
+            (policy.redis.is_some(), crate::policy::GLOBAL_REDIS_ID),
+            (policy.http.is_some(), crate::policy::GLOBAL_HTTP_ID),
+        ]
+        .into_iter()
+        .filter(|(exists, _)| *exists)
+        .map(|(_, id)| super::report::GlobalFormatReport {
+            id: id.into(),
+            applicable: state.applicable.contains(id),
+            validations: state.usage.get(id).copied().unwrap_or_default(),
+            time_validations: state.time_validations.get(id).copied().unwrap_or_default(),
+        })
+        .collect()
     }
     #[allow(clippy::too_many_arguments)]
     pub(in crate::replay) fn preview_multipart(
@@ -417,9 +449,7 @@ pub(in crate::replay::policy) fn is_request_rule(rule: &ReplayDependencyRule) ->
     matches!(
         rule.redis,
         Some(super::redis_value::RedisSelector::Requests(_))
-    ) || rule.http.as_ref().is_some_and(|h| {
-        h.multipart.is_some() || !h.json.time.is_empty() || !h.json.fields.is_empty()
-    })
+    ) || rule.http.as_ref().is_some_and(|h| h.multipart.is_some())
 }
 pub(in crate::replay::policy) fn validate(rule: &ReplayDependencyRule) -> Result<()> {
     if !is_request_rule(rule) {
@@ -437,24 +467,19 @@ pub(in crate::replay::policy) fn validate(rule: &ReplayDependencyRule) -> Result
             && rule.target.port.is_some_and(|port| port > 0),
         "request contracts require an exact endpoint"
     );
-    crate::config::process_owned_dependencies::validate_source_evidence(&rule.source_evidence)?;
+    crate::config::process_owned_dependencies::validate_optional_source_evidence(
+        &rule.source_evidence,
+    )?;
     if let Some(super::redis_value::RedisSelector::Requests(redis)) = &rule.redis {
         redis.validate()?;
     }
-    if let Some(http) = &rule.http {
-        if http.multipart.is_some() {
-            ensure!(
-                http.json.is_empty() && http.query.is_empty() && http.headers.is_empty(),
-                "multipart contracts cannot carry another HTTP normalization"
-            );
-        } else if !http.json.fields.is_empty() {
-            ensure!(
-                http.json.time.is_empty() && http.json.unordered.is_empty(),
-                "HTTP generated body fields use separate nonoverlapping value rules for times and ordering"
-            );
-        } else {
-            http_json::validate(http)?;
-        }
+    if let Some(http) = &rule.http
+        && http.multipart.is_some()
+    {
+        ensure!(
+            http.query.is_empty(),
+            "multipart contracts cannot carry another HTTP normalization"
+        );
     }
     Ok(())
 }

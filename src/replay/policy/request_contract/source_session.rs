@@ -43,8 +43,8 @@ impl RequestContracts {
         }
         Ok(Self {
             compiled: None,
-            mysql_selection: Arc::default(),
             witnesses: None,
+            input_origin: Some(derived_inputs::InputOrigin::Root(target_root.to_owned())),
             rules: Arc::new(
                 rules
                     .iter()
@@ -55,8 +55,8 @@ impl RequestContracts {
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),
             identities: Arc::default(),
-            identity_prefixes: Arc::default(),
             time_copies: Arc::default(),
+            mysql_automatic: Arc::default(),
         })
     }
 

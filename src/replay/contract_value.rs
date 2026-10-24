@@ -1,52 +1,51 @@
 //! Derived delivery copies. Protocol adapters own their framing and lifecycle.
-pub(in crate::replay) use crate::value_contract::encoded::compare;
-#[cfg(test)]
-use crate::value_contract::encoded::merged_codec;
 use crate::{
-    policy::CompiledRule,
     value_codec::DecodedValue,
     value_contract::json::{AnchorClocks, Comparison},
 };
 use anyhow::{Result, ensure};
+mod sse;
+pub(in crate::replay) use sse::SseDelivery;
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct Delivery {
-    original: Vec<u8>,
     decoded: DecodedValue,
-    rules: Vec<CompiledRule>,
+    global: crate::policy::CompiledJsonPolicy,
     clocks: AnchorClocks,
     source_validation: Comparison,
+    copies: Vec<CopiedTime>,
+}
+
+#[derive(Debug, Clone)]
+pub(in crate::replay) struct CopiedTime {
+    pub pointer: String,
+    pub value: serde_json::Value,
+    pub proof: crate::value_contract::json::VerifiedTimeCopy,
 }
 
 impl Delivery {
-    pub(in crate::replay) fn prepare(
+    pub(in crate::replay) fn prepare_global(
         source: &[u8],
-        rules: &[&CompiledRule],
+        global: &crate::policy::CompiledJsonPolicy,
         clocks: AnchorClocks,
     ) -> Result<Self> {
-        let codec = crate::value_contract::encoded::prepared_codec(rules)?;
+        let codec = crate::value_codec::CodecPlan::compile(&crate::policy::Codec::Json)?;
         let decoded = codec.decode(source)?;
-        for rule in rules {
-            for pointer in rule.delivery_time.keys() {
-                ensure!(
-                    crate::value_contract::json::pointer_observed(&decoded.logical, pointer),
-                    "Source delivery timestamp {pointer:?} was not observed"
-                );
-            }
-        }
         let source_clock =
             |pair: crate::value_contract::time::ClockPair| crate::value_contract::time::ClockPair {
                 source: pair.source,
                 target: pair.source,
             };
-        let check = crate::value_contract::encoded::compare_decoded(
+        let source_clocks = AnchorClocks {
+            case: source_clock(clocks.case),
+            dependency: source_clock(clocks.dependency),
+            delivery: source_clock(clocks.delivery),
+        };
+        let check = crate::value_contract::global::compare_decoded(
             &decoded,
             &decoded,
-            rules,
-            AnchorClocks {
-                case: source_clock(clocks.case),
-                dependency: source_clock(clocks.dependency),
-                delivery: source_clock(clocks.delivery),
-            },
+            global,
+            &[],
+            source_clocks,
         )?;
         ensure!(
             check.passed(),
@@ -54,22 +53,75 @@ impl Delivery {
             check.differences
         );
         Ok(Self {
-            original: source.into(),
             decoded,
-            rules: rules.iter().map(|rule| (*rule).clone()).collect(),
+            global: global.clone(),
             clocks,
             source_validation: check,
+            copies: Vec::new(),
         })
     }
 
     pub(in crate::replay) fn render(&self, now: chrono::DateTime<chrono::Utc>) -> Result<Vec<u8>> {
-        if self.rules.iter().all(|rule| rule.delivery_time.is_empty()) {
-            return Ok(self.original.clone());
-        }
         let mut clocks = self.clocks;
         clocks.delivery.target = Some(now);
-        let rules = self.rules.iter().collect::<Vec<_>>();
-        crate::value_contract::encoded::materialize_decoded(&self.decoded, &rules, clocks)
+        if self.copies.is_empty() {
+            return crate::value_contract::global::materialize_decoded(
+                &self.decoded,
+                &self.global,
+                &[],
+                clocks,
+            );
+        }
+        let (logical, allowed) = self.logical_with_copies(clocks)?;
+        self.decoded.encode(&logical, &allowed)
+    }
+
+    pub(in crate::replay) fn with_copies(mut self, copies: Vec<CopiedTime>) -> Self {
+        self.copies = copies;
+        self
+    }
+
+    fn logical_with_copies(
+        &self,
+        clocks: AnchorClocks,
+    ) -> Result<(serde_json::Value, Vec<String>)> {
+        let mut logical = crate::value_contract::global::materialize_logical(
+            &self.decoded.logical,
+            &self.global,
+            &[],
+            clocks,
+        )?;
+        let selected = self
+            .global
+            .fields_with_clocks(&self.decoded.logical, clocks)?;
+        let mut allowed = Vec::new();
+        for (pointer, contract) in selected {
+            let Some(time) = contract.time() else {
+                continue;
+            };
+            allowed.push(pointer.clone());
+            if let Some(copy) = self.copies.iter().find(|copy| copy.pointer == pointer) {
+                let source =
+                    self.decoded.logical.pointer(&pointer).ok_or_else(|| {
+                        anyhow::anyhow!("stored timestamp Source field disappeared")
+                    })?;
+                ensure!(
+                    copy.proof.permits_value(
+                        crate::policy::GLOBAL_JSON_ID,
+                        &pointer,
+                        &pointer,
+                        source,
+                        &copy.value,
+                        &time
+                    ),
+                    "stored timestamp delivery lacks authenticated provenance"
+                );
+                *logical.pointer_mut(&pointer).ok_or_else(|| {
+                    anyhow::anyhow!("stored timestamp delivery field disappeared")
+                })? = copy.value.clone();
+            }
+        }
+        Ok((logical, allowed))
     }
 
     pub(in crate::replay) fn validation(&self) -> &Comparison {
@@ -77,9 +129,7 @@ impl Delivery {
     }
 
     pub(in crate::replay) fn has_identities(&self) -> bool {
-        crate::value_contract::identities::rules_have_identity(
-            &self.rules.iter().collect::<Vec<_>>(),
-        )
+        self.global.fields.values().any(|field| field.is_identity())
     }
 
     /// Render both derived time and identity fields from one immutable decode.
@@ -90,29 +140,22 @@ impl Delivery {
         owner: &crate::replay::policy::request_contract::RequestContracts,
         case: &str,
     ) -> Result<(Vec<u8>, crate::value_contract::identities::IdentityDecision)> {
-        let rules = self.rules.iter().collect::<Vec<_>>();
-        // Conditions always see the immutable Source document, before any
-        // derived delivery time can alter a sibling used by a guard.
-        let selected = crate::value_contract::identities::select(&self.decoded.logical, &rules)?;
-        let entries = selected
-            .iter()
-            .map(|field| field.delivery)
-            .collect::<Vec<_>>();
-        let (values, decision) = owner.identity_deliveries(case, &entries)?;
         let mut clocks = self.clocks;
         clocks.delivery.target = Some(now);
-        let mut logical =
-            crate::value_contract::delivery::materialize(&self.decoded.logical, &rules, clocks)?;
-        let mut allowed = rules
-            .iter()
-            .flat_map(|rule| rule.delivery_time.keys().cloned())
-            .collect::<Vec<_>>();
-        for (field, value) in selected.iter().zip(values) {
-            *logical
-                .pointer_mut(&field.pointer)
-                .ok_or_else(|| anyhow::anyhow!("identity delivery field disappeared"))? = value;
-            allowed.push(field.pointer.clone());
-        }
+        let (mut logical, copied_allowed) = self.logical_with_copies(clocks)?;
+        let (decision, mut allowed) = owner.translate_identity_plan(
+            case,
+            &self.decoded.logical,
+            &mut logical,
+            &self.global,
+        )?;
+        allowed.extend(copied_allowed);
+        allowed.extend(
+            self.global
+                .fields_with_clocks(&self.decoded.logical, clocks)?
+                .into_iter()
+                .filter_map(|(pointer, field)| field.time().map(|_| pointer)),
+        );
         Ok((self.decoded.encode(&logical, &allowed)?, decision))
     }
 }

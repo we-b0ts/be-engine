@@ -35,7 +35,6 @@ pub(super) fn verify(
         .map(WitnessManifest::source_index)
         .transpose()?;
     for (case_id, directory) in bundle.cases.clone() {
-        let mut time_inputs = crate::value_contract::time_copies::TimeCopyStore::default();
         let request = bundle.request(&directory.join("request.json"))?;
         let method = request["method"]
             .as_str()
@@ -48,27 +47,6 @@ pub(super) fn verify(
             .context("invalid Source URI")?
             .path()
             .to_string();
-        let mut applicable = Vec::new();
-        for rule in policy
-            .rules
-            .iter()
-            .filter(|r| r.rule.selector.matches_api(method, &path))
-        {
-            if let Some(condition) = &rule.rule.when {
-                let body = crate::json_value::parse(&capture(&request["body"])?).context(
-                    "Source condition requires complete unique-member JSON request evidence",
-                )?;
-                if !condition.matches_body(&body) {
-                    continue;
-                }
-            }
-            applicable.push(rule);
-        }
-        let response_rules = applicable
-            .iter()
-            .copied()
-            .filter(|r| r.rule.surface == Surface::ApiResponse)
-            .collect::<Vec<_>>();
         let source_body = capture(&request["body"])
             .ok()
             .and_then(|bytes| crate::json_value::parse(&bytes));
@@ -79,10 +57,9 @@ pub(super) fn verify(
             .copied()
             .filter(|rule| api::is_response(rule))
             .collect::<Vec<_>>();
-        if response_rules.iter().any(|r| selected.contains(&r.rule.id))
-            || native_response
-                .iter()
-                .any(|r| selected.contains(&r.rule.id))
+        if native_response
+            .iter()
+            .any(|r| selected.contains(&r.rule.id))
         {
             api::verify(
                 root,
@@ -90,7 +67,7 @@ pub(super) fn verify(
                 &case_id,
                 &directory,
                 &request,
-                &response_rules,
+                policy.global_json.as_ref(),
                 &native_response,
                 result,
             )?;
@@ -112,50 +89,9 @@ pub(super) fn verify(
                 continue;
             }
             let event: Value = serde_json::from_str(&line)?;
-            for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-                let candidates = applicable
-                    .iter()
-                    .copied()
-                    .filter(|r| r.rule.surface == surface)
-                    .collect::<Vec<_>>();
-                let rules = dependency::selected_rules(&candidates, &event)?;
-                if surface == Surface::DependencyResponse
-                    && rules.iter().any(|rule| {
-                        policy.origins.contains_key(&rule.rule.id)
-                            && rule
-                                .rule
-                                .contract
-                                .values()
-                                .any(|field| field.unconditional().time().is_some())
-                    })
-                    && let (Some(index), Some(private), Some(identity)) = (
-                        witness_index.as_ref(),
-                        private.as_deref(),
-                        time_copies::identity(&case_id, &event),
-                    )
-                {
-                    let source = dependency::source_witness(surface, &event, &directory)?;
-                    time_copies::observe(
-                        &mut time_inputs,
-                        &case_id,
-                        &event,
-                        &source,
-                        &rules,
-                        time_copies::ReadEvidence {
-                            private,
-                            directory: &directory,
-                            report: &bundle.replay,
-                            case_started: timestamp(&request["timestamp"]),
-                            responses: index.for_source(surface, &identity).collect(),
-                            requests: if dependency::protocol(&event) == Some(Protocol::Redis) {
-                                index
-                                    .for_source(Surface::DependencyRequest, &identity)
-                                    .collect()
-                            } else {
-                                vec![]
-                            },
-                        },
-                    )?;
+            for surface in [Surface::DependencyRequest] {
+                if dependency::protocol(&event) != Some(Protocol::Mysql) {
+                    continue;
                 }
                 let mut native_sql = Vec::new();
                 if surface == Surface::DependencyRequest
@@ -171,9 +107,7 @@ pub(super) fn verify(
                         }
                     }
                 }
-                if !rules.iter().any(|r| selected.contains(&r.rule.id))
-                    && !native_sql.iter().any(|r| selected.contains(&r.rule.id))
-                {
+                if !native_sql.iter().any(|r| selected.contains(&r.rule.id)) {
                     continue;
                 }
                 ensure!(
@@ -208,14 +142,8 @@ pub(super) fn verify(
                         target: completed,
                     },
                 };
-                let checked = dependency::compare_source(
-                    surface,
-                    &event,
-                    &raw,
-                    &rules,
-                    &native_sql,
-                    source_clocks,
-                )?;
+                let checked =
+                    dependency::compare_source(surface, &event, &raw, &native_sql, source_clocks)?;
                 if checked.is_empty() {
                     result.unavailable_source_values += 1;
                     continue;
@@ -223,18 +151,6 @@ pub(super) fn verify(
                 result.source_validations += 1;
                 for id in checked {
                     *result.rules.entry(id).or_default() += 1;
-                }
-                if surface == Surface::DependencyResponse
-                    && !rules.is_empty()
-                    && rules.iter().all(|rule| {
-                        policy.origins.contains_key(&rule.rule.id) && rule.delivery_time.is_empty()
-                    })
-                {
-                    // Resource read declarations validate stored Source types.
-                    // Derived input is owned by delivery/read-back effects and
-                    // cannot prove independent Target behavior for this field.
-                    result.missing_target_witnesses += 1;
-                    continue;
                 }
                 let Some(_manifest) = manifest.as_ref().filter(|_| private.is_some()) else {
                     result.missing_target_witnesses += 1;
@@ -273,7 +189,7 @@ pub(super) fn verify(
                     .for_source(surface, &identity)
                 {
                     let metadata = entry.metadata();
-                    if metadata.target_role == TargetRole::DeliveredInput {
+                    if entry.target_role() != TargetRole::IndependentTargetObservation {
                         continue;
                     }
                     let matches = metadata.surface == surface
@@ -375,21 +291,16 @@ pub(super) fn verify(
                     let target_pair = normalized
                         .as_ref()
                         .map_or(target.as_slice(), |n| n.target.as_slice());
-                    let comparison = if clocks.dependency.source.is_some() && clocks.dependency.target.is_some() && time_inputs.has_case(&case_id) {
-                        time_inputs.set_lookup_clocks(clocks.dependency);
-                        dependency::compare_pair_with_time_copies(surface, &event, source_pair, target_pair, &rules, native_pair, clocks, Some((&time_inputs, &case_id)))
-                    } else { dependency::compare_pair(
+                    let comparison = dependency::compare_pair(
                         surface,
                         &event,
                         source_pair,
                         target_pair,
-                        &rules,
-                        native_pair,
+                            native_pair,
                         clocks,
-                    ) }
+                    )
                     .with_context(|| {
-                        let rules = rules.iter().map(|r| r.rule.id.as_str())
-                            .chain(native_sql.iter().map(|r| r.rule.id.as_str())).collect::<Vec<_>>();
+                        let rules = native_sql.iter().map(|r| r.rule.id.as_str()).collect::<Vec<_>>();
                         format!("dependency preflight failed for rules {rules:?}, Case {case_id}, Source connection {:?} sequence {:?}, Target observation {:?}",
                             witness.metadata.source.connection_id, witness.metadata.source.sequence,
                             witness.target_observation_id.as_deref().unwrap_or(&witness.id))

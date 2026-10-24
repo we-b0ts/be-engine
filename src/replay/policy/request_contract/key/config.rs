@@ -13,12 +13,10 @@ pub(crate) enum KeyContract {
         segment_index: Option<usize>,
     },
     Capture {
-        binding: String,
         template: String,
         format: KeyFormat,
     },
     Reference {
-        binding: String,
         template: String,
         #[serde(default)]
         transform: Transform,
@@ -47,7 +45,6 @@ pub(crate) enum Transform {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct IdentityReference {
-    pub binding: String,
     pub template: String,
     #[serde(default)]
     pub transform: Transform,
@@ -71,20 +68,8 @@ pub(super) fn affixes(template: &str) -> Result<(&str, &str)> {
     );
     Ok((prefix, suffix))
 }
-fn binding(name: &str) -> Result<()> {
-    ensure!(
-        !name.is_empty()
-            && name.len() <= 128
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')),
-        "key identity requires a bounded binding name"
-    );
-    Ok(())
-}
 impl IdentityReference {
     pub(crate) fn validate(&self) -> Result<()> {
-        binding(&self.binding)?;
         affixes(&self.template)?;
         Ok(())
     }
@@ -106,11 +91,8 @@ impl KeyContract {
                 );
             }
             Self::Capture {
-                binding: name,
-                template,
-                format,
+                template, format, ..
             } => {
-                binding(name)?;
                 let (prefix, suffix) = affixes(template)?;
                 ensure!(
                     !prefix.is_empty() || !suffix.is_empty(),
@@ -125,11 +107,9 @@ impl KeyContract {
                 }
             }
             Self::Reference {
-                binding: name,
                 template,
                 transform,
             } => IdentityReference {
-                binding: name.clone(),
                 template: template.clone(),
                 transform: *transform,
             }

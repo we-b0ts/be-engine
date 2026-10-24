@@ -747,7 +747,10 @@ fn canonical_commit_drift_requires_reconciliation_even_with_identical_files() {
 
 fn append_runtime_rule(path: &std::path::Path) {
     let mut policy = crate::policy::parse_policy(&fs::read_to_string(path).unwrap()).unwrap();
-    policy.rules.push(serde_json::from_value(serde_json::json!({"id":"runtime-members","surface":"api.response","match":{"api":"GET /api"},"slot":"body","codec":"json","contract":{"/members":{"kind":"unordered"}},"proof":{"source":"tests.rs:members","fact":"The fixture models a reviewed unordered membership contract"}})).unwrap());
+    policy.json = Some(
+        serde_json::from_value(serde_json::json!({"fields":{"/members":{"kind":"unordered"}}}))
+            .unwrap(),
+    );
     crate::policy::compile_policy(&policy).unwrap();
     fs::write(path, serde_yaml::to_string(&policy).unwrap()).unwrap();
 }

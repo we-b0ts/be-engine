@@ -623,11 +623,8 @@ A worker's external-input blocker is evidence for the existing route, not
 permission to mark completion. Preserve bindings and evidence when the engine
 returns global `blocked`, and resume through its returned action after repair.
 
-Redis lock token candidates are exposed by current `dirty_clusters` evidence,
-including conditional `redis_lock` hints/planners. Propose a self-contained
-`redis_lock` effect with exact resource/key scope and implementer Source proof,
-then use `rule plan --file rule.yaml --evidence <id>`; review/apply and run fresh Replay.
-Do not require UUID formatting, script SHA configuration or a second release
-rule. The engine retains nonce correlation and every other command argument.
-Old reports require fresh Replay to obtain witnesses. Wrong tokens after an
-applied rule remain target defects, not a request to weaken the rule.
+Redis scalar ownership tokens use `redis.keys` with the generator's format,
+for example `identity` with `{hex: 32}`. The engine shares complete Source/Target
+correspondences across ordinary writes and later opaque EVAL/EVALSHA ARGV or
+DELEX IFEQ references. Script bytes, numkeys, KEYS, TTL/options, lane order and
+finite consumption remain strict. No lock-specific effect or planner exists.

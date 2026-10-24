@@ -178,7 +178,9 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(raw.contains("protocol: http"));
     assert!(!raw.contains("response_role"));
     assert!(raw.contains("source_revision:"));
-    assert!(raw.contains(EVIDENCE));
+    assert!(!raw.contains(EVIDENCE));
+    assert!(!raw.contains("proof:"));
+    assert_eq!(applied.source_evidence, EVIDENCE);
     let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 1);
 

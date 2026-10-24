@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,6 +48,7 @@ pub(crate) struct RecordedHttpClient {
     request_timeout: Duration,
     max_response_bytes: usize,
     request_rules: Option<Arc<crate::request_rules::RequestRuleRuntime>>,
+    input_registration: Option<(PathBuf, String)>,
 }
 
 pub(crate) struct RecordedHttpResponse {
@@ -77,6 +77,7 @@ impl RecordedHttpClient {
             request_timeout,
             max_response_bytes,
             request_rules: None,
+            input_registration: None,
         }
     }
 
@@ -93,6 +94,11 @@ impl RecordedHttpClient {
         request_rules: Arc<crate::request_rules::RequestRuleRuntime>,
     ) -> Self {
         self.request_rules = Some(request_rules);
+        self
+    }
+
+    pub(crate) fn with_input_registration(mut self, session: &Path, case: &str) -> Self {
+        self.input_registration = Some((session.into(), case.into()));
         self
     }
 
@@ -120,6 +126,7 @@ impl RecordedHttpClient {
         let bytes = decrypted.as_deref().unwrap_or(bytes);
         let mut value: serde_json::Value = serde_json::from_slice(bytes)
             .with_context(|| format!("invalid recorded request {request_label}"))?;
+        let original = self.input_registration.as_ref().map(|_| value.clone());
         let request_sent_at = chrono::Utc::now();
         let request_rules = self
             .request_rules
@@ -127,6 +134,14 @@ impl RecordedHttpClient {
             .map(|rules| rules.apply(&mut value, request_sent_at))
             .transpose()?
             .unwrap_or_default();
+        if let (Some((session, case)), Some(original), Some(rules)) = (
+            &self.input_registration,
+            original.as_ref(),
+            self.request_rules.as_ref(),
+        ) && !rules.derived_identity_pairs(original, &value)?.is_empty()
+        {
+            crate::replay::register_derived_input(session, case, request_sent_at, &value).await?;
+        }
         let recorded: RecordedRequest =
             serde_json::from_value(value).context("invalid recorded request shape")?;
         ensure!(

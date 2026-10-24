@@ -27,8 +27,10 @@ rules:
         input.replace("not_in: [closed]", "equals: pending"),
     ] {
         let input = input.as_str();
-        let compiled = compile_policy(&parse_policy(input).unwrap()).unwrap();
-        let rules = compiled.rules.iter().collect::<Vec<_>>();
+        let raw: serde_yaml::Value = serde_yaml::from_str(input).unwrap();
+        let rule: Rule = serde_yaml::from_value(raw["rules"][0].clone()).unwrap();
+        let compiled = compile_rule(&rule).unwrap();
+        let rules = vec![&compiled];
         let clocks = AnchorClocks {
             dependency: crate::value_contract::time::ClockPair {
                 source: chrono::DateTime::from_timestamp(10, 0),
@@ -73,14 +75,19 @@ rules:
             clocks,
         );
         assert!(noncanonical.is_err() || !noncanonical.unwrap().passed());
-        assert!(
-            parse_policy(
-                &input.replace("      /status: {field_path: [2], field_type: string}\n", "")
-            )
-            .is_err()
-        );
-        assert!(parse_policy(&input.replace("field_type: string", "field_type: bool")).is_err());
+        let invalid = |input: String| {
+            let raw: serde_yaml::Value = serde_yaml::from_str(&input).unwrap();
+            let rule: Rule = serde_yaml::from_value(raw["rules"][0].clone()).unwrap();
+            compile_rule(&rule).is_err()
+        };
+        assert!(invalid(input.replace(
+            "      /status: {field_path: [2], field_type: string}\n",
+            ""
+        )));
+        assert!(invalid(
+            input.replace("field_type: string", "field_type: bool")
+        ));
         let delivery = input.replace("surface: api.response", "surface: dependency.response").replace("match: {api: GET /requests}", "match: {api: GET /requests, resource: {protocol: redis, endpoint: 'cache:6379'}, operation: GET, key: {prefix: 'request:'}}").replace("slot: body", "slot: value").replace("  proof:", "  delivery: {rebase_time: [/duration]}\n  proof:");
-        assert!(parse_policy(&delivery).is_err());
+        assert!(invalid(delivery));
     }
 }

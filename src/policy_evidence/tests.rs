@@ -60,6 +60,22 @@ fn sealed_private_witnesses_preserve_roles_bytes_and_complete_coverage() {
     );
     let manifest = store.sealed_manifest().unwrap();
     assert!(manifest.complete && manifest.sealed);
+    let index = manifest.source_index().unwrap();
+    let entries = index
+        .for_source(Surface::DependencyRequest, &reference.metadata.source)
+        .collect::<Vec<_>>();
+    assert!(!entries.is_empty());
+    for entry in entries {
+        assert_eq!(entry.metadata().target_role, TargetRole::Unavailable);
+        assert_eq!(
+            entry.target_role(),
+            TargetRole::IndependentTargetObservation
+        );
+        assert_eq!(
+            entry.expand().unwrap().metadata.target_role,
+            entry.target_role()
+        );
+    }
     assert_eq!(
         (manifest.observed, manifest.recorded, manifest.omitted),
         (2, 2, 0)

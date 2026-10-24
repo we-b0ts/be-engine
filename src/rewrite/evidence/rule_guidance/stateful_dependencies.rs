@@ -31,26 +31,6 @@ fn diagnostic(cluster: &Value, expected: &str) -> bool {
     signatures(cluster).any(|signature| signature["diagnostic"]["kind"] == expected)
 }
 
-fn mysql_select(cluster: &Value) -> bool {
-    operation(cluster, "SELECT")
-        || (operation(cluster, "COM_QUERY") || operation(cluster, "COM_STMT_EXECUTE"))
-            && signatures(cluster).any(|signature| {
-                [
-                    &signature["sql"],
-                    &signature["sql_summary"],
-                    &signature["sql_summary"]["preview"],
-                ]
-                .into_iter()
-                .any(|value| value.as_str().is_some_and(select_sql))
-            })
-}
-
-fn select_sql(sql: &str) -> bool {
-    sql.split_whitespace()
-        .next()
-        .is_some_and(|word| word.eq_ignore_ascii_case("SELECT"))
-}
-
 pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleHint> {
     if !matches!(query, QUERY_DIRTY_CLUSTERS | QUERY_UNIFIED_RULE_CANDIDATES) {
         return Vec::new();
@@ -85,25 +65,23 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
             if diagnostic(cluster, "redis_state_observation_mismatch") {
                 capabilities.insert("redis_state_observations");
             }
-        } else if cluster["protocol"] == "mysql" && mysql_select(cluster) {
-            capabilities.insert("mysql_read_back");
         }
     }
     if query == QUERY_UNIFIED_RULE_CANDIDATES {
-        for entry in facts["source_entry"]["bindings"]
+        for entry in facts["source_entry"]["locations"]
             .as_array()
             .into_iter()
             .flatten()
         {
-            let binding = &entry["binding"];
+            let binding = &entry["location"];
             if !matches!(
                 binding["surface"].as_str(),
                 Some("dependency.request" | "dependency.response")
             ) {
                 continue;
             }
-            match binding["match"]["resource"]["protocol"].as_str() {
-                Some("redis") => match binding["match"]["operation"].as_str() {
+            if let Some("redis") = binding["match"]["resource"]["protocol"].as_str() {
+                match binding["match"]["operation"].as_str() {
                     Some("APPEND") => {
                         capabilities.insert("redis_append_stream");
                     }
@@ -121,16 +99,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
                         capabilities.insert("redis_expiry_refresh");
                     }
                     _ => {}
-                },
-                Some("mysql")
-                    if binding["surface"] == "dependency.response"
-                        && (binding["slot"]["sql_column"].as_str().is_some()
-                            || entry["source_response_kind"] == "resultset"
-                            || binding["match"]["sql"].as_str().is_some_and(select_sql)) =>
-                {
-                    capabilities.insert("mysql_read_back");
                 }
-                _ => {}
             }
         }
     }
@@ -164,9 +133,6 @@ fn instruction(capability: &str) -> &'static str {
         }
         "redis_state_observations" => {
             "For Source-proven variable GET counts, an existing raw SET identity read_back can explicitly declare state_epochs with separate Source proof. Scope the same Case ownership and endpoint/database/user and bounded key; prove absence initially and exact current SET/DEL state, causal clocks, no implicit expiry or other writers, and a positive write-to-read witness in the selected inventory. Append a declaration or add state_epochs proof to the otherwise unchanged declaration, preserving existing write scope, contracts and proofs. Each Source-observed state still needs a delivered observation; no future or deleted identity can be borrowed. A typed redis_state_observation_mismatch must be investigated at its reported state mutation rather than treated as missing evidence. See docs/redis-state-observations.md."
-        }
-        "mysql_read_back" => {
-            "Ordinary MySQL resource identity fields use physical database/table/column origins and mapped same-Case delivery without a SELECT template. An existing narrow native identity rule can instead append effect.mysql_read_back for its separately proven Source-persisted identity read from selected MySQL JSON fields. Preserve its ID, capture, scope, references and prior declarations/proofs; the exact read resource must already be an authorized reference. Declare Case ownership, endpoint/database/user, complete SELECT with bounded physical tables, result column and JSON pointers; embedded copies require explicit templates. For a Source-proven sharded ORM SELECT, declare a bounded table_series and explicit AS {{table}}_suffix aliases tied to the physical table. Do not enumerate witnessed shards or infer a table family from digits. Array pointers select actual array elements; numeric object keys stay literal. Prove each leaf's immutable Source capture completed before the Source read; runtime also requires its committed same-Case Target binding. Historical unbound IDs and unselected fields remain unchanged; derived delivery is not independent Target evidence, and SELECTs remain finite. See docs/mysql-identity-read-back.md."
         }
         _ => unreachable!("only bounded supported capabilities are selected"),
     }

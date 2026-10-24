@@ -38,7 +38,7 @@ Source-proven expiry drift in Redis JSON read responses uses explicit
 [Redis time-shift rules](redis-time-shift-rules.md), discovered through worker
 source diagnosis without heuristic hints.
 
-Source-proven Redis ownership tokens use [Redis lock rules](redis-lock-rules.md),
+Source-proven Redis ownership tokens use [Redis scalar formats](redis-scalar-formats.md),
 with bounded token-only witnesses, explicit endpoint/key scope and fresh Replay.
 
 Source-generated identities shared across decoded SQL, JSON and Redis keys use

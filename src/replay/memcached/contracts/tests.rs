@@ -2,11 +2,7 @@ use super::*;
 use crate::value_contract::{json::AnchorClocks, time::ClockPair};
 use serde_json::{Value, json};
 
-fn source_fixture() -> (tempfile::TempDir, ReplayPolicyRuntime) {
-    source_fixture_with(false, "json")
-}
-
-fn source_fixture_with(request: bool, codec: &str) -> (tempfile::TempDir, ReplayPolicyRuntime) {
+fn source_fixture_with(_request: bool, codec: &str) -> (tempfile::TempDir, ReplayPolicyRuntime) {
     use crate::replay::{ReplayCase, ReplayCaseStatus};
     let temp = tempfile::tempdir().unwrap();
     let local = temp.path().join(".traffic-e2e/local");
@@ -27,36 +23,11 @@ fn source_fixture_with(request: bool, codec: &str) -> (tempfile::TempDir, Replay
     std::fs::write(dir.join("expected-response.json"), "{}").unwrap();
     std::fs::write(dir.join("dependencies.jsonl"), "").unwrap();
     let path = temp.path().join("policy.yaml");
-    let mut raw = r#"format: traffic-policy/v2
-rules:
-  - id: cache-read
-    surface: dependency.response
-    match:
-      api: GET /session
-      resource: {protocol: memcached, endpoint: 'cache.test:11211'}
-      operation: GET
-      key: {exact: session}
-    slot: value
-    codec: json
-    contract:
-      /expires_at: {kind: time, format: unix_seconds, relation: preserve_offset}
-    delivery: {rebase_time: [/expires_at]}
-    proof: {source: 'src/session:read', fact: 'Expiry preserves its offset from the API request'}
-"#
-    .to_owned();
-    if request {
-        raw = raw
-            .replace(
-                "surface: dependency.response",
-                "surface: dependency.request",
-            )
-            .replace("operation: GET", "operation: SET")
-            .replace("    delivery: {rebase_time: [/expires_at]}\n", "");
-    }
-    raw = raw.replace("codec: json", &format!("codec: {codec}"));
-    if codec.is_empty() {
-        raw = "format: traffic-policy/v2\nrules: []\n".into();
-    }
+    let raw = if codec.is_empty() {
+        "format: traffic-policy/v2\nrules: []\n"
+    } else {
+        "format: traffic-policy/v2\njson:\n  fields:\n    /expires_at: {kind: time, formats: [unix_seconds]}\n"
+    };
     std::fs::write(&path, raw).unwrap();
     let cases = BTreeMap::from([(
         "case".into(),
@@ -73,18 +44,11 @@ rules:
 
 #[test]
 fn native_set_matcher_accepts_authorized_payload_length_changes_and_keeps_flags_strict() {
-    for (codec, source, target) in [
-        (
-            "json",
-            br#"{"expires_at":127}"#.to_vec(),
-            br#"{"expires_at":1127}"#.to_vec(),
-        ),
-        (
-            "{kind: protobuf, fields: {/expires_at: {field_path: [1], field_type: uint64}}}",
-            vec![8, 127],
-            vec![8, 0xe7, 8],
-        ),
-    ] {
+    for (codec, source, target) in [(
+        "json",
+        br#"{"expires_at":127}"#.to_vec(),
+        br#"{"expires_at":1127}"#.to_vec(),
+    )] {
         for changed_flags in [false, true] {
             let (_temp, runtime) = source_fixture_with(true, codec);
             runtime.request_contracts.set_request_times(
@@ -354,23 +318,13 @@ fn binary_response_witness_proves_native_get_adaptation_and_keeps_cas_flags_stri
 }
 
 #[tokio::test]
-async fn binary_get_delivery_rebases_json_and_protobuf_with_live_correlation_and_finite_consumption()
- {
+async fn binary_get_delivery_rebases_json_with_live_correlation_and_finite_consumption() {
     use crate::replay::{MysqlReplayConfig, ReplayRuntime};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    for (codec, value) in [
-        ("json", br#"{"expires_at":1000,"stable":7}"#.to_vec()),
-        (
-            "{kind: protobuf, fields: {/expires_at: {field_path: [1], field_type: uint64}, /stable: {field_path: [2], field_type: uint64}}}",
-            vec![8, 0xe8, 7, 16, 7, 72, 0x87, 0],
-        ),
-    ] {
+    for (codec, value) in [("json", br#"{"expires_at":1000,"stable":7}"#.to_vec())] {
         let (temp, _policy) = source_fixture_with(false, codec);
         let case = temp.path().join(".traffic-e2e/local/recordings/case");
         let path = temp.path().join("policy.yaml");
-        let yaml = std::fs::read_to_string(&path).unwrap();
-        let compiled =
-            crate::policy::compile_policy(&crate::policy::parse_policy(&yaml).unwrap()).unwrap();
         let mut frame = vec![0; 24];
         frame[0] = 0x81;
         frame[1] = 0x0c;
@@ -439,8 +393,7 @@ async fn binary_get_delivery_rebases_json_and_protobuf_with_live_correlation_and
         client.read_exact(&mut body).await.unwrap();
         assert_eq!(&body[..4], &7u32.to_be_bytes());
         let decoded =
-            crate::value_codec::CodecView::decode(&compiled.rules[0].rule.codec, &body[4..])
-                .unwrap();
+            crate::value_codec::CodecView::decode(&crate::policy::Codec::Json, &body[4..]).unwrap();
         assert!(
             decoded.logical["expires_at"]
                 .as_i64()
@@ -449,9 +402,6 @@ async fn binary_get_delivery_rebases_json_and_protobuf_with_live_correlation_and
                 <= 3
         );
         assert_eq!(decoded.logical["stable"], 7);
-        if codec != "json" {
-            assert!(body.ends_with(&[16, 7, 72, 0x87, 0]));
-        }
         client.write_all(&request).await.unwrap();
         client.read_exact(&mut header).await.unwrap();
         assert_ne!(&header[6..8], &[0, 0]);
@@ -463,9 +413,6 @@ async fn binary_get_delivery_rebases_json_and_protobuf_with_live_correlation_and
                 .as_array()
                 .is_some_and(|matched| matched.len() == 1)
             {
-                let rule = &report["replay_policy"]["dependency_rules"][0];
-                assert_eq!(rule["matches"], 1);
-                assert_eq!(rule["time_validations"], 1);
                 found = true;
                 break;
             }
@@ -490,189 +437,40 @@ fn source_event(frame: Option<&[u8]>) -> serde_json::Value {
 }
 
 #[test]
-fn misses_errors_and_quiet_outcomes_are_unavailable_without_rule_usage() {
-    for frame in [
-        Some(b"END\r\n".as_slice()),
-        Some(b"SERVER_ERROR unavailable\r\n".as_slice()),
-        None,
-    ] {
-        let (_temp, runtime) = source_fixture();
-        source_observation(&runtime.request_contracts, "case", &source_event(frame)).unwrap();
-        let report = runtime.report();
-        assert_eq!(report.unavailable_value_slots["cache-read"], 1);
-        let rule = &report.dependency_rules[0];
-        assert!(!rule.applicable);
-        assert_eq!(rule.matches, 0);
-        assert!(report.unused_applicable_dependency_rule_ids.is_empty());
-    }
-}
-
-#[test]
-fn source_payload_requires_selected_fields_and_complete_valid_encoding() {
-    for payload in [
-        br#"{"stable":7}"#.as_slice(),
-        br#"{"expires_at":"1000"}"#,
-        b"invalid json",
-    ] {
-        let (_temp, runtime) = source_fixture();
-        let mut frame = format!("VALUE session 0 {}\r\n", payload.len()).into_bytes();
-        frame.extend(payload);
-        frame.extend(b"\r\nEND\r\n");
-        assert!(
-            source_observation(
-                &runtime.request_contracts,
-                "case",
-                &source_event(Some(&frame))
-            )
-            .is_err()
-        );
-        assert!(runtime.report().unavailable_value_slots.is_empty());
-    }
-    let (_temp, runtime) = source_fixture();
-    let payload = br#"{"expires_at":1000,"stable":7}"#;
-    let mut frame = format!("VALUE session 0 {}\r\n", payload.len()).into_bytes();
-    frame.extend(payload);
-    frame.extend(b"\r\nEND\r\n");
-    source_observation(
-        &runtime.request_contracts,
-        "case",
-        &source_event(Some(&frame)),
-    )
-    .unwrap();
-    assert!(runtime.report().dependency_rules[0].applicable);
-    assert!(runtime.report().unavailable_value_slots.is_empty());
-}
-
-#[test]
-fn json_and_protobuf_get_values_use_the_same_delivery_contract_with_exact_framing() {
-    for (codec, source, expected) in [
-        (
-            "json",
-            serde_json::to_vec(&json!({"expires_at":1000,"stable":7})).unwrap(),
-            serde_json::to_vec(&json!({"expires_at":2000,"stable":7})).unwrap(),
-        ),
-        (
-            "{kind: protobuf, fields: {/expires_at: {field_path: [1], field_type: uint64}}}",
-            vec![8, 0xe8, 7, 0x18, 0x87, 0],
-            vec![8, 0xd0, 15, 0x18, 0x87, 0],
-        ),
-    ] {
-        let raw = format!(
-            r#"format: traffic-policy/v2
-rules:
-  - id: cache-read
-    surface: dependency.response
-    match:
-      resource: {{protocol: memcached, endpoint: 'cache.test:11211'}}
-      operation: GET
-      key: {{exact: session}}
-    slot: value
-    codec: {codec}
-    contract:
-      /expires_at: {{kind: time, format: unix_seconds, relation: preserve_offset}}
-    delivery: {{rebase_time: [/expires_at]}}
-    proof: {{source: 'src/session:read', fact: 'Expiry preserves its offset from the API request'}}
-"#
-        );
-        let compiled =
-            crate::policy::compile_policy(&crate::policy::parse_policy(&raw).unwrap()).unwrap();
-        let source_at = DateTime::from_timestamp(1000, 0).unwrap();
-        let target_at = DateTime::from_timestamp(2000, 0).unwrap();
-        let delivery = crate::replay::contract_value::Delivery::prepare(
-            &source,
-            &[&compiled.rules[0]],
-            AnchorClocks {
-                dependency: ClockPair {
-                    source: Some(source_at),
-                    target: Some(target_at),
-                },
-                ..Default::default()
+fn json_get_delivery_preserves_native_key_flags_cas_and_text_framing() {
+    let source = serde_json::to_vec(&json!({"expires_at":1000,"stable":7})).unwrap();
+    let plan = crate::policy::parse_and_compile_policy("format: traffic-policy/v2\njson:\n  fields:\n    /expires_at: {kind: time, formats: [unix_seconds]}\n").unwrap().global_json.unwrap();
+    let target_at = DateTime::from_timestamp(2000, 0).unwrap();
+    let delivery = crate::replay::contract_value::Delivery::prepare_global(
+        &source,
+        &plan,
+        AnchorClocks {
+            dependency: ClockPair {
+                source: DateTime::from_timestamp(1000, 0),
+                target: Some(target_at),
             },
-        )
-        .unwrap();
-        let payload = delivery.render(target_at).unwrap();
-        if codec == "json" {
-            assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&payload).unwrap(),
-                json!({"expires_at":2000,"stable":7})
-            );
-        } else {
-            assert_eq!(payload, expected);
-        }
-        assert_eq!(delivery.validation().time_validations["cache-read"], 1);
-        let mut frame = format!("VALUE session 17 {} 12345\r\n", source.len()).into_bytes();
-        frame.extend(&source);
-        frame.extend(b"\r\nEND\r\n");
-        let slots =
-            crate::memcached::value_slot::extract(std::slice::from_ref(&frame), "text").unwrap();
-        let patched = crate::memcached::value_slot::replace(&frame, &slots[0], &payload).unwrap();
-        assert!(
-            patched.starts_with(format!("VALUE session 17 {} 12345\r\n", payload.len()).as_bytes())
-        );
-        assert!(patched.ends_with(b"\r\nEND\r\n"));
-        let actual_slots =
-            crate::memcached::value_slot::extract(std::slice::from_ref(&patched), "text").unwrap();
-        assert_eq!(&patched[actual_slots[0].payload.clone()], payload);
-    }
-}
-
-#[test]
-fn comparison_fields_absent_from_a_complete_payload_remain_inactive_and_strict() {
-    let (temp, _) = source_fixture();
-    let path = temp.path().join("policy.yaml");
-    let raw = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(
-        &path,
-        raw.replace("    delivery: {rebase_time: [/expires_at]}\n", ""),
-    )
-    .unwrap();
-    let dir = temp.path().join(".traffic-e2e/local/recordings/case");
-    let cases = BTreeMap::from([(
-        "case".into(),
-        crate::replay::ReplayCase {
-            id: "case".into(),
-            dir: dir.clone(),
-            dependencies_path: dir.join("dependencies.jsonl"),
-            status: crate::replay::ReplayCaseStatus::Pending,
+            ..Default::default()
         },
-    )]);
-    let runtime = ReplayPolicyRuntime::load(&path, &cases).unwrap();
-    let source = br#"{"stable":7}"#;
-    let mut frame = format!("VALUE session 0 {}\r\n", source.len()).into_bytes();
-    frame.extend(source);
-    frame.extend(b"\r\nEND\r\n");
-    source_observation(
-        &runtime.request_contracts,
-        "case",
-        &source_event(Some(&frame)),
     )
     .unwrap();
-    let report = runtime.report();
-    assert!(!report.dependency_rules[0].applicable);
-    assert!(report.unavailable_value_slots.is_empty());
-    let target = TargetKey {
-        host: "cache.test".into(),
-        port: 11211,
-    };
-    let rules = runtime.request_contracts.memcached_compiled_rules(
-        Surface::DependencyResponse,
-        Some("case"),
-        &target,
-        "get",
-        Some(b"session"),
+    let payload = delivery.render(target_at).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&payload).unwrap(),
+        json!({"expires_at":2000,"stable":7})
     );
-    let equal =
-        crate::replay::contract_value::compare(source, source, &rules, Default::default()).unwrap();
-    assert!(equal.passed());
-    assert!(equal.evaluated.is_empty());
-    let added = crate::replay::contract_value::compare(
-        source,
-        br#"{"stable":7,"expires_at":1000}"#,
-        &rules,
-        Default::default(),
-    )
-    .unwrap();
-    assert!(!added.passed());
+    let mut frame = format!("VALUE session 17 {} 12345\r\n", source.len()).into_bytes();
+    frame.extend(&source);
+    frame.extend(b"\r\nEND\r\n");
+    let slots =
+        crate::memcached::value_slot::extract(std::slice::from_ref(&frame), "text").unwrap();
+    let patched = crate::memcached::value_slot::replace(&frame, &slots[0], &payload).unwrap();
+    assert!(
+        patched.starts_with(format!("VALUE session 17 {} 12345\r\n", payload.len()).as_bytes())
+    );
+    assert!(patched.ends_with(b"\r\nEND\r\n"));
+    let slots =
+        crate::memcached::value_slot::extract(std::slice::from_ref(&patched), "text").unwrap();
+    assert_eq!(&patched[slots[0].payload.clone()], payload);
 }
 
 #[test]

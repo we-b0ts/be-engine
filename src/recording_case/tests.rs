@@ -23,6 +23,25 @@ async fn head(socket: &mut TcpStream) {
 
 #[tokio::test]
 async fn background_api_delivers_response_then_records_a_delayed_real_redis_request() {
+    delayed_dependency(false, false, false).await;
+}
+
+#[tokio::test]
+async fn async_api_records_a_delayed_terminal_resource_as_an_ordinary_case_dependency() {
+    delayed_dependency(true, false, false).await;
+}
+
+#[tokio::test]
+async fn async_api_dependency_failure_publishes_a_complete_case_and_quiesces_source() {
+    delayed_dependency(true, true, false).await;
+}
+
+#[tokio::test]
+async fn async_api_initial_del_before_primary_response_waits_for_the_final_del() {
+    delayed_dependency(true, false, true).await;
+}
+
+async fn delayed_dependency(async_api: bool, failure: bool, repeated: bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let temp = tempfile::tempdir().unwrap();
@@ -52,7 +71,13 @@ async fn background_api_delivers_response_then_records_a_delayed_real_redis_requ
                 }}
             }
         })).unwrap();
-        config.process_owned_dependencies = vec![rule];
+        if async_api {
+            config.async_api.insert("POST /jobs".into(), serde_json::from_value(serde_json::json!({
+                "when":{"/background":true},"end":[{"redis":{"operation":if repeated {"DEL"} else {"GET"},"key":"cancel:*","occurrence":if repeated {2} else {1}}}]
+            })).unwrap());
+        } else {
+            config.process_owned_dependencies = vec![rule];
+        }
         let state = AppState::new(config).await.unwrap();
         let (mut source_redis, redis_client) = pair().await;
         let (mut redis_server, redis_upstream) = pair().await;
@@ -69,22 +94,35 @@ async fn background_api_delivers_response_then_records_a_delayed_real_redis_requ
             let mut body = vec![0; br#"{"background":true}"#.len()];
             socket.read_exact(&mut body).await.unwrap();
             assert_eq!(body, br#"{"background":true}"#);
+            let command=if repeated {b"*2\r\n$3\r\nDEL\r\n$9\r\ncancel:42\r\n".as_slice()} else {b"*2\r\n$3\r\nGET\r\n$9\r\ncancel:42\r\n".as_slice()};
+            if repeated {
+                source_redis.write_all(command).await.unwrap();
+                let mut initial=[0;4];
+                source_redis.read_exact(&mut initial).await.unwrap();
+                assert_eq!(&initial,b":1\r\n");
+            }
             socket.write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
             socket.shutdown().await.unwrap();
             after_response.await.unwrap();
             tokio::time::sleep(Duration::from_millis(30)).await;
-            source_redis.write_all(b"*2\r\n$3\r\nGET\r\n$9\r\ncancel:42\r\n").await.unwrap();
-            let mut response = [0; 5];
+            source_redis.write_all(command).await.unwrap();
+            let expected = if failure {b"-ERR failure\r\n".as_slice()} else if repeated {b":1\r\n".as_slice()} else {b"$-1\r\n".as_slice()};
+            let mut response = vec![0;expected.len()];
             source_redis.read_exact(&mut response).await.unwrap();
-            assert_eq!(&response, b"$-1\r\n");
+            assert_eq!(response, expected);
         });
         let upstream_task = tokio::spawn(async move {
+            if repeated {
+                let mut initial=vec![0;b"*2\r\n$3\r\nDEL\r\n$9\r\ncancel:42\r\n".len()];
+                redis_server.read_exact(&mut initial).await.unwrap();
+                redis_server.write_all(b":1\r\n").await.unwrap();
+            }
             let mut command = vec![0; b"*2\r\n$3\r\nGET\r\n$9\r\ncancel:42\r\n".len()];
             redis_server.read_exact(&mut command).await.unwrap();
             assert!(command.ends_with(b"cancel:42\r\n"));
             // A slow selected request must remain in flight beyond one idle window.
             tokio::time::sleep(Duration::from_millis(120)).await;
-            redis_server.write_all(b"$-1\r\n").await.unwrap();
+            redis_server.write_all(if failure {b"-ERR failure\r\n"} else if repeated {b":1\r\n"} else {b"$-1\r\n"}).await.unwrap();
         });
         let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = gateway.local_addr().unwrap();
@@ -102,12 +140,27 @@ async fn background_api_delivers_response_then_records_a_delayed_real_redis_requ
         upstream_task.await.unwrap();
         assert!(state.inner.active_cases.wait_for_no_active_case(Duration::from_secs(2)).await);
         let directory = state.recorder().case_dir(&case);
-        let report: serde_json::Value = serde_json::from_slice(&tokio::fs::read(directory.join("api-origin-observation.json")).await.unwrap()).unwrap();
-        assert_eq!(report["outcome"], "quiet");
-        assert_eq!(report["selected_completed_refs"].as_array().unwrap().len(), 1);
-        assert_eq!(report["rules"][0]["selected_selector_only"], 1);
+        let report_path=if async_api {"async-api-observation.json"} else {"api-origin-observation.json"};
+        let report: serde_json::Value = serde_json::from_slice(&tokio::fs::read(directory.join(report_path)).await.unwrap()).unwrap();
+        if async_api {
+            assert_eq!(report["end_reason"],if failure {"dependency_failure"} else {"resource"});
+            assert_eq!(report["complete"],true);
+            assert_eq!(state.inner.active_cases.is_quiescing(),failure);
+            assert!(!directory.join("recording-error.json").exists());
+            assert!(directory.join("expected-response.json").exists());
+        } else {
+            assert_eq!(report["outcome"], "quiet");
+            assert_eq!(report["selected_completed_refs"].as_array().unwrap().len(), 1);
+            assert_eq!(report["rules"][0]["selected_selector_only"], 1);
+        }
         let dependencies = tokio::fs::read_to_string(directory.join("dependencies.jsonl")).await.unwrap();
-        assert!(dependencies.lines().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()).any(|event| event["event_type"] == "redis_exchange" && event["command"] == "GET"));
+        let observed=dependencies.lines().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()).filter(|event|event["event_type"]=="redis_exchange" && event["command"]==if repeated {"DEL"} else {"GET"}).count();
+        assert_eq!(observed,if repeated {2} else {1});
+        if async_api {
+            assert_eq!(report["inventory_complete"],true);
+            assert_eq!(report["request_timeout_ms"],2000);
+            assert_eq!(report["completed_refs"].as_array().unwrap().len(),observed);
+        }
         gateway_task.abort();
         let _ = tokio::time::timeout(Duration::from_secs(1), redis).await.unwrap();
     }).await.unwrap();

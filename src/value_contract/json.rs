@@ -8,9 +8,10 @@ use serde_json::Value;
 use super::time::{self, ClockPair, TimeError};
 use crate::policy::{FieldContract, TimeAnchor, TimeRelation, TimestampFormat};
 mod clock_scope;
+mod composition;
 pub(crate) mod diagnosis;
 pub(super) mod identity;
-pub(crate) use identity::token as identity_token;
+pub(crate) use identity::{key as identity_key, token as identity_token};
 mod native;
 mod time_fields;
 pub(crate) use super::time_copies::VerifiedTimeCopy;
@@ -76,31 +77,21 @@ pub(crate) struct Comparison {
     #[serde(skip)]
     pub(crate) nonce_relationships: NonceRelationships,
     #[serde(skip)]
-    pub(crate) identities: BTreeMap<String, identity::Bijection>,
+    pub(crate) identities: identity::Bijection,
 }
 
 impl Comparison {
     /// Tokens stay in private runtime/control data; diagnostics serialize only differences.
     pub(crate) fn identity_pairs(&self) -> Vec<crate::value_contract::identities::IdentityPair> {
-        self.identities
-            .iter()
-            .flat_map(|(binding, identities)| identities.pairs(binding))
-            .collect()
+        self.identities.pairs().collect()
     }
 
     pub(crate) fn passed(&self) -> bool {
         self.differences.is_empty()
     }
     pub(crate) fn merge_and_validate(&mut self, other: Comparison) {
-        for (binding, identities) in other.identities {
-            if let Err(reason) = self
-                .identities
-                .entry(binding)
-                .or_default()
-                .merge(identities)
-            {
-                self.differences.push(difference("", reason));
-            }
+        if let Err(reason) = self.identities.merge(other.identities) {
+            self.differences.push(difference("", reason));
         }
         self.evaluated.extend(other.evaluated);
         self.differences.extend(other.differences);
@@ -173,7 +164,7 @@ struct Decisions {
     scoped_time_observations: usize,
     time_validations: BTreeMap<String, usize>,
     nonces: NonceRelationships,
-    identities: BTreeMap<String, identity::Bijection>,
+    identities: identity::Bijection,
 }
 
 struct MultisetSlice<'a> {
@@ -223,6 +214,17 @@ pub(crate) fn compare_with_verified(
     clocks: AnchorClocks,
 ) -> Comparison {
     compare_all(source, target, fields, native, verified, clocks, &[])
+}
+
+pub(crate) fn compare_with_verified_time_copies(
+    source: &Value,
+    target: &Value,
+    fields: &[Field<'_>],
+    verified: &[VerifiedField<'_>],
+    clocks: AnchorClocks,
+    copies: &[VerifiedTimeCopy],
+) -> Comparison {
+    compare_all(source, target, fields, &[], verified, clocks, copies)
 }
 
 pub(crate) fn compare_with_time_copies(
@@ -296,6 +298,26 @@ fn compare_all(
         nonce_relationships: decisions.nonces,
         identities: decisions.identities,
     }
+}
+
+fn compare_duration(
+    source: &Value,
+    target: &Value,
+    unit: crate::policy::DurationUnit,
+    clocks: ClockPair,
+) -> Result<(), TimeError> {
+    use crate::policy::DurationUnit as U;
+    let unit = match unit {
+        U::Seconds => time::DurationUnit::Seconds,
+        U::Milliseconds => time::DurationUnit::Milliseconds,
+        U::Microseconds => time::DurationUnit::Microseconds,
+        U::Minutes => time::DurationUnit::Minutes,
+        U::Hours => time::DurationUnit::Hours,
+    };
+    time::validate_numeric_category(source, target)?;
+    let source = time::parse_duration(source, unit)?;
+    let target = time::parse_duration(target, unit)?;
+    time::compare_duration_nanos(source, target, clocks)
 }
 
 fn difference(pointer: &str, reason: &str) -> Difference {
@@ -385,6 +407,57 @@ impl Comparator<'_> {
             .filter(|(_, field)| pointer_matches(field.pointer, pointer, self.source_root))
             .collect::<Vec<_>>();
         if selected.len() + native.len() + verified.len() > 1 {
+            if selected.is_empty()
+                && native.is_empty()
+                && !source.is_array()
+                && !source.is_object()
+                && verified
+                    .iter()
+                    .all(|(_, field)| field.rule_id == crate::policy::GLOBAL_JSON_ID)
+            {
+                let mut staged = decisions.clone();
+                for (index, field) in &verified {
+                    native::verify(
+                        field,
+                        LeafContext {
+                            source,
+                            target,
+                            source_pointer: pointer,
+                            target_pointer,
+                            source_root: self.source_root,
+                            target_root: self.target_root,
+                            clocks: self.clocks,
+                        },
+                        &mut staged,
+                    )?;
+                    staged.selected_native.insert(self.native.len() + *index);
+                    staged.evaluated.insert(field.rule_id.into());
+                }
+                *decisions = staged;
+                return Ok(());
+            }
+            if selected.len() == 1
+                && selected[0].1.rule_id == crate::policy::GLOBAL_JSON_ID
+                && !source.is_array()
+                && !source.is_object()
+                && (!native.is_empty() || !verified.is_empty())
+            {
+                return self.global_native_leaf(
+                    LeafContext {
+                        source,
+                        target,
+                        source_pointer: pointer,
+                        target_pointer,
+                        source_root: self.source_root,
+                        target_root: self.target_root,
+                        clocks: self.clocks,
+                    },
+                    selected[0],
+                    &native,
+                    &verified,
+                    decisions,
+                );
+            }
             if native.is_empty()
                 && verified.is_empty()
                 && selected.iter().all(|(_, field)| {
@@ -485,14 +558,17 @@ impl Comparator<'_> {
                 field.contract
             };
             match contract {
-                FieldContract::Identity {
-                    binding,
-                    prefix,
-                    format,
-                } => {
-                    return identity::compare(
-                        source, target, binding, prefix, *format, pointer, decisions,
-                    );
+                FieldContract::IdentityAnchor => {
+                    if source != target {
+                        return Err(difference(pointer, "exact identity value changed"));
+                    }
+                    return decisions
+                        .identities
+                        .observe(source, target)
+                        .map_err(|reason| difference(pointer, reason));
+                }
+                FieldContract::Identity { prefix, format } => {
+                    return identity::compare(source, target, prefix, *format, pointer, decisions);
                 }
                 FieldContract::Conditional { .. } => {
                     return Err(difference(
@@ -558,6 +634,16 @@ impl Comparator<'_> {
                     );
                 }
                 FieldContract::Time { .. } => {
+                    if matches!(
+                        field.rule_id,
+                        crate::policy::GLOBAL_JSON_ID
+                            | crate::policy::GLOBAL_HTTP_ID
+                            | crate::policy::GLOBAL_REDIS_ID
+                            | "global.mysql"
+                    ) && source == target
+                    {
+                        return Ok(());
+                    }
                     return self.time_field(
                         source,
                         target,
@@ -569,20 +655,17 @@ impl Comparator<'_> {
                     );
                 }
                 FieldContract::Duration { unit, anchor } => {
-                    use crate::policy::DurationUnit as U;
-                    let unit = match unit {
-                        U::Seconds => time::DurationUnit::Seconds,
-                        U::Milliseconds => time::DurationUnit::Milliseconds,
-                        U::Microseconds => time::DurationUnit::Microseconds,
-                        U::Minutes => time::DurationUnit::Minutes,
-                        U::Hours => time::DurationUnit::Hours,
-                    };
-                    let result = (|| {
-                        time::validate_numeric_category(source, target)?;
-                        let source = time::parse_duration(source, unit)?;
-                        let target = time::parse_duration(target, unit)?;
-                        time::compare_duration_nanos(source, target, self.clocks.get(*anchor))
-                    })();
+                    if matches!(
+                        field.rule_id,
+                        crate::policy::GLOBAL_JSON_ID
+                            | crate::policy::GLOBAL_HTTP_ID
+                            | crate::policy::GLOBAL_REDIS_ID
+                            | "global.mysql"
+                    ) && source == target
+                    {
+                        return Ok(());
+                    }
+                    let result = compare_duration(source, target, *unit, self.clocks.get(*anchor));
                     return result.map_err(|e| difference(pointer, &e.to_string()));
                 }
             }

@@ -322,7 +322,7 @@ fn binds_and_references_runtime_mysql_uuid() {
     assert!(report.unused_applicable_dependency_rule_ids.is_empty());
     assert_eq!(report.dependency_rules[0].binds, 1);
     assert_eq!(report.dependency_rules[0].time_validations, 1);
-    assert_eq!(report.dependency_rules[1].references, 1);
+    assert_eq!(report.dependency_rules[1].binds, 1);
 }
 
 #[test]
@@ -430,115 +430,84 @@ fn rejects_changed_reference_and_out_of_window_time() {
             now,
         )
         .unwrap_err()
-        .contains("did not match its bound value")
+        .contains("identity")
     );
 }
 
 #[test]
-fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
-    let fixture = policy_fixture(memcached_policy());
+fn memcached_json_uses_global_formats_across_keys_and_resources_without_exposing_values() {
+    let fixture = policy_fixture(
+        "format: traffic-policy/v2\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n",
+    );
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
-    let target = TargetKey {
-        host: "cache.internal".to_string(),
-        port: 11211,
-    };
-    runtime.observe_recorded_memcached_exchange(Some(CASE_ID), &target, "set", Some(b"u42"));
-    let recorded_at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
-    let actual_at = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
-    let recorded = protobuf_user_info(1_699_999_995, b"stable");
-    let actual = protobuf_user_info(1_799_999_995, b"stable");
-    let decision = runtime
-        .preview_memcached(&MemcachedPolicyContext {
+    let source_at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+    let target_at = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+    let source =
+        serde_json::to_vec(&json!({"created_at":1_699_999_995_i64,"stable":"private-stable"}))
+            .unwrap();
+    let target =
+        serde_json::to_vec(&json!({"created_at":1_799_999_995_i64,"stable":"private-stable"}))
+            .unwrap();
+    for (host, key) in [
+        ("cache.internal", b"users:42".as_slice()),
+        ("other-cache.internal", b"other:42".as_slice()),
+    ] {
+        let endpoint = TargetKey {
+            host: host.into(),
+            port: 11211,
+        };
+        let context = |actual_value| MemcachedPolicyContext {
             case_id: Some(CASE_ID),
-            target: &target,
+            target: &endpoint,
             command: "set",
-            key: Some(b"u42"),
-            recorded_value: Some(&recorded),
-            actual_value: Some(&actual),
-            recorded_observed_at: recorded_at,
+            key: Some(key),
+            recorded_value: Some(&source),
+            actual_value,
+            recorded_observed_at: source_at,
             recorded_duration_ms: 0,
-            actual_observed_at: actual_at,
-        })
-        .unwrap();
-    runtime.commit(Some(CASE_ID), decision).unwrap();
-
+            actual_observed_at: target_at,
+        };
+        let decision = runtime.preview_memcached(&context(Some(&target))).unwrap();
+        runtime.commit(Some(CASE_ID), decision).unwrap();
+        let changed =
+            serde_json::to_vec(&json!({"created_at":1_799_999_995_i64,"stable":"changed"}))
+                .unwrap();
+        assert!(runtime.preview_memcached(&context(Some(&changed))).is_err());
+    }
     let report = runtime.report();
-    assert_eq!(report.dependency_rules[0].matches, 1);
-    assert_eq!(report.dependency_rules[0].time_validations, 1);
-    assert!(report.unused_applicable_dependency_rule_ids.is_empty());
-    let serialized = serde_json::to_string(&report).unwrap();
-    assert!(!serialized.contains("1699999995"));
-    assert!(!serialized.contains("1800000005"));
-
-    let other_host_same_port = TargetKey {
-        host: "another-cache.internal".to_string(),
-        port: 11211,
-    };
-    assert!(
-        runtime
-            .preview_memcached(&MemcachedPolicyContext {
-                case_id: Some(CASE_ID),
-                target: &other_host_same_port,
-                command: "set",
-                key: Some(b"u42"),
-                recorded_value: Some(&recorded),
-                actual_value: Some(&actual),
-                recorded_observed_at: recorded_at,
-                recorded_duration_ms: 0,
-                actual_observed_at: actual_at,
-            })
-            .is_err()
-    );
-
-    let same_host_other_port = TargetKey {
-        host: "cache.internal".to_string(),
-        port: 11212,
-    };
-    let changed_stable_value = protobuf_user_info(1_800_000_005, b"changed");
-    assert!(
-        runtime
-            .preview_memcached(&MemcachedPolicyContext {
-                case_id: Some(CASE_ID),
-                target: &same_host_other_port,
-                command: "set",
-                key: Some(b"u42"),
-                recorded_value: Some(&recorded),
-                actual_value: Some(&changed_stable_value),
-                recorded_observed_at: recorded_at,
-                recorded_duration_ms: 0,
-                actual_observed_at: actual_at,
-            })
-            .unwrap_err()
-            .contains("value did not match")
-    );
+    assert_eq!(report.global_formats[0].validations, 2);
+    assert_eq!(report.global_formats[0].time_validations, 2);
+    let public = serde_json::to_string(&report).unwrap();
+    assert!(!public.contains("private-stable"));
+    assert!(!public.contains("1699999995"));
 }
 
 #[test]
-fn rejects_memcached_contract_without_an_executable_resource_and_value_slot() {
-    for invalid in 0..4 {
-        let fixture = policy_fixture(memcached_policy());
-        let mut policy =
-            crate::policy::parse_policy(&fs::read_to_string(&fixture.policy_path).unwrap())
-                .unwrap();
-        let rule = policy.rules[0].as_value_mut().unwrap();
-        match invalid {
-            0 => rule.selector.resource = None,
-            1 => rule.selector.resource.as_mut().unwrap().endpoint.port = 0,
-            2 => rule.selector.operation = Some("APPEND".into()),
-            _ => rule.selector.key = Some(crate::policy::KeySelector::default()),
-        }
-        fs::write(
-            &fixture.policy_path,
-            // Bypass the authoring writer's own validation to exercise the loader.
-            serde_yaml::to_string(&serde_json::json!({
-                "format": policy.format,
-                "rules": policy.rules,
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        assert!(ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).is_err());
-    }
+fn unknown_memcached_bytes_remain_exact_and_value_presence_is_strict() {
+    let fixture = policy_fixture(
+        "format: traffic-policy/v2\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n",
+    );
+    let runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+    let endpoint = TargetKey {
+        host: "cache.internal".into(),
+        port: 11211,
+    };
+    let source = protobuf_user_info(1_700_000_000, b"stable");
+    let target = protobuf_user_info(1_800_000_000, b"stable");
+    let context = |actual_value| MemcachedPolicyContext {
+        case_id: Some(CASE_ID),
+        target: &endpoint,
+        command: "set",
+        key: Some(b"u42"),
+        recorded_value: Some(&source),
+        actual_value,
+        recorded_observed_at: Utc::now(),
+        recorded_duration_ms: 0,
+        actual_observed_at: Utc::now(),
+    };
+    assert!(runtime.preview_memcached(&context(Some(&source))).is_ok());
+    assert!(runtime.preview_memcached(&context(Some(&target))).is_err());
+    assert!(runtime.preview_memcached(&context(None)).is_err());
 }
 
 #[test]
@@ -666,8 +635,8 @@ fn scoped_and_unscoped_rules_compose_on_disjoint_mysql_params() {
         Some(sql),
         None,
     );
-    let recorded = values(&[json!(10), json!("old"), json!("request-id")]);
-    let actual = values(&[json!(20), json!("new"), json!("request-id")]);
+    let recorded = values(&[json!("10"), json!("old"), json!("request-id")]);
+    let actual = values(&[json!("20"), json!("new"), json!("request-id")]);
 
     let decision = preview_mysql_contract(
         &runtime,
@@ -752,8 +721,9 @@ fn policy_fixture(policy: &str) -> PolicyFixture {
     fs::write(case_dir.join("dependencies.jsonl"), "").unwrap();
     let policy_path = temp.path().join("replay.yaml");
     let mut synthetic: serde_yaml::Value = serde_yaml::from_str(policy).unwrap();
-    for rule in synthetic["dependency_rules"]
-        .as_sequence_mut()
+    for rule in synthetic
+        .get_mut("dependency_rules")
+        .and_then(serde_yaml::Value::as_sequence_mut)
         .into_iter()
         .flatten()
     {
@@ -849,29 +819,6 @@ dependency_rules:
           time:
             relative_to: replay_now
             tolerance: 5s
-"#
-}
-
-fn memcached_policy() -> &'static str {
-    r#"
-version: 1
-expected_response: assertions_only
-dependency_rules:
-  - id: user-info-loading-time
-    protocol: memcached
-    memcached:
-      resource:
-        kind: cache_service
-        port: 11211
-      command: set
-      key:
-        prefix: u
-        suffix: ''
-      protobuf:
-        timestamp_fields:
-          50:
-            mechanism: unix_seconds
-            source_evidence: UserInfoServiceBase.java:438 current time
 "#
 }
 

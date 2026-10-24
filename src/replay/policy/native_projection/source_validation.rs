@@ -55,9 +55,6 @@ pub(crate) fn validate_native_source_dependencies(
     let mut coverage = coverage::Coverage::default();
     let mut identities = BTreeSet::new();
     for case in cases {
-        runtime
-            .dynamic_values
-            .observe_mysql_read_sources(case.id, case.events)?;
         input::validate(compiled, target_root, case, &mut checked)?;
         signed_input::validate(compiled, target_root, case, &mut checked)?;
         redis::register_callbacks(&mut redis_state, case)?;
@@ -98,9 +95,6 @@ pub(crate) fn validate_native_source_dependencies(
             *checked.rules.entry(row.id).or_default() += row.matches;
         }
     }
-    for (id, count) in redis_state.validate_native_source_identities(&runtime)? {
-        *checked.rules.entry(id).or_default() += count;
-    }
     for (id, count) in
         crate::replay::redis::append::validate_source(&runtime.request_contracts, cases)?
     {
@@ -125,12 +119,7 @@ pub(crate) fn validate_native_source_dependencies(
             .iter()
             .any(|rule| rule.rule.id == *id && dependency_effect(&rule.rule.effect))
     });
-    coverage.finish(
-        compiled,
-        selected_rule_ids,
-        &checked.rules,
-        &runtime.dynamic_values.mysql_read_back_report(),
-    )?;
+    coverage.finish(compiled, selected_rule_ids, &checked.rules)?;
     runtime
         .request_contracts
         .validate_read_back_coverage(selected_rule_ids)?;
@@ -145,8 +134,6 @@ fn dependency_effect(effect: &NativeEffect) -> bool {
             | NativeEffect::RedisReadCommutation(_)
             | NativeEffect::RedisExpiryRefresh(_)
             | NativeEffect::RedisSequence(_)
-            | NativeEffect::RedisLock
-            | NativeEffect::RedisPublishIdentity(_)
             | NativeEffect::HttpRequest(_)
             | NativeEffect::HttpClientMetadata(_)
             | NativeEffect::MysqlValues(_)

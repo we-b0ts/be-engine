@@ -19,10 +19,10 @@ mod change_transaction;
 mod concurrency_transaction;
 #[path = "transaction_conditional_identity.rs"]
 mod conditional_identity_transaction;
-#[path = "transaction_declarations.rs"]
-mod declarations_transaction;
 #[path = "transaction_dependency.rs"]
 mod dependency_transaction;
+#[path = "transaction_global_formats.rs"]
+mod global_formats_transaction;
 #[path = "transaction_header.rs"]
 mod header_transaction;
 #[path = "transaction_http_body_jwt.rs"]
@@ -37,8 +37,6 @@ mod interaction_transaction;
 mod mysql_candidates_transaction;
 #[path = "transaction_mysql_composite.rs"]
 mod mysql_composite_transaction;
-#[path = "transaction_mysql_read_back.rs"]
-mod mysql_read_back_transaction;
 #[path = "transaction_mysql_table_values.rs"]
 mod mysql_table_values_transaction;
 #[path = "transaction_native.rs"]
@@ -61,7 +59,7 @@ mod signed_input_transaction;
 mod sse_transaction;
 
 #[test]
-fn compact_proposals_expand_source_proof_in_public_plan_apply_and_keep_stale_guards() {
+fn global_format_proposals_preserve_source_revision_and_policy_stale_guards() {
     for stale in [false, true] {
         let fixture = Fixture::new();
         fs::write(
@@ -69,15 +67,14 @@ fn compact_proposals_expand_source_proof_in_public_plan_apply_and_keep_stale_gua
             "format: traffic-policy/v2\nsource_revision: source\nrules: []\n",
         )
         .unwrap();
-        let mut rule = super::rule();
-        let source = rule["proof"]["source"].as_str().unwrap().to_owned();
-        rule["contract"]["/members"] = json!("unordered");
-        write(&fixture.proposal, rule);
+        write(&fixture.proposal, super::rule());
         fixture.confirm();
         let plan = fixture.plan().unwrap();
-        let expanded = &plan.traffic_e2e_report["expanded_rules"][0];
-        assert_eq!(expanded["proof"]["source"], format!("{source} @ source"));
-        assert_eq!(expanded["contract"]["/members"]["kind"], "unordered");
+        assert_eq!(
+            plan.traffic_e2e_report["json"]["fields"]["/members"]["kind"],
+            "unordered"
+        );
+        assert_eq!(plan.traffic_e2e_report["rule_ids"], json!(["global.json"]));
         assert_eq!(plan.traffic_e2e_report["verified"], false);
         if stale {
             let bytes = "format: traffic-policy/v2\nsource_revision: changed-source\nrules: []\n";
@@ -87,8 +84,8 @@ fn compact_proposals_expand_source_proof_in_public_plan_apply_and_keep_stale_gua
         } else {
             let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
             assert_eq!(
-                applied.traffic_e2e_report["expanded_rules"],
-                plan.traffic_e2e_report["expanded_rules"]
+                applied.traffic_e2e_report["json"],
+                plan.traffic_e2e_report["json"]
             );
             assert_eq!(
                 applied.traffic_e2e_report["status"],
@@ -382,40 +379,12 @@ impl Fixture {
 }
 
 #[test]
-fn protobuf_uses_the_same_public_transaction_and_retains_unknown_business_fields() {
-    for changed_remainder in [false, true] {
-        let fixture = Fixture::new();
-        let mut proposed = super::rule();
-        proposed["codec"] = json!({"kind":"protobuf","fields":{"/members":{"field_path":[1],"field_type":"string","repeated":true}}});
-        write(&fixture.proposal, proposed);
-        let source = b"\x0a\x03one\x0a\x03two\x12\x05exact";
-        let target = if changed_remainder {
-            b"\x0a\x03two\x0a\x03one\x12\x05wrong".as_slice()
-        } else {
-            b"\x0a\x03two\x0a\x03one\x12\x05exact".as_slice()
-        };
-        fixture.replace_response_bodies(source, target);
-        fixture.confirm();
-        let evidence = fixture.evidence();
-        assert!(evidence.facts["candidates"].as_array().unwrap().is_empty());
-        assert_eq!(
-            evidence.facts["source_entry"]["bindings"][0]["needs_schema"],
-            true
-        );
-        let plan = fixture.plan();
-        if changed_remainder {
-            assert!(plan.is_err());
-            assert!(fixture.state().rule_plan.is_none());
-        } else {
-            let plan = plan.unwrap();
-            assert_eq!(
-                plan.traffic_e2e_report["preflight"]["independent_target_validations"],
-                1
-            );
-            apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
-            assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
-        }
-    }
+fn unknown_binary_bytes_cannot_be_granted_json_rewrite_permission() {
+    let fixture = Fixture::new();
+    fixture.replace_response_bodies(b"\x0a\x03one\x0a\x03two", b"\x0a\x03two\x0a\x03one");
+    fixture.confirm();
+    assert!(fixture.plan().is_err());
+    assert!(fixture.state().rule_plan.is_none());
 }
 
 #[test]
@@ -424,12 +393,13 @@ fn public_discover_plan_apply_keeps_issue_and_requires_real_replay() {
     fixture.confirm();
     let evidence = fixture.evidence();
     assert_eq!(
-        evidence.facts["candidates"][0]["draft_rule"]["contract"]["/members"]["kind"],
+        evidence.facts["candidates"][0]["draft_policy"]["json"]["fields"]["/members"]["kind"],
         "unordered"
     );
-    assert_eq!(
-        evidence.facts["candidates"][0]["draft_rule"]["match"]["api"],
-        "GET /api"
+    assert!(
+        evidence.facts["candidates"][0]["draft_policy"]
+            .get("rules")
+            .is_none()
     );
     assert!(
         evidence
@@ -451,12 +421,11 @@ fn public_discover_plan_apply_keeps_issue_and_requires_real_replay() {
         applied.traffic_e2e_report["status"],
         "applied_pending_replay"
     );
-    assert_eq!(
+    assert!(
         crate::policy::parse_policy(&fs::read_to_string(fixture.policy()).unwrap())
             .unwrap()
-            .rules
-            .len(),
-        1
+            .json
+            .is_some()
     );
     let state = fixture.state();
     assert!(state.rule_plan.is_none() && state.rule_replay_pending && !state.e2e_current);
@@ -564,13 +533,13 @@ fn changed_policy_is_never_overwritten_and_recovery_retains_source_proof() {
     let recovered = recover_rewrite_rule_plan(fixture.context(), &plan.plan_id).unwrap();
     assert_eq!(
         recovered["retired_plan"]["unified"]["rule_ids"][0],
-        "members"
+        "global.json"
     );
     assert!(
         recovered["retired_plan"]["unified"]["updated"]
             .as_str()
             .unwrap()
-            .contains("src/members.rs:12")
+            .contains("/members")
     );
     assert_eq!(fs::read_to_string(fixture.policy()).unwrap(), current);
     assert!(fixture.state().rule_plan.is_none() && fixture.state().rule_replay_pending);

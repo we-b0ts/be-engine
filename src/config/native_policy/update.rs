@@ -19,7 +19,8 @@ pub(crate) fn render_updated(
 ) -> Result<String> {
     let mut document = crate::policy::parse_policy(original)?;
     let compiled = crate::policy::compile_policy(&document)?;
-    let before = project_source_policy(&compiled.native)?;
+    let mut before = project_source_policy(&compiled.native)?;
+    before.async_api = compiled.async_api.clone();
     if before == *proposed {
         return Ok(original.into());
     }
@@ -55,8 +56,9 @@ pub(crate) fn render_updated(
                 retained.push(entry);
             } else {
                 let mut replacement = old.clone();
-                replacement.proof = proof.clone();
-                replacement.proof.source.clear();
+                let mut capture_proof = proof.clone();
+                capture_proof.source.clear();
+                replacement.proof = Some(capture_proof);
                 replacement.effect = n::NativeEffect::CaptureHttp(n::CaptureHttpEffect {
                     source_revision: proposed.http.source_revision.clone(),
                     case_paths: paths,
@@ -95,6 +97,9 @@ pub(crate) fn render_updated(
     }
     order::capture_responses(&mut retained, proposed)?;
     document.rules = retained;
+    if before.async_api != proposed.async_api {
+        document.async_api = Some(proposed.async_api.clone());
+    }
     crate::policy::compile_policy(&document)
         .context("updated Source effects violate unified policy capabilities or ownership")?;
     crate::policy::render_policy(&document)

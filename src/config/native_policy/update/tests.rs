@@ -13,14 +13,9 @@ fn revision() -> String {
 fn base() -> TrafficPolicy {
     let mut document = crate::policy::parse_policy(
         r#"format: traffic-policy/v2
-rules:
-  - id: response-members
-    surface: api.response
-    match: {api: GET /api}
-    slot: body
-    codec: json
-    contract: {/members: {kind: unordered}}
-    proof: {source: 'src/api:members', fact: 'Caller consumes the complete collection as a set'}
+json:
+  fields:
+    /members: {kind: unordered}
 "#,
     )
     .unwrap();
@@ -32,7 +27,7 @@ rules:
                 source_revision: revision(),
                 case_paths: vec!["/api".into()],
             }),
-            proof: proof("original-scope"),
+            proof: Some(proof("original-scope")),
             when: None,
         }
         .into(),
@@ -50,7 +45,7 @@ rules:
                     path_prefixes: vec!["/configuration".into()],
                 },
             }),
-            proof: proof("original-process"),
+            proof: Some(proof("original-process")),
             when: None,
         }
         .into(),
@@ -76,14 +71,8 @@ fn source_writer_preserves_shared_revision_and_expanded_nested_proofs() {
             Some(rule)
         );
     }
-    assert!(
-        after
-            .rules
-            .iter()
-            .all(|rule| rule.proof().source.ends_with(&format!(" @ {}", revision()))
-                || (rule.proof().source.is_empty() && matches!(rule,
-                    PolicyRule::Native(rule) if matches!(rule.effect, NativeEffect::CaptureHttp(_)))))
-    );
+    assert!(after.rules.iter().all(|rule| rule.proof().is_none()));
+    assert!(!rendered.contains("proof:"));
     assert!(!rendered.contains(" @ sha256:"));
     let after_compiled = crate::policy::compile_policy(&after).unwrap();
     assert_eq!(
@@ -104,7 +93,8 @@ fn source_writer_preserves_shared_revision_and_expanded_nested_proofs() {
 #[test]
 fn source_scope_update_preserves_other_effects_complete_rules_and_original_proofs() {
     let document = base();
-    let original = serde_yaml::to_string(&document).unwrap();
+    let original = crate::policy::render_policy(&document).unwrap();
+    let document = crate::policy::parse_policy(&original).unwrap();
     let before = crate::policy::compile_policy(&document).unwrap();
     let mut proposed = project_source_policy(&before.native).unwrap();
     proposed.http.case_path_patterns.push("/new/*".into());
@@ -122,8 +112,8 @@ fn source_scope_update_preserves_other_effects_complete_rules_and_original_proof
         .iter()
         .find(|rule| rule.id() == "source-capture-http")
         .unwrap();
-    assert_eq!(new.proof().fact, update.fact);
-    assert!(new.proof().source.is_empty());
+    assert!(new.proof().is_none());
+    assert!(!rendered.contains("proof:"));
     let compiled = crate::policy::compile_policy(&after).unwrap();
     assert_eq!(compiled.fingerprints.runtime, before.fingerprints.runtime);
     assert_eq!(
@@ -168,13 +158,7 @@ fn changed_owner_merges_file_references_under_one_document_revision() {
         .iter()
         .find(|rule| rule.rule.id == "process-config")
         .unwrap();
-    assert!(
-        owner
-            .rule
-            .proof
-            .source
-            .ends_with(&format!(" @ {}", revision()))
-    );
+    assert!(owner.rule.proof.is_none());
 }
 
 #[test]
@@ -182,14 +166,14 @@ fn changing_one_capture_preserves_existing_nested_facts_and_uses_explicit_proof_
     let mut document = base();
     let old_pointer = Proven {
         contract: "/base_url".to_owned(),
-        proof: proof("url-construction"),
+        proof: Some(proof("url-construction")),
     };
     document.rules.push(
         NativeRule {
             id: "capture-url".into(),
             selector: Default::default(),
             when: None,
-            proof: proof("capture-root"),
+            proof: Some(proof("capture-root")),
             effect: NativeEffect::CaptureHttpResponse(n::CaptureResponseEffect {
                 authorities: vec!["service.test".into()],
                 methods: vec!["GET".into()],
@@ -205,7 +189,8 @@ fn changing_one_capture_preserves_existing_nested_facts_and_uses_explicit_proof_
         }
         .into(),
     );
-    let original = serde_yaml::to_string(&document).unwrap();
+    let original = crate::policy::render_policy(&document).unwrap();
+    let document = crate::policy::parse_policy(&original).unwrap();
     let compiled = crate::policy::compile_policy(&document).unwrap();
     let mut proposed = project_source_policy(&compiled.native).unwrap();
     proposed.http_response_rewrite[0]
@@ -222,17 +207,16 @@ fn changing_one_capture_preserves_existing_nested_facts_and_uses_explicit_proof_
         .unwrap()
         .as_native()
         .unwrap();
-    assert!(changed.proof.source.contains(&update.source));
-    assert!(changed.proof.fact.contains(&update.fact));
-    assert!(changed.proof.fact.contains(&proof("capture-root").fact));
+    assert!(changed.proof.is_none());
     let NativeEffect::CaptureHttpResponse(effect) = &changed.effect else {
         panic!("wrong effect")
     };
     let n::CaptureResponseContract::Urls { pointers } = &effect.contract else {
         panic!("wrong contract")
     };
-    assert_eq!(pointers[0], old_pointer);
-    assert_eq!(pointers[1].proof, update);
+    assert_eq!(pointers[0].contract, old_pointer.contract);
+    assert_eq!(pointers[1].contract, "/logs_url");
+    assert!(pointers.iter().all(|pointer| pointer.proof.is_none()));
 }
 
 #[test]
@@ -252,7 +236,7 @@ fn changing_a_response_capture_keeps_plugin_precedence_and_untouched_typed_facts
         id: id.into(),
         selector: Default::default(),
         when: None,
-        proof: proof(id),
+        proof: Some(proof(id)),
         effect: NativeEffect::CaptureHttpResponse(n::CaptureResponseEffect {
             authorities: vec!["service.test".into()],
             methods: vec!["GET".into()],
@@ -270,7 +254,7 @@ fn changing_a_response_capture_keeps_plugin_precedence_and_untouched_typed_facts
             n::CaptureResponseContract::Urls {
                 pointers: vec![Proven {
                     contract: "/base_url".into(),
-                    proof: proof("original-url-construction"),
+                    proof: Some(proof("original-url-construction")),
                 }],
             },
         )
@@ -283,7 +267,8 @@ fn changing_a_response_capture_keeps_plugin_precedence_and_untouched_typed_facts
         )
         .into(),
     );
-    let original = serde_yaml::to_string(&document).unwrap();
+    let original = crate::policy::render_policy(&document).unwrap();
+    let document = crate::policy::parse_policy(&original).unwrap();
     let compiled = crate::policy::compile_policy(&document).unwrap();
     let target = tempfile::tempdir().unwrap();
     let directory = target.path().join(".traffic-e2e");
@@ -300,7 +285,7 @@ fn changing_a_response_capture_keeps_plugin_precedence_and_untouched_typed_facts
     assert_eq!(loaded.http_response_rewrite.rules[0].name, "z-primary-url");
     assert!(loaded.http_response_rewrite.rules[0].plugin.is_none());
     let mut reordered = document.clone();
-    reordered.rules.swap(3, 4);
+    reordered.rules.swap(2, 3);
     let reordered_compiled = crate::policy::compile_policy(&reordered).unwrap();
     assert_ne!(
         compiled.fingerprints.capture,
@@ -360,6 +345,5 @@ fn changing_a_response_capture_keeps_plugin_precedence_and_untouched_typed_facts
         .iter()
         .find(|rule| rule.id() == "z-primary-url")
         .unwrap();
-    assert!(changed.proof().fact.contains(&proof("z-primary-url").fact));
-    assert!(changed.proof().fact.contains("reviewed-dynamic-path"));
+    assert!(changed.proof().is_none());
 }

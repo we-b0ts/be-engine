@@ -75,6 +75,7 @@ fn position(
         .context("SQL value slot is absent")
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compare(
     // This is the observed connection default, shared by the paired requests.
@@ -97,6 +98,7 @@ pub(crate) fn compare(
         value_rules,
         native_rules,
         clocks,
+        None,
         None,
     )
 }
@@ -125,6 +127,34 @@ pub(crate) fn compare_with_time_copies(
         native_rules,
         clocks,
         copies.as_ref(),
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::replay) fn compare_with_automatic(
+    database: Option<&str>,
+    source_sql: Option<&str>,
+    source_params: Option<&[RecordedMysqlValue]>,
+    actual_sql: Option<&str>,
+    actual_params: Option<&[RecordedMysqlValue]>,
+    value_rules: &[&CompiledRule],
+    native_rules: &[&CompiledNativeRule],
+    clocks: AnchorClocks,
+    copies: Option<CopyProofs<'_>>,
+    automatic: &crate::replay::mysql::contracts::automatic::RequestContext<'_>,
+) -> Result<Comparison> {
+    compare_inner(
+        database,
+        source_sql,
+        source_params,
+        actual_sql,
+        actual_params,
+        value_rules,
+        native_rules,
+        clocks,
+        copies.as_ref(),
+        Some(automatic),
     )
 }
 
@@ -141,6 +171,7 @@ fn compare_inner(
     native_rules: &[&CompiledNativeRule],
     clocks: AnchorClocks,
     copies: Option<&CopyProofs<'_>>,
+    automatic: Option<&crate::replay::mysql::contracts::automatic::RequestContext<'_>>,
 ) -> Result<Comparison> {
     if let (Some(source), Some(target)) = (source_params, actual_params) {
         ensure!(
@@ -161,51 +192,13 @@ fn compare_inner(
         mysql_values::materialized(actual_sql, actual_params).map_err(anyhow::Error::msg)?;
     ensure!(source.len() == actual.len(), "SQL token inventory changed");
     let mut selected = BTreeMap::<usize, Selected<'_>>::new();
-    let mut field_analyses = None;
-    let mut copy_origins = BTreeMap::new();
     for rule in value_rules {
         let positions = match &rule.rule.slot {
             Slot::SqlValue(slot) => {
                 let template = SqlValueTemplate::from_value_selector(&rule.rule.selector)?;
                 vec![position(&template, &source, &actual, *slot)?]
             }
-            Slot::SqlField(_) => {
-                let (source_fields, actual_fields) = field_analyses.get_or_insert_with(|| {
-                    (
-                        crate::mysql::sql::field_bindings::analyze(&source, database),
-                        crate::mysql::sql::field_bindings::analyze(&actual, database),
-                    )
-                });
-                let positions = source_fields
-                    .as_ref()
-                    .map(|analysis| fields::positions_in(rule, analysis))
-                    .transpose()?
-                    .unwrap_or_default();
-                let actual_positions = actual_fields
-                    .as_ref()
-                    .map(|analysis| fields::positions_in(rule, analysis))
-                    .transpose()?
-                    .unwrap_or_default();
-                ensure!(
-                    positions == actual_positions,
-                    "Target SQL changed the selected physical field occurrences"
-                );
-                if copies.is_some() {
-                    for position in &positions {
-                        if let Some((source, target)) = source_fields
-                            .as_ref()
-                            .and_then(|a| a.at_token(*position))
-                            .zip(actual_fields.as_ref().and_then(|a| a.at_token(*position)))
-                        {
-                            copy_origins
-                                .entry(*position)
-                                .or_insert_with(|| (source.clone(), target.clone()));
-                        }
-                    }
-                }
-                positions
-            }
-            _ => anyhow::bail!("SQL request requires a value or physical field slot"),
+            _ => anyhow::bail!("internal SQL value contract requires a value slot"),
         };
         for position in positions {
             let selected = selected.entry(position).or_default();
@@ -291,9 +284,48 @@ fn compare_inner(
     let mut actual_values = serde_json::Map::new();
     let mut fields = Vec::<(String, String, FieldContract)>::new();
     let mut generated_ids = std::collections::BTreeSet::new();
-    let mut copy_lookups = Vec::new();
+    let automatic_origins =
+        automatic.and_then(|_| crate::mysql::sql::field_bindings::analyze(&source, database));
+    let mut automatic_comparison = Comparison::default();
     for (position, (source, actual)) in source.iter().zip(&actual).enumerate() {
         let Some(selected) = selected.get(&position) else {
+            if let Some(automatic) = automatic
+                && let Some(selected) = automatic.select(
+                    source,
+                    actual,
+                    automatic_origins
+                        .as_ref()
+                        .and_then(|analysis| analysis.at_token(position)),
+                    position,
+                    clocks,
+                )?
+            {
+                let verified = if let (Some(copies), Some(origin)) = (
+                    copies,
+                    automatic_origins
+                        .as_ref()
+                        .and_then(|analysis| analysis.at_token(position)),
+                ) {
+                    copies.resolve(copies.prepare_global(automatic, &selected, origin, clocks)?)
+                } else {
+                    vec![]
+                };
+                let mut next =
+                    crate::replay::mysql::contracts::automatic::compare_selection_with_context(
+                        &selected,
+                        clocks,
+                        &verified,
+                        automatic.policy,
+                    )?;
+                next.scope_schema_clocks(position);
+                ensure!(
+                    next.passed(),
+                    "global MySQL value contract failed: {:?}",
+                    next.differences
+                );
+                automatic_comparison.merge_and_validate(next);
+                continue;
+            }
             ensure!(
                 source == actual,
                 "unselected SQL token/value differs at {position}"
@@ -347,15 +379,18 @@ fn compare_inner(
                 actual.comparison_value(&paths(&actual.logical)?),
             )
         };
-        for rule in &selected.values {
-            if let (Some(copies), Some((source, target))) = (copies, copy_origins.get(&position)) {
-                let prepared = copies.prepare(rule, &source_value, source, target, &root)?;
-                ensure!(
-                    copy_lookups.len().saturating_add(prepared.len()) <= 4096,
-                    "SQL time-copy candidate exceeds 4096 selected leaves"
-                );
-                copy_lookups.extend(prepared);
+        if !selected.scalar
+            && let Some(json) = automatic.and_then(|context| context.policy.global_json.as_ref())
+        {
+            for (pointer, contract) in json.fields_with_clocks(&source_value, clocks)? {
+                fields.push((
+                    crate::policy::GLOBAL_JSON_ID.into(),
+                    format!("{root}{pointer}"),
+                    contract,
+                ));
             }
+        }
+        for rule in &selected.values {
             for (pointer, field) in &rule.rule.contract {
                 fields.push((
                     rule.rule.id.clone(),
@@ -384,11 +419,8 @@ fn compare_inner(
             contract,
         })
         .collect::<Vec<_>>();
-    let verified_copies = copies
-        .map(|copies| copies.resolve(copy_lookups))
-        .unwrap_or_default();
-    let mut result =
-        json::compare_with_time_copies(&source, &actual, &fields, clocks, &verified_copies);
+    let mut result = json::compare(&source, &actual, &fields, clocks);
+    result.merge_and_validate(automatic_comparison);
     result.evaluated.extend(generated_ids);
     Ok(result)
 }
@@ -477,9 +509,6 @@ pub(in crate::replay::policy) fn decision(
 #[path = "mysql_native/array_tests.rs"]
 mod array_tests;
 #[cfg(test)]
-#[path = "mysql_native/field_tests.rs"]
-mod field_tests;
-#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -500,6 +529,12 @@ mod tests {
             }},"proof":proof},
             {"id":"members","surface":"dependency.request","match":selector,"slot":{"sql_value":2},"codec":"json","contract":{"/members":{"kind":"unordered"}},"proof":proof}
         ]});
+        let encoded = crate::policy::compile_rule(
+            &serde_json::from_value::<crate::policy::Rule>(document["rules"][1].clone()).unwrap(),
+        )
+        .unwrap();
+        let mut document = document;
+        document["rules"].as_array_mut().unwrap().pop();
         let policy: crate::policy::TrafficPolicy = serde_json::from_value(document).unwrap();
         let compiled = crate::policy::compile_policy(&policy).unwrap();
         let source = "UPDATE events SET created='2020-01-01 00:00:00.123456', updated='2020-01-01 00:00:00.123456', payload='{\"time\":\"2020-01-01T00:00:02.123456\",\"members\":[\"a\",\"b\",\"a\"],\"stable\":7}' WHERE id=7";
@@ -518,7 +553,7 @@ mod tests {
                 None,
                 Some(target),
                 None,
-                &compiled.rules.iter().collect::<Vec<_>>(),
+                &[&encoded],
                 &compiled.native.iter().collect::<Vec<_>>(),
                 clocks,
             )

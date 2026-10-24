@@ -3,57 +3,13 @@ use super::*;
 #[test]
 fn every_request_rule_requires_fresh_replay_and_process_rules_do_not() {
     use RewriteDependencyRuleSpec as Spec;
-    let selector = crate::HttpHeaderTimestampSelector {
-        host: "storage.test".into(),
-        port: 9100,
-        method: "GET".into(),
-        path: "/bucket/*".into(),
-        header: "x-amz-date".into(),
-        format: crate::ResponseTimestampFormat::AmzDate,
-    };
-    let redis_key = crate::RedisValueKeySelector::Exact {
-        value: "key".into(),
-    };
     let request_rules = [
-        Spec::HttpHeaderTimestamp { selector },
         Spec::HttpCrossCase {
             selector: crate::HttpCrossCaseSelector {
                 host: "http.test".into(),
                 port: 80,
                 method: "GET".into(),
                 path: "/read".into(),
-            },
-        },
-        Spec::HttpUnordered {
-            selector: crate::HttpUnorderedSelector {
-                host: "http.test".into(),
-                port: 80,
-                method: "POST".into(),
-                path: "/list".into(),
-                pointer: "/ids".into(),
-            },
-        },
-        Spec::RedisUnordered {
-            selector: crate::RedisUnorderedSelector {
-                host: "redis.test".into(),
-                port: 6379,
-                key: redis_key.clone(),
-                field: crate::RedisUnorderedField::Json {
-                    pointer: "/ids".into(),
-                },
-            },
-        },
-        Spec::RedisTimeShift {
-            selector: crate::RedisTimeShiftSelector {
-                host: "redis.test".into(),
-                port: 6379,
-                read: crate::RedisTimeShiftRead {
-                    command: "GET".into(),
-                    database: 0,
-                    key: redis_key,
-                    hash_field: None,
-                    response_json: Default::default(),
-                },
             },
         },
         Spec::RedisCrossCase {

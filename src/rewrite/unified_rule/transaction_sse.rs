@@ -13,25 +13,11 @@ const PRIVATE: &str = "synthetic-private-delta";
 mod discovery_tests;
 
 fn proposal() -> Value {
-    let identity = json!({"kind":"identity","prefix":"msg_","format":{"hex":12},"binding":"assistant-message"});
-    let time = json!({"request_time":"unix_seconds","clock_group":"response"});
-    let fields = [
-        ("response.created", json!({"/response/created_at":time})),
-        ("response.in_progress", json!({"/response/created_at":time})),
-        ("response.output_item.added", json!({"/item/id":identity})),
-        ("response.output_text.delta", json!({"/item_id":identity})),
-        ("response.output_item.done", json!({"/item/id":identity})),
-        (
-            "response.completed",
-            json!({"/response/created_at":time,"/response/output/*/id":identity}),
-        ),
-    ];
-    Value::Array(fields.into_iter().map(|(event, contract)| json!({
-        "id":event,"surface":"api.response","match":{"api":"GET /api"},
-        "when":{"request_body_json":{"/stream":{"equals":true}}},
-        "slot":{"sse_data":{"event":"message","json_type":event}},"codec":"json","contract":contract,
-        "proof":{"source":"responses.py:builder","fact":"Source generates msg_ plus uuid4.hex[:12] once and reuses it across events; creation uses this HTTP request clock"}
-    })).collect())
+    let identity = json!({"kind":"identity","formats":[{"prefix":"msg_","hex":12}]});
+    json!({"format":"traffic-policy/v2","json":{"fields":{
+        "/response/created_at":{"kind":"time","formats":["unix_seconds"]},
+        "/item/id":identity,"/item_id":identity,"/response/output/*/id":identity
+    }}})
 }
 
 fn event(name: &str, data: Value, index: usize) -> Value {
@@ -175,11 +161,7 @@ fn sse_value_contracts_discover_plan_apply_and_assert_encrypted_messages() {
     assert!(
         candidates
             .iter()
-            .any(
-                |c| c["draft_rule"]["slot"]["sse_data"]["json_type"] == "response.created"
-                    && c["draft_rule"]["slot"]["sse_data"]["event"] == "message"
-                    && c["draft_rule"]["contract"]["/response/created_at"]["kind"] == "time"
-            )
+            .any(|c| c["draft_policy"]["json"]["fields"]["/response/created_at"]["kind"] == "time")
     );
     assert!(!candidates.iter().any(|c| c["mechanism"] == "identity"));
     let plan = fixture.plan().unwrap();
@@ -191,12 +173,10 @@ fn sse_value_contracts_discover_plan_apply_and_assert_encrypted_messages() {
         plan.traffic_e2e_report["preflight"]["independent_target_validations"],
         1
     );
-    for rule in proposal().as_array().unwrap() {
-        assert_eq!(
-            plan.traffic_e2e_report["preflight"]["rules"][rule["id"].as_str().unwrap()],
-            1
-        );
-    }
+    assert_eq!(
+        plan.traffic_e2e_report["preflight"]["rules"]["global.json"],
+        1
+    );
     assert_eq!(plan.traffic_e2e_report["verified"], false);
     assert!(!serde_json::to_string(&plan).unwrap().contains(PRIVATE));
     assert!(!serde_json::to_string(&evidence).unwrap().contains(PRIVATE));
@@ -204,7 +184,7 @@ fn sse_value_contracts_discover_plan_apply_and_assert_encrypted_messages() {
     assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
     let report = crate::assert_recorded_response(options(&fixture)).unwrap();
     assert!(report.passed, "{:?}", report.differences);
-    assert_eq!(report.applied_body_rule_ids.len(), 6);
+    assert_eq!(report.applied_body_rule_ids, ["global.json"]);
     for (path, bytes) in [
         &paths.request,
         &paths.expected_response,
@@ -254,7 +234,7 @@ fn sse_value_contracts_keep_identity_time_remainder_and_lifecycle_strict() {
         let mut target = stream(true);
         match scenario {
             "time" => change_data(&mut target, 0, |v| {
-                v["response"]["created_at"] = json!(START)
+                v["response"]["created_at"] = json!(START + 20)
             }),
             "time-type" => change_data(&mut target, 0, |v| {
                 v["response"]["created_at"] = json!((START + 60).to_string())
@@ -381,7 +361,7 @@ fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evid
                 change_data(&mut target, 3, |v| v["item_id"] = json!("msg_abcdef654322"))
             }
             "target-time" => change_data(&mut target, 0, |v| {
-                v["response"]["created_at"] = json!(START)
+                v["response"]["created_at"] = json!(START + 20)
             }),
             "target-length" => {
                 target["interaction"]["events"]
@@ -412,7 +392,7 @@ fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evid
         } else {
             let error = format!("{:#}", fixture.plan().unwrap_err());
             assert!(
-                error.contains("SSE response contract failed"),
+                error.contains("contract failed") || error.contains("identity"),
                 "{scenario}: {error}"
             );
             assert!(!error.contains(PRIVATE));
@@ -445,52 +425,32 @@ fn sse_source_self_validation_without_target_requires_fresh_replay() {
 }
 
 #[test]
-fn sse_json_type_selection_requires_source_witness_and_keeps_wire_event_distinct() {
-    for scenario in [
-        "missing",
-        "unknown",
-        "not-string",
-        "duplicate",
-        "wire-event",
-    ] {
-        let fixture = fixture();
-        let mut source = stream(false);
-        match scenario {
-            "missing" => change_data(&mut source, 0, |v| {
+fn global_sse_fields_do_not_require_business_event_discriminators() {
+    let fixture = fixture();
+    let remove_types = |mut value: Value| {
+        for index in 0..7 {
+            change_data(&mut value, index, |v| {
                 v.as_object_mut().unwrap().remove("type");
-            }),
-            "unknown" => change_data(&mut source, 0, |v| v["type"] = json!("unknown")),
-            "not-string" => change_data(&mut source, 0, |v| v["type"] = json!(42)),
-            "duplicate" | "wire-event" => {
-                let message = &mut source["interaction"]["events"][0]["message"]["data"];
-                let mut envelope: Value = serde_json::from_str(message.as_str().unwrap()).unwrap();
-                if scenario == "duplicate" {
-                    envelope["data"] =
-                        json!("{\"type\":\"response.created\",\"type\":\"response.created\"}");
-                } else {
-                    envelope["event"] = json!("response.created");
-                }
-                *message = json!(envelope.to_string());
-            }
-            _ => unreachable!(),
+            });
         }
-        install(&fixture, source, stream(true));
-        // Isolate Source coverage from an independent Target mismatch.
-        let mut assertions: Value =
-            serde_json::from_slice(&fs::read(&fixture.paths.assertions).unwrap()).unwrap();
-        assertions["cases"][0]["response"] = Value::Null;
-        write(&fixture.paths.assertions, assertions);
-        let error = format!("{:#}", fixture.plan().unwrap_err());
-        assert!(
-            error.contains("no complete Source witness"),
-            "{scenario}: {error}"
-        );
-        assert!(fixture.state().rule_plan.is_none());
-    }
+        value
+    };
+    install(
+        &fixture,
+        remove_types(stream(false)),
+        remove_types(stream(true)),
+    );
+    let plan = fixture.plan().unwrap();
+    apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+    assert!(
+        crate::assert_recorded_response(options(&fixture))
+            .unwrap()
+            .passed
+    );
 }
 
 #[test]
-fn sse_legacy_wire_event_selection_still_plans_and_asserts() {
+fn named_sse_events_share_global_field_formats() {
     let fixture = fixture();
     let named = |mut value: Value| {
         for frame in value["interaction"]["events"]
@@ -508,11 +468,7 @@ fn sse_legacy_wire_event_selection_still_plans_and_asserts() {
         value
     };
     install(&fixture, named(stream(false)), named(stream(true)));
-    let mut rules = proposal();
-    for rule in rules.as_array_mut().unwrap() {
-        rule["slot"]["sse_data"] = rule["slot"]["sse_data"]["json_type"].clone();
-    }
-    write(&fixture.proposal, rules);
+    write(&fixture.proposal, proposal());
     let plan = fixture.plan().unwrap();
     apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
     assert!(

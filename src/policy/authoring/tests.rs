@@ -45,23 +45,7 @@ fn configured_time_anchors_reject_in_compact_full_and_nested_contracts() {
 }
 
 #[test]
-fn duration_and_encrypted_duration_do_not_require_or_accept_an_anchor() {
-    let raw = r#"format: traffic-policy/v2
-rules:
-- id: duration
-  surface: api.response
-  match: {api: GET /jobs}
-  slot: body
-  codec: json
-  contract: {/elapsed: {kind: duration, unit: seconds}}
-  proof: {source: 'jobs.py:1', fact: 'Duration uses an independently observed dependency clock'}
-"#;
-    let policy = parse_policy(raw).unwrap();
-    assert!(!render_policy(&policy).unwrap().contains("anchor:"));
-    assert!(
-        parse_policy(&raw.replace("unit: seconds", "unit: seconds, anchor: case.request_start"))
-            .is_err()
-    );
+fn encrypted_duration_does_not_require_or_accept_an_anchor() {
     assert!(
         serde_yaml::from_str::<crate::policy::native::PlaintextContract>(
             "kind: duration\nunit: seconds\nanchor: dependency.request_start"
@@ -110,8 +94,10 @@ rules:
     assert!(!rendered.contains("timezone:"));
     assert!(!rendered.contains("preserve_or_request_window"));
     assert_eq!(
-        compile_policy(&policy).unwrap(),
-        compile_policy(&parse_policy(&rendered).unwrap()).unwrap()
+        compile_policy(&policy).unwrap().fingerprints,
+        compile_policy(&parse_policy(&rendered).unwrap())
+            .unwrap()
+            .fingerprints
     );
     let strict =
         parse_policy(&raw.replace("preserve_or_request_window", "request_window")).unwrap();
@@ -150,7 +136,10 @@ rules:
 fn local_inheritance_expands_every_contract_and_partial_override_without_crossing_rules() {
     let policy = parse_policy(sql_policy()).unwrap();
     let native = policy.rules[0].as_native().unwrap();
-    assert_eq!(native.proof.source, "app/task.py:10-30 @ source-v1");
+    assert_eq!(
+        native.proof.as_ref().unwrap().source,
+        "app/task.py:10-30 @ source-v1"
+    );
     let NativeEffect::MysqlValues(values) = &native.effect else {
         panic!()
     };
@@ -160,7 +149,7 @@ fn local_inheritance_expands_every_contract_and_partial_override_without_crossin
     };
     assert_eq!(fields["/updatedAt"].proof, values.values[&0].proof);
     assert_eq!(
-        fields["/updatedAt"].proof.fact,
+        fields["/updatedAt"].proof.as_ref().unwrap().fact,
         "JSON time is copied from this request clock"
     );
     assert_eq!(
@@ -171,11 +160,15 @@ fn local_inheritance_expands_every_contract_and_partial_override_without_crossin
         fields["/updatedAt"].contract.relation,
         TimeRelation::PreserveOffset
     );
-    let bad = format!(
-        "{}- id: missing-proof\n  match: {{api: GET /empty}}\n  effect: {{kind: redis_lock}}\n",
+    let independent = format!(
+        "{}- id: no-plan-proof\n  match: {{api: GET /empty}}\n  effect: {{kind: response_header_date, header: content-disposition, parameter: filename, format: '%Y-%m-%d'}}\n",
         sql_policy()
     );
-    assert!(parse_policy(&bad).is_err());
+    assert!(
+        parse_policy(&independent).unwrap().rules[1]
+            .proof()
+            .is_none()
+    );
 }
 
 #[test]
@@ -197,8 +190,13 @@ fn compact_and_fully_explicit_documents_have_identical_effects_proofs_and_identi
     assert!(!rendered.contains("utc_offset"));
     assert!(!rendered.contains(" @ source-v1"));
     assert_eq!(rendered.matches("source_revision:").count(), 1);
-    assert_eq!(rendered.matches("proof:").count(), 2);
-    assert_eq!(parse_policy(&rendered).unwrap(), compact);
+    assert!(!rendered.contains("proof:"));
+    assert_eq!(
+        compile_policy(&parse_policy(&rendered).unwrap())
+            .unwrap()
+            .fingerprints,
+        compile_policy(&compact).unwrap().fingerprints
+    );
     assert_eq!(
         render_policy(&parse_policy(&rendered).unwrap()).unwrap(),
         rendered
@@ -258,73 +256,15 @@ rules:
             .is_err()
     );
     assert_eq!(
-        parse_policy(&render_policy(&policy).unwrap()).unwrap(),
-        policy
+        compile_policy(&parse_policy(&render_policy(&policy).unwrap()).unwrap())
+            .unwrap()
+            .fingerprints,
+        compile_policy(&policy).unwrap().fingerprints
     );
 }
 
 #[test]
-fn all_three_surfaces_and_protobuf_reuse_the_same_time_abbreviation() {
-    for (surface, slot, extra) in [
-        ("api.response", "body", ""),
-        (
-            "dependency.request",
-            "value",
-            "resource: {protocol: redis, endpoint: 'cache:6379', database: 0}\n    operation: SET\n    key: {exact: session}",
-        ),
-        (
-            "dependency.response",
-            "value",
-            "resource: {protocol: redis, endpoint: 'cache:6379', database: 0}\n    operation: GET\n    key: {exact: session}",
-        ),
-    ] {
-        let raw = format!(
-            r#"format: traffic-policy/v2
-source_revision: source-v1
-rules:
-- id: session
-  surface: {surface}
-  match:
-    api: POST /sessions
-    {extra}
-  slot: {slot}
-  codec: json
-  contract:
-    /members: unordered
-    /expires_at: {{relative_time: unix_microseconds}}
-  proof: {{source: app/session.py, fact: 'Source emits a membership set and request-relative expiry'}}
-"#
-        );
-        let policy = parse_policy(&raw).unwrap();
-        let full = raw
-            .replace("/members: unordered", "/members: {kind: unordered}")
-            .replace(
-                "{relative_time: unix_microseconds}",
-                "{kind: time, format: unix_microseconds, relation: preserve_offset}",
-            );
-        assert_eq!(
-            compile_policy(&policy).unwrap(),
-            compile_policy(&parse_policy(&full).unwrap()).unwrap()
-        );
-        let pb = raw.replace(
-            "codec: json",
-            r#"codec:
-    kind: protobuf
-    fields:
-      /members: {field_path: [1], field_type: string, repeated: true}
-      /expires_at: {field_path: [2], field_type: int64}"#,
-        );
-        let pb = parse_policy(&pb).unwrap();
-        assert_eq!(
-            compile_policy(&policy).unwrap().rules[0].capabilities,
-            compile_policy(&pb).unwrap().rules[0].capabilities
-        );
-        assert_eq!(parse_policy(&render_policy(&pb).unwrap()).unwrap(), pb);
-    }
-}
-
-#[test]
-fn renderer_retains_quoted_text_and_rejects_multiline_proofs_as_before() {
+fn renderer_excludes_plan_proof_text_and_still_validates_its_bounds() {
     let raw = sql_policy().replace(
         "Source writes the request clock and preserves all other values",
         "first: line\\n\\nsecond # line",
@@ -333,13 +273,20 @@ fn renderer_retains_quoted_text_and_rejects_multiline_proofs_as_before() {
     let PolicyRule::Native(rule) = &mut policy.rules[0] else {
         panic!()
     };
-    rule.proof.fact = "first: line; second # line; Unicode 时间 and quoted \"true\"".into();
+    rule.proof.as_mut().unwrap().fact =
+        "first: line; second # line; Unicode 时间 and quoted \"true\"".into();
     let actual = render_policy(&policy).unwrap();
-    assert_eq!(parse_policy(&actual).unwrap(), policy);
+    assert!(!actual.contains("proof:"));
+    assert_eq!(
+        compile_policy(&parse_policy(&actual).unwrap())
+            .unwrap()
+            .fingerprints,
+        compile_policy(&policy).unwrap().fingerprints
+    );
     let PolicyRule::Native(rule) = &mut policy.rules[0] else {
         panic!()
     };
-    rule.proof.fact.push('\n');
+    rule.proof.as_mut().unwrap().fact.push('\n');
     assert!(render_policy(&policy).is_err());
 }
 
@@ -366,8 +313,10 @@ rules:
     );
     let policy = parse_policy(&raw).unwrap();
     assert_eq!(
-        parse_policy(&render_policy(&policy).unwrap()).unwrap(),
-        policy
+        compile_policy(&parse_policy(&render_policy(&policy).unwrap()).unwrap())
+            .unwrap()
+            .fingerprints,
+        compile_policy(&policy).unwrap().fingerprints
     );
 }
 
@@ -376,7 +325,7 @@ fn standalone_rule_proposals_inherit_proof_and_get_revision_context_before_compa
     let policy = parse_policy(sql_policy()).unwrap();
     let raw: serde_yaml::Value = serde_yaml::from_str(sql_policy()).unwrap();
     let rule: PolicyRule = serde_yaml::from_value(raw["rules"][0].clone()).unwrap();
-    assert!(!rule.proof().source.contains(" @ "));
+    assert!(!rule.proof().unwrap().source.contains(" @ "));
     let proposed = super::expanded(&TrafficPolicy {
         format: POLICY_FORMAT.into(),
         source_revision: policy.source_revision.clone(),

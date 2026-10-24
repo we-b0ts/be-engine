@@ -363,9 +363,14 @@ async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_record
     let crate::policy::PolicyRule::Native(rule) = &mut document.rules[0] else {
         panic!("expected native fixture rule");
     };
-    rule.proof
-        .fact
-        .push_str("; additional reviewed Source fact");
+    let crate::policy::NativeEffect::ProcessOwned(effect) = &mut rule.effect else {
+        panic!("expected process ownership")
+    };
+    let crate::policy::native::ProcessSelector::Http { authorities, .. } = &mut effect.selector
+    else {
+        panic!("expected HTTP ownership")
+    };
+    authorities.push("additional-config.test".into());
     fs::write(&policy, crate::policy::render_policy(&document).unwrap()).unwrap();
     let changed_config =
         crate::AppConfig::load(origin.path().join(".traffic-e2e/project.yaml")).unwrap();

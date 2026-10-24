@@ -28,6 +28,7 @@ mod source_response;
 mod startup_inputs;
 mod store;
 mod support;
+mod target_stop;
 #[cfg(test)]
 pub(crate) mod test_session;
 
@@ -515,8 +516,6 @@ pub(crate) use evidence::query_http_cross_case_candidates;
 pub(crate) use evidence::query_rule_policy_freshness;
 pub(crate) use evidence::{query_dynamic_capture_candidates, query_http_unordered_candidates};
 
-pub(crate) use evidence::query_redis_lock_candidates;
-pub(crate) use evidence::query_redis_publish_candidates;
 pub(crate) use evidence::query_redis_unordered_candidates;
 
 pub(crate) use evidence::query_dependency_request_candidates;

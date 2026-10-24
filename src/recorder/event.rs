@@ -40,6 +40,7 @@ pub struct CaseContext {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum RecorderEvent {
+    DependencyConnectFailure(DependencyConnectFailureEvent),
     HttpExchange(HttpExchangeEvent),
     TcpGatewayConnection(TcpGatewayConnectionEvent),
     UdpDatagram(UdpDatagramEvent),
@@ -68,6 +69,7 @@ pub enum RecorderEvent {
 impl RecorderEvent {
     pub(crate) fn kind(&self) -> &'static str {
         match self {
+            Self::DependencyConnectFailure(_) => "dependency_connect_failure",
             Self::HttpExchange(_) => "http_exchange",
             Self::TcpGatewayConnection(_) => "tcp_gateway_connection",
             Self::UdpDatagram(_) => "udp_datagram",
@@ -93,6 +95,21 @@ impl RecorderEvent {
             Self::ProxyError(_) => "proxy_error",
         }
     }
+}
+
+/// An actual failed upstream connect and the transport failure sent to Source.
+/// Protocol parsing and recorder failures must never use this observation.
+#[derive(Debug, Clone, Serialize)]
+pub struct DependencyConnectFailureEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub protocol: String,
+    pub target_host: String,
+    pub target_port: u16,
+    pub duration_ms: u128,
+    pub failure_kind: String,
+    pub client_outcome: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

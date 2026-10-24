@@ -45,10 +45,12 @@ fn url_date_scope_requires_a_selected_time_and_inherits_source_proof() {
     )
     .unwrap();
     let rendered = crate::policy::render_policy(&document).unwrap();
-    // Compilation and rendering must preserve nested query proofs and semantics.
+    // Runtime rendering preserves query semantics and excludes plan proof metadata.
     assert_eq!(
-        crate::policy::compile_policy(&crate::policy::parse_policy(&rendered).unwrap()).unwrap(),
-        compiled
+        crate::policy::compile_policy(&crate::policy::parse_policy(&rendered).unwrap())
+            .unwrap()
+            .fingerprints,
+        compiled.fingerprints
     );
     url["query"]["X-Amz-Credential"]["relative_to"] = json!("missing");
     assert!(compile(url).is_err());

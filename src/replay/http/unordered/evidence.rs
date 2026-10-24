@@ -1,6 +1,7 @@
-//! Bounded request-time witnesses and stale-safe, read-only candidate verification.
+//! Bounded read-only observations of complete HTTP array-order differences.
 use super::*;
 use crate::replay::json_order::canonical_json;
+use anyhow::ensure;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
@@ -19,7 +20,7 @@ pub(in crate::replay::http) struct OrderCandidate {
     scheme: HttpReplayScheme,
     case_id: Option<String>,
     source_case_id: Option<String>,
-    pub selector: HttpUnorderedSelector,
+    pub selector: HttpUnorderedLocation,
     element_count: usize,
     remaining_unordered_pointers: Vec<String>,
     recorded_request_fingerprint: String,
@@ -85,7 +86,7 @@ pub(in crate::replay::http) fn capture(
                 scheme,
                 case_id: state.active_case_id.clone(),
                 source_case_id: exchange.case_id.clone(),
-                selector: HttpUnorderedSelector {
+                selector: HttpUnorderedLocation {
                     host: target.host.clone(),
                     port: target.port,
                     method: method.to_string(),
@@ -162,84 +163,5 @@ pub(crate) fn discover(report_path: &Path) -> Result<Value> {
         json!({"candidates": candidates, "omitted_candidates": omitted,
         "evidence_revision": digest(&bytes), "requires_fresh_replay": unavailable,
         "does_not_prove": "order-only request differences require source proof of unordered semantics"}),
-    )
-}
-
-pub(crate) fn verify(
-    source: &Path,
-    report_path: &Path,
-    selector: &HttpUnorderedSelector,
-) -> Result<Value> {
-    let evidence = discover(report_path)?;
-    ensure!(
-        evidence["omitted_candidates"] == 0,
-        "HTTP unordered evidence is bounded; narrow and rerun Replay before planning"
-    );
-    let candidates: Vec<OrderCandidate> = serde_json::from_value(evidence["candidates"].clone())?;
-    let candidates: Vec<_> = candidates
-        .into_iter()
-        .filter(|c| selector.selects(&c.selector))
-        .collect();
-    ensure!(
-        !candidates.is_empty(),
-        "no verified HTTP unordered candidate for this endpoint and JSON Pointer; old reports require fresh Replay"
-    );
-    let (root, files) = super::super::recording::files(source)?;
-    let mut verified = vec![false; candidates.len()];
-    let mut records = Vec::new();
-    for file in files {
-        let source_case_id = super::super::recording::case_id(&file)?;
-        if !candidates
-            .iter()
-            .any(|c| c.source_case_id.as_deref().unwrap_or("Global") == source_case_id)
-        {
-            continue;
-        }
-        super::super::recording::visit(&file, |line, record| {
-            if !selector.endpoint().matches(&record) {
-                return Ok(());
-            }
-            let fingerprint = super::super::identity::recorded_fingerprint(&record)?;
-            for (index, candidate) in candidates.iter().enumerate() {
-                if identity_from_record(&record)?.scheme != candidate.scheme
-                    || candidate.source_case_id.as_deref().unwrap_or("Global") != source_case_id
-                    || fingerprint != candidate.recorded_request_fingerprint
-                {
-                    continue;
-                }
-                ensure!(
-                    record.error.is_none() && record.response_status.is_some(),
-                    "HTTP unordered source exchange is not replayable"
-                );
-                let body: Value = serde_json::from_slice(&decode_body(&record.request_body)?)?;
-                let array = body
-                    .pointer(&candidate.selector.pointer)
-                    .and_then(Value::as_array)
-                    .context("HTTP unordered source array disappeared")?;
-                ensure!(
-                    array.len() == candidate.element_count
-                        && array_fingerprint(array) == candidate.array_fingerprint,
-                    "HTTP unordered source array changed"
-                );
-                let response = record
-                    .response_body
-                    .as_ref()
-                    .map(decode_body)
-                    .transpose()?
-                    .unwrap_or_default();
-                records.push(json!({"path": file.strip_prefix(&root)?, "line": line,
-                    "response_status":record.response_status, "response_fingerprint":digest(&response),
-                    "response_headers_fingerprint":digest(&serde_json::to_vec(&record.response_headers)?)}));
-                verified[index] = true;
-            }
-            Ok(())
-        })?;
-    }
-    ensure!(
-        verified.iter().all(|v| *v),
-        "HTTP unordered source evidence changed or is missing"
-    );
-    Ok(
-        json!({"candidates":candidates, "records":records, "evidence_revision":evidence["evidence_revision"]}),
     )
 }

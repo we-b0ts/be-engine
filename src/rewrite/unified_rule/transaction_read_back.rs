@@ -124,11 +124,12 @@ fn finite_read_back_state_epoch_upgrade_uses_complete_source_and_normal_plan_app
             vec![]
         });
         let mut upgrade = prior.clone();
-        upgrade["effect"]["read_back"][0]["state_epochs"] = json!({
+        upgrade["effect"]["read_back"][0]["state_epochs"] = json!(true);
+        upgrade["effect"]["read_back"][0]["proof"] = json!({
         "source":"session.py:51","fact":if scenario == "missing-proof" {""} else {
             "Scheduling changes repeated GET counts; SET and DEL exclusively define the same Case-owned identity state"
         }});
-        write(&fixture.proposal, upgrade);
+        write(&fixture.proposal, upgrade.clone());
         fixture.confirm();
         let dependencies = fixture
             .state()
@@ -146,14 +147,16 @@ fn finite_read_back_state_epoch_upgrade_uses_complete_source_and_normal_plan_app
         }
         let plan = planned.unwrap();
         let expanded = &plan.traffic_e2e_report["expanded_rules"][0];
-        assert_eq!(expanded["proof"], prior["proof"]);
+        assert!(expanded["proof"].is_null());
         assert_eq!(
-            expanded["effect"]["read_back"][0]["proof"],
-            prior["effect"]["read_back"][0]["proof"]
+            expanded["effect"]["read_back"][0]["contract"]["state_epochs"],
+            true
         );
+        let source = &plan.traffic_e2e_report["source_proofs"]["rules"][0];
+        assert_eq!(source["proof"], prior["proof"]);
         assert_eq!(
-            expanded["effect"]["read_back"][0]["contract"]["state_epochs"]["source"],
-            "session.py:51"
+            source["effect"]["read_back"][0]["proof"],
+            upgrade["effect"]["read_back"][0]["proof"]
         );
         assert_eq!(
             plan.traffic_e2e_report["preflight"]["stateful_target_obligations"],

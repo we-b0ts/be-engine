@@ -2,7 +2,7 @@ use super::*;
 use crate::policy::native as n;
 
 fn response(api: &str) -> TrafficPolicy {
-    parse_policy(&json_rule("api.response").replace("GET /sessions", api)).unwrap()
+    native_policy(api)
 }
 
 #[test]
@@ -13,7 +13,7 @@ fn literal_api_rules_preserve_request_identity_and_distinct_fingerprints() {
         let api = format!("GET {path}");
         let compiled = compile_policy(&response(&api)).unwrap();
         assert_eq!(
-            compiled.rules[0].rule.selector.api.as_deref(),
+            compiled.native[0].rule.selector.api.as_deref(),
             Some(api.as_str())
         );
         assert!(identities.insert(compiled.fingerprints.runtime));
@@ -30,14 +30,7 @@ fn literal_api_rules_preserve_request_identity_and_distinct_fingerprints() {
 
 #[test]
 fn dependency_and_native_selectors_share_literal_http_paths_without_widening_patterns() {
-    let mut value = response("GET /api/items/")
-        .rules
-        .remove(0)
-        .as_value()
-        .unwrap()
-        .clone();
-    value.surface = Surface::DependencyRequest;
-    value.selector.resource = Some(Resource {
+    let resource = Some(Resource {
         protocol: Protocol::Http,
         endpoint: Endpoint {
             host: "upstream.test".into(),
@@ -46,38 +39,24 @@ fn dependency_and_native_selectors_share_literal_http_paths_without_widening_pat
         database: None,
         username: None,
     });
-    value.selector.operation = Some("POST".into());
-    value.selector.path = Some("/upstream//items/".into());
-    assert!(compile_rule(&value).is_ok());
+    let proof = Proof {
+        source: "source.py:1".into(),
+        fact: "Source preserves literal upstream paths".into(),
+    };
     let mut native = NativeRule {
         id: "literal-header".into(),
         selector: NativeMatch {
             api: Some("GET /api/items/".into()),
-            resource: value.selector.resource.clone(),
+            resource,
             operation: Some("POST".into()),
-            path: value.selector.path.clone(),
+            path: Some("/upstream//items/".into()),
             ..Default::default()
         },
         effect: NativeEffect::HttpRequest(n::HttpRequestEffect {
-            headers: std::collections::BTreeMap::from([(
-                "x-time".into(),
-                n::Proven {
-                    contract: n::NativeTime {
-                        format: TimestampFormat::UnixSeconds,
-                        relation: TimeRelation::RequestWindow,
-                        anchor: TimeAnchor::DependencyRequestStart,
-                        utc_offset: None,
-                        clock_group: None,
-                        clock_scope: Default::default(),
-                    },
-                    proof: value.proof.clone(),
-                },
-            )]),
             query: Default::default(),
-            json: Default::default(),
-            multipart_boundary: false,
+            multipart_boundary: true,
         }),
-        proof: value.proof.clone(),
+        proof: Some(proof.clone()),
         when: None,
     };
     assert!(compile_native(&native).is_ok());
@@ -88,9 +67,7 @@ fn dependency_and_native_selectors_share_literal_http_paths_without_widening_pat
         "/upstream/items#x",
         "/upstream/bad path",
     ] {
-        value.selector.path = Some(invalid.into());
         native.selector.path = Some(invalid.into());
-        assert!(compile_rule(&value).is_err(), "{invalid}");
         assert!(compile_native(&native).is_err(), "{invalid}");
     }
 }
@@ -108,7 +85,8 @@ fn motan_and_explicit_capture_patterns_keep_their_strict_grammar() {
         "GET /bad path",
     ] {
         assert!(
-            parse_policy(&json_rule("api.response").replace("GET /sessions", invalid)).is_err(),
+            parse_policy(&serde_json::to_string(&serde_json::json!({"format":POLICY_FORMAT,"rules":[{
+                "id":"invalid","match":{"api":invalid},"effect":{"kind":"response_header_date","header":"date","format":"%Y-%m-%d"},"proof":{"source":"source.py:1","fact":"Literal path proof"}}]})).unwrap()).is_err(),
             "{invalid}"
         );
     }
@@ -117,10 +95,10 @@ fn motan_and_explicit_capture_patterns_keep_their_strict_grammar() {
         id: "capture-literal-url".into(),
         selector: Default::default(),
         when: None,
-        proof: Proof {
+        proof: Some(Proof {
             source: "src/source.rs:42".into(),
             fact: "The exact upstream endpoint returns a dependent service URL".into(),
-        },
+        }),
         effect: NativeEffect::CaptureHttpResponse(n::CaptureResponseEffect {
             authorities: vec!["upstream.test".into()],
             methods: vec!["GET".into()],
@@ -132,10 +110,10 @@ fn motan_and_explicit_capture_patterns_keep_their_strict_grammar() {
             contract: n::CaptureResponseContract::Urls {
                 pointers: vec![n::Proven {
                     contract: "/base_url".into(),
-                    proof: Proof {
+                    proof: Some(Proof {
                         source: "src/source.rs:43".into(),
                         fact: "Source consumes this returned URL".into(),
-                    },
+                    }),
                 }],
             },
         }),

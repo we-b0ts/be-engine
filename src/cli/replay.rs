@@ -99,6 +99,7 @@ struct ReplayFileValues {
 }
 
 struct ResolvedReplay {
+    request_timeout_ms: u64,
     dependency_loading: traffic_e2e::ReplayDependencyLoading,
     case: PathBuf,
     case_ids: Vec<String>,
@@ -141,6 +142,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
         None
     };
     let lifecycle = ReplayLifecycleConfig {
+        request_timeout: std::time::Duration::from_millis(resolved.request_timeout_ms),
         dependency_loading: resolved.dependency_loading,
         case_dependency_post_response_window: std::time::Duration::from_millis(
             resolved.case_dependency_post_response_window_ms,
@@ -342,6 +344,10 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         dependency_loading.case_timeout_seconds = seconds;
     }
     Ok(ResolvedReplay {
+        request_timeout_ms: recorder_defaults.as_ref().map_or_else(
+            || AppConfig::default().http_gateway.request_timeout_ms,
+            |config| config.http_gateway.request_timeout_ms,
+        ),
         dependency_loading,
         case,
         case_ids,

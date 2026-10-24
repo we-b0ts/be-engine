@@ -18,44 +18,46 @@ pub(crate) fn materialize(
     clocks: AnchorClocks,
 ) -> Result<Value> {
     let mut result = source.clone();
-    let mut deltas = BTreeMap::new();
-    for rule in rules {
-        for contract in rule.delivery_time.values() {
-            if contract.format == TimestampFormat::CalendarDate {
-                continue;
-            }
-            let pair = anchor(clocks, contract.anchor);
-            let (source, target) = pair.require()?;
-            let delta = time::date_nanos(target) - time::date_nanos(source);
-            let quantum = quantum(contract.format);
-            let entry = deltas.entry(contract.anchor).or_insert((delta, quantum));
-            entry.1 = entry.1.max(quantum);
-        }
-    }
+    // A field declaration applies only to leaves present in this Source value.
+    // Resolve them before requiring clocks or choosing shared clock precision.
+    let mut selected = Vec::new();
     for rule in rules {
         for (pointer, contract) in &rule.delivery_time {
             let pointers = select(pointer, source)?;
-            ensure!(
-                !pointers.is_empty(),
-                "delivery timestamp {pointer:?} was not observed"
-            );
-            for pointer in pointers {
-                let value = result
-                    .pointer_mut(&pointer)
-                    .context("delivery field disappeared")?;
-                *value = if contract.format == TimestampFormat::CalendarDate {
-                    time::calendar::rebase(
-                        value,
-                        contract
-                            .offset()?
-                            .context("calendar_date requires utc_offset")?,
-                        anchor(clocks, contract.anchor),
-                    )?
-                } else {
-                    let (delta, quantum) = deltas[&contract.anchor];
-                    shift(value, contract, delta / quantum * quantum)?
-                };
+            if !pointers.is_empty() {
+                selected.push((contract, pointers));
             }
+        }
+    }
+    let mut deltas = BTreeMap::new();
+    for (contract, _) in &selected {
+        if contract.format == TimestampFormat::CalendarDate {
+            continue;
+        }
+        let pair = anchor(clocks, contract.anchor);
+        let (source, target) = pair.require()?;
+        let delta = time::date_nanos(target) - time::date_nanos(source);
+        let quantum = quantum(contract.format);
+        let entry = deltas.entry(contract.anchor).or_insert((delta, quantum));
+        entry.1 = entry.1.max(quantum);
+    }
+    for (contract, pointers) in selected {
+        for pointer in pointers {
+            let value = result
+                .pointer_mut(&pointer)
+                .context("delivery field disappeared")?;
+            *value = if contract.format == TimestampFormat::CalendarDate {
+                time::calendar::rebase(
+                    value,
+                    contract
+                        .offset()?
+                        .context("calendar_date requires utc_offset")?,
+                    anchor(clocks, contract.anchor),
+                )?
+            } else {
+                let (delta, quantum) = deltas[&contract.anchor];
+                shift(value, contract, delta / quantum * quantum)?
+            };
         }
     }
     // Only writable fields are translated. Ordinary comparison contracts must
@@ -186,15 +188,17 @@ pub(crate) fn shift(value: &Value, config: &TimeContract, delta: i128) -> Result
     }
 }
 
-pub(super) fn select(pattern: &str, value: &Value) -> Result<Vec<String>> {
+pub(crate) fn select(pattern: &str, value: &Value) -> Result<Vec<String>> {
     fn walk(parts: &[&str], value: &Value, path: String, out: &mut Vec<String>) {
         let Some((part, rest)) = parts.split_first() else {
             out.push(path);
             return;
         };
-        if *part == "*" && value.is_array() {
-            for (i, child) in value.as_array().unwrap().iter().enumerate() {
-                walk(rest, child, format!("{path}/{i}"), out);
+        if *part == "*" {
+            if let Some(values) = value.as_array() {
+                for (i, child) in values.iter().enumerate() {
+                    walk(rest, child, format!("{path}/{i}"), out);
+                }
             }
         } else if let Some(child) = value.pointer(&format!("/{part}")) {
             walk(rest, child, format!("{path}/{part}"), out);

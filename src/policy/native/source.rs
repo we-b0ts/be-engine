@@ -173,7 +173,5 @@ pub enum FiniteSharingEffect {
     Redis {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hash_field: Option<String>,
-        #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
-        response_time: BTreeMap<String, Proven<super::NativeTime>>,
     },
 }

@@ -26,7 +26,9 @@ mod case_index;
 mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
+mod connect_failure;
 mod contract_value;
+mod lifecycle_cleanup;
 pub(crate) use memcached::contracts::{
     source_witness as memcached_source_witness, validate_witness as memcached_validate_witness,
 };
@@ -56,7 +58,6 @@ mod http;
 pub(crate) use http::contracts::{
     source_witness as http_source_witness,
     validate_contract_witness as http_validate_contract_witness,
-    witness_matches as http_witness_matches,
     witness_metadata_matches as http_witness_metadata_matches, witness_value as http_witness_value,
 };
 pub(crate) use http::cross_case as http_cross_case;
@@ -67,7 +68,6 @@ pub(crate) use http::tests::{
     snapshot_http_replay, spawn_coordinator_http_replay, write_http_case,
 };
 pub(crate) use http::unordered as http_unordered;
-pub use http::unordered::HttpUnorderedSelector;
 mod kafka;
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -76,27 +76,22 @@ mod memcached;
 mod model;
 mod motan;
 mod mysql;
-pub(crate) use mysql::contracts::request_witnesses_related as mysql_request_witnesses_related;
-pub(crate) use mysql::contracts::time_copies::delivered_witness_time_copies as mysql_delivered_witness_time_copies;
-pub(crate) use mysql::contracts::validate_contract_candidate_with_time_copies as mysql_validate_contract_candidate_with_time_copies;
+pub(crate) use mysql::contracts::automatic::Metadata as MysqlInferenceMetadata;
+pub(crate) use mysql::contracts::source_witness as mysql_source_witness;
+pub(crate) use mysql::contracts::time_copies::global::delivered_witness_time_copies as mysql_global_delivered_time_copies;
 pub(crate) use mysql::contracts::{
     IdentityPreflight as MysqlIdentityPreflight,
     normalize_identity_witnesses as mysql_normalize_identity_witnesses,
 };
-pub(crate) use mysql::contracts::{
-    source_witness as mysql_source_witness, validate_witness as mysql_validate_witness,
-    witness_values as mysql_witness_values,
-};
 pub(crate) use policy::mysql_native_witness_matches;
-pub(crate) use policy::mysql_witness_matches;
 pub(crate) use policy::validate_mysql_value_selector;
 mod network_access;
 mod policy;
 pub(crate) use policy::replace_request_rule_section;
 pub(crate) use policy::request_contract::redis_bulk_payload;
 pub(crate) use policy::request_contract::{
-    RedisFieldValue, RedisTimeRead, redis_delivered_time_copies, redis_field_values,
-    redis_response_identities, redis_time_position, redis_time_write_proofs,
+    RedisFieldValue, RedisTimeRead, redis_delivered_global_time_copies,
+    redis_delivered_scalar_time_copies, redis_field_values, redis_time_position,
 };
 mod redis;
 pub(crate) mod report;
@@ -144,6 +139,7 @@ pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 10;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayLifecycleConfig {
+    pub request_timeout: std::time::Duration,
     pub case_dependency_post_response_window: std::time::Duration,
     pub dependency_loading: ReplayDependencyLoading,
 }
@@ -151,6 +147,9 @@ pub struct ReplayLifecycleConfig {
 impl Default for ReplayLifecycleConfig {
     fn default() -> Self {
         Self {
+            request_timeout: std::time::Duration::from_millis(
+                crate::config::HttpGatewayConfig::default().request_timeout_ms,
+            ),
             dependency_loading: ReplayDependencyLoading::default(),
             case_dependency_post_response_window: std::time::Duration::from_millis(
                 DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
@@ -236,7 +235,7 @@ pub use report::global_evidence::{GlobalDependencyPage, read_global_dependency_p
 pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
-pub(crate) use control::check_response_identities;
+pub(crate) use control::{check_response_identities, register_derived_input};
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
     run_replay_control(config).await
@@ -399,6 +398,7 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 
 #[derive(Debug)]
 struct ReplayState {
+    connect_failures: connect_failure::Inventory,
     deferred: Option<Arc<deferred::DeferredDependencies>>,
     egress_counter_reader: Option<ReplayEgressCounterReader>,
     egress_counter_starts: BTreeMap<String, egress_counter::Sample>,
@@ -412,6 +412,8 @@ struct ReplayState {
     root_dir: PathBuf,
     cases: BTreeMap<String, ReplayCase>,
     active_case_id: Option<String>,
+    target_stop_prepared: BTreeSet<String>,
+    target_session_stopped: bool,
     dependency_tails: control::dependency_tail::CaseTails,
     case_dependency_post_response_window: std::time::Duration,
     global_path: Option<PathBuf>,
@@ -452,11 +454,16 @@ async fn accept_replay_tcp_connection(listener: &TcpListener) -> Result<(TcpStre
 }
 
 async fn handle_gateway_connection(
-    stream: TcpStream,
+    mut stream: TcpStream,
     peer_addr: SocketAddr,
     state: Arc<Mutex<ReplayState>>,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
+    let stopping = state.lock().await.async_case_quiescing();
+    if stopping {
+        crate::dependency::termination::ConnectionControl::new(&stream)?.reset()?;
+        return Ok(());
+    }
     let target = match replay_destination_for_stream(&stream, &state).await {
         ReplayDestination::Recorded(target) => Some(target),
         ReplayDestination::Unrecorded {
@@ -482,6 +489,11 @@ async fn handle_gateway_connection(
         }
         ReplayDestination::Unknown => None,
     };
+    if let Some(target) = target.as_ref()
+        && connect_failure::deliver(&mut stream, target, &state).await?
+    {
+        return Ok(());
+    }
     match target.as_ref().map(|target| target.protocol) {
         Some(ReplayProtocol::Auto) => {
             let target = target.context("auto replay connection has no target")?;
@@ -656,45 +668,18 @@ fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
     Ok(SocketAddr::new(IpAddr::V4(ip), port))
 }
 
-pub use policy::{
-    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
-};
-
 #[cfg(test)]
 pub(crate) use policy::test_fixture::install_dependency_rule as install_dependency_rule_fixture;
 #[cfg(test)]
+pub(crate) use policy::test_fixture::redis_time::{RedisTimeShiftFeedback, RedisTimeShiftSelector};
+#[cfg(test)]
 pub(crate) use policy::test_fixture::write_policy as write_policy_fixture;
-pub use policy::{
-    RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
-};
-pub use redis::time_shift::{
-    RedisTimeShiftRead, RedisTimeShiftSelector, RedisTimestampFormat, RelativeTime,
-    RelativeTimeField,
-};
 pub use redis::value::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
-
-pub use policy::{
-    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
-};
 
 pub(crate) use redis::value as redis_value;
 
 mod json_order;
 mod recording_evidence;
-
-pub use policy::HttpHeaderTimestampSelector;
-
-pub use policy::{
-    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
-    plan_http_header_timestamp,
-};
-
-pub use policy::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};
-pub use policy::{RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, plan_redis_publish};
-pub(crate) use redis::lock as redis_lock;
-pub use redis::lock::RedisLockSelector;
-pub(crate) use redis::publish as redis_publish;
-pub use redis::publish::RedisPublishSelector;
 
 pub use policy::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 
@@ -709,7 +694,7 @@ pub(crate) use assertion::native::{
     compare_header as native_response_header, selected as native_response_selected,
 };
 pub(crate) use assertion::{
-    ResponsePayloadPair, compare_interaction, decode_sse, response_payload_pair,
+    ResponsePayloadPair, compare_interaction_global, decode_sse, response_payload_pair,
 };
 pub(crate) use mysql::contracts::{
     validate_contract_candidate as mysql_validate_contract_candidate,
@@ -719,3 +704,7 @@ pub(crate) use policy::native_projection::validate_native_adapter;
 
 pub(crate) use assertion::native::source_request_body as native_source_request_body;
 pub(crate) use policy::native_projection::compiled_input_rules;
+
+pub(crate) use redis::expiration::normalize as normalize_redis_expiration;
+
+pub(crate) use mysql::contracts::automatic::validate_witness_with_time_copies as mysql_validate_global_witness_with_time_copies;

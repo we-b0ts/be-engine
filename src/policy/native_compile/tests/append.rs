@@ -13,7 +13,6 @@ fn append_capability_requires_explicit_scope_and_exclusive_payload_ownership() {
         "/match/resource/database",
         "/match/key",
         "/match/operation",
-        "/proof",
     ] {
         let mut rule = rule();
         let (parent, key) = path.rsplit_once('/').unwrap();
@@ -32,6 +31,14 @@ fn append_capability_requires_explicit_scope_and_exclusive_payload_ownership() {
         &json!({"format":"traffic-policy/v2","rules":[rule()]}).to_string(),
     )
     .unwrap();
+    let mut missing_proof = rule();
+    missing_proof.as_object_mut().unwrap().remove("proof");
+    let runtime = crate::policy::parse_policy(
+        &json!({"format":"traffic-policy/v2","rules":[missing_proof]}).to_string(),
+    )
+    .unwrap();
+    crate::policy::compile_policy(&runtime).unwrap();
+    assert!(crate::policy::require_source_proofs(&runtime).is_err());
     let compiled = crate::policy::compile_policy(&policy).unwrap();
     assert_eq!(
         compiled.native[0].rule.effect.capability_name(),

@@ -3,7 +3,6 @@ mod http_native;
 mod memcached;
 pub(in crate::replay::policy) mod mysql_contract;
 pub(in crate::replay::policy) mod mysql_native;
-pub(in crate::replay::policy) mod mysql_response;
 pub(in crate::replay::policy) mod mysql_selectors;
 pub(super) mod mysql_values;
 mod source_session;
@@ -45,12 +44,21 @@ struct DependencyRuleUsage {
 #[derive(Debug, Clone, Default)]
 pub(in crate::replay) struct DependencyRuleDecision {
     usage: BTreeMap<String, DependencyRuleUsage>,
-    bindings: Vec<(String, Value)>,
+    automatic_identities: Option<crate::value_contract::identities::IdentityDecision>,
     pub(in crate::replay) dynamic_query_params: Vec<String>,
     pub(in crate::replay) value_contracts: Vec<super::request_contract::Decision>,
 }
 
 impl DependencyRuleDecision {
+    pub(in crate::replay) fn identity_proposals(
+        &self,
+    ) -> impl Iterator<Item = &crate::value_contract::identities::IdentityDecision> {
+        self.automatic_identities.iter().chain(
+            self.value_contracts
+                .iter()
+                .filter_map(|decision| decision.identity.as_ref()),
+        )
+    }
     pub(in crate::replay::policy) fn merge_value_comparison(
         &mut self,
         comparison: crate::value_contract::json::Comparison,
@@ -74,7 +82,6 @@ pub(in crate::replay) struct ReplayPolicyRuntime {
     applicable_dependency_rule_ids: BTreeSet<String>,
     recorded_mysql_rule_applicability: BTreeMap<String, BTreeSet<RecordedDependencyRuleSource>>,
     usage: BTreeMap<String, DependencyRuleUsage>,
-    bindings: BTreeMap<String, BTreeMap<String, Value>>,
 }
 
 #[derive(Debug)]
@@ -238,11 +245,13 @@ impl ReplayPolicyRuntime {
             applicable_dependency_rule_ids: BTreeSet::new(),
             recorded_mysql_rule_applicability: BTreeMap::new(),
             usage,
-            bindings: BTreeMap::new(),
         };
         runtime
             .request_contracts
             .configure_compiled(runtime.loaded.compiled.clone())?;
+        runtime
+            .dynamic_values
+            .configure_identities(runtime.request_contracts.clone());
         if observe_sources
             && (runtime.dynamic_values.enabled() || runtime.request_contracts.enabled())
         {
@@ -305,7 +314,6 @@ impl ReplayPolicyRuntime {
                 .filter(|rule| {
                     rule.protocol == DependencyProtocol::Http
                         && rule.replay_scope != super::config::ReplayScope::RecordingRun
-                        && rule.http.as_ref().is_some_and(|h| h.json.is_empty())
                         && rule_matches_case(rule, case)
                         && rule_matches_http(rule, target, method, uri)
                 })
@@ -363,7 +371,6 @@ impl ReplayPolicyRuntime {
     pub(in crate::replay) fn begin_case(&mut self, case_id: &str) {
         self.dynamic_values.begin_case(case_id);
         self.request_contracts.begin_case(case_id);
-        self.bindings.remove(case_id);
     }
 
     pub(in crate::replay) fn preview_mysql(
@@ -386,10 +393,6 @@ impl ReplayPolicyRuntime {
             .iter()
             .filter(|rule| {
                 rule.protocol == DependencyProtocol::Mysql
-                    && rule
-                        .mysql
-                        .as_ref()
-                        .is_some_and(|mysql| mysql.response_time_shift.is_empty())
                     && rule_matches_case(rule, case)
                     && self.mysql_selectors.matches(
                         rule,
@@ -490,10 +493,6 @@ impl ReplayPolicyRuntime {
         };
         self.loaded.document.dependency_rules.iter().any(|rule| {
             rule.protocol == DependencyProtocol::Mysql
-                && rule
-                    .mysql
-                    .as_ref()
-                    .is_some_and(|mysql| mysql.response_time_shift.is_empty())
                 && rule_matches_case(rule, case)
                 && self.mysql_selectors.matches(
                     rule,
@@ -526,7 +525,6 @@ impl ReplayPolicyRuntime {
             .filter(|rule| {
                 rule.protocol == DependencyProtocol::Http
                     && rule.replay_scope != super::config::ReplayScope::RecordingRun
-                    && rule.http.as_ref().is_some_and(|h| h.json.is_empty())
                     && rule_matches_case(rule, case)
                     && rule_matches_http(rule, context.target, context.method, context.actual_uri)
             })
@@ -596,25 +594,8 @@ impl ReplayPolicyRuntime {
         request_times: crate::replay::assertion::RequestTimes,
     ) -> Result<(), String> {
         let usage = decision.usage.entry(rule_id.to_string()).or_default();
-        if let Some(reference) = &field.reference {
-            let Some(bound) = self
-                .bindings
-                .get(case_id)
-                .and_then(|bindings| bindings.get(reference))
-            else {
-                return Err(format!(
-                    "replay policy ref {reference:?} is not bound in this case"
-                ));
-            };
-            if bound != actual {
-                return Err(format!(
-                    "replay policy ref {reference:?} did not match its bound value"
-                ));
-            }
-            usage.references += 1;
-            return Ok(());
-        }
         if let Some(validator) = field.validate {
+            validate_value(recorded, validator)?;
             validate_value(actual, validator)?;
             usage.validations += 1;
         }
@@ -622,42 +603,49 @@ impl ReplayPolicyRuntime {
             validate_relative_time(recorded, actual, time, request_times)?;
             usage.time_validations += 1;
         }
-        if let Some(binding) = &field.bind {
-            if let Some(bound) = self
-                .bindings
-                .get(case_id)
-                .and_then(|bindings| bindings.get(binding))
-                .or_else(|| {
-                    decision
-                        .bindings
-                        .iter()
-                        .find_map(|(name, value)| (name == binding).then_some(value))
-                })
-                && bound != actual
-            {
-                return Err(format!(
-                    "replay policy bind {binding:?} changed within the same case"
-                ));
-            }
-            decision.bindings.push((binding.clone(), actual.clone()));
-            usage.binds += 1;
+        if field.bind.is_none() && field.reference.is_none() {
+            return Ok(());
         }
+        if std::mem::discriminant(recorded) != std::mem::discriminant(actual) {
+            return Err("generated identity scalar type changed".into());
+        }
+        let source = crate::value_contract::json::identity_key(recorded, "")
+            .map_err(|difference| difference.reason)?;
+        let target = crate::value_contract::json::identity_key(actual, "")
+            .map_err(|difference| difference.reason)?;
+        usage.binds += 1;
+        let identity = self
+            .request_contracts
+            .preview_identity_pairs(
+                case_id,
+                &[crate::value_contract::identities::IdentityPair { source, target }],
+            )
+            .map_err(|error| error.to_string())?;
+        let mut proposal = super::request_contract::Decision::default();
+        proposal.identity = decision.automatic_identities.take();
+        self.request_contracts
+            .merge_identity_decision(&mut proposal, identity)
+            .map_err(|error| error.to_string())?;
+        decision.automatic_identities = proposal.identity;
         Ok(())
     }
 
     pub(in crate::replay) fn commit(
         &mut self,
-        case_id: Option<&str>,
-        decision: DependencyRuleDecision,
+        _case_id: Option<&str>,
+        mut decision: DependencyRuleDecision,
     ) -> Result<()> {
+        let mut identities = super::request_contract::Decision::default();
+        identities.identity = decision.automatic_identities.take();
+        for contract in &mut decision.value_contracts {
+            if let Some(identity) = contract.identity.take() {
+                self.request_contracts
+                    .merge_identity_decision(&mut identities, identity)?;
+            }
+        }
+        self.request_contracts.commit(identities)?;
         for value_contract in decision.value_contracts {
             self.request_contracts.commit(value_contract)?;
-        }
-        if let Some(case_id) = case_id {
-            let bindings = self.bindings.entry(case_id.to_string()).or_default();
-            for (name, value) in decision.bindings {
-                bindings.entry(name).or_insert(value);
-            }
         }
         for (rule_id, decision_usage) in decision.usage {
             self.applicable_dependency_rule_ids.insert(rule_id.clone());
@@ -711,8 +699,8 @@ impl ReplayPolicyRuntime {
             fingerprint: self.loaded.fingerprint.clone(),
             expected_response: self.loaded.document.expected_response,
             dependency_rules,
+            global_formats: self.request_contracts.global_format_reports(),
             dynamic_bindings: self.dynamic_values.report(),
-            mysql_identity_read_backs: self.dynamic_values.mysql_read_back_report(),
             redis_read_backs: self.request_contracts.read_back_report(),
             key_bindings: self.request_contracts.key_binding_report(),
             dynamic_capture_candidates: self.dynamic_values.capture_candidates(),
@@ -722,7 +710,6 @@ impl ReplayPolicyRuntime {
             recorded_redis_rule_applicability: self
                 .request_contracts
                 .recorded_redis_rule_applicability(),
-            unavailable_value_slots: self.request_contracts.unavailable_value_slots(),
         }
     }
 }
@@ -862,7 +849,5 @@ fn rule_matches_target(rule: &ReplayDependencyRule, actual: Option<&TargetKey>) 
 }
 
 mod http_client_metadata;
-mod http_headers;
-mod http_json;
 
 mod redis_value;

@@ -371,4 +371,4 @@ source recorded equality identifies single-key EVAL/EVALSHA/DELEX references.
 The rule correlates opaque tokens without UUID or script SHA configuration,
 retains other arguments and finite consumption, and requires fresh Replay.
 It does not interpret Lua or emulate lock contention/expiry. See
-[Redis lock rules](../../../../../docs/redis-lock-rules.md).
+[Redis scalar formats](../../../../../docs/redis-scalar-formats.md).

@@ -14,10 +14,10 @@ use crate::policy::{Database, Endpoint, Resource};
 fn proven<T>(contract: T) -> Proven<T> {
     Proven {
         contract,
-        proof: Proof {
+        proof: Some(Proof {
             source: "source.rs:1".into(),
             fact: "one Source constructor supplies this field".into(),
-        },
+        }),
     }
 }
 
@@ -43,7 +43,6 @@ fn path_rule() -> NativeRule {
             ..Default::default()
         },
         effect: NativeEffect::Identity(IdentityEffect {
-            mysql_read_back: vec![],
             read_back: vec![],
             value_type: IdentityType::String,
             format: None,
@@ -169,11 +168,18 @@ fn proof_edits_do_not_invalidate_execution_but_a_semantic_field_named_proof_does
     let original = path_rule();
     let baseline = compile_native(&original).unwrap();
     let mut changed = original.clone();
-    changed.proof.fact = "more exact Source explanation".into();
+    changed.proof.as_mut().unwrap().fact = "more exact Source explanation".into();
     if let NativeEffect::Identity(effect) = &mut changed.effect
         && let IdentityCapture::HttpPath { segment } = &mut effect.capture
     {
-        segment.fields.get_mut("proof").unwrap().proof.fact = "nonce generated once".into();
+        segment
+            .fields
+            .get_mut("proof")
+            .unwrap()
+            .proof
+            .as_mut()
+            .unwrap()
+            .fact = "nonce generated once".into();
     }
     assert_eq!(
         compile_native(&changed).unwrap().fingerprint,
@@ -194,7 +200,7 @@ fn proof_edits_do_not_invalidate_execution_but_a_semantic_field_named_proof_does
 }
 
 #[test]
-fn inline_sequence_proof_is_required_and_duplicate_slots_cannot_overwrite() {
+fn inline_sequence_runtime_proof_is_optional_and_duplicate_slots_cannot_overwrite() {
     let yaml = r#"
 id: schedule
 match:
@@ -213,13 +219,28 @@ effect:
 "#;
     let rule: NativeRule = serde_yaml::from_str(yaml).unwrap();
     compile_native(&rule).unwrap();
-    assert!(
-        serde_yaml::from_str::<NativeRule>(&yaml.replace(
-            "          proof: {source: 'scheduler.rs:2', fact: 'current request time'}",
-            ""
-        ))
-        .is_err()
+    let runtime: NativeRule = serde_yaml::from_str(&yaml.replace(
+        "          proof: {source: 'scheduler.rs:2', fact: 'current request time'}",
+        "",
+    ))
+    .unwrap();
+    assert_eq!(
+        compile_native(&runtime).unwrap().fingerprint,
+        compile_native(&rule).unwrap().fingerprint
     );
+    let mut invalid = rule.clone();
+    if let NativeEffect::RedisSequence(effect) = &mut invalid.effect {
+        effect.commands[0]
+            .arguments
+            .get_mut(&1)
+            .unwrap()
+            .proof
+            .as_mut()
+            .unwrap()
+            .fact
+            .clear();
+    }
+    assert!(compile_native(&invalid).is_err());
     let duplicate=yaml.replace("          proof: {source: 'scheduler.rs:2', fact: 'current request time'}","          proof: {source: 'scheduler.rs:2', fact: 'current request time'}\n        1:\n          contract: {kind: time, format: unix_seconds, relation: preserve_offset}\n          proof: {source: 'scheduler.rs:3', fact: 'must not replace first slot'}");
     assert!(serde_yaml::from_str::<NativeRule>(&duplicate).is_err());
 }

@@ -5,19 +5,16 @@ use sha2::{Digest, Sha256};
 
 const MAX_INPUT_POSITIONS: usize = 16384;
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
-const MAX_IDENTITY_TEXT: usize = 512;
 
-pub(super) fn capture_error(request: &Value, json: Option<&Value>) -> Option<&'static str> {
+pub(super) fn capture_error(request: &Value, _json: Option<&Value>) -> Option<&'static str> {
     let body = request.get("body")?;
     if body["truncated"] == true
+        || body["redacted"] == true
         || body
             .get("decode_error")
             .is_some_and(|error| !error.is_null())
     {
         return Some("API input capture is incomplete");
-    }
-    if json.is_none() && body["data"].as_str().is_some_and(|data| !data.is_empty()) {
-        return Some("nonempty API input requires complete JSON for identity anchoring");
     }
     None
 }
@@ -55,7 +52,7 @@ impl InputIndex {
         for segment in path.split('/').filter(|segment| !segment.is_empty()) {
             let decoded = decode_path_segment(segment)?;
             budget.visit(decoded.len())?;
-            self.insert(&decoded);
+            self.insert(&Value::String(decoded));
         }
         let query = parsed
             .as_ref()
@@ -64,7 +61,7 @@ impl InputIndex {
         if let Some(query) = query {
             for (_, value) in ::url::form_urlencoded::parse(query.as_bytes()) {
                 budget.visit(value.len())?;
-                self.insert(&value);
+                self.insert(&Value::String(value.into_owned()));
             }
         }
         if let Some(body) = body {
@@ -79,11 +76,11 @@ impl InputIndex {
         match value {
             Value::String(value) => {
                 budget.add_bytes(value.len())?;
-                self.insert(value);
+                self.insert(&Value::String(value.clone()));
             }
             Value::Number(value) => {
-                if let Some(value) = value.as_u64() {
-                    self.insert(&value.to_string());
+                if value.is_i64() || value.is_u64() {
+                    self.insert(&Value::Number(value.clone()));
                 }
             }
             Value::Array(values) => {
@@ -102,11 +99,10 @@ impl InputIndex {
         Ok(())
     }
 
-    fn insert(&mut self, value: &str) {
-        // A declared prefix plus a canonical identity token cannot exceed 512
-        // bytes. Longer business text cannot be an exact identity occurrence.
-        if !value.is_empty() && value.len() <= MAX_IDENTITY_TEXT {
-            self.values.insert(Sha256::digest(value.as_bytes()).into());
+    fn insert(&mut self, value: &Value) {
+        if let Ok(encoded) = crate::value_contract::json::identity_key(value, "") {
+            self.values
+                .insert(Sha256::digest(encoded.as_bytes()).into());
         }
     }
 
@@ -144,7 +140,7 @@ impl Budget {
     }
 }
 
-fn decode_path_segment(segment: &str) -> Result<String> {
+pub(super) fn decode_path_segment(segment: &str) -> Result<String> {
     let mut decoded = Vec::with_capacity(segment.len());
     let mut remaining = segment.as_bytes();
     while let Some((&first, rest)) = remaining.split_first() {
@@ -218,20 +214,9 @@ impl RequestContracts {
             index.failure.as_deref().unwrap_or_default()
         );
         for pair in pairs.iter().filter(|pair| pair.source != pair.target) {
-            let fixed = self.identity_prefixes.get(&pair.domain).map_or_else(
-                || index.contains(&pair.source),
-                |prefixes| {
-                    prefixes.iter().any(|prefix| {
-                        if prefix.is_empty() {
-                            index.contains(&pair.source)
-                        } else {
-                            index.contains(&format!("{prefix}{}", pair.source))
-                        }
-                    })
-                },
-            );
+            let fixed = index.contains(&pair.source);
             ensure!(
-                !fixed,
+                !fixed || self.derived_input_pair_is_authorized(case, pair),
                 "identity supplied by the immutable API request must remain exact"
             );
         }

@@ -9,7 +9,6 @@ pub(super) fn prepare_scopes(
     existing: &TrafficPolicy,
     active_api: &str,
 ) -> Result<()> {
-    super::declarations::validate_response_scope(document, active_api)?;
     for rule in &mut document.rules {
         let legacy_scope = existing
             .rules
@@ -50,12 +49,12 @@ pub(super) fn merge(document: &mut TrafficPolicy, rules: Vec<PolicyRule>) -> Res
     let mut changed = false;
     for rule in rules {
         if let Some(current) = document.rules.iter_mut().find(|r| r.id() == rule.id()) {
-            if current == &rule {
+            if same_runtime_rule(current, &rule)? {
                 continue;
             }
             ensure!(
                 extends_relationships(current, &rule),
-                "existing rule ID changes scope, capture, contract or prior proof; only additive identity references, read_back declarations or a separately proven finite read_back to state_epochs upgrade are supported. Preserve the existing rule and put new Source proof on each added permission"
+                "existing rule ID changes scope, capture or contract; only additive identity references, read_back declarations or a separately proven finite read_back to state_epochs upgrade are supported"
             );
             *current = rule;
         } else {
@@ -64,6 +63,19 @@ pub(super) fn merge(document: &mut TrafficPolicy, rules: Vec<PolicyRule>) -> Res
         changed = true;
     }
     Ok(changed)
+}
+
+fn same_runtime_rule(left: &PolicyRule, right: &PolicyRule) -> Result<bool> {
+    Ok(match (left, right) {
+        (PolicyRule::Native(left), PolicyRule::Native(right)) => {
+            crate::policy::native_semantics(left)? == crate::policy::native_semantics(right)?
+        }
+        (PolicyRule::Value(left), PolicyRule::Value(right)) => {
+            crate::policy::compile_rule(left)?.fingerprint
+                == crate::policy::compile_rule(right)?.fingerprint
+        }
+        _ => false,
+    })
 }
 
 fn extends_relationships(current: &PolicyRule, proposed: &PolicyRule) -> bool {
@@ -75,33 +87,38 @@ fn extends_relationships(current: &PolicyRule, proposed: &PolicyRule) -> bool {
         (NativeEffect::Identity(old), NativeEffect::Identity(new)) => {
             let read_extension = new.read_back.len() >= old.read_back.len()
                 && old.read_back.iter().zip(&new.read_back).all(|(old, new)| {
-                    if old == new {
+                    if old.contract == new.contract {
                         return true;
                     }
                     let mut previous = new.clone();
                     // The typed compiler admits state_epochs only on an
                     // unconditional raw SET-to-GET identity. This merge
                     // preserves that read's original contract and proof.
-                    old.contract.state_epochs.is_none()
-                        && previous.contract.state_epochs.take().is_some()
-                        && &previous == old
+                    let upgrade = !old.contract.state_epochs && previous.contract.state_epochs;
+                    previous.contract.state_epochs = false;
+                    upgrade && previous.contract == old.contract
                 });
-            if !new.references.starts_with(&old.references)
+            if new.references.len() < old.references.len()
+                || !old
+                    .references
+                    .iter()
+                    .zip(&new.references)
+                    .all(|(old, new)| old.contract == new.contract)
                 || !read_extension
-                || !new.mysql_read_back.starts_with(&old.mysql_read_back)
-                || (new.references.len() == old.references.len()
-                    && new.read_back == old.read_back
-                    && new.mysql_read_back.len() == old.mysql_read_back.len())
+                || (new.references.len() == old.references.len() && new.read_back == old.read_back)
             {
                 return false;
             }
             new.references = old.references.clone();
             new.read_back = old.read_back.clone();
-            new.mysql_read_back = old.mysql_read_back.clone();
         }
         (NativeEffect::RedisSequence(old), NativeEffect::RedisSequence(new)) => {
             if new.read_back.len() <= old.read_back.len()
-                || !new.read_back.starts_with(&old.read_back)
+                || !old
+                    .read_back
+                    .iter()
+                    .zip(&new.read_back)
+                    .all(|(old, new)| old.contract == new.contract)
             {
                 return false;
             }
@@ -109,7 +126,10 @@ fn extends_relationships(current: &PolicyRule, proposed: &PolicyRule) -> bool {
         }
         _ => return false,
     }
-    base == *current
+    crate::policy::native_semantics(&base)
+        .ok()
+        .zip(crate::policy::native_semantics(current).ok())
+        .is_some_and(|(base, current)| base == current)
 }
 
 #[cfg(test)]
@@ -123,15 +143,11 @@ mod tests {
 
     #[test]
     fn resource_scope_omits_api_but_preserves_existing_scopes_and_primary_assertions() {
-        let value = json!({"id":"date","surface":"dependency.request",
-            "match":{"api":"GET /tasks","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"SET","key":{"exact":"members"}},
-            "slot":"value","codec":"json","contract":{"/members":"unordered"},
-            "proof":{"source":"source.py:1","fact":"Source writes unordered members"}});
         let native = json!({"id":"append","match":{"api":"GET /tasks",
             "resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"APPEND","key":{"kind":"exact","value":"content"}},
             "effect":{"kind":"redis_append_stream"},"proof":{"source":"source.py:2","fact":"Source writes a text stream"}});
-        for raw in [value, native] {
-            let old = document(raw);
+        {
+            let old = document(native);
             let empty = TrafficPolicy {
                 rules: vec![],
                 ..old.clone()
@@ -139,7 +155,7 @@ mod tests {
             let mut fresh = old.clone();
             prepare_scopes(&mut fresh, &empty, "GET /tasks").unwrap();
             assert!(
-                serde_json::to_value(&fresh).unwrap()["rules"][0]["match"]
+                serde_json::to_value(&fresh).unwrap()["redis"]["rules"][0]["match"]
                     .get("api")
                     .is_none()
             );
@@ -150,14 +166,14 @@ mod tests {
             assert!(!merge(&mut old.clone(), update.rules).unwrap());
             assert!(prepare_scopes(&mut old.clone(), &empty, "POST /other").is_err());
             let mut conditional = serde_json::to_value(&old).unwrap();
-            conditional["rules"][0]["when"] =
+            conditional["redis"]["rules"][0]["when"] =
                 json!({"request_body_json":{"/enabled":{"equals":true}}});
             let mut conditional: TrafficPolicy = serde_json::from_value(conditional).unwrap();
             assert!(prepare_scopes(&mut conditional, &empty, "GET /tasks").is_err());
         }
-        let mut response = document(json!({"id":"response","surface":"api.response",
-            "match":{"api":"GET /tasks"},"slot":"body","codec":"json","contract":{"/members":"unordered"},
-            "proof":{"source":"source.py:3","fact":"Source returns unordered members"}}));
+        let mut response = document(json!({"id":"response","match":{"api":"GET /tasks"},
+            "effect":{"kind":"response_header_date","header":"content-disposition","parameter":"filename","format":"%Y-%m-%d"},
+            "proof":{"source":"source.py:3","fact":"Source includes the date in the download filename"}}));
         let original = response.clone();
         prepare_scopes(&mut response, &original, "GET /tasks").unwrap();
         assert_eq!(response, original);
@@ -178,7 +194,7 @@ mod tests {
         let update = document(proposed.clone());
         assert!(merge(&mut original, update.rules.clone()).unwrap());
         assert!(!merge(&mut original, update.rules).unwrap());
-        for change in 0..5 {
+        for change in [0, 1, 3, 4] {
             let mut changed = proposed.clone();
             match change {
                 0 => changed["match"]["api"] = json!("GET /other"),
@@ -222,7 +238,7 @@ mod tests {
         let mut installed = baseline.clone();
         assert!(merge(&mut installed, document(proposed.clone()).rules).unwrap());
         assert!(!merge(&mut installed, document(proposed.clone()).rules).unwrap());
-        for change in 0..7 {
+        for change in [0, 1, 3, 5, 6] {
             let mut bad = proposed.clone();
             match change {
                 0 => bad["match"]["api"] = json!("GET /other"),
@@ -268,7 +284,8 @@ mod tests {
                     "proof":{"source":"source.py:2","fact":"Source reads the identity written to the same key"}}]},
             "proof":{"source":"source.py:1","fact":"Source writes a generated identity"}});
         let mut proposed = prior.clone();
-        proposed["effect"]["read_back"][0]["state_epochs"] = json!({
+        proposed["effect"]["read_back"][0]["state_epochs"] = json!(true);
+        proposed["effect"]["read_back"][0]["proof"] = json!({
             "source":"source.py:3","fact":"Repeated GETs observe the current identity until SET or DEL"});
         let baseline = document(prior.clone());
         let mut installed = baseline.clone();
@@ -279,7 +296,7 @@ mod tests {
             "contract":{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"}},
             "proof":{"source":"source.py:4","fact":"The completed SQL result refers to the captured identity"}}));
         assert!(merge(&mut baseline.clone(), document(combined.clone()).rules).unwrap());
-        for change in 0..8 {
+        for change in [0, 1, 4, 5, 6, 7] {
             let mut bad = combined.clone();
             match change {
                 0 => bad["match"]["api"] = json!("GET /other"),
@@ -301,13 +318,12 @@ mod tests {
             );
             assert_eq!(current, baseline);
         }
-        for mut bad in [prior, proposed] {
-            if let Some(proof) = bad["effect"]["read_back"][0].get_mut("state_epochs") {
-                proof["fact"] = json!("replacement state proof");
-            }
-            let mut current = installed.clone();
-            assert!(merge(&mut current, document(bad).rules).is_err());
-            assert_eq!(current, installed);
-        }
+        let mut current = installed.clone();
+        assert!(merge(&mut current, document(prior).rules).is_err());
+        assert_eq!(current, installed);
+        let mut clarified = proposed;
+        clarified["effect"]["read_back"][0]["proof"]["fact"] =
+            json!("A clearer explanation of the same finite current-state reads");
+        assert!(!merge(&mut installed, document(clarified).rules).unwrap());
     }
 }

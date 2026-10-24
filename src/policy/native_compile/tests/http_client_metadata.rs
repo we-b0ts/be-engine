@@ -34,8 +34,10 @@ fn client_metadata_is_typed_and_owns_only_the_selected_headers() {
         policy::parse_policy(&json!({"format":"traffic-policy/v2","rules":[rule()]}).to_string())
             .unwrap();
     assert_eq!(
-        policy::parse_and_compile_policy(&policy::render_policy(&parsed).unwrap()).unwrap(),
-        compiled
+        policy::parse_and_compile_policy(&policy::render_policy(&parsed).unwrap())
+            .unwrap()
+            .fingerprints,
+        compiled.fingerprints
     );
 }
 

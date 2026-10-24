@@ -374,9 +374,6 @@ pub fn apply_rewrite_dependency_rule(
             matches!(
                 p.spec,
                 model::RewriteDependencyRuleSpec::HttpCrossCase { .. }
-                    | model::RewriteDependencyRuleSpec::HttpUnordered { .. }
-                    | model::RewriteDependencyRuleSpec::RedisUnordered { .. }
-                    | model::RewriteDependencyRuleSpec::RedisTimeShift { .. }
             )
         }))
     })?;

@@ -4,13 +4,24 @@
 mod authoring;
 mod capability;
 pub(crate) use authoring::expanded as expand_policy;
-pub use authoring::render_policy;
+pub(crate) use authoring::require_source_proof;
 pub(crate) use authoring::retired_authoring;
+pub use authoring::{effective_rules, render_policy, require_source_proofs};
+mod async_api;
 mod compiler;
 mod declarations;
-mod lowering;
+mod global_json;
+mod http_global;
+pub use async_api::*;
+pub use http_global::*;
+mod global_protocol;
+mod mysql_global;
+mod redis_global;
 pub use declarations::*;
-pub use lowering::{ExpandedPolicy, effective_rules, is_schema_clock_group, lower_policy};
+pub use global_json::*;
+pub use global_protocol::*;
+pub use mysql_global::*;
+pub use redis_global::*;
 mod condition;
 pub mod native;
 mod native_compile;
@@ -23,7 +34,8 @@ pub use time_scope::ClockScope;
 
 pub use capability::*;
 pub use compiler::*;
-pub use native::{HttpJsonField, NativeEffect, NativeMatch, NativeRule, PolicyRule};
+pub use native::{NativeEffect, NativeMatch, NativeRule, PolicyRule};
+pub(crate) use native_compile::semantic_rule as native_semantics;
 pub use native_compile::*;
 pub use schema::*;
 

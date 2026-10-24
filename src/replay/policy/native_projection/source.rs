@@ -36,16 +36,16 @@ pub(crate) fn validate_finite_sharing(
             )?
         }
         n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis { .. }) => {
-            let super::super::redis_value::RedisSelector::TimeShift(read) = projected
+            let super::super::redis_value::RedisSelector::SharedRead(read) = projected
                 .redis
                 .context("Redis sharing projection is missing")?
             else {
-                anyhow::bail!("Redis sharing owner is not a time-shift read");
+                anyhow::bail!("Redis sharing owner is not a finite shared read");
             };
             crate::replay::redis::cross_case::verify_candidate(
                 case_source,
                 replay_report,
-                &crate::replay::RedisTimeShiftSelector {
+                &crate::replay::redis::shared_read::RedisSharedReadSelector {
                     host: resource.endpoint.host.clone(),
                     port: resource.endpoint.port,
                     read,

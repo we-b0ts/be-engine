@@ -55,25 +55,6 @@ pub(super) fn validate(
     let body = crate::replay::http_witness_value(&raw, Surface::DependencyRequest)?
         .context("Source HTTP request body missing")?;
     let source_time = started(event)?;
-    if let Some(prepared) = runtime.request_contracts.prepare_http_body(
-        case.id,
-        &target,
-        method,
-        &super::super::super::pattern::uri_path(uri),
-        &body,
-        &body,
-        crate::replay::assertion::RequestTimes {
-            source: source_time,
-            target: source_time,
-        },
-    ) {
-        let prepared = prepared?;
-        ensure!(
-            prepared.source == prepared.actual,
-            "Source HTTP field comparison changed values"
-        );
-        runtime.request_contracts.commit(prepared.decision)?;
-    }
     coverage.references(
         runtime
             .dynamic_values
@@ -100,7 +81,9 @@ pub(super) fn validate(
                 && normalized.source_uri == normalized.actual_uri.to_string(),
             "Source HTTP identity self validation changed fields"
         );
-        runtime.dynamic_values.commit(case.id, normalized.decision);
+        runtime
+            .dynamic_values
+            .commit(case.id, normalized.decision)?;
     }
     let context = HttpPolicyContext {
         request_times: crate::replay::assertion::RequestTimes {
@@ -141,22 +124,7 @@ pub(super) fn validate(
     ) {
         decision.value_contracts.push(result?);
     }
-    let mut timestamps = Vec::new();
-    for (name, (id, format)) in runtime.http_header_timestamp_rules(&context) {
-        crate::replay::http::request_headers::timestamp::validate(
-            format,
-            headers.get(&name).map(Vec::as_slice),
-            headers.get(&name).map(Vec::as_slice),
-            crate::replay::assertion::RequestTimes {
-                source: source_time,
-                target: source_time,
-            },
-        )
-        .map_err(anyhow::Error::msg)?;
-        timestamps.push(id);
-    }
     runtime.commit(Some(case.id), decision)?;
-    runtime.commit_http_header_timestamps(&timestamps);
     let observed = runtime
         .http_client_metadata_headers(&context)
         .into_iter()

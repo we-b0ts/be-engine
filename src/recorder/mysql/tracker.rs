@@ -241,6 +241,7 @@ impl MysqlQueryCompletion {
         self.mark_client_terminated();
         if let Some(exchange) = self.exchange.as_mut() {
             exchange.outcome = DependencyExchangeOutcome::Terminated(observed.termination);
+            exchange.timestamp = crate::dependency::termination::observed_wall_time(observed.at);
             if exchange
                 .response
                 .wire_prefix

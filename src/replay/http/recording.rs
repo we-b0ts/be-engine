@@ -29,19 +29,3 @@ pub(super) fn visit_matching(
     }
     Ok(())
 }
-
-/// Protocol planners that require all HTTP witnesses still avoid unrelated bodies.
-pub(super) fn visit(
-    file: &Path,
-    mut visitor: impl FnMut(usize, RecordedHttpExchange) -> Result<()>,
-) -> Result<()> {
-    let index = crate::dependency_index::load_file(file)?;
-    let mut reader = crate::dependency_index::RecordReader::new(0);
-    for entry in &index.http {
-        let raw = reader.read(file, &index.stamp, &entry.location)?;
-        let mut record: RecordedHttpExchange = serde_json::from_slice(&raw)?;
-        record.decrypt_request_headers(file)?;
-        visitor(entry.location.line, record)?;
-    }
-    Ok(())
-}

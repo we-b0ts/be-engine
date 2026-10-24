@@ -60,6 +60,7 @@ impl ReplayRuntime {
         let mut memcached = memcached::MemcachedReplayState::default();
         let mut kafka = kafka::KafkaReplayState::default();
         let mut motan = motan::MotanReplayState::default();
+        let mut connect_failures = connect_failure::Inventory::default();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
         let reader = Arc::new(std::sync::Mutex::new(
@@ -127,6 +128,10 @@ impl ReplayRuntime {
             .collect();
         let mut deferred_files = BTreeMap::new();
         for (index, case) in cases.values().enumerate() {
+            let cleanup = lifecycle_cleanup::load_refs(&case.dir).await?;
+            connect_failures
+                .load(&case.id, &case.dependencies_path, &mut targets)
+                .await?;
             if lazy {
                 let path = case.dependencies_path.clone();
                 let cache = reader.clone();
@@ -168,12 +173,14 @@ impl ReplayRuntime {
                     &mut targets,
                     &mut connection_identities,
                     process_owned_dependencies,
+                    &cleanup,
                 )?;
                 deferred_files.insert(
                     case.id.clone(),
                     deferred::CaseInventory {
                         index: file_index,
                         skip,
+                        cleanup,
                     },
                 );
             } else {
@@ -298,6 +305,11 @@ impl ReplayRuntime {
                 &session_id.to_string(),
                 &policy.report().fingerprint,
             )?;
+            for (case, directory) in &redis.shared_source_directories {
+                policy
+                    .request_contracts
+                    .register_source_origin(case, directory)?;
+            }
             policy
                 .request_contracts
                 .configure_witnesses(witnesses, !lazy)?;
@@ -321,12 +333,8 @@ impl ReplayRuntime {
             }
             http::observe_recorded_policy_exchanges(policy, &http_exchanges);
             memcached::observe_recorded_policy_exchanges(policy, &memcached);
-            redis.value_rules = policy.redis_value_rules();
             redis.dynamic_values = policy.dynamic_values.clone();
             redis.request_contracts = policy.request_contracts.clone();
-            redis.configure_lock_tokens(&policy.redis_lock_token_rules());
-            redis.configure_publish(policy.redis_publish_rules());
-            redis.configure_time_shift(&policy.redis_time_shift_rules())?;
             policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
         }
 
@@ -353,6 +361,8 @@ impl ReplayRuntime {
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
         let mut state = ReplayState {
+            target_stop_prepared: BTreeSet::new(),
+            target_session_stopped: false,
             deferred,
             egress_counter_reader: None,
             egress_counter_starts: BTreeMap::new(),
@@ -368,7 +378,16 @@ impl ReplayRuntime {
             active_case_id,
             dependency_tails: control::dependency_tail::CaseTails::with_process_rules(
                 process_owned_dependencies.to_vec(),
+            )
+            .with_async_rules(
+                replay_policy
+                    .as_ref()
+                    .and_then(|policy| policy.request_contracts.compiled_rules())
+                    .map(|compiled| compiled.async_api.clone())
+                    .unwrap_or_default(),
+                lifecycle.request_timeout,
             ),
+            connect_failures,
             case_dependency_post_response_window: lifecycle.case_dependency_post_response_window,
             global_path,
             regular_global: BTreeMap::new(),

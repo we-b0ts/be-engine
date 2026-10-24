@@ -17,10 +17,12 @@ use crate::recording_network::RecordedEndpoint;
 use crate::request_headers::RequestHeaderCapture;
 
 pub(crate) mod api_origin_observation;
+pub(crate) mod async_api;
 pub(crate) mod background;
 mod capture;
 mod capture_health;
 pub(crate) mod case;
+pub(crate) mod connect_failure;
 pub(crate) mod connections;
 mod dependencies;
 mod event;
@@ -290,6 +292,7 @@ pub(super) fn should_write_traffic_event(mode: TrafficJsonlMode, event: &Recorde
         TrafficJsonlMode::Full => true,
         TrafficJsonlMode::Off => false,
         TrafficJsonlMode::Errors => match event {
+            RecorderEvent::DependencyConnectFailure(_) => true,
             RecorderEvent::HttpExchange(event) => {
                 event.outcome.is_client_terminated()
                     || event.outcome.is_server_terminated()

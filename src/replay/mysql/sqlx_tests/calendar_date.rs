@@ -23,32 +23,10 @@ async fn mysql_calendar_date_over_tls_keeps_state_and_finite_consumption() {
             event["query_sequence"] = json!(i+1);
         }
         let policy = format!(r#"format: traffic-policy/v2
+json:
+  fields:
+    /spec/lastActiveDate: {{kind: time, formats: [{{format: calendar_date, utc_offset: '+08:00'}}]}}
 rules:
-- id: activity-read
-  surface: dependency.response
-  match:
-    api: GET /users
-    resource: {{protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}}
-    operation: COM_QUERY
-    sql: SELECT payload FROM pets WHERE id=?
-  slot: {{sql_column: payload}}
-  codec: json
-  contract:
-    /spec/lastActiveDate: {{relative_time: calendar_date, utc_offset: '+08:00'}}
-  delivery: {{rebase_time: [/spec/lastActiveDate]}}
-  proof: {{source: 'pets.py:read', fact: 'Stored local date preserves its day distance; all counters remain exact'}}
-- id: activity-write
-  surface: dependency.request
-  match:
-    api: GET /users
-    resource: {{protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}}
-    operation: COM_STMT_EXECUTE
-    sql: {write_sql:?}
-  slot: {{sql_value: 0}}
-  codec: json
-  contract:
-    /spec/lastActiveDate: {{relative_time: calendar_date, utc_offset: '+08:00'}}
-  proof: {{source: 'pets.py:write', fact: 'The same local date is persisted after the exact business update'}}
 - id: updated-at
   match:
     api: GET /users

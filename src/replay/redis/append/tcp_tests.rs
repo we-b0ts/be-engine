@@ -72,7 +72,7 @@ async fn replay_tcp(reject_first: bool, commute_reads: bool, observation_chunks:
             "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1}]},
         "proof":{"source":"session.py:1","fact":"Source writes a generated block id, reads it and uses it in content keys"}});
     if observation_chunks.is_some() {
-        identity["effect"]["read_back"][0]["state_epochs"] = json!({"source":"session.py:5","fact":"Source reads the Case current identity between SET/DEL transitions; batch scheduling only changes the read count"});
+        identity["effect"]["read_back"][0]["state_epochs"] = json!(true);
     }
     let mut rules = vec![identity, rule()];
     if observation_chunks.is_some() {

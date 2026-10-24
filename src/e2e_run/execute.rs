@@ -600,6 +600,9 @@ async fn execute_case(
 
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
     let begin = control(state, "begin", Some(case_id), false, false).await;
+    let target_stop_required = begin
+        .as_ref()
+        .is_ok_and(|response| response["target_stop_required"] == true);
     if let Err(error) = begin {
         state.cases[case_index].status = CaseStatus::Incomplete;
         state.push_error(format!("case {case_id} begin failed: {error:#}"));
@@ -628,6 +631,7 @@ async fn execute_case(
                     case_view.replay_request(),
                     &actual_response,
                     runtime.request_rules.clone(),
+                    (&state.replay_session, case_id),
                 )
                 .await
             }
@@ -751,7 +755,11 @@ async fn execute_case(
         state.push_error(format!("case {case_id} HTTP execution failed: {error:#}"));
     }
 
-    let ended = control(state, "end", Some(case_id), true, false).await;
+    let ended = if target_stop_required {
+        super::target_stop::finish(layout, state, case_index, case_id).await
+    } else {
+        control(state, "end", Some(case_id), true, false).await
+    };
     let replay_clean = ended.is_ok();
     state.cases[case_index].replay_clean = Some(replay_clean);
     state.cases[case_index].status = if assertion_passed && replay_clean {

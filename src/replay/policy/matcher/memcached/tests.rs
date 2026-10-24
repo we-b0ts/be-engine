@@ -2,106 +2,117 @@ use super::*;
 use crate::replay::{ReplayCaseStatus, assertion::RequestTimes};
 use serde_json::json;
 
+fn runtime() -> (tempfile::TempDir, ReplayPolicyRuntime) {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    std::fs::create_dir(&case_dir).unwrap();
+    std::fs::write(
+        case_dir.join("request.json"),
+        json!({"method":"POST","uri":"/test","timestamp":"1970-01-01T00:16:40Z"}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(case_dir.join("expected-response.json"), "{}").unwrap();
+    std::fs::write(case_dir.join("dependencies.jsonl"), "").unwrap();
+    let policy_path = temp.path().join("policy.yaml");
+    std::fs::write(&policy_path,"format: traffic-policy/v2\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n    /members: {kind: unordered}\n").unwrap();
+    let cases = BTreeMap::from([(
+        "case".into(),
+        ReplayCase {
+            id: "case".into(),
+            dir: case_dir.clone(),
+            dependencies_path: case_dir.join("dependencies.jsonl"),
+            status: ReplayCaseStatus::Pending,
+        },
+    )]);
+    let runtime = ReplayPolicyRuntime::load(&policy_path, &cases).unwrap();
+    runtime.request_contracts.set_request_times(
+        "case",
+        RequestTimes {
+            source: DateTime::from_timestamp(1000, 0),
+            target: DateTime::from_timestamp(1005, 0),
+        },
+    );
+    (temp, runtime)
+}
+
 #[test]
-fn json_and_protobuf_values_share_contracts_and_independent_dependency_start_clocks() {
-    for (codec, source, target) in [
-        (
-            "json",
-            serde_json::to_vec(&json!({"created_at":1000,"members":["a","b"],"stable":7})).unwrap(),
-            serde_json::to_vec(&json!({"created_at":2000,"members":["b","a"],"stable":7})).unwrap(),
-        ),
-        (
-            "{kind: protobuf, fields: {/created_at: {field_path: [1], field_type: uint64}, /members: {field_path: [2], field_type: string, repeated: true}}}",
-            vec![8, 0xe8, 7, 18, 1, b'a', 18, 1, b'b', 24, 7],
-            vec![8, 0xd0, 15, 18, 1, b'b', 18, 1, b'a', 24, 7],
-        ),
-    ] {
-        let temp = tempfile::tempdir().unwrap();
-        let case_dir = temp.path().join("case");
-        std::fs::create_dir(&case_dir).unwrap();
-        std::fs::write(
-            case_dir.join("request.json"),
-            json!({"method":"POST","uri":"/test","timestamp":"1970-01-01T00:16:40Z"}).to_string(),
-        )
+fn global_json_uses_independent_dependency_start_clocks_without_resource_or_api_selectors() {
+    let (_temp, mut runtime) = runtime();
+    let source =
+        serde_json::to_vec(&json!({"created_at":1000,"members":["a","b"],"stable":7})).unwrap();
+    let target =
+        serde_json::to_vec(&json!({"created_at":2000,"members":["b","a"],"stable":7})).unwrap();
+    let endpoint = TargetKey {
+        host: "unconfigured-cache.test".into(),
+        port: 11212,
+    };
+    let context = MemcachedPolicyContext {
+        case_id: Some("case"),
+        target: &endpoint,
+        command: "add",
+        key: Some(b"unconfigured-key"),
+        recorded_value: Some(&source),
+        actual_value: Some(&target),
+        recorded_observed_at: DateTime::from_timestamp(1010, 0).unwrap(),
+        recorded_duration_ms: 10_000,
+        actual_observed_at: DateTime::from_timestamp(2000, 0).unwrap(),
+    };
+    let decision = runtime.preview_memcached(&context).unwrap();
+    assert_eq!(decision.value_contracts.len(), 1);
+    assert_eq!(decision.value_contracts[0].ids, vec!["global.json"]);
+    let clocks = runtime.request_contracts.contract_clocks(
+        Some("case"),
+        DateTime::from_timestamp(1000, 0),
+        DateTime::from_timestamp(2000, 0),
+        None,
+        None,
+    );
+    let comparison = runtime
+        .request_contracts
+        .compare_global_value(&source, &target, &[], clocks)
         .unwrap();
-        std::fs::write(case_dir.join("expected-response.json"), "{}").unwrap();
-        std::fs::write(case_dir.join("dependencies.jsonl"), "").unwrap();
-        let policy_path = temp.path().join("policy.yaml");
-        std::fs::write(&policy_path, format!(r#"format: traffic-policy/v2
-rules:
-  - id: cache-write
-    surface: dependency.request
-    match:
-      api: POST /test
-      resource: {{protocol: memcached, endpoint: 'cache.test:11211'}}
-      operation: SET
-      key: {{exact: session}}
-    slot: value
-    codec: {codec}
-    contract:
-      /created_at: {{kind: time, format: unix_seconds, relation: preserve_offset}}
-      /members: {{kind: unordered}}
-    proof: {{source: 'src/session:build', fact: 'Members come from a set; the timestamp uses the dependency request clock'}}
-"#)).unwrap();
-        let cases = BTreeMap::from([(
-            "case".into(),
-            ReplayCase {
-                id: "case".into(),
-                dir: case_dir.clone(),
-                dependencies_path: case_dir.join("dependencies.jsonl"),
-                status: ReplayCaseStatus::Pending,
-            },
-        )]);
-        let mut runtime = ReplayPolicyRuntime::load(&policy_path, &cases).unwrap();
-        runtime.request_contracts.set_request_times(
-            "case",
-            RequestTimes {
-                source: DateTime::from_timestamp(1000, 0),
-                target: DateTime::from_timestamp(1005, 0),
-            },
-        );
-        let target_key = TargetKey {
-            host: "cache.test".into(),
-            port: 11211,
-        };
-        let context = MemcachedPolicyContext {
-            case_id: Some("case"),
-            target: &target_key,
-            command: "set",
-            key: Some(b"session"),
-            recorded_value: Some(&source),
-            actual_value: Some(&target),
-            recorded_observed_at: DateTime::from_timestamp(1010, 0).unwrap(),
-            recorded_duration_ms: 10_000,
-            actual_observed_at: DateTime::from_timestamp(2000, 0).unwrap(),
-        };
-        let decision = runtime.preview_memcached(&context).unwrap();
-        assert_eq!(decision.value_contracts.len(), 1);
-        runtime.commit(Some("case"), decision).unwrap();
-        let report = runtime.report();
-        let entry = report
-            .dependency_rules
-            .iter()
-            .find(|rule| rule.id == "cache-write")
-            .unwrap();
-        assert_eq!(entry.matches, 1);
-        assert_eq!(entry.time_validations, 1);
-        let invalid = if codec == "json" {
-            let mut value: Value = serde_json::from_slice(&target).unwrap();
-            value["stable"] = json!(8);
-            serde_json::to_vec(&value).unwrap()
-        } else {
-            let mut value = target.clone();
-            *value.last_mut().unwrap() = 8;
-            value
-        };
-        assert!(
-            runtime
-                .preview_memcached(&MemcachedPolicyContext {
-                    actual_value: Some(&invalid),
-                    ..context
-                })
-                .is_err()
-        );
-    }
+    assert_eq!(comparison.time_validations["global.json"], 1);
+    runtime.commit(Some("case"), decision).unwrap();
+    let invalid =
+        serde_json::to_vec(&json!({"created_at":2000,"members":["b","a"],"stable":8})).unwrap();
+    assert!(
+        runtime
+            .preview_memcached(&MemcachedPolicyContext {
+                actual_value: Some(&invalid),
+                ..context
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn unrecognized_protobuf_values_keep_exact_bytes() {
+    let (_temp, runtime) = runtime();
+    let source = vec![8, 0xe8, 7, 18, 1, b'a', 18, 1, b'b', 24, 7];
+    let target = vec![8, 0xd0, 15, 18, 1, b'b', 18, 1, b'a', 24, 7];
+    let endpoint = TargetKey {
+        host: "cache.test".into(),
+        port: 11211,
+    };
+    let context = MemcachedPolicyContext {
+        case_id: Some("case"),
+        target: &endpoint,
+        command: "set",
+        key: Some(b"session"),
+        recorded_value: Some(&source),
+        actual_value: Some(&source),
+        recorded_observed_at: DateTime::from_timestamp(1010, 0).unwrap(),
+        recorded_duration_ms: 10_000,
+        actual_observed_at: DateTime::from_timestamp(2000, 0).unwrap(),
+    };
+    let decision = runtime.preview_memcached(&context).unwrap();
+    assert!(decision.value_contracts[0].ids.is_empty());
+    assert!(
+        runtime
+            .preview_memcached(&MemcachedPolicyContext {
+                actual_value: Some(&target),
+                ..context
+            })
+            .is_err()
+    );
 }

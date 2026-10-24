@@ -3,8 +3,9 @@ use super::*;
 use crate::policy::{CompiledRule, Slot, Surface};
 use crate::policy_evidence::{TargetRole, WitnessMetadata};
 use crate::value_contract::json::{AnchorClocks, Comparison};
+pub(in crate::replay) mod automatic;
+mod delivery;
 pub(in crate::replay) mod fields;
-mod identity_delivery;
 mod preflight_identity;
 pub(in crate::replay) mod time_copies;
 pub(crate) use preflight_identity::{IdentityPreflight, normalize_identity_witnesses};
@@ -59,9 +60,7 @@ pub(in crate::replay) struct PreparedDelivery {
     observation_id: uuid::Uuid,
     original: Arc<[u8]>,
     base: ResponseEnvelope,
-    rules: Vec<CompiledRule>,
     clocks: AnchorClocks,
-    validation: Comparison,
     metadata: Vec<WitnessMetadata>,
     database: Option<String>,
     identities: Option<(policy::request_contract::RequestContracts, String)>,
@@ -70,12 +69,14 @@ impl PreparedDelivery {
     pub(in crate::replay) fn render(
         &self,
         now: chrono::DateTime<Utc>,
-    ) -> Result<RecordedMysqlResponse> {
+    ) -> Result<(
+        RecordedMysqlResponse,
+        Option<crate::value_contract::identities::IdentityDecision>,
+    )> {
         let mut clocks = self.clocks;
         clocks.delivery.target = Some(now);
-        identity_delivery::materialize_response(
+        delivery::materialize_response(
             &self.base.response,
-            &self.rules.iter().collect::<Vec<_>>(),
             clocks,
             self.base.request.sql.as_deref(),
             self.database.as_deref(),
@@ -89,6 +90,7 @@ impl PreparedDelivery {
         owner: &policy::request_contract::RequestContracts,
         response: &RecordedMysqlResponse,
         now: chrono::DateTime<Utc>,
+        identity: Option<crate::value_contract::identities::IdentityDecision>,
     ) -> Result<()> {
         let mut delivered = self.base.clone();
         delivered.response_delivered_at = Some(now);
@@ -104,9 +106,26 @@ impl PreparedDelivery {
                 &target,
             )?;
         }
-        owner.commit(policy::request_contract::Decision::from_value_comparison(
-            self.validation.clone(),
-        ))?;
+        let comparison = automatic::compare_response(
+            owner
+                .compiled_rules()
+                .context("SQL delivery lost its global policy")?,
+            &self.base.response,
+            response,
+            self.base.request.sql.as_deref(),
+            self.database.as_deref(),
+            AnchorClocks {
+                delivery: crate::value_contract::time::ClockPair {
+                    target: Some(now),
+                    ..self.clocks.delivery
+                },
+                ..self.clocks
+            },
+        )?;
+        ensure!(comparison.passed(), "SQL delivered value contract failed");
+        let mut decision = policy::request_contract::Decision::from_value_comparison(comparison);
+        decision.identity = identity;
+        owner.commit(decision)?;
         Ok(())
     }
 }
@@ -119,15 +138,10 @@ pub(in crate::replay) fn prepare_delivery(
     delivered: &RecordedMysqlResponse,
     request: ObservedRequest<'_>,
 ) -> Result<Option<PreparedDelivery>> {
-    let rules = owner
-        .mysql_compiled_rules(Surface::DependencyResponse, Some(case), identity, record)
-        .into_iter()
-        .filter(|rule| {
-            !rule.delivery_time.is_empty()
-                || crate::value_contract::identities::rules_have_identity(&[*rule])
-        })
-        .collect::<Vec<_>>();
-    if rules.is_empty()
+    let automatic = owner
+        .compiled_rules()
+        .filter(|policy| policy.global_json.is_some() || policy.mysql.is_some());
+    if automatic.is_none()
         || record.outcome != crate::DependencyExchangeOutcome::Response
         || record.response.status != "resultset"
     {
@@ -144,13 +158,13 @@ pub(in crate::replay) fn prepare_delivery(
         None,
     );
     let source_clocks = source_clocks(clocks);
-    let validation = validate_response(
+    let validation = automatic::compare_response(
+        automatic.expect("global MySQL mode"),
         &record.response,
         &record.response,
-        &rules,
-        source_clocks,
         record.sql.as_deref(),
         record.database.as_deref(),
+        source_clocks,
     )?;
     ensure!(
         validation.passed(),
@@ -158,8 +172,7 @@ pub(in crate::replay) fn prepare_delivery(
         validation.differences
     );
     // Projection is a native SQL proof. It cannot be inferred from a codec.
-    let expected =
-        identity_delivery::projected_response(owner, case, identity, record, request, clocks)?;
+    let expected = delivery::projected_response(owner, case, identity, record, request, clocks)?;
     ensure!(
         &expected == delivered,
         "SQL response copy changed outside the proven projection"
@@ -170,21 +183,15 @@ pub(in crate::replay) fn prepare_delivery(
         outcome: record.outcome,
         response: record.response.clone(),
     })?;
-    let metadata = rules
-        .iter()
-        .map(|rule| {
-            owner.mysql_metadata(
-                case,
-                identity,
-                record,
-                (Surface::DependencyResponse, rule.rule.slot.clone()),
-                TargetRole::DerivedDelivery,
-                clocks,
-            )
-        })
-        .collect();
-    let identities = crate::value_contract::identities::rules_have_identity(&rules)
-        .then(|| (owner.clone(), case.to_owned()));
+    let metadata = vec![owner.mysql_metadata(
+        case,
+        identity,
+        record,
+        (Surface::DependencyResponse, Slot::SqlColumn(String::new())),
+        TargetRole::DerivedDelivery,
+        clocks,
+    )];
+    let identities = Some((owner.clone(), case.to_owned()));
     Ok(Some(PreparedDelivery {
         observation_id: uuid::Uuid::new_v4(),
         original: original.into(),
@@ -194,9 +201,7 @@ pub(in crate::replay) fn prepare_delivery(
             outcome: record.outcome,
             response: delivered.clone(),
         },
-        rules: rules.into_iter().cloned().collect(),
         clocks,
-        validation,
         metadata,
         database: identity.database.clone(),
         identities,
@@ -223,15 +228,7 @@ pub(in crate::replay) fn record_request(
         None,
         None,
     );
-    let rules =
-        owner.mysql_compiled_rules(Surface::DependencyRequest, Some(case), identity, record);
-    let mut slots = rules
-        .iter()
-        .map(|rule| rule.rule.slot.clone())
-        .collect::<Vec<_>>();
-    if slots.is_empty() {
-        slots.push(Slot::SqlValue(0));
-    }
+    let slots = [Slot::SqlValue(0)];
     for slot in slots {
         let metadata = owner.mysql_metadata(
             case,
@@ -331,90 +328,6 @@ fn response_witness(
     })?)
 }
 
-pub(crate) fn validate_witness(
-    // The caller proves the Target witness resource matches the recorded event.
-    database: Option<&str>,
-    source: &[u8],
-    target: &[u8],
-    surface: Surface,
-    rules: &[&CompiledRule],
-    clocks: AnchorClocks,
-) -> Result<Comparison> {
-    if surface == Surface::DependencyRequest {
-        let source: RequestEnvelope = serde_json::from_slice(source)?;
-        let target: RequestEnvelope = serde_json::from_slice(target)?;
-        validate_request_clocks(&source, &target, clocks)?;
-        ensure!(
-            source.command == target.command
-                || matches!(
-                    (source.command.as_str(), target.command.as_str()),
-                    (
-                        "COM_QUERY" | "COM_STMT_EXECUTE",
-                        "COM_QUERY" | "COM_STMT_EXECUTE"
-                    )
-                ),
-            "SQL command changed outside its native text/prepared query adapter"
-        );
-        return policy::compare_mysql_values(
-            database,
-            source.sql.as_deref(),
-            source.params.as_deref(),
-            target.sql.as_deref(),
-            target.params.as_deref(),
-            rules,
-            clocks,
-        );
-    }
-    ensure!(
-        surface == Surface::DependencyResponse,
-        "invalid SQL witness surface"
-    );
-    let source: ResponseEnvelope = serde_json::from_slice(source)?;
-    let target: ResponseEnvelope = serde_json::from_slice(target)?;
-    validate_request_clocks(&source.request, &target.request, clocks)?;
-    ensure!(
-        source.response_delivered_at == clocks.delivery.source
-            && target.response_delivered_at == clocks.delivery.target,
-        "SQL response clocks differ from protected metadata"
-    );
-    ensure!(
-        source.outcome == target.outcome,
-        "SQL termination outcome changed"
-    );
-    let record: RecordedMysqlExchange = serde_json::from_value(serde_json::json!({
-        "timestamp":source.response_delivered_at,
-        "command":source.request.command,"sql":source.request.sql,"params":source.request.params,
-        "response":source.response,"outcome":source.outcome
-    }))?;
-    let base = projected_response(
-        &record,
-        &target.request.command,
-        target.request.sql.as_deref(),
-        target.request.params.as_deref(),
-    )?;
-    let validation = validate_response(
-        &record.response,
-        &record.response,
-        rules,
-        source_clocks(clocks),
-        record.sql.as_deref(),
-        database,
-    )?;
-    ensure!(validation.passed(), "Source SQL response contract failed");
-    let expected = materialize_response(
-        &base,
-        rules,
-        clocks,
-        target.request.sql.as_deref(),
-        database,
-    )?;
-    ensure!(
-        expected == target.response,
-        "derived SQL response differs from its native projection and explicit delivery effects"
-    );
-    Ok(validation)
-}
-
 /// A state-free native SQL Source/Target preflight uses the same request owner.
 /// Encoded fields and scalar times share one SQL remainder and clock scope.
 pub(crate) fn validate_contract_witness(
@@ -443,30 +356,6 @@ pub(crate) fn validate_contract_candidate(
     clocks: AnchorClocks,
 ) -> Result<Option<Comparison>> {
     validate_contract_candidate_inner(database, source, target, values, native, clocks, None)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn validate_contract_candidate_with_time_copies(
-    // Source and Target share this observed default schema; missing evidence
-    // grants physical field permissions only to fully qualified statements.
-    database: Option<&str>,
-    source: &[u8],
-    target: &[u8],
-    values: &[&CompiledRule],
-    native: &[&crate::policy::CompiledNativeRule],
-    clocks: AnchorClocks,
-    store: &crate::value_contract::time_copies::TimeCopyStore,
-    case: &str,
-) -> Result<Option<Comparison>> {
-    validate_contract_candidate_inner(
-        database,
-        source,
-        target,
-        values,
-        native,
-        clocks,
-        Some(policy::MysqlTimeCopyProofs::stored(store, case)),
-    )
 }
 
 fn validate_contract_candidate_inner(
@@ -510,13 +399,6 @@ fn validate_contract_candidate_inner(
     .map(Some)
 }
 
-pub(crate) fn request_witnesses_related(source: &[u8], target: &[u8]) -> Result<bool> {
-    structurally_related(
-        &serde_json::from_slice(source)?,
-        &serde_json::from_slice(target)?,
-    )
-}
-
 fn structurally_related(source: &RequestEnvelope, target: &RequestEnvelope) -> Result<bool> {
     let statement = |request: &RequestEnvelope| {
         crate::mysql::sql::bounds::statement(
@@ -537,48 +419,6 @@ fn structurally_related(source: &RequestEnvelope, target: &RequestEnvelope) -> R
             .iter()
             .zip(&target_tokens)
             .all(|(source, target)| source == target || scalar(source) && scalar(target)))
-}
-
-pub(crate) fn witness_values(
-    raw: &[u8],
-    surface: Surface,
-    rule: &CompiledRule,
-    database: Option<&str>,
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-    match (&rule.rule.slot, surface) {
-        (Slot::SqlValue(index), Surface::DependencyRequest) => {
-            let request: RequestEnvelope = serde_json::from_slice(raw)?;
-            let value = policy::mysql_contract_value(
-                request.sql.as_deref(),
-                request.params.as_deref(),
-                rule,
-            )?;
-            Ok(vec![(index.to_string().into_bytes(), value)])
-        }
-        (Slot::SqlColumn(column), Surface::DependencyResponse) => {
-            let envelope: ResponseEnvelope = serde_json::from_slice(raw)?;
-            response_values(&envelope.response, column)
-        }
-        (Slot::SqlField(_), Surface::DependencyRequest) => {
-            let request: RequestEnvelope = serde_json::from_slice(raw)?;
-            policy::mysql_field_values(
-                rule,
-                request.sql.as_deref(),
-                request.params.as_deref(),
-                database,
-            )
-        }
-        (Slot::SqlField(_), Surface::DependencyResponse) => {
-            let envelope: ResponseEnvelope = serde_json::from_slice(raw)?;
-            fields::response_values(
-                &envelope.response,
-                rule,
-                envelope.request.sql.as_deref(),
-                database,
-            )
-        }
-        _ => anyhow::bail!("SQL witness slot and surface disagree"),
-    }
 }
 
 fn validate_request_clocks(
@@ -636,23 +476,6 @@ fn projected_response(
     )
     .context("SQL statement changes require a complete native projection proof")
 }
-fn column_index(response: &RecordedMysqlResponse, name: &str) -> Result<usize> {
-    ensure!(
-        response.status == "resultset" && !response.rows_truncated,
-        "SQL encoded column requires a complete resultset"
-    );
-    let matches = response
-        .columns
-        .iter()
-        .enumerate()
-        .filter(|(_, column)| column.column.as_deref().unwrap_or(&column.name) == name)
-        .collect::<Vec<_>>();
-    ensure!(
-        matches.len() == 1,
-        "SQL encoded column must have one physical identity: {name}"
-    );
-    Ok(matches[0].0)
-}
 fn value_bytes(value: &RecordedMysqlValue) -> Result<Option<Vec<u8>>> {
     if value.kind == "null" {
         return Ok(None);
@@ -670,71 +493,4 @@ fn value_bytes(value: &RecordedMysqlValue) -> Result<Option<Vec<u8>>> {
         "encoded SQL value changed its native value family"
     );
     Ok(Some(text.as_bytes().to_vec()))
-}
-fn response_values(
-    response: &RecordedMysqlResponse,
-    column: &str,
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-    let index = column_index(response, column)?;
-    response
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(row, values)| {
-            let value = values.get(index).context("SQL result row is incomplete")?;
-            Ok(value_bytes(value)?.map(|bytes| (row.to_string().into_bytes(), bytes)))
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(|values| values.into_iter().flatten().collect())
-}
-fn validate_response(
-    source: &RecordedMysqlResponse,
-    target: &RecordedMysqlResponse,
-    rules: &[&CompiledRule],
-    clocks: AnchorClocks,
-    sql: Option<&str>,
-    database: Option<&str>,
-) -> Result<Comparison> {
-    ensure!(
-        source.columns == target.columns && source.rows.len() == target.rows.len(),
-        "SQL result metadata or row inventory differs"
-    );
-    let mut result = Comparison::default();
-    for rule in rules {
-        let (source, target) = match &rule.rule.slot {
-            Slot::SqlColumn(column) => (
-                response_values(source, column)?,
-                response_values(target, column)?,
-            ),
-            Slot::SqlField(_) => {
-                // The native request selection has already proved missing
-                // metadata through the original SQL. Complete origins remain
-                // sufficient after a valid projection.
-                (
-                    fields::response_values(source, rule, sql, database)?,
-                    fields::response_values(target, rule, sql, database)?,
-                )
-            }
-            _ => anyhow::bail!("SQL response requires a column or physical field"),
-        };
-        ensure!(
-            source.len() == target.len(),
-            "SQL NULL/value presence changed"
-        );
-        for ((row, source), (other, target)) in source.iter().zip(&target) {
-            ensure!(row == other, "SQL row identity changed");
-            let next = crate::value_contract::encoded::compare(source, target, &[*rule], clocks)?;
-            result.merge_and_validate(next);
-        }
-    }
-    Ok(result)
-}
-fn materialize_response(
-    source: &RecordedMysqlResponse,
-    rules: &[&CompiledRule],
-    clocks: AnchorClocks,
-    sql: Option<&str>,
-    database: Option<&str>,
-) -> Result<RecordedMysqlResponse> {
-    identity_delivery::materialize_response(source, rules, clocks, sql, database, None)
 }

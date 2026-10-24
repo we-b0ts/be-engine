@@ -8,7 +8,6 @@ use super::native::*;
 use super::{Proof, Protocol, SourceCondition, TimestampFormat, compiler};
 
 mod http_request;
-mod mysql_read_back;
 pub(crate) mod ownership;
 mod read_back;
 mod response;
@@ -36,8 +35,9 @@ pub enum NativeDomain {
 
 pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
     identifier(&rule.id, "rule id")?;
-    rule.proof
-        .validate(matches!(rule.effect, NativeEffect::CaptureHttp(_)))?;
+    if let Some(proof) = &rule.proof {
+        proof.validate(matches!(rule.effect, NativeEffect::CaptureHttp(_)))?;
+    }
     validate_match(&rule.selector)?;
     if let Some(when) = &rule.when {
         ensure!(
@@ -48,7 +48,6 @@ pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
     }
     validate_effect(rule).with_context(|| format!("invalid native rule {:?}", rule.id))?;
     read_back::validate(rule)?;
-    mysql_read_back::validate(rule)?;
     let compiled = CompiledNativeRule {
         rule: rule.clone(),
         domain: rule.effect.domain(),
@@ -98,8 +97,7 @@ pub(crate) fn semantic_rule(rule: &NativeRule) -> Result<serde_json::Value> {
             _ => (),
         }
     }
-    let mut rule = rule.clone();
-    read_back::normalize_proof_identity(&mut rule.effect);
+    let rule = rule.clone();
     let mut value = serde_json::to_value(rule)?;
     strip_proofs(&mut value);
     Ok(value)
@@ -124,8 +122,6 @@ impl NativeEffect {
             Self::RedisAppendStream => "append_stream_equivalence",
             Self::RedisReadCommutation(_) => "finite_read_commutation",
             Self::RedisExpiryRefresh(_) => "key_lifetime_expiry_refresh",
-            Self::RedisLock => "lock_identity",
-            Self::RedisPublishIdentity(_) => "publisher_identity",
             Self::ResponseJwt(_) => "signed_response",
             Self::ResponseHeaderDate(_) => "header_calendar_date",
             Self::ResponseGenerated(_) => "generated_response",
@@ -275,48 +271,6 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
             );
             Ok(())
         }
-        NativeEffect::RedisLock => {
-            resource(selector, Protocol::Redis)?;
-            ensure!(
-                selector.key.is_some(),
-                "lock identity requires a bounded key selector"
-            );
-            ensure!(
-                selector.operation.is_none(),
-                "lock identity owns acquisition/release operations as one lifecycle"
-            );
-            Ok(())
-        }
-        NativeEffect::RedisPublishIdentity(effect) => {
-            resource(selector, Protocol::Redis)?;
-            ensure!(
-                selector
-                    .operation
-                    .as_deref()
-                    .is_none_or(|command| command == "PUBLISH"),
-                "publisher identity selects PUBLISH"
-            );
-            ensure!(
-                selector
-                    .key
-                    .as_ref()
-                    .and_then(NativeKeySelector::exact)
-                    .is_some(),
-                "publisher identity requires an exact channel"
-            );
-            ensure!(
-                effect.uuid_index.is_some() != effect.uuid_field.is_some(),
-                "publisher identity requires one UUID payload location"
-            );
-            if let Some(field) = &effect.uuid_field {
-                text(field, "publisher UUID field", 128)?;
-            }
-            ensure!(
-                effect.uuid_index.is_none_or(|index| index < 128),
-                "UUID index exceeds bound"
-            );
-            Ok(())
-        }
         NativeEffect::ResponseJwt(effect) => {
             response_scope(rule)?;
             compiler::validate_pointer(&effect.pointer, true)?;
@@ -423,9 +377,7 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
                 "MySQL value effect requires SQL selector"
             );
             ensure!(
-                !effect.params.is_empty()
-                    || !effect.values.is_empty()
-                    || !effect.response_time.is_empty(),
+                !effect.params.is_empty() || !effect.values.is_empty(),
                 "MySQL value effect has no contract"
             );
             for field in effect.params.values() {
@@ -445,16 +397,6 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
                         }
                         Ok(())
                     }
-                })?;
-            }
-            for field in effect.response_time.values() {
-                proven(field, |field| {
-                    validate_time(&field.time)?;
-                    ensure!(
-                        field.preserve_values.len() <= 16,
-                        "too many fixed SQL sentinels"
-                    );
-                    Ok(())
                 })?;
             }
             Ok(())
@@ -762,11 +704,8 @@ fn validate_key_contract(key: &NativeKeyContract) -> Result<()> {
             "invalid key time window"
         ),
         NativeKeyContract::Capture {
-            binding,
-            template,
-            format,
+            template, format, ..
         } => {
-            identifier(binding, "key binding")?;
             template_slot(template)?;
             match format {
                 KeyIdentityFormat::Hex { bytes } | KeyIdentityFormat::Base64url { bytes } => {
@@ -784,7 +723,6 @@ fn validate_key_contract(key: &NativeKeyContract) -> Result<()> {
 }
 
 fn validate_reference(reference: &IdentityReference) -> Result<()> {
-    identifier(&reference.binding, "identity binding")?;
     template_slot(&reference.template)
 }
 
@@ -804,18 +742,8 @@ fn template_slot(template: &str) -> Result<()> {
 
 fn validate_generated_value(value: &GeneratedValue) -> Result<()> {
     match value {
-        GeneratedValue::NonEmpty { binding }
-        | GeneratedValue::Uuid { binding }
-        | GeneratedValue::UuidV4 { binding } => {
-            if let Some(binding) = binding {
-                identifier(binding, "generated binding")?;
-            }
-            Ok(())
-        }
-        GeneratedValue::Reference { binding } | GeneratedValue::Bind { binding } => {
-            identifier(binding, "generated binding")
-        }
         GeneratedValue::Time(time) => validate_time(time),
+        _ => Ok(()),
     }
 }
 
@@ -902,8 +830,12 @@ pub(super) fn api_parts(api: &str) -> Result<(&str, &str)> {
     Ok((method, path))
 }
 
-pub(super) fn proof(proof: &Proof) -> Result<()> {
-    proof.validate(false)
+pub(super) fn proof(proof: &Option<Proof>) -> Result<()> {
+    proof
+        .as_ref()
+        .map(|proof| proof.validate(false))
+        .transpose()
+        .map(|_| ())
 }
 
 pub(super) fn proven<T>(value: &Proven<T>, validate: impl FnOnce(&T) -> Result<()>) -> Result<()> {

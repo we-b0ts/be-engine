@@ -190,3 +190,21 @@ pub(in crate::replay) fn compare(
     }
     Ok(validated)
 }
+
+/// A decoded signature still has a complete token identity across carriers.
+/// Parsing claims alone cannot authorize splitting one Source token into two.
+pub(in crate::replay) fn identity_pair(
+    rule: &ResponseJwtRule,
+    source: &Value,
+    target: &Value,
+) -> Result<crate::value_contract::identities::IdentityPair, ResponseDifferenceKind> {
+    let extracted = url::extract(rule, source, target)?;
+    let [source, target] = extracted
+        .as_ref()
+        .map(|value| [&value.tokens[0], &value.tokens[1]])
+        .unwrap_or([source, target]);
+    Ok(crate::value_contract::identities::IdentityPair {
+        source: serde_json::to_string(source).map_err(|_| ResponseDifferenceKind::JwtInvalid)?,
+        target: serde_json::to_string(target).map_err(|_| ResponseDifferenceKind::JwtInvalid)?,
+    })
+}

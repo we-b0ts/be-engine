@@ -232,10 +232,7 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                         "HTTP sharing requires exact method and path"
                     );
                 }
-                FiniteSharingEffect::Redis {
-                    hash_field,
-                    response_time,
-                } => {
+                FiniteSharingEffect::Redis { hash_field } => {
                     resource(&rule.selector, Protocol::Redis)?;
                     ensure!(
                         rule.selector
@@ -254,19 +251,6 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                             == hash_field.is_some(),
                         "HGET sharing requires one hash field"
                     );
-                    ensure!(
-                        (1..=32).contains(&response_time.len()),
-                        "Redis sharing requires explicit response-time fields"
-                    );
-                    for (pointer, time) in response_time {
-                        compiler::validate_pointer(pointer, false)?;
-                        proven(time, validate_time)?;
-                        ensure!(
-                            time.contract.anchor
-                                == super::super::TimeAnchor::DependencyRequestStart,
-                            "shared Redis response rebasing uses dependency request clocks"
-                        );
-                    }
                 }
             }
         }

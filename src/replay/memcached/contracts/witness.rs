@@ -101,7 +101,11 @@ pub(crate) fn validate_witness(
         let command = source["command"]
             .as_str()
             .context("Memcached command unavailable")?;
-        let actual = if wire == "text" && command.eq_ignore_ascii_case("set") {
+        let actual = if wire == "text"
+            && matches!(
+                command.to_ascii_lowercase().as_str(),
+                "set" | "add" | "replace" | "cas"
+            ) {
             normalize_value_count(&source_args, &target_args, &source_value, &target_value)?
         } else {
             target_args

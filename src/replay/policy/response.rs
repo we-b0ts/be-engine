@@ -688,6 +688,9 @@ fn validate_rule_api(api: &str) -> Result<(&str, &str)> {
 }
 
 fn validate_audit_text(value: &str, label: &str, max_len: usize) -> Result<()> {
+    if label == "source_evidence" && value.is_empty() {
+        return Ok(());
+    }
     ensure!(
         !value.trim().is_empty(),
         "response rule {label} must not be blank"

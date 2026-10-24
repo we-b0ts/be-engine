@@ -12,7 +12,7 @@ pub(super) fn project(output: &mut NativeRuntimeProjection, rule: &n::NativeRule
         .context("native assertion API is absent")?;
     match &rule.effect {
         n::NativeEffect::ResponseJwt(effect) => {
-            let jwt = project_jwt(effect, &rule.proof)?;
+            let jwt = project_jwt(effect, rule.proof.as_ref())?;
             jwt.validate()?;
             if jwt.header.is_some() {
                 return Ok(());
@@ -34,7 +34,7 @@ pub(super) fn project(output: &mut NativeRuntimeProjection, rule: &n::NativeRule
                 parameter: effect.parameter.clone(),
                 format: effect.format.clone(),
                 timezone: effect.timezone.clone(),
-                source_evidence: proof(&rule.proof),
+                source_evidence: proof(rule.proof.as_ref()),
             };
             header.validate()?;
             output
@@ -86,7 +86,7 @@ pub(super) fn project(output: &mut NativeRuntimeProjection, rule: &n::NativeRule
                 }
             }
             for field in &effect.fields {
-                body_field(output, rule, api, &field.contract, &field.proof)?;
+                body_field(output, rule, api, &field.contract, field.proof.as_ref())?;
             }
         }
         _ => anyhow::bail!("native effect is not a structured assertion"),
@@ -99,7 +99,7 @@ fn body_field(
     rule: &n::NativeRule,
     api: &str,
     field: &n::BodyField,
-    field_proof: &crate::policy::Proof,
+    field_proof: Option<&crate::policy::Proof>,
 ) -> Result<()> {
     let source_evidence = proof(field_proof);
     match field {
@@ -330,7 +330,7 @@ fn protobuf_element(value: n::ProtobufElement) -> r::ProtobufRepeatedElementType
 
 pub(in crate::replay) fn project_jwt(
     effect: &n::ResponseJwtEffect,
-    source_proof: &crate::policy::Proof,
+    source_proof: Option<&crate::policy::Proof>,
 ) -> Result<r::ResponseJwtRule> {
     let jwt = r::ResponseJwtRule {
         pointer: effect.pointer.clone(),

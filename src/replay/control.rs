@@ -4,8 +4,11 @@ use super::*;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) mod dependency_tail;
+mod derived_input;
 mod identity;
+pub(crate) use derived_input::register as register_derived_input;
 mod interaction;
+mod target_stop;
 pub(crate) use identity::check_response_identities;
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READY_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
@@ -21,6 +24,8 @@ pub(super) struct ReplayControlRequest {
     pub(super) fail_on_incomplete: bool,
     #[serde(default)]
     pub(super) identity_pairs: Vec<crate::value_contract::identities::IdentityPair>,
+    #[serde(default)]
+    pub(super) derived_input: Option<derived_input::Registration>,
 }
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -332,7 +337,10 @@ pub(super) async fn handle_control_request(
         }
         "begin" => begin_case(&request, state.clone()).await,
         "response_identities" => identity::accept(&request, &state).await,
+        "derived_input" => derived_input::accept(&request, &state).await,
+        "prepare_end" => target_stop::prepare(&request, &state).await,
         "end" => end_case(&request, state.clone()).await,
+        "end_stopped" => end_case(&request, state.clone()).await,
         "report" => {
             let state = state.lock().await;
             let report = state.snapshot_report();
@@ -505,7 +513,7 @@ pub(super) async fn begin_case(
     };
     let counter_reader = {
         let state = state.lock().await;
-        if state.finalized_at.is_some() {
+        if state.finalized_at.is_some() || state.target_session_stopped {
             return serde_json::json!({"ok":false,"error":"finalized Replay requires a fresh session"});
         }
         if state.deferred.is_some()
@@ -545,6 +553,9 @@ pub(super) async fn begin_case(
         None => None,
     };
     let mut state = state.lock().await;
+    if state.target_session_stopped || state.finalized_at.is_some() {
+        return serde_json::json!({"ok":false,"error":"stopped Target requires a fresh Replay session"});
+    }
     if let Some(active_case_id) = state.active_case_id.as_deref()
         && active_case_id != case_id
     {
@@ -570,8 +581,10 @@ pub(super) async fn begin_case(
     if let Some(case) = state.cases.get_mut(case_id) {
         case.status = ReplayCaseStatus::Active;
     }
+    let target_stop_required = state.dependency_tails.target_stop_required(case_id);
     serde_json::json!({
         "ok": true,
+        "target_stop_required": target_stop_required,
         "active_case_id": case_id,
         "case": state.cases.get(case_id).map(|case| ReplayCaseReport {
             case_id: case.id.clone(),
@@ -593,6 +606,10 @@ pub(super) async fn end_case(
     let Some(case_id) = request.case_id.as_deref() else {
         return serde_json::json!({"ok": false, "error": "end requires case_id"});
     };
+    let stopped = match target_stop::confirm(request, &state).await {
+        Ok(stopped) => stopped,
+        Err(error) => return serde_json::json!({"ok":false,"error":format!("{error:#}")}),
+    };
     let (post_response_window, case_dir) = {
         let state = state.lock().await;
         if !state.cases.contains_key(case_id) {
@@ -612,7 +629,11 @@ pub(super) async fn end_case(
             state.cases[case_id].dir.clone(),
         )
     };
-    let deadline = dependency_tail::deadline(&state, case_id).await;
+    let deadline = if stopped {
+        dependency_tail::cleanup_deadline(&state, case_id).await
+    } else {
+        dependency_tail::deadline(&state, case_id).await
+    };
     let cleanup = async {
         let interaction =
             interaction::drain(&state, case_id, &case_dir, post_response_window, deadline).await?;
@@ -649,6 +670,7 @@ pub(super) async fn end_case(
             .remove(case_id)
             .zip(state.egress_counter_reader.clone());
         state.active_case_id = None;
+        state.target_stop_prepared.remove(case_id);
         dependency_tail::end(&mut state, case_id);
         if let Some(case) = state.cases.get_mut(case_id) {
             case.status = ReplayCaseStatus::Ended;
@@ -779,6 +801,9 @@ pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
 
 impl ReplayState {
     fn case_is_dirty(&self, case_id: &str) -> bool {
+        if self.connect_failures.case_is_dirty(case_id) {
+            return true;
+        }
         let dirty = self.unrecorded_case_ids.contains(case_id)
             || self.mysql.case_is_dirty(case_id)
             || self.http_case_is_dirty(case_id)

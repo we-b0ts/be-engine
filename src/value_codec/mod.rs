@@ -1,5 +1,6 @@
 //! Bounded payload decoding with typed values and lossless protocol remainders.
 mod protobuf;
+pub(crate) mod sse;
 
 use std::{borrow::Cow, sync::Arc};
 

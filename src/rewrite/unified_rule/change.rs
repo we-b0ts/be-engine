@@ -51,7 +51,11 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
     ensure!(
         !change.policy.rules.is_empty()
             || !change.policy.resources.is_empty()
-            || !change.policy.responses.is_empty(),
+            || change.policy.json.is_some()
+            || change.policy.mysql.is_some()
+            || change.policy.redis.is_some()
+            || change.policy.http.is_some()
+            || change.policy.async_api.is_some(),
         "policy changes require explicit replacement declarations or rules with Source proof"
     );
     crate::policy::compile_policy(&change.policy)?;
@@ -118,9 +122,6 @@ impl Proposal {
         document
             .rules
             .retain(|rule| !self.replace_rules.contains(rule.id()));
-        document
-            .field_references
-            .retain(|id, _| !self.replace_rules.contains(id));
         Ok(removed)
     }
 }
@@ -148,9 +149,9 @@ mod tests {
     use serde_json::json;
 
     fn rule(id: &str, api: &str) -> serde_json::Value {
-        json!({"id":id,"surface":"api.response","match":{"api":api},
-            "slot":"body","codec":"json","contract":{"/members":"unordered"},
-            "proof":{"source":"source.py:members","fact":"Source exposes a set"}})
+        json!({"id":id,"match":{"api":api},
+            "effect":{"kind":"response_header_date","header":"content-disposition","parameter":"filename","format":"%Y-%m-%d"},
+            "proof":{"source":"source.py:filename","fact":"Source includes the current date in the download filename"}})
     }
 
     fn change(replace: serde_json::Value) -> serde_json::Value {

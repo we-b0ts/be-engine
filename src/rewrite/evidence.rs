@@ -329,17 +329,12 @@ fn facts(
                 facts["signing_key_discovery"] = super::jwt_rule::signing_key_discovery(target_root);
             }
             facts["dynamic_capture_candidates"] = crate::e2e_run::query_dynamic_capture_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
-            facts["http_header_timestamp_candidates"] = serde_json::to_value(rule_guidance::http_header_timestamp_candidates(&facts))?;
             if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")) {
                 facts["http_request_differences_command"] = serde_json::to_value(super::action::command(target_root,
                     vec!["evidence".into(), query_id(state, issue, QUERY_HTTP_REQUESTS)], Vec::new()))?;
                 facts["http_unordered_candidates"] = crate::e2e_run::query_http_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
-                facts["redis_lock_candidates"] = crate::e2e_run::query_redis_lock_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["redis_unordered_candidates"] = crate::e2e_run::query_redis_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["cross_case_candidates"] = crate::e2e_run::query_http_cross_case_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
-            }
-            if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| (c["protocol"] == "redis" || c["protocol"] == "http") && c["reason"] == "unmatched_target")) {
-                facts["redis_publish_candidates"] = crate::e2e_run::query_redis_publish_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             }
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }
             mysql_diagnosis::attach(&mut facts);
@@ -692,7 +687,7 @@ pub(super) fn unified_rule_hint(
         .find(|q| q.query_id.ends_with("unified-rule-candidates"))?;
     Some(super::evidence_model::RewriteRuleHint {
         capability:"unified_value_contract".into(),rule:"traffic-policy/v2".into(),
-        hint:"Inspect source_entry.bindings and existing declarations at the first relevant mismatch, including when no draft exists. Inventory Source-proven time, duration, unordered or identity semantics by physical resource field; response fields retain their API envelope. For an identity, collect all eligible MySQL/Redis/response locations, format and case-local binding together instead of adding SQL/argument exceptions or waiting for separate capture/reference failures. Runtime relations follow observed Source values; eligibility still requires Source proof. Plan the declaration document once with any extra native relationships, inspect coverage and residual failures, apply and complete genuine Replay. Bounded discovery never establishes complete coverage or permission.".into(),
+        hint:"Inspect source_entry.locations and the global json.fields map at the first relevant mismatch, including when no draft exists. Declare Source-proven time or identity formats and unordered semantics once per logical JSON pointer; APIs, SSE events, tables and cache keys share that map. JSON-valued columns need no codec declaration. Native MySQL time types use protocol metadata when mysql is enabled; other scalar formats use mysql.tables or redis.keys by native carrier. The engine infers identity correspondence from complete typed Source values and preserves equality and distinctness internally. Keep extra native relationships explicit, inspect complete coverage and residual failures, apply and complete genuine Replay. Bounded discovery never establishes complete coverage or permission.".into(),
         help:command.command,
     })
 }

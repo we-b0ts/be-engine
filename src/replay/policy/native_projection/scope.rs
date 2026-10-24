@@ -90,7 +90,6 @@ mod tests {
             username: Some("writer".into()),
         };
         let guard = NativeScopeGuard {
-            mysql_read_back: vec![],
             id: "identity".into(),
             selector: NativeMatch {
                 api: Some("POST /tasks/*".into()),

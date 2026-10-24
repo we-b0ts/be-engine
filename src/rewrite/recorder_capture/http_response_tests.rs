@@ -424,16 +424,8 @@ fn checked_pattern_merges_old_ids_and_preserves_uncovered_or_different_rules() {
     }
     let merged = updated.rules[0].as_native().unwrap();
     assert!(
-        merged
-            .proof
-            .fact
-            .contains(&options(&report).source_evidence)
-    );
-    assert!(
-        merged
-            .proof
-            .fact
-            .contains("sandbox_id varies; consume base_url")
+        merged.proof.is_none(),
+        "Source proof stays in the capture plan rather than runtime policy"
     );
     let crate::policy::native::NativeEffect::CaptureHttpResponse(effect) = &merged.effect else {
         panic!("wrong effect")

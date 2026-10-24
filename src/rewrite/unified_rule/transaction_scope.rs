@@ -17,17 +17,17 @@ fn extra(fixture: &Fixture, uri: &str) {
 }
 
 #[test]
-fn unrelated_unprepared_or_skipped_apis_do_not_block_scoped_rule_plan_apply() {
+fn global_formats_reenumerate_unprepared_apis_before_apply() {
     let fixture = Fixture::new();
     extra(&fixture, "/skipped");
     fixture.confirm();
     let plan = fixture.plan().unwrap();
-    apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
-    assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+    extra(&fixture, "/newly-added");
+    assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
 }
 
 #[test]
-fn an_omitted_case_of_the_rules_own_api_still_blocks_planning() {
+fn an_omitted_case_of_the_focused_api_still_blocks_planning() {
     let fixture = Fixture::new();
     extra(&fixture, "/api");
     fixture.confirm();

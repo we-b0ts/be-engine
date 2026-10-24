@@ -1,5 +1,6 @@
 pub(crate) mod access;
 mod client_info;
+pub(crate) mod key_slots;
 pub(crate) mod socketio_rpc;
 mod wire;
 

@@ -12,6 +12,7 @@ pub(super) struct PendingHttpTermination {
     pub(super) prefix_delivered: Option<Arc<PrefixDelivery>>,
     pub(super) expected_termination: Option<crate::dependency::DependencyTermination>,
     pub(super) server_result: Option<Result<(), String>>,
+    pub(super) lifecycle_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl PendingHttpTermination {
@@ -19,6 +20,9 @@ impl PendingHttpTermination {
         &self,
         termination: &crate::http::termination::ClientTermination,
     ) -> Option<crate::http::termination::ObservedTermination> {
+        if self.lifecycle_stop.is_some() {
+            return termination.observed();
+        }
         if self.expected_termination.is_some_and(|end| {
             end.side == crate::dependency::TerminationSide::Client
                 && end.kind == crate::dependency::TerminationKind::Eof
@@ -46,13 +50,58 @@ impl PendingHttpTermination {
             prefix_delivered: None,
             expected_termination: record.outcome.termination(),
             server_result: None,
+            lifecycle_stop: None,
         }
+    }
+
+    pub(super) fn for_lifecycle_stop(
+        detail: MatchedHttpExchangeReport,
+        record: &RecordedHttpExchange,
+        gate: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        let mut pending = Self::new(detail, record);
+        pending.expected_termination = None;
+        pending.lifecycle_stop = Some(gate);
+        pending
+    }
+
+    pub(super) async fn validate_observed(
+        &self,
+        observed: crate::http::termination::ObservedTermination,
+        state: &Arc<Mutex<ReplayState>>,
+    ) -> Result<()> {
+        if let Some(gate) = &self.lifecycle_stop {
+            let case = self
+                .detail
+                .case_id
+                .as_deref()
+                .context("HTTP cleanup has no Case owner")?;
+            crate::replay::lifecycle_cleanup::accept_peer_end(gate, state, case).await?;
+        }
+        self.validate(observed)
     }
 
     pub(super) fn validate(
         &self,
         observed: crate::http::termination::ObservedTermination,
     ) -> Result<()> {
+        if let Some(gate) = &self.lifecycle_stop {
+            anyhow::ensure!(
+                gate.load(std::sync::atomic::Ordering::Acquire),
+                "Target HTTP dependency ended before its recorded case Source-stop boundary"
+            );
+            anyhow::ensure!(
+                observed.termination.side == crate::dependency::TerminationSide::Client,
+                "async cleanup requires real Target transport termination"
+            );
+            anyhow::ensure!(
+                self.prefix_delivered
+                    .as_ref()
+                    .is_none_or(|prefix| prefix.is_complete()),
+                "Target terminated HTTP dependency before its recorded response prefix was delivered"
+            );
+            return Ok(());
+        }
         self.timing.validate_client_termination(
             Instant::from_std(observed.at).saturating_duration_since(self.started),
         )?;

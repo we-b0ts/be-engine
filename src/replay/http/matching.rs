@@ -106,47 +106,6 @@ impl ReplayState {
                     });
                     continue;
                 }
-                let body_contract = if exchange.source == ReplaySource::Case
-                    && exchange.shared_origin.is_none()
-                    && let (Some(policy), Some(case)) =
-                        (&self.replay_policy, active_case_id.as_deref())
-                    && let Ok(source_body) = decode_body(&exchange.record.request_body)
-                {
-                    policy.request_contracts.prepare_http_body(
-                        case,
-                        target,
-                        method.as_str(),
-                        &uri_path_only(&exchange.record.uri),
-                        &source_body,
-                        body,
-                        crate::replay::assertion::RequestTimes {
-                            source: request_headers::time_reference::source(&exchange.record),
-                            target: Some(request_started_at),
-                        },
-                    )
-                } else {
-                    None
-                };
-                let body_contract = match body_contract {
-                    Some(Ok(value)) => Some(value),
-                    Some(Err(error)) => {
-                        closest_mismatch.get_or_insert_with(|| {
-                            format!("HTTP JSON request field contract failed: {error:#}")
-                        });
-                        continue;
-                    }
-                    None => None,
-                };
-                let body_exchange = body_contract.as_ref().map(|value| {
-                    let mut copy = exchange.clone();
-                    copy.record.request_body.encoding = "base64".into();
-                    copy.record.request_body.data = STANDARD.encode(&value.source);
-                    copy
-                });
-                let exchange = body_exchange.as_ref().unwrap_or(exchange);
-                let body = body_contract
-                    .as_ref()
-                    .map_or(body, |value| value.actual.as_slice());
                 let normalized = if exchange.source == ReplaySource::Case
                     && exchange.shared_origin.is_none()
                 {
@@ -227,11 +186,7 @@ impl ReplayState {
                 } else {
                     DependencyRuleDecision::default()
                 };
-                if let Some(body_contract) = &body_contract {
-                    policy_decision
-                        .value_contracts
-                        .push(body_contract.decision.clone());
-                }
+
                 let mut ignored_query_params = self.http_ignore_query_params.clone();
                 ignored_query_params.extend(policy_decision.dynamic_query_params.iter().cloned());
                 if exchange.shared_origin.is_some() {
@@ -244,29 +199,32 @@ impl ReplayState {
                     body,
                     &ignored_query_params,
                 );
-                if mismatch.as_deref() == Some("HTTP request body did not match the recorded body")
-                    && exchange.shared_origin.is_none()
+
+                let mut declared_headers = None;
+                if (mismatch.is_none()
+                    || mismatch.as_deref()
+                        == Some("HTTP request body did not match the recorded body"))
                     && let Some(policy) = &self.replay_policy
-                    && let Ok(recorded_body) = decode_body(&exchange.record.request_body)
-                    && policy.preview_http_json(
-                        &HttpPolicyContext {
-                            request_times: crate::replay::assertion::RequestTimes {
-                                source: request_headers::time_reference::source(&exchange.record),
-                                target: Some(request_started_at),
-                            },
-                            case_id: active_case_id.as_deref(),
-                            target,
-                            method: method.as_str(),
-                            recorded_uri: &exchange.record.uri,
-                            actual_uri: &uri.to_string(),
-                        },
-                        &recorded_body,
-                        body,
-                        &mut policy_decision,
+                    && let Some(compared) = request_headers::preview_global(
+                        &policy.request_contracts,
+                        active_case_id.as_deref().or(exchange.case_id.as_deref()),
+                        &exchange.record.request_headers,
+                        headers,
+                        request_headers::time_reference::source(&exchange.record),
+                        request_started_at,
                     )
                 {
-                    mismatch = None;
+                    match compared {
+                        Ok((decision, headers)) => {
+                            policy_decision.value_contracts.push(decision);
+                            declared_headers = Some(headers);
+                        }
+                        Err(error) => {
+                            mismatch = Some(format!("HTTP header value contract failed: {error:#}"))
+                        }
+                    }
                 }
+                let headers = declared_headers.as_ref().unwrap_or(headers);
                 let mut request_decision = None;
                 let mut body_comparison = None;
                 if (mismatch.is_none()
@@ -276,6 +234,7 @@ impl ReplayState {
                     && let Some(result) = contracts::preview_request(
                         policy,
                         exchange,
+                        active_case_id.as_deref(),
                         &contracts::RequestView {
                             observation_id,
                             scheme,
@@ -338,32 +297,6 @@ impl ReplayState {
                             }
                         }
                     }
-                    let clocks = crate::replay::assertion::RequestTimes {
-                        source: request_headers::time_reference::source(&exchange.record),
-                        target: Some(request_started_at),
-                    };
-                    if let Some(result) = policy.request_contracts.preview_http_json_time(
-                        case,
-                        target,
-                        method.as_str(),
-                        &exchange.record.uri,
-                        &uri.to_string(),
-                        &source_body,
-                        &exchange.record.request_headers,
-                        body,
-                        headers,
-                        clocks,
-                    ) {
-                        match result {
-                            Ok(decision) => {
-                                mismatch = None;
-                                request_decision = Some(decision);
-                            }
-                            Err(_) => {
-                                mismatch = Some("HTTP JSON time request contract differs".into())
-                            }
-                        }
-                    }
                     if mismatch.is_some() {
                         let mut source_headers = exchange.record.request_headers.clone();
                         let mut actual_headers = headers.clone();
@@ -379,8 +312,12 @@ impl ReplayState {
                                 &exchange.record.request_headers,
                                 body,
                                 headers,
-                                clocks,
-                                &uri.to_string(),
+                                crate::replay::assertion::RequestTimes {
+                                    source: request_headers::time_reference::source(
+                                        &exchange.record,
+                                    ),
+                                    target: Some(request_started_at),
+                                },
                             );
                         }
                     }
@@ -438,6 +375,36 @@ impl ReplayState {
                     closest_mismatch.get_or_insert(reason);
                     continue;
                 }
+                if let Some(policy) = &self.replay_policy {
+                    let mut combined = crate::replay::policy::request_contract::Decision::default();
+                    let checked = (|| -> Result<()> {
+                        for identity in policy_decision.identity_proposals().chain(
+                            request_decision
+                                .iter()
+                                .filter_map(|decision| decision.identity.as_ref()),
+                        ) {
+                            policy
+                                .request_contracts
+                                .merge_identity_decision(&mut combined, identity.clone())?;
+                        }
+                        if let (Some(case), Some(normalized)) =
+                            (active_case_id.as_deref(), normalized.as_ref())
+                        {
+                            policy.dynamic_values.join_identities(
+                                case,
+                                &normalized.decision,
+                                &mut combined,
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    if checked.is_err() {
+                        closest_mismatch.get_or_insert(
+                            "HTTP header/body identity correspondence changed".into(),
+                        );
+                        continue;
+                    }
+                }
                 matching_request_decision = request_decision;
                 matching_index = Some(index);
                 matching_policy_decision = policy_decision;
@@ -490,7 +457,19 @@ impl ReplayState {
             self.record_unmatched_http(scheme, target, method, uri, reason.clone());
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
-        if !exchange.record.outcome.is_client_terminated()
+        let lifecycle_cleanup = active_case_id.as_deref().and_then(|case| {
+            let id = exchange.record.id.as_deref()?.parse().ok()?;
+            self.async_cleanup_gate(
+                case,
+                crate::replay::control::dependency_tail::RecordedReference::Http {
+                    exchange_id: id,
+                },
+            )
+        });
+        let recorded_upstream_failure = upstream_failure::is_recorded(&exchange.record);
+        if lifecycle_cleanup.is_none()
+            && !recorded_upstream_failure
+            && !exchange.record.outcome.is_client_terminated()
             && !exchange.record.outcome.is_server_terminated()
             && (exchange.record.error.is_some() || exchange.record.response_status.is_none())
         {
@@ -517,8 +496,35 @@ impl ReplayState {
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
 
-        if let Some(policy) = &self.replay_policy {
-            match contracts::materialize_response(policy, &mut exchange, request_started_at) {
+        if (lifecycle_cleanup.is_none() || exchange.record.response_stream.is_some())
+            && let Some(policy) = &self.replay_policy
+        {
+            let mut captured = crate::replay::policy::request_contract::Decision::default();
+            if let Some(case) = active_case_id.as_deref() {
+                policy
+                    .dynamic_values
+                    .join_identities(case, &matching_dynamic_decision, &mut captured)
+                    .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?;
+            }
+            let owner = policy
+                .request_contracts
+                .with_identity_proposals(
+                    matching_policy_decision
+                        .identity_proposals()
+                        .chain(
+                            matching_request_decision
+                                .iter()
+                                .filter_map(|decision| decision.identity.as_ref()),
+                        )
+                        .chain(captured.identity.iter()),
+                )
+                .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?;
+            match contracts::materialize_response(
+                &owner,
+                &mut exchange,
+                active_case_id.as_deref(),
+                request_started_at,
+            ) {
                 Ok(decision) => matching_policy_decision
                     .value_contracts
                     .extend(decision.value_contracts),
@@ -538,23 +544,28 @@ impl ReplayState {
                 }
             }
         }
-        self.audit_http_request_headers(&exchange, index, &audited_headers, request_started_at);
         if let Some(policy) = &mut self.replay_policy {
+            let mut captures = crate::replay::policy::request_contract::Decision::default();
             if let Some(case) = active_case_id.as_deref() {
                 policy
                     .dynamic_values
-                    .commit(case, matching_dynamic_decision);
+                    .join_identities(case, &matching_dynamic_decision, &mut captures)
+                    .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?;
             }
+            matching_policy_decision.value_contracts.push(captures);
+            matching_policy_decision
+                .value_contracts
+                .extend(matching_request_decision.take());
             policy
                 .commit(active_case_id.as_deref(), matching_policy_decision)
                 .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?;
-            if let Some(decision) = matching_request_decision {
+            if let Some(case) = active_case_id.as_deref() {
                 policy
-                    .request_contracts
-                    .commit(decision)
-                    .map_err(|error| HttpReplayMatchError::BadGateway(error.to_string()))?;
+                    .dynamic_values
+                    .commit_after_identities(case, matching_dynamic_decision);
             }
         }
+        self.audit_http_request_headers(&exchange, index, &audited_headers, request_started_at);
         let detail = MatchedHttpExchangeReport {
             case_id: active_case_id.clone(),
             shared_origin: exchange.shared_origin.clone(),
@@ -568,6 +579,26 @@ impl ReplayState {
             outcome: exchange.record.outcome,
             target_event_index: 0,
         };
+        if let Some(gate) = lifecycle_cleanup {
+            // Source stopped before receiving a response. Retain the original
+            // claimed request until the runner stops Target; never synthesize
+            // the proxy's post-stop 502 as a business dependency response.
+            self.http_exchanges[index].status =
+                crate::replay::ReplayExchangeStatus::AwaitingClientTermination;
+            if exchange.record.response_stream.is_some() {
+                self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Responding;
+                exchange.record.lifecycle_stop = Some(gate);
+                exchange.record.stream_delivery = Some(detail);
+                return Ok(exchange.record);
+            }
+            return Err(HttpReplayMatchError::ClientTerminated(Box::new(
+                termination::PendingHttpTermination::for_lifecycle_stop(
+                    detail,
+                    &exchange.record,
+                    gate,
+                ),
+            )));
+        }
         if exchange.record.outcome.is_server_terminated()
             && exchange.record.response_stream.is_none()
         {
@@ -584,6 +615,9 @@ impl ReplayState {
             return Err(HttpReplayMatchError::ClientTerminated(Box::new(
                 termination::PendingHttpTermination::new(detail, &exchange.record),
             )));
+        }
+        if recorded_upstream_failure {
+            upstream_failure::materialize(&mut exchange.record);
         }
         if exchange.record.response_stream.is_some() {
             self.http_exchanges[index].status = if exchange.record.outcome.is_client_terminated() {

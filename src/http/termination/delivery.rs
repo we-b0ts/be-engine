@@ -2,7 +2,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::watch;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct DeliveryProgress(watch::Sender<u64>);
 impl Default for DeliveryProgress {
     fn default() -> Self {
@@ -18,6 +18,7 @@ impl DeliveryProgress {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PrefixDelivery {
     progress: DeliveryProgress,
     required: AtomicU64,

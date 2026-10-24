@@ -21,6 +21,16 @@ pub(crate) struct ObservedTermination {
     pub(crate) at: Instant,
 }
 
+/// Project an independently observed monotonic end into the event wall clock.
+/// A delayed recorder finalizer must not move an earlier peer end past Source stop.
+pub(crate) fn observed_wall_time(at: Instant) -> chrono::DateTime<chrono::Utc> {
+    let wall = chrono::Utc::now();
+    chrono::TimeDelta::from_std(Instant::now().saturating_duration_since(at))
+        .ok()
+        .and_then(|lag| wall.checked_sub_signed(lag))
+        .unwrap_or(wall)
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ConnectionTermination {
     state: Arc<Mutex<TerminationState>>,

@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::{Mapping, Value};
 
-use super::{field_refs, proof, resources, walk};
+use super::{proof, redis_keys, resources, walk};
 use crate::policy::{PolicyRule, TrafficPolicy};
 
 #[derive(Deserialize)]
@@ -12,12 +12,47 @@ struct Document {
     format: String,
     #[serde(default, deserialize_with = "declared_revision")]
     source_revision: Option<String>,
+    #[serde(default)]
+    json: Option<crate::policy::JsonPolicy>,
+    #[serde(default)]
+    mysql: Option<crate::policy::MysqlPolicy>,
+    #[serde(default)]
+    redis: Option<RedisDocument>,
+    #[serde(default)]
+    http: Option<crate::policy::HttpPolicy>,
+    #[serde(default, deserialize_with = "optional_async_api")]
+    async_api: Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRule>>,
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
     resources: std::collections::BTreeMap<String, crate::policy::ResourceDeclaration>,
-    #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
-    responses: std::collections::BTreeMap<String, crate::policy::ResponseDeclaration>,
     #[serde(default)]
     rules: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RedisDocument {
+    #[serde(default)]
+    database: Option<i64>,
+    #[serde(default, deserialize_with = "redis_keys")]
+    keys: Option<std::collections::BTreeMap<String, redis_keys::Entry>>,
+    #[serde(default, deserialize_with = "redis_rules")]
+    rules: Option<Vec<Value>>,
+}
+
+fn optional_async_api<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRule>>, D::Error> {
+    crate::policy::strict_map::unique_map(deserializer).map(Some)
+}
+
+fn redis_keys<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<std::collections::BTreeMap<String, redis_keys::Entry>>, D::Error> {
+    crate::policy::strict_map::unique_map(deserializer).map(Some)
+}
+
+fn redis_rules<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<Value>>, D::Error> {
+    Vec::deserialize(deserializer).map(Some)
 }
 
 fn declared_revision<'de, D: Deserializer<'de>>(
@@ -34,34 +69,92 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
                 proof::revision(revision)?;
             }
             resources::validate(&document.resources)?;
-            let mut rules = Vec::with_capacity(document.rules.len());
-            let mut field_references = std::collections::BTreeMap::new();
-            for mut rule in document.rules {
+            let (redis, nested_rules) = redis_document(document.redis, &document.resources)?;
+            let mut declared_rules = document.rules;
+            declared_rules.extend(nested_rules);
+            let mut rules = Vec::with_capacity(declared_rules.len());
+            for mut rule in declared_rules {
                 let id = rule
                     .get("id")
                     .and_then(Value::as_str)
                     .unwrap_or("<missing-id>")
                     .to_owned();
                 resources::expand(&mut rule, &document.resources)?;
-                let references = field_refs::expand(&mut rule, &document.resources)?;
-                if !references.is_empty() {
-                    field_references.insert(id.clone(), references);
-                }
                 walk::expand_rule(&mut rule, document.source_revision.as_deref())
                     .map_err(|error| anyhow::anyhow!("rule {id:?}: {error:#}"))?;
                 rules.push(serde_yaml::from_value(rule)?);
             }
+            sort_rules(&mut rules);
             Ok(Self {
                 format: document.format,
                 source_revision: document.source_revision,
+                json: document.json,
+                mysql: document.mysql,
+                redis,
+                http: document.http,
+                async_api: document.async_api,
                 resources: document.resources,
-                responses: document.responses,
-                field_references,
                 rules,
             })
         })();
         result.map_err(serde::de::Error::custom)
     }
+}
+
+fn redis_document(
+    value: Option<RedisDocument>,
+    resources: &std::collections::BTreeMap<String, crate::policy::ResourceDeclaration>,
+) -> Result<(Option<crate::policy::RedisPolicy>, Vec<Value>)> {
+    let Some(value) = value else {
+        return Ok((None, vec![]));
+    };
+    let has_settings = value.database.is_some() || value.keys.is_some();
+    let (keys, generated) =
+        redis_keys::expand(value.keys.unwrap_or_default(), value.database, resources)?;
+    let policy = if !has_settings && value.rules.is_some() {
+        None
+    } else {
+        Some(crate::policy::RedisPolicy {
+            database: value.database,
+            keys,
+        })
+    };
+    let mut rules = value.rules.unwrap_or_default();
+    rules.extend(generated);
+    Ok((policy, rules))
+}
+
+fn sort_rules(rules: &mut [PolicyRule]) {
+    rules.sort_by_key(|rule| {
+        (
+            redis_rule(rule),
+            redis_keys::generated(rule),
+            if redis_keys::generated(rule) {
+                rule.id().to_owned()
+            } else {
+                String::new()
+            },
+        )
+    });
+}
+
+fn redis_rule(rule: &PolicyRule) -> bool {
+    let PolicyRule::Native(rule) = rule else {
+        return false;
+    };
+    rule.selector
+        .resource
+        .as_ref()
+        .is_some_and(|resource| resource.protocol == crate::policy::Protocol::Redis)
+        || matches!(
+            rule.effect,
+            crate::policy::NativeEffect::RedisSequence(_)
+                | crate::policy::NativeEffect::RedisAppendStream
+                | crate::policy::NativeEffect::RedisReadCommutation(_)
+                | crate::policy::NativeEffect::RedisExpiryRefresh(_)
+        )
+        || matches!(&rule.effect, crate::policy::NativeEffect::ProcessOwned(effect)
+            if matches!(effect.selector, crate::policy::native::ProcessSelector::Redis { .. }))
 }
 
 /// Typed callers can insert rules without a document context; normalize them
@@ -71,26 +164,36 @@ pub(crate) fn expanded(document: &TrafficPolicy) -> Result<TrafficPolicy> {
     if let Some(revision) = &document.source_revision {
         proof::revision(revision)?;
     }
-    let rules = document
+    let mut rules = document
         .rules
         .iter()
         .map(|rule| {
-            let mut value = serde_yaml::to_value(rule)?;
-            if let Some(references) = document.field_references.get(rule.id()) {
-                field_refs::refresh(&mut value, references, &document.resources)?;
+            if matches!(rule, PolicyRule::Value(_)) {
+                // Value rules are internal comparator IR, never an authored
+                // configuration or a legacy document compatibility path.
+                return Ok(rule.clone());
             }
+            let mut value = serde_yaml::to_value(rule)?;
             walk::expand_rule(&mut value, document.source_revision.as_deref())?;
             serde_yaml::from_value(value).map_err(Into::into)
         })
         .collect::<Result<Vec<PolicyRule>>>()?;
+    sort_rules(&mut rules);
     Ok(TrafficPolicy {
         format: document.format.clone(),
         source_revision: document.source_revision.clone(),
+        json: document.json.clone(),
+        mysql: document.mysql.clone(),
+        redis: document.redis.clone(),
+        http: document.http.clone(),
+        async_api: document.async_api.clone(),
         resources: document.resources.clone(),
-        responses: document.responses.clone(),
-        field_references: document.field_references.clone(),
         rules,
     })
+}
+
+pub fn effective_rules(document: &TrafficPolicy) -> Result<Vec<PolicyRule>> {
+    Ok(expanded(document)?.rules)
 }
 
 impl Serialize for TrafficPolicy {
@@ -112,33 +215,63 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
     if let Some(revision) = &document.source_revision {
         root.insert("source_revision".into(), revision.clone().into());
     }
+    if let Some(json) = &document.json {
+        root.insert("json".into(), serde_yaml::to_value(json)?);
+    }
+    if let Some(mysql) = &document.mysql {
+        root.insert("mysql".into(), serde_yaml::to_value(mysql)?);
+    }
+    if let Some(redis) = &document.redis {
+        root.insert("redis".into(), serde_yaml::to_value(redis)?);
+    }
+    if let Some(http) = &document.http {
+        root.insert("http".into(), serde_yaml::to_value(http)?);
+    }
+    if let Some(async_api) = &document.async_api {
+        root.insert("async_api".into(), serde_yaml::to_value(async_api)?);
+    }
     if !document.resources.is_empty() {
         root.insert(
             "resources".into(),
             serde_yaml::to_value(&document.resources)?,
         );
     }
-    if !document.responses.is_empty() {
-        root.insert(
-            "responses".into(),
-            serde_yaml::to_value(&document.responses)?,
-        );
-    }
+    ensure!(
+        document
+            .rules
+            .iter()
+            .all(|rule| matches!(rule, PolicyRule::Native(_))),
+        "internal value rules cannot be authored; use root json.fields or mysql.tables"
+    );
     let mut rules = vec![];
+    let mut redis_rules = vec![];
     let resource_names = resources::names(&document.resources)?;
     let capture_first = document.rules.iter().filter(|rule| matches!(rule,
         PolicyRule::Native(rule) if matches!(rule.effect, crate::policy::NativeEffect::CaptureHttp(_))));
     let remaining = document.rules.iter().filter(|rule| !matches!(rule,
         PolicyRule::Native(rule) if matches!(rule.effect, crate::policy::NativeEffect::CaptureHttp(_))));
     for rule in capture_first.chain(remaining) {
-        let references = document.field_references.get(rule.id());
+        if redis_keys::compact(rule, &document.resources, &mut root)? {
+            continue;
+        }
+        let belongs_redis = redis_rule(rule);
         let mut rule = serde_yaml::to_value(rule)?;
         walk::compact_rule(&mut rule, document.source_revision.as_deref())?;
-        if let Some(references) = references {
-            field_refs::restore(&mut rule, references)?;
-        }
         resources::compact(&mut rule, &resource_names)?;
-        rules.push(rule);
+        if belongs_redis {
+            redis_rules.push(rule)
+        } else {
+            rules.push(rule)
+        };
+    }
+    if !redis_rules.is_empty() {
+        let redis = root
+            .entry(Value::String("redis".into()))
+            .or_insert_with(|| Value::Mapping(Mapping::new()));
+        redis
+            .as_mapping_mut()
+            .expect("serialized Redis settings mapping")
+            .insert("rules".into(), Value::Sequence(redis_rules));
     }
     root.insert("rules".into(), Value::Sequence(rules));
     Ok(root.into())

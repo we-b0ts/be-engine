@@ -88,7 +88,7 @@ impl CapabilityId {
             FieldContract::Unordered => Self::Unordered,
             FieldContract::Time { .. } => Self::RelativeTime,
             FieldContract::Duration { .. } => Self::Duration,
-            FieldContract::Identity { .. } => Self::Identity,
+            FieldContract::Identity { .. } | FieldContract::IdentityAnchor => Self::Identity,
         }
     }
 
@@ -183,7 +183,7 @@ pub fn validate_contract_binding(
             "duration requires a numeric scalar Protobuf field at {path:?}"
         ),
         FieldContract::Conditional { .. } => unreachable!("handled before codec binding"),
-        FieldContract::Identity { .. } => {
+        FieldContract::Identity { .. } | FieldContract::IdentityAnchor => {
             anyhow::bail!("identity contracts require JSON or a physical SQL scalar")
         }
     }

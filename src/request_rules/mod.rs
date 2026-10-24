@@ -2,6 +2,7 @@
 //! Request execution never consumes assertion or dependency response values.
 //! Pure JWT primitives are also reused by isolated assertion comparators.
 
+mod derived;
 pub(crate) mod jwt;
 pub mod keys;
 pub use jwt::Algorithm as JwtAlgorithm;
@@ -308,6 +309,7 @@ struct RuntimeJwtRule {
 
 enum RuntimeKey {
     TargetStartup(PathBuf),
+    Frozen(keys::ResolvedSigningKey),
     #[cfg(test)]
     Fixed(Vec<u8>),
 }
@@ -316,7 +318,14 @@ impl RequestRuleRuntime {
     pub(crate) fn load(target_root: &Path, policy: &Path) -> Result<Self> {
         let document = crate::policy::parse_policy(&std::fs::read_to_string(policy)?)?;
         let compiled = crate::policy::compile_policy(&document)?;
-        let configured = crate::replay::compiled_input_rules(&compiled)?;
+        Self::from_compiled(target_root, &compiled)
+    }
+
+    pub(crate) fn from_compiled(
+        target_root: &Path,
+        compiled: &crate::policy::CompiledPolicy,
+    ) -> Result<Self> {
+        let configured = crate::replay::compiled_input_rules(compiled)?;
         let mut rules = Vec::with_capacity(configured.jwt.rules.len());
         for rule in configured.jwt.rules {
             let profile = configured
@@ -439,6 +448,10 @@ impl RequestRuleRuntime {
                             rule.id
                         )
                     })?)
+                }
+                RuntimeKey::Frozen(key) => {
+                    key.ensure_current()?;
+                    Cow::Borrowed(key.bytes())
                 }
                 #[cfg(test)]
                 RuntimeKey::Fixed(key) => Cow::Borrowed(key.as_slice()),

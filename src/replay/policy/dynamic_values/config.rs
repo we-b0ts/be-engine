@@ -328,7 +328,9 @@ impl DynamicValueRule {
             self.targets.iter().any(|endpoint| endpoint == target),
             "dynamic capture endpoint must belong to targets"
         );
-        crate::config::process_owned_dependencies::validate_source_evidence(&self.source_evidence)?;
+        crate::config::process_owned_dependencies::validate_optional_source_evidence(
+            &self.source_evidence,
+        )?;
         Ok(())
     }
 
