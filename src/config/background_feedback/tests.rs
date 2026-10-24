@@ -173,7 +173,7 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(applied.applied);
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("format: traffic-policy/v1"));
+    assert!(raw.contains("format: traffic-policy/v2"));
     assert!(raw.contains("kind: process_owned"));
     assert!(raw.contains("protocol: http"));
     assert!(!raw.contains("response_role"));

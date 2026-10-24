@@ -310,6 +310,13 @@ fn validate_origin(origin: &ApiOrigin) -> Result<()> {
     for pointer in origin.request_body.keys() {
         compiler::validate_pointer(pointer, false)?;
     }
+    ensure!(
+        origin
+            .request_body
+            .values()
+            .all(|value| !matches!(value, crate::policy::SourceScalar::Null)),
+        "API origin conditions require non-null scalars"
+    );
     for (name, capture) in &origin.capture {
         identifier(name, "origin binding")?;
         proven(capture, |capture| {

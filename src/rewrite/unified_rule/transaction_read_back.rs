@@ -28,7 +28,7 @@ fn read_back_public_plan_apply_requires_source_read_proof_and_fresh_target_repla
             prior["effect"].as_object_mut().unwrap().remove("read_back");
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v1","rules":[prior]}),
+                json!({"format":"traffic-policy/v2","rules":[prior]}),
             );
             let mut events = vec![event(1, "SET", &["current:7", "old"], b"+OK\r\n")];
             if positive_read {
@@ -93,7 +93,7 @@ fn finite_read_back_state_epoch_upgrade_uses_complete_source_and_normal_plan_app
             crate::platform::encryption_key::load_or_create(root).unwrap();
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v1","rules":[prior.clone()]}),
+                json!({"format":"traffic-policy/v2","rules":[prior.clone()]}),
             );
             let mut events = vec![
                 event(1, "GET", &["current:7"], b"$-1\r\n"),

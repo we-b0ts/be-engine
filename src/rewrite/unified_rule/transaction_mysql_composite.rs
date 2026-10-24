@@ -46,7 +46,7 @@ fn mysql_composite_plan_uses_scoped_accepted_bindings_and_keeps_unselected_field
                 }
                 write(
                     &root.join(".traffic-e2e/policy.yaml"),
-                    json!({"format":"traffic-policy/v1","rules":[rule]}),
+                    json!({"format":"traffic-policy/v2","rules":[rule]}),
                 );
                 vec![]
             });
@@ -181,7 +181,7 @@ fn mysql_composite_plan_requires_prior_capture_only_for_referenced_identity() {
                 }
                 write(
                     &root.join(".traffic-e2e/policy.yaml"),
-                    json!({"format":"traffic-policy/v1","rules":[rule]}),
+                    json!({"format":"traffic-policy/v2","rules":[rule]}),
                 );
                 vec![]
             });

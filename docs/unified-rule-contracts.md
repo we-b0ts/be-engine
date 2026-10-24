@@ -16,6 +16,26 @@ files supply requirements; their layout, number and serialization are not
 compatibility requirements. The final runtime must have one new-format loader,
 not an old-format fallback hidden behind the new schema.
 
+## Current resource-field authoring
+
+`traffic-policy/v2` declares persistent physical data semantics under `resources`,
+API output fields under `responses`, and contextual/stateful behavior under
+`rules`. Named resource references remove repeated identity configuration;
+`field_ref` reuses a declared strategy where a native rule proves an additional
+relationship. Choose time, duration, unordered or identity semantics from Source
+behavior; no SQL template, value ordinal or API-specific repeat is needed for
+the same stored field. MySQL resource fields resolve real database/table/column
+identity across SQL shapes, rather than expanding recorded SQL templates.
+See [resource-owned field contracts](resource-field-contracts.md) for the current
+schema, Redis carriers, self conditions, clock defaults and bounded Replay caches.
+Ordinary identity fields share a case-local `binding` across declared MySQL,
+Redis and response locations. Source observations define equality and distinctness;
+read delivery uses established Target IDs and anchors unknown inputs. Request
+the complete eligible location inventory at the first relevant mismatch and plan
+it together. A generator-first native capture is unnecessary for these fields;
+native rules remain for additional derivation, signatures or finite behavior.
+The requirement inventory below records the earlier design baseline.
+
 ## Evidence surfaces and additional effects
 
 Keep three value surfaces explicit:
@@ -55,7 +75,9 @@ not reorder a GET response, authorize a reusable read, or classify unused work.
 ## Resource scope across APIs
 
 Task: `rMyn5SlKQg`. New dependency value rules and native resource effects select
-the resource, operation and value location without `match.api`. Discovery and
+the resource and physical data location without `match.api`. Generic resource
+fields do not require an operation or SQL template; contextual native effects
+retain their own operation/statement selection. Discovery and
 planning omit that field from these rules. The API that owns a rewrite issue
 still identifies the transaction and its evidence; it does not limit resource
 access contracts. Root inbound request-body `when` conditions cannot be used on
@@ -148,8 +170,8 @@ the reference Target's behavior or renew any existing execution evidence.
 | Owner | Responsibility | Must not own |
 | --- | --- | --- |
 | `value_contract/time` | Pure typed timestamp parsing, formats, offset relations, precision and overflow checks. | Files, clocks, configuration, protocol matching or evidence persistence. |
-| `policy/schema` | Strict `traffic-policy/v1` document types, Source conditions and explicit native effect payloads. | Runtime state or protocol I/O. |
-| `policy/compiler` | Validate scopes, types, ownership, capability requirements, dependencies and effect projections; produce immutable typed IR. | Infer business permission from a sample or mutate recordings. |
+| `policy/schema`, `policy/declarations` | Strict `traffic-policy/v2` authored types, resource/response fields, Source conditions and explicit native effect payloads. | Runtime state or protocol I/O. |
+| `policy/authoring`, `policy/lowering`, `policy/compiler` | Resolve references and proofs; lower resource/response fields; validate scopes, ownership and capabilities; prepare immutable typed IR and endpoint/codec/table indices. | Infer business permission from a sample or mutate recordings. |
 | `policy/capability` | Protocol-slot/codec/contract/effect capability registry and machine-readable requirements. | A hand-maintained cross-product of bespoke Redis JSON/PB rules. |
 | Protocol `contract_adapter` children | Extract typed slots and supply trusted protocol context/anchors; apply validated comparison decisions or response copies. | Generic time math or user-selected arbitrary clocks. |
 | Existing codec owners | Bounded JSON, PB, Hessian2, multipart, URL/JWT and DOCX/envelope parsing, typed selection and safe reconstruction where supported. | Case ownership, finite consumption or scheduling. |
@@ -168,14 +190,16 @@ new modules and any touched file approaching 1000 lines.
 ### Optional authoring conveniences
 
 The typed rule/codec/contract/effect design and its full explicit spelling remain
-available. Human authoring can omit repeated information within the same rule:
+available. Human authoring can share named resources, declare physical fields
+once and inherit proof within one resource/response subtree or authored rule:
 
 - A root `source_revision` supplies the shared Source identity. Source capture
   and process effects inherit it; resolved proof references include it. Explicit
   conflicting revisions reject. Documents requiring independent Source identities
   can retain the complete explicit form without a shared declaration.
 - A rule's proof is required. A nested contract inherits its nearest enclosing
-  proof within that rule. A local `proof` can override `source`, `fact`, or both;
+  proof within that rule. Resource/response fields inherit within their declaration
+  subtree. A local `proof` can override `source`, `fact`, or both;
   blank source/fact values and null proofs reject. Nothing inherits from another
   rule.
 - Nested contracts may retain the full `contract`/`proof` wrapper or use the
@@ -196,7 +220,7 @@ For example, a native SQL rule can preserve its original abstraction and scope
 without repeating the same Source paragraph for every time field:
 
 ```yaml
-format: traffic-policy/v1
+format: traffic-policy/v2
 source_revision: sha256:1111111111111111111111111111111111111111111111111111111111111111
 rules:
   - id: task-update-times
@@ -228,15 +252,19 @@ rules:
 The example revision is a placeholder fixture identity; projects declare their
 actual frozen Source identity. The equivalent value-rule spelling is
 `/expires_at: {relative_time: unix_microseconds}`;
-JSON and typed PB reuse it on each supported surface. No resource registry,
-business default, new effect, dynamic macro or expression language is introduced.
+JSON and typed PB reuse it on each supported surface. Prefer a resource-owned
+column/payload declaration for persistent field semantics. The SQL example above
+is the explicit contextual spelling; its contracts can instead use `field_ref`
+when the same strategies are already declared. Named references resolve before
+compilation and do not create an expression language or runtime registry.
 
-`policy/authoring` performs closed schema traversal, expands inherited proofs
-and named time abbreviations, and renders human-readable YAML. It never traverses
+`policy/authoring` performs closed schema traversal, resolves named resource and
+field references, expands inherited proofs and named time abbreviations, and
+renders human-readable YAML. `policy/lowering` supplies the existing typed value
+pipeline with resource/response fields; the authored graph remains readable. It never traverses
 business literals, request conditions or arbitrary decoded data. The existing
 typed compiler still validates capabilities, ownership and complete contracts.
-Plans and effective evidence serialize fully expanded rules/proofs; only the
-source-controlled authoring document is compact. Equivalent authoring forms
+Plans and effective evidence expose resolved rules/proofs and the authored graph. Equivalent authoring forms
 produce identical full/runtime/capture/classification fingerprints. Rendering
 verifies the compiled identity after a parse round trip before returning output.
 Writers preserve shared revision context; unchanged apply keeps original bytes
@@ -268,12 +296,16 @@ JSON `null` is present and still needs an explicit valid contract or an exact
 inactive branch.
 
 Timestamp contracts default to `clock_scope: shared`, retaining existing named
-`clock_group` relationships. When each array element reads its own clock, use
+`clock_group` relationships for explicit ordinary rules. Resource/response
+fields without an authored group have independent per-field/path defaults;
+wildcards scope each actual selected leaf independently, and SQL occurrences
+remain independent too. When each array element reads its own clock, use
 `{relative_time: unix_milliseconds, clock_scope: array_element}`. This scopes
 relationships by the complete actual array ancestry; it does not treat a numeric
 object key as an element. Fields derived from one read within an element share
-a group; independent reads within that element still need distinct Source-proven
-`clock_group` names. Reusing a group name in a different case does not reuse a
+a group. Schema defaults already separate independent fields and wildcard
+occurrences; explicit ordinary/native rules need distinct groups for independent
+reads. Reusing a group name in a different case does not reuse a
 clock. Neither scope nor group changes the independent request-time anchor.
 
 SSE copies may follow an entity across frames instead of array positions. A
@@ -284,20 +316,24 @@ the entity; the scope does not infer an identity permission from differing IDs.
 Use this to preserve one block creation instant in its creation and terminal
 frames, while different blocks keep independent clocks.
 
-For Source-proven sharded ORM SELECTs, declare the bounded `table_series` and use
-whole `{{table}}` identifiers/qualifiers plus explicit projection aliases such as
+Resource-owned MySQL fields declare bounded physical tables/columns independently
+of statement shape. Contextual native rules for Source-proven sharded ORM
+SELECTs can retain `table_series`, whole `{{table}}` identifiers/qualifiers and
+explicit projection aliases such as
 `AS {{table}}_id`. The alias suffix is a nonempty ASCII letter/digit/underscore
 literal bound to that same physical table. Aliases, predicates, selected columns,
 the actual Source/Target shard and finite exchanges remain checked. Do not infer
 sharding from digits in a sample or append a separate rule for each witnessed
-shard. SQL discovery with no configured template asks for this Source construction
-proof; it does not manufacture a family, codec or value slot.
+shard. SQL discovery reports bounded physical-field suggestions without requiring
+a configured template. It still requires Source construction and codec/contract
+proof and never manufactures a table family.
 
-The document discriminator is `format: traffic-policy/v1`; `rules` is the
-authoring list; ordinary comparison permissions are combined by explicit field
-ownership. Every rule has an ID,
-surface, match scope, slot, codec, contract and project proof. Rules may have a
-Source `when` condition and an explicit `delivery.rebase_time` field subset.
+The document discriminator is `format: traffic-policy/v2`; `resources` and
+`responses` own reusable field declarations, while `rules` retains contextual
+value rules and native effects. Lowered value rules have an ID, surface, match
+scope, slot, codec, contract and Source proof; explicit field ownership combines
+permissions. API declarations can have a Source `when`; dependency response
+fields require an explicit `delivery.rebase_time` subset to change delivered input.
 The compiler rejects unknown fields, ambiguous overlapping ownership and
 unsupported combinations before any Target traffic is admitted.
 
@@ -310,7 +346,7 @@ This example uses two encodings with the same collection semantics, and
 separate request, delivery and primary-response time permissions:
 
 ```yaml
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
   - id: session-write
     surface: dependency.request
@@ -485,7 +521,7 @@ missing-witness/fresh-Replay obligation. Excluding a search edge never changes
 runtime matching or clears an unmatched Target command.
 
 ```yaml
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
   - id: response-download-token
     match: {api: POST /api/attachments/*/download-token}
@@ -547,9 +583,10 @@ rules:
       fact: Active durations use now minus submitted_at; terminal states freeze at updated_at and therefore remain exact.
 ```
 
-Plain UUID/random contracts validate only their declared shape. Use template
-bindings or native identity/nonce effects when Source semantics require copied
-values or a one-to-one relationship. Template bindings here correlate selected
+Plain UUID/random contracts validate only their declared shape. Use resource-owned
+identity fields with a shared binding for ordinary cross-resource equality and
+distinctness. Template bindings or native identity/nonce effects retain additional
+embedded, derived or cryptographic relationships. Template bindings here correlate selected
 fields within one response rule. They
 do not imply a cross-request Redis binding. Integer identities are capture-only
 until a typed reference adapter exists; unsupported references reject at compile
@@ -613,8 +650,9 @@ For Source/Target values `S`, `T` and trusted anchors `As`, `At`:
   timestamps. Validate script digest/body, numkeys, KEYS, ARGV and selected
   indices together without evaluating Lua.
 
-Identity/nonce contracts retain capture location, shape, lifetime, allowed
-reference endpoints and a one-to-one Source/Target mapping. Candidate previews
+Resource identity fields retain their eligible physical locations, format and
+case-local one-to-one Source/Target mapping. Native identity/nonce effects also
+retain their capture, lifetime and allowed reference endpoints. Candidate previews
 stage decisions without changing live state. A failed stable field, signature,
 time relation, element pairing or protocol admission discards those decisions.
 PUBLISH UUID and JSON time checks commit atomically, including selectors resolved
@@ -740,7 +778,7 @@ An explicit reviewed replacement uses the same plan/apply CLI with this wrapper:
 format: traffic-policy-change/v1
 replace_rules: [old-a, old-b]
 policy:
-  format: traffic-policy/v1
+  format: traffic-policy/v2
   rules:
     - id: cache-write-clock
       surface: dependency.request

@@ -27,7 +27,7 @@ fn source_fixture_with(request: bool, codec: &str) -> (tempfile::TempDir, Replay
     std::fs::write(dir.join("expected-response.json"), "{}").unwrap();
     std::fs::write(dir.join("dependencies.jsonl"), "").unwrap();
     let path = temp.path().join("policy.yaml");
-    let mut raw = r#"format: traffic-policy/v1
+    let mut raw = r#"format: traffic-policy/v2
 rules:
   - id: cache-read
     surface: dependency.response
@@ -55,7 +55,7 @@ rules:
     }
     raw = raw.replace("codec: json", &format!("codec: {codec}"));
     if codec.is_empty() {
-        raw = "format: traffic-policy/v1\nrules: []\n".into();
+        raw = "format: traffic-policy/v2\nrules: []\n".into();
     }
     std::fs::write(&path, raw).unwrap();
     let cases = BTreeMap::from([(
@@ -558,7 +558,7 @@ fn json_and_protobuf_get_values_use_the_same_delivery_contract_with_exact_framin
         ),
     ] {
         let raw = format!(
-            r#"format: traffic-policy/v1
+            r#"format: traffic-policy/v2
 rules:
   - id: cache-read
     surface: dependency.response

@@ -22,7 +22,7 @@ async fn mysql_calendar_date_over_tls_keeps_state_and_finite_consumption() {
             event["connection_id"] = json!(connection);
             event["query_sequence"] = json!(i+1);
         }
-        let policy = format!(r#"format: traffic-policy/v1
+        let policy = format!(r#"format: traffic-policy/v2
 rules:
 - id: activity-read
   surface: dependency.response

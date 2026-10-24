@@ -1,4 +1,4 @@
-//! Rule-local evidence inheritance; revision binding never inspects business literals.
+//! Owner-local evidence inheritance; revision binding never inspects business literals.
 use anyhow::{Context, Result, ensure};
 use serde_yaml::{Mapping, Value};
 
@@ -69,7 +69,7 @@ fn expand_inner(
                     .get(key)
                     .and_then(Value::as_str)
                     .is_some_and(|s| !s.trim().is_empty()),
-            "proof.{key} is required; proof inheritance is limited to one rule"
+            "proof.{key} is required; proof inheritance stays within its owning rule or declaration subtree"
         );
     }
     if let Some(revision) = revision

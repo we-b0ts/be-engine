@@ -110,6 +110,10 @@ pub(super) fn observe(
                 .as_ref()
                 .is_some_and(|r| r.protocol == Protocol::Mysql)
             {
+                // The protected envelope omits connection defaults. Bind its
+                // actual endpoint/schema/user to the immutable Source event
+                // before interpreting unqualified SQL on either side.
+                super::super::preflight::dependency::validate_metadata(witness, event)?;
                 drafts.sql_entry(
                     event,
                     &source,

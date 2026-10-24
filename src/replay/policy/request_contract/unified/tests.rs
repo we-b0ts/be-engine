@@ -4,7 +4,7 @@ use serde_json::json;
 fn runtime(operation: &str) -> RequestContracts {
     let policy = crate::policy::parse_policy(&format!(
         r#"
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
 - id: session-value
   surface: dependency.request
@@ -31,6 +31,8 @@ rules:
     runtime.state.lock().unwrap().cases.insert(
         "case".into(),
         CaseAnchor {
+            source_uri: String::new(),
+            source_input_error: None,
             method: "POST".into(),
             path: "/sessions".into(),
             recorded: DateTime::from_timestamp(1000, 0),
@@ -117,7 +119,7 @@ fn redis_set_composes_collection_and_time_without_relaxing_other_arguments() {
     );
     assert!(preview(&runtime, "SET", &["session:1", &a], &["session:2", &b]).is_err());
     assert!(runtime.reports().iter().all(|report| report.matches == 0));
-    runtime.commit(decision);
+    runtime.commit(decision).unwrap();
     assert_eq!(runtime.reports()[0].matches, 1);
     assert_eq!(runtime.reports()[0].time_validations, 1);
 }

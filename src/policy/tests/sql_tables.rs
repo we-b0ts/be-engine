@@ -8,7 +8,7 @@ fn value() -> Value {
 }
 
 fn compile(rules: Value) -> anyhow::Result<CompiledPolicy> {
-    parse_and_compile_policy(&json!({"format":"traffic-policy/v1","rules":rules}).to_string())
+    parse_and_compile_policy(&json!({"format":"traffic-policy/v2","rules":rules}).to_string())
 }
 
 #[test]
@@ -27,7 +27,7 @@ fn sql_value_table_selectors_reuse_bounded_native_table_admission() {
             .as_object_mut()
             .unwrap()
             .extend(declaration.as_object().unwrap().clone());
-        let doc = parse_policy(&json!({"format":"traffic-policy/v1","rules":[rule]}).to_string())
+        let doc = parse_policy(&json!({"format":"traffic-policy/v2","rules":[rule]}).to_string())
             .unwrap();
         let rendered = render_policy(&doc).unwrap();
         assert_eq!(parse_policy(&rendered).unwrap(), doc);

@@ -5,6 +5,7 @@ mod append;
 mod conditional_identity;
 mod http_client_metadata;
 mod http_request;
+mod identity_delivery;
 mod mysql_json;
 mod read_commutation;
 mod redis_sequence;

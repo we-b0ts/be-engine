@@ -47,7 +47,7 @@ fn install_with_recorded_coverage(root: &Path, unprepared_api: bool) -> super::E
     .unwrap();
     fs::write(
         root.join(".traffic-e2e/policy.yaml"),
-        "format: traffic-policy/v1\nrules: []\n",
+        "format: traffic-policy/v2\nrules: []\n",
     )
     .unwrap();
     fs::write(
@@ -177,7 +177,7 @@ pub(crate) fn state_path(context: &super::E2eRunContext, api: &str) -> std::path
 }
 
 pub(crate) fn classify_stream(root: &Path) {
-    let policy = json!({"format":"traffic-policy/v1","rules":[{
+    let policy = json!({"format":"traffic-policy/v2","rules":[{
         "id":"stream-startup","match":{},"effect":{"kind":"process_owned","source_revision":"",
             "selector":{"protocol":"http","authorities":["stream.test"],"methods":["GET"],"path_prefixes":["/connect"]}},
         "proof":{"source":"startup.rs:1","fact":"Source starts this process-wide stream independently of API calls"}

@@ -57,6 +57,7 @@ fn a_confirmed_begin_anchor_and_member_can_select_the_real_terminal_request() {
     event.response.status = "resultset".into();
     event.response.affected_rows = None;
     event.response.columns.push(crate::recorder::MysqlColumn {
+        database: None,
         name: "id".into(),
         table: None,
         column: None,

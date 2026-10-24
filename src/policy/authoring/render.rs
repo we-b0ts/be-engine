@@ -4,13 +4,13 @@ use anyhow::{Result, ensure};
 use serde_yaml::Value;
 
 pub fn render_policy(document: &TrafficPolicy) -> Result<String> {
-    crate::policy::compile_policy(document)?;
+    let compiled = crate::policy::compile_policy(document)?;
     let value = super::document::compact_value(document)?;
     let mut output = String::new();
     emit(&value, 0, &mut output)?;
-    let reparsed = crate::policy::parse_policy(&output)?;
+    let reparsed = crate::policy::parse_and_compile_policy(&output)?;
     ensure!(
-        crate::policy::compile_policy(document)? == crate::policy::compile_policy(&reparsed)?,
+        compiled == reparsed,
         "authoring renderer changed the expanded policy"
     );
     Ok(output)
@@ -38,7 +38,11 @@ fn inline(value: &Value) -> Result<Option<String>> {
         Value::Mapping(map)
             if (map.len() <= 1
                 || map.contains_key("relative_time")
-                || map.contains_key("request_time"))
+                || map.contains_key("request_time")
+                || map.contains_key("resource") && map.contains_key("column")
+                || map.contains_key("resource")
+                    && map.contains_key("key")
+                    && map.contains_key("pointer"))
                 && map.iter().all(|(k, v)| atom(k) && atom(v)) =>
         {
             let fields = map

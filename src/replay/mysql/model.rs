@@ -44,6 +44,7 @@ pub(in crate::replay) enum OptionalSessionExchange {
 pub(in crate::replay) struct MatchedExchange {
     pub(in crate::replay) transaction_owner: Option<Option<String>>,
     pub(in crate::replay) value_delivery: Option<contracts::PreparedDelivery>,
+    pub(in crate::replay) time_copy_delivery: Option<contracts::time_copies::PreparedRead>,
     pub(in crate::replay) identity_delivery: Option<policy::dynamic_values::MysqlIdentityDelivery>,
     pub(in crate::replay) response_time_shift_rules: Vec<String>,
     #[allow(dead_code)]
@@ -142,6 +143,8 @@ pub(in crate::replay) struct RecordedMysqlWireCapture {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub(in crate::replay) struct RecordedMysqlColumn {
     pub(in crate::replay) name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) database: Option<String>,
     pub(in crate::replay) table: Option<String>,
     /// Delivered table label; the recording's table remains the physical origin.
     #[serde(skip)]

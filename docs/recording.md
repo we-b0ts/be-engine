@@ -57,7 +57,7 @@ recorder:
       paths: [/api/jobs]
 ```
 
-Standalone recording can load the Source effects of a `traffic-policy/v1`
+Standalone recording can load the Source effects of a `traffic-policy/v2`
 document with `--policy PATH` / `TRAFFIC_E2E_POLICY`. With `--config`, an explicit
 policy must resolve to the same file as `project.policy`; it cannot override the
 project authority. Without project configuration or policy, cases use literal

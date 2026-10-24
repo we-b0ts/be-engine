@@ -1,6 +1,6 @@
 # Unified Traffic Rules
 
-Use one `traffic-policy/v1` policy for acquisition, classification, input
+Use one `traffic-policy/v2` policy for acquisition, classification, input
 adaptation and all comparisons. Managed project configuration contains:
 
 ```yaml
@@ -9,8 +9,9 @@ project:
 ```
 
 The path is relative to the target repository root. Initialization creates an
-empty policy; it supplies no project-specific exceptions. Old version-1/2/3
-verification documents and the separate Source policy format are rejected.
+empty policy with `resources: {}`, `responses: {}` and `rules: []`; it supplies
+no project-specific exceptions. Only `traffic-policy/v2` is accepted; former
+version-numbered verification documents, v1 and separate Source policies reject.
 
 ## Discover, Plan, Apply
 
@@ -26,6 +27,24 @@ describe the current bounded scan window; Source bindings have separate
 `binding_count` and `summary_omitted` fields. Explicit nonresumable limits remain
 under `bounded_analysis.nonresumable_limits`. Missing drafts are not proof of a
 missing capability, and supported mechanism hints never supply Source proof.
+
+At the first relevant mismatch, inspect existing resource/response declarations
+and request the physical field inventory with Source semantics. Choose time
+format/relation, duration unit/branch, unordered consumer behavior or identity
+eligibility before choosing a statement. MySQL database/table/column and Redis
+key/container/hash-field paths own their field strategies across APIs and
+supported SQL/command shapes. Response fields retain an API/output envelope.
+Do not repeat the strategy by SQL template, value ordinal or caller.
+
+For an identity, inventory all eligible MySQL/Redis/response positions together
+with one case-local `binding` and a consistent format. Source observations define
+the actual equality and distinctness relations; a generator-first capture is
+unnecessary for ordinary field contracts. Plan this declaration inventory
+together, rather than waiting for separate capture/reference Replay failures.
+Unknown delivered IDs are fixed input anchors; established mappings deliver the
+corresponding Target IDs. Mixed generated/fixed columns need expressible
+eligibility, or their existing narrow native owner must remain. See
+[identity domains](../../../../../docs/resource-field-contracts.md#identity-domains-and-read-delivery).
 
 Draft discovery follows actual array structure: `/blocks/*/timestamp` covers
 repeated elements across indexes and cases without guessing that numeric object
@@ -49,16 +68,18 @@ The coordinator accepts one rule, a list, or a complete typed document:
 ```bash
 backend-rewrite --target-root <target> rule plan \
   --file /tmp/proposed-rules.yaml --evidence <current-evidence-id>
-backend-rewrite --target-root <target> rule apply <plan-id>
+backend-rewrite --target-root <target> rule apply --plan <plan-id>
 ```
 
 The plan expands every selected rule, validates its whole affected payload and
 reports remaining Replay, reclassification and recording obligations. Reuse the
-same pending plan after an interruption; `rule recover <plan-id>` resolves an
+same pending plan after an interruption; `rule recover --plan <plan-id>` resolves an
 interrupted transaction through the coordinator. Do not edit a managed policy
 or recording to bypass this transaction.
 
-Ordinary rule documents are additive: omitted existing IDs stay in the policy.
+Authored documents are additive: omitted rules and resource/response declarations
+stay in the policy. Declaration amendments preserve existing identity, proof and
+fields; unsupported replacement or deletion rejects.
 To consolidate existing owners, use an explicit change proposal with complete
 replacement rules and their own Source proof:
 
@@ -66,7 +87,7 @@ replacement rules and their own Source proof:
 format: traffic-policy-change/v1
 replace_rules: [old-a, old-b]
 policy:
-  format: traffic-policy/v1
+  format: traffic-policy/v2
   rules:
     - id: cache-write-clock
       surface: dependency.request
@@ -103,9 +124,12 @@ name that project's policy and cannot override its authority.
 | `dependency.request` | Complete recorded request and real Target client request |
 | `dependency.response` | Complete recorded result and its explicit Replay delivery; materialization and verification remain separate |
 
-Rules select a protocol-owned slot and then a codec. Redis SET and Memcached
-SET `value`, GET/GETS response `value`, HTTP `body`, MySQL `sql_value` and
-`sql_column` have explicit capability gates. A supported value slot uses the
+Resource fields select physical data before an operation is known: MySQL
+database/table/column, or Redis database/key/container/hash-field and decoded
+path. Response declarations select API body or SSE data. These lower to the same
+protocol slot/codec pipeline. Explicit MySQL `sql_field`, Redis `redis_value`,
+HTTP `body`, Memcached `value` and contextual `sql_value`/`sql_column` slots have
+capability gates. See [resource-field contracts](../../../../../docs/resource-field-contracts.md). A supported value slot uses the
 same JSON/PB contracts; adding PB does not require another JSON-specific
 protocol strategy. Unsupported operation/slot/codec combinations fail during
 compilation rather than silently falling back.
@@ -116,31 +140,34 @@ SSE primary responses can select `slot: {sse_data: <exact-event-name>}` with
 immutable Source JSON `/type`; Target types remain exact. Pointers address the decoded SSE data JSON; envelope, event order,
 count and closure stay strict. Time contracts use the independent HTTP request
 starts. Explicit `identity` fields share a case-local bijection by `binding`
-across selected events, preserving declared prefixes and decimal/UUID or fixed lowercase hex types
+across selected events and declared MySQL/Redis identity fields, preserving
+declared prefixes and decimal/UUID or fixed lowercase hex types
 (`format: {hex: 12}` for 12 hex characters).
-Trace Source identity ownership first: DB-derived IDs fixed by Replay must stay
-exact. See [SSE value contracts](../../../../../docs/sse-value-contracts.md).
+Trace Source identity eligibility first; unknown historical dependency inputs
+remain anchored. See [SSE value contracts](../../../../../docs/sse-value-contracts.md).
 
-A self-contained Redis JSON rule is:
+For a stable Redis JSON value, declare the carrier once:
 
 ```yaml
-id: cache-members
-surface: dependency.request
-match:
-  resource: {protocol: redis, endpoint: 'cache.example:6379', database: 0}
-  operation: SET
-  key: {kind: exact, value: task-cache}
-slot: value
-codec: json
-contract:
-  /members: {kind: unordered}
-  /written_at:
-    kind: time
-    format: unix_milliseconds
-    relation: preserve_offset
-proof:
-  source: src/cache.rs:write
-  fact: The consumer treats members as a multiset; written_at comes from this request's clock.
+format: traffic-policy/v2
+resources:
+  cache:
+    protocol: redis
+    endpoint: cache.example:6379
+    database: 0
+    proof:
+      source: src/cache.rs:write
+      fact: The consumer treats members as a multiset; written_at uses this request clock.
+    keys:
+      - key: {exact: task-cache}
+        container: string
+        value:
+          codec: json
+          fields:
+            /members: unordered
+            /written_at: {relative_time: unix_milliseconds}
+responses: {}
+rules: []
 ```
 
 For PB replace only the codec declaration with explicit typed bindings, for
@@ -152,9 +179,11 @@ is not permission to change every declared field.
 
 ## Exact Remainder And Time
 
-Every rule carries its own inline `proof: {source, fact}`. Default to inline
-resources, codec bindings and contracts. The current format keeps these definitions inline; plans expose their complete
-content without requiring an AI to traverse configuration references.
+Resource/response subtrees and contextual rules carry Source proof. Declare
+stable physical field strategies once; contextual native contracts may reuse
+them through typed `field_ref` references. Plans expose the resolved permissions
+and authored graph. A named resource removes identity duplication but does not
+create shared exchanges, cached validation results or business equivalence.
 
 Write `fact` as the causal conclusion in at most 200 UTF-8 bytes, not a replay
 diary; never truncate existing proof mechanically. The renderer uses at most two
@@ -167,7 +196,8 @@ preserves other rules' authored relative order.
 
 For human authoring, a document-level `source_revision` can bind the common
 Source identity. Nested contracts inherit the nearest proof inside their own
-rule; supply a local proof only for different facts or Source references. Partial
+rule or resource/response declaration subtree; supply a local proof only for
+different facts or Source references. Partial
 local proof overrides are allowed; blank source/fact values and null proofs
 reject. Proof never inherits across rules. Complete `contract`/`proof` pairs
 remain supported.
@@ -200,8 +230,13 @@ Use `clock_scope: array_element` for Source-proven independent reads in repeated
 elements, for example `/blocks/*/timestamp: {relative_time: unix_milliseconds,
 clock_scope: array_element}`. Actual nested array ancestry scopes each element;
 numeric object keys stay literal. The default `shared` retains existing group
-relationships. Copies derived from one read keep one `clock_group`, while separate
-reads within an element still require separate groups and Source proof. Neither
+relationships for explicit ordinary rules. Resource/response schema fields
+without an authored group get independent per-field/path defaults; wildcard
+paths separate each actual selected leaf, and repeated SQL occurrences are
+independent too. Copies derived from one read keep one authored
+`clock_group`. For explicit ordinary/native rules, separate reads within an
+element require separate groups and Source proof; schema defaults already
+separate fields and wildcard occurrences. Neither
 scope nor group selects another request anchor.
 
 For a clock repeated across SSE frames, declare an explicit identity for its
@@ -215,6 +250,14 @@ Comparing a dependency response does not authorize rewriting it. Only explicit
 `delivery: {rebase_time: [/path]}` materializes declared response time fields.
 The writer revalidates the complete delivered payload and preserves unrelated
 bytes, native metadata and finite consumption.
+
+Resource-owned time fields also retain bounded, case-local provenance from a
+successful dependency read to the value actually delivered. A later write can
+copy that historical timestamp only at the same physical field and logical path;
+it cannot rely on equal old values without that read. Explicit native generation
+clocks remain strict. Keep the Source read/modify/write flow instead of listing
+its SQL variants or rebasing all reads. The [resource field guide](../../../../../docs/resource-field-contracts.md#time-conditions-and-delivery)
+describes mapping ambiguity, typed timestamp equality, bounds and delivery order.
 
 For Source business branches based on `date.today()` and stored `YYYY-MM-DD`
 state, use a value codec field such as
@@ -231,29 +274,35 @@ the corresponding request output date contract separately. Keep streaks,
 experience, totals, row identity and all other business fields strict; never
 normalize their downstream differences as time or generated values.
 
-MySQL value rules on `sql_value` and `sql_column` can select a bounded physical
-table family with `match.sql: 'UPDATE {{table}} SET json=?, updated_at=? WHERE
-{{table}}.id=?'` and `match.table_series: {prefix: tasks_, start: 0, end: 1023,
-width: 4}`. Explicit `tables` or bounded `table_patterns` use the same native
-table selector validation. A selector is required for `{{table}}`, which must be
-a whole table identifier, its qualifier, or an explicit outer SELECT projection
-alias such as `AS {{table}}_id`. An alias suffix is a nonempty literal of ASCII
-letters, digits or underscores. The Source table binds every marker;
-the Target cannot switch shards or qualifiers, change predicates/row identity,
-or add calls. Field ownership covers the whole declared family, including tables
-not present in the current witnesses.
-Trace Source sharding and ORM alias construction before declaring this family;
-do not enumerate observed shard numbers or infer a family from numeric names.
-Discovery without a configured SQL template requests that bounded `table_series`
-and alias proof rather than inventing selectors, slots or codecs.
+MySQL resource fields select physical database/table/column plus an explicit
+scalar or JSON/PB codec. They cover supported direct writes, predicates and
+result origins across new SQL shapes; no `match.sql` is required. Discovery
+reports bounded `physical_fields` suggestions without raw SQL or values. Missing
+or ambiguous origins never grant permission. A table family still needs Source
+construction proof; do not infer a family from observed numeric suffixes.
+
+Native contextual effects may retain `match.sql` and `{{table}}` with explicit
+`tables`, bounded `table_patterns` or `table_series`. Preserve the actual shard,
+aliases, predicates and row identity. At supported native contract sites,
+`field_ref` reuses a declared strategy while a proven `clock_group` adds the
+statement's relation; do not duplicate the strategy per observed SQL. Refer to
+the [resource-field guide](../../../../../docs/resource-field-contracts.md) for
+references, supported expressions and old-recording origin fallback.
 
 Use the existing conditional value contract for nullable branch-specific clocks,
 for example `/status/completedAt: {kind: conditional, when: {relative_pointer:
 ../status, equals: COMPLETED}, contract: {relative_time: iso8601_naive,
 clock_group: completed}}`. The Source predicate selects the time comparison;
 inactive values, including `null`, stay exact. Other JSON members and native SQL
-arguments retain their contracts. Independent Source clock reads need separate
-clock groups; a completion field is not an unrestricted nullable timestamp.
+arguments retain their contracts. Explicit ordinary/native contracts need
+separate groups for independent Source clock reads; schema defaults already
+separate them. A completion field is not an unrestricted nullable timestamp.
+
+A scalar sentinel can use `when: {relative_pointer: '.', not_in:
+['1970-01-01 00:00:00']}` around its time contract. The inactive Source value
+stays exact and Target must remain in the same branch. For a nullable scalar,
+include `null` in `not_in` as well; an active time contract rejects a present
+null rather than skipping it.
 
 A Source sibling may condition an individual value contract with
 `kind: conditional`, `when: {relative_pointer: ../type, equals: text}` and an
@@ -275,9 +324,11 @@ preserves each read's count and delivery; extra or missing reads still fail.
 Use it for proven independent polling, never to suppress a cancellation value
 or repair missing business reads. See [finite read commutation](../../../../../docs/redis-read-commutation.md).
 
-Use the typed native owner when a contract involves more than one value:
+Ordinary identity fields relate several values through their shared binding.
+Use a typed native owner for additional protocol, contextual or stateful behavior:
 
-- `identity`: capture and later references with explicit resource scopes;
+- `identity`: narrow capture/reference rules, embedded copies and derivation
+  beyond ordinary physical identity fields;
 - `redis_sequence`, `redis_lock`, `redis_publish_identity`: atomic steps,
   successful acquisition/reference causality and nonce identity;
 - `http_request`, `mysql_values`: native query/header/multipart or SQL
@@ -298,8 +349,10 @@ replace independent Target evidence; successful planning can still require
 fresh Replay. Startup signing inputs are frozen by actual resolved file hash,
 without copying secret values into a plan.
 
-If Source reads back a generated ID or preserved timestamp from Redis before
-reusing it, an existing `identity` or `redis_sequence` write rule can declare
+Ordinary resource identity fields already translate established mappings on
+reads and anchor unknown inputs. For additional native read-back behavior when
+Source reads a generated ID or preserved timestamp from Redis before reusing it,
+an existing `identity` or `redis_sequence` write rule can declare
 `effect.read_back`. This explicitly binds GET/LRANGE response fields to values
 from successful matched Target writes to the same key. Update the original
 rule and its write/read Source proof through normal plan/apply; each declaration
@@ -308,7 +361,7 @@ a Target-local cache solely to compensate for recorded Source IDs returned by
 Replay. Undeclared fields remain strict. See
 [Redis read-back](../../../../../docs/redis-read-back.md) for schema and limits.
 
-For a generated identity read back from MySQL JSON, append
+For extra native behavior involving an identity read back from MySQL JSON, append
 `effect.mysql_read_back` to the existing `identity` rule with its own Source
 proof. Select an already declared reference resource, complete SELECT/table
 scope, physical result column and JSON pointers (array `*` is supported).

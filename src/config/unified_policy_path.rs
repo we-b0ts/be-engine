@@ -171,7 +171,7 @@ mod tests {
         std::fs::create_dir(outside.path().join("nested")).unwrap();
         std::fs::write(
             outside.path().join("nested/rules.yaml"),
-            "format: traffic-policy/v1\nrules: []\n",
+            "format: traffic-policy/v2\nrules: []\n",
         )
         .unwrap();
         let managed = temp.path().join(".traffic-e2e");
@@ -213,7 +213,7 @@ mod tests {
         let directory = temp.path().join("contracts");
         std::fs::create_dir(&directory).unwrap();
         let policy = directory.join("rules.yaml");
-        std::fs::write(&policy, "format: traffic-policy/v1\nrules: []\n").unwrap();
+        std::fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
         assert_eq!(resolve_unified_policy_path(&project).unwrap(), policy);
         assert_eq!(resolve_unified_policy_root(&policy).unwrap(), temp.path());
         std::fs::rename(&policy, directory.join("actual.yaml")).unwrap();

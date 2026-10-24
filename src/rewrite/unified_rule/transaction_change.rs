@@ -9,7 +9,7 @@ fn fixture() -> Fixture {
         other["match"]["api"] = json!("GET /other");
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v1","rules":[super::super::rule(),other]}),
+            json!({"format":"traffic-policy/v2","rules":[super::super::rule(),other]}),
         );
         vec![]
     })
@@ -22,7 +22,7 @@ fn proposal(fixture: &Fixture) {
         &fixture.proposal,
         json!({"format":"traffic-policy-change/v1",
         "replace_rules":["members"],
-        "policy":{"format":"traffic-policy/v1","rules":[replacement]}}),
+        "policy":{"format":"traffic-policy/v2","rules":[replacement]}}),
     );
 }
 
@@ -108,7 +108,7 @@ fn public_capture_consolidation_validates_the_replacements_before_consuming_them
         fs::write(project_path, serde_yaml::to_string(&project).unwrap()).unwrap();
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v1","source_revision":revision,"rules":[
+            json!({"format":"traffic-policy/v2","source_revision":revision,"rules":[
                 capture("capture-a", json!(["/api"])),
                 capture("capture-b", json!(["/other/*"])),
                 super::super::rule()
@@ -150,7 +150,7 @@ fn public_capture_consolidation_validates_the_replacements_before_consuming_them
     write(
         &fixture.proposal,
         json!({"format":"traffic-policy-change/v1","replace_rules":["capture-a","capture-b"],
-        "policy":{"format":"traffic-policy/v1","source_revision":revision,"rules":[
+        "policy":{"format":"traffic-policy/v2","source_revision":revision,"rules":[
             capture("capture-merged", json!(["/other/*","/api"]))
         ]}}),
     );

@@ -105,6 +105,7 @@ mod tests {
     #[test]
     fn binary_replay_column_sets_binary_flag() {
         let payload = column_definition_payload(&RecordedMysqlColumn {
+            database: None,
             name: "department_id".to_string(),
             table: Some("user".to_string()),
             table_alias: None,

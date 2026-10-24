@@ -15,7 +15,7 @@ fn assert_scopes(api_scoped: bool) {
     let temp = tempfile::tempdir().unwrap();
     let policy_path = temp.path().join("policy.yaml");
     let policy = r#"
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
 - id: scoped-lock
   match:

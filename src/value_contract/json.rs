@@ -9,8 +9,11 @@ use super::time::{self, ClockPair, TimeError};
 use crate::policy::{FieldContract, TimeAnchor, TimeRelation, TimestampFormat};
 mod clock_scope;
 pub(crate) mod diagnosis;
-mod identity;
+pub(super) mod identity;
+pub(crate) use identity::token as identity_token;
 mod native;
+mod time_fields;
+pub(crate) use super::time_copies::VerifiedTimeCopy;
 pub(crate) use native::{LeafContext, LeafObservations, NativeField, NonceIdentity, VerifiedField};
 
 const MAX_COMPARISONS: usize = 16_384;
@@ -22,15 +25,12 @@ const MAX_TIME_OBSERVATIONS: usize = 4096;
 fn time_observation_count(
     relationships: &TimeRelationships,
     key: &(TimeAnchor, Option<String>, clock_scope::ScopeKey),
+    scoped_observations: usize,
 ) -> usize {
     if key.2.is_shared() {
         relationships.get(key).map_or(0, Vec::len)
     } else {
-        relationships
-            .iter()
-            .filter(|((_, _, scope), _)| !scope.is_shared())
-            .map(|(_, times)| times.len())
-            .sum()
+        scoped_observations
     }
 }
 type NonceRelationships = BTreeMap<(String, String), Vec<([u8; 32], [u8; 32])>>;
@@ -72,12 +72,22 @@ pub(crate) struct Comparison {
     #[serde(skip)]
     pub(crate) relationships: TimeRelationships,
     #[serde(skip)]
+    scoped_time_observations: usize,
+    #[serde(skip)]
     pub(crate) nonce_relationships: NonceRelationships,
     #[serde(skip)]
     pub(crate) identities: BTreeMap<String, identity::Bijection>,
 }
 
 impl Comparison {
+    /// Tokens stay in private runtime/control data; diagnostics serialize only differences.
+    pub(crate) fn identity_pairs(&self) -> Vec<crate::value_contract::identities::IdentityPair> {
+        self.identities
+            .iter()
+            .flat_map(|(binding, identities)| identities.pairs(binding))
+            .collect()
+    }
+
     pub(crate) fn passed(&self) -> bool {
         self.differences.is_empty()
     }
@@ -98,7 +108,9 @@ impl Comparison {
             *self.time_validations.entry(rule_id).or_default() += count;
         }
         for (scope, values) in other.relationships {
-            let mut observations = time_observation_count(&self.relationships, &scope);
+            let scoped = !scope.2.is_shared();
+            let mut observations =
+                time_observation_count(&self.relationships, &scope, self.scoped_time_observations);
             if !scope.2.is_shared()
                 && !self.relationships.contains_key(&scope)
                 && observations >= MAX_TIME_OBSERVATIONS
@@ -129,6 +141,9 @@ impl Comparison {
                 }
                 existing.push(pair);
                 observations += 1;
+                if scoped {
+                    self.scoped_time_observations += 1;
+                }
             }
         }
         for (scope, pairs) in other.nonce_relationships {
@@ -155,6 +170,7 @@ struct Decisions {
     selected: BTreeSet<usize>,
     selected_native: BTreeSet<usize>,
     times: TimeRelationships,
+    scoped_time_observations: usize,
     time_validations: BTreeMap<String, usize>,
     nonces: NonceRelationships,
     identities: BTreeMap<String, identity::Bijection>,
@@ -172,6 +188,7 @@ struct Comparator<'a> {
     fields: &'a [Field<'a>],
     native: &'a [NativeField<'a>],
     verified: &'a [VerifiedField<'a>],
+    time_copies: BTreeMap<(&'a str, &'a str), Vec<&'a VerifiedTimeCopy>>,
     clocks: AnchorClocks,
     remaining: usize,
     source_root: &'a Value,
@@ -205,10 +222,38 @@ pub(crate) fn compare_with_verified(
     verified: &[VerifiedField<'_>],
     clocks: AnchorClocks,
 ) -> Comparison {
+    compare_all(source, target, fields, native, verified, clocks, &[])
+}
+
+pub(crate) fn compare_with_time_copies(
+    source: &Value,
+    target: &Value,
+    fields: &[Field<'_>],
+    clocks: AnchorClocks,
+    copies: &[VerifiedTimeCopy],
+) -> Comparison {
+    compare_all(source, target, fields, &[], &[], clocks, copies)
+}
+
+fn compare_all(
+    source: &Value,
+    target: &Value,
+    fields: &[Field<'_>],
+    native: &[NativeField<'_>],
+    verified: &[VerifiedField<'_>],
+    clocks: AnchorClocks,
+    time_copies: &[VerifiedTimeCopy],
+) -> Comparison {
     let mut comparator = Comparator {
         fields,
         native,
         verified,
+        time_copies: time_copies
+            .iter()
+            .fold(BTreeMap::new(), |mut index, proof| {
+                index.entry(proof.scope()).or_default().push(proof);
+                index
+            }),
         clocks,
         remaining: MAX_COMPARISONS,
         source_root: source,
@@ -247,6 +292,7 @@ pub(crate) fn compare_with_verified(
         time_validations: decisions.time_validations,
         differences: result.err().into_iter().collect(),
         relationships: decisions.times,
+        scoped_time_observations: decisions.scoped_time_observations,
         nonce_relationships: decisions.nonces,
         identities: decisions.identities,
     }
@@ -339,6 +385,55 @@ impl Comparator<'_> {
             .filter(|(_, field)| pointer_matches(field.pointer, pointer, self.source_root))
             .collect::<Vec<_>>();
         if selected.len() + native.len() + verified.len() > 1 {
+            if native.is_empty()
+                && verified.is_empty()
+                && selected.iter().all(|(_, field)| {
+                    time_fields::compatible(selected[0].1.contract, field.contract)
+                })
+            {
+                let mut inactive = false;
+                for (_, field) in &selected {
+                    if let FieldContract::Conditional { when, .. } = field.contract {
+                        inactive |= !when
+                            .matches_pair(
+                                self.source_root,
+                                self.target_root,
+                                pointer,
+                                target_pointer,
+                            )
+                            .map_err(|_| {
+                                difference(pointer, "field condition branch changed or is invalid")
+                            })?;
+                    }
+                }
+                if inactive {
+                    if source != target {
+                        return Err(difference(
+                            pointer,
+                            "inactive field contract requires exact equality",
+                        ));
+                    }
+                    for (index, field) in selected {
+                        decisions.selected.insert(index);
+                        decisions.evaluated.insert(field.rule_id.into());
+                    }
+                    return Ok(());
+                }
+                for (index, field) in selected {
+                    decisions.selected.insert(index);
+                    decisions.evaluated.insert(field.rule_id.into());
+                    self.time_field(
+                        source,
+                        target,
+                        pointer,
+                        target_pointer,
+                        field,
+                        field.contract.unconditional(),
+                        decisions,
+                    )?;
+                }
+                return Ok(());
+            }
             return Err(difference(pointer, "conflicting field contracts"));
         }
         if let Some((index, field)) = verified.first() {
@@ -462,53 +557,16 @@ impl Comparator<'_> {
                         decisions,
                     );
                 }
-                FieldContract::Time {
-                    format,
-                    relation,
-                    anchor,
-                    utc_offset,
-                    clock_group,
-                    clock_scope,
-                } => {
-                    let config = crate::policy::TimeContract {
-                        format: *format,
-                        relation: *relation,
-                        anchor: *anchor,
-                        utc_offset: utc_offset.clone(),
-                        clock_group: clock_group.clone(),
-                        clock_scope: clock_scope.clone(),
-                    };
-                    let result = compare_time(source, target, &config, self.clocks.get(*anchor));
-                    let pair = result.map_err(|e| difference(pointer, &e.to_string()))?;
-                    *decisions
-                        .time_validations
-                        .entry(field.rule_id.into())
-                        .or_default() += 1;
-                    // Civil dates already preserve the exact local-day relation.
-                    // They do not share a nanosecond shift with instant fields.
-                    if *format != TimestampFormat::CalendarDate {
-                        let scope =
-                            clock_scope::resolve(self, field, pointer, target_pointer, decisions)?;
-                        let key = (*anchor, clock_group.clone(), scope);
-                        if !decisions
-                            .times
-                            .get(&key)
-                            .is_some_and(|times| times.contains(&pair))
-                            && time_observation_count(&decisions.times, &key)
-                                >= MAX_TIME_OBSERVATIONS
-                        {
-                            return Err(difference(
-                                pointer,
-                                "time relationship exceeds 4096 distinct observations",
-                            ));
-                        }
-                        let relationships = decisions.times.entry(key).or_default();
-                        if !relationships.contains(&pair) {
-                            relationships.push(pair);
-                        }
-                    }
-                    return validate_relationships(decisions)
-                        .map_err(|e| difference(pointer, &e.to_string()));
+                FieldContract::Time { .. } => {
+                    return self.time_field(
+                        source,
+                        target,
+                        pointer,
+                        target_pointer,
+                        field,
+                        contract,
+                        decisions,
+                    );
                 }
                 FieldContract::Duration { unit, anchor } => {
                     use crate::policy::DurationUnit as U;
@@ -651,19 +709,7 @@ fn compare_time(
     config: &crate::policy::TimeContract,
     clocks: ClockPair,
 ) -> Result<(i128, i128), TimeError> {
-    if !same_type(source, target) {
-        return Err(TimeError::NumericCategoryChanged);
-    }
-    if matches!(
-        config.format,
-        TimestampFormat::UnixSeconds
-            | TimestampFormat::UnixMilliseconds
-            | TimestampFormat::UnixMicroseconds
-    ) && !source.is_number()
-    {
-        return Err(TimeError::InvalidValue);
-    }
-    let offset = config.offset().map_err(|_| TimeError::InvalidValue)?;
+    let pair = parse_time_pair(source, target, config)?;
     let mode = match config.relation {
         TimeRelation::RequestWindow => time::TimeMode::RequestWindow,
         TimeRelation::PreserveOffset => time::TimeMode::PreserveRelative,
@@ -672,15 +718,52 @@ fn compare_time(
         return time::calendar::compare(
             source,
             target,
-            offset.ok_or(TimeError::InvalidValue)?,
+            config
+                .offset()
+                .map_err(|_| TimeError::InvalidValue)?
+                .ok_or(TimeError::InvalidValue)?,
             mode,
             clocks,
         );
     }
-    let source = time::parse_timestamp(source, core_format(config.format)?, offset)?;
-    let target = time::parse_timestamp(target, core_format(config.format)?, offset)?;
-    time::compare_timestamp_nanos(source, target, mode, clocks)?;
-    Ok((source, target))
+    time::compare_timestamp_nanos(pair.0, pair.1, mode, clocks)?;
+    Ok(pair)
+}
+
+pub(crate) fn parse_time_pair(
+    source: &Value,
+    target: &Value,
+    config: &crate::policy::TimeContract,
+) -> Result<(i128, i128), TimeError> {
+    if !same_type(source, target) {
+        return Err(TimeError::NumericCategoryChanged);
+    }
+    Ok((
+        parse_time_value(source, config)?,
+        parse_time_value(target, config)?,
+    ))
+}
+
+pub(crate) fn parse_time_value(
+    value: &Value,
+    config: &crate::policy::TimeContract,
+) -> Result<i128, TimeError> {
+    if matches!(
+        config.format,
+        TimestampFormat::UnixSeconds
+            | TimestampFormat::UnixMilliseconds
+            | TimestampFormat::UnixMicroseconds
+    ) && !value.is_number()
+    {
+        return Err(TimeError::InvalidValue);
+    }
+    let offset = config.offset().map_err(|_| TimeError::InvalidValue)?;
+    if config.format == TimestampFormat::CalendarDate {
+        use chrono::Datelike;
+        offset.ok_or(TimeError::InvalidValue)?;
+        return Ok(i128::from(time::calendar::parse(value)?.num_days_from_ce()));
+    }
+    time::parse_timestamp(value, core_format(config.format)?, offset)
 }
 
 #[cfg(test)]

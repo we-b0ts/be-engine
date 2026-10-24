@@ -2,7 +2,7 @@
 
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
-> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> syntax. Use the self-contained `traffic-policy/v2` rules, `project.policy`,
 > and `rule plan --file … --evidence …` described in
 > [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
 > evidence and lifecycle constraints described here remain mandatory.
@@ -126,8 +126,11 @@ recording key. Plan verifies the protected current witness against a complete,
 same-case Source exchange and every declared stable field. Apply rechecks
 evidence and policy identity and requires fresh Replay.
 
-For several dependent rules, apply the first capture and Replay again before
-planning a later reference. Reports retain `key_bindings` as case/endpoint/name
+For native key references whose evidence depends on an earlier committed capture,
+apply that capture and Replay before planning the dependent key reference.
+Ordinary resource identity fields instead declare their complete eligible
+MySQL/Redis/response inventory together; they do not require this staged key
+workflow. Reports retain native `key_bindings` as case/endpoint/name
 and Source/target fingerprints, without plaintext identities. A later plan can
 check its reference against that committed evidence. It cannot change or collapse
 an existing pair. Rule audits count matched captures and references separately.

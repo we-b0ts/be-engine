@@ -102,6 +102,7 @@ pub(super) fn claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             read.json_pointers
                 .iter()
                 .map(move |pointer| NativeFieldClaim {
+                    contract: None,
                     rule_id: rule.id.clone(),
                     surface: ClaimSurface::DependencyResponse,
                     selector: NativeMatch {

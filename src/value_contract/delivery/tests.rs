@@ -36,7 +36,7 @@ fn naive_delivery_preserves_civil_text_without_timezone_configuration() {
 
 #[test]
 fn delivery_only_translates_declared_time_and_keeps_source_immutable() {
-    let doc=crate::policy::parse_policy(r#"format: traffic-policy/v1
+    let doc=crate::policy::parse_policy(r#"format: traffic-policy/v2
 rules:
   - id: session-input
     surface: dependency.response

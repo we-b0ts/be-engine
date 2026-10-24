@@ -3,6 +3,10 @@
 Use this file for local commands, runtime behavior, recording, replay, and
 testing details. Keep `AGENTS.md` as the short navigation map.
 
+Author resource and API output fields once with the current
+[resource-owned field contracts](resource-field-contracts.md). Contextual clock
+relationships and stateful protocol effects retain explicit rules.
+
 API-triggered asynchronous process traffic uses [API-origin rules](api-triggered-process-traffic.md),
 including request-body conditions, recorded identity capture and old-recording reclassification.
 
@@ -504,7 +508,7 @@ encrypt_request_headers = ["authorization"]
 ```
 
 JWT expiration between recording and Replay can be handled by an explicit
-`traffic-policy/v1` `input_jwt` rule. See [JWT request rules](jwt-request-rules.md)
+`traffic-policy/v2` `input_jwt` rule. See [JWT request rules](jwt-request-rules.md)
 for the coordinator evidence, plan/apply, target key sources, and replay-only
 revalidation flow. No new standard recording is required for this rule.
 
@@ -811,7 +815,7 @@ HTTP URL acquisition is a `capture_http_response` native effect in the unified
 policy named by `project.policy`:
 
 ```yaml
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
   - id: sandbox-url
     match: {}

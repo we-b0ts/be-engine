@@ -31,7 +31,7 @@ primary response and defaults to 10 ms.
 `verification.max_failed_cases_per_api` defaults to 10 and stops the current
 API after that many non-passing cases; remaining cases are left unexecuted.
 All acquisition, classification, input and comparison rules share the
-`traffic-policy/v1` document named by `project.policy`, normally
+`traffic-policy/v2` document named by `project.policy`, normally
 `.traffic-e2e/policy.yaml`. Initialization creates this policy empty.
 Relevant target fields are `.traffic-e2e/Dockerfile.target`, startup mount paths,
 and `startup_timeout_seconds` (180 by default, at most 1800).

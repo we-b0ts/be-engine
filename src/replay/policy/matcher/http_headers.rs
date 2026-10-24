@@ -50,6 +50,7 @@ impl ReplayPolicyRuntime {
                 .or_default()
                 .time_validations += 1;
         }
-        self.commit(None, decision);
+        self.commit(None, decision)
+            .expect("header accounting carries no value proposals");
     }
 }

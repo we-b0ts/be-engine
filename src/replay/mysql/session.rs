@@ -201,6 +201,21 @@ pub(super) async fn deliver_matched(
         );
         return Err(error);
     }
+    if let Some(prepared) = &matched.time_copy_delivery
+        && let Err(error) = prepared.commit_after_wire(
+            matched.report.case_id.as_deref(),
+            &session.identity(),
+            &matched.record.response,
+            matched.report.sql.as_deref(),
+        )
+    {
+        state.lock().await.fail_exchange(
+            &matched,
+            &session.identity(),
+            &format!("SQL time-copy provenance: {error:#}"),
+        );
+        return Err(error);
+    }
     let mut replay = state.lock().await;
     if let (Some(prepared), Some(policy)) = (&matched.value_delivery, replay.replay_policy.as_ref())
         && let Err(error) = prepared.commit(

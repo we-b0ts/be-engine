@@ -5,7 +5,7 @@ use serde_json::json;
 
 fn fixture(codec: &str) -> crate::policy::CompiledPolicy {
     let policy = format!(
-        r#"format: traffic-policy/v1
+        r#"format: traffic-policy/v2
 rules:
 - id: delivery-clock
   surface: dependency.response
@@ -81,6 +81,125 @@ fn one_decode_self_validation_still_rejects_missing_invalid_and_duplicate_source
     for source in [&[][..], &[8, 0xe8], &[8, 1, 8, 2], &[10, 1, 1]] {
         assert!(Delivery::prepare(source, &rules, clocks()).is_err());
     }
+}
+
+#[test]
+fn response_owned_wildcard_times_are_independent_unless_the_clock_is_explicit() {
+    let document = json!({"format":"traffic-policy/v2","responses":{"items":{
+        "api":"GET /items","proof":{"source":"items.py:create","fact":"Each item owns an independently generated timestamp"},
+        "body":{"codec":"json","fields":{"/items/*/at":{"relative_time":"unix_seconds"}}}
+    }}});
+    let source = br#"{"items":[{"at":1010,"id":1},{"at":1010,"id":2}]}"#;
+    let target = br#"{"items":[{"at":2010,"id":1},{"at":2011,"id":2}]}"#;
+    for explicit in [false, true] {
+        let mut document = document.clone();
+        if explicit {
+            document["responses"]["items"]["body"]["fields"]["/items/*/at"]["clock_group"] =
+                json!("same-event");
+        }
+        let policy = compile_policy(&parse_policy(&document.to_string()).unwrap()).unwrap();
+        let rules = policy.rules.iter().collect::<Vec<_>>();
+        let compared = compare(source, target, &rules, clocks()).unwrap();
+        assert_eq!(compared.passed(), !explicit, "{:?}", compared.differences);
+        assert!(
+            !compare(
+                source,
+                br#"{"items":[{"at":2010,"id":1},{"at":2011,"id":3}]}"#,
+                &rules,
+                clocks()
+            )
+            .unwrap()
+            .passed()
+        );
+    }
+}
+
+#[test]
+fn nullable_owned_timestamps_keep_null_exact_and_validate_nonnull_values() {
+    let document = json!({"format":"traffic-policy/v2","responses":{"task":{
+        "api":"GET /task","proof":{"source":"task.py:model","fact":"Completion is nullable datetime across terminal statuses"},
+        "body":{"codec":"json","fields":{"/completedAt":{"kind":"conditional","when":{"relative_pointer":".","not_in":[null]},"contract":{"relative_time":"unix_seconds"}}}}
+    }}});
+    let policy = compile_policy(&parse_policy(&document.to_string()).unwrap()).unwrap();
+    let rules = policy.rules.iter().collect::<Vec<_>>();
+    for (source, target, passed) in [
+        (
+            json!({"completedAt":null}),
+            json!({"completedAt":null}),
+            true,
+        ),
+        (
+            json!({"completedAt":1010}),
+            json!({"completedAt":2010}),
+            true,
+        ),
+        (
+            json!({"completedAt":null}),
+            json!({"completedAt":2010}),
+            false,
+        ),
+        (
+            json!({"completedAt":1010}),
+            json!({"completedAt":null}),
+            false,
+        ),
+        (
+            json!({"completedAt":"broken"}),
+            json!({"completedAt":"broken"}),
+            false,
+        ),
+        (json!({"completedAt":null}), json!({}), false),
+    ] {
+        let result = compare(
+            &serde_json::to_vec(&source).unwrap(),
+            &serde_json::to_vec(&target).unwrap(),
+            &rules,
+            clocks(),
+        )
+        .unwrap();
+        assert_eq!(
+            result.passed(),
+            passed,
+            "{source} -> {target}: {:?}",
+            result.differences
+        );
+    }
+}
+
+#[test]
+#[ignore = "manual resource-field Replay comparison throughput and decode-count benchmark"]
+fn schema_wildcard_replay_benchmark() {
+    use std::{hint::black_box, time::Instant};
+    let policy = crate::policy::parse_and_compile_policy(&json!({
+        "format":"traffic-policy/v2","responses":{"items":{
+            "api":"GET /items","proof":{"source":"items.py:clock","fact":"Each item has its own generated time"},
+            "body":{"codec":"json","fields":{"/items/*/at":{"relative_time":"unix_seconds"}}}
+        }}
+    }).to_string()).unwrap();
+    let rules = policy.rules.iter().collect::<Vec<_>>();
+    let payload = |target| {
+        serde_json::to_vec(&json!({"items":(0..2048).map(|id| json!({
+        "id":id,"at":if target { 2010 + id % 2 } else { 1010 },"stable":"x".repeat(256)
+    })).collect::<Vec<_>>()}))
+        .unwrap()
+    };
+    let source = payload(false);
+    let target = payload(true);
+    let iterations = 32;
+    let started = Instant::now();
+    let (_, decodes) = crate::value_codec::measured_decodes(|| {
+        for _ in 0..iterations {
+            let result = compare(&source, &target, &rules, clocks()).unwrap();
+            assert!(result.passed(), "{:?}", result.differences);
+            black_box(result);
+        }
+    });
+    assert_eq!(decodes, iterations * 2);
+    eprintln!(
+        "schema field Replay: items=2048 bytes={} iterations={iterations} decodes={decodes} elapsed_ms={:.3}",
+        source.len(),
+        started.elapsed().as_secs_f64() * 1000.0
+    );
 }
 
 #[test]

@@ -41,6 +41,6 @@ fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
 }
 
 fn compile(rules: Vec<Value>) -> anyhow::Result<crate::policy::CompiledPolicy> {
-    crate::policy::parse_policy(&json!({"format":"traffic-policy/v1","rules":rules}).to_string())
+    crate::policy::parse_policy(&json!({"format":"traffic-policy/v2","rules":rules}).to_string())
         .and_then(|p| crate::policy::compile_policy(&p))
 }

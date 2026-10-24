@@ -5,6 +5,7 @@ use crate::{
     value_contract::json::{self, AnchorClocks, Comparison, Field},
 };
 use anyhow::{Context, Result, ensure};
+use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
@@ -13,7 +14,7 @@ pub(crate) fn materialize(
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Vec<u8>> {
-    let codec = CodecPlan::compile(&merged_codec(rules)?)?;
+    let codec = prepared_codec(rules)?;
     let decoded = codec.decode(source)?;
     materialize_decoded(&decoded, rules, clocks)
 }
@@ -43,13 +44,25 @@ pub(crate) fn merged_codec(rules: &[&CompiledRule]) -> Result<Codec> {
     Ok(codec)
 }
 
+/// Common carriers reuse their load-time plan without cloning PB schemas.
+/// Different overlapping PB declarations merge once for the selected group.
+pub(crate) fn prepared_codec(rules: &[&CompiledRule]) -> Result<Arc<CodecPlan>> {
+    let first = rules
+        .first()
+        .context("value comparison requires selected rules")?;
+    if rules.iter().all(|rule| rule.rule.codec == first.rule.codec) {
+        return Ok(Arc::clone(&first.codec_plan));
+    }
+    Ok(Arc::new(CodecPlan::compile(&merged_codec(rules)?)?))
+}
+
 pub(crate) fn compare(
     source: &[u8],
     target: &[u8],
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
-    let codec = CodecPlan::compile(&merged_codec(rules)?)?;
+    let codec = prepared_codec(rules)?;
     let source = codec.decode(source)?;
     let target = codec.decode(target)?;
     compare_decoded(&source, &target, rules, clocks)
@@ -62,6 +75,16 @@ pub(crate) fn compare_decoded(
     target: &DecodedValue,
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
+) -> Result<Comparison> {
+    compare_decoded_with_time_copies(source, target, rules, clocks, &[])
+}
+
+pub(crate) fn compare_decoded_with_time_copies(
+    source: &DecodedValue,
+    target: &DecodedValue,
+    rules: &[&CompiledRule],
+    clocks: AnchorClocks,
+    copies: &[json::VerifiedTimeCopy],
 ) -> Result<Comparison> {
     let fields = rules
         .iter()
@@ -78,10 +101,22 @@ pub(crate) fn compare_decoded(
         .collect::<Vec<_>>();
     let source_view = source.comparison_view(&comparison_paths(&source.logical, rules)?);
     if std::ptr::eq(source, target) {
-        return Ok(json::compare(&source_view, &source_view, &fields, clocks));
+        return Ok(json::compare_with_time_copies(
+            &source_view,
+            &source_view,
+            &fields,
+            clocks,
+            copies,
+        ));
     }
     let target_view = target.comparison_view(&comparison_paths(&target.logical, rules)?);
-    Ok(json::compare(&source_view, &target_view, &fields, clocks))
+    Ok(json::compare_with_time_copies(
+        &source_view,
+        &target_view,
+        &fields,
+        clocks,
+        copies,
+    ))
 }
 
 /// Retain native PB wire identity for every inactive field. The actual field
@@ -109,7 +144,7 @@ pub(crate) fn comparison_paths(
 
 pub(crate) fn merge_codec(codec: &mut Codec, next: &Codec) -> Result<()> {
     match (codec, next) {
-        (Codec::Json, Codec::Json) => (),
+        (Codec::Json, Codec::Json) | (Codec::Scalar, Codec::Scalar) => (),
         (Codec::Protobuf(merged), Codec::Protobuf(next)) => {
             for (path, field) in &next.fields {
                 if let Some(current) = merged.fields.get(path) {

@@ -19,10 +19,10 @@ impl RequestContracts {
         let mut context = RedisRequestContext::without_exchange(case, target, database, command);
         context.recorded_at = times.source;
         context.actual_at = times.target;
-        if let Some(result) = self.preview_unified_redis(&context, source, actual) {
+        if let Some(result) = self.preview_redis_legacy(&context, source, actual) {
             return Some(result);
         }
-        self.preview_redis_legacy(&context, source, actual)
+        self.preview_unified_redis(&context, source, actual)
     }
 
     pub(super) fn preview_redis_legacy(
@@ -139,12 +139,27 @@ impl RequestContracts {
             &mut decision,
         )?;
         let mut times = Vec::new();
+        let mut resource_fields = crate::value_contract::json::Comparison::default();
+        let source_arguments = source;
         for (index, (source, actual)) in source.iter().zip(actual).enumerate() {
             if index == 0 {
                 continue;
             }
             match config.argument_values.get(&index) {
-                None => ensure!(source == actual, "unselected Redis argument differs"),
+                None => {
+                    if let Some(mut comparison) = self.compare_redis_native_argument(
+                        context,
+                        source_arguments,
+                        index,
+                        source,
+                        actual,
+                    )? {
+                        comparison.scope_schema_clocks(index);
+                        resource_fields.merge_and_validate(comparison);
+                    } else {
+                        ensure!(source == actual, "unselected Redis argument differs");
+                    }
+                }
                 Some(ArgumentRule::Time(field)) => {
                     let source = serde_json::from_slice(source)?;
                     let actual = serde_json::from_slice(actual)?;
@@ -163,6 +178,7 @@ impl RequestContracts {
                         .context("target value requires bounded complete unique-member JSON")?;
                     let source_original = source.clone();
                     let actual_original = actual.clone();
+                    let mut native_owned = BTreeSet::new();
                     for (pattern, field) in &fields.json {
                         let pointers = crate::replay::policy::response::select_json_pointers(
                             pattern,
@@ -174,6 +190,7 @@ impl RequestContracts {
                             "selected Redis JSON fields are missing or exceed bounds"
                         );
                         for pointer in &pointers {
+                            native_owned.insert(pointer.clone());
                             let time_start = times.len();
                             let a = source_original
                                 .pointer(pointer)
@@ -242,7 +259,21 @@ impl RequestContracts {
                             }
                         }
                     }
-                    ensure!(source == actual, "unselected Redis JSON fields differ");
+                    if let Some(mut comparison) = self.compare_redis_native_fields(
+                        context,
+                        // The carrier, rather than this loop's borrowed payload,
+                        // identifies the physical key/container and value slot.
+                        source_arguments,
+                        index,
+                        &source_original,
+                        &actual_original,
+                        &native_owned,
+                    )? {
+                        comparison.scope_schema_clocks(index);
+                        resource_fields.merge_and_validate(comparison);
+                    } else {
+                        ensure!(source == actual, "unselected Redis JSON fields differ");
+                    }
                 }
             }
         }
@@ -251,6 +282,16 @@ impl RequestContracts {
             "selected Redis argument is missing"
         );
         super::time::validate_relationships(&times)?;
+        ensure!(
+            resource_fields.passed(),
+            "Redis resource field relationships changed: {:?}",
+            resource_fields.differences
+        );
+        decision.identity = Some(self.identity_decision(case, &resource_fields)?);
+        decision.ids.extend(resource_fields.evaluated);
+        for (id, count) in resource_fields.time_validations {
+            *decision.unified_time_validations.entry(id).or_default() += count;
+        }
         if selector.commands.len() > 1 {
             let key = (
                 case.into(),

@@ -4,7 +4,7 @@ use sqlx::Executor;
 fn policy(surface: &str, operation: &str, sql: &str, slot: &str, delivery: bool) -> String {
     format!(
         r#"
-format: traffic-policy/v1
+format: traffic-policy/v2
 rules:
 - id: sql-payload
   surface: {surface}
@@ -75,7 +75,7 @@ async fn mysql_json_wildcard_times_preserve_array_shape_members_and_finite_consu
         record["query_sequence"] = json!(1);
         record["params"] = json!([{"kind":"string","value":payload(start).to_string()},{"kind":"integer","value":7}]);
         let policy = format!(
-            r#"format: traffic-policy/v1
+            r#"format: traffic-policy/v2
 rules:
 - id: block-times
   match:
@@ -249,6 +249,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
             case_id,
             fail_on_dirty: false,
             fail_on_incomplete: false,
+            identity_pairs: Vec::new(),
         };
         let (ended, _) = crate::replay::control::handle_control_request(
             request("end", Some("case-id".into())),
@@ -293,7 +294,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
 #[tokio::test]
 async fn absent_sql_json_leaf_is_inactive_and_business_values_remain_exact() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let policy = r#"format: traffic-policy/v1
+        let policy = r#"format: traffic-policy/v2
 rules:
 - id: optional-sql-time
   surface: dependency.request

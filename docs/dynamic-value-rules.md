@@ -2,10 +2,18 @@
 
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
-> syntax. Use the self-contained `traffic-policy/v1` rules, `project.policy`,
+> syntax. Use the self-contained `traffic-policy/v2` rules, `project.policy`,
 > and `rule plan --file … --evidence …` described in
 > [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
 > evidence and lifecycle constraints described here remain mandatory.
+
+For current ordinary MySQL/Redis/response fields, prefer
+[resource identity declarations](resource-field-contracts.md#identity-domains-and-read-delivery).
+Inventory every eligible physical location together, use a shared case-local
+binding and let observed Source values define equality and distinctness. No
+SQL template, value ordinal or generator-first capture is required for these
+fields. The native capture/reference machinery below remains for additional
+templates, derivation and stateful behavior; its binding namespace is separate.
 
 
 A source-generated name can appear in a uniqueness SELECT, an INSERT's scalar

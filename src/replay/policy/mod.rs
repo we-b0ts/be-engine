@@ -2,7 +2,6 @@ pub(crate) mod case_condition;
 mod config;
 pub(crate) mod native_crypto_key;
 pub use case_condition::{CaseCondition, JsonCondition};
-pub(crate) use matcher::mysql_native::compare as compare_mysql_contracts;
 mod evidence_policy;
 pub(in crate::replay) mod request_contract;
 pub(crate) use evidence_policy::ReplayEvidencePolicyFreshness;
@@ -34,6 +33,9 @@ mod matcher;
 pub(crate) use matcher::mysql_contract::{
     compare_values as compare_mysql_values, selected_value as mysql_contract_value,
     validate_selector as validate_mysql_value_selector, witness_matches as mysql_witness_matches,
+};
+pub(in crate::replay) use matcher::mysql_native::fields::{
+    matches_field as mysql_field_matches, values as mysql_field_values,
 };
 pub(crate) use matcher::mysql_native::witness_matches as mysql_native_witness_matches;
 mod pattern;
@@ -179,3 +181,8 @@ pub use response::{ResponseJwtAlgorithm, ResponseJwtKeySource, ResponseJwtRule};
 pub use feedback::{ResponseJwtRuleFeedback, plan_response_jwt_rule};
 
 pub(in crate::replay) use response::ResponseBodyRuleMatch;
+
+pub(crate) use matcher::mysql_native::{
+    CopyProofs as MysqlTimeCopyProofs,
+    compare_with_time_copies as compare_mysql_contracts_with_time_copies,
+};

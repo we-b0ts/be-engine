@@ -78,7 +78,7 @@ fn recorded_observation_lifetimes_validate_without_editing_source() {
     }
     assert!(!rules.is_empty());
     let compiled = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v1","rules":rules.into_values().collect::<Vec<_>>()} )
+        &json!({"format":"traffic-policy/v2","rules":rules.into_values().collect::<Vec<_>>()} )
             .to_string(),
     )
     .and_then(|p| crate::policy::compile_policy(&p))

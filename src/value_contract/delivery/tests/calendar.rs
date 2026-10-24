@@ -1,7 +1,7 @@
 use super::*;
 
 fn policy() -> String {
-    r#"format: traffic-policy/v1
+    r#"format: traffic-policy/v2
 rules:
 - id: activity-date
   surface: dependency.response

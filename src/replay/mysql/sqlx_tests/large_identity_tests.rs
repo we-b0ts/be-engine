@@ -3,7 +3,7 @@ use super::*;
 use sqlx::Executor;
 
 const UPDATE: &str = "UPDATE attachments SET image=?, storage_key=?, status=? WHERE id=?";
-const POLICY: &str = r#"format: traffic-policy/v1
+const POLICY: &str = r#"format: traffic-policy/v2
 rules:
 - id: storage-key
   match:

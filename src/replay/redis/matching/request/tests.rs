@@ -32,7 +32,7 @@ fn script_batches_use_each_physical_call_clock_and_consume_each_exchange_once() 
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
     let path = temp.path().join("policy.yaml");
-    std::fs::write(&path,r#"format: traffic-policy/v1
+    std::fs::write(&path,r#"format: traffic-policy/v2
 rules:
 - id: batch-clock
   match:
@@ -248,7 +248,7 @@ fn payload_evidence_budget_keeps_native_redis_matching_without_recounting_omissi
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
     let path = temp.path().join("policy.yaml");
-    std::fs::write(&path, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    std::fs::write(&path, "format: traffic-policy/v2\nrules: []\n").unwrap();
     let cases = BTreeMap::from([(
         "case".into(),
         ReplayCase {

@@ -29,7 +29,20 @@ pub(super) fn resolve(
         unreachable!()
     };
     match &time.clock_scope {
-        ClockScope::Shared => Ok(ScopeKey::Shared),
+        ClockScope::Shared => {
+            let implicit = time.clock_group.as_deref().is_some_and(|group| {
+                crate::policy::is_schema_clock_group(
+                    group.split(".occurrence.").next().unwrap_or(group),
+                )
+            });
+            if implicit && field.pointer.split('/').any(|part| part == "*") {
+                // A declaration describes each selected physical value. Only an
+                // authored group can relate separate wildcard occurrences.
+                Ok(ScopeKey::ArrayElement(source_pointer.to_owned()))
+            } else {
+                Ok(ScopeKey::Shared)
+            }
+        }
         ClockScope::ArrayElement => {
             let mut source = comparator.source_root;
             let mut target = comparator.target_root;

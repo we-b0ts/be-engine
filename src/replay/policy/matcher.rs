@@ -649,9 +649,9 @@ impl ReplayPolicyRuntime {
         &mut self,
         case_id: Option<&str>,
         decision: DependencyRuleDecision,
-    ) {
+    ) -> Result<()> {
         for value_contract in decision.value_contracts {
-            self.request_contracts.commit(value_contract);
+            self.request_contracts.commit(value_contract)?;
         }
         if let Some(case_id) = case_id {
             let bindings = self.bindings.entry(case_id.to_string()).or_default();
@@ -671,6 +671,7 @@ impl ReplayPolicyRuntime {
             usage.validations += decision_usage.validations;
             usage.time_validations += decision_usage.time_validations;
         }
+        Ok(())
     }
 
     pub(in crate::replay) fn report(&self) -> ReplayPolicyReport {

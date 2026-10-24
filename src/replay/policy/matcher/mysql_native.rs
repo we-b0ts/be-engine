@@ -6,8 +6,47 @@ use crate::policy::{Codec, CompiledNativeRule, CompiledRule, FieldContract, Slot
 use crate::replay::policy::sql_template::{SqlValueTemplate, extract};
 use crate::value_codec::CodecView;
 use crate::value_contract::json::{self, AnchorClocks, Comparison, Field};
+mod copies;
+pub(in crate::replay) mod fields;
 mod params;
+pub(crate) use copies::CopyProofs;
 pub(in crate::replay::policy) use params::validate_parameters;
+
+fn same_time_semantics(left: &FieldContract, right: &FieldContract) -> bool {
+    let time = |contract: &FieldContract| match contract {
+        FieldContract::Conditional { when, contract }
+            if when.relative_pointer == "."
+                && matches!(contract.as_ref(), FieldContract::Time { .. }) =>
+        {
+            contract.time()
+        }
+        _ => contract.time(),
+    };
+    let (Some(mut left), Some(mut right)) = (time(left), time(right)) else {
+        return false;
+    };
+    left.clock_group = None;
+    right.clock_group = None;
+    left == right
+}
+
+fn occurrence_contract(contract: &FieldContract, position: usize) -> FieldContract {
+    let mut contract = contract.clone();
+    fn scope(contract: &mut FieldContract, position: usize) {
+        match contract {
+            FieldContract::Conditional { contract, .. } => scope(contract, position),
+            FieldContract::Time {
+                clock_group: Some(group),
+                ..
+            } if crate::policy::is_schema_clock_group(group) => {
+                *group = format!("{group}.occurrence.{position}");
+            }
+            _ => (),
+        }
+    }
+    scope(&mut contract, position);
+    contract
+}
 
 #[derive(Default)]
 struct Selected<'a> {
@@ -36,7 +75,11 @@ fn position(
         .context("SQL value slot is absent")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compare(
+    // This is the observed connection default, shared by the paired requests.
+    // A declared resource schema is only a field selector, never this default.
+    database: Option<&str>,
     source_sql: Option<&str>,
     source_params: Option<&[RecordedMysqlValue]>,
     actual_sql: Option<&str>,
@@ -44,6 +87,60 @@ pub(crate) fn compare(
     value_rules: &[&CompiledRule],
     native_rules: &[&CompiledNativeRule],
     clocks: AnchorClocks,
+) -> Result<Comparison> {
+    compare_inner(
+        database,
+        source_sql,
+        source_params,
+        actual_sql,
+        actual_params,
+        value_rules,
+        native_rules,
+        clocks,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compare_with_time_copies(
+    // This is the observed connection default, shared by the paired requests.
+    // A declared resource schema is only a field selector, never this default.
+    database: Option<&str>,
+    source_sql: Option<&str>,
+    source_params: Option<&[RecordedMysqlValue]>,
+    actual_sql: Option<&str>,
+    actual_params: Option<&[RecordedMysqlValue]>,
+    value_rules: &[&CompiledRule],
+    native_rules: &[&CompiledNativeRule],
+    clocks: AnchorClocks,
+    copies: Option<CopyProofs<'_>>,
+) -> Result<Comparison> {
+    compare_inner(
+        database,
+        source_sql,
+        source_params,
+        actual_sql,
+        actual_params,
+        value_rules,
+        native_rules,
+        clocks,
+        copies.as_ref(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compare_inner(
+    // This is the observed connection default, shared by the paired requests.
+    // A declared resource schema is only a field selector, never this default.
+    database: Option<&str>,
+    source_sql: Option<&str>,
+    source_params: Option<&[RecordedMysqlValue]>,
+    actual_sql: Option<&str>,
+    actual_params: Option<&[RecordedMysqlValue]>,
+    value_rules: &[&CompiledRule],
+    native_rules: &[&CompiledNativeRule],
+    clocks: AnchorClocks,
+    copies: Option<&CopyProofs<'_>>,
 ) -> Result<Comparison> {
     if let (Some(source), Some(target)) = (source_params, actual_params) {
         ensure!(
@@ -64,16 +161,59 @@ pub(crate) fn compare(
         mysql_values::materialized(actual_sql, actual_params).map_err(anyhow::Error::msg)?;
     ensure!(source.len() == actual.len(), "SQL token inventory changed");
     let mut selected = BTreeMap::<usize, Selected<'_>>::new();
+    let mut field_analyses = None;
+    let mut copy_origins = BTreeMap::new();
     for rule in value_rules {
-        let Slot::SqlValue(slot) = rule.rule.slot else {
-            anyhow::bail!("SQL request requires sql_value")
+        let positions = match &rule.rule.slot {
+            Slot::SqlValue(slot) => {
+                let template = SqlValueTemplate::from_value_selector(&rule.rule.selector)?;
+                vec![position(&template, &source, &actual, *slot)?]
+            }
+            Slot::SqlField(_) => {
+                let (source_fields, actual_fields) = field_analyses.get_or_insert_with(|| {
+                    (
+                        crate::mysql::sql::field_bindings::analyze(&source, database),
+                        crate::mysql::sql::field_bindings::analyze(&actual, database),
+                    )
+                });
+                let positions = source_fields
+                    .as_ref()
+                    .map(|analysis| fields::positions_in(rule, analysis))
+                    .transpose()?
+                    .unwrap_or_default();
+                let actual_positions = actual_fields
+                    .as_ref()
+                    .map(|analysis| fields::positions_in(rule, analysis))
+                    .transpose()?
+                    .unwrap_or_default();
+                ensure!(
+                    positions == actual_positions,
+                    "Target SQL changed the selected physical field occurrences"
+                );
+                if copies.is_some() {
+                    for position in &positions {
+                        if let Some((source, target)) = source_fields
+                            .as_ref()
+                            .and_then(|a| a.at_token(*position))
+                            .zip(actual_fields.as_ref().and_then(|a| a.at_token(*position)))
+                        {
+                            copy_origins
+                                .entry(*position)
+                                .or_insert_with(|| (source.clone(), target.clone()));
+                        }
+                    }
+                }
+                positions
+            }
+            _ => anyhow::bail!("SQL request requires a value or physical field slot"),
         };
-        let template = SqlValueTemplate::from_value_selector(&rule.rule.selector)?;
-        selected
-            .entry(position(&template, &source, &actual, slot)?)
-            .or_default()
-            .values
-            .push(rule);
+        for position in positions {
+            let selected = selected.entry(position).or_default();
+            if rule.rule.codec == Codec::Scalar {
+                selected.scalar = true;
+            }
+            selected.values.push(rule);
+        }
     }
     for compiled in native_rules {
         let rule = &compiled.rule;
@@ -104,16 +244,24 @@ pub(crate) fn compare(
             let value = selected.entry(position).or_default();
             match &field.contract {
                 SqlValueContract::Time(time) => {
+                    let contract = time_contract(time);
                     ensure!(
                         value.generated.is_none()
-                            && value.values.is_empty()
-                            && value.times.is_empty(),
+                            && value.times.is_empty()
+                            && value.values.iter().all(|rule| {
+                                matches!(rule.rule.slot, Slot::SqlField(_))
+                                    && rule.rule.codec == Codec::Scalar
+                                    && rule.rule.contract.len() == 1
+                                    && rule
+                                        .rule
+                                        .contract
+                                        .get("")
+                                        .is_some_and(|broad| same_time_semantics(broad, &contract))
+                            }),
                         "scalar SQL time overlaps another value owner"
                     );
                     value.scalar = true;
-                    value
-                        .times
-                        .push((rule.id.clone(), String::new(), time_contract(time)));
+                    value.times.push((rule.id.clone(), String::new(), contract));
                 }
                 SqlValueContract::Json { fields } => {
                     ensure!(
@@ -121,11 +269,19 @@ pub(crate) fn compare(
                         "SQL JSON and scalar owners overlap"
                     );
                     for (pointer, field) in fields {
-                        value.times.push((
-                            rule.id.clone(),
-                            pointer.clone(),
-                            time_contract(&field.contract),
-                        ));
+                        let contract = time_contract(&field.contract);
+                        ensure!(
+                            value.values.iter().all(|rule| {
+                                rule.rule.contract.get(pointer).is_none_or(|broad| {
+                                    matches!(rule.rule.slot, Slot::SqlField(_))
+                                        && same_time_semantics(broad, &contract)
+                                })
+                            }),
+                            "SQL contextual time conflicts with the declared physical field strategy"
+                        );
+                        value
+                            .times
+                            .push((rule.id.clone(), pointer.clone(), contract));
                     }
                 }
             }
@@ -135,6 +291,7 @@ pub(crate) fn compare(
     let mut actual_values = serde_json::Map::new();
     let mut fields = Vec::<(String, String, FieldContract)>::new();
     let mut generated_ids = std::collections::BTreeSet::new();
+    let mut copy_lookups = Vec::new();
     for (position, (source, actual)) in source.iter().zip(&actual).enumerate() {
         let Some(selected) = selected.get(&position) else {
             ensure!(
@@ -150,25 +307,35 @@ pub(crate) fn compare(
         }
         let root = format!("/slots/{position}");
         let (source_value, actual_value) = if selected.scalar {
-            (
-                mysql_values::time_value(source).map_err(anyhow::Error::msg)?,
-                mysql_values::time_value(actual).map_err(anyhow::Error::msg)?,
-            )
+            (fields::scalar(source)?, fields::scalar(actual)?)
         } else {
             let (Token::Bytes(source), Token::Bytes(actual)) = (source, actual) else {
                 anyhow::bail!("SQL encoded value changed its native scalar type")
             };
-            let codec = if selected.values.is_empty() {
-                Codec::Json
+            let plan = if selected.values.is_empty() {
+                None
             } else {
-                crate::value_contract::encoded::merged_codec(&selected.values)?
+                Some(crate::value_contract::encoded::prepared_codec(
+                    &selected.values,
+                )?)
             };
             ensure!(
-                selected.times.is_empty() || codec == Codec::Json,
+                selected.times.is_empty()
+                    || selected
+                        .values
+                        .iter()
+                        .all(|rule| rule.rule.codec == Codec::Json),
                 "native JSON fields require the same JSON codec"
             );
-            let source = CodecView::decode(&codec, source)?;
-            let actual = CodecView::decode(&codec, actual)?;
+            let decode = |bytes: &[u8]| {
+                if let Some(plan) = &plan {
+                    plan.decode(bytes)
+                } else {
+                    CodecView::decode(&Codec::Json, bytes)
+                }
+            };
+            let source = decode(source)?;
+            let actual = decode(actual)?;
             let paths = |root: &Value| -> Result<Vec<String>> {
                 let mut paths =
                     crate::value_contract::encoded::comparison_paths(root, &selected.values)?;
@@ -181,11 +348,23 @@ pub(crate) fn compare(
             )
         };
         for rule in &selected.values {
+            if let (Some(copies), Some((source, target))) = (copies, copy_origins.get(&position)) {
+                let prepared = copies.prepare(rule, &source_value, source, target, &root)?;
+                ensure!(
+                    copy_lookups.len().saturating_add(prepared.len()) <= 4096,
+                    "SQL time-copy candidate exceeds 4096 selected leaves"
+                );
+                copy_lookups.extend(prepared);
+            }
             for (pointer, field) in &rule.rule.contract {
                 fields.push((
                     rule.rule.id.clone(),
                     format!("{root}{pointer}"),
-                    field.clone(),
+                    if matches!(rule.rule.slot, Slot::SqlField(_)) {
+                        occurrence_contract(field, position)
+                    } else {
+                        field.clone()
+                    },
                 ));
             }
         }
@@ -205,7 +384,11 @@ pub(crate) fn compare(
             contract,
         })
         .collect::<Vec<_>>();
-    let mut result = json::compare(&source, &actual, &fields, clocks);
+    let verified_copies = copies
+        .map(|copies| copies.resolve(copy_lookups))
+        .unwrap_or_default();
+    let mut result =
+        json::compare_with_time_copies(&source, &actual, &fields, clocks, &verified_copies);
     result.evaluated.extend(generated_ids);
     Ok(result)
 }
@@ -294,6 +477,9 @@ pub(in crate::replay::policy) fn decision(
 #[path = "mysql_native/array_tests.rs"]
 mod array_tests;
 #[cfg(test)]
+#[path = "mysql_native/field_tests.rs"]
+mod field_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -306,7 +492,7 @@ mod tests {
         json_time.as_object_mut().unwrap().remove("kind");
         let template = "UPDATE events SET created=?, updated=?, payload=? WHERE id=?";
         let selector = json!({"api":"POST /events","resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":template});
-        let document = json!({"format":"traffic-policy/v1","rules":[
+        let document = json!({"format":"traffic-policy/v2","rules":[
             {"id":"times","match":selector,"effect":{"kind":"mysql_values","values":{
                 "0":{"contract":time("sql_datetime",None),"proof":proof},
                 "1":{"contract":time("sql_datetime",None),"proof":proof},
@@ -327,6 +513,7 @@ mod tests {
         };
         let check = |target: &str| {
             compare(
+                Some("app"),
                 Some(source),
                 None,
                 Some(target),

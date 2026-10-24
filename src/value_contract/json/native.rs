@@ -1,5 +1,8 @@
 //! Specialized leaves participate inside the shared whole-element pairing.
-use super::{AnchorClocks, Comparison, Decisions, Difference, difference, validate_relationships};
+use super::{
+    AnchorClocks, Comparison, Decisions, Difference, MAX_TIME_OBSERVATIONS, difference,
+    validate_relationships,
+};
 use crate::policy::native::GeneratedResponse;
 
 /// This intentionally has no Debug or Serialize implementation: the key is a
@@ -118,6 +121,12 @@ fn merge(decisions: &mut Decisions, comparison: Comparison) -> Result<(), &'stat
         *decisions.time_validations.entry(rule_id).or_default() += count;
     }
     for (scope, values) in comparison.relationships {
+        if !scope.2.is_shared() {
+            decisions.scoped_time_observations += values.len();
+            if decisions.scoped_time_observations > MAX_TIME_OBSERVATIONS {
+                return Err("scoped time relationship exceeds 4096 distinct observations");
+            }
+        }
         decisions.times.entry(scope).or_default().extend(values);
     }
     for (scope, pairs) in comparison.nonce_relationships {

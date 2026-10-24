@@ -48,7 +48,7 @@ fn process_owned_reclassification_updates_exact_rule_applicability_reversibly() 
             rule_policy(json!([{"case_id":CASE,"index":0}]))
         );
     }
-    fs::write(&f.rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    fs::write(&f.rules, "format: traffic-policy/v2\nrules: []\n").unwrap();
     f.reclassify();
     assert_eq!(
         f.read_report()["replay_policy"],
@@ -105,7 +105,7 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let rules = temp.path().join("policy.yaml");
-        fs::write(&rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
+        fs::write(&rules, "format: traffic-policy/v2\nrules: []\n").unwrap();
         let report = temp.path().join("replay-report.json");
         let case_dir = temp.path().join(CASE);
         fs::create_dir(&case_dir).unwrap();
@@ -214,7 +214,7 @@ fn mysql_plan_apply_reclassifies_existing_evidence_and_rule_removal_restores_dir
         );
         assert_eq!(fs::read(&deps).unwrap(), original);
     }
-    fs::write(&f.rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    fs::write(&f.rules, "format: traffic-policy/v2\nrules: []\n").unwrap();
     let result = f.reclassify();
     assert_eq!(result.matched_unused_case, 0);
     assert_eq!(result.remaining_dirty_case_ids, [CASE.to_owned()].into());
@@ -329,7 +329,7 @@ fn mixed_mysql_and_redis_rules_reclassify_the_same_immutable_case() {
         assert!(result.remaining_dirty_case_ids.is_empty());
     }
     assert_eq!(fs::read_to_string(&deps).unwrap(), original);
-    fs::write(&f.rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    fs::write(&f.rules, "format: traffic-policy/v2\nrules: []\n").unwrap();
     let restored = f.reclassify();
     assert_eq!(restored.remaining_dirty_case_ids, [CASE.to_owned()].into());
     assert_eq!(f.read_report()["unused_case_exchanges"][0]["case_id"], CASE);

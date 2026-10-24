@@ -60,6 +60,7 @@ pub(super) fn compare(
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
     let checked = compare_outputs(expected, actual, rules, times)?;
+    report.identity_pairs.extend(checked.identity_pairs());
     report.applied_body_rule_ids.extend(checked.evaluated);
     report.differences.extend(
         checked

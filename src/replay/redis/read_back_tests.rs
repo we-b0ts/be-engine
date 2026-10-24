@@ -52,7 +52,7 @@ async fn read_back_tcp_preserves_generated_identity_without_target_local_cache()
     std::fs::write(case.join("dependencies.jsonl"), &original).unwrap();
     std::fs::write(
         root.join(".traffic-e2e/policy.yaml"),
-        json!({"format":"traffic-policy/v1","rules":[rule(),{
+        json!({"format":"traffic-policy/v2","rules":[rule(),{
             "id":"lset-time","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"key":{"kind":"exact","value":"blocks:7"}},
             "effect":{"kind":"redis_sequence","commands":[{"operation":"LSET","arguments":{"2":{"kind":"json","fields":{"/timestamp":{"relative_time":"unix_milliseconds"}}}}}]},
             "proof":{"source":"blocks.py:update","fact":"Source writes a millisecond timestamp while preserving a previously bound identity in a list element"}

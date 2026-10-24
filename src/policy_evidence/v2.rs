@@ -41,13 +41,16 @@ impl TargetMetadata {
             !self.case_id.is_empty(),
             "Target observation requires a Case identity"
         );
-        let expected = if self.surface == Surface::DependencyResponse {
-            TargetRole::DerivedDelivery
+        let valid = if self.surface == Surface::DependencyResponse {
+            matches!(
+                self.role,
+                TargetRole::DerivedDelivery | TargetRole::DeliveredInput
+            )
         } else {
-            TargetRole::IndependentTargetObservation
+            self.role == TargetRole::IndependentTargetObservation
         };
         ensure!(
-            self.role == expected,
+            valid,
             "derived delivery cannot become independent Target proof"
         );
         ensure!(

@@ -97,9 +97,13 @@ fn time_window_checks_own_clocks_stable_key_and_pipeline_sequence() {
         assert!(compare(&runtime, "INCRBY", &source, &bad).is_err());
     }
     assert!(compare(&runtime, "EXPIRE", &[source[0], "61"], &[actual[0], "61"]).is_err());
-    runtime.commit(compare(&runtime, "INCRBY", &source, &actual).unwrap());
+    runtime
+        .commit(compare(&runtime, "INCRBY", &source, &actual).unwrap())
+        .unwrap();
     assert!(compare(&runtime, "EXPIRE", &[source[0], "61"], &[actual[0], "62"]).is_err());
-    runtime.commit(compare(&runtime, "EXPIRE", &[source[0], "61"], &[actual[0], "61"]).unwrap());
+    runtime
+        .commit(compare(&runtime, "EXPIRE", &[source[0], "61"], &[actual[0], "61"]).unwrap())
+        .unwrap();
     assert!(compare(&runtime, "INCRBY", &source, &actual).is_ok());
     runtime.set_request_times(
         "case",
@@ -121,7 +125,9 @@ fn boundary_window_still_requires_same_target_key_for_the_sequence() {
             target: Some(DateTime::from_timestamp(2039, 0).unwrap()),
         },
     );
-    runtime.commit(compare(&runtime, "INCRBY", &["rate:x:16", "1"], &["rate:x:33", "1"]).unwrap());
+    runtime
+        .commit(compare(&runtime, "INCRBY", &["rate:x:16", "1"], &["rate:x:33", "1"]).unwrap())
+        .unwrap();
     assert!(
         compare(
             &runtime,
@@ -191,7 +197,7 @@ fn key_and_json_identity_and_time_are_validated_atomically() {
     ];
     let decision = compare(&runtime, "SET", &source, &actual).unwrap();
     assert!(runtime.key_binding_report().is_empty());
-    runtime.commit(decision);
+    runtime.commit(decision).unwrap();
     let reports = runtime.key_binding_report();
     assert_eq!(reports.len(), 1);
     let public = serde_json::to_string(&reports).unwrap();
@@ -258,36 +264,45 @@ fn later_references_need_committed_capture_and_can_verify_sha256_derivation() {
             )
             .is_err()
     );
-    runtime.commit(
-        compare(
-            &runtime,
-            "SET",
-            &[
-                "sessions:ab12",
-                r#"{"id":"ab12","expires_at":4600}"#,
-                "EX",
-                "3600",
-            ],
-            &[
-                "sessions:cd34",
-                r#"{"id":"cd34","expires_at":5600}"#,
-                "EX",
-                "3600",
-            ],
-        )
-        .unwrap(),
-    );
-    runtime.commit(
-        runtime
-            .compare_redis(
-                &super::super::RedisRequestContext::without_exchange("case", &target(), 0, "SET"),
-                &reference,
-                selector,
-                &args(&source),
-                &args(&actual),
+    runtime
+        .commit(
+            compare(
+                &runtime,
+                "SET",
+                &[
+                    "sessions:ab12",
+                    r#"{"id":"ab12","expires_at":4600}"#,
+                    "EX",
+                    "3600",
+                ],
+                &[
+                    "sessions:cd34",
+                    r#"{"id":"cd34","expires_at":5600}"#,
+                    "EX",
+                    "3600",
+                ],
             )
             .unwrap(),
-    );
+        )
+        .unwrap();
+    runtime
+        .commit(
+            runtime
+                .compare_redis(
+                    &super::super::RedisRequestContext::without_exchange(
+                        "case",
+                        &target(),
+                        0,
+                        "SET",
+                    ),
+                    &reference,
+                    selector,
+                    &args(&source),
+                    &args(&actual),
+                )
+                .unwrap(),
+        )
+        .unwrap();
     let restored = super::super::tests::runtime(selected.clone());
     restored
         .restore_key_binding_proofs(
@@ -407,15 +422,17 @@ fn shaped_key_capture_preserves_fixed_affixes_and_json_identity() {
         format!("sessions:nonce-{b}:meta"),
         format!(r#"{{"id":"{b}","expires_at":5600}}"#),
     ];
-    runtime.commit(
-        compare(
-            &runtime,
-            "SET",
-            &[&source[0], &source[1]],
-            &[&actual[0], &actual[1]],
+    runtime
+        .commit(
+            compare(
+                &runtime,
+                "SET",
+                &[&source[0], &source[1]],
+                &[&actual[0], &actual[1]],
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    );
+        .unwrap();
     assert!(
         compare(
             &runtime,

@@ -136,14 +136,14 @@ mod tests {
 
     fn compile(rules: Vec<serde_json::Value>) -> Result<super::super::CompiledPolicy> {
         super::super::parse_and_compile_policy(
-            &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+            &json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
         )
     }
 
     #[test]
     fn authoring_roundtrip_preserves_names_and_new_scope_without_changing_defaults() {
         let rule = value_rule("/blocks/*/timestamp", json!("array_element"));
-        let document = json!({"format":"traffic-policy/v1","rules":[rule]}).to_string();
+        let document = json!({"format":"traffic-policy/v2","rules":[rule]}).to_string();
         let parsed = super::super::parse_policy(&document).unwrap();
         let rendered = super::super::render_policy(&parsed).unwrap();
         assert!(rendered.contains("clock_group: row-7"));
@@ -184,7 +184,7 @@ mod tests {
             json!({"kind":"identity","binding":"block","prefix":"text-","format":"decimal"});
         assert!(compile(vec![rule.clone()]).is_ok());
         let parsed = super::super::parse_policy(
-            &json!({"format":"traffic-policy/v1","rules":[rule]}).to_string(),
+            &json!({"format":"traffic-policy/v2","rules":[rule]}).to_string(),
         )
         .unwrap();
         assert!(

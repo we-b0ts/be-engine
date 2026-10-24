@@ -435,6 +435,7 @@ impl RedisReplayState {
                 to,
             }),
             read_back: None,
+            time_read: None,
             unified_delivery: None,
             rpc_push: None,
             rpc_response: None,

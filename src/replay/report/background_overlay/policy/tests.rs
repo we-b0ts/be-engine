@@ -88,7 +88,7 @@ impl Fixture {
         .unwrap();
         let policy = temp.path().join("policy.yaml");
         let proof = json!({"source":"jobs.py:finish","fact":"Detached job metrics use their captured job identity and a request-relative timestamp"});
-        let rules = json!({"format":"traffic-policy/v1",
+        let rules = json!({"format":"traffic-policy/v2",
             "source_revision":"sha256:1111111111111111111111111111111111111111111111111111111111111111","rules":[
             {"id":RULE,"match":{"api":"POST /callback","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"key":{"kind":"affix","prefix":"metrics:"}},
                 "effect":{"kind":"redis_sequence","commands":[{"operation":"EVALSHA","script":{"sha1":DIGEST},"arguments":{"5":{"relative_time":"unix_seconds"}}}]},"proof":proof},

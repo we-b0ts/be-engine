@@ -19,6 +19,7 @@ mod dependency;
 mod interaction;
 mod page;
 mod primary;
+mod sql_fields;
 mod values;
 pub(in crate::rewrite) use page::Cursor;
 
@@ -125,15 +126,16 @@ pub(in crate::rewrite) fn facts(
     let total = drafts.seen.len();
     let candidates = drafts.candidates();
     Ok(
-        json!({"format":"traffic-policy/v1","api":state.api,"candidates":candidates,
+        json!({"format":"traffic-policy/v2","api":state.api,"candidates":candidates,
         "observations_examined":drafts.observations,"json_nodes_examined":drafts.examined,"candidate_count":total,"summary_omitted":total.saturating_sub(candidates.len()),
         "pagination":{"scope":"bounded_scan_window","summary_offset":cursor.summary,"summary_limit":LIMIT,"scan_remaining":!primary_done || !dependency_done,"next_page_cursor":next_page,"next_scan_cursor":next_scan},
         "bounded_analysis":{"scan_order":if cursor.primary_first { ["api.response", "dependency"] } else { ["dependency", "api.response"] },"limited":drafts.limited || drafts.summary_limited(),"summary_limited":drafts.summary_limited(),"observation_limit":OBSERVATION_LIMIT,"node_limit":NODE_LIMIT,"payload_limit_bytes":4 * 1024 * 1024,"source_cache_limit_bytes":SOURCE_CACHE_LIMIT,"complete_coverage":false,"nonresumable_limits":drafts.nonresumable_limits},
         "coverage":manifest.as_ref().map(|m| json!({"sealed":m.sealed,"complete":m.complete,"omitted":m.omitted,"recorded":m.recorded})),
-        "source_entry":{"binding_count":drafts.entry_ids.len(),"summary_omitted":drafts.entry_ids.len().saturating_sub(drafts.entries.len()),"bindings":drafts.entries,"requires":["an explicit surface and resource/operation/value slot", "a typed logical pointer (PB requires explicit numeric wire path and field type)", "Source file:line and the proven ordering or time relation"],
-            "instruction":"A Source-proven field may be proposed directly even when no observed mechanism draft is available. Draft discovery is bounded and never coverage."},
+        "source_entry":{"binding_count":drafts.entry_ids.len(),"summary_omitted":drafts.entry_ids.len().saturating_sub(drafts.entries.len()),"bindings":drafts.entries,"requires":["an owning resource and physical data position; response outputs retain their API/envelope selector", "a codec and logical pointer (PB requires explicit numeric wire path and field type)", "Source file:line proving time format/relation, duration unit/branch, unordered consumer semantics or identity variability", "existing declaration reuse, Source-proven table/key families and exact null/empty/sentinel branches"],
+            "identity_inventory":{"scope":"case","relationship":"bijective_renaming","requires":["one shared binding and consistent format", "all eligible MySQL/Redis/response locations together", "Source proof that these positions permit renaming rather than fixed/external business values", "explicit guards or a retained narrow native owner when eligibility varies"],"observations_define_relations":true,"automatic_permission":false},
+            "instruction":"Inspect existing declarations and propose Source-proven physical fields directly even without a mechanism draft. Request an identity's complete location inventory at its first mismatch; a generator-first capture rule is not required. Native rules add only extra contextual relationships, derivation or protocol/stateful behavior. Draft discovery is bounded and never coverage."},
         "plan":super::super::action::command(root,vec!["rule".into(),"plan".into(),"--file".into(),"<rule.yaml>".into(),"--evidence".into(),"<evidence-id>".into()],vec![]),
-        "requires_genuine_replay":true,"does_not_prove":"Observed permutations or timestamp shifts do not prove Source intent, ownership, sharing, or successful Replay. Complete Source inventory and all selected fields are checked by plan."}),
+        "requires_genuine_replay":true,"does_not_prove":"Observed permutations, timestamp shifts or ID equality do not prove Source intent, eligibility, ownership, sharing or successful Replay. Complete Source inventory and all selected fields are checked by plan."}),
     )
 }
 
@@ -205,7 +207,7 @@ impl Drafts {
         }
         let identity = serde_json::to_string(&base)?;
         self.add_entry(identity, json!({"binding":base,"witness_id":witness,"needs_schema":codec.is_none(),"source_intent_required":true,
-                "instruction":if codec.is_none(){"Encoded bytes do not identify a codec. Trace Source encoding; for PB provide explicit field_path, field_type and repeated before planning."}else if base["slot"].get("sse_data").is_some(){"Pointers address the SSE data JSON for this exact event/type. Trace Source time generation for request_time/relative_time; a generated identity needs an explicit prefix/format and shared binding across every referring event/pointer, including terminal output. Differences alone do not prove identity permission. Event presence/order and unselected text stay strict. See docs/sse-value-contracts.md."}else{"Schema supplies decoding only. Choose a field and contract from Source behavior; proof is required for this binding."}}));
+                "instruction":if codec.is_none(){"Encoded bytes do not identify a codec. Trace Source encoding; for PB provide explicit field_path, field_type and repeated before planning. Then choose Source-proven field semantics; the missing draft is not a capability verdict."}else if base["slot"].get("sse_data").is_some(){"Pointers address the SSE data JSON for this exact event/type. Declare output fields under responses. Prove time/duration/ordering semantics, or inventory an identity's eligible MySQL/Redis/response locations with one case-local binding and explicit prefix/format, including terminal output. Observed Source values define equality and distinctness only after Source authorizes those positions. Fixed inputs remain anchored. Event presence/order and unselected text stay strict. See docs/sse-value-contracts.md."}else{"Schema supplies decoding only. Reuse or extend the owning resources/responses field declaration from Source behavior: time format/relation, duration unit/branch, unordered consumer semantics or a proven eligible identity domain. Inventory all identity locations together; proof is required for each location. Native contextual effects retain their extra relationship or protocol behavior."}}));
         let (Some(codec), Some(target)) = (codec, target) else {
             return Ok(());
         };
@@ -217,6 +219,7 @@ impl Drafts {
         };
         let paths = match &codec {
             Codec::Json => Vec::new(),
+            Codec::Scalar => vec![String::new()],
             Codec::Protobuf(codec) => codec.fields.keys().cloned().collect(),
         };
         self.collect(
@@ -229,7 +232,7 @@ impl Drafts {
             0,
         )
     }
-    #[allow(clippy::too_many_arguments)] // SQL bindings require the Source template; metadata slots are only placeholders.
+    #[allow(clippy::too_many_arguments)] // Native witnesses and physical-field suggestions share immutable context.
     fn sql_entry(
         &mut self,
         event: &Value,
@@ -265,24 +268,42 @@ impl Drafts {
         }
         if rules.is_empty() {
             let base = json!({"surface":witness.metadata.surface,"match":{
-                "resource":witness.metadata.resource,"operation":witness.metadata.operation}});
-            let identity = serde_json::to_string(&(&base, &event["response"]["status"]))?;
+                "resource":witness.metadata.resource}});
+            let physical = sql_fields::observed(event, witness.metadata.surface);
+            let unavailable = physical["fields"].as_array().is_none_or(Vec::is_empty);
+            let identity =
+                serde_json::to_string(&(&base, &physical, &event["response"]["status"]))?;
             self.add_entry(identity, json!({"binding":base,"witness_id":witness.id,
-                    "source_response_kind":event["response"]["status"],
-                    "needs_sql_template":true,"needs_slot":true,"needs_schema":true,"source_intent_required":true,
-                    "instruction":"Trace Source SQL construction and declare match.sql plus sql_value (template parameter ordinal) or sql_column. Metadata placeholders do not identify the value slot. For sharded ORM SQL, prove a bounded table_series and explicit AS {{table}}_suffix aliases from Source; do not enumerate witnessed shards or infer a table family from digits. Supply an explicit codec and fresh Source proof."}));
+                    "source_response_kind":event["response"]["status"],"physical_fields":physical,
+                    "needs_sql_template":false,"needs_physical_binding":unavailable,"needs_slot":true,"needs_schema":true,"source_intent_required":true,
+                    "instruction":"Inspect existing resource declarations, then declare physical database/table/column fields and an explicit scalar or JSON/PB codec from Source behavior. Choose time, duration, unordered or identity semantics where supported; no match.api, match.sql or value ordinal repeats the same field strategy. For identity, collect every eligible MySQL/Redis/response position and common case-local binding together. Mixed fixed/external IDs need expressible eligibility guards; otherwise retain the narrow native owner. Observed positions and physical tables are suggestions, not generation, codec or table-family proof; prove bounded table_series from Source construction. Unknown or ambiguous origins grant no permission. Use an explicit SQL template and field_ref only for additional native contextual relationships. Supply fresh Source proof."}));
             return Ok(());
         }
         let scope = rules
             .iter()
             .map(|rule| rule.rule.id.as_str())
             .collect::<BTreeSet<_>>();
+        let database = witness
+            .metadata
+            .resource
+            .as_ref()
+            .and_then(|resource| resource.database.as_ref())
+            .and_then(|database| database.name());
         for rule in &rules {
-            let source_values =
-                crate::replay::mysql_witness_values(source, witness.metadata.surface, rule)?;
+            let source_values = crate::replay::mysql_witness_values(
+                source,
+                witness.metadata.surface,
+                rule,
+                database,
+            )?;
             let target_values = target
                 .map(|bytes| {
-                    crate::replay::mysql_witness_values(bytes, witness.metadata.surface, rule)
+                    crate::replay::mysql_witness_values(
+                        bytes,
+                        witness.metadata.surface,
+                        rule,
+                        database,
+                    )
                 })
                 .transpose()?;
             let mut base = json!({"surface":rule.rule.surface,"match":rule.rule.selector,"slot":rule.rule.slot});
@@ -320,7 +341,7 @@ mod tests {
         second["match"]["table_series"]["end"] = json!(2);
         second["codec"] = json!({"kind":"protobuf","fields":{"/members":{"field_path":[1],"field_type":"string","repeated":true}}});
         let schemas = crate::policy::parse_and_compile_policy(
-            &json!({"format":"traffic-policy/v1","rules":[first.clone(),second]}).to_string(),
+            &json!({"format":"traffic-policy/v2","rules":[first.clone(),second]}).to_string(),
         )
         .unwrap();
         let mut drafts = Drafts::default();
@@ -345,7 +366,7 @@ mod tests {
 
     #[test]
     fn protobuf_discovery_reuses_only_an_explicit_matching_schema_and_never_its_proof() {
-        let document = serde_json::json!({"format":"traffic-policy/v1","rules":[{
+        let document = serde_json::json!({"format":"traffic-policy/v2","rules":[{
             "id":"known-schema","surface":"api.response","match":{"api":"GET /api"},"slot":"body",
             "codec":{"kind":"protobuf","fields":{"/members":{"field_path":[1],"field_type":"string","repeated":true}}},
             "contract":{"/members":{"kind":"unordered"}},

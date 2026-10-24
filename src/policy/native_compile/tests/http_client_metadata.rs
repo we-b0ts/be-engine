@@ -10,7 +10,7 @@ fn rule() -> Value {
 }
 fn compile(rules: Vec<Value>) -> anyhow::Result<policy::CompiledPolicy> {
     policy::parse_and_compile_policy(
-        &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+        &json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
     )
 }
 
@@ -31,7 +31,7 @@ fn client_metadata_is_typed_and_owns_only_the_selected_headers() {
     timestamp["effect"] = json!({"kind":"http_request","headers":{"x-stainless-lang":{"format":"unix_seconds","relation":"request_window"}}});
     assert!(compile(vec![rule(), timestamp]).is_err());
     let parsed =
-        policy::parse_policy(&json!({"format":"traffic-policy/v1","rules":[rule()]}).to_string())
+        policy::parse_policy(&json!({"format":"traffic-policy/v2","rules":[rule()]}).to_string())
             .unwrap();
     assert_eq!(
         policy::parse_and_compile_policy(&policy::render_policy(&parsed).unwrap()).unwrap(),

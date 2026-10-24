@@ -4,10 +4,13 @@ pub(in crate::replay::policy) mod evidence;
 mod http_body;
 mod http_json;
 mod http_value;
+mod identity;
+mod identity_inputs;
 mod jwt;
 pub(in crate::replay::policy) mod key;
 mod memcached;
 mod mysql;
+pub(in crate::replay) use mysql::RawMysqlIdentityRequest;
 mod mysql_selection;
 pub(in crate::replay::policy) mod native_projection;
 mod signing_keys;
@@ -16,7 +19,14 @@ pub(in crate::replay) use key::KeyBindingReport;
 mod overlap;
 mod read_back;
 mod redis;
+mod redis_fields;
 pub(in crate::replay) use read_back::{PreparedReadBack, RedisReadBackReport};
+pub(in crate::replay) use redis_fields::PreparedRedisTimeRead;
+pub(crate) use redis_fields::response_identities as redis_response_identities;
+pub(crate) use redis_fields::{RedisFieldValue, redis_field_values};
+pub(crate) use redis_fields::{
+    RedisTimeRead, redis_delivered_time_copies, redis_time_position, redis_time_write_proofs,
+};
 mod unified_response;
 mod url;
 pub(in crate::replay) use unified_response::PreparedRedisDelivery;
@@ -26,6 +36,7 @@ mod source_applicability;
 mod source_records;
 mod source_session;
 mod time;
+mod time_copies;
 mod unified;
 pub(in crate::replay::policy) use overlap::validate as validate_overlaps;
 pub(in crate::replay) use unified::RedisRequestContext;
@@ -48,6 +59,8 @@ use std::{
 struct CaseAnchor {
     method: String,
     path: String,
+    source_uri: String,
+    source_input_error: Option<&'static str>,
     recorded: Option<DateTime<Utc>>,
     actual: Option<DateTime<Utc>>,
     dir: PathBuf,
@@ -64,6 +77,7 @@ struct State {
     key_binds: BTreeMap<String, usize>,
     identity_references: BTreeMap<String, usize>,
     cases: BTreeMap<String, CaseAnchor>,
+    identity_inputs: BTreeMap<String, Arc<identity_inputs::InputIndex>>,
     applicable: BTreeSet<String>,
     redis_applicability: source_applicability::RedisApplicability,
     usage: BTreeMap<String, usize>,
@@ -87,6 +101,10 @@ pub(in crate::replay) struct RequestContracts {
     rules: Arc<Vec<ReplayDependencyRule>>,
     keys: Arc<BTreeMap<(String, String), crate::request_rules::keys::ResolvedSigningKey>>,
     state: Arc<Mutex<State>>,
+    identities: Arc<Mutex<crate::value_contract::identities::IdentityStore>>,
+    identity_prefixes: Arc<BTreeMap<String, BTreeSet<String>>>,
+    pub(in crate::replay) time_copies:
+        Arc<Mutex<crate::value_contract::time_copies::TimeCopyStore>>,
 }
 impl std::fmt::Debug for RequestContracts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -97,6 +115,7 @@ impl std::fmt::Debug for RequestContracts {
 }
 #[derive(Debug, Clone, Default)]
 pub(in crate::replay) struct Decision {
+    pub(in crate::replay) identity: Option<crate::value_contract::identities::IdentityDecision>,
     key_bindings: Vec<key::PendingBinding>,
     identity_references: usize,
     pub ids: Vec<String>,
@@ -134,11 +153,15 @@ impl RequestContracts {
             }
             let request: Value =
                 serde_json::from_slice(&std::fs::read(case.dir.join("request.json"))?)?;
+            let source_body = unified::source_body(&request);
+            let source_input_error = identity_inputs::capture_error(&request, source_body.as_ref());
             state.cases.insert(
                 id.clone(),
                 CaseAnchor {
                     method: request["method"].as_str().unwrap_or_default().into(),
                     path: super::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
+                    source_uri: request["uri"].as_str().unwrap_or_default().to_owned(),
+                    source_input_error,
                     recorded: request["timestamp"].as_str().and_then(|v| v.parse().ok()),
                     actual: None,
                     dir: case.dir.clone(),
@@ -150,7 +173,7 @@ impl RequestContracts {
                                 .map(|condition| (rule.id.as_str(), condition))
                         }),
                     ),
-                    source_body: unified::source_body(&request),
+                    source_body,
                 },
             );
         }
@@ -167,6 +190,9 @@ impl RequestContracts {
             ),
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),
+            identities: Arc::default(),
+            identity_prefixes: Arc::default(),
+            time_copies: Arc::default(),
         })
     }
     pub(in crate::replay::policy) fn signing_keys(
@@ -185,6 +211,9 @@ impl RequestContracts {
         state.key_binding_proofs.retain(|proof| proof.case_id != id);
         state.candidates.retain(|c| c.case_id != id);
         state.read_back.begin_case(id);
+        drop(state);
+        self.time_copies.lock().expect("time copies").begin_case(id);
+        self.clear_identities(id);
     }
     pub(in crate::replay) fn request_begin(&self, id: &str) -> Result<()> {
         let mut state = self.state.lock().expect("request contracts");
@@ -254,7 +283,10 @@ impl RequestContracts {
             })
             .collect()
     }
-    pub(in crate::replay) fn commit(&self, decision: Decision) {
+    pub(in crate::replay) fn commit(&self, decision: Decision) -> Result<()> {
+        if let Some(identity) = decision.identity {
+            self.commit_identity(identity)?;
+        }
         let mut state = self.state.lock().expect("request contracts");
         for id in decision.ids {
             *state.key_binds.entry(id.clone()).or_default() += decision.key_bindings.len();
@@ -280,6 +312,7 @@ impl RequestContracts {
                 .or_default()
                 .insert(source, actual);
         }
+        Ok(())
     }
     pub(in crate::replay) fn enabled(&self) -> bool {
         !self.rules.is_empty()

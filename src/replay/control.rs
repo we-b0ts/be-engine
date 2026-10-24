@@ -4,7 +4,9 @@ use super::*;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) mod dependency_tail;
+mod identity;
 mod interaction;
+pub(crate) use identity::check_response_identities;
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READY_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -17,6 +19,8 @@ pub(super) struct ReplayControlRequest {
     pub(super) fail_on_dirty: bool,
     #[serde(default)]
     pub(super) fail_on_incomplete: bool,
+    #[serde(default)]
+    pub(super) identity_pairs: Vec<crate::value_contract::identities::IdentityPair>,
 }
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -227,11 +231,23 @@ pub(super) async fn handle_control_stream(
 ) -> Result<bool> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader
+    use tokio::io::AsyncReadExt;
+    (&mut reader)
+        .take(identity::MAX_CONTROL_BYTES as u64 + 1)
         .read_line(&mut line)
         .await
         .context("failed to read replay control request")?;
     let mut stream = reader.into_inner();
+    if line.len() > identity::MAX_CONTROL_BYTES {
+        write_control_response(
+            &mut stream,
+            serde_json::json!({
+                "ok": false, "error": "replay control request exceeds the supported bound"
+            }),
+        )
+        .await?;
+        return Ok(false);
+    }
     let request: ReplayControlRequest = match serde_json::from_str(line.trim()) {
         Ok(request) => request,
         Err(err) => {
@@ -315,6 +331,7 @@ pub(super) async fn handle_control_request(
             }
         }
         "begin" => begin_case(&request, state.clone()).await,
+        "response_identities" => identity::accept(&request, &state).await,
         "end" => end_case(&request, state.clone()).await,
         "report" => {
             let state = state.lock().await;
@@ -635,6 +652,10 @@ pub(super) async fn end_case(
         dependency_tail::end(&mut state, case_id);
         if let Some(case) = state.cases.get_mut(case_id) {
             case.status = ReplayCaseStatus::Ended;
+        }
+        if let Some(policy) = &state.replay_policy {
+            policy.request_contracts.clear_time_copies(case_id);
+            policy.request_contracts.clear_identities(case_id);
         }
         deferred::release_consumed_payloads(&mut state);
         sample

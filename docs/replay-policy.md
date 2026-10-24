@@ -1,6 +1,6 @@
 # Traffic Policy
 
-The sole policy is a strict `traffic-policy/v1` document named by the managed
+The sole policy is a strict `traffic-policy/v2` document named by the managed
 project's `project.policy` path. The path is relative to the Target repository;
 the default is `.traffic-e2e/policy.yaml`.
 
@@ -14,14 +14,20 @@ project:
 An empty policy is:
 
 ```yaml
-format: traffic-policy/v1
+format: traffic-policy/v2
+resources: {}
+responses: {}
 rules: []
 ```
 
-Use a self-contained rule by default. Inline resource, codec, contracts and Source
-proof make the complete permission visible in one place. Value rules declare
-one of `api.response`, `dependency.request`, `dependency.response`; native effects
-retain their explicit identity, input, acquisition, ownership or sharing owner.
+Declare stable physical data semantics once under `resources` and API output
+fields under `responses`. Refer to named resources and reuse field strategies
+through `field_ref` in contextual rules. See
+[resource-owned field contracts](resource-field-contracts.md) for the schema,
+SQL-independent selection, Redis carriers, conditions and clock relationships.
+Declarations lower to the same `api.response`, `dependency.request` and
+`dependency.response` contracts; native effects retain their explicit identity,
+input, acquisition, ownership or sharing owner.
 Keep `fact` within 200 UTF-8 bytes and `source` within three file references;
 use a list for multiple files. Capture-path rules come first and may omit
 `source`. A common document-level `source_revision` is emitted only once.
@@ -34,7 +40,8 @@ See [unified rule contracts](unified-rule-contracts.md) for all three surfaces,
 JSON/PB reuse, native examples, module boundaries, precision, evidence and plan
 obligations. Domain-specific rule pages preserve historical semantic explanations;
 their old configuration/commands are retired. Production loaders and authoring
-APIs do not accept old version 1/2/3 policy documents or split file layouts.
+APIs accept only `traffic-policy/v2`, not the former version-numbered verification
+documents, `traffic-policy/v1` or split file layouts.
 
 Workers discover bounded drafts and missing Source proof through current evidence.
 Discovery prioritizes the representative and failed response Cases. Each scan
@@ -55,7 +62,8 @@ commutation, expiry-refresh and Redis/MySQL read-back mechanisms with their
 Source proof requirements. These hints identify capabilities to investigate;
 they never authorize changed values, ordering or call counts.
 
-The coordinator proposes one record or a rule list:
+The coordinator proposes a rule, a rule list or an authored v2 document containing
+resource/response declarations and contextual rules:
 
 ```text
 backend-rewrite rule plan --file rule.yaml --evidence <current-evidence-id>
@@ -75,7 +83,7 @@ the same `rule plan --file` command:
 format: traffic-policy-change/v1
 replace_rules: [old-clock-rule, old-identity-rule]
 policy:
-  format: traffic-policy/v1
+  format: traffic-policy/v2
   rules:
     # Complete replacement rules, with their own Source proof.
 ```
@@ -89,7 +97,9 @@ replacement rules and whole-policy diff. Unselected rules remain unchanged.
 Publication reuses the original policy compare-and-swap, frozen witnesses,
 durable write intent and recovery, and requires fresh genuine Replay. A change
 proposal is not a persisted policy format. Ordinary rule documents remain
-additive; omitting an old rule from them never deletes it.
+additive; omitting an old rule or declaration never deletes it. Declaration
+amendments preserve existing resource identity, proofs and fields; unsupported
+replacement or deletion rejects rather than silently broadening permission.
 Capture HTTP consolidation must preserve the exact existing path union, Source
 revision and selectors. Breeze capture and ordered Source-response rewrites
 cannot be deleted or replaced through this value-rule transaction. Prospective

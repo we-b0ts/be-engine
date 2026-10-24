@@ -160,6 +160,8 @@ fn json_request_time_requires_exact_endpoint_inbound_case_and_dependency_method(
     state.cases.insert(
         "case".into(),
         CaseAnchor {
+            source_uri: String::new(),
+            source_input_error: None,
             source_body: None,
             conditions: BTreeSet::new(),
             method: "POST".into(),

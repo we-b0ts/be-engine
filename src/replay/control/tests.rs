@@ -42,6 +42,7 @@ async fn replay_end_keeps_case_active_for_default_post_response_window() {
         case_id: Some("case-a".to_string()),
         fail_on_dirty: false,
         fail_on_incomplete: false,
+        identity_pairs: Vec::new(),
     };
     assert_eq!(begin_case(&begin, state.clone()).await["ok"], true);
 
@@ -50,6 +51,7 @@ async fn replay_end_keeps_case_active_for_default_post_response_window() {
         case_id: Some("case-a".to_string()),
         fail_on_dirty: false,
         fail_on_incomplete: false,
+        identity_pairs: Vec::new(),
     };
     let end_state = state.clone();
     let ending = tokio::spawn(async move { end_case(&end, end_state).await });

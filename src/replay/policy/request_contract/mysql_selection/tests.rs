@@ -219,7 +219,7 @@ fn runtime(native: bool) -> RequestContracts {
         "  surface: dependency.request\n  slot: {sql_value: 0}\n  codec: json\n  contract:\n    /stamp: {kind: time, format: unix_seconds, relation: preserve_offset}\n"
     };
     let policy = crate::policy::parse_policy(&format!(
-        r#"format: traffic-policy/v1
+        r#"format: traffic-policy/v2
 rules:
 - id: time
   match:
@@ -243,6 +243,8 @@ rules:
     runtime.state.lock().unwrap().cases.insert(
         "case".into(),
         CaseAnchor {
+            source_uri: String::new(),
+            source_input_error: None,
             method: "POST".into(),
             path: "/entries/7".into(),
             source_body: Some(json!({"enabled": true})),
@@ -350,7 +352,7 @@ fn compiled_templates_are_shared_by_runtime_clones_and_reset_on_policy_reconfigu
     ));
     assert_eq!(clone.mysql_selection.templates.len(), 1);
     let policy = crate::policy::parse_policy(
-        r#"format: traffic-policy/v1
+        r#"format: traffic-policy/v2
 rules:
 - id: response-set
   surface: api.response

@@ -9,6 +9,10 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "mysql_fields_tests.rs"]
+mod mysql_fields_tests;
+
 pub(in crate::rewrite::unified_rule) fn protocol(event: &Value) -> Option<Protocol> {
     match event["event_type"].as_str()? {
         "redis_exchange" => Some(Protocol::Redis),
@@ -19,10 +23,7 @@ pub(in crate::rewrite::unified_rule) fn protocol(event: &Value) -> Option<Protoc
     }
 }
 
-pub(in crate::rewrite::unified_rule) fn selects(
-    rule: &CompiledRule,
-    event: &Value,
-) -> Result<bool> {
+fn resource_scope_matches(rule: &CompiledRule, event: &Value) -> Result<bool> {
     let resource = rule
         .rule
         .selector
@@ -33,7 +34,7 @@ pub(in crate::rewrite::unified_rule) fn selects(
         return Ok(false);
     }
     if resource.protocol == Protocol::Http {
-        return crate::replay::http_witness_matches(event, rule);
+        return Ok(true);
     }
     ensure!(
         matches!(
@@ -46,10 +47,10 @@ pub(in crate::rewrite::unified_rule) fn selects(
         .as_str()
         .is_some_and(|h| h.eq_ignore_ascii_case(&resource.endpoint.host))
         || event["target_port"].as_u64() != Some(u64::from(resource.endpoint.port))
-        || resource
-            .database
-            .as_ref()
-            .is_some_and(|d| !database_matches(d, &event["database"]))
+        || resource.database.as_ref().is_some_and(|d| {
+            !matches!(rule.rule.slot, crate::policy::Slot::SqlField(_))
+                && !database_matches(d, &event["database"])
+        })
         || resource
             .username
             .as_ref()
@@ -67,8 +68,30 @@ pub(in crate::rewrite::unified_rule) fn selects(
     {
         return Ok(false);
     }
+    Ok(true)
+}
+
+pub(in crate::rewrite::unified_rule) fn selects(
+    rule: &CompiledRule,
+    event: &Value,
+) -> Result<bool> {
+    if !resource_scope_matches(rule, event)? {
+        return Ok(false);
+    }
+    let resource = rule
+        .rule
+        .selector
+        .resource
+        .as_ref()
+        .expect("checked resource");
+    if resource.protocol == Protocol::Http {
+        return crate::replay::http_witness_matches(event, rule);
+    }
     if resource.protocol == Protocol::Mysql {
         return crate::replay::mysql_witness_matches(event, rule);
+    }
+    if matches!(rule.rule.slot, crate::policy::Slot::RedisValue(_)) {
+        return super::redis_fields::selects(rule, event);
     }
     if let Some(field) = &rule.rule.selector.hash_field
         && !super::arguments(event)?
@@ -84,6 +107,28 @@ pub(in crate::rewrite::unified_rule) fn selects(
             .as_ref()
             .is_none_or(|s| s.matches(key))
     }))
+}
+
+/// Batch semantic Redis selection so one event is decoded once per surface.
+pub(super) fn selected_rules<'a>(
+    rules: &[&'a CompiledRule],
+    event: &Value,
+) -> Result<Vec<&'a CompiledRule>> {
+    let mut result = Vec::new();
+    let mut semantic = Vec::new();
+    for rule in rules {
+        if protocol(event) == Some(Protocol::Redis)
+            && matches!(rule.rule.slot, crate::policy::Slot::RedisValue(_))
+        {
+            if resource_scope_matches(rule, event)? {
+                semantic.push(*rule);
+            }
+        } else if selects(rule, event)? {
+            result.push(*rule);
+        }
+    }
+    result.extend(super::redis_fields::select_rules(&semantic, event)?);
+    Ok(result)
 }
 
 pub(super) fn selects_native_sql(rule: &CompiledNativeRule, event: &Value) -> Result<bool> {
@@ -162,7 +207,10 @@ pub(in crate::rewrite::unified_rule) fn source_witness(
     }
 }
 
-pub(super) fn validate_metadata(witness: &WitnessRef, event: &Value) -> Result<()> {
+pub(in crate::rewrite::unified_rule) fn validate_metadata(
+    witness: &WitnessRef,
+    event: &Value,
+) -> Result<()> {
     if protocol(event) == Some(Protocol::Http) {
         return crate::replay::http_witness_metadata_matches(event, &witness.metadata);
     }
@@ -199,15 +247,36 @@ pub(super) fn compare_source(
     native: &[&CompiledNativeRule],
     clocks: AnchorClocks,
 ) -> Result<BTreeSet<String>> {
+    if protocol(event) == Some(Protocol::Redis)
+        && rules
+            .iter()
+            .any(|rule| matches!(rule.rule.slot, crate::policy::Slot::RedisValue(_)))
+    {
+        return super::redis_fields::source(surface, event, raw, rules, clocks);
+    }
     if protocol(event) == Some(Protocol::Mysql) {
         let mut checked = BTreeSet::new();
         if surface == Surface::DependencyResponse && event["response"]["status"] != "resultset" {
             return Ok(checked);
         }
         let report = if surface == Surface::DependencyRequest {
-            crate::replay::mysql_validate_contract_witness(raw, raw, rules, native, clocks)?
+            crate::replay::mysql_validate_contract_witness(
+                event["database"].as_str(),
+                raw,
+                raw,
+                rules,
+                native,
+                clocks,
+            )?
         } else {
-            crate::replay::mysql_validate_witness(raw, raw, surface, rules, clocks)?
+            crate::replay::mysql_validate_witness(
+                event["database"].as_str(),
+                raw,
+                raw,
+                surface,
+                rules,
+                clocks,
+            )?
         };
         ensure!(
             report.passed(),
@@ -237,17 +306,69 @@ pub(super) fn compare_pair(
     native: &[&CompiledNativeRule],
     clocks: AnchorClocks,
 ) -> Result<usize> {
+    compare_pair_with_time_copies(surface, event, source, target, rules, native, clocks, None)
+}
+
+#[allow(clippy::too_many_arguments)] // Complete protected envelopes and their selected owners stay together.
+pub(super) fn compare_pair_with_time_copies(
+    surface: Surface,
+    event: &Value,
+    source: &[u8],
+    target: &[u8],
+    rules: &[&CompiledRule],
+    native: &[&CompiledNativeRule],
+    clocks: AnchorClocks,
+    copies: Option<(&crate::value_contract::time_copies::TimeCopyStore, &str)>,
+) -> Result<usize> {
+    if protocol(event) == Some(Protocol::Redis)
+        && rules
+            .iter()
+            .any(|rule| matches!(rule.rule.slot, crate::policy::Slot::RedisValue(_)))
+    {
+        return if copies.is_some() {
+            super::redis_fields::pair_with_time_copies(
+                surface, event, source, target, rules, clocks, copies,
+            )
+        } else {
+            super::redis_fields::pair(surface, event, source, target, rules, clocks)
+        };
+    }
     if protocol(event) == Some(Protocol::Mysql) {
         let report = if surface == Surface::DependencyRequest {
-            let Some(report) = crate::replay::mysql_validate_contract_candidate(
-                source, target, rules, native, clocks,
-            )?
-            else {
+            let candidate = if let Some((store, case)) = copies {
+                crate::replay::mysql_validate_contract_candidate_with_time_copies(
+                    event["database"].as_str(),
+                    source,
+                    target,
+                    rules,
+                    native,
+                    clocks,
+                    store,
+                    case,
+                )?
+            } else {
+                crate::replay::mysql_validate_contract_candidate(
+                    event["database"].as_str(),
+                    source,
+                    target,
+                    rules,
+                    native,
+                    clocks,
+                )?
+            };
+            let Some(report) = candidate else {
                 return Ok(0);
             };
             report
         } else {
-            crate::replay::mysql_validate_witness(source, target, surface, rules, clocks)?
+            crate::replay::mysql_validate_witness(
+                event["database"].as_str(),
+                source,
+                target,
+                surface,
+                rules,
+                clocks,
+            )?
         };
         ensure!(
             report.passed(),

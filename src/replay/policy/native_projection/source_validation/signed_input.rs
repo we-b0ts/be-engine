@@ -81,7 +81,7 @@ mod tests {
             "signing_key":{"kind":"target_env","name":"LOGIN_SECRET"},"time":"preserve_relative"},
             "proof":{"source":"login.py:verify","fact":"The application verifies sorted MD5 fields and timestamp age"}});
         let compiled = crate::policy::compile_policy(
-            &serde_json::from_value(json!({"format":"traffic-policy/v1","rules":[rule]})).unwrap(),
+            &serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[rule]})).unwrap(),
         )
         .unwrap();
         let temp = tempfile::tempdir().unwrap();

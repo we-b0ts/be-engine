@@ -79,6 +79,8 @@ authenticated in-memory view in both API and native dependency preflight. Plans
 freeze original artifacts and the managed key, keep private bytes out of public
 reports, and still require genuine independent Target Replay after Apply.
 
-These dependency bindings and SSE value bindings remain separate owners. An
-identical binding label on a response field does not by itself prove the response
-identity came from the corresponding dependency result.
+Resource-owned MySQL/Redis identity fields and SSE/response identity fields can
+share one case-local `binding` when Source proves their locations are eligible
+for renaming. Native `effect.capture` bindings keep their separate capture and
+reference semantics; giving a response field the same label does not connect
+it to that native owner. See [identity domains](resource-field-contracts.md#identity-domains-and-read-delivery).

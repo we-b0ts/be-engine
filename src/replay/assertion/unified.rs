@@ -79,9 +79,13 @@ pub(super) fn compare(
             ..Default::default()
         },
     )?;
+    report.identity_pairs.extend(comparison.identity_pairs());
     report.body_codec = match codec {
         crate::policy::Codec::Json => ResponseBodyCodec::Json,
         crate::policy::Codec::Protobuf(_) => ResponseBodyCodec::Protobuf,
+        crate::policy::Codec::Scalar => {
+            anyhow::bail!("API response body requires a document codec")
+        }
     };
     report.applied_body_rule_ids.extend(comparison.evaluated);
     for diff in comparison.differences {

@@ -185,7 +185,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, MysqlBackgroundDependencyFeedback) {
         let temp = tempfile::tempdir().unwrap();
         let rules = temp.path().join("source-traffic-policy.yaml");
-        fs::write(&rules, "format: traffic-policy/v1\nrules: []\n").unwrap();
+        fs::write(&rules, "format: traffic-policy/v2\nrules: []\n").unwrap();
         let deps = temp.path().join("dependencies.jsonl");
         let sql = "SELECT id FROM tasks_0001 WHERE status='RUNNING' AND created_at >= '2026-09-05'";
         let event = json!({"event_type":"mysql_exchange","command":"COM_QUERY","target_host":"db.internal","target_port":3306,"database":"app","username":"user","sql":sql,"parse_warnings":[],"response":{"status":"resultset","columns":[{"name":"id"}],"rows":[],"row_count":0,"rows_truncated":false}});

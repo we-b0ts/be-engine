@@ -624,6 +624,7 @@ fn evaluate_response(
                 diagnosis.used_for_verdict = false;
                 report.body_diagnosis = Some(diagnosis);
             }
+            report.identity_pairs.extend(comparison.identity_pairs());
             report.applied_body_rule_ids.extend(comparison.evaluated);
             for diff in comparison.differences {
                 report.differences.push(unified::contract_difference(diff));

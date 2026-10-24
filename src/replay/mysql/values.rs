@@ -139,6 +139,7 @@ fn single_integer_result(name: &str, value: i64) -> RecordedMysqlResponse {
 
 pub(in crate::replay) fn string_column(name: &str) -> RecordedMysqlColumn {
     RecordedMysqlColumn {
+        database: None,
         name: name.to_string(),
         table: None,
         table_alias: None,
@@ -154,6 +155,7 @@ pub(in crate::replay) fn string_column(name: &str) -> RecordedMysqlColumn {
 
 pub(in crate::replay) fn integer_column(name: &str) -> RecordedMysqlColumn {
     RecordedMysqlColumn {
+        database: None,
         name: name.to_string(),
         table: None,
         table_alias: None,

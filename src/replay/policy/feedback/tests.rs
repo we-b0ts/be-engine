@@ -17,7 +17,7 @@ impl RetiredFixture {
         let evidence = temp.path().join("dependencies.jsonl");
         fs::write(
             &policy,
-            "# preserved policy\nformat: traffic-policy/v1\nrules: []\n",
+            "# preserved policy\nformat: traffic-policy/v2\nrules: []\n",
         )
         .unwrap();
         fs::write(&evidence, b"immutable Source and Target witnesses\n").unwrap();
@@ -41,7 +41,7 @@ impl RetiredFixture {
                 .contains("legacy rule authoring is retired"),
             "{error:#}"
         );
-        assert!(error.to_string().contains("traffic-policy/v1"));
+        assert!(error.to_string().contains("traffic-policy/v2"));
         assert_eq!(fs::read(&self.policy).unwrap(), before[0]);
         assert_eq!(fs::read(&self.evidence).unwrap(), before[1]);
     }

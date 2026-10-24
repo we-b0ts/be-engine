@@ -64,7 +64,7 @@ fn lset_source_preflight_composes_json_time_and_conditional_identity_at_element_
         definitions[1]["effect"]["capture"]["index"] = json!(index);
         assert!(
             crate::policy::parse_and_compile_policy(
-                &json!({"format":"traffic-policy/v1","rules":definitions}).to_string()
+                &json!({"format":"traffic-policy/v2","rules":definitions}).to_string()
             )
             .is_err()
         );

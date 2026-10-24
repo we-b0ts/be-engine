@@ -16,7 +16,7 @@ async fn run(rule: Option<Value>, actual: Value) -> Value {
     let path = case.join("policy.yaml");
     std::fs::write(
         &path,
-        json!({"format":"traffic-policy/v1","rules":rule.into_iter().collect::<Vec<_>>()} )
+        json!({"format":"traffic-policy/v2","rules":rule.into_iter().collect::<Vec<_>>()} )
             .to_string(),
     )
     .unwrap();
@@ -132,7 +132,7 @@ async fn client_metadata_envelope_preflight_preserves_identity_and_business_head
         ..Default::default()
     };
     let compiled = crate::policy::parse_and_compile_policy(
-        &json!({"format":"traffic-policy/v1","rules":[rule()]}).to_string(),
+        &json!({"format":"traffic-policy/v2","rules":[rule()]}).to_string(),
     )
     .unwrap();
     let native = compiled.native.iter().collect::<Vec<_>>();

@@ -16,6 +16,8 @@ pub struct NativeFieldClaim {
     pub location: OwnedLocation,
     pub collection: bool,
     pub hash_field: Option<crate::policy::KeySelector>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<crate::policy::FieldContract>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -43,6 +45,8 @@ pub enum NativeOwnedSlot {
     RedisArgument(usize),
     SqlValue(usize),
     SqlColumn(String),
+    SqlField(String),
+    RedisValue(crate::policy::RedisContainer),
     Header(String),
     Query(String),
     PathSegment(usize),
@@ -53,6 +57,11 @@ impl NativeOwnedSlot {
     fn overlaps(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::SseData(a), Self::SseData(b)) => a.overlaps(b),
+            (Self::SqlField(a), Self::SqlField(b)) => a.eq_ignore_ascii_case(b),
+            (Self::RedisValue(_), Self::RedisValue(_) | Self::Value | Self::RedisArgument(_))
+            | (Self::Value | Self::RedisArgument(_), Self::RedisValue(_)) => true,
+            (Self::SqlField(_), Self::SqlValue(_) | Self::SqlColumn(_))
+            | (Self::SqlValue(_) | Self::SqlColumn(_), Self::SqlField(_)) => true,
             _ => self == other,
         }
     }
@@ -91,9 +100,13 @@ pub enum OwnedElement {
     Index(usize),
 }
 
+mod contracts;
+mod field_refs;
 mod validation;
+pub(crate) use field_refs::validate_field_references;
 pub use validation::validate_field_claims;
 pub(crate) use validation::value_sql_scopes_overlap;
+pub(crate) use validation::value_sql_slots_overlap;
 
 pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
     use ClaimSurface as S;
@@ -143,6 +156,7 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             slot,
             location,
             collection,
+            contract: None,
         })
     };
     match &rule.effect {
@@ -435,6 +449,9 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
         }
     }
     claims.extend(super::mysql_read_back::claims(rule));
+    for claim in &mut claims {
+        claim.contract = contracts::native_contract(rule, claim);
+    }
     claims
 }
 

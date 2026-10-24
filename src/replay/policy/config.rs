@@ -359,7 +359,7 @@ pub(in crate::replay) fn load_replay_policy(path: &Path) -> Result<LoadedReplayP
         .with_context(|| format!("failed to read replay policy {}", path.display()))?;
     let source = std::str::from_utf8(&bytes)?;
     let compiled = crate::policy::parse_and_compile_policy(source)
-        .with_context(|| format!("failed to parse traffic-policy/v1 {}", path.display()))?;
+        .with_context(|| format!("failed to parse traffic-policy/v2 {}", path.display()))?;
     let compiled = std::sync::Arc::new(compiled);
     let projection = super::native_projection::project_native(&compiled.native)?;
     Ok(LoadedReplayPolicy {

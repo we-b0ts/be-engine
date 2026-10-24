@@ -4,7 +4,7 @@ use serde_json::json;
 #[test]
 fn mysql_wildcard_clocks_cover_variable_case_lengths_in_text_and_prepared_calls() {
     let template = "UPDATE results SET payload=? WHERE id=?";
-    let document = json!({"format":"traffic-policy/v1","rules":[{
+    let document = json!({"format":"traffic-policy/v2","rules":[{
         "id":"times","match":{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":template},
         "effect":{"kind":"mysql_values","values":{"0":{"kind":"json","fields":{"/blocks/*/timestamp":{"relative_time":"unix_microseconds","clock_group":"block-create","clock_scope":"array_element"}}}}},
         "proof":{"source":"blocks.py:create","fact":"Every block is generated with an independent current timestamp"}
@@ -41,6 +41,7 @@ fn mysql_wildcard_clocks_cover_variable_case_lengths_in_text_and_prepared_calls(
                     ]
                 };
                 compare(
+                    Some("app"),
                     Some(template),
                     Some(&params(&source)),
                     Some(template),
@@ -51,6 +52,7 @@ fn mysql_wildcard_clocks_cover_variable_case_lengths_in_text_and_prepared_calls(
                 )
             } else {
                 compare(
+                    Some("app"),
                     Some(&format!(
                         "UPDATE results SET payload='{}' WHERE id=7",
                         source

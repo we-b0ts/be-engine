@@ -1,8 +1,10 @@
 //! Derived delivery copies. Protocol adapters own their framing and lifecycle.
-pub(in crate::replay) use crate::value_contract::encoded::{compare, merged_codec};
+pub(in crate::replay) use crate::value_contract::encoded::compare;
+#[cfg(test)]
+use crate::value_contract::encoded::merged_codec;
 use crate::{
     policy::CompiledRule,
-    value_codec::{CodecPlan, DecodedValue},
+    value_codec::DecodedValue,
     value_contract::json::{AnchorClocks, Comparison},
 };
 use anyhow::{Result, ensure};
@@ -21,7 +23,7 @@ impl Delivery {
         rules: &[&CompiledRule],
         clocks: AnchorClocks,
     ) -> Result<Self> {
-        let codec = CodecPlan::compile(&merged_codec(rules)?)?;
+        let codec = crate::value_contract::encoded::prepared_codec(rules)?;
         let decoded = codec.decode(source)?;
         for rule in rules {
             for pointer in rule.delivery_time.keys() {
@@ -72,6 +74,46 @@ impl Delivery {
 
     pub(in crate::replay) fn validation(&self) -> &Comparison {
         &self.source_validation
+    }
+
+    pub(in crate::replay) fn has_identities(&self) -> bool {
+        crate::value_contract::identities::rules_have_identity(
+            &self.rules.iter().collect::<Vec<_>>(),
+        )
+    }
+
+    /// Render both derived time and identity fields from one immutable decode.
+    /// The protocol owner commits the returned proposal before exposing bytes.
+    pub(in crate::replay) fn render_with_identities(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        owner: &crate::replay::policy::request_contract::RequestContracts,
+        case: &str,
+    ) -> Result<(Vec<u8>, crate::value_contract::identities::IdentityDecision)> {
+        let rules = self.rules.iter().collect::<Vec<_>>();
+        // Conditions always see the immutable Source document, before any
+        // derived delivery time can alter a sibling used by a guard.
+        let selected = crate::value_contract::identities::select(&self.decoded.logical, &rules)?;
+        let entries = selected
+            .iter()
+            .map(|field| field.delivery)
+            .collect::<Vec<_>>();
+        let (values, decision) = owner.identity_deliveries(case, &entries)?;
+        let mut clocks = self.clocks;
+        clocks.delivery.target = Some(now);
+        let mut logical =
+            crate::value_contract::delivery::materialize(&self.decoded.logical, &rules, clocks)?;
+        let mut allowed = rules
+            .iter()
+            .flat_map(|rule| rule.delivery_time.keys().cloned())
+            .collect::<Vec<_>>();
+        for (field, value) in selected.iter().zip(values) {
+            *logical
+                .pointer_mut(&field.pointer)
+                .ok_or_else(|| anyhow::anyhow!("identity delivery field disappeared"))? = value;
+            allowed.push(field.pointer.clone());
+        }
+        Ok((self.decoded.encode(&logical, &allowed)?, decision))
     }
 }
 

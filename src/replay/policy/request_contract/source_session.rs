@@ -11,9 +11,12 @@ impl RequestContracts {
         let mut state = State::default();
         for (id, (dir, request)) in requests {
             let recorded = request["timestamp"].as_str().map(str::parse).transpose()?;
+            let source_body = unified::source_body(request);
+            let source_input_error = identity_inputs::capture_error(request, source_body.as_ref());
             state.cases.insert(
                 id.clone(),
                 CaseAnchor {
+                    source_input_error,
                     method: request["method"]
                         .as_str()
                         .context("Source method is absent")?
@@ -21,10 +24,14 @@ impl RequestContracts {
                     path: super::super::pattern::uri_path(
                         request["uri"].as_str().context("Source URI is absent")?,
                     ),
+                    source_uri: request["uri"]
+                        .as_str()
+                        .context("Source URI is absent")?
+                        .to_owned(),
                     recorded,
                     actual: recorded,
                     dir: dir.clone(),
-                    source_body: unified::source_body(request),
+                    source_body,
                     conditions: super::super::case_condition::matching_rule_ids(
                         request,
                         rules.iter().filter_map(|rule| {
@@ -47,6 +54,9 @@ impl RequestContracts {
             ),
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),
+            identities: Arc::default(),
+            identity_prefixes: Arc::default(),
+            time_copies: Arc::default(),
         })
     }
 

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use crate::policy::{self, NativeEffect, TimeAnchor, native::HttpJsonField};
 
 fn document(fields: Value) -> Value {
-    json!({"format":"traffic-policy/v1","rules":[{
+    json!({"format":"traffic-policy/v2","rules":[{
         "id":"signed-outbound", "match":{
             "api":"POST /requests",
             "resource":{"protocol":"http","endpoint":"upstream.test:80"},

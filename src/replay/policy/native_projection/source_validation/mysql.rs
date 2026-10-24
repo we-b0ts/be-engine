@@ -91,7 +91,7 @@ pub(super) fn validate(
         clock,
         runtime,
     ) {
-        runtime.commit(Some(case.id), decision.map_err(anyhow::Error::msg)?);
+        runtime.commit(Some(case.id), decision.map_err(anyhow::Error::msg)?)?;
     }
     let (response, ids) = runtime.shift_mysql_response(
         Some(case.id),

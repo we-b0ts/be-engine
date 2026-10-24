@@ -453,6 +453,7 @@ async fn mysql_recorder_retains_idle_candidates_and_keeps_active_calls_case_owne
                 affected_rows: None,
                 last_insert_id: None,
                 columns: vec![MysqlColumn {
+                    database: None,
                     name: "id".into(),
                     table: None,
                     column: None,

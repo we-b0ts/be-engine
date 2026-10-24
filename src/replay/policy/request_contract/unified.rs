@@ -64,6 +64,27 @@ impl RequestContracts {
         compiled: Option<Arc<CompiledPolicy>>,
     ) -> Result<()> {
         self.mysql_selection = Arc::new(mysql_selection::MysqlSelection::new(compiled.as_deref())?);
+        let mut prefixes = BTreeMap::<String, BTreeSet<String>>::new();
+        for contract in compiled
+            .iter()
+            .flat_map(|policy| &policy.rules)
+            .flat_map(|rule| rule.rule.contract.values())
+        {
+            if let crate::policy::FieldContract::Identity {
+                binding, prefix, ..
+            } = contract.unconditional()
+            {
+                prefixes
+                    .entry(binding.clone())
+                    .or_default()
+                    .insert(prefix.clone());
+            }
+        }
+        ensure!(
+            prefixes.values().all(|prefixes| prefixes.len() <= 64),
+            "identity binding exceeds 64 literal prefix variants"
+        );
+        self.identity_prefixes = Arc::new(prefixes);
         self.compiled = compiled;
         Ok(())
     }
@@ -273,11 +294,18 @@ impl RequestContracts {
         source_delivery: Option<DateTime<Utc>>,
         target_delivery: Option<DateTime<Utc>>,
     ) -> json::AnchorClocks {
-        let case = case.and_then(|id| self.anchor(id).ok());
+        let case = case.and_then(|id| {
+            self.state
+                .lock()
+                .expect("request contracts")
+                .cases
+                .get(id)
+                .map(|anchor| (anchor.recorded, anchor.actual))
+        });
         json::AnchorClocks {
             case: ClockPair {
-                source: case.as_ref().and_then(|anchor| anchor.recorded),
-                target: case.and_then(|anchor| anchor.actual),
+                source: case.and_then(|(recorded, _)| recorded),
+                target: case.and_then(|(_, actual)| actual),
             },
             dependency: ClockPair {
                 source: source_dependency,
@@ -296,8 +324,10 @@ impl RequestContracts {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
-        self.preview_unified_redis(context, source, actual)
-            .or_else(|| self.preview_redis_legacy(context, source, actual))
+        // A contextual native owner retains its sequence, identity and clock
+        // relationships. Resource fields cover every other storage operation.
+        self.preview_redis_legacy(context, source, actual)
+            .or_else(|| self.preview_unified_redis(context, source, actual))
     }
 
     pub(super) fn preview_unified_redis(
@@ -306,116 +336,7 @@ impl RequestContracts {
         source: &[Vec<u8>],
         actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
-        // Matchers retain the original independent Target before normalization.
-        // Re-evaluating comparison copies must never create another observation.
-        let rules = self.unified_selected(
-            context,
-            source.first()?.as_slice(),
-            Surface::DependencyRequest,
-            source.get(1).map(Vec::as_slice),
-        );
-        if rules.is_empty() {
-            return None;
-        }
-        Some((|| {
-            let index = value_index(context.command, source.len())
-                .context("command does not expose a supported Redis JSON value slot")?;
-            ensure!(source.len() == actual.len(), "Redis argument count changed");
-            ensure!(
-                source
-                    .iter()
-                    .zip(actual)
-                    .enumerate()
-                    .all(|(i, (source, actual))| i == index || source == actual),
-                "Redis key or unselected options/arguments changed"
-            );
-            let anchor = self.anchor(context.case)?;
-            let clocks = json::AnchorClocks {
-                case: ClockPair {
-                    source: anchor.recorded,
-                    target: anchor.actual,
-                },
-                dependency: ClockPair {
-                    source: context.recorded_at,
-                    target: context.actual_at,
-                },
-                ..Default::default()
-            };
-            let comparison = crate::value_contract::encoded::compare(
-                &source[index],
-                &actual[index],
-                &rules,
-                clocks,
-            )?;
-            ensure!(
-                comparison.passed(),
-                "Redis value contract failed: {}",
-                serde_json::to_string(&comparison.differences)?
-            );
-            Ok(Decision {
-                ids: comparison.evaluated.into_iter().collect(),
-                unified_time_validations: comparison.time_validations,
-                ..Default::default()
-            })
-        })())
-    }
-
-    pub(super) fn unified_selected(
-        &self,
-        context: &RedisRequestContext<'_>,
-        key: &[u8],
-        surface: Surface,
-        hash_field: Option<&[u8]>,
-    ) -> Vec<&CompiledRule> {
-        let Some(policy) = &self.compiled else {
-            return vec![];
-        };
-        let Ok(anchor) = self.anchor(context.case) else {
-            return vec![];
-        };
-        policy
-            .rules
-            .iter()
-            .filter(|compiled| {
-                let rule = &compiled.rule;
-                let Some(resource) = &rule.selector.resource else {
-                    return false;
-                };
-                rule.surface == surface
-                    && resource.protocol == Protocol::Redis
-                    && resource
-                        .endpoint
-                        .host
-                        .eq_ignore_ascii_case(&context.target.host)
-                    && resource.endpoint.port == context.target.port
-                    && resource
-                        .database
-                        .as_ref()
-                        .is_none_or(|database| database.index() == Some(context.database))
-                    && resource
-                        .username
-                        .as_ref()
-                        .is_none_or(|username| Some(username.as_str()) == context.username)
-                    && rule.selector.operation.as_deref() == Some(context.command)
-                    && rule
-                        .selector
-                        .hash_field
-                        .as_ref()
-                        .is_none_or(|field| hash_field.is_some_and(|value| field.matches(value)))
-                    && rule
-                        .selector
-                        .key
-                        .as_ref()
-                        .is_some_and(|selector| selector.matches(key))
-                    && rule.selector.matches_api(&anchor.method, &anchor.path)
-                    && rule.when.as_ref().is_none_or(|condition| {
-                        anchor
-                            .source_body
-                            .as_ref()
-                            .is_some_and(|body| condition.matches_body(body))
-                    })
-            })
-            .collect()
+        self.compare_redis_compiled(context, source, actual)
     }
 
     pub(super) fn observe_unified_source(&self, case: &str, event: &Value) -> Result<()> {
@@ -431,14 +352,13 @@ impl RequestContracts {
         let Some(args) = event["args"].as_array() else {
             return Ok(());
         };
-        let Some(first) = args.first() else {
+        if args.is_empty() {
             return Ok(());
-        };
+        }
         let source = args
             .iter()
             .map(evidence::decode)
             .collect::<Result<Vec<_>>>()?;
-        let key = evidence::decode(first)?;
         let target = TargetKey {
             host: event["target_host"].as_str().unwrap_or_default().into(),
             port: event["target_port"].as_u64().unwrap_or_default() as u16,
@@ -474,66 +394,7 @@ impl RequestContracts {
         // Immutable inventory includes sequence commands and lock lifecycle
         // traffic, not just commands with a generic encoded value slot.
         self.record_unified_request(&context, &source, None);
-        if matches!(context.command, "GET" | "HGET")
-            && event
-                .get("outcome")
-                .is_none_or(|outcome| outcome == "response")
-            && event["response_kind"] == "bulk_string"
-        {
-            let response = evidence::decode(&event["response"])?;
-            if complete_bulk(&response) {
-                self.record_unified_response_source(
-                    &context,
-                    &response,
-                    event["timestamp"]
-                        .as_str()
-                        .and_then(|value| value.parse().ok()),
-                );
-            }
-        }
-        let mut ids = BTreeSet::new();
-        for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-            let selected =
-                self.unified_selected(&context, &key, surface, source.get(1).map(Vec::as_slice));
-            if selected.is_empty() {
-                continue;
-            }
-            let payload = if surface == Surface::DependencyResponse {
-                let ordinary = event
-                    .get("outcome")
-                    .is_none_or(|outcome| outcome == "response");
-                if ordinary {
-                    super::unified_response::redis_bulk_payload(&evidence::decode(
-                        &event["response"],
-                    )?)?
-                } else {
-                    None
-                }
-            } else {
-                value_index(context.command, source.len())
-                    .and_then(|index| source.get(index).cloned())
-            };
-            let Some(payload) = payload else {
-                self.observe_value_slot_unavailable(
-                    selected.iter().map(|rule| rule.rule.id.clone()),
-                );
-                continue;
-            };
-            let clocks = self.contract_clocks(
-                Some(case),
-                context.recorded_at,
-                None,
-                event["timestamp"]
-                    .as_str()
-                    .and_then(|value| value.parse().ok()),
-                None,
-            );
-            let validation =
-                crate::replay::contract_value::Delivery::prepare(&payload, &selected, clocks)?;
-            ids.extend(validation.validation().evaluated.iter().cloned());
-        }
-        self.observe_source_applicability(case, event, ids);
-        Ok(())
+        self.observe_redis_compiled_source(&context, event, &source)
     }
 
     pub(in crate::replay) fn record_unified_request(
@@ -639,7 +500,7 @@ impl RequestContracts {
         )
     }
 
-    fn record_unified_response_source(
+    pub(super) fn record_unified_response_source(
         &self,
         context: &RedisRequestContext<'_>,
         source: &[u8],
@@ -733,25 +594,6 @@ impl RequestContracts {
             })
             .collect()
     }
-}
-
-fn complete_bulk(raw: &[u8]) -> bool {
-    if raw.first() != Some(&b'$') {
-        return false;
-    }
-    let Some(header) = raw.windows(2).position(|bytes| bytes == b"\r\n") else {
-        return false;
-    };
-    let Some(length) = std::str::from_utf8(&raw[1..header])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-    else {
-        return false;
-    };
-    let Some(end) = (header + 2).checked_add(length) else {
-        return false;
-    };
-    end.checked_add(2) == Some(raw.len()) && raw.get(end..) == Some(b"\r\n")
 }
 
 pub(super) fn value_index(command: &str, length: usize) -> Option<usize> {

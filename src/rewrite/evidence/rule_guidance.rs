@@ -4,6 +4,7 @@ use super::*;
 mod generated_values;
 mod http_client_metadata;
 mod http_header_timestamp;
+mod resource_fields;
 mod stateful_dependencies;
 pub(super) use generated_values::has_response_jwt;
 
@@ -55,11 +56,12 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         return vec![hint];
     }
     let mut hints = generated_values::hints(root, query, facts);
+    hints.extend(resource_fields::hints(root, query, facts));
     hints.extend(stateful_dependencies::hints(root, query, facts));
     let mut add = |capability: &str, rule: &str, instruction: &str| {
         hints.push(RewriteRuleHint {
         capability: capability.into(), rule: rule.into(),
-        hint: format!("{instruction} Write a self-contained traffic-policy/v1 rule with fresh Source file:line proof: at most three file references and a causal fact of at most 200 UTF-8 bytes. Use one document source_revision. Use rule plan --file <rule.yaml> --evidence <evidence-id>, inspect the immutable plan, apply, then complete its genuine Replay or recording obligations."),
+        hint: format!("{instruction} Write a self-contained traffic-policy/v2 rule with fresh Source file:line proof: at most three file references and a causal fact of at most 200 UTF-8 bytes. Use one document source_revision. Use rule plan --file <rule.yaml> --evidence <evidence-id>, inspect the immutable plan, apply, then complete its genuine Replay or recording obligations."),
         help: help(root),
     })
     };
@@ -75,7 +77,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         add(
             "sse_data_contract",
             "sse_data",
-            "Review source_entry.bindings for exact slot.sse_data event/json_type selectors. Contract pointers address data JSON. Time drafts require Source clock proof; generated identities require Source generator/lifetime proof, explicit prefix/format and the same binding across all referring events/pointers, including terminal output. Identity permissions are never inferred as candidates. Missing events and event order remain strict and require Target investigation. See docs/sse-value-contracts.md.",
+            "Review source_entry.bindings for exact slot.sse_data event/json_type selectors and declare output fields under responses. Contract pointers address data JSON. Prove time formats/clock relations, duration units/terminal branches, unordered collection semantics or identity variability. For identities, inventory every eligible MySQL/Redis/response position together and use one case-local binding domain; include terminal output. Observed Source equality and distinctness define the relations, rather than a mandatory capture event. Fixed or dependency-delivered identities remain anchored. Drafts never infer identity permission. Missing events and event order remain strict. See docs/sse-value-contracts.md.",
         );
     }
     if query == QUERY_REPRESENTATIVES {
@@ -157,7 +159,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             add(
                 capability,
                 "unordered",
-                "Inspect protected Source/Target value differences. Declare the dependency.request surface, exact resource and value slot, explicit JSON or PB codec, and only Source-proven unordered logical fields. A response rule does not authorize outbound request changes.",
+                "Inspect protected Source/Target value differences and prove the consumer treats the selected collection as unordered. For MySQL/Redis storage, declare the physical field once under resources with its JSON or typed PB codec; a different API, SQL shape or command needs no repeated contract. HTTP requests retain their exact resource, request surface and body slot. Preserve element associations and duplicate counts. A response declaration does not authorize an undeclared outbound field.",
             );
             add(
                 if protocol == "http" {
@@ -218,6 +220,9 @@ pub(super) fn applicable_rule_planners(
         return vec![];
     }
     let mut planners = generated_values::planners(root, issue, query, facts, evidence);
+    planners.extend(resource_fields::planners(
+        root, issue, query, facts, evidence,
+    ));
     planners.extend(stateful_dependencies::planners(
         root, issue, query, facts, evidence,
     ));

@@ -566,6 +566,8 @@ pub struct MysqlExchangeResponse {
 pub struct MysqlColumn {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<String>,

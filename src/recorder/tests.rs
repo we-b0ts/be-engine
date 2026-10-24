@@ -836,6 +836,7 @@ fn mysql_column(
     sql_type: &str,
 ) -> MysqlColumn {
     MysqlColumn {
+        database: None,
         name: name.to_string(),
         table: Some(table.to_string()),
         column: Some(column.to_string()),

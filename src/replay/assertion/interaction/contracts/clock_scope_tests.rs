@@ -21,7 +21,7 @@ fn rules(entity: bool) -> crate::policy::CompiledPolicy {
         },"proof":{"source":"blocks.py:stream","fact":"Each created entity carries one clock reused in its terminal copy"}
     })).collect::<Vec<_>>();
     crate::policy::parse_and_compile_policy(
-        &json!({"format":"traffic-policy/v1","rules":rules}).to_string(),
+        &json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
     )
     .unwrap()
 }

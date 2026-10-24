@@ -133,7 +133,7 @@ pub(super) fn validate(
         .request_contracts
         .preview_redis_context(&context, &args, &args)
     {
-        runtime.request_contracts.commit(decision?);
+        runtime.request_contracts.commit(decision?)?;
     }
     if runtime.request_contracts.has_read_back_for(&context, &args)
         && event["outcome"]

@@ -77,6 +77,8 @@ mod model;
 mod motan;
 mod mysql;
 pub(crate) use mysql::contracts::request_witnesses_related as mysql_request_witnesses_related;
+pub(crate) use mysql::contracts::time_copies::delivered_witness_time_copies as mysql_delivered_witness_time_copies;
+pub(crate) use mysql::contracts::validate_contract_candidate_with_time_copies as mysql_validate_contract_candidate_with_time_copies;
 pub(crate) use mysql::contracts::{
     IdentityPreflight as MysqlIdentityPreflight,
     normalize_identity_witnesses as mysql_normalize_identity_witnesses,
@@ -92,6 +94,10 @@ mod network_access;
 mod policy;
 pub(crate) use policy::replace_request_rule_section;
 pub(crate) use policy::request_contract::redis_bulk_payload;
+pub(crate) use policy::request_contract::{
+    RedisFieldValue, RedisTimeRead, redis_delivered_time_copies, redis_field_values,
+    redis_response_identities, redis_time_position, redis_time_write_proofs,
+};
 mod redis;
 pub(crate) mod report;
 #[cfg(test)]
@@ -230,6 +236,7 @@ pub use report::global_evidence::{GlobalDependencyPage, read_global_dependency_p
 pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
+pub(crate) use control::check_response_identities;
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
     run_replay_control(config).await

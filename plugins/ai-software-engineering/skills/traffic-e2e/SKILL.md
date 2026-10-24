@@ -83,10 +83,14 @@ target repair, migration route, blocker status, or completion state.
 
 ## Unified Policy Boundary
 
-`project.policy` names one `traffic-policy/v1` document, normally
-`.traffic-e2e/policy.yaml`. Keep resources, codecs, contracts and proof inline
-by default. Current bounded evidence supplies rule discovery and capability
-metadata. During managed rewrites, the backend-rewrite skill owns the single
+`project.policy` names one `traffic-policy/v2` document, normally
+`.traffic-e2e/policy.yaml`. Declare persistent physical fields under `resources`
+and API output fields under `responses`; retain contextual/stateful effects in
+`rules`. Named resource references and `field_ref` reuse identity and strategy
+without duplicating them per SQL or command. See
+[resource-field contracts](../../../../docs/resource-field-contracts.md) for
+schema, supported carriers, conditions and clock relationships. Current bounded
+evidence supplies discovery and capability metadata; it does not supply Source proof. During managed rewrites, the backend-rewrite skill owns the single
 `rule plan --file ... --evidence ...` / `rule apply <plan-id>` transaction.
 Plans expand the complete rule, protect unselected evidence and expose remaining
 Replay, reclassification or recording obligations. Source self-validation does

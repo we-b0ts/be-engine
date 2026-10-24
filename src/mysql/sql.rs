@@ -3,6 +3,7 @@
 //! Uses MySQL's default quoting/escape modes; executable comments fail closed.
 
 pub(crate) mod bounds;
+pub(crate) mod field_bindings;
 pub(crate) mod insert;
 mod lexical_cache;
 pub(crate) mod projection;

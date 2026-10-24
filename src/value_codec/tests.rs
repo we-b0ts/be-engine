@@ -425,3 +425,20 @@ fn codec_pointer_matching_retains_canonical_array_indexes_and_escaped_names() {
         assert_eq!(pointer_matches(pattern, pointer), expected);
     }
 }
+
+#[test]
+fn scalar_codec_retains_native_types_and_rejects_containers() {
+    let plan = CodecPlan::compile(&Codec::Scalar).unwrap();
+    assert_eq!(
+        plan.decode(br#""2026-10-23 12:00:00""#).unwrap().logical,
+        json!("2026-10-23 12:00:00")
+    );
+    assert_eq!(plan.decode(b"12").unwrap().logical, json!(12));
+    assert_ne!(
+        plan.decode(b"12").unwrap().logical,
+        plan.decode(br#""12""#).unwrap().logical
+    );
+    assert!(plan.decode(b"{}").is_err());
+    assert!(plan.decode(b"[]").is_err());
+    assert!(plan.decode(b"null").unwrap().logical.is_null());
+}

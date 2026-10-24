@@ -552,6 +552,7 @@ async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned
                 affected_rows: None,
                 last_insert_id: None,
                 columns: vec![MysqlColumn {
+                    database: None,
                     name: "id".into(),
                     table: None,
                     column: None,

@@ -22,7 +22,7 @@ fn identity_reference_extension_public_plan_apply_proves_use_after_capture_and_f
             crate::platform::encryption_key::load_or_create(root).unwrap();
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v1","rules":[proposal(false)]}),
+                json!({"format":"traffic-policy/v2","rules":[proposal(false)]}),
             );
             let redis = |sequence, command, args: &[&str], response: &str| {
                 json!({"event_type":"redis_exchange","timestamp":"2026-10-16T00:00:00Z","duration_ms":0,

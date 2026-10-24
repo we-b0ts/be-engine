@@ -1,4 +1,4 @@
-//! Explicit SSE payload scope and case-local, Source-proven identity bindings.
+//! Explicit response payload scope and case-local, Source-proven identities.
 use super::*;
 
 pub(super) fn validate_slot(rule: &Rule) -> Result<()> {
@@ -38,8 +38,15 @@ pub(super) fn validate_identity(
     format: IdentityFormat,
 ) -> Result<()> {
     ensure!(
-        rule.surface == Surface::ApiResponse && matches!(rule.slot, Slot::SseData(_)),
-        "identity contracts require an api.response sse_data slot"
+        matches!(
+            (&rule.surface, &rule.slot),
+            (Surface::ApiResponse, Slot::Body | Slot::SseData(_))
+                | (
+                    Surface::DependencyRequest | Surface::DependencyResponse,
+                    Slot::SqlField(_) | Slot::RedisValue(_)
+                )
+        ),
+        "identity contracts require a physical SQL/Redis value or an API response payload"
     );
     ensure!(
         !binding.is_empty()
@@ -53,10 +60,10 @@ pub(super) fn validate_identity(
         prefix.len() <= 256 && !prefix.chars().any(char::is_control),
         "identity prefix requires a bounded literal"
     );
-    if let IdentityFormat::Hex(length) = format {
+    if let IdentityFormat::Hex(length) | IdentityFormat::Base64Url(length) = format {
         ensure!(
             (1..=256).contains(&length),
-            "hex identity length must be between 1 and 256 characters"
+            "identity token length must be between 1 and 256 characters"
         );
     }
     Ok(())
@@ -64,9 +71,12 @@ pub(super) fn validate_identity(
 
 pub(super) fn validate_bindings(rules: &[CompiledRule]) -> Result<()> {
     let mut formats = BTreeMap::new();
+    let mut prefixes = BTreeMap::<&str, BTreeSet<&str>>::new();
     for contract in rules.iter().flat_map(|r| r.rule.contract.values()) {
         if let FieldContract::Identity {
-            binding, format, ..
+            binding,
+            format,
+            prefix,
         } = contract.unconditional()
         {
             ensure!(
@@ -74,6 +84,12 @@ pub(super) fn validate_bindings(rules: &[CompiledRule]) -> Result<()> {
                     .insert(binding, format)
                     .is_none_or(|old| old == format),
                 "shared identity binding has incompatible formats"
+            );
+            let variants = prefixes.entry(binding).or_default();
+            variants.insert(prefix);
+            ensure!(
+                variants.len() <= 64,
+                "identity binding exceeds 64 literal prefix variants"
             );
         }
     }

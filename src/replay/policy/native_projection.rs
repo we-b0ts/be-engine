@@ -280,6 +280,7 @@ fn condition(value: Option<&SourceCondition>) -> Option<super::case_condition::C
 
 fn scalar(value: &crate::policy::SourceScalar) -> serde_json::Value {
     match value {
+        crate::policy::SourceScalar::Null => serde_json::Value::Null,
         crate::policy::SourceScalar::Bool(value) => (*value).into(),
         crate::policy::SourceScalar::Number(value) => value.clone().into(),
         crate::policy::SourceScalar::String(value) => value.clone().into(),

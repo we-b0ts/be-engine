@@ -174,7 +174,7 @@ fn method_reclassification_uses_immutable_dependencies_of_sibling_session_cases(
 }
 
 fn write_process_policy(path: &Path, selector: Value) {
-    let document = json!({"format":"traffic-policy/v1","rules":[{
+    let document = json!({"format":"traffic-policy/v2","rules":[{
         "id":"process-startup","match":{},
         "effect":{"kind":"process_owned","source_revision":format!("sha256:{}", "1".repeat(64)),"selector":selector},
         "proof":{"source":"startup.rs:run","fact":"Source starts this process-wide dependency independently of API calls"}

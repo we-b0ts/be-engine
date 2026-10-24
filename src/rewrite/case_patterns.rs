@@ -450,7 +450,7 @@ mod tests {
         );
         fs::write(
             target.path().join(".traffic-e2e/policy.yaml"),
-            "format: traffic-policy/v1\nrules: []\n",
+            "format: traffic-policy/v2\nrules: []\n",
         )
         .unwrap();
         fs::write(target.path().join("lib.rs"), "pub fn value() {}\n").unwrap();

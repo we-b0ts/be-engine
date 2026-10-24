@@ -40,6 +40,7 @@ fn sse_slot_round_trips_and_separates_event_and_body_ownership() {
             .into_iter()
             .map(|r| PolicyRule::Value(Box::new(r.rule)))
             .collect(),
+        ..TrafficPolicy::default()
     };
     let yaml = serde_yaml::to_string(&document).unwrap();
     assert_eq!(
@@ -59,9 +60,6 @@ fn sse_slots_reject_ambiguous_events_unsupported_bindings_and_delivery() {
         r["slot"]["sse_data"] = event.into();
         variants.push(r);
     }
-    let mut r = rule();
-    r["slot"] = "body".into();
-    variants.push(r);
     let mut r = rule();
     r["contract"]["/item/id"]["binding"] = "".into();
     variants.push(r);
@@ -109,6 +107,7 @@ fn sse_json_type_scopes_are_disjoint_but_event_only_claims_overlap() {
             .into_iter()
             .map(|r| PolicyRule::Value(Box::new(r.rule)))
             .collect(),
+        ..TrafficPolicy::default()
     };
     let yaml = render_policy(&policy).unwrap();
     assert_eq!(parse_policy(&yaml).unwrap(), policy);

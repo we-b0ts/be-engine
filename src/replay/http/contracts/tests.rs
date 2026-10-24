@@ -67,7 +67,7 @@ fn fixture(
         "json"
     };
     let path = temp.path().join("policy.yaml");
-    std::fs::write(&path,format!(r#"format: traffic-policy/v1
+    std::fs::write(&path,format!(r#"format: traffic-policy/v2
 rules:
   - id: http-request
     surface: dependency.request
@@ -328,7 +328,7 @@ async fn empty_native_response_preserves_204_and_is_unavailable_without_rule_usa
 #[tokio::test]
 async fn first_body_failure_without_rules_keeps_complete_independent_target_evidence() {
     let (_temp, case, path, event) = fixture(false);
-    std::fs::write(&path, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    std::fs::write(&path, "format: traffic-policy/v2\nrules: []\n").unwrap();
     let (address, runtime, task) =
         super::super::tests::spawn_http_replay_with_policy(&case, vec![], Some(path), None).await;
     let response = send(
@@ -443,7 +443,7 @@ async fn unmatched_requests_without_any_source_candidate_keep_distinct_target_ob
     // Keep a real HTTP endpoint registered, without a candidate for /dependency.
     event["uri"] = "/unrelated".into();
     std::fs::write(case.join("dependencies.jsonl"), event.to_string()).unwrap();
-    std::fs::write(&path, "format: traffic-policy/v1\nrules: []\n").unwrap();
+    std::fs::write(&path, "format: traffic-policy/v2\nrules: []\n").unwrap();
     let (address, runtime, task) =
         super::super::tests::spawn_http_replay_with_policy(&case, vec![], Some(path), None).await;
     for _ in 0..2 {
@@ -486,7 +486,7 @@ async fn unmatched_requests_without_any_source_candidate_keep_distinct_target_ob
 async fn target_observation_io_failure_preserves_global_matching_and_rejects_case_candidates() {
     for global in [false, true] {
         let (_temp, case, path, event) = fixture(false);
-        std::fs::write(&path, "format: traffic-policy/v1\nrules: []\n").unwrap();
+        std::fs::write(&path, "format: traffic-policy/v2\nrules: []\n").unwrap();
         if global {
             std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
             std::fs::write(
