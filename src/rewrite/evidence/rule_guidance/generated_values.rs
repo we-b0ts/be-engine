@@ -57,21 +57,21 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     {
         hints.push(RewriteRuleHint {
             capability: "redis_key_request".into(), rule: "dependency-request".into(),
-            hint: "A Redis key mismatch is a candidate, not proof of generation. First inventory the key identity and every eligible value/response location from Source. Resource-owned value fields use one case-local identity binding; key segments, SHA256 derivation and ordered commands retain an explicit redis_sequence key_contract with exact endpoint/database and bounded key scope. time_window validates one canonical numeric segment against each inbound request clock (fixed five-second window); INCRBY/EXPIRE order, increment, TTL and stable segments remain exact. SET or single-subject SUBSCRIBE/UNSUBSCRIBE capture requires one fixed-affix template, binding and bounded hex/base64url/uuid_v4 format; JSON identity references and request-relative time fields are checked atomically with the key. Failed comparisons commit no bindings. Later key/JSON references require a committed case-local binding; transform: sha256 verifies derivation only from that binding. Digest-shaped captures alone are opaque identities. When a native key reference depends on an earlier capture, its committed key_bindings still carry that separate derivation proof; this limitation does not require staging ordinary resource-field identity declarations one reference at a time. Each field has one explicit owner; key contracts and identity captures cannot overlap on the same command/key. Authentication, lanes, stable fields and finite consumption remain strict. See docs/redis-key-contracts.md; recordings remain unchanged.".into(),
+            hint: "A Redis key mismatch is a candidate, not proof of generation. Declare bounded key patterns under redis.keys without resource or database selectors. Use key_format with an ordered commands list only when Source proves a generated key segment or command sequence; scalar values use kind/formats and complete JSON values automatically use json.fields. Command argument time declarations contain one format; equal Source instants imply equal Target instants internally, without authored bindings or clock groups. Script commands retain their exact script identity. Stable key segments, increments, TTL/options, authentication, actual endpoint/database pairing, lane order and finite consumption remain checked. Native derivation contracts remain necessary for transformations not covered by these formats. Failed candidates publish no identity relations. See docs/redis-key-contracts.md; recordings remain unchanged.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(), "plan".into(), "--help".into()], Vec::new()),
         });
     }
     if query == QUERY_REPRESENTATIVES && has_response_jwt(facts) {
         hints.push(RewriteRuleHint {
             capability: "response_jwt".into(), rule: "response-jwt".into(),
-            hint: "Response observations contain a compact signed JWT candidate (HS256/HS384/HS512/RS256), directly or inside an HTTP(S) URL query; decoding alone does not prove generation or a valid signature. Trace source issuance, key precedence, nonce generation and expiry derivation. Declare a response_jwt effect with pointer for a JSON body, or location: {header: location} for one unique response header, plus algorithm, signing_key and Source proof. url_query_param extracts one unique query token. nonces declare typed /jti or /nonce formats (uuid_v4, or base64url with decoded_bytes); echo_query_param validates the same signed nonce in the outer URL independently on both sides. Every unselected URL byte, status and body stays strict. Body companions expires_at, issued_at and ttl retain signed expiry derivation. RS256 recorded_mysql binds one exact case-local public-key dependency and kid/algorithm. Inspect signing_key_discovery; plan verifies both signatures, stable claims, nonces and request-relative times within five seconds. Never exempt whole URLs or tokens with random. Apply and finish fresh Replay.".into(),
+            hint: "A recorded response contains a JWT candidate; decoding does not prove generation or a valid signature. Trace Source signing and key configuration using signing_key_discovery without exposing key bytes. Named signatures profiles and global JWT formats cover ordinary tokens; API response positions retain additional signed relationships. Consult docs/signature-profiles.md only after confirming the Source behavior, then return a Source-backed proposal for plan/apply and genuine Replay.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(), "plan".into(), "--help".into()], Vec::new()),
         });
     }
     if query == QUERY_REPRESENTATIVES && has_header_difference(facts, 0) {
         hints.push(RewriteRuleHint {
             capability: "response_header_date".into(), rule: "header-date".into(),
-            hint: "A response header difference can contain a current-date filename. Review header_date_candidates, then prove the source date format and timezone. Declare response_header_date with the header, format, timezone and optional parameter (filename also checks filename*) in a self-contained rule, then plan, apply and complete fresh Replay. Each side must use its own request's calendar date; disposition, filename prefix/extension, other parameters, multiplicity and body remain checked. Existing recordings are reusable.".into(),
+            hint: "Inspect the header difference and header_date_candidates, then trace Source construction. If Source proves a generated filename date, preserve its API scope and propose the response header position described in docs/content-policy-layout.md. Stable filename text, other parameters and header presence/count/order remain required. A differing header alone authorizes no exception. Submit Source proof for plan/apply and complete fresh Replay.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(),"plan".into(),"--help".into()], Vec::new()),
         });
     }
@@ -83,7 +83,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     {
         hints.push(RewriteRuleHint {
             capability: "dynamic_value".into(), rule: "dynamic-value".into(),
-            hint: "If an identity differs, request its complete Source-proven physical location inventory before planning: MySQL database/table/column and decoded pointer, Redis key/container/hash-field and pointer, and response output locations. Declare eligible identity fields once under resources/responses with a common case-local binding and format. Source equality and distinctness define the runtime relations; no SQL template, argument ordinal or mandatory generator-first capture is needed for ordinary fields. Reads use an established Target identity or anchor an unknown input. Fixed/external IDs and sentinels need exact handling; retain a narrow native rule when eligibility cannot be expressed. Native identity/key effects remain for embedded templates, hashes, contextual generation or finite state; field_ref reuses declared strategies. Failed speculative matches commit no identity. Stable fields, authentication/database, finite consumption and case ownership remain checked. Use the same self-contained rule file and plan/apply transaction; apply requires genuine Replay, and hashes or opaque bytes never imply generation.".into(),
+            hint: "Inspect the reported identity candidates and trace Source generation and reuse before choosing a format. Reuse the existing global declarations; Source-proven composite strings can use a global template while retaining literal text and complete identity values. Source-known outbound path positions belong under http.requests. Consult docs/content-policy-layout.md for those authoring choices. Equal values, nulls and absent fields do not prove generation. Return independent Source proof for plan/apply and fresh Replay.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(),"plan".into(),"--help".into()], Vec::new()),
         });
     }
@@ -94,7 +94,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     {
         hints.push(RewriteRuleHint {
             capability: "dependency_request".into(), rule: "dependency-request".into(),
-            hint: "Review protected dependency_request_candidates and trace Source generation. Declare stable fields under resources without match.api: MySQL physical database/table/column, or Redis key/container/hash-field and decoded pointer. The same field contract covers every API and supported SQL/command shape; JSON and typed PB reuse time, duration, unordered and identity semantics where supported. Inspect existing declarations first and add missing physical locations together, including when no mechanical candidate exists. Named resources and field_ref avoid repeated endpoint identities and strategies; a shared identity binding explicitly relates eligible fields. Use native redis_sequence, http_request or mysql_values only for protocol-owned arguments, signatures, multipart or stateful relationships. Redis LPUSH/RPUSH fields can declare canonical uuid length 36 or nonempty control-free string max_length 1..1024; ordinary value references use the shared field binding; key/channel segments retain their explicit native key contract. RPC PUBLISH composes protocol identity copies with selected times and URL query contracts. URL remainders stay exact; utc_date_segment can tie a credential scope date to its selected signing time, and signature shapes do not certify cryptographic validity. See docs/redis-generated-requests.md. Explicit script identity, key/options, stable arguments, auth/database, multipart parts, query and finite consumption remain native evidence. Time fields declare format/relation; the adapter uses each physical request's independently observed start. Schema fields default to independent clocks; an authored clock_group needs one proven Source clock read. Relative naive timestamps cancel a shared offset; calendar dates and absolute windows retain offset requirements. Preserve scalar sentinels with a self conditional guard. Startup keys resolve from immutable startup inputs without exposing bytes. Write the rule file, plan against the current evidence, inspect the complete Source coverage and retained failed Target witnesses, apply and finish genuine Replay.".into(),
+            hint: "Inspect the protected dependency_request_candidates and compare them with Source behavior. Reuse existing formats and preserve protocol, resource, content and finite-call checks. Complete supported multipart requests already compare their ordered parts; outer-boundary differences need no policy exception. For a Source-proven format or carrier gap, consult docs/content-policy-layout.md and return the smallest declaration with Source proof for plan/apply. Missing drafts, equal responses and null values grant no permission; complete genuine Replay after application.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(),"plan".into(),"--help".into()], Vec::new()),
         });
     }
@@ -148,7 +148,8 @@ mod tests {
         let facts = json!({"representative":{"response_difference":{"actual":{"value":url}}}});
         let hints = super::hints(Path::new("/target"), QUERY_REPRESENTATIVES, &facts);
         assert_eq!(hints[0].capability, "response_jwt");
-        assert!(hints[0].hint.contains("url_query_param"));
+        assert!(hints[0].hint.contains("signatures profiles"));
+        assert!(hints[0].hint.contains("API response positions"));
         let rendered = serde_json::to_string(&hints).unwrap();
         assert!(!rendered.contains(&raw));
         assert!(!rendered.contains(&url));
@@ -206,7 +207,86 @@ mod tests {
                 .iter()
                 .any(|hint| hint.capability == "redis_key_request"
                     && hint.hint.contains("not proof")
-                    && hint.hint.contains("key_contract"))
+                    && hint.hint.contains("key_format"))
+        );
+    }
+
+    #[test]
+    fn current_carrier_guidance_keeps_existing_planners_without_recommending_retired_authoring() {
+        let root = Path::new("/target");
+        let header = json!({"representative":{"pointer":"$headers/content-disposition",
+            "header_date_candidates":[{"parameter":"filename","format":"%Y-%m-%d"}]}});
+        let hinted = hints(root, QUERY_REPRESENTATIVES, &header);
+        assert_eq!(hinted[0].capability, "response_header_date");
+        assert!(hinted[0].hint.contains("API scope"));
+        assert!(hinted[0].hint.contains("docs/content-policy-layout.md"));
+        assert!(hinted[0].hint.contains("Source proof"));
+        assert!(!hinted[0].hint.contains("Declare response_header_date"));
+        assert!(!hinted[0].hint.contains("timezone"));
+        assert_eq!(
+            planners(
+                root,
+                RewriteIssueKind::Response,
+                QUERY_REPRESENTATIVES,
+                &header,
+                "current"
+            )[0]
+            .evidence_id,
+            "current"
+        );
+
+        let multipart = json!({"dependency_request_candidates":[{"capability":"http_multipart"}]});
+        let hinted = hints(root, QUERY_DIRTY_CLUSTERS, &multipart);
+        assert_eq!(hinted.len(), 1);
+        assert_eq!(hinted[0].capability, "dependency_request");
+        assert!(
+            hinted[0]
+                .hint
+                .contains("outer-boundary differences need no policy exception")
+        );
+        assert!(!hinted[0].hint.contains("multipart_boundary"));
+        assert!(!hinted[0].hint.contains("native typed contracts"));
+        assert!(hinted[0].help.argv.contains(&"--help".into()));
+        let available = planners(
+            root,
+            RewriteIssueKind::Dependency,
+            QUERY_DIRTY_CLUSTERS,
+            &multipart,
+            "current",
+        );
+        assert_eq!(available[0].capability, "dependency_request");
+        assert!(
+            available[0]
+                .command
+                .argv
+                .ends_with(&["--evidence".into(), "current".into()])
+        );
+    }
+
+    #[test]
+    fn compound_format_guidance_requires_existing_candidate_evidence_not_value_appearance() {
+        let root = Path::new("/target");
+        for value in [
+            Value::Null,
+            json!("wss://example/sessions/random?ticket=random"),
+            json!("c29tZS1iYXNlNjQ"),
+        ] {
+            let facts = json!({"representative":{"pointer":"/url",
+                "expected":{"presence":"present","value":value},
+                "actual":{"presence":"present","value":value}}});
+            assert!(hints(root, QUERY_REPRESENTATIVES, &facts).is_empty());
+            assert!(hints(root, QUERY_DIRTY_CLUSTERS, &facts).is_empty());
+        }
+        let candidate = json!({"dynamic_capture_candidates":[{"capture":{"protocol":"http"}}]});
+        let hinted = hints(root, QUERY_DIRTY_CLUSTERS, &candidate);
+        assert_eq!(hinted.len(), 1);
+        assert_eq!(hinted[0].capability, "dynamic_value");
+        assert!(hinted[0].hint.contains("global template"));
+        assert!(hinted[0].hint.contains("http.requests"));
+        assert!(hinted[0].hint.contains("Source proof"));
+        assert!(
+            !hinted[0].hint.contains("template:"),
+            "routine hints should not embed a configuration example"
         );
     }
 }

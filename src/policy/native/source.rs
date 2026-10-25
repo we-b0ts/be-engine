@@ -58,6 +58,8 @@ pub enum CaptureResponseContract {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessOwnedEffect {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_name: Option<String>,
     pub source_revision: String,
     pub selector: ProcessSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -173,7 +175,5 @@ pub enum FiniteSharingEffect {
     Redis {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hash_field: Option<String>,
-        #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
-        response_time: BTreeMap<String, Proven<super::NativeTime>>,
     },
 }

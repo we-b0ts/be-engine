@@ -413,10 +413,10 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
             && let crate::policy::native::ProcessSelector::Redis { operation, .. } =
                 &effect.selector
         {
-            rule.proof = crate::policy::Proof {
+            rule.proof = Some(crate::policy::Proof {
                 source: "TrafficServiceImpl.loadAllCacheData".into(),
                 fact: format!("loadAllCacheData {operation} warm-up"),
-            };
+            });
         }
     }
     fs::write(&config, serde_yaml::to_string(&original).unwrap()).unwrap();
@@ -527,8 +527,7 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
                 .collect::<Vec<_>>(),
             ["exp:assign:collection:", "exp:config:collection:"]
         );
-        assert!(source_evidence.contains("loadAllCacheData"));
-        assert!(source_evidence.contains("scheduled"));
+        assert!(source_evidence.is_empty());
     }
 
     let repeated = plan_redis_background_dependency(hget).unwrap();

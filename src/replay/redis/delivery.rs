@@ -11,6 +11,25 @@ pub(super) async fn deliver_redis_exchange(
     started: tokio::time::Instant,
     client_id: Uuid,
 ) -> Result<bool> {
+    let lifecycle = state.lock().await.redis.exchanges[matched.index]
+        .record
+        .lifecycle_cleanup;
+    if lifecycle {
+        match super::lifecycle::deliver(reader, state, matched, client_id).await {
+            Ok(()) => {
+                state.lock().await.redis.complete_exchange(matched);
+                return Ok(true);
+            }
+            Err(error) => {
+                state
+                    .lock()
+                    .await
+                    .redis
+                    .fail_exchange(matched, error.to_string());
+                return Err(error);
+            }
+        }
+    }
     if matched.timing.outcome().is_client_terminated() {
         let result = if reader.buffer.is_empty() {
             matched
@@ -106,7 +125,15 @@ pub(super) async fn deliver_redis_exchange(
     let unified_rendered = matched
         .unified_delivery
         .as_ref()
-        .map(|delivery| delivery.render(unified_rendered_at))
+        .map(|delivery| {
+            delivery.render_consistent(
+                unified_rendered_at,
+                matched
+                    .read_back
+                    .as_ref()
+                    .map(|native| native.response.as_slice()),
+            )
+        })
         .transpose();
     let unified_rendered = match unified_rendered {
         Ok(rendered) => rendered,
@@ -119,33 +146,9 @@ pub(super) async fn deliver_redis_exchange(
             return Err(error);
         }
     };
-    let rendered = matched
-        .response_time_shift
-        .as_ref()
-        .map(|shift| {
-            shift.render(
-                matched
-                    .request_started_at
-                    .context("Redis time shift requires the target dependency request start")?,
-            )
-        })
-        .transpose();
-    let rendered = match rendered {
-        Ok(value) => value,
-        Err(error) => {
-            state
-                .lock()
-                .await
-                .redis
-                .fail_exchange(matched, error.to_string());
-            return Err(error);
-        }
-    };
-    let response = unified_rendered.as_deref().unwrap_or_else(|| {
-        rendered
-            .as_ref()
-            .map_or(matched.response.as_slice(), |(bytes, _)| bytes.as_slice())
-    });
+    let response = unified_rendered
+        .as_deref()
+        .unwrap_or(matched.response.as_slice());
     if let Err(error) = reader.inner.write_all(response).await {
         state.lock().await.redis.fail_exchange(
             matched,
@@ -156,6 +159,16 @@ pub(super) async fn deliver_redis_exchange(
     let delivered_at = chrono::Utc::now();
     if let Some(read) = &matched.time_read
         && let Err(error) = read.publish(response, delivered_at)
+    {
+        state
+            .lock()
+            .await
+            .redis
+            .fail_exchange(matched, error.to_string());
+        return Err(error);
+    }
+    if let Some(write) = &matched.time_write
+        && let Err(error) = write.publish(delivered_at)
     {
         state
             .lock()
@@ -196,27 +209,6 @@ pub(super) async fn deliver_redis_exchange(
         {
             state.redis.fail_exchange(matched, error.to_string());
             return Err(error);
-        }
-    }
-    if let (Some(shift), Some((_, offset_milliseconds))) = (&matched.response_time_shift, rendered)
-    {
-        if let Some(policy) = state.replay_policy.as_mut() {
-            policy.commit_redis_value(matched.report.case_id.as_deref(), &shift.rule_ids);
-        }
-        for rule_id in &shift.rule_ids {
-            if state.redis.time_shifts.len() >= 1000 {
-                break;
-            }
-            state
-                .redis
-                .time_shifts
-                .push(time_shift::TimeShiftObservation {
-                    rule_id: rule_id.clone(),
-                    case_id: matched.report.case_id.clone(),
-                    connection_id: matched.connection_id,
-                    sequence: matched.report.sequence,
-                    offset_milliseconds,
-                });
         }
     }
     if let Some(push) = matched.rpc_push {
@@ -330,7 +322,7 @@ async fn claim_terminated_pipeline(
                 return Err(anyhow!(reason));
             }
             if let Some(policy) = &mut state.replay_policy {
-                policy.commit_redis_value(case_id.as_deref(), &matched.rule_ids);
+                policy.commit_redis_rule_usage(case_id.as_deref(), &matched.rule_ids);
             }
             pipeline.push(matched);
         }

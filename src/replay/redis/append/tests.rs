@@ -27,6 +27,13 @@ pub(in crate::replay::redis) fn state(
     events: &[Value],
     rules: Vec<Value>,
 ) -> (tempfile::TempDir, RedisReplayState) {
+    state_with_policy(events, json!({"format":"traffic-policy/v2","rules":rules}))
+}
+
+pub(in crate::replay::redis) fn state_with_policy(
+    events: &[Value],
+    document: Value,
+) -> (tempfile::TempDir, RedisReplayState) {
     let root = tempfile::tempdir().unwrap();
     let case = root.path().join("case");
     std::fs::create_dir(&case).unwrap();
@@ -42,11 +49,7 @@ pub(in crate::replay::redis) fn state(
     )
     .unwrap();
     let policy = root.path().join("policy.yaml");
-    std::fs::write(
-        &policy,
-        json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
-    )
-    .unwrap();
+    std::fs::write(&policy, document.to_string()).unwrap();
     let runtime = crate::replay::ReplayPolicyRuntime::load(
         &policy,
         &BTreeMap::from([(

@@ -11,6 +11,10 @@ pub(in crate::recorder::redis) async fn record_subscription(
     state
         .inner
         .active_cases
+        .observe_async_dependency_event(&event, &targets, true);
+    state
+        .inner
+        .active_cases
         .observe_dependency_event(&event, &targets, true);
     state
         .inner

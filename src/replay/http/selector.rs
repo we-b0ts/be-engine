@@ -33,13 +33,4 @@ impl HttpDependencySelector {
         );
         Ok(())
     }
-
-    pub(super) fn matches(&self, record: &RecordedHttpExchange) -> bool {
-        identity_from_record(record).is_ok_and(|i| {
-            i.target.host == super::super::normalize_host(&self.host)
-                && i.target.port == self.port
-                && record.method.eq_ignore_ascii_case(&self.method)
-                && uri_path_only(&record.uri) == self.path
-        })
-    }
 }

@@ -1,61 +1,75 @@
-# One typed policy for recording, classification, inputs and comparisons.
-# Declare resource/response fields once; keep contextual effects in rules.
-# Discover differences, plan with Source proof, then apply and verify Replay.
+# One policy for recording, protocol ownership and global content formats.
+# Empty initialization grants no value changes. Add formats after inspecting
+# Source behavior, plan/apply with immutable evidence, then run genuine Replay.
+# Source references and facts remain in the plan evidence, outside this runtime
+# file. Rendering an annotated rule proposal writes only its declared behavior.
 format: traffic-policy/v2
 resources: {}
-responses: {}
 rules: []
 
-# Example replacement for the empty document above. Supply real resource names,
-# physical fields and Source proof before activating any contract. A binding
-# preserves Source equality and distinctness across one case; it needs no SQL,
-# argument ordinal, configured capture order or permanent foreign-key graph.
-#
+# Example replacement for the empty document above:
 # format: traffic-policy/v2
-# resources:
-#   task_database:
-#     protocol: mysql
-#     endpoint: db.internal:3306
-#     database: app
-#     proof:
-#       source: models/task.py:save
-#       fact: Generated task UUIDs are copied to links, JSON payloads and cache.
-#     tables:
-#       tasks:
-#         fields:
-#           id: {kind: identity, binding: task-id, format: uuid}
-#           updated_at: {relative_time: sql_datetime}
-#           payload:
-#             codec: json
-#             fields:
-#               /task_id: {kind: identity, binding: task-id, format: uuid}
-#               /blocks/*/timestamp: {relative_time: unix_milliseconds, clock_scope: array_element}
-#       task_links:
-#         fields:
-#           owner_id: {kind: identity, binding: task-id, format: uuid}
-#   task_cache:
-#     protocol: redis
-#     endpoint: cache.internal:6379
-#     database: 0
-#     proof:
-#       source: cache/task.py:write
-#       fact: Cache documents copy the generated task UUID and update clock.
-#     keys:
-#       - key: {prefix: 'task:document:'}
-#         container: string
-#         value:
-#           codec: json
-#           fields:
-#             /task_id: {kind: identity, binding: task-id, format: uuid}
-#             /updated_at: {relative_time: unix_seconds}
-# responses:
-#   task_details:
-#     api: GET /tasks/*
-#     proof:
-#       source: api/task.py:read
-#       fact: The response copies the stored generated task UUID.
-#     body:
-#       codec: json
+# signatures:
+#   default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
+# json:
+#   fields:
+#     /task_id: {kind: identity, formats: [uuid]}
+#     /access_token: {kind: jwt}
+#     /updated_at: {kind: time, formats: [unix_seconds]}
+#     /blocks/*/timestamp: {kind: time, formats: [unix_milliseconds]}
+#     /members: {kind: unordered}
+# mysql:
+#   tables:
+#     tasks:
+#       pattern: tasks
 #       fields:
-#         /id: {kind: identity, binding: task-id, format: uuid}
+#         id: {kind: identity, formats: [uuid]}
+#     task_links:
+#       pattern: task_links_*
+#       fields:
+#         owner_id: {kind: identity, formats: [uuid]}
+# redis:
+#   keys:
+#     task-run-monitor:v2:as-of: {kind: time, formats: [unix_seconds]}
+#     'task:current:*': {kind: identity, formats: [uuid], read_back: true}
+#     'task:content:*': {append_stream: true, expiry_refresh: true}
+#     'task:cancel:*': {read_commutation: true}
+#     'task:counter:*': {commands: [INCRBY, EXPIRE]}
+#     'task:events:*':
+#       commands:
+#         - operation: ZADD
+#           arguments:
+#             1: {kind: time, formats: [unix_seconds]}
+# api:
+#   '*':
+#     request:
+#       headers:
+#         authorization: {signature: default, scheme: bearer}
+# http:
+#   headers:
+#     x-amz-date: {kind: time, formats: [amz_date]}
+# localcache:
+#   requests:
+#     - redis: {operation: HGET, key: token_v2, field: '3061639762'}
+#     - http: {host: auth.example.com, method: GET, path: /.well-known/jwks.json}
+# source_revision: immutable-source-image-v1
+# process_dependencies:
+#   tasks:
+#     refresh_signing_keys: # Use the actual logical task name from Source.
+#       requests:
+#         - http: {host: auth.example.com, method: GET, path: /keys/}
+# async_api:
+#   POST /jobs:
+#     when: {/background: true}
+#     end:
+#       - mysql: {sql: "UPDATE jobs SET status = 'completed' WHERE id = ?"}
+#       - redis: {operation: DEL, key: 'job:finished:*'}
 # rules: []
+#
+# JSON payloads are inferred across carriers. SQL temporal types use recorded
+# metadata, without per-column time declarations. Redis key-local behavior uses
+# redis.keys; finite initialization requests and actual process task requests
+# use their separate lifetime declarations. HTTP header presence remains strict.
+# Signatures profiles and API positions reuse strict native crypto owners.
+# Multipart, DOCX, WSS paths and AES envelopes retain native typed rules;
+# global JSON inference does not cover those formats.

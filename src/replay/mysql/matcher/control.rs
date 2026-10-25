@@ -25,7 +25,9 @@ impl ReplayState {
                 continue;
             };
             let exchange = &mut self.mysql.exchanges[index];
-            exchange.status = if exchange.record.outcome.is_client_terminated() {
+            exchange.status = if exchange.record.outcome.is_client_terminated()
+                && !exchange.record.lifecycle_cleanup
+            {
                 ReplayExchangeStatus::AwaitingClientTermination
             } else {
                 ReplayExchangeStatus::Responding
@@ -34,8 +36,6 @@ impl ReplayState {
                 transaction_owner: None,
                 value_delivery: None,
                 time_copy_delivery: None,
-                identity_delivery: None,
-                response_time_shift_rules: Vec::new(),
                 source,
                 index,
                 record: exchange.record.clone(),

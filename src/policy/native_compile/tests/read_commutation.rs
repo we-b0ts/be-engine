@@ -8,13 +8,7 @@ fn rule() -> Value {
 
 #[test]
 fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
-    for path in [
-        "/match/resource",
-        "/match/resource/database",
-        "/match/key",
-        "/match/operation",
-        "/proof",
-    ] {
+    for path in ["/match/resource/database", "/match/key", "/match/operation"] {
         let mut rule = rule();
         let (parent, key) = path.rsplit_once('/').unwrap();
         rule.pointer_mut(parent)
@@ -24,6 +18,14 @@ fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
             .remove(key);
         assert!(compile(vec![rule]).is_err(), "{path}");
     }
+    let mut missing_proof = rule();
+    missing_proof.as_object_mut().unwrap().remove("proof");
+    let runtime = crate::policy::parse_policy(
+        &json!({"format":"traffic-policy/v2","rules":[missing_proof]}).to_string(),
+    )
+    .unwrap();
+    crate::policy::compile_policy(&runtime).unwrap();
+    assert!(crate::policy::require_source_proofs(&runtime).is_err());
     let compiled = compile(vec![rule()]).unwrap();
     assert_eq!(
         compiled.native[0].rule.effect.capability_name(),
@@ -38,6 +40,12 @@ fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
     let mut other = rule();
     other["effect"]["optional"] = json!(true);
     assert!(compile(vec![other]).is_err());
+    let mut discovered = rule();
+    discovered["match"]
+        .as_object_mut()
+        .unwrap()
+        .remove("resource");
+    assert!(compile(vec![discovered]).is_ok());
 }
 
 fn compile(rules: Vec<Value>) -> anyhow::Result<crate::policy::CompiledPolicy> {

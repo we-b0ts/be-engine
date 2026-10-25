@@ -79,7 +79,9 @@ pub(super) fn validate(
                 && normalized.source_params == normalized.actual_params,
             "Source SQL identity self validation changed fields"
         );
-        runtime.dynamic_values.commit(case.id, normalized.decision);
+        runtime
+            .dynamic_values
+            .commit(case.id, normalized.decision)?;
     }
     if let Some(decision) = runtime.request_contracts.preview_mysql_values(
         Some(case.id),
@@ -92,67 +94,6 @@ pub(super) fn validate(
         runtime,
     ) {
         runtime.commit(Some(case.id), decision.map_err(anyhow::Error::msg)?)?;
-    }
-    let (response, ids) = runtime.shift_mysql_response(
-        Some(case.id),
-        &identity,
-        &record,
-        &record.response,
-        crate::replay::mysql::contracts::source_started(&record),
-    )?;
-    ensure!(
-        serde_json::to_value(&response)? == serde_json::to_value(&record.response)?,
-        "Source SQL response self translation changed values"
-    );
-    for id in &ids {
-        let compiled = runtime
-            .request_contracts
-            .compiled_rules()
-            .and_then(|policy| policy.native.iter().find(|rule| &rule.rule.id == id))
-            .context("Source SQL response lost its native owner")?;
-        let NativeEffect::MysqlValues(effect) = &compiled.rule.effect else {
-            continue;
-        };
-        for (name, field) in &effect.response_time {
-            let index = crate::replay::mysql::time_shift::column_index(&record.response, name)?;
-            let mut positive = false;
-            for row in &record.response.rows {
-                let cell = row
-                    .get(index)
-                    .context("Source SQL result row is incomplete")?;
-                if cell.kind == "null" {
-                    continue;
-                }
-                let value = crate::replay::mysql_value_bytes(cell)?;
-                let value = std::str::from_utf8(&value)?;
-                crate::replay::mysql::time_shift::parse_datetime(value)?;
-                if !field
-                    .contract
-                    .preserve_values
-                    .iter()
-                    .any(|preserved| preserved == value)
-                {
-                    positive = true;
-                }
-            }
-            if positive {
-                coverage.column(id, name);
-            }
-        }
-    }
-    runtime.commit_mysql_response_shift(&ids);
-    if let Some(prepared) = runtime.dynamic_values.prepare_mysql_identity_delivery(
-        Some(case.id),
-        &identity,
-        &record,
-        &record.response,
-    )? {
-        let delivered = prepared.render(&record.response)?;
-        ensure!(
-            delivered == record.response,
-            "Source SQL identity self delivery changed fields"
-        );
-        prepared.commit(&runtime.dynamic_values, &delivered)?;
     }
     Ok(())
 }

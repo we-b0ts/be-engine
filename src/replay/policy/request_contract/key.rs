@@ -15,7 +15,7 @@ pub(super) struct BindingScope {
     host: String,
     port: u16,
     database: i64,
-    binding: String,
+    username: Option<String>,
 }
 impl BindingScope {
     pub(super) fn belongs_to(&self, case: &str) -> bool {
@@ -30,24 +30,20 @@ pub(in crate::replay) struct KeyBindingReport {
     pub host: String,
     pub port: u16,
     pub database: i64,
-    pub binding: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
     pub source_fingerprint: String,
     pub target_fingerprint: String,
 }
 pub(super) type PendingBinding = (BindingScope, String, String);
 
-fn scope(case: &str, rule: &ReplayDependencyRule, database: i64, binding: &str) -> BindingScope {
+fn scope(context: &RedisRequestContext<'_>) -> BindingScope {
     BindingScope {
-        case: case.into(),
-        host: rule
-            .target
-            .host
-            .as_ref()
-            .expect("validated endpoint")
-            .to_ascii_lowercase(),
-        port: rule.target.port.expect("validated endpoint"),
-        database,
-        binding: binding.into(),
+        case: context.case.into(),
+        host: crate::replay::normalize_host(&context.target.host),
+        port: context.target.port,
+        database: context.database,
+        username: context.username.map(str::to_owned),
     }
 }
 fn fingerprint(value: &str) -> String {
@@ -64,6 +60,24 @@ fn value<'a>(text: &'a str, template: &str) -> Result<&'a str> {
         "invalid identity slot"
     );
     Ok(extracted)
+}
+
+fn selected_identity<'a>(
+    text: &'a str,
+    selector: &crate::replay::redis::key_selector::RedisValueKeySelector,
+) -> Result<Option<&'a str>> {
+    use crate::replay::redis::key_selector::RedisValueKeySelector;
+    let (prefix, suffix) = match selector {
+        RedisValueKeySelector::Affix { prefix, suffix }
+        | RedisValueKeySelector::Numeric { prefix, suffix } => (prefix, suffix),
+        RedisValueKeySelector::Exact { .. } => return Ok(None),
+    };
+    let middle = text
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+        .context("captured Redis identity is outside its physical key selector")?;
+    ensure!(!middle.is_empty(), "captured Redis key identity is empty");
+    Ok(Some(middle))
 }
 fn shaped(value: &str, format: &KeyFormat) -> bool {
     match format {
@@ -95,7 +109,7 @@ impl RequestContracts {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn compare_key(
         &self,
-        case: &str,
+        context: &RedisRequestContext<'_>,
         rule: &ReplayDependencyRule,
         selector: &super::config::RedisRequestSelector,
         source: &[u8],
@@ -103,8 +117,18 @@ impl RequestContracts {
         clocks: crate::replay::assertion::RequestTimes,
         decision: &mut Decision,
     ) -> Result<()> {
+        let case = context.case;
         let Some(contract) = &selector.key_contract else {
-            ensure!(source == actual, "Redis key changed");
+            ensure!(
+                source == actual
+                    || std::str::from_utf8(source)
+                        .ok()
+                        .zip(std::str::from_utf8(actual).ok())
+                        .is_some_and(|(a, b)| self
+                            .knows_native_identity(case, a, b)
+                            .unwrap_or(false)),
+                "Redis key changed without an accepted complete identity relation"
+            );
             return Ok(());
         };
         let left = std::str::from_utf8(source)?;
@@ -158,30 +182,27 @@ impl RequestContracts {
                 ensure!(a == b, "stable Redis key segments changed");
                 decision.time_validations += 1;
             }
-            KeyContract::Capture {
-                binding,
-                template,
-                format,
-            } => {
+            KeyContract::Capture { template, format } => {
                 let a = value(left, template)?;
                 let b = value(right, template)?;
                 ensure!(
                     shaped(a, format) && shaped(b, format),
                     "key identity format changed"
                 );
-                let scope = scope(case, rule, selector.database, binding);
+                let scope = scope(context);
                 let state = self.state.lock().expect("request contracts");
-                let pairs = state.key_bindings.get(&scope);
+                let pairs = state
+                    .key_bindings
+                    .iter()
+                    .filter(|(other, _)| other.case == case)
+                    .flat_map(|(_, pairs)| pairs.iter())
+                    .collect::<Vec<_>>();
                 let (source_hash, target_hash) = (fingerprint(a), fingerprint(b));
                 ensure!(
                     state
                         .key_binding_proofs
                         .iter()
-                        .filter(|p| p.case_id == scope.case
-                            && p.host == scope.host
-                            && p.port == scope.port
-                            && p.database == scope.database
-                            && p.binding == scope.binding)
+                        .filter(|p| p.case_id == scope.case)
                         .all(|p| (p.source_fingerprint != source_hash
                             || p.target_fingerprint == target_hash)
                             && (p.target_fingerprint != target_hash
@@ -189,32 +210,45 @@ impl RequestContracts {
                     "key capture conflicts with its committed evidence"
                 );
                 ensure!(
-                    pairs.is_none_or(|pairs| (pairs.contains_key(a) || pairs.len() < 256)
+                    (pairs.iter().any(|(source, _)| source.as_str() == a) || pairs.len() < 4096)
                         && pairs
                             .iter()
-                            .all(|(x, y)| (x != a || y == b) && (y != b || x == a))),
+                            .all(|(x, y)| (x.as_str() != a || y.as_str() == b)
+                                && (y.as_str() != b || x.as_str() == a)),
                     "key identity binding changed or collapsed"
                 );
                 ensure!(
                     decision
                         .key_bindings
                         .iter()
-                        .filter(|(s, _, _)| *s == scope)
+                        .filter(|(s, _, _)| s.case == case)
                         .all(|(_, x, y)| (x != a || y == b) && (y != b || x == a)),
                     "pending key identities conflict"
                 );
+                drop(state);
+                self.observe_native_identity(case, a, b, decision)?;
+                if let (Some(source), Some(target)) = (
+                    selected_identity(left, &selector.key)?,
+                    selected_identity(right, &selector.key)?,
+                ) {
+                    // A format's literal prefix is part of its complete typed
+                    // identity, just as it is in a JSON field. The random
+                    // suffix alone cannot establish that cross-carrier pair.
+                    self.observe_native_identity(case, source, target, decision)?;
+                }
+                if left.len() <= 1024 && right.len() <= 1024 {
+                    self.observe_native_identity(case, left, right, decision)?;
+                }
                 decision.key_bindings.push((scope, a.into(), b.into()));
             }
             KeyContract::Reference {
-                binding,
                 template,
                 transform,
             } => self.compare_identity(
                 case,
                 rule,
-                selector.database,
+                context.database,
                 &IdentityReference {
-                    binding: binding.clone(),
                     template: template.clone(),
                     transform: *transform,
                 },
@@ -238,24 +272,43 @@ impl RequestContracts {
     ) -> Result<()> {
         let a = value(source, &reference.template)?;
         let b = value(actual, &reference.template)?;
-        let scope = scope(case, rule, database, &reference.binding);
+        let _ = (rule, database);
+        if matches!(reference.transform, Transform::Identity)
+            && self.knows_native_identity(case, a, b)?
+        {
+            if source.len() <= 1024 && actual.len() <= 1024 {
+                self.observe_native_identity(case, source, actual, decision)?;
+            }
+            decision.identity_references += 1;
+            return Ok(());
+        }
         let matches = |x: &str, y: &str| {
             transform(x, reference.transform) == a && transform(y, reference.transform) == b
         };
         if decision
             .key_bindings
             .iter()
-            .any(|(s, x, y)| *s == scope && matches(x, y))
+            .any(|(s, x, y)| s.case == case && matches(x, y))
         {
+            self.observe_native_identity(case, a, b, decision)?;
+            if source.len() <= 1024 && actual.len() <= 1024 {
+                self.observe_native_identity(case, source, actual, decision)?;
+            }
             decision.identity_references += 1;
             return Ok(());
         }
         let state = self.state.lock().expect("request contracts");
         if state
             .key_bindings
-            .get(&scope)
-            .is_some_and(|pairs| pairs.iter().any(|(x, y)| matches(x, y)))
+            .iter()
+            .filter(|(other, _)| other.case == case)
+            .any(|(_, pairs)| pairs.iter().any(|(x, y)| matches(x, y)))
         {
+            drop(state);
+            self.observe_native_identity(case, a, b, decision)?;
+            if source.len() <= 1024 && actual.len() <= 1024 {
+                self.observe_native_identity(case, source, actual, decision)?;
+            }
             decision.identity_references += 1;
             return Ok(());
         }
@@ -265,14 +318,14 @@ impl RequestContracts {
         };
         ensure!(
             state.key_binding_proofs.iter().any(|p| p.case_id == case
-                && p.host == scope.host
-                && p.port == scope.port
-                && p.database == database
-                && p.binding == reference.binding
                 && p.source_fingerprint == a
                 && p.target_fingerprint == b),
             "identity reference has no matching committed capture"
         );
+        drop(state);
+        if source.len() <= 1024 && actual.len() <= 1024 {
+            self.observe_native_identity(case, source, actual, decision)?;
+        }
         decision.identity_references += 1;
         Ok(())
     }
@@ -287,7 +340,7 @@ impl RequestContracts {
                     host: s.host.clone(),
                     port: s.port,
                     database: s.database,
-                    binding: s.binding.clone(),
+                    username: s.username.clone(),
                     source_fingerprint: fingerprint(a),
                     target_fingerprint: fingerprint(b),
                 })
@@ -323,7 +376,6 @@ impl RequestContracts {
                 "invalid committed key binding proof"
             );
             IdentityReference {
-                binding: proof.binding.clone(),
                 template: "{value}".into(),
                 transform: Transform::Identity,
             }
@@ -331,11 +383,7 @@ impl RequestContracts {
             ensure!(
                 proofs
                     .iter()
-                    .filter(|p| p.case_id == proof.case_id
-                        && p.host == proof.host
-                        && p.port == proof.port
-                        && p.database == proof.database
-                        && p.binding == proof.binding)
+                    .filter(|p| p.case_id == proof.case_id)
                     .all(|p| (p.source_fingerprint != proof.source_fingerprint
                         || p.target_fingerprint == proof.target_fingerprint)
                         && (p.target_fingerprint != proof.target_fingerprint

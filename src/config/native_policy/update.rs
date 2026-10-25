@@ -19,11 +19,40 @@ pub(crate) fn render_updated(
 ) -> Result<String> {
     let mut document = crate::policy::parse_policy(original)?;
     let compiled = crate::policy::compile_policy(&document)?;
-    let before = project_source_policy(&compiled.native)?;
+    let mut before = project_source_policy(&compiled.native)?;
+    before.async_api = compiled.async_api.clone();
     if before == *proposed {
         return Ok(original.into());
     }
+    let raw: serde_yaml::Value = serde_yaml::from_str(original)?;
+    let single_recording_owner = raw.get("recording").is_some()
+        && document
+            .rules
+            .iter()
+            .filter(|rule| {
+                rule.as_native()
+                    .is_some_and(|rule| matches!(rule.effect, n::NativeEffect::CaptureHttp(_)))
+            })
+            .count()
+            == 1;
     let mut generated = reverse::rules(proposed, proof)?;
+    if document.source_revision.is_none()
+        && !document.rules.iter().any(|rule| {
+            rule.as_native()
+                .is_some_and(|rule| matches!(rule.effect, n::NativeEffect::CaptureHttp(_)))
+        })
+        && !proposed.http.case_path_patterns.is_empty()
+    {
+        let capture = generated
+            .iter()
+            .find(|rule| matches!(rule.effect, n::NativeEffect::CaptureHttp(_)))
+            .context("initial recording proposal lost its capture owner")?;
+        // The caller supplied this immutable Source identity. Validate the
+        // complete native scope before making it the shared document context;
+        // unrelated effects and proofs still undergo ordinary conflict checks.
+        crate::policy::compile_native(capture)?;
+        document.source_revision = Some(proposed.http.source_revision.clone());
+    }
     let mut retained = Vec::new();
     let mut capture_paths = std::collections::BTreeSet::new();
     for entry in document.rules {
@@ -39,12 +68,22 @@ pub(crate) fn render_updated(
             continue;
         }
         if let n::NativeEffect::CaptureHttp(capture) = &old.effect {
-            let paths = capture
+            let mut paths = capture
                 .case_paths
                 .iter()
                 .filter(|path| proposed.http.case_path_patterns.contains(path))
                 .cloned()
                 .collect::<Vec<_>>();
+            if single_recording_owner {
+                // One authored recording scope owns the complete explicit
+                // proposal. Preserve its existing order and append new paths
+                // under that same ID and the writer's ordinary capture proof.
+                for path in &proposed.http.case_path_patterns {
+                    if !paths.contains(path) {
+                        paths.push(path.clone());
+                    }
+                }
+            }
             capture_paths.extend(paths.iter().cloned());
             if paths.is_empty() {
                 continue;
@@ -55,8 +94,9 @@ pub(crate) fn render_updated(
                 retained.push(entry);
             } else {
                 let mut replacement = old.clone();
-                replacement.proof = proof.clone();
-                replacement.proof.source.clear();
+                let mut capture_proof = proof.clone();
+                capture_proof.source.clear();
+                replacement.proof = Some(capture_proof);
                 replacement.effect = n::NativeEffect::CaptureHttp(n::CaptureHttpEffect {
                     source_revision: proposed.http.source_revision.clone(),
                     case_paths: paths,
@@ -95,6 +135,9 @@ pub(crate) fn render_updated(
     }
     order::capture_responses(&mut retained, proposed)?;
     document.rules = retained;
+    if before.async_api != proposed.async_api {
+        document.async_api = Some(proposed.async_api.clone());
+    }
     crate::policy::compile_policy(&document)
         .context("updated Source effects violate unified policy capabilities or ownership")?;
     crate::policy::render_policy(&document)

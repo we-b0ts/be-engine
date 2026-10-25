@@ -84,13 +84,11 @@ pub fn plan_http_cross_case(feedback: HttpCrossCaseFeedback) -> Result<HttpCross
         redis: None,
         protocol: DependencyProtocol::Http,
         target: TargetSelector {
-            host: Some(feedback.selector.host.clone()),
-            port: Some(feedback.selector.port),
+            host: feedback.selector.host.clone(),
+            port: feedback.selector.port,
         },
         http: Some(HttpSelector {
             multipart: None,
-            headers: Default::default(),
-            json: Default::default(),
             method: feedback.selector.method.clone(),
             path: feedback.selector.path.clone(),
             query: Default::default(),

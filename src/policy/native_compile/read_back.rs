@@ -1,36 +1,29 @@
 //! Validate read permissions independently of existing write matching contracts.
 use super::*;
 
-/// The presence of state_epochs grants a permission; its proof text does not
-/// alter that permission. Touch only typed read-back metadata, never JSON data.
-pub(super) fn normalize_proof_identity(effect: &mut NativeEffect) {
-    let reads = match effect {
-        NativeEffect::Identity(effect) => &mut effect.read_back,
-        NativeEffect::RedisSequence(effect) => &mut effect.read_back,
-        _ => return,
-    };
-    for read in reads {
-        if let Some(proof) = &mut read.contract.state_epochs {
-            proof.source.clear();
-            proof.fact = "enabled".into();
-        }
-    }
-}
-
 pub(super) fn validate(rule: &NativeRule) -> Result<()> {
     let entries = rule.effect.redis_read_back();
     if entries.is_empty() {
         return Ok(());
     }
-    let resource = resource(&rule.selector, Protocol::Redis)?;
-    ensure!(
-        resource
-            .database
-            .as_ref()
-            .and_then(super::super::Database::index)
-            .is_some(),
-        "Redis read_back requires an explicit database"
-    );
+    if rule.selector.resource.is_some() {
+        let resource = resource(&rule.selector, Protocol::Redis)?;
+        ensure!(
+            resource
+                .database
+                .as_ref()
+                .and_then(super::super::Database::index)
+                .is_some(),
+            "Redis read_back requires an explicit database"
+        );
+    } else {
+        ensure!(
+            crate::policy::native::is_key_only_read_back(rule)
+                || matches!(rule.effect, NativeEffect::RedisSequence(_)),
+            "resource-less read_back requires a canonical key state or Redis sequence owner"
+        );
+        validate_discovered_redis_key(&rule.selector)?;
+    }
     ensure!(
         rule.selector.key.is_some(),
         "Redis read_back requires an explicit write key selector"
@@ -43,8 +36,7 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
     for entry in entries {
         proof(&entry.proof)?;
         let read = &entry.contract;
-        if let Some(epoch_proof) = &read.state_epochs {
-            proof(epoch_proof)?;
+        if read.state_epochs {
             ensure!(
                 read.write_operation == "SET"
                     && read.operation == "GET"

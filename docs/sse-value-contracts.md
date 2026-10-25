@@ -1,109 +1,55 @@
 # SSE response value contracts
 
-`api.response` supports `slot: {sse_data: <event>}` with `codec: json`.
-The slot selects the exact SSE `event` name; a missing event name selects
-`message`, as in SSE. The original distinction between an absent name and an
-explicit `event: message` remains strict. There are no event wildcards, frame
-reordering, event deletion or automatic identity permissions.
-
-For data-only streams whose business JSON carries a top-level `type`, select it
-explicitly:
+SSE data uses the same global JSON field formats as ordinary HTTP responses,
+MySQL JSON-valued columns and cache payloads. An ordinary field declaration
+needs no API, wire event or business JSON type selector:
 
 ```yaml
-slot: {sse_data: {event: message, json_type: response.completed}}
+format: traffic-policy/v2
+json:
+  fields:
+    /created_at: {kind: time, formats: [unix_seconds]}
+    /response/created_at: {kind: time, formats: [unix_seconds]}
+    /item_id: {kind: identity, formats: [{prefix: msg_, hex: 12}]}
+    /item/id: {kind: identity, formats: [{prefix: msg_, hex: 12}]}
+rules: []
 ```
 
-`event` still selects the exact wire event name (default `message` when absent).
-`json_type` additionally matches the immutable Source JSON `/type` string. It is
-not inferred from a wire event name. Target `/type` must remain exact, including
-when other event-only rules also apply. Different JSON types have disjoint field
-ownership; an event-only selector overlaps all JSON types for that wire event.
-Types are bounded literal strings without wildcards. A missing, non-string or
-invalid Source type cannot supply a selected positive witness. Every proposed
-rule still requires a complete Source witness. Unselected frames compare exactly.
+The engine retains exact SSE framing and decodes each `data` string as complete
+JSON without duplicate members. Pointers address that JSON root. Both Source
+and Target missing a field passes without evaluating the format; one-sided
+presence fails. Time and identity fields accept paired nulls implicitly. Non-JSON
+sentinels such as `[DONE]` compare as exact bytes. Event count, order, event
+names, IDs, retry values and unselected data remain strict.
 
-The engine decodes the recorded SSE envelope, then its `data` string as complete
-JSON without duplicate members. Field pointers address that business JSON.
-Each selected event must contain all selected Source fields; Target presence,
-types and every unselected value remain checked. Non-JSON sentinels such as
-`[DONE]` can remain unselected and compare exactly. Other interaction protocols
-retain their existing strict comparisons.
+Time formats preserve relative differences using independent Source and Target
+HTTP request clocks. A field present in creation, progress and terminal events
+needs one global pointer declaration. Sharing a format declaration does not
+assert that unrelated fields came from the same clock read. Additional proven
+clock relationships can retain their contextual native owner.
 
-For example, a Source-proven request-time field is:
+Identity formats validate both sides. Equal complete typed Source IDs must
+remain equal Target IDs across fields, events and supported storage carriers;
+different Source IDs cannot merge. The engine maintains this correspondence
+internally per replay case. Prefixes are part of the complete identity value,
+and numeric IDs differ from string IDs. Failed candidate pairings do not commit
+identity decisions. A dependency-delivered unknown ID anchors itself, while an
+established correspondence delivers the known Target ID. No generator-first
+capture or authored identity group is needed.
 
-```yaml
-id: response-created-clock
-surface: api.response
-match: {api: POST /responses}
-when:
-  request_body_json: {/stream: {equals: true}}
-slot: {sse_data: {event: message, json_type: response.created}}
-codec: json
-contract:
-  /response/created_at:
-    request_time: unix_seconds
-    clock_group: response
-proof:
-  source: src/events.py:response_created
-  fact: Source takes the creation time from this HTTP request's clock.
-```
+`uuid` requires a canonical lowercase, hyphenated, non-nil UUID. `decimal`
+requires a positive canonical unsigned integer, preserving the observed scalar
+type. `{hex: 12}` requires exactly twelve lowercase hexadecimal characters;
+`{base64url: N}` supports fixed unpadded URL-safe token lengths. Literal prefixes
+are included in the format map. `string` accepts nonempty UTF-8 identity text
+without controls, at most 1024 bytes including its literal prefix. Fixed IDs, externally supplied inputs,
+derivations, signatures and finite consumption retain their existing checks.
+See [global field formats](resource-field-contracts.md).
 
-Both physical HTTP request starts are required. `request_time` checks the fixed
-five-second request window; `relative_time` preserves a Source-proven offset
-from each request start. Clock-group relationships also span selected frames
-in this interaction. Repeat the rule for `response.in_progress` and
-`response.completed` when Source emits that field there. Applying the ordinary
-body rule to an empty stream carrier does not grant these permissions.
-Repeated equal time observations share relationship state; each group is bounded
-to 4096 distinct Source/Target time pairs.
-
-An explicit identity contract can preserve a generated entity's equality and
-injectivity across different events and pointers:
-
-```yaml
-id: response-item-added-identity
-surface: api.response
-match: {api: POST /responses}
-slot: {sse_data: {event: message, json_type: response.output_item.added}}
-codec: json
-contract:
-  /item/id:
-    kind: identity
-    prefix: msg_
-    format: {hex: 12}
-    binding: assistant-message
-proof:
-  source: src/events.py:item_added
-  fact: Source constructs a fresh message identity and reuses it in later events.
-```
-
-Use the same `binding` for `/item_id` in the relevant delta events and `/item/id`
-in done events, with their own exact event selectors and Source proof. A Source
-identity must always map to the same Target identity, and distinct Source
-identities cannot collapse into one Target identity. Bindings are fresh for
-each replay case and may be shared with declared MySQL, Redis and response
-identity fields in that case. Standalone interaction comparison has its own
-isolated binding state. Declare the complete eligible location inventory
-together; no generator-first capture rule is required for ordinary fields.
-The binding's format must be consistent throughout the policy; different literal
-prefixes can refer to the same underlying identity. Prefix bytes stay exact.
-`decimal` requires a positive canonical u64 string; digit count may differ.
-`uuid` requires a canonical lowercase, hyphenated, non-nil UUID.
-`{hex: 12}` requires exactly 12 lowercase ASCII hexadecimal characters after the
-prefix on both sides, as generated by `uuid4().hex[:12]`; lengths from 1 to 256
-characters are supported. Leading zeroes remain valid. Shared bindings must agree
-on the format and hex length. No arbitrary string or inferred random-ID contract
-is supported. Each binding is bounded to
-4096 entities per interaction.
-
-A shared binding preserves observed equality and distinctness at explicitly
-declared eligible locations; it does not infer database derivation from a field
-name. For `msg_{subtask_id}`, trace Source allocation and declare the actual
-identity locations and format, or keep the derived value exact. An ID delivered
-from a dependency without an established mapping is anchored to that input.
-A different displayed ID is insufficient proof of variability. Explicit
-derivation, external identity, authentication and consumption obligations retain
-their own checks. See [resource identity fields](resource-field-contracts.md#identity-domains-and-read-delivery).
+Per-API field rules and SSE JSON-type format declarations are retired. Native
+signature or causal effects can retain their own scope without changing the
+global field declaration. The default event name is `message`; envelope
+comparison preserves an absent wire name versus explicit `event: message`.
 
 Discovery groups JSON-bearing SSE slots by their explicit Source `/type` when
 present and exposes observed time/unordered drafts without
@@ -116,18 +62,18 @@ witnesses so a large dependency trace cannot consume the budget first.
 prioritizes the representative and failed Cases. Follow
 `pagination.next_page.command` for omitted summaries and
 `pagination.next_scan.command` to continue past the observation budget, including
-later SSE frames and terminal output. Candidate and binding counts describe
-only the current window; `source_entry.binding_count` and `summary_omitted`
-expose binding truncation independently of candidates. Nonresumable limits are
+later SSE frames and terminal output. Candidate and location counts describe
+only the current window; `source_entry.location_count` and `summary_omitted`
+expose location truncation independently of candidates. Nonresumable limits are
 reported under `bounded_analysis.nonresumable_limits`.
-`source_entry.bindings` exposes exact
+`source_entry.locations` exposes exact
 SSE selectors and authoring instructions even when no time/unordered draft is
-found. Use those bindings to trace Source generation and prove explicit identity
-rules; an empty candidate list does not mean the engine lacks SSE support.
-Include every eligible identity location, including IDs nested in terminal
-response output and corresponding MySQL/Redis fields, in the same proposal.
-The Source trace supplies the concrete equality relationships; the proposal
-supplies their domain, format and variability proof. Missing events and event
+found. Use those observed positions to trace Source generation and propose global
+field formats; an empty candidate list does not mean the engine lacks SSE support.
+Include needed root-relative pointers, including IDs nested in terminal output,
+in the global map; scalar MySQL identities use `mysql.tables`. The Source trace
+supplies concrete equality relationships, while the proposal supplies formats
+and variability proof. Missing events and event
 order require Target diagnosis. If
 `policy_freshness.requires_fresh_replay` is true, follow its coordinator refresh
 command before planning against new evidence.

@@ -21,7 +21,7 @@ async fn read_json_response(client: &mut TcpStream) -> Value {
             client.read_exact(&mut byte).await.unwrap();
             raw.push(byte[0]);
         }
-        assert_eq!(raw[0], b'$');
+        assert_eq!(raw[0], b'$', "{}", String::from_utf8_lossy(&raw));
         let len: usize = std::str::from_utf8(&raw[1..raw.len() - 2])
             .unwrap()
             .parse()
@@ -119,14 +119,15 @@ async fn redis_time_shift_rfc3339_get_plan_apply_preserves_session_expiry_over_r
         false
     );
     let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
-    let usage = report["replay_policy"]["dependency_rules"]
+    let usage = report["replay_policy"]["global_formats"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|rule| rule["id"] == "session-expiry")
+        .find(|rule| rule["id"] == "global.json")
         .unwrap();
-    assert_eq!(usage["kind"], "source_to_delivery");
-    assert!(usage["time_validations"].as_u64().unwrap() > 0);
+    assert!(usage["validations"].as_u64().unwrap() > 0);
+    // Derived input is not independent Target time evidence.
+    assert_eq!(usage["time_validations"], 0);
     assert!(!report.to_string().contains("private-token"));
     assert_eq!(std::fs::read(recording).unwrap(), immutable);
     task.abort();
@@ -328,7 +329,7 @@ async fn redis_time_shift_scope_shares_multiple_reads_in_capture_order_with_fini
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(report["redis"]["time_shifts"].as_array().unwrap().len(), 2);
+        assert!(report["redis"].get("time_shifts").is_none());
         if case == root {
             // Sorting shared reads must rebuild the ordinary case gate index.
             let replay = state.lock().await;
@@ -357,7 +358,7 @@ async fn redis_time_shift_scope_shares_multiple_reads_in_capture_order_with_fini
 
 #[tokio::test]
 async fn redis_time_shift_scope_rejects_duplicate_partial_and_unsafe_shared_lanes() {
-    for variant in ["duplicate", "partial", "nil", "timestamp"] {
+    for variant in ["duplicate", "partial", "nil"] {
         let temp = shared_read_recording(1);
         let root = temp.path();
         let file = root.join("apis/playback/origin-0/dependencies.jsonl");
@@ -378,7 +379,7 @@ async fn redis_time_shift_scope_rejects_duplicate_partial_and_unsafe_shared_lane
             "nil" => {
                 record["response_kind"] = json!("nil");
                 record["response"] = capture_json(b"$-1\r\n");
-                (record.to_string(), "complete successful ordinary JSON read")
+                (record.to_string(), "complete successful ordinary bulk read")
             }
             "timestamp" => {
                 record.as_object_mut().unwrap().remove("timestamp");
@@ -476,7 +477,7 @@ async fn redis_time_shift_scope_plan_apply_shares_a_complete_multi_read_lane() {
         super::super::redis::cross_case::verify_candidate(
             &feedback.case_source,
             &feedback.replay_report_path,
-            &selector
+            &selector.shared()
         )
         .unwrap()["matching_exchanges"],
         2
@@ -490,12 +491,13 @@ async fn redis_time_shift_scope_plan_apply_shares_a_complete_multi_read_lane() {
         super::super::redis::cross_case::verify_candidate(
             &feedback.case_source,
             &feedback.replay_report_path,
-            &selector
+            &selector.shared()
         )
         .is_err()
     );
     std::fs::write(&origin, &immutable).unwrap();
-    crate::replay::policy::test_fixture::promote_redis_sharing(feedback).unwrap();
+    crate::replay::policy::test_fixture::promote_redis_sharing(feedback, selector.shared())
+        .unwrap();
     for case in [root.to_path_buf(), consumer] {
         let (addr, state, task) = redis_value_tests::spawn(&case, Some(policy.clone())).await;
         assert_eq!(
@@ -632,18 +634,16 @@ async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real
     let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
     assert_eq!(report["redis"]["matched_count"], 1);
     assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
-    let usage = report["replay_policy"]["dependency_rules"]
+    let usage = report["replay_policy"]["global_formats"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|rule| rule["id"] == "token-time")
+        .find(|rule| rule["id"] == "global.json")
         .unwrap();
-    assert_eq!(usage["kind"], "source_to_delivery");
-    assert!(usage["time_validations"].as_u64().unwrap() > 0);
-    assert_eq!(
-        report["replay_policy"]["dependency_rules"][0]["validations"],
-        1
-    );
+    assert!(usage["validations"].as_u64().unwrap() > 0);
+    // Derived input is not independent Target time evidence.
+    assert_eq!(usage["time_validations"], 0);
+    assert_eq!(usage["validations"], 1);
     assert!(!report.to_string().contains("private-token"));
     assert_eq!(std::fs::read(recording).unwrap(), immutable);
     // Scope and finite consumption remain strict even with the rule.
@@ -752,11 +752,12 @@ async fn redis_time_shift_scope_loads_one_sibling_read_and_preserves_finite_cons
     let proof = super::super::redis::cross_case::verify_candidate(
         &feedback.case_source,
         &feedback.replay_report_path,
-        &selector,
+        &selector.shared(),
     )
     .unwrap();
     assert_eq!(proof["candidate"]["origin_case_id"], "origin");
-    crate::replay::policy::test_fixture::promote_redis_sharing(feedback).unwrap();
+    crate::replay::policy::test_fixture::promote_redis_sharing(feedback, selector.shared())
+        .unwrap();
     let compiled = super::super::policy::load_replay_policy(&policy)
         .unwrap()
         .compiled

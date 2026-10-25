@@ -52,7 +52,7 @@ fn relative_timestamp_preserves_ttl_and_uses_inclusive_five_second_tolerance() {
         ("2023-11-14T23:14:25.000001Z", false),
         ("2023-11-14T22:14:20Z", false), // Dropped TTL.
         ("2023-11-14T23:44:20Z", false), // Wrong TTL.
-        ("2023-11-14T23:13:20Z", false), // Same literal despite later request.
+        ("2023-11-14T23:13:20Z", true),  // Exact values bypass time strategy.
     ] {
         let (_temp, options) = write_raw_case(
             &rule("rfc3339", "/expires_at", "preserve_relative"),
@@ -82,7 +82,7 @@ fn relative_timestamp_rejects_invalid_types_missing_fields_and_other_field_chang
         (
             json!("invalid"),
             json!("2023-11-14T23:14:20Z"),
-            ResponseDifferenceKind::TimeFieldInvalid,
+            ResponseDifferenceKind::ValueMismatch,
             "/expires_at",
         ),
         (
@@ -109,7 +109,9 @@ fn relative_timestamp_rejects_invalid_types_missing_fields_and_other_field_chang
             report
                 .differences
                 .iter()
-                .any(|d| d.kind == kind && d.pointer == pointer)
+                .any(|d| d.kind == kind && d.pointer == pointer),
+            "expected {kind:?} at {pointer}, got {:?}",
+            report.differences
         );
     }
     for (target, pointer, kind) in [
@@ -182,9 +184,8 @@ fn relative_timestamp_array_expansion_checks_each_item_and_keeps_default_semanti
         r#"{"expires_at":"2023-11-14T23:14:20Z"}"#,
     );
     let report = assert_recorded_response(options).unwrap();
-    assert!(!report.passed);
-    assert_eq!(
-        report.differences[0].kind,
-        ResponseDifferenceKind::TimestampOutsideRequestWindow
+    assert!(
+        report.passed,
+        "global time fields preserve the relative request offset"
     );
 }

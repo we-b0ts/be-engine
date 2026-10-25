@@ -6,20 +6,13 @@ fn calendar_date_plan_apply_preserves_strict_counters_and_requires_fresh_replay(
     for response in [false, true] {
         for change in ["valid", "counter", "date"] {
             let fixture = Fixture::new();
-            let sql = if response {
-                "SELECT payload FROM pets WHERE id=?"
-            } else {
-                "UPDATE pets SET payload=? WHERE id=?"
-            };
-            let mut rule = json!({"id":"activity-date","surface":if response {"dependency.response"} else {"dependency.request"},
-                "match":{"api":"GET /api","resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"},"operation":"COM_QUERY","sql":sql},
-                "slot":if response {json!({"sql_column":"payload"})} else {json!({"sql_value":0})},
-                "codec":"json","contract":{"/lastActiveDate":{"relative_time":"calendar_date","utc_offset":"+08:00"}},
-                "proof":{"source":"pets.py:date_today","fact":"Stored civil date preserves its signed day distance in deployment UTC+08:00; counters remain exact"}});
-            if response {
-                rule["delivery"] = json!({"rebase_time":["/lastActiveDate"]});
-            }
-            write(&fixture.proposal, rule);
+            write(
+                &fixture.proposal,
+                json!({"format":"traffic-policy/v2","json":{"fields":{
+                    "/members":{"kind":"unordered"},
+                    "/lastActiveDate":{"kind":"time","formats":[{"format":"calendar_date","utc_offset":"+08:00"}]}
+                }}}),
+            );
             let body = json!({"lastActiveDate":"2026-10-16","experience":7}).to_string();
             let event = json!({"event_type":"mysql_exchange","timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
                 "connection_id":uuid::Uuid::nil(),"query_sequence":1,"target_host":"db.test","target_port":3306,"database":"app","username":"writer","command":"COM_QUERY",
@@ -52,7 +45,7 @@ fn calendar_date_plan_apply_preserves_strict_counters_and_requires_fresh_replay(
             });
             fixture.confirm();
             let planned = fixture.plan();
-            if change != "valid" {
+            if change != "valid" && !(response && change == "date") {
                 assert!(planned.is_err(), "response={response}, change={change}");
                 continue;
             }
@@ -60,12 +53,9 @@ fn calendar_date_plan_apply_preserves_strict_counters_and_requires_fresh_replay(
             let preflight = &plan.traffic_e2e_report["preflight"];
             assert_eq!(
                 preflight["independent_target_validations"],
-                if response { 0 } else { 1 }
+                if response { 1 } else { 2 }
             );
-            assert_eq!(
-                preflight["derived_delivery_validations"],
-                if response { 1 } else { 0 }
-            );
+            assert_eq!(preflight["derived_delivery_validations"], 0);
             assert_eq!(plan.traffic_e2e_report["verified"], false);
             let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
             assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);

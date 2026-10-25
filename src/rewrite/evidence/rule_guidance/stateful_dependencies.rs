@@ -31,26 +31,6 @@ fn diagnostic(cluster: &Value, expected: &str) -> bool {
     signatures(cluster).any(|signature| signature["diagnostic"]["kind"] == expected)
 }
 
-fn mysql_select(cluster: &Value) -> bool {
-    operation(cluster, "SELECT")
-        || (operation(cluster, "COM_QUERY") || operation(cluster, "COM_STMT_EXECUTE"))
-            && signatures(cluster).any(|signature| {
-                [
-                    &signature["sql"],
-                    &signature["sql_summary"],
-                    &signature["sql_summary"]["preview"],
-                ]
-                .into_iter()
-                .any(|value| value.as_str().is_some_and(select_sql))
-            })
-}
-
-fn select_sql(sql: &str) -> bool {
-    sql.split_whitespace()
-        .next()
-        .is_some_and(|word| word.eq_ignore_ascii_case("SELECT"))
-}
-
 pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleHint> {
     if !matches!(query, QUERY_DIRTY_CLUSTERS | QUERY_UNIFIED_RULE_CANDIDATES) {
         return Vec::new();
@@ -85,25 +65,23 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
             if diagnostic(cluster, "redis_state_observation_mismatch") {
                 capabilities.insert("redis_state_observations");
             }
-        } else if cluster["protocol"] == "mysql" && mysql_select(cluster) {
-            capabilities.insert("mysql_read_back");
         }
     }
     if query == QUERY_UNIFIED_RULE_CANDIDATES {
-        for entry in facts["source_entry"]["bindings"]
+        for entry in facts["source_entry"]["locations"]
             .as_array()
             .into_iter()
             .flatten()
         {
-            let binding = &entry["binding"];
+            let binding = &entry["location"];
             if !matches!(
                 binding["surface"].as_str(),
                 Some("dependency.request" | "dependency.response")
             ) {
                 continue;
             }
-            match binding["match"]["resource"]["protocol"].as_str() {
-                Some("redis") => match binding["match"]["operation"].as_str() {
+            if let Some("redis") = binding["match"]["resource"]["protocol"].as_str() {
+                match binding["match"]["operation"].as_str() {
                     Some("APPEND") => {
                         capabilities.insert("redis_append_stream");
                     }
@@ -121,16 +99,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
                         capabilities.insert("redis_expiry_refresh");
                     }
                     _ => {}
-                },
-                Some("mysql")
-                    if binding["surface"] == "dependency.response"
-                        && (binding["slot"]["sql_column"].as_str().is_some()
-                            || entry["source_response_kind"] == "resultset"
-                            || binding["match"]["sql"].as_str().is_some_and(select_sql)) =>
-                {
-                    capabilities.insert("mysql_read_back");
                 }
-                _ => {}
             }
         }
     }
@@ -151,22 +120,19 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
 fn instruction(capability: &str) -> &'static str {
     match capability {
         "redis_append_stream" => {
-            "redis_append_stream supports different nonempty APPEND chunk boundaries for one Source-proven ordered byte stream. Scope API, exact Redis endpoint/database/authenticated user, operation APPEND and bounded key family; prove complete writers, initial length, causal order and read/reset fences. Every byte remains exact; other calls and finite TTL counts need their own proof. An existing redis_append_stream_mismatch or redis_append_stream_boundary_mismatch reports a rejected byte prefix or early fence, not missing evidence: inspect the cursor and required offset before changing Target behavior or policy. See docs/redis-append-stream.md."
+            "Declare redis.keys.<bounded-pattern>.append_stream: true for Source-proven ordered APPEND buffering. Prove complete writers, initial length, causal order and read/reset fences. Resource/database selectors are not authored; preparation and runtime partition actual endpoint, database and authentication identities. Every byte remains exact; other calls and finite TTL counts need their own proof. redis_append_stream_mismatch and redis_append_stream_boundary_mismatch identify a rejected byte prefix or early fence: inspect the cursor and required offset. See docs/redis-append-stream.md."
         }
         "redis_read_commutation" => {
-            "redis_read_commutation supports finite nil GETs commuting with unrelated commands. Scope API, exact Redis endpoint/database/authenticated user, operation GET and bounded key; prove complete nil reads, only no-op DEL cleanup, independent Source scheduling and no shared, mutated or stateful ownership. Every recorded read remains required and extra reads fail. GET presence or lane_blocked alone does not prove nil values or independence. See docs/redis-read-commutation.md."
+            "Declare redis.keys.<bounded-pattern>.read_commutation: true for finite nil GETs commuting with unrelated commands. Prove complete nil reads, only no-op DEL cleanup, independent Source scheduling and no shared, mutated or stateful ownership. Every recorded read remains required and extra reads fail. GET presence or lane_blocked alone does not prove nil values or independence. Actual resource/database/authentication partitions remain strict. See docs/redis-read-commutation.md."
         }
         "redis_expiry_refresh" => {
-            "redis_expiry_refresh supports count-equivalent EXPIRE calls inside one proven key lifetime. Scope API, exact Redis endpoint/database/authenticated user, operation EXPIRE and bounded key; prove successful ordinary Case creation, one exact positive TTL, no expiry observers or external ownership, and complete causal Source traces shorter than the TTL. One delivered refresh must cover each observed lifetime; creation/deletion and ordinary writes remain finite. EXPIRE presence alone does not prove these prerequisites. See docs/redis-state-observations.md."
+            "Declare redis.keys.<bounded-pattern>.expiry_refresh: true for count-equivalent EXPIRE calls inside one proven key lifetime. Prove successful ordinary Case creation, one exact positive TTL, no expiry observers or external ownership, and complete causal Source traces shorter than the TTL. One delivered refresh must cover each observed lifetime; creation/deletion and ordinary writes remain finite. EXPIRE presence alone does not prove these prerequisites. See docs/redis-state-observations.md."
         }
         "redis_read_back" => {
-            "For declared resource identity fields, ordinary reads already deliver established same-Case Target IDs and anchor unknown inputs; declare all eligible locations together. For extra native write/read behavior, an existing identity or redis_sequence write rule can declare effect.read_back for SET argument 1 to GET, RPUSH argument 1 or LSET argument 2 to LRANGE. Trace a preceding successful Target-matched write and the same-key Source read, with exact Case ownership and endpoint/database/user and declared owned JSON fields or raw value. Update the existing write rule with its ID, scope, capture, contracts and prior proofs preserved; give each new declaration its own capture-to-read proof. This changes selected delivered values and retains ordinary ordering and finite counts. See docs/redis-read-back.md."
+            "Global JSON and scalar identity formats already reuse established same-Case Target values and anchor unknown inputs. For Source-proven variable GET observations of the latest raw SET identity, declare kind: identity, formats and read_back: true on the same redis.keys pattern. Prove complete same-key SET/DEL lifetimes and a positive write-to-read witness; historical reads before an owned write remain finite. Actual endpoint/database/authentication and causality remain checked. Additional list or compound native write/read relationships retain their typed contracts and finite counts. See docs/redis-read-back.md."
         }
         "redis_state_observations" => {
-            "For Source-proven variable GET counts, an existing raw SET identity read_back can explicitly declare state_epochs with separate Source proof. Scope the same Case ownership and endpoint/database/user and bounded key; prove absence initially and exact current SET/DEL state, causal clocks, no implicit expiry or other writers, and a positive write-to-read witness in the selected inventory. Append a declaration or add state_epochs proof to the otherwise unchanged declaration, preserving existing write scope, contracts and proofs. Each Source-observed state still needs a delivered observation; no future or deleted identity can be borrowed. A typed redis_state_observation_mismatch must be investigated at its reported state mutation rather than treated as missing evidence. See docs/redis-state-observations.md."
-        }
-        "mysql_read_back" => {
-            "Ordinary MySQL resource identity fields use physical database/table/column origins and mapped same-Case delivery without a SELECT template. An existing narrow native identity rule can instead append effect.mysql_read_back for its separately proven Source-persisted identity read from selected MySQL JSON fields. Preserve its ID, capture, scope, references and prior declarations/proofs; the exact read resource must already be an authorized reference. Declare Case ownership, endpoint/database/user, complete SELECT with bounded physical tables, result column and JSON pointers; embedded copies require explicit templates. For a Source-proven sharded ORM SELECT, declare a bounded table_series and explicit AS {{table}}_suffix aliases tied to the physical table. Do not enumerate witnessed shards or infer a table family from digits. Array pointers select actual array elements; numeric object keys stay literal. Prove each leaf's immutable Source capture completed before the Source read; runtime also requires its committed same-Case Target binding. Historical unbound IDs and unselected fields remain unchanged; derived delivery is not independent Target evidence, and SELECTs remain finite. See docs/mysql-identity-read-back.md."
+            "redis.keys.<bounded-pattern>.read_back: true enables Source-proven current-identity GET state observations with the key scalar identity format. Supply independent Source proof on the proposed key declaration, not an authored state_epochs or binding graph. A positive write-to-read witness and complete causal SET/DEL history are required. Historical reads before the first owned SET stay finite; no future, deleted, other-resource or other-user identity can be borrowed. Investigate redis_state_observation_mismatch at its reported state mutation. See docs/redis-state-observations.md."
         }
         _ => unreachable!("only bounded supported capabilities are selected"),
     }

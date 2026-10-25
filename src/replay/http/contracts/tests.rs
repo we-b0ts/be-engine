@@ -61,41 +61,17 @@ fn fixture(
         "response_status":200,"response_headers":{"x-stable":["fixed"],"content-type":["application/octet-stream"],"content-length":[response.len().to_string()]},
         "response_body":capture(&response),"timestamp":"1970-01-01T00:16:45Z","request_started_at":"1970-01-01T00:16:40Z","duration_ms":5000,"outcome":"response","error":null});
     std::fs::write(case.join("dependencies.jsonl"), event.to_string()).unwrap();
-    let codec = if pb {
-        "{kind: protobuf, fields: {/time: {field_path: [1], field_type: uint64}, /members: {field_path: [2], field_type: string, repeated: true}, /stable: {field_path: [3], field_type: uint64}}}"
-    } else {
-        "json"
-    };
     let path = temp.path().join("policy.yaml");
-    std::fs::write(&path,format!(r#"format: traffic-policy/v2
-rules:
-  - id: http-request
-    surface: dependency.request
-    match:
-      api: POST /api
-      resource: {{protocol: http, endpoint: 'service.test:8080'}}
-      operation: POST
-      path: /dependency
-    slot: body
-    codec: {codec}
-    contract:
-      /time: {{kind: time, format: unix_seconds, relation: preserve_offset}}
-      /members: {{kind: unordered}}
-    proof: {{source: 'src/client:send', fact: 'Request time uses the dependency clock; member order is not observed'}}
-  - id: http-response
-    surface: dependency.response
-    match:
-      api: POST /api
-      resource: {{protocol: http, endpoint: 'service.test:8080'}}
-      operation: POST
-      path: /dependency
-    slot: body
-    codec: {codec}
-    contract:
-      /time: {{kind: time, format: unix_seconds, relation: preserve_offset}}
-    delivery: {{rebase_time: [/time]}}
-    proof: {{source: 'src/server:build', fact: 'Response time preserves its offset from the dependency request start and is not signed'}}
-"#)).unwrap();
+    std::fs::write(
+        &path,
+        r#"format: traffic-policy/v2
+json:
+  fields:
+    /time: {kind: time, formats: [unix_seconds]}
+    /members: {kind: unordered}
+"#,
+    )
+    .unwrap();
     (temp, case, path, event)
 }
 
@@ -125,11 +101,9 @@ async fn send(address: SocketAddr, body: Vec<u8>, tenant: &str) -> Response<Inco
 }
 
 #[tokio::test]
-async fn request_and_response_json_and_protobuf_share_native_safe_contracts_and_finite_delivery() {
-    for pb in [false, true] {
+async fn global_json_keeps_native_safe_contracts_and_finite_delivery() {
+    for pb in [false] {
         let (_temp, case, path, event) = fixture(pb);
-        let parsed = crate::policy::parse_policy(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let compiled = crate::policy::compile_policy(&parsed).unwrap();
         let (address, runtime, task) =
             super::super::tests::spawn_http_replay_with_policy(&case, vec![], Some(path), None)
                 .await;
@@ -146,7 +120,7 @@ async fn request_and_response_json_and_protobuf_share_native_safe_contracts_and_
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(declared, bytes.len());
         let decoded =
-            crate::value_codec::CodecView::decode(&compiled.rules[1].rule.codec, &bytes).unwrap();
+            crate::value_codec::CodecView::decode(&crate::policy::Codec::Json, &bytes).unwrap();
         // Preserve the Source response's +5s offset from this dependency's
         // start, regardless of when Replay delivers the response.
         let timestamp = decoded.logical["time"].as_i64().unwrap();
@@ -159,13 +133,13 @@ async fn request_and_response_json_and_protobuf_share_native_safe_contracts_and_
             let state = runtime.state.lock().await;
             let report = serde_json::to_value(state.snapshot_report()).unwrap();
             assert_eq!(report["matched_http_exchange_count"], 1);
-            for rule in report["replay_policy"]["dependency_rules"]
+            let formats = report["replay_policy"]["global_formats"]
                 .as_array()
-                .unwrap()
-            {
-                assert_eq!(rule["matches"], 1);
-                assert_eq!(rule["time_validations"], 1);
-            }
+                .unwrap();
+            assert_eq!(formats.len(), 1);
+            assert_eq!(formats[0]["id"], "global.json");
+            assert_eq!(formats[0]["applicable"], true);
+            assert!(formats[0]["validations"].as_u64().unwrap() > 0);
             assert!(!state.http_case_is_dirty("case-http"));
             let manifest = state
                 .replay_policy
@@ -263,7 +237,7 @@ async fn body_contract_rejects_unselected_fields_and_retains_the_failed_target_p
     assert!(failure["target_observation_id"].is_string());
     assert_eq!(
         failure["body_comparisons"][0]["selected_rule_ids"][0],
-        "http-request"
+        "global.json"
     );
     assert_eq!(failure["body_comparisons"][0]["passed"], false);
     assert_eq!(
@@ -309,18 +283,7 @@ async fn empty_native_response_preserves_204_and_is_unavailable_without_rule_usa
     );
     let state = runtime.state.lock().await;
     let report = serde_json::to_value(state.snapshot_report()).unwrap();
-    assert_eq!(
-        report["replay_policy"]["unavailable_value_slots"]["http-response"],
-        1
-    );
-    let rule = report["replay_policy"]["dependency_rules"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|rule| rule["id"] == "http-response")
-        .unwrap();
-    assert_eq!(rule["applicable"], false);
-    assert_eq!(rule["matches"], 0);
+    assert_eq!(report["matched_http_exchange_count"], 1);
     assert!(!state.http_case_is_dirty("case-http"));
     task.abort();
 }

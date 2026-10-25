@@ -19,6 +19,14 @@ pub(super) fn identity(
     case: &str,
     event: &Value,
 ) -> Option<crate::policy_evidence::SourceIdentity> {
+    if dependency::protocol(event) == Some(Protocol::Http) {
+        return Some(crate::policy_evidence::SourceIdentity {
+            case_id: case.into(),
+            exchange_id: Some(event["id"].as_str()?.into()),
+            connection_id: None,
+            sequence: None,
+        });
+    }
     let sequence = if dependency::protocol(event) == Some(Protocol::Mysql) {
         event["query_sequence"].as_u64()?
     } else {
@@ -112,12 +120,12 @@ impl<'a> Requests<'a> {
     }
 }
 
-pub(super) fn observe(
+pub(super) fn observe_global(
     store: &mut TimeCopyStore,
     case: &str,
     event: &Value,
     source: &[u8],
-    rules: &[&CompiledRule],
+    policy: &CompiledPolicy,
     mut evidence: ReadEvidence<'_>,
 ) -> Result<()> {
     // The live hooks capture only successfully delivered, ordinary Case reads.
@@ -221,14 +229,16 @@ pub(super) fn observe(
             )?);
             Ok(())
         };
+        let clocks = witness.metadata.clocks.comparison();
         match resource.protocol {
             Protocol::Mysql => {
-                crate::replay::mysql_delivered_witness_time_copies(
+                crate::replay::mysql_global_delivered_time_copies(
                     source,
                     &target,
-                    rules,
+                    policy,
                     resource,
                     event["database"].as_str(),
+                    clocks,
                     &mut record,
                 )?;
             }
@@ -239,24 +249,36 @@ pub(super) fn observe(
                     continue;
                 };
                 let args = arguments(event)?;
-                crate::replay::redis_delivered_time_copies(
-                    crate::replay::RedisTimeRead {
-                        host: &resource.endpoint.host,
-                        port: resource.endpoint.port,
-                        database: event["database"]
-                            .as_i64()
-                            .context("temporal Redis read lacks its actual database")?,
-                        command: event["command"]
-                            .as_str()
-                            .context("temporal Redis read lacks its operation")?,
-                        source_args: &args,
-                        target_args: &target_args,
-                        source_response: source,
-                        delivered_response: &target,
-                    },
-                    rules,
-                    &mut record,
-                )?;
+                let read = crate::replay::RedisTimeRead {
+                    host: &resource.endpoint.host,
+                    port: resource.endpoint.port,
+                    database: event["database"]
+                        .as_i64()
+                        .context("temporal Redis read lacks its actual database")?,
+                    command: event["command"]
+                        .as_str()
+                        .context("temporal Redis read lacks its operation")?,
+                    source_args: &args,
+                    target_args: &target_args,
+                    source_response: source,
+                    delivered_response: &target,
+                };
+                if let Some(redis) = &policy.redis {
+                    crate::replay::redis_delivered_scalar_time_copies(
+                        read,
+                        redis,
+                        clocks,
+                        &mut record,
+                    )?;
+                }
+                if let Some(plan) = &policy.global_json {
+                    crate::replay::redis_delivered_global_time_copies(
+                        read,
+                        plan,
+                        clocks,
+                        &mut record,
+                    )?;
+                }
             }
             _ => (),
         }

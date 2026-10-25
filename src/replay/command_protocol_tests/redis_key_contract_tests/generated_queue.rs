@@ -54,16 +54,20 @@ async fn generated_queue_identities_subscribe_lpush_unsubscribe_with_strict_task
         }
         let f = Fixture::new(records);
         f.install("result-channel",json!({"key":{"prefix":"celery-task-meta-"},
-            "key_contract":{"kind":"capture","binding":"index-task","template":"celery-task-meta-{value}","format":{"kind":"uuid_v4"}},
+            "key_contract":{"kind":"capture","template":"celery-task-meta-{value}","format":{"kind":"uuid_v4"}},
             "commands":[{"command":"SUBSCRIBE","argument_values":{}},{"command":"UNSUBSCRIBE","argument_values":{}}]})).unwrap();
-        f.install("task-message",json!({"key":"celery","commands":[{"command":"LPUSH","argument_values":{"1":{"json":{
-            "/headers/id":{"identity":{"binding":"index-task","template":"{value}"}},
-            "/headers/root_id":{"identity":{"binding":"index-task","template":"{value}"}},
-            "/properties/correlation_id":{"identity":{"binding":"index-task","template":"{value}"}},
-            "/properties/delivery_tag":{"random":{"format":"uuid","length":36}},
-            "/properties/reply_to":{"random":{"format":"uuid","length":36}},
-            "/headers/origin":{"random":{"format":"string","max_length":255}}
-        }}}}]})).unwrap();
+        f.install(
+            "task-message",
+            json!({"key":"celery","commands":[{"command":"LPUSH","argument_values":{"1":{"json":{
+                "/headers/id":{"identity":{"template":"{value}"}},
+                "/headers/root_id":{"identity":{"template":"{value}"}},
+                "/properties/correlation_id":{"identity":{"template":"{value}"}},
+                "/properties/delivery_tag":{"random":{"format":"uuid","length":36}},
+                "/properties/reply_to":{"random":{"format":"uuid","length":36}},
+                "/headers/origin":{"random":{"format":"string","max_length":255}}
+            }}}}]}),
+        )
+        .unwrap();
         let (addr, state, task) = redis_value_tests::spawn(&f.case, Some(f.policy.clone())).await;
         let mut subscriber = TcpStream::connect(addr).await.unwrap();
         let mut client = TcpStream::connect(addr).await.unwrap();

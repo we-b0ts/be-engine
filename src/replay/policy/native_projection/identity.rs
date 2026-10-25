@@ -181,7 +181,7 @@ pub(super) fn project(
             n::IdentityFormat::Uuid => d::DynamicValueFormat::Uuid,
             n::IdentityFormat::UuidV4 => d::DynamicValueFormat::UuidV4,
         }),
-        source_evidence: proof(&rule.proof),
+        source_evidence: proof(rule.proof.as_ref()),
     };
     output.validate()?;
     Ok(output)

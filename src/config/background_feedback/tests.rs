@@ -38,9 +38,9 @@ impl Fixture {
             rules_path: self.config.clone(),
             replay_report_path: self.replay_report.clone(),
             name: "config-refresh".to_string(),
-            authority: "CONFIG.API.demo.test".to_string(),
+            authority: "CONFIG.INTERNAL".to_string(),
             method: "get".to_string(),
-            path_prefix: "/1/config/service".to_string(),
+            path_prefix: "/refresh".to_string(),
             source_revision: REVISION.to_string(),
             source_evidence: EVIDENCE.to_string(),
         }
@@ -65,17 +65,17 @@ fn report_with_unused() -> Value {
         "unused_case_http_exchanges": [
             evidence(
                 "case-b",
-                "config.api.demo.test",
+                "config.internal",
                 80,
                 "GET",
-                "/1/config/service?action=lookup&group=large"
+                "/refresh?action=lookup&group=large"
             ),
             evidence(
                 "case-a",
-                "config.api.demo.test",
+                "config.internal",
                 80,
                 "GET",
-                "/1/config/service?action=lookup&group=small"
+                "/refresh?action=lookup&group=small"
             ),
         ],
         "unmatched_http_requests": [],
@@ -109,13 +109,8 @@ fn retries_policy_application_after_report_reclassification() {
     assert_eq!(fs::read(&fixture.replay_report).unwrap(), classified);
 
     let mut report: Value = serde_json::from_slice(&classified).unwrap();
-    report["http_request_header_mismatches"] = json!([evidence(
-        "case-a",
-        "config.api.demo.test",
-        80,
-        "GET",
-        "/1/config/service"
-    )]);
+    report["http_request_header_mismatches"] =
+        json!([evidence("case-a", "config.internal", 80, "GET", "/refresh")]);
     fs::write(&fixture.replay_report, report.to_string()).unwrap();
     assert!(
         plan_background_dependency(fixture.feedback())
@@ -142,13 +137,8 @@ fn ordinary_global_exchanges_cannot_replace_unused_case_evidence() {
 #[test]
 fn header_mismatch_cannot_be_hidden_by_a_background_rule() {
     let mut report = report_with_unused();
-    report["http_request_header_mismatches"] = json!([evidence(
-        "case-a",
-        "config.api.demo.test",
-        80,
-        "GET",
-        "/1/config/service"
-    )]);
+    report["http_request_header_mismatches"] =
+        json!([evidence("case-a", "config.internal", 80, "GET", "/refresh")]);
     let fixture = Fixture::new(report);
     let error = plan_background_dependency(fixture.feedback())
         .err()
@@ -165,7 +155,7 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(!plan.report().reused_existing);
     assert_eq!(plan.report().effective_name, "config-refresh");
     assert!(!plan.report().applied);
-    assert_eq!(plan.report().authority, "config.api.demo.test");
+    assert_eq!(plan.report().authority, "config.internal");
     assert_eq!(plan.report().method, "GET");
     assert_eq!(plan.report().matched_unused_exchanges, 2);
     assert_eq!(plan.report().matched_case_ids, ["case-a", "case-b"]);
@@ -178,7 +168,9 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(raw.contains("protocol: http"));
     assert!(!raw.contains("response_role"));
     assert!(raw.contains("source_revision:"));
-    assert!(raw.contains(EVIDENCE));
+    assert!(!raw.contains(EVIDENCE));
+    assert!(!raw.contains("proof:"));
+    assert_eq!(applied.source_evidence, EVIDENCE);
     let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 1);
 
@@ -220,20 +212,23 @@ fn equivalent_http_selector_reuses_existing_rule_even_when_name_and_proof_change
 }
 
 #[test]
-fn covered_http_selector_reuses_a_multi_selector_system_default() {
+fn covered_http_selector_reuses_an_explicit_multi_selector_rule() {
     let fixture = Fixture::new(report_with_unused());
-    fs::write(
-        &fixture.config,
-        SourceTrafficPolicyConfig::repository_defaults()
-            .render()
-            .unwrap(),
-    )
-    .unwrap();
-
+    let mut policy = SourceTrafficPolicyConfig::empty();
+    policy
+        .process_owned_dependencies
+        .push(BackgroundDependencyRuleConfig::Http {
+            name: "explicit-config-poll".into(),
+            authorities: vec!["config.internal".into(), "mirror.config.internal".into()],
+            methods: vec!["GET".into()],
+            path_prefixes: vec!["/refresh".into(), "/health-cache".into()],
+            source_revision: REVISION.into(),
+            source_evidence: EVIDENCE.into(),
+        });
+    fs::write(&fixture.config, policy.render().unwrap()).unwrap();
     let plan = plan_background_dependency(fixture.feedback()).unwrap();
-
     assert!(plan.report().reused_existing);
-    assert_eq!(plan.report().effective_name, "breeze_vintage");
+    assert_eq!(plan.report().effective_name, "explicit-config-poll");
     assert!(!plan.report().changed);
     assert!(plan.report().diff.is_empty());
 }
@@ -263,10 +258,10 @@ fn rejects_incomplete_or_conflicting_replay_evidence() {
     let mut report = report_with_unused();
     report["unmatched_http_requests"] = json!([evidence(
         "case-a",
-        "config.api.demo.test",
+        "config.internal",
         80,
         "GET",
-        "/1/config/service?action=write",
+        "/refresh?action=write",
     )]);
     let fixture = Fixture::new(report);
     assert!(
@@ -279,10 +274,10 @@ fn rejects_incomplete_or_conflicting_replay_evidence() {
     let mut report = report_with_unused();
     report["unsupported_http_exchanges"] = json!([evidence(
         "case-a",
-        "config.api.demo.test",
+        "config.internal",
         80,
         "GET",
-        "/1/config/service?action=unsupported",
+        "/refresh?action=unsupported",
     )]);
     let fixture = Fixture::new(report);
     assert!(
@@ -331,7 +326,7 @@ fn existing_name_cannot_be_reused_for_a_different_selector() {
         .unwrap();
 
     let mut feedback = fixture.feedback();
-    feedback.path_prefix = "/1/config".to_string();
+    feedback.path_prefix = "/".to_string();
     assert!(
         plan_background_dependency(feedback)
             .unwrap_err()

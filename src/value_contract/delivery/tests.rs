@@ -3,6 +3,7 @@ use crate::value_contract::time::ClockPair;
 use chrono::TimeZone;
 use serde_json::json;
 mod calendar;
+mod optional;
 
 #[test]
 fn naive_delivery_preserves_civil_text_without_timezone_configuration() {
@@ -36,7 +37,7 @@ fn naive_delivery_preserves_civil_text_without_timezone_configuration() {
 
 #[test]
 fn delivery_only_translates_declared_time_and_keeps_source_immutable() {
-    let doc=crate::policy::parse_policy(r#"format: traffic-policy/v2
+    let doc:serde_yaml::Value=serde_yaml::from_str(r#"format: traffic-policy/v2
 rules:
   - id: session-input
     surface: dependency.response
@@ -52,7 +53,8 @@ rules:
     delivery: {rebase_time: [/expiry]}
     proof: {source: 'src/session.py:40 read', fact: 'Source expiry retains its offset from the recorded input delivery.'}
 "#).unwrap();
-    let compiled = crate::policy::compile_policy(&doc).unwrap();
+    let rule: crate::policy::Rule = serde_yaml::from_value(doc["rules"][0].clone()).unwrap();
+    let compiled = crate::policy::compile_rule(&rule).unwrap();
     let source = json!({"members":[2,1,2],"expiry":12_000_001,"stable":true});
     let clocks = AnchorClocks {
         dependency: ClockPair {
@@ -61,18 +63,11 @@ rules:
         },
         ..Default::default()
     };
-    let actual = materialize(&source, &compiled.rules.iter().collect::<Vec<_>>(), clocks).unwrap();
+    let actual = materialize(&source, &[&compiled], clocks).unwrap();
     assert_eq!(
         actual,
         json!({"members":[2,1,2],"expiry":112_000_001,"stable":true})
     );
     assert_eq!(source["expiry"], 12_000_001);
-    assert!(
-        materialize(
-            &source,
-            &compiled.rules.iter().collect::<Vec<_>>(),
-            AnchorClocks::default()
-        )
-        .is_err()
-    );
+    assert!(materialize(&source, &[&compiled], AnchorClocks::default()).is_err());
 }

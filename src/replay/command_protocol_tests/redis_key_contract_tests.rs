@@ -59,16 +59,16 @@ impl Fixture {
     }
 }
 fn session_rule() -> Value {
-    json!({"key":{"prefix":"sessions:"},"key_contract":{"kind":"capture","binding":"session","template":"sessions:{value}","format":{"kind":"hex","bytes":2}},
+    json!({"key":{"prefix":"sessions:"},"key_contract":{"kind":"capture","template":"sessions:{value}","format":{"kind":"hex","bytes":2}},
     "commands":[{"command":"SET","argument_values":{"1":{"json":{
-        "/id":{"identity":{"binding":"session","template":"{value}"}},
+        "/id":{"identity":{"template":"{value}"}},
         "/expires_at":{"time":"preserve_relative","format":"unix_seconds"}
     }}}}]})
 }
 fn ticket_rule() -> Value {
-    json!({"key":{"prefix":"tickets:"},"key_contract":{"kind":"capture","binding":"ticket","template":"tickets:{value}","format":{"kind":"hex","bytes":32}},
+    json!({"key":{"prefix":"tickets:"},"key_contract":{"kind":"capture","template":"tickets:{value}","format":{"kind":"hex","bytes":32}},
     "commands":[{"command":"SET","argument_values":{"1":{"json":{
-        "/session_id":{"identity":{"binding":"session","template":"{value}"}}
+        "/session_id":{"identity":{"template":"{value}"}}
     }}}}]})
 }
 

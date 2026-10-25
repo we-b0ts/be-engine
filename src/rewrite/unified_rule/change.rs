@@ -11,13 +11,17 @@ const CHANGE_FORMAT: &str = "traffic-policy-change/v1";
 pub(super) struct Proposal {
     pub policy: TrafficPolicy,
     pub replace_rules: BTreeSet<String>,
+    pub replace_sections: BTreeSet<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Change {
     format: String,
+    #[serde(default)]
     replace_rules: Vec<String>,
+    #[serde(default)]
+    replace_sections: Vec<String>,
     policy: TrafficPolicy,
 }
 
@@ -27,6 +31,7 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
         return Ok(Proposal {
             policy: super::parse_proposal(input)?,
             replace_rules: BTreeSet::new(),
+            replace_sections: BTreeSet::new(),
         });
     }
     let change: Change = serde_yaml::from_value(value).context("invalid policy change proposal")?;
@@ -35,8 +40,8 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
         "unsupported policy change format"
     );
     ensure!(
-        (1..=256).contains(&change.replace_rules.len()),
-        "policy changes require 1..256 explicit replaced rule IDs"
+        change.replace_rules.len() <= 256,
+        "policy changes permit at most 256 explicit replaced rule IDs"
     );
     let count = change.replace_rules.len();
     let replace_rules = change.replace_rules.into_iter().collect::<BTreeSet<_>>();
@@ -48,16 +53,44 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
         !replace_rules.iter().any(|id| id.trim().is_empty()),
         "replaced rule IDs must not be blank"
     );
+    let count = change.replace_sections.len();
+    let replace_sections = change.replace_sections.into_iter().collect::<BTreeSet<_>>();
+    ensure!(
+        replace_sections.len() == count,
+        "replaced sections must be unique"
+    );
+    for section in &replace_sections {
+        let provided = match section.as_str() {
+            "json" => change.policy.json.is_some(),
+            "mysql" => change.policy.mysql.is_some(),
+            "redis" => change.policy.redis.is_some(),
+            "http" => change.policy.http.is_some(),
+            "async_api" => change.policy.async_api.is_some(),
+            _ => anyhow::bail!(
+                "unsupported replaced section {section:?}; use json, mysql, redis, http or async_api"
+            ),
+        };
+        ensure!(
+            provided,
+            "replaced section {section:?} must be explicitly provided in policy"
+        );
+    }
     ensure!(
         !change.policy.rules.is_empty()
             || !change.policy.resources.is_empty()
-            || !change.policy.responses.is_empty(),
+            || change.policy.json.is_some()
+            || change.policy.mysql.is_some()
+            || change.policy.redis.is_some()
+            || change.policy.http.is_some()
+            || change.policy.async_api.is_some()
+            || !change.policy.signatures.is_empty(),
         "policy changes require explicit replacement declarations or rules with Source proof"
     );
     crate::policy::compile_policy(&change.policy)?;
     Ok(Proposal {
         policy: change.policy,
         replace_rules,
+        replace_sections,
     })
 }
 
@@ -118,9 +151,6 @@ impl Proposal {
         document
             .rules
             .retain(|rule| !self.replace_rules.contains(rule.id()));
-        document
-            .field_references
-            .retain(|id, _| !self.replace_rules.contains(id));
         Ok(removed)
     }
 }
@@ -148,9 +178,9 @@ mod tests {
     use serde_json::json;
 
     fn rule(id: &str, api: &str) -> serde_json::Value {
-        json!({"id":id,"surface":"api.response","match":{"api":api},
-            "slot":"body","codec":"json","contract":{"/members":"unordered"},
-            "proof":{"source":"source.py:members","fact":"Source exposes a set"}})
+        json!({"id":id,"match":{"api":api},
+            "effect":{"kind":"response_header_date","header":"content-disposition","parameter":"filename","format":"%Y-%m-%d"},
+            "proof":{"source":"source.py:filename","fact":"Source includes the current date in the download filename"}})
     }
 
     fn change(replace: serde_json::Value) -> serde_json::Value {
@@ -203,8 +233,34 @@ mod tests {
         let mut invalid = value;
         invalid["policy"]["rules"] = json!([]);
         assert!(parse(&invalid.to_string()).is_err());
-        assert!(parse(&change(json!([])).to_string()).is_err());
+        assert!(parse(&change(json!([])).to_string()).is_ok());
         assert!(parse(&change(json!(["old", "old"])).to_string()).is_err());
+    }
+
+    #[test]
+    fn section_replacement_requires_unique_supported_explicitly_provided_sections() {
+        let valid = json!({"format":CHANGE_FORMAT,"replace_sections":["json"],
+            "policy":{"format":"traffic-policy/v2","json":{"fields":{}}}});
+        let parsed = parse(&valid.to_string()).unwrap();
+        assert!(parsed.replace_rules.is_empty());
+        assert_eq!(parsed.replace_sections, BTreeSet::from(["json".into()]));
+        for sections in [
+            json!(["json", "json"]),
+            json!(["unknown"]),
+            json!(["mysql"]),
+            json!(["signatures"]),
+        ] {
+            let mut bad = valid.clone();
+            bad["replace_sections"] = sections;
+            assert!(parse(&bad.to_string()).is_err(), "accepted {bad}");
+        }
+        assert!(crate::policy::parse_policy(&valid.to_string()).is_err());
+        let missing_headers = json!({"format":CHANGE_FORMAT,"replace_sections":["http"],
+            "policy":{"format":"traffic-policy/v2","http":{"requests":[]}}});
+        assert!(
+            parse(&missing_headers.to_string()).is_ok(),
+            "an explicitly empty HTTP map remains a valid whole-format replacement"
+        );
     }
 
     #[test]

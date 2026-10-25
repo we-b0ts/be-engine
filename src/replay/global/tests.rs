@@ -2,6 +2,8 @@ use super::*;
 use crate::dependency_index::global::{GlobalEntry, global_records, load_global_index};
 use serde_json::json;
 
+mod ownership;
+
 fn expected_phase(record: &DependencyRecord) -> Option<Phase> {
     // Exhaustive: adding a dependency variant must also decide its load phase.
     match record {

@@ -84,24 +84,6 @@ pub enum RewriteDependencyRuleSelector {
     RedisCrossCase {
         rule_id: String,
     },
-    RedisTimeShift {
-        selector: crate::RedisTimeShiftSelector,
-    },
-    HttpHeaderTimestamp {
-        selector: crate::HttpHeaderTimestampSelector,
-    },
-    HttpUnordered {
-        selector: crate::HttpUnorderedSelector,
-    },
-    RedisLock {
-        selector: crate::RedisLockSelector,
-    },
-    RedisPublish {
-        selector: crate::RedisPublishSelector,
-    },
-    RedisUnordered {
-        selector: crate::RedisUnorderedSelector,
-    },
     HttpCrossCase {
         selector: crate::HttpCrossCaseSelector,
     },
@@ -222,11 +204,6 @@ pub(super) fn plan(
         record.spec,
         RewriteDependencyRuleSpec::MysqlApiTriggered { .. }
             | RewriteDependencyRuleSpec::RedisApiTriggered { .. }
-            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
-            | RewriteDependencyRuleSpec::RedisLock { .. }
-            | RewriteDependencyRuleSpec::RedisPublish { .. }
-            | RewriteDependencyRuleSpec::RedisUnordered { .. }
-            | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     ) {
         record.review_fingerprint = Some(fingerprint::id(&[&serde_json::to_string(&report)?]));
@@ -393,14 +370,8 @@ pub(super) fn apply(
     if matches!(
         record.spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
-            | RewriteDependencyRuleSpec::HttpUnordered { .. }
             | RewriteDependencyRuleSpec::MysqlApiTriggered { .. }
             | RewriteDependencyRuleSpec::RedisApiTriggered { .. }
-            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
-            | RewriteDependencyRuleSpec::RedisLock { .. }
-            | RewriteDependencyRuleSpec::RedisPublish { .. }
-            | RewriteDependencyRuleSpec::RedisUnordered { .. }
-            | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     ) {
         validate_plan_evidence(
@@ -512,14 +483,8 @@ fn validate_plan_evidence(
     if !matches!(
         spec,
         RewriteDependencyRuleSpec::HttpCrossCase { .. }
-            | RewriteDependencyRuleSpec::HttpUnordered { .. }
             | RewriteDependencyRuleSpec::MysqlApiTriggered { .. }
             | RewriteDependencyRuleSpec::RedisApiTriggered { .. }
-            | RewriteDependencyRuleSpec::HttpHeaderTimestamp { .. }
-            | RewriteDependencyRuleSpec::RedisLock { .. }
-            | RewriteDependencyRuleSpec::RedisPublish { .. }
-            | RewriteDependencyRuleSpec::RedisUnordered { .. }
-            | RewriteDependencyRuleSpec::RedisTimeShift { .. }
             | RewriteDependencyRuleSpec::RedisCrossCase { .. }
     ) && state
         .dependency_rule_plan

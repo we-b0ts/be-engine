@@ -93,6 +93,15 @@ fn requested_query(
         })
 }
 
+pub(super) fn is_rule_discovery_query(
+    state: &RewriteState,
+    issue: &RewriteIssue,
+    query_id: &str,
+) -> bool {
+    requested_query(state, issue, query_id)
+        .is_some_and(|(kind, _)| kind == QUERY_UNIFIED_RULE_CANDIDATES)
+}
+
 pub(super) fn query(
     target_root: &Path,
     state: &RewriteState,
@@ -131,7 +140,7 @@ pub(super) fn query(
     } else if kind == QUERY_UNIFIED_RULE_CANDIDATES {
         (unified_discovery::facts(target_root, state, issue, requested_id)?,
             vec!["A mechanical draft requires Source code proof and full selected evidence validation. Derived delivery never proves independent Target response behavior.".into()],
-            "Inspect draft_rule or Source bindings. Follow pagination.next_page for omitted summaries and pagination.next_scan for remaining observations. Fill Source proof and use the returned unified planner; bounded discovery never proves complete coverage.".into())
+            "Inspect candidates[].draft_policy and source_entry.locations. Follow pagination.next_page for omitted summaries and pagination.next_scan for remaining observations. Draft fields and formats add to current declarations; inspect the planned changes, add Source proof and use the returned planner. Bounded discovery never proves complete coverage.".into())
     } else {
         facts(target_root, state, issue, kind, offset)?
     };
@@ -329,17 +338,12 @@ fn facts(
                 facts["signing_key_discovery"] = super::jwt_rule::signing_key_discovery(target_root);
             }
             facts["dynamic_capture_candidates"] = crate::e2e_run::query_dynamic_capture_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
-            facts["http_header_timestamp_candidates"] = serde_json::to_value(rule_guidance::http_header_timestamp_candidates(&facts))?;
             if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| c["protocol"] == "http" && c["reason"] == "unmatched_target")) {
                 facts["http_request_differences_command"] = serde_json::to_value(super::action::command(target_root,
                     vec!["evidence".into(), query_id(state, issue, QUERY_HTTP_REQUESTS)], Vec::new()))?;
                 facts["http_unordered_candidates"] = crate::e2e_run::query_http_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
-                facts["redis_lock_candidates"] = crate::e2e_run::query_redis_lock_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["redis_unordered_candidates"] = crate::e2e_run::query_redis_unordered_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
                 facts["cross_case_candidates"] = crate::e2e_run::query_http_cross_case_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
-            }
-            if facts["clusters"].as_array().is_some_and(|clusters| clusters.iter().any(|c| (c["protocol"] == "redis" || c["protocol"] == "http") && c["reason"] == "unmatched_target")) {
-                facts["redis_publish_candidates"] = crate::e2e_run::query_redis_publish_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             }
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }
             mysql_diagnosis::attach(&mut facts);
@@ -687,12 +691,15 @@ pub(super) fn unified_rule_hint(
     root: &Path,
     state: &RewriteState,
 ) -> Option<super::evidence_model::RewriteRuleHint> {
-    let command = commands(root, state)
-        .into_iter()
-        .find(|q| q.query_id.ends_with("unified-rule-candidates"))?;
+    let command = commands(root, state).into_iter().find(|q| {
+        state
+            .active_issue
+            .as_ref()
+            .is_some_and(|issue| is_rule_discovery_query(state, issue, &q.query_id))
+    })?;
     Some(super::evidence_model::RewriteRuleHint {
         capability:"unified_value_contract".into(),rule:"traffic-policy/v2".into(),
-        hint:"Inspect source_entry.bindings and existing declarations at the first relevant mismatch, including when no draft exists. Inventory Source-proven time, duration, unordered or identity semantics by physical resource field; response fields retain their API envelope. For an identity, collect all eligible MySQL/Redis/response locations, format and case-local binding together instead of adding SQL/argument exceptions or waiting for separate capture/reference failures. Runtime relations follow observed Source values; eligibility still requires Source proof. Plan the declaration document once with any extra native relationships, inspect coverage and residual failures, apply and complete genuine Replay. Bounded discovery never establishes complete coverage or permission.".into(),
+        hint:"Use the differences and Source locations to diagnose this issue. This query exposes supported content formats and carrier bindings, even when no draft exists. Rules require Source proof, complete plan validation and genuine Replay; equal/null observations do not authorize a rule.".into(),
         help:command.command,
     })
 }

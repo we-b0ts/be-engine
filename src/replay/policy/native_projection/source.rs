@@ -13,12 +13,7 @@ pub(crate) fn validate_finite_sharing(
         "finite-sharing proof received another effect"
     );
     let projected = dependency::project(&compiled.rule)?;
-    let resource = compiled
-        .rule
-        .selector
-        .resource
-        .as_ref()
-        .context("sharing resource is missing")?;
+    let resource = compiled.rule.selector.resource.as_ref();
     let evidence = match &compiled.rule.effect {
         n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Http) => {
             let selected = projected
@@ -28,26 +23,28 @@ pub(crate) fn validate_finite_sharing(
                 case_source,
                 replay_report,
                 &crate::replay::HttpCrossCaseSelector {
-                    host: resource.endpoint.host.clone(),
-                    port: resource.endpoint.port,
+                    host: resource
+                        .map(|resource| resource.endpoint.host.clone())
+                        .or_else(|| compiled.rule.selector.http_host.clone()),
+                    port: resource.map(|resource| resource.endpoint.port),
                     method: selected.method,
                     path: selected.path,
                 },
             )?
         }
         n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis { .. }) => {
-            let super::super::redis_value::RedisSelector::TimeShift(read) = projected
+            let super::super::redis_value::RedisSelector::SharedRead(read) = projected
                 .redis
                 .context("Redis sharing projection is missing")?
             else {
-                anyhow::bail!("Redis sharing owner is not a time-shift read");
+                anyhow::bail!("Redis sharing owner is not a finite shared read");
             };
             crate::replay::redis::cross_case::verify_candidate(
                 case_source,
                 replay_report,
-                &crate::replay::RedisTimeShiftSelector {
-                    host: resource.endpoint.host.clone(),
-                    port: resource.endpoint.port,
+                &crate::replay::redis::shared_read::RedisSharedReadSelector {
+                    host: resource.map(|resource| resource.endpoint.host.clone()),
+                    port: resource.map(|resource| resource.endpoint.port),
                     read,
                 },
             )?

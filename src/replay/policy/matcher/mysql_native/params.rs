@@ -98,7 +98,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn generated_sql_bindings_and_times_compose_without_claiming_failed_candidates() {
+    fn generated_sql_formats_and_times_compose_without_claiming_failed_candidates() {
         let temporary = tempfile::tempdir().unwrap();
         let directory = temporary.path().join("case");
         std::fs::create_dir(&directory).unwrap();
@@ -112,8 +112,8 @@ mod tests {
         let proof = json!({"source":"source.py:save","fact":"Source mints a UUID, keeps it for later updates, and stores the request-relative creation instant"});
         let resource = json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app"});
         let document = json!({"format":"traffic-policy/v2","rules":[
-            {"id":"created","match":{"api":"POST /events","resource":resource,"sql":"INSERT INTO events (id,created) VALUES (?,?)"},"effect":{"kind":"mysql_values","params":{"0":{"contract":{"kind":"uuid_v4","binding":"event"},"proof":proof}},"values":{"1":{"contract":{"kind":"time","format":"sql_datetime","relation":"preserve_offset","utc_offset":"+00:00"},"proof":proof}}},"proof":proof},
-            {"id":"updated","match":{"api":"POST /events","resource":resource,"sql":"UPDATE events SET label=? WHERE id=?"},"effect":{"kind":"mysql_values","params":{"1":{"contract":{"kind":"reference","binding":"event"},"proof":proof}}},"proof":proof}
+            {"id":"created","match":{"api":"POST /events","resource":resource,"sql":"INSERT INTO events (id,created) VALUES (?,?)"},"effect":{"kind":"mysql_values","params":{"0":{"contract":{"kind":"uuid_v4"},"proof":proof}},"values":{"1":{"contract":{"kind":"time","format":"sql_datetime","relation":"preserve_offset","utc_offset":"+00:00"},"proof":proof}}},"proof":proof},
+            {"id":"updated","match":{"api":"POST /events","resource":resource,"sql":"UPDATE events SET label=? WHERE id=?"},"effect":{"kind":"mysql_values","params":{"1":{"contract":{"kind":"uuid_v4"},"proof":proof}}},"proof":proof}
         ]});
         let document: crate::policy::TrafficPolicy = serde_json::from_value(document).unwrap();
         let compiled = crate::policy::compile_policy(&document).unwrap();
@@ -161,7 +161,7 @@ mod tests {
             .unwrap()
             .passed()
         );
-        // Previewing a losing candidate never reserves its UUID binding.
+        // Previewing a losing candidate never reserves its UUID correspondence.
         let unused = validate_parameters(
             &runtime,
             "case",
@@ -173,6 +173,7 @@ mod tests {
         )
         .unwrap();
         drop(unused);
+        assert!(!runtime.request_contracts.has_identities("case"));
         let actual = candidate("00000000-0000-4000-8000-000000000003");
         let comparison = compare(
             Some("app"),
@@ -198,6 +199,17 @@ mod tests {
         .unwrap();
         decision.merge_value_comparison(comparison, &selected);
         runtime.commit(Some("case"), decision).unwrap();
+        assert!(runtime.request_contracts.has_identities("case"));
+        let conflict = crate::value_contract::identities::IdentityPair {
+            source: serde_json::to_string("00000000-0000-4000-8000-000000000001").unwrap(),
+            target: serde_json::to_string("00000000-0000-4000-8000-000000000002").unwrap(),
+        };
+        assert!(
+            runtime
+                .request_contracts
+                .preview_identity_pairs("case", &[conflict])
+                .is_err()
+        );
         let source =
             "UPDATE events SET label='checked' WHERE id='00000000-0000-4000-8000-000000000001'";
         let correct =
@@ -255,7 +267,7 @@ mod tests {
                 None,
                 &reference
             )
-            .is_err()
+            .is_ok()
         );
         assert!(
             compare(

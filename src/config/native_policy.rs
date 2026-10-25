@@ -19,10 +19,9 @@ pub(crate) fn parse_source_with_fingerprints(
     raw: &str,
 ) -> Result<(SourceTrafficPolicyConfig, crate::policy::PolicyFingerprints)> {
     let compiled = crate::policy::parse_and_compile_policy(raw)?;
-    Ok((
-        project_source_policy(&compiled.native)?,
-        compiled.fingerprints,
-    ))
+    let mut projected = project_source_policy(&compiled.native)?;
+    projected.async_api = compiled.async_api.clone();
+    Ok((projected, compiled.fingerprints))
 }
 
 #[cfg(test)]
@@ -35,6 +34,7 @@ pub(crate) fn render_initial(config: &SourceTrafficPolicyConfig) -> Result<Strin
     let document = crate::policy::TrafficPolicy {
         format: crate::policy::POLICY_FORMAT.into(),
         source_revision: None,
+        async_api: (!config.async_api.is_empty()).then(|| config.async_api.clone()),
         rules: rules.into_iter().map(Into::into).collect(),
         ..Default::default()
     };
@@ -59,6 +59,7 @@ pub(crate) fn project_source_policy(
         http_response_rewrite: vec![],
         breeze_capture: vec![],
         process_owned_dependencies: vec![],
+        async_api: Default::default(),
     };
     for compiled in rules {
         let rule = &compiled.rule;
@@ -146,14 +147,14 @@ fn capture_response(
         status_codes: effect.status_codes.clone(),
         content_types: effect.content_types.clone(),
         plugin,
-        source_evidence: proof(&rule.proof),
+        source_evidence: proof(rule.proof.as_ref()),
     }
 }
 
 fn process_owned(rule: &n::NativeRule, effect: &n::ProcessOwnedEffect) -> Result<B> {
     let name = rule.id.clone();
     let source_revision = effect.source_revision.clone();
-    let source_evidence = proof(&rule.proof);
+    let source_evidence = proof(rule.proof.as_ref());
     let trigger_source = effect
         .origin
         .as_ref()
@@ -395,6 +396,8 @@ fn origin_script(script: &n::OriginScript) -> Result<super::ApiTriggerRedisScrip
     })
 }
 
-fn proof(value: &crate::policy::Proof) -> String {
-    format!("{}: {}", value.source, value.fact)
+fn proof(value: Option<&crate::policy::Proof>) -> String {
+    value
+        .map(|value| format!("{}: {}", value.source, value.fact))
+        .unwrap_or_default()
 }

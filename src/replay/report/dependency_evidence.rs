@@ -173,6 +173,21 @@ const NETWORK_EVENTS: &[EventArray] = &[EventArray {
     direction: DifferenceDirection::TargetOnly,
 }];
 
+const CONNECT_EVENTS: &[EventArray] = &[
+    EventArray {
+        protocol: "network",
+        field: "unused_case",
+        reason: "unused_recorded_connection_failure",
+        direction: DifferenceDirection::UnusedRecorded,
+    },
+    EventArray {
+        protocol: "network",
+        field: "failed_case",
+        reason: "connection_failure_delivery_failed",
+        direction: DifferenceDirection::TargetOnly,
+    },
+];
+
 const COMMAND_EVENTS: &[EventArray] = &[
     EventArray {
         protocol: "",
@@ -237,6 +252,9 @@ pub(crate) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
     collect_arrays(report, NETWORK_EVENTS.iter().copied(), true, &mut builders);
     collect_arrays(report, MYSQL_EVENTS.iter().copied(), false, &mut builders);
     collect_arrays(report, HTTP_EVENTS.iter().copied(), false, &mut builders);
+    if let Some(report) = report.get("connect_failures") {
+        collect_arrays(report, CONNECT_EVENTS.iter().copied(), false, &mut builders);
+    }
     for protocol in ["redis", "memcached", "kafka", "motan"] {
         let Some(protocol_report) = report.get(protocol) else {
             continue;
@@ -306,6 +324,9 @@ pub(in crate::replay) fn report_has_case_dirty_events(report: &Value) -> bool {
         .is_some_and(|targets| !targets.is_empty())
         || arrays_have_case_event(report, MYSQL_EVENTS)
         || arrays_have_case_event(report, HTTP_EVENTS)
+        || report
+            .get("connect_failures")
+            .is_some_and(|report| arrays_have_case_event(report, CONNECT_EVENTS))
         || ["redis", "memcached", "kafka", "motan"]
             .into_iter()
             .filter_map(|protocol| report.get(protocol))
@@ -543,6 +564,9 @@ fn signature(event: &Value) -> Value {
         "reason",
         "diagnostic",
         "target_event_index",
+        "failure_kind",
+        "client_outcome",
+        "duration_ms",
     ] {
         if let Some(value) = event.get(field) {
             signature.insert(field.to_string(), bounded_value(value));

@@ -4,25 +4,16 @@ use super::*;
 #[derive(Default)]
 pub(super) struct Coverage {
     references: BTreeSet<(String, usize)>,
-    columns: BTreeSet<(String, String)>,
-    headers: BTreeSet<(String, String)>,
 }
 impl Coverage {
-    pub(super) fn header(&mut self, id: &str, name: &str) {
-        self.headers.insert((id.into(), name.into()));
-    }
     pub(super) fn references(&mut self, hits: impl IntoIterator<Item = (String, usize)>) {
         self.references.extend(hits);
-    }
-    pub(super) fn column(&mut self, id: &str, column: &str) {
-        self.columns.insert((id.into(), column.into()));
     }
     pub(super) fn finish(
         &self,
         compiled: &CompiledPolicy,
         selected: &BTreeSet<String>,
         counts: &BTreeMap<String, usize>,
-        mysql_reads: &[crate::replay::policy::dynamic_values::MysqlIdentityReadBackReport],
     ) -> Result<()> {
         for compiled in compiled
             .native
@@ -35,46 +26,14 @@ impl Coverage {
                 "native rule {} has no positive complete Source evidence",
                 rule.id
             );
-            match &rule.effect {
-                NativeEffect::HttpClientMetadata(effect) => {
-                    for name in &effect.headers {
-                        ensure!(
-                            self.headers.contains(&(rule.id.clone(), name.clone())),
-                            "HTTP client metadata rule {} header {name} has no complete positive Source witness",
-                            rule.id
-                        );
-                    }
+            if let NativeEffect::Identity(effect) = &rule.effect {
+                for index in 0..effect.references.len() {
+                    ensure!(
+                        self.references.contains(&(rule.id.clone(), index)),
+                        "native identity {} reference resource {index} has no use after a Source capture",
+                        rule.id
+                    );
                 }
-                NativeEffect::Identity(effect) => {
-                    for index in 0..effect.references.len() {
-                        ensure!(
-                            self.references.contains(&(rule.id.clone(), index)),
-                            "native identity {} reference resource {index} has no use after a Source capture",
-                            rule.id
-                        );
-                    }
-                    for (index, entry) in effect.mysql_read_back.iter().enumerate() {
-                        for pointer in &entry.contract.json_pointers {
-                            ensure!(
-                                mysql_reads.iter().any(|read| read.rule_id == rule.id
-                                    && read.declaration == index
-                                    && read.json_pointers.contains(pointer)),
-                                "native identity {} MySQL read_back {index} field {pointer} has no positive causal Source witness",
-                                rule.id
-                            );
-                        }
-                    }
-                }
-                NativeEffect::MysqlValues(effect) => {
-                    for column in effect.response_time.keys() {
-                        ensure!(
-                            self.columns.contains(&(rule.id.clone(), column.clone())),
-                            "native SQL rule {} response column {column} has no positive Source time cell",
-                            rule.id
-                        );
-                    }
-                }
-                _ => (),
             }
         }
         Ok(())

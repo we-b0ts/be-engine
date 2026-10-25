@@ -42,6 +42,32 @@ impl IdentityFacts {
 }
 
 impl RequestContracts {
+    /// Register immutable Source context without admitting a runnable Target case.
+    pub(in crate::replay) fn register_source_origin(
+        &self,
+        case: &str,
+        directory: &Path,
+    ) -> Result<()> {
+        if self
+            .state
+            .lock()
+            .expect("request contracts")
+            .cases
+            .contains_key(case)
+        {
+            return Ok(());
+        }
+        let raw = std::fs::read(directory.join("request.json"))?;
+        let request: Value = serde_json::from_slice(&raw)?;
+        let anchor = CaseAnchor::from_request(directory, &request, &self.rules);
+        let mut state = self.state.lock().expect("request contracts");
+        state
+            .source_request_digests
+            .insert(case.into(), crate::policy_evidence::digest(&raw));
+        state.cases.entry(case.into()).or_insert(anchor);
+        Ok(())
+    }
+
     pub(super) fn register_source_records(&self, case: &str, bytes: &[u8]) -> Result<()> {
         let Some(store) = &self.witnesses else {
             return Ok(());

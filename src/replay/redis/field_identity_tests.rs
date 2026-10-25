@@ -39,15 +39,10 @@ async fn send(client: &mut RedisBufferedReader<TcpStream>, parts: &[&[u8]]) -> V
 
 #[tokio::test]
 async fn resource_ids_cross_tcp_writes_and_reads_with_native_json_and_finite_inventory() {
-    replay_tcp(false).await;
+    replay_tcp().await;
 }
 
-#[tokio::test]
-async fn legacy_string_projection_cannot_hide_resource_identity_pairs_over_tcp() {
-    replay_tcp(true).await;
-}
-
-async fn replay_tcp(legacy_projection: bool) {
+async fn replay_tcp() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let case = root.join(".traffic-e2e/local/artifacts/recordings/run/apis/tasks/case");
@@ -96,51 +91,13 @@ async fn replay_tcp(legacy_projection: bool) {
     std::fs::write(case.join("dependencies.jsonl"), &original).unwrap();
     let path = root.join(".traffic-e2e/policy.yaml");
     let raw = r#"format: traffic-policy/v2
-resources:
-  cache:
-    protocol: redis
-    endpoint: redis.test:6379
-    database: 0
-    proof: {source: 'app/cache.rs:1-20', fact: 'Source copies generated identities between these stored entities'}
-    keys:
-      - key: {prefix: 'session:'}
-        container: string
-        value:
-          codec: json
-          fields:
-            /id: {kind: identity, binding: entity, prefix: '', format: decimal}
-rules:
-  - id: native-nonce
-    match:
-      api: POST /tasks
-      resource: cache
-      key: {kind: exact, value: 'session:1'}
-    effect:
-      kind: redis_sequence
-      commands:
-        - operation: SET
-          arguments:
-            1:
-              kind: json
-              fields:
-                /native_nonce: {kind: random, format: hex, length: 4}
-    proof: {source: 'app/cache.rs:5', fact: 'This independent nonce has an exact lowercase hexadecimal representation'}
+json:
+  fields:
+    /id: {kind: identity, formats: [decimal]}
+    /legacy_id: {kind: identity, formats: [decimal]}
+    /native_nonce: {kind: identity, formats: [{hex: 4}]}
 "#;
-    let mut document: Value = serde_yaml::from_str(raw).unwrap();
-    if legacy_projection {
-        document["rules"].as_array_mut().unwrap().push(json!({
-            "id":"legacy-entity", "match":{
-                "api":"POST /tasks", "resource":"cache", "operation":"SET",
-                "key":{"kind":"exact", "value":"session:1"}
-            },
-            "effect":{
-                "kind":"identity", "value_type":"string",
-                "capture":{"kind":"redis_argument", "index":1, "json_pointer":"/legacy_id"},
-                "references":[{"resource":"cache"}]
-            },
-            "proof":{"source":"app/cache.rs:1", "fact":"The older contextual capture also observes the generated entity used by later writes"}
-        }));
-    }
+    let document: Value = serde_yaml::from_str(raw).unwrap();
     std::fs::write(&path, document.to_string()).unwrap();
     crate::replay::write_test_recording_network_manifest(root);
     let addr = "127.0.0.1:0".parse().unwrap();
@@ -183,11 +140,8 @@ rules:
         runtime.state.clone(),
     ));
     let mut client = RedisBufferedReader::new(stream, 1024 * 1024);
-    let target_value = if legacy_projection {
-        br#"{"id":"999","legacy_id":"999","native_nonce":"bbbb","stable":"kept"}"#.as_slice()
-    } else {
-        br#"{"id":"999","legacy_id":"11","native_nonce":"bbbb","stable":"kept"}"#.as_slice()
-    };
+    let target_value =
+        br#"{"id":"999","legacy_id":"999","native_nonce":"bbbb","stable":"kept"}"#.as_slice();
     assert_eq!(
         send(&mut client, &[b"SET", b"session:1", target_value]).await,
         b"+OK\r\n"
@@ -195,7 +149,7 @@ rules:
     let delivered = send(&mut client, &[b"GET", b"session:1"]).await;
     assert_eq!(
         delivered,
-        bulk(r#"{"id":"999","legacy_id":"11","native_nonce":"aaaa","stable":"kept"}"#)
+        bulk(r#"{"id":"999","legacy_id":"999","native_nonce":"bbbb","stable":"kept"}"#)
     );
     assert_eq!(
         send(

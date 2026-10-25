@@ -6,27 +6,31 @@ use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-const GET: &[u8] = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
+pub(super) const GET: &[u8] = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
 const PING: &[u8] = b"*1\r\n$4\r\nPING\r\n";
 
-struct Fixture {
+pub(super) struct Fixture {
     _temp: tempfile::TempDir,
-    runtime: ReplayRuntime,
-    root: std::path::PathBuf,
+    pub(super) runtime: ReplayRuntime,
+    pub(super) root: std::path::PathBuf,
 }
 
-fn command(command: &str) -> ReplayControlRequest {
+pub(super) fn command(command: &str) -> ReplayControlRequest {
     ReplayControlRequest {
         command: command.into(),
         case_id: Some("case-a".into()),
         fail_on_dirty: false,
         fail_on_incomplete: false,
         identity_pairs: Vec::new(),
+        derived_input: None,
     }
 }
 
 fn dependency(connection: Uuid, duration_ms: u64) -> Value {
-    let capture = |data: &str| json!({"encoding":"utf8", "data":data, "truncated":false});
+    let capture = |data: &str| {
+        json!({"encoding":"utf8", "data":data, "truncated":false,
+        "original_len":data.len(),"stored_len":data.len()})
+    };
     json!({
         "event_type":"redis_exchange", "id":Uuid::new_v4(), "connection_id":connection,
         "sequence":1, "target_host":"redis.test", "target_port":6379,
@@ -47,7 +51,28 @@ async fn metadata(root: &Path, connection: Uuid, timeout_ms: u64) {
     ).await.unwrap();
 }
 
-async fn fixture(timeout_ms: Option<u64>, duration_ms: u64) -> Fixture {
+pub(super) async fn fixture(timeout_ms: Option<u64>, duration_ms: u64) -> Fixture {
+    fixture_with_response(timeout_ms, duration_ms, None).await
+}
+
+pub(super) async fn fixture_with_response(
+    timeout_ms: Option<u64>,
+    duration_ms: u64,
+    response: Option<(&str, &str)>,
+) -> Fixture {
+    fixture_with_records(timeout_ms, duration_ms, response, true).await
+}
+
+pub(super) async fn fixture_empty() -> Fixture {
+    fixture_with_records(None, 0, None, false).await
+}
+
+async fn fixture_with_records(
+    timeout_ms: Option<u64>,
+    duration_ms: u64,
+    response: Option<(&str, &str)>,
+    include_dependency: bool,
+) -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("apis");
     let connection = Uuid::new_v4();
@@ -55,8 +80,15 @@ async fn fixture(timeout_ms: Option<u64>, duration_ms: u64) -> Fixture {
         tokio::fs::create_dir_all(root.join(case)).await.unwrap();
         tokio::fs::write(
             root.join(case).join("dependencies.jsonl"),
-            if case == "case-a" {
-                format!("{}\n", dependency(connection, duration_ms))
+            if case == "case-a" && include_dependency {
+                let mut event = dependency(connection, duration_ms);
+                if let Some((kind, raw)) = response {
+                    event["response_kind"] = kind.into();
+                    event["response"]["data"] = raw.into();
+                    event["response"]["original_len"] = raw.len().into();
+                    event["response"]["stored_len"] = raw.len().into();
+                }
+                format!("{event}\n")
             } else {
                 String::new()
             },
@@ -97,7 +129,7 @@ async fn fixture(timeout_ms: Option<u64>, duration_ms: u64) -> Fixture {
     }
 }
 
-async fn client(
+pub(super) async fn client(
     state: Arc<Mutex<ReplayState>>,
 ) -> (TcpStream, tokio::task::JoinHandle<Result<()>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

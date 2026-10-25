@@ -39,7 +39,7 @@ pub(super) fn convert(
                         row_match,
                         column: value.column.clone(),
                     },
-                    proof: proof.clone(),
+                    proof: Some(proof.clone()),
                 },
             ))
         })
@@ -50,7 +50,7 @@ pub(super) fn convert(
             request_body,
             capture,
         },
-        proof: proof.clone(),
+        proof: Some(proof.clone()),
     })
 }
 fn scalar(value: &serde_json::Value) -> Result<SourceScalar> {

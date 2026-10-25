@@ -31,12 +31,7 @@ pub(super) fn validate_slot(rule: &Rule) -> Result<()> {
     }
 }
 
-pub(super) fn validate_identity(
-    rule: &Rule,
-    binding: &str,
-    prefix: &str,
-    format: IdentityFormat,
-) -> Result<()> {
+pub(super) fn validate_identity(rule: &Rule, prefix: &str, format: IdentityFormat) -> Result<()> {
     ensure!(
         matches!(
             (&rule.surface, &rule.slot),
@@ -49,70 +44,52 @@ pub(super) fn validate_identity(
         "identity contracts require a physical SQL/Redis value or an API response payload"
     );
     ensure!(
-        !binding.is_empty()
-            && binding.len() <= 64
-            && binding
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)),
-        "identity binding requires a bounded identifier"
-    );
-    ensure!(
         prefix.len() <= 256 && !prefix.chars().any(char::is_control),
         "identity prefix requires a bounded literal"
     );
+    if let IdentityFormat::BoundedString(length) = format {
+        ensure!(
+            (1..=1024).contains(&length),
+            "identity string length requires 1..1024 bytes"
+        );
+    }
     if let IdentityFormat::Hex(length) | IdentityFormat::Base64Url(length) = format {
         ensure!(
-            (1..=256).contains(&length),
-            "identity token length must be between 1 and 256 characters"
+            (1..=1024).contains(&length),
+            "identity token length must be between 1 and 1024 characters"
         );
     }
     Ok(())
 }
 
-pub(super) fn validate_bindings(rules: &[CompiledRule]) -> Result<()> {
-    let mut formats = BTreeMap::new();
-    let mut prefixes = BTreeMap::<&str, BTreeSet<&str>>::new();
-    for contract in rules.iter().flat_map(|r| r.rule.contract.values()) {
-        if let FieldContract::Identity {
-            binding,
-            format,
-            prefix,
-        } = contract.unconditional()
-        {
-            ensure!(
-                formats
-                    .insert(binding, format)
-                    .is_none_or(|old| old == format),
-                "shared identity binding has incompatible formats"
-            );
-            let variants = prefixes.entry(binding).or_default();
-            variants.insert(prefix);
-            ensure!(
-                variants.len() <= 64,
-                "identity binding exceeds 64 literal prefix variants"
-            );
-        }
-    }
+pub(super) fn validate_identity_scopes(rules: &[CompiledRule]) -> Result<()> {
     for rule in rules {
         for (pointer, contract) in &rule.rule.contract {
             let Some(time) = contract.unconditional().time() else {
                 continue;
             };
-            let ClockScope::Entity { binding, .. } = &time.clock_scope else {
+            let ClockScope::Entity { .. } = &time.clock_scope else {
                 continue;
             };
             let identity_pointer = time
                 .clock_scope
                 .peer_pointer(pointer)
                 .context("clock scope identity sibling is absent")?;
-            ensure!(rules.iter().any(|candidate| {
-                candidate.rule.selector == rule.rule.selector
-                    && candidate.rule.slot == rule.rule.slot
-                    && candidate.rule.when == rule.rule.when
-                    && candidate.rule.contract.get(&identity_pointer).is_some_and(|identity| {
-                        matches!(identity.unconditional(), FieldContract::Identity { binding: other, .. } if other.as_str() == binding.as_str())
-                    })
-            }), "entity clock_scope requires a matching identity binding at its sibling pointer in the same SSE scope");
+            ensure!(
+                rules.iter().any(|candidate| {
+                    candidate.rule.selector == rule.rule.selector
+                        && candidate.rule.slot == rule.rule.slot
+                        && candidate.rule.when == rule.rule.when
+                        && candidate
+                            .rule
+                            .contract
+                            .get(&identity_pointer)
+                            .is_some_and(|identity| {
+                                matches!(identity.unconditional(), FieldContract::Identity { .. })
+                            })
+                }),
+                "entity clock_scope requires a declared identity at its sibling pointer in the same payload scope"
+            );
         }
     }
     Ok(())

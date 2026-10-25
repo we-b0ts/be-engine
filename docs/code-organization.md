@@ -57,6 +57,24 @@ is unclear.
   Source before draining those owned requests and their evidence.
   `recorder/api_origin_observation` owns online origin,
   selector and captured-identity matching without changing dependency ownership.
+  `policy/async_api` owns Source request conditions and terminal-resource syntax.
+  `recorder/async_api` matches complete observed SQL or Redis operations;
+  its `recorded` adapter reads immutable semantic JSONL through the same
+  completion and occurrence checks. `redis/key_slots` owns physical key
+  positions shared by recording completion and replay identity translation.
+  `recorder/connect_failure` records actual failed upstream connects and the
+  explicit client reset delivered by Recorder. `replay/connect_failure` owns
+  finite case/endpoint matching and faithful timed transport delivery; neither
+  owner treats protocol parsing or capture corruption as a dependency failure.
+  `active_case/async_api` retains early completion signals, the common request
+  deadline and normal Source-stop/drain behavior. Asynchronous completion keeps
+  ordinary dependency ownership and never authorizes process-owned exclusions.
+  Its exact cleanup inventory distinguishes post-Source-stop transport cleanup
+  from complete business failures. `replay/lifecycle_cleanup` admits only those
+  original references; protocol adapters retain captured prefixes and await
+  actual Target termination after the controller's stop boundary. HTTP's
+  `contracts/prefix` reuses global rendering without creating complete-response
+  witnesses; `http/termination` owns flush confirmation and real transport ends.
   `recording_case` wires these case lifecycle operations into application state;
   its `interaction` child owns the lease/publication barrier. `record_service/proxy` owns
   external admission lease scheduling and transparent ingress transport; the
@@ -74,12 +92,41 @@ is unclear.
   diagnostics, with bounded payload previews and raw JSON differences. It does
   not persist plaintext, apply value rules or change assertion outcomes.
 
+- `policy/global_json` owns the carrier-independent `json.fields` format map,
+  deterministic Source-only format selection and compiled content identity.
+  `policy/mysql_global` owns physical scalar table/column format selectors.
+  `value_contract/global` composes these logical formats with strict remainder
+  comparison and derives delivery copies; it does not select APIs or resources.
+  MySQL `contracts/automatic` infers native temporal types from immutable wire
+  metadata and projects SQL/result value positions. Protocol adapters retain
+  framing, pairing, transactions and finite consumption. Identity correspondence
+  is internal, case-local and keyed by complete typed values, independently of
+  authored paths and format lists.
+  Global JWT formats verify signatures and claims using immutable key snapshots
+  loaded before comparison, then stage complete-token correspondence.
+  `request_rules/derived` and
+  `replay/policy/request_contract/derived_inputs` independently reconstruct actual
+  native input re-signing at its precise send clock using frozen startup keys.
+  Private `replay/control/derived_input` admission anchors complete delivered
+  token values before HTTP exposure. The global comparator retains pairing and
+  staged identity decisions; protocol adapters retain wire delivery.
 - `policy/schema` and `policy/declarations` own the strict `traffic-policy/v2`
-  authored document. `policy/authoring` resolves named resources, field references,
-  local proof inheritance and compact contracts; `policy/lowering` maps resource
-  fields and API response declarations into the existing typed rule IR.
+  authored document. `policy/global_json` owns the single global field-format
+  map and its immutable Source-driven format selection; `policy/mysql_global`
+  owns physical scalar-column patterns; `policy/redis_global` owns scalar-key patterns.
+  `value_contract/redis_scalar` preserves Source scalar wire encoding and shares
+  the global comparator without a second time/identity kernel. `policy/authoring` resolves endpoint aliases,
+  plan-local proof inheritance and compact runtime contracts. Its Redis authoring
+  namespace groups stateful effects under `redis.rules`; its `redis_keys` child
+  lowers key-local append, read, expiry and sharing permissions into that same
+  native runtime list and reverses only exact generated forms when rendering.
+  No second rule evaluator or fingerprint is introduced. Resource field graphs, per-API value declarations and
+  field-reference expansion are retired.
   `policy/proof` owns shared proof byte limits and bounded Source references;
-  authoring resolves local inheritance and common document revision context.
+  authoring resolves plan-local inheritance and common document revision context.
+  `rewrite/unified_rule/source_proof` freezes Source explanations outside the
+  published runtime policy, checks their snapshot hash and associates each
+  explanation with the declared runtime permission before application.
   `policy/compiler` owns typed capability validation, field ownership and
   semantic effect fingerprints, prepared endpoint indices, table matchers and codec
   plans; these modules neither read evidence nor change runtime state.
@@ -92,6 +139,10 @@ is unclear.
   comparison and bounded whole-element multiset pairing; `value_contract/delivery`
   writes only explicitly authorized timestamps in derived copies. These pure
   owners never claim protocol exchanges or mutate recorded evidence.
+  `value_contract/global` adapts the one global field plan to decoded JSON or
+  known PB logical values, chooses numeric epoch units from independent Source
+  clocks, and keeps unknown encodings or ambiguous numeric units exact.
+  Protocol carriers own extraction, same-position pairing and actual delivery.
 - `policy_evidence` owns authenticated private payload witnesses, complete
   coverage accounting, sealing and publication of their relative artifacts.
   Public reports retain role/identity/digest metadata without payload bodies.
@@ -157,13 +208,11 @@ is unclear.
   the same `sql_template/table` admission and physical-table binding. Value and
   mixed field ownership checks retain the complete declared table range.
   `replay/mysql/contracts/preflight_identity` owns derived SQL witness copies for
-  composed request and response identity/value planning. `dynamic_values/mysql_read_back`
-  owns explicit SQL JSON identity delivery patches, immutable capture clocks and
-  fingerprint-only successful delivery reports. SQL matching and session owners
-  retain finite selection, response composition and the post-wire commit boundary.
-  `policy/native_compile/mysql_read_back` owns admission and response field claims;
-  native Source validation proves each declared causal leaf without Target input.
-  `dynamic_values/audit` restores only accepted
+  composed request identity/value planning. Global MySQL scalar declarations and
+  global JSON formats share the case identity store for result delivery; no
+  separate identity read-back renderer, SELECT template or response-field claim
+  is authored. Protocol response delivery retains its immutable Source copy and
+  finite consumption. `dynamic_values/audit` restores only accepted
   Case-local binding fingerprints with native capture/reference guards and Source
   causality. Immutable later captures establish whether a statement references a
   binding; only captures completed before that request may restore it. Unrelated
@@ -413,9 +462,10 @@ is unclear.
   Its `time` child adapts request-specific source format and calendar constraints
   to `value_contract/time`. Explicit clock groups retain a strict shared default;
   request sequence state carries group observations across commands.
-  `redis/publish/json` owns UUID-only JSON comparison copies for composition with time contracts; `redis/matching/request` commits their bindings only after all request checks pass. Planning uses the same copies without mutating recorded evidence. `http_json` owns JSON body stable-field pairing and time comparisons
-  using dependency-local clocks, and `evidence/http_json` protects and verifies
-  failed target witnesses before planning.
+  `redis/matching/request` composes global JSON identity and time decisions
+  and commits them only after all request checks pass. HTTP JSON comparison uses the common
+  global value kernel with dependency-local clocks; protected request witnesses
+  retain independently observed Target bytes before candidate normalization.
   `replay/policy/case_condition` owns bounded scalar conditions on immutable
   inbound Source JSON. Runtime adapters retain matching rule IDs, and evidence
   planners freeze the same request artifact before admitting a conditional
@@ -454,22 +504,17 @@ is unclear.
   and requests fresh verification while returning its selector and source proof.
 - `replay/assertion/time` adapts response time configuration and diagnostics to
   the shared `value_contract/time` formats, fixed windows and precision rules.
-  `replay/policy/http_headers` owns typed selectors/schema validation, its
-  matcher child selects/accounts for rules, and its feedback child owns
-  evidence-backed plan/apply. `replay/http/request_headers` owns post-match
-  audit evidence; its time-reference child resolves dependency-local recorded or
-  completion-minus-duration clocks internally. Its
-  timestamp-evidence child verifies immutable witnesses.
-  `policy/native/http_client_metadata` owns the closed SDK-name schema;
-  `native_compile/http_request` validates its explicit consumer scope and field
-  ownership. `replay/policy/http_client_metadata` shares endpoint/method/path
-  selection between audit and protected witness preflight; the matcher supplies
-  Source API/condition selection and usage accounting. The header audit retains
-  observational differences without selecting exchanges or changing delivery.
-  `rewrite/evidence/rule_guidance/http_header_timestamp` projects bounded
-  candidates without proving source semantics. The coordinator model and HTTP
-  The unified rule transaction owns authoring; protocol children own only their
-  typed domain behavior and command projection.
+  `policy/http_global` owns the one global HTTP header format map;
+  `value_contract/http_headers` adapts case-insensitive names and ordered
+  occurrences into the shared scalar kernel. Request matching stages its
+  identity proposals with body/native proposals before one commit.
+  `replay/http/request_headers` retains general audit evidence, protected-value
+  handling and unselected-header modes. Its time-reference child resolves
+  independent request starts; its fingerprint child identifies immutable inputs.
+  Ordinary SDK headers retain strict presence and value comparison. Global
+  header formats validate values without granting header omission permissions.
+  The unified rule transaction owns global header authoring and complete Source
+  coverage; protocol adapters retain framing, signature and finite behavior.
 - `gateway/motan` owns primary Motan request admission, fixed-response routing,
   matched-source forwarding, and primary-case persistence orchestration for
   both Motan1 and Motan2.
@@ -1003,12 +1048,10 @@ explicit repository-wide audit.
   coordinator plan/apply commands. `e2e_run` supplies the active-attempt guard
   independently of report availability; `rewrite/plan_recovery` retires legacy
   or stale file/signature proofs and requests fresh Replay.
-  `replay/mysql/time_shift` translates selected datetime result cells on delivery
-  copies. `replay/policy/config/mysql_response` owns bounded result selectors;
-  `matcher/mysql_response` selects rules and accounts for successful delivery.
-  `feedback/generated_values/mysql_response` proves matched immutable result
-  evidence and reuses the generated-value plan/apply transaction. None of these
-  owners authorizes request SQL differences or changes recorded result payloads.
+  Native temporal metadata and explicit `mysql.tables` field formats share
+  `contracts/automatic` result delivery. Inferred native times rebase only fresh
+  Source values; explicitly declared formats preserve the request-relative
+  offset of historical or future times without per-SELECT response rules.
 
 - `request_rules` owns explicit inbound-request transformation policy and the
   per-send runtime. Its `jwt` child owns compact HMAC JWT verification,
@@ -1096,22 +1139,18 @@ explicit repository-wide audit.
   encryption ownership, including dependency-header decryption; dependency
   reports and aggregation own dirty propagation and bounded diagnosis.
 
-- `replay/http/unordered` owns explicit request JSON array normalization and
-  bounded order-only witnesses; its `evidence` child verifies those witnesses
-  against finalized Replay and immutable source exchanges. It never shares
-  exchanges or changes ownership. `replay/policy/http_json` owns its YAML
-  contract, `matcher/http_json` previews policy usage, and
-  `feedback/http_unordered` owns stale-safe plan/apply. Worker discovery remains
-  in `rewrite/evidence/rule_guidance`; the coordinator owns fresh verification.
+- `replay/http/unordered` retains bounded order-difference diagnostics over
+  immutable Source and independent Target request evidence. Collection semantics
+  come from global `json.fields` and the shared whole-element comparator. This
+  diagnostic adapter never authorizes matching, shares exchanges or changes
+  finite consumption.
 
-- `replay/redis/value` owns whole-string write value decoding and comparison;
-  its `selector` child defines endpoint/key/field selection and its `evidence`
-  child captures bounded order witnesses and verifies immutable source evidence.
-  `replay/policy/redis_value` validates the YAML contract, its matcher adapter
-  commits selected rule usage, and `feedback/redis_unordered` owns stale-safe
-  plan/apply. Redis matching continues to own source lanes and consumption.
-  `bin/backend-rewrite/dependency_rule/redis` owns Redis CLI conversion, while
-  coordinator dependency-rule and evidence owners retain lifecycle and discovery.
+- `replay/redis/value` owns conservative JSON equality for complete string-write
+  arguments and bounded collection-order diagnostics. Its selector types describe
+  observations only; they do not define policy or an alternative matcher. Global
+  `json.fields` and the shared content kernel own value permissions. Unknown
+  payloads remain exact bytes. Redis matching retains keys, lanes and finite
+  consumption; native usage accounting covers its remaining stateful effects.
 - `replay/json_order` owns shared dependency JSON object identity and explicit
   array normalization; HTTP identity and Redis values consume it.
   `replay/recording_evidence` owns standard-run evidence file boundaries shared
@@ -1119,36 +1158,25 @@ explicit repository-wide audit.
   binary decoding; its `unordered_evidence` sibling exposes typed order witnesses
   without authorizing a schema or a rule.
 
-- `replay/redis/time_shift` owns explicit relative-time translation of matched
-  read-response copies. Its `config` child validates GET/HGET selection and
-  timestamp fields; `timestamp` owns Unix integer and RFC3339 string validation
-  and translation; `evidence` verifies source-selected immutable exchanges
-  against a finalized API attempt without heuristic discovery. Redis delivery
-  owns independent dependency request clocks and successful-use observations; finite matching
-  remains unchanged. `policy/feedback/redis_time_shift` owns stale-safe policy
-  plan/apply, with source proof retained in coordinator plan records.
-  `replay/redis/key_selector` owns compact and legacy-compatible key/hash-field
-  byte selectors; `replay/redis/json` owns bounded duplicate-rejecting JSON
-  decoding shared by request-value comparison and response transformation.
+- `replay/redis/shared_read` owns key/hash selection for finite shared reads.
+  It does not interpret response values. Global JSON delivery and the physical
+  write/read provenance store own temporal copies; there is no separate Redis
+  JSON timestamp renderer or authored lock behavior.
+  `replay/redis/key_selector` owns physical key/hash selectors and
+  `replay/redis/json` owns bounded duplicate-rejecting JSON decoding.
 
-- `replay/redis/lock` owns bounded token positions and case/resource-local nonce
-  bindings. Its evidence child owns token-only witnesses and immutable
-  acquisition/reference validation; script interpretation and target lock
-  behavior remain outside Replay matching. `policy/redis_value` owns the compact
-  `redis.lock` schema and overlap validation, its matcher projects runtime rules,
-  and `policy/feedback/redis_lock` owns stale-safe plan/apply. The Redis lock CLI
-  child projects explicit host/port/key selectors; coordinator evidence exposes
-  conditional hints and fresh-Replay planners through the existing lifecycle.
+- `policy/redis_global` owns physical scalar key patterns. The shared identity
+  store and `request_contract/redis_fields/keys` relate complete values across
+  SET payloads, protocol key slots and opaque script ARGV. Lua interpretation,
+  TTL changes and extra command counts receive no permission from a value format.
+  `redis_fields/time_writes` publishes temporal write provenance after successful
+  wire delivery; JSON reads reuse those values only at the same physical origin
+  with independent Source and Target ordering evidence.
 
-- `replay/redis/publish` owns bounded textual UUID positions and publisher
-  identity bindings inside opaque PUBLISH payloads. Its evidence child owns
-  UUID-only mismatch witnesses and immutable exchange verification. No message
-  deserializer is executed. `policy/redis_value` owns `redis.publish` schema and
-  overlap checks; `policy/feedback/redis_publish` owns stale-safe plan/apply.
-  The Redis CLI publish child projects exact endpoint/channel/UUID positions or
-  bounded ASCII field markers.
-  Redis matching owns lane ordering and finite consumption; connection scope
-  retains whole-lane stateful affinity, including publishers in such lanes.
+- Redis PUBLISH payloads use the common global JSON policy and internal
+  correspondence store. Unknown binary payloads retain exact byte comparison.
+  Redis matching owns channel, lane ordering, request framing and finite
+  consumption; JSON format declarations do not grant resource exemptions.
 
 - `replay/command_matching` separates lane-order admission from final response
   consumption. Case-scoped Redis claims satisfy request order while Responding,
@@ -1157,24 +1185,57 @@ explicit repository-wide audit.
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
 
-- `replay/policy/request_contract/http_body` validates explicitly selected HTTP
-  JSON random fields and HMAC JWTs, then supplies private comparison copies to
-  ordinary HTTP matching. `request_contract/jwt` shares authenticated-claim
-  validation and staged nonce bindings with Redis; `signing_keys` resolves their
-  immutable startup inputs for Replay and Source preflight. The protocol owner
+- `replay/policy/request_contract/global_value` adapts global JSON comparison
+  and typed identity delivery to protocol callers. Its `identity` child creates
+  isolated, bounded delivery views containing the selected request's staged
+  identity proposals. Response echoes resolve those proposals before publication;
+  a failed complete candidate leaves the shared case map untouched. HTTP matching
+  commits the joint header, body, query and delivery decision. The protocol owner
   retains strict remainder comparison, independent witnesses and finite delivery.
+  Explicit native JWT transformations continue to resolve signing inputs through
+  `signing_keys`; global JWT formats verify signatures and claims against
+  independently frozen keys before publishing complete-token identities.
 
 
 ## Unified policy responsibilities
+
+- `policy/authoring/api` owns API codec/envelope/header bindings and shared DOCX
+  field declarations; signature positions delegate to the signature owner.
+  `policy/authoring/http` owns compact request path-identity declarations
+  and the separate `http.response_rewrite` acquisition list. Both lower to existing native owners, preserve Source proofs
+  and fold only lossless canonical forms. Ordered capture precedence remains
+  independent of generated IDs and rendering groups.
+  `policy/authoring/recording` owns case path selection and its original Source
+  revision/capture identity; the document renderer writes this section last.
+- `policy/global_json/template` validates global string layouts and typed slot
+  formats. `value_contract/global_protocol/template` owns Source-only layout
+  selection, exact literals, token validation and staged complete identities.
+  Delivery adapters reconstruct only those selected slots. API encryption
+  bindings retain private key snapshots and IV relationships; decoded plaintext
+  without legacy overrides reuses the global JSON comparator.
+- `replay/http/multipart` owns bounded protocol equivalence for complete Source
+  form-data. Matching, final header audits and protected witness verification
+  share its parser; it does not change recorded bytes, other headers, finite
+  consumption or cross-case sharing fingerprints.
+
+- `policy/signatures` owns named algorithm/key declarations and the private
+  immutable key registry. Pure compilation validates references without startup
+  I/O; Replay and plan initialization resolve the existing managed key snapshots
+  once. `policy/authoring/signatures` lowers API token locations to the existing
+  JWT/MD5 owners and renders only lossless generated shapes. Global JWT leaves
+  reuse authenticated parsing and NumericDate comparison in `request_rules/jwt`,
+  then compare claims through the shared JSON policy and publish complete token
+  and claim identity proposals atomically. Global formats allow historical
+  tokens; explicitly generated native responses retain their issuance checks.
 
 - `policy/{schema,native,native_compile,strict_map,capability}` owns closed typed
   contracts, Source scope and pure validation. Unknown combinations reject before
   replay; adapter admission and runtime construction share typed projections.
 - `policy/authoring` owns document revision context, rule-local proof inheritance,
   named contract abbreviations and readable YAML rendering. Its closed traversal
-  expands only typed contract locations, preserving business literals and the
-  complete rule/proof IR used by compilation, plans and evidence. Rendering
-  verifies compiled equality after a parse round trip.
+  expands only typed contract locations, preserving business literals. Optional
+  Source explanations belong to plan IR; rendering removes those schema-owned
+  records and verifies semantic fingerprints after a parse round trip.
 - `value_contract/{json,encoded,time,generated,delivery,identities}` owns pure values, whole
   element pairing, microsecond relationships, conditional fields and staged
   nonces/templates. Keys are borrowed immutable inputs; bytes and plaintext do

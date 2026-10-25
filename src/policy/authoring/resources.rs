@@ -86,7 +86,6 @@ fn visit(rule: &mut Value, f: &mut impl FnMut(&mut Value) -> Result<()>) -> Resu
     match effect.get("kind").and_then(Value::as_str).unwrap_or("") {
         "identity" => {
             list(effect, "references", f)?;
-            list(effect, "mysql_read_back", f)?;
         }
         "response_jwt" => {
             if let Some(key) = effect.get_mut("signing_key") {

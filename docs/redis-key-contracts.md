@@ -1,4 +1,53 @@
-# Redis key request contracts
+# Redis key declarations
+
+Use `redis.keys` for bounded key-local formats and behavior, without API,
+resource aliases or database selectors:
+
+```yaml
+redis:
+  keys:
+    'chat:streaming:*': {append_stream: true, expiry_refresh: true}
+    'chat:cancel:*': {read_commutation: true}
+    'chat:streaming:text_block:*':
+      kind: identity
+      formats: [{prefix: text-, format: decimal}]
+      read_back: true
+    'task:counter:*': {commands: [INCRBY, EXPIRE]}
+    'task:events:*':
+      commands:
+        - operation: ZADD
+          arguments:
+            1: {kind: time, formats: [unix_seconds]}
+    'request:*':
+      key_format: {kind: identity, formats: [{hex: 32}]}
+      commands: [SET]
+localcache:
+  requests:
+    - redis: {operation: HGET, key: token_v2, field: '3061639762'}
+```
+
+`kind`/`formats` describe scalar values; complete JSON values are recognized
+and use `json.fields`. `key_format` describes the wildcard segment of a key
+and requires its ordered `commands` list. A time-window key uses
+`key_format: {kind: time_window, seconds: 60}`. Command arguments are one-based
+value positions after the key. Time arguments declare one format; the engine
+infers equal Source instants internally without authored clock groups. EVALSHA
+requires its exact `script: {sha1: ...}`; EVAL requires `script: {sha256: ...}`.
+Scripts, numkeys, KEYS and unselected ARGV remain strict.
+
+`read_back: true` supports current raw SET identity/GET states, including proven
+variable GET counts. APPEND preserves the complete byte stream across chunks;
+read commutation retains finite read counts; expiry refresh preserves key
+lifetimes and fixed TTL. Actual endpoint, database, authentication, protocol,
+causal ordering and finite inventory are still checked independently. A format
+declaration cannot merge state between physical resources.
+
+`localcache.requests` separately identifies finite process initialization reads.
+It does not declare value formats or arbitrary reusable cache responses.
+Source proof belongs on annotated plan declarations; runtime rendering omits
+it. Use the normal `rule plan --file … --evidence …` transaction and fresh Replay.
+The native semantic notes below describe additional derivations not covered by
+the compact key syntax; their old commands and YAML are not current authoring.
 
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
@@ -16,7 +65,7 @@ database and inbound `case: {method, path}`. Published recordings stay unchanged
 Keys outside a declared contract keep byte equality.
 An overlapping legacy `dynamic_values` capture cannot be combined with a key
 contract on the same command; declare selected JSON references in that key
-contract so comparison and binding commit stay atomic.
+contract so comparison and correspondence commit stay atomic.
 
 ## Fixed time windows
 
@@ -67,7 +116,6 @@ windows computed near inbound admission, rather than arbitrarily delayed jobs.
     key: {prefix: 'sessions:'}
     key_contract:
       kind: capture
-      binding: session-id
       template: 'sessions:{value}'
       format: {kind: base64url, bytes: 18}
     commands:
@@ -76,7 +124,7 @@ windows computed near inbound admission, rather than arbitrarily delayed jobs.
         1:
           json:
             /session_id:
-              identity: {binding: session-id, template: '{value}'}
+              identity: {template: '{value}'}
             /expires_at: {time: preserve_relative, format: rfc3339}
 ```
 
@@ -91,23 +139,22 @@ uses its existing independently captured inbound anchors and preserves the
 recorded expiry offset. Other JSON members, presence, scalar types, arrays,
 SET options and TTL remain exact. Null, missing and empty values do not collapse.
 
-Bindings commit only when the complete exchange matches and consumes its
+Correspondence commits only when the complete exchange matches and consumes its
 recorded response. A failed key, JSON field, time, TTL or stable argument commits
 nothing. Reusing a Source identity with a different target identity, or collapsing
-distinct Source identities onto one target identity, fails. Bindings are scoped
-to the case, endpoint, database and explicit name; a later case starts fresh.
+distinct Source identities onto one target identity, fails. Correspondence is scoped to
+the replay case; a later case starts fresh.
 
 A later SET can capture another key identity while referencing the earlier
-session binding in its JSON. For example, a digest-shaped ticket key can use
+session value in its JSON. For example, a digest-shaped ticket key can use
 `format: {kind: hex, bytes: 32}` while its `/session_id` field references
-`session-id`. A captured digest is an opaque identity: the format alone does
+the same Source value. A captured digest is an opaque identity: the format alone does
 not verify the preimage. If the preimage is already bound, an explicit reference
 can instead verify SHA256 derivation:
 
 ```yaml
 key_contract:
   kind: reference
-  binding: session-id
   template: 'session-hash:{value}'
   transform: sha256
 ```
@@ -128,9 +175,8 @@ evidence and policy identity and requires fresh Replay.
 
 For native key references whose evidence depends on an earlier committed capture,
 apply that capture and Replay before planning the dependent key reference.
-Ordinary resource identity fields instead declare their complete eligible
-MySQL/Redis/response inventory together; they do not require this staged key
-workflow. Reports retain native `key_bindings` as case/endpoint/name
+Ordinary global JSON and scalar MySQL identity formats infer correspondences
+from complete typed values internally; they do not require staged key planning. Reports retain native `key_bindings` as case/endpoint/name
 and Source/target fingerprints, without plaintext identities. A later plan can
 check its reference against that committed evidence. It cannot change or collapse
 an existing pair. Rule audits count matched captures and references separately.

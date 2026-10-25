@@ -1,13 +1,57 @@
 //! Complete Case/key proof. Unknown writers, implicit expiry and TTL reads fail closed.
 use super::*;
 
+/// A global declaration does not turn historical, read-only state into an
+/// owned lifetime. The ordinary finite exchanges still validate those reads.
+pub(super) fn has_owned_set(
+    state: &RedisReplayState,
+    case: &str,
+    seed: &ReplayExchange,
+) -> Result<bool> {
+    let Some(key) = seed.args.first() else {
+        return Ok(false);
+    };
+    for exchange in &state.exchanges {
+        if exchange.source == ReplaySource::Case
+            && exchange.case_id.as_deref() == Some(case)
+            && exchange.record.database == seed.record.database
+            && target_matches(
+                &TargetKey {
+                    host: seed.record.target_host.clone(),
+                    port: seed.record.target_port,
+                },
+                &exchange.record.target_host,
+                exchange.record.target_port,
+            )
+            && exchange.record.resp_version == seed.record.resp_version
+            && normalize_optional(exchange.record.username.as_deref())
+                == normalize_optional(seed.record.username.as_deref())
+            && exchange.record.outcome == DependencyExchangeOutcome::Response
+            && supported_set(exchange, key)
+            && exchange.response_bytes()? == b"+OK\r\n"
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn supported_set(exchange: &ReplayExchange, key: &[u8]) -> bool {
+    exchange.record.command == "SET"
+        && matches!(exchange.args.len(), 2 | 4)
+        && exchange
+            .args
+            .first()
+            .is_some_and(|selected| selected == key)
+}
+
 pub(super) fn prepare(
     state: &RedisReplayState,
     case: &str,
     rule: &str,
     kind: Kind,
     seed: &ReplayExchange,
-) -> Result<Profile> {
+) -> Result<Option<Profile>> {
     let mut profile = Profile {
         case: case.into(),
         rule: rule.into(),
@@ -24,6 +68,7 @@ pub(super) fn prepare(
             .first()
             .context("observation Source key missing")?
             .clone(),
+        finite_prefix: vec![],
         epochs: vec![Epoch {
             mutation: None,
             observations: vec![],
@@ -70,8 +115,48 @@ pub(super) fn prepare(
         timeline.push((index, e));
     }
     timeline.sort_by_key(|(index, e)| (e.record.started_at(), *index));
-    let mut lanes = BTreeMap::new();
-    let mut previous: Option<&ReplayExchange> = None;
+    validate_causal_order(&timeline)?;
+    if kind == Kind::Read {
+        let mut first_set = None;
+        for (position, (_, exchange)) in timeline.iter().enumerate() {
+            if supported_set(exchange, &profile.key) && exchange.response_bytes()? == b"+OK\r\n" {
+                first_set = Some(position);
+                break;
+            }
+        }
+        let first_set =
+            first_set.context("read observations have no supported successful Case SET")?;
+        let mut unknown_prefix = false;
+        for (_, exchange) in &timeline[..first_set] {
+            if exchange.record.command == "GET" {
+                let response = exchange.response_bytes()?;
+                ensure!(
+                    response.len() <= 1024 * 1024,
+                    "state observation response exceeds bounds"
+                );
+                ensure!(
+                    matches!(
+                        redis_frame_kind(&bytes::Bytes::copy_from_slice(&response))?,
+                        RedisFrameKind::BulkString | RedisFrameKind::Null | RedisFrameKind::Error
+                    ),
+                    "historical Source GET has an invalid response type"
+                );
+                unknown_prefix |= response != b"$-1\r\n";
+            }
+        }
+        if unknown_prefix {
+            ensure!(
+                timeline[..first_set]
+                    .iter()
+                    .all(|(_, exchange)| exchange.record.command == "GET"),
+                "unknown initial state prefix cannot hide unsupported writers or expiry observations"
+            );
+            profile.finite_prefix = timeline
+                .drain(..first_set)
+                .map(|(index, _)| index)
+                .collect();
+        }
+    }
     let mut value: Option<Vec<u8>> = None;
     let mut alive = false;
     let mut refresh: Option<Vec<Vec<u8>>> = None;
@@ -80,23 +165,6 @@ pub(super) fn prepare(
         .and_then(|(_, e)| e.record.earliest_start());
     let last = timeline.last().and_then(|(_, e)| e.record.timestamp);
     for (index, e) in timeline {
-        if let Some(sequence) = lanes.insert(e.record.connection_id, e.record.sequence) {
-            ensure!(
-                sequence < e.record.sequence,
-                "state observation Source clocks reverse a lane"
-            );
-        }
-        if let Some(p) = previous {
-            ensure!(
-                p.record.connection_id == e.record.connection_id
-                    || p.record
-                        .timestamp
-                        .zip(e.record.earliest_start())
-                        .is_some_and(|(end, start)| end <= start),
-                "state observation Source accesses overlap or lack causal clocks"
-            );
-        }
-        previous = Some(e);
         let response = e.response_bytes()?;
         ensure!(
             response.len() <= 1024 * 1024,
@@ -217,10 +285,6 @@ pub(super) fn prepare(
             ),
         }
     }
-    ensure!(
-        profile.epochs.iter().any(|e| !e.observations.is_empty()),
-        "state observations lack Source witnesses"
-    );
     if let Some(ttl) = profile.valid_for_seconds {
         let (first, last) = first
             .zip(last)
@@ -232,7 +296,45 @@ pub(super) fn prepare(
             "Source key lifetime reaches or exceeds its TTL; refresh equivalence is not proven"
         );
     }
-    Ok(profile)
+    let observed = profile
+        .epochs
+        .iter()
+        .any(|epoch| !epoch.observations.is_empty());
+    if !observed && kind == Kind::Read && !profile.finite_prefix.is_empty() {
+        // Source validation still covers every write and expiry constraint,
+        // but historical reads cannot supply a write-to-read witness.
+        return Ok(None);
+    }
+    ensure!(observed, "state observations lack Source witnesses");
+    Ok(Some(profile))
+}
+
+fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Result<()> {
+    let mut lanes = BTreeMap::new();
+    let mut previous: Option<&ReplayExchange> = None;
+    for (_, exchange) in timeline {
+        if let Some(sequence) =
+            lanes.insert(exchange.record.connection_id, exchange.record.sequence)
+        {
+            ensure!(
+                sequence < exchange.record.sequence,
+                "state observation Source clocks reverse a lane"
+            );
+        }
+        if let Some(before) = previous {
+            ensure!(
+                before.record.connection_id == exchange.record.connection_id
+                    || before
+                        .record
+                        .timestamp
+                        .zip(exchange.record.earliest_start())
+                        .is_some_and(|(end, start)| end <= start),
+                "state observation Source accesses overlap or lack causal clocks"
+            );
+        }
+        previous = Some(exchange);
+    }
+    Ok(())
 }
 
 fn new_epoch(profile: &mut Profile, mutation: usize) -> Result<()> {

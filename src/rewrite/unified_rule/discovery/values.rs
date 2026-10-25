@@ -5,7 +5,6 @@ use super::*;
 pub(super) struct JsonLocation {
     pointer: String,
     pattern: String,
-    in_array: bool,
 }
 
 impl JsonLocation {
@@ -14,7 +13,6 @@ impl JsonLocation {
         Self {
             pointer: format!("{}/{key}", self.pointer),
             pattern: format!("{}/{key}", self.pattern),
-            in_array: self.in_array,
         }
     }
 
@@ -22,7 +20,6 @@ impl JsonLocation {
         Self {
             pointer: format!("{}/{index}", self.pointer),
             pattern: format!("{}/*", self.pattern),
-            in_array: true,
         }
     }
 }
@@ -75,7 +72,7 @@ impl Drafts {
             &[]
         };
         for format in formats {
-            let mut contract = json!({"kind":"time","format":format,"relation":"preserve_offset"});
+            let contract = json!({"kind":"time","format":format,"relation":"preserve_offset"});
             let typed: FieldContract = serde_json::from_value(contract.clone())?;
             let observed = if base["surface"] == "api.response" {
                 AnchorClocks {
@@ -97,9 +94,6 @@ impl Drafts {
             )
             .passed()
             {
-                if location.in_array {
-                    contract["clock_scope"] = json!("array_element");
-                }
                 self.push(base, location, contract, witness)?;
                 return Ok(());
             }
@@ -149,12 +143,17 @@ impl Drafts {
 
     fn push(
         &mut self,
-        base: &Value,
+        _base: &Value,
         location: &JsonLocation,
         contract: Value,
         witness: &str,
     ) -> Result<()> {
-        let identity = serde_json::to_string(&(base, &location.pattern, &contract))?;
+        let contract = if contract["kind"] == "time" {
+            json!({"kind":"time","formats":[contract["format"]]})
+        } else {
+            contract
+        };
+        let identity = serde_json::to_string(&(&location.pattern, &contract))?;
         let id = format!(
             "draft-{}",
             super::super::super::fingerprint::id(&[&identity]).trim_start_matches("fnv1a64:")
@@ -169,14 +168,10 @@ impl Drafts {
         {
             return Ok(());
         }
-        let mut rule = base.clone();
-        rule["id"] = json!(id);
-        rule["contract"] = json!({&location.pattern:contract});
-        rule["proof"] = json!({"source":"","fact":""});
-        self.values.push(
-            json!({"candidate_id":id,"witness_id":witness,"mechanism":contract["kind"],
-            "draft_rule":rule,"source_proof_required":true,"plan_ready":false}),
-        );
+        self.values.push(json!({"candidate_id":id,"witness_id":witness,"mechanism":contract["kind"],
+            "draft_policy":{"format":"traffic-policy/v2","json":{"fields":{&location.pattern:contract}}},
+            "section_update":"add",
+            "source_proof_required":true,"plan_ready":false}));
         Ok(())
     }
 
@@ -187,9 +182,9 @@ impl Drafts {
             .map(|mut candidate| {
                 let bindings = &self.candidate_bindings
                     [candidate["candidate_id"].as_str().expect("draft identity")];
-                candidate["binding_count"] = json!(bindings.len());
-                candidate["bindings_omitted"] = json!(bindings.len().saturating_sub(LIMIT));
-                candidate["bindings"] = json!(
+                candidate["location_count"] = json!(bindings.len());
+                candidate["locations_omitted"] = json!(bindings.len().saturating_sub(LIMIT));
+                candidate["locations"] = json!(
                     bindings
                         .iter()
                         .take(LIMIT)

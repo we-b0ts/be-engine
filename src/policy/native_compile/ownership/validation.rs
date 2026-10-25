@@ -24,11 +24,7 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
         .collect::<std::collections::BTreeSet<_>>();
     let identity_read_back = native
         .iter()
-        .filter(|rule| {
-            !rule.rule.effect.redis_read_back().is_empty()
-                || matches!(&rule.rule.effect, crate::policy::NativeEffect::Identity(effect)
-                    if !effect.mysql_read_back.is_empty())
-        })
+        .filter(|rule| !rule.rule.effect.redis_read_back().is_empty())
         .map(|rule| rule.rule.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let delivery = value
@@ -183,9 +179,6 @@ fn validate_body_codecs(value: &[CompiledRule], native: &[CompiledNativeRule]) -
             crate::policy::NativeEffect::ResponseJwt(effect) if effect.location.is_none() => {
                 Some((Surface::ApiResponse, Codec::Json))
             }
-            crate::policy::NativeEffect::HttpRequest(effect) if !effect.json.is_empty() => {
-                Some((Surface::DependencyRequest, Codec::Json))
-            }
             _ => None,
         };
         if let Some((surface, codec)) = codec {
@@ -276,6 +269,7 @@ fn selector(value: &MatchSpec) -> NativeMatch {
     NativeMatch {
         api: value.api.clone(),
         resource: value.resource.clone(),
+        http_host: None,
         operation: value.operation.clone(),
         key: value.key.as_ref().map(key),
         path: value.path.clone(),
@@ -652,7 +646,6 @@ fn locations_overlap(left: &OwnedLocation, right: &OwnedLocation) -> bool {
             &b.iter().map(String::as_str).collect::<Vec<_>>(),
         ),
         (L::HeaderParameter { name: a }, L::HeaderParameter { name: b }) => a == b,
-        (L::PayloadItem { index: a }, L::PayloadItem { index: b }) => a == b,
         (
             L::Docx {
                 part: a,

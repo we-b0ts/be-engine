@@ -38,32 +38,7 @@ impl RequestContracts {
         .map_err(|error| anyhow::anyhow!("JWT contract failed: {error:?}"))?;
         decision.time_validations += validated.time_validations;
         for nonce in validated.nonces {
-            let key = (
-                context.case.into(),
-                context.rule.into(),
-                format!("{}{}", context.pointer, nonce.claim),
-            );
-            let state = self.state.lock().expect("request contracts");
-            if let Some(bindings) = state.nonces.get(&key) {
-                ensure!(
-                    (bindings.contains_key(&nonce.source) || bindings.len() < 256)
-                        && bindings.iter().all(|(left, right)| {
-                            (left != &nonce.source || right == &nonce.target)
-                                && (right != &nonce.target || left == &nonce.source)
-                        }),
-                    "JWT nonce binding is inconsistent"
-                );
-            }
-            drop(state);
-            ensure!(
-                decision.nonces.iter().all(|(pending_key, left, right)| {
-                    pending_key != &key
-                        || ((left != &nonce.source || right == &nonce.target)
-                            && (right != &nonce.target || left == &nonce.source))
-                }),
-                "JWT nonce binding is inconsistent"
-            );
-            decision.nonces.push((key, nonce.source, nonce.target));
+            self.observe_native_identity(context.case, &nonce.source, &nonce.target, decision)?;
         }
         Ok(())
     }

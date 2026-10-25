@@ -37,6 +37,7 @@ struct Profile {
     username: Option<String>,
     resp_version: u8,
     key: Vec<u8>,
+    finite_prefix: Vec<usize>,
     epochs: Vec<Epoch>,
     valid_for_seconds: Option<u64>,
     prepared_at: chrono::DateTime<chrono::Utc>,
@@ -98,8 +99,7 @@ impl Observations {
         case: Option<&str>,
     ) -> Result<()> {
         ensure!(
-            source != ReplaySource::Case
-                || !self.profiles.iter().any(|p| Some(p.case.as_str()) == case),
+            source != ReplaySource::Case || !case.is_some_and(|case| self.prepared.contains(case)),
             "cannot extend prepared state-observation Case inventory"
         );
         Ok(())
@@ -124,7 +124,7 @@ fn selected(effect: &NativeEffect) -> bool {
         || effect
             .redis_read_back()
             .iter()
-            .any(|r| r.contract.state_epochs.is_some())
+            .any(|r| r.contract.state_epochs)
 }
 
 impl RedisReplayState {
@@ -155,7 +155,7 @@ impl RedisReplayState {
                         .effect
                         .redis_read_back()
                         .iter()
-                        .any(|e| e.contract.state_epochs.is_some())
+                        .any(|e| e.contract.state_epochs)
                 {
                     Kind::Read
                 } else {
@@ -182,23 +182,28 @@ impl RedisReplayState {
                 if !seen.insert((
                     target,
                     seed.record.database,
+                    normalize_optional(seed.record.username.as_deref()),
+                    seed.record.resp_version,
                     seed.args[0].clone(),
                     kind as u8,
                 )) {
+                    continue;
+                }
+                if kind == Kind::Read && !source::has_owned_set(self, case, seed)? {
                     continue;
                 }
                 ensure!(
                     profiles.len() < MAX_KEYS,
                     "state observations exceed Case key limit"
                 );
-                profiles.push(source::prepare(self, case, &rule.id, kind, seed)?);
+                profiles.extend(source::prepare(self, case, &rule.id, kind, seed)?);
             }
         }
         ensure!(
             profiles
                 .iter()
-                .flat_map(|p| &p.epochs)
-                .map(|e| e.observations.len())
+                .map(|p| p.finite_prefix.len()
+                    + p.epochs.iter().map(|e| e.observations.len()).sum::<usize>())
                 .sum::<usize>()
                 <= MAX_OBSERVATIONS,
             "state observations exceed Case Source observation limit"
@@ -290,6 +295,49 @@ impl RedisReplayState {
                 })
                 .expect("every Source profile has an initial epoch");
             let reject = |reason: &str| self.observation_mismatch(profile, epoch, reason);
+            if epoch.mutation.is_none() && !profile.finite_prefix.is_empty() {
+                let prefix = profile
+                    .finite_prefix
+                    .iter()
+                    .map(|&index| {
+                        let record = &self.exchanges[index].record;
+                        (record.connection_id, record.sequence)
+                    })
+                    .collect::<BTreeSet<_>>();
+                let candidate = crate::replay::command_matching::preferred_match(
+                    &self.exchanges,
+                    case,
+                    |exchange| {
+                        prefix.contains(&(exchange.record.connection_id, exchange.record.sequence))
+                            && exchange.status.is_available()
+                            && self.connection_scopes.matches(exchange, case, connection)
+                            && self.arguments_match(exchange, args)
+                    },
+                );
+                let candidate = match candidate {
+                    crate::replay::command_matching::PreferredMatch::Matched(index) => index,
+                    crate::replay::command_matching::PreferredMatch::LaneBlocked {
+                        candidate,
+                        blocker,
+                    } => {
+                        return Err(crate::replay::command_matching::lane_blocked_diagnostic(
+                            &self.exchanges,
+                            candidate,
+                            blocker,
+                        ));
+                    }
+                    crate::replay::command_matching::PreferredMatch::NotFound => {
+                        return Err(reject(
+                            "unknown initial state has no remaining finite Source read; a proven SET must establish the next epoch",
+                        ));
+                    }
+                };
+                if selected.is_some() {
+                    return Err(reject("Source state-observation ownership is ambiguous"));
+                }
+                selected = Some(candidate);
+                continue;
+            }
             if profile
                 .epochs
                 .iter()
@@ -384,6 +432,18 @@ impl RedisReplayState {
             else {
                 continue;
             };
+            if position == 1
+                && profile
+                    .finite_prefix
+                    .iter()
+                    .any(|&index| !self.exchanges[index].status.is_consumed())
+            {
+                return Err(self.observation_mismatch(
+                    profile,
+                    &profile.epochs[position],
+                    "finite Source reads of unknown initial state must finish before the first SET",
+                ));
+            }
             if let Some(blocker) = profile.epochs[..position].iter().find(|e| {
                 e.mutation.is_some_and(|i| {
                     !matches!(

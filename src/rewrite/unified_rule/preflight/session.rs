@@ -9,15 +9,10 @@ fn stateful(rule: &CompiledNativeRule) -> bool {
         | NativeEffect::RedisAppendStream
         | NativeEffect::RedisReadCommutation(_)
         | NativeEffect::RedisExpiryRefresh(_)
-        | NativeEffect::RedisLock
-        | NativeEffect::RedisPublishIdentity(_)
         | NativeEffect::HttpRequest(_)
-        | NativeEffect::HttpClientMetadata(_)
         | NativeEffect::InputJwt(_)
         | NativeEffect::InputSignedTimestamp(_) => true,
-        NativeEffect::MysqlValues(effect) => {
-            !effect.params.is_empty() || !effect.response_time.is_empty()
-        }
+        NativeEffect::MysqlValues(effect) => !effect.params.is_empty(),
         _ => false,
     }
 }

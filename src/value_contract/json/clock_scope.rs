@@ -9,7 +9,7 @@ pub(crate) enum ScopeKey {
     #[default]
     Shared,
     ArrayElement(String),
-    Entity(String, [u8; 32]),
+    Entity([u8; 32]),
 }
 
 impl ScopeKey {
@@ -80,7 +80,7 @@ pub(super) fn resolve(
                 )
             })
         }
-        ClockScope::Entity { binding, .. } => {
+        ClockScope::Entity { .. } => {
             let source_key = time
                 .clock_scope
                 .peer_pointer(source_pointer)
@@ -91,7 +91,7 @@ pub(super) fn resolve(
                 .ok_or_else(|| difference(target_pointer, "clock scope has no identity sibling"))?;
             let identity = comparator.fields.iter().find(|candidate| {
                 pointer_matches(candidate.pointer, &source_key, comparator.source_root)
-                    && matches!(candidate.contract.unconditional(), FieldContract::Identity { binding: other, .. } if other.as_str() == binding.as_str())
+                    && matches!(candidate.contract.unconditional(), FieldContract::Identity { .. })
             }).ok_or_else(|| difference(source_pointer, "entity clock_scope requires its explicit identity field in the selected JSON contracts"))?;
             if let FieldContract::Conditional { when, .. } = identity.contract
                 && !when
@@ -120,19 +120,13 @@ pub(super) fn resolve(
             let target = comparator.target_root.pointer(&target_key).ok_or_else(|| {
                 difference(target_pointer, "clock scope Target identity is absent")
             })?;
-            identity::compare(
+            identity::compare(source, target, prefix, *format, &source_key, decisions)?;
+            Ok(ScopeKey::Entity(identity::fingerprint(
                 source,
-                target,
-                binding.as_str(),
                 prefix,
                 *format,
                 &source_key,
-                decisions,
-            )?;
-            Ok(ScopeKey::Entity(
-                binding.clone(),
-                identity::fingerprint(source, prefix, *format, &source_key)?,
-            ))
+            )?))
         }
     }
 }

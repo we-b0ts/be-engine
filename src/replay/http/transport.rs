@@ -105,7 +105,7 @@ where
                     if let Some(observed) = observed {
                         let exchange = pending.lock().expect("HTTP pending termination poisoned").take();
                         if let Some(exchange) = exchange {
-                            let completion = exchange.validate(observed);
+                            let completion = exchange.validate_observed(observed, &state).await;
                             let success = completion.is_ok();
                             state.lock().await.finish_http_termination(exchange, completion);
                             if success { half_closed = true; } else { expired = true; }
@@ -154,7 +154,7 @@ where
             exchange.server_result.take().unwrap_or_else(|| Err("Target terminated HTTP dependency before its recorded server termination was delivered".into())).map_err(|error| anyhow!(error))
         } else {
             match exchange.observed_client(&termination) {
-                Some(observed) => exchange.validate(observed),
+                Some(observed) => exchange.validate_observed(observed, &state).await,
                 None => Err(anyhow!(
                     "client did not terminate HTTP dependency connection within recorded timing window"
                 )),
@@ -195,6 +195,18 @@ async fn handle_http_request(
     deadline: tokio::sync::watch::Sender<Option<tokio::time::Instant>>,
     transport: TerminationTransport,
 ) -> Result<Response<stream_delivery::DeliveryBody>, Infallible> {
+    let stopping = {
+        let state = state.lock().await;
+        state.async_case_quiescing()
+    };
+    if stopping {
+        transport
+            .observation
+            .connection_observation()
+            .observe_engine_stop();
+        let _ = transport.control.reset();
+        return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
+    }
     let started = tokio::time::Instant::now();
     let request_started_at = Utc::now();
     let method = request.method().clone();
@@ -208,6 +220,18 @@ async fn handle_http_request(
     let body = match request.into_body().collect().await {
         Ok(body) => body.to_bytes(),
         Err(error) => {
+            let state_guard = state.lock().await;
+            if state_guard.async_case_quiescing() {
+                drop(state_guard);
+                transport
+                    .observation
+                    .connection_observation()
+                    .observe_engine_stop();
+                let _ = transport.control.reset();
+                return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>()
+                    .await;
+            }
+            drop(state_guard);
             return Ok(stream_delivery::ordinary(error_response(
                 StatusCode::BAD_GATEWAY,
                 &format!("failed to read replay request body: {error}"),
@@ -224,6 +248,17 @@ async fn handle_http_request(
     };
     let matched = {
         let mut state = state.lock().await;
+        // Body collection can overlap prepare-stop. Close admission under the
+        // same lock as request matching so cleanup traffic cannot claim slots.
+        if state.async_case_quiescing() {
+            drop(state);
+            transport
+                .observation
+                .connection_observation()
+                .observe_engine_stop();
+            let _ = transport.control.reset();
+            return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
+        }
         let unmatched_before = state.http_events.unmatched.len();
         let result = state.match_http_request(
             scheme,
@@ -250,7 +285,9 @@ async fn handle_http_request(
         Ok(record) => record,
         Err(HttpReplayMatchError::ClientTerminated(mut exchange)) => {
             exchange.started = started;
-            deadline.send_replace(Some(exchange.timing.termination_deadline(exchange.started)));
+            if exchange.lifecycle_stop.is_none() {
+                deadline.send_replace(Some(exchange.timing.termination_deadline(exchange.started)));
+            }
             *pending_exchange
                 .lock()
                 .expect("HTTP pending termination poisoned") = Some(*exchange);
@@ -291,36 +328,48 @@ async fn handle_http_request(
     };
     let mut record = record;
     let mut server_close = None;
-    let client_prefix =
-        if record.outcome.is_client_terminated() || record.outcome.is_server_terminated() {
-            let delivered = Arc::new(crate::http::termination::PrefixDelivery::new(
-                transport.delivery,
-            ));
-            let detail = record
-                .stream_delivery
-                .take()
-                .expect("matched cancelled stream delivery");
-            let mut exchange = termination::PendingHttpTermination::new(detail, &record);
-            exchange.started = started;
-            exchange.prefix_delivered = Some(delivered.clone());
-            if record.outcome.is_server_terminated() {
-                server_close = Some(termination::ServerClose::new(
-                    transport.control,
-                    transport.observation,
-                    pending_exchange.clone(),
-                    transport.closed,
-                    record.outcome.termination().expect("server termination"),
-                    exchange.timing.termination_deadline(started),
-                ));
-            }
-            deadline.send_replace(Some(exchange.timing.termination_deadline(started)));
-            *pending_exchange
-                .lock()
-                .expect("HTTP pending termination poisoned") = Some(exchange);
-            Some(delivered)
+    let client_prefix = if record.lifecycle_stop.is_some()
+        || record.outcome.is_client_terminated()
+        || record.outcome.is_server_terminated()
+    {
+        let delivered = Arc::new(crate::http::termination::PrefixDelivery::new(
+            transport.delivery,
+        ));
+        let detail = record
+            .stream_delivery
+            .take()
+            .expect("matched cancelled stream delivery");
+        let mut exchange = if let Some(gate) = record.lifecycle_stop.clone() {
+            termination::PendingHttpTermination::for_lifecycle_stop(detail, &record, gate)
         } else {
-            None
+            termination::PendingHttpTermination::new(detail, &record)
         };
+        exchange.started = started;
+        exchange.prefix_delivered = Some(delivered.clone());
+        if record.lifecycle_stop.is_some() {
+            state.lock().await.http_exchanges[exchange.detail.index].lifecycle_prefix =
+                Some(delivered.clone());
+        }
+        if record.lifecycle_stop.is_none() && record.outcome.is_server_terminated() {
+            server_close = Some(termination::ServerClose::new(
+                transport.control,
+                transport.observation,
+                pending_exchange.clone(),
+                transport.closed,
+                record.outcome.termination().expect("server termination"),
+                exchange.timing.termination_deadline(started),
+            ));
+        }
+        if record.lifecycle_stop.is_none() {
+            deadline.send_replace(Some(exchange.timing.termination_deadline(started)));
+        }
+        *pending_exchange
+            .lock()
+            .expect("HTTP pending termination poisoned") = Some(exchange);
+        Some(delivered)
+    } else {
+        None
+    };
     let response = stream_delivery::response(record, started, state, client_prefix, server_close)
         .await
         .unwrap_or_else(|error| {

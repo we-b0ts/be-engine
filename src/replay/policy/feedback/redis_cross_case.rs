@@ -1,10 +1,10 @@
-//! Promote one already configured Redis time rule to finite recording-run scope.
+//! Promote one already configured Redis shared-read rule to finite recording-run scope.
 use super::document::{render_dependency_rules, replace_dependency_rules};
 use crate::replay::policy::config::{
     DependencyProtocol, ReplayScope, load_replay_policy, validate_document,
 };
 use crate::replay::policy::redis_value::RedisSelector;
-use crate::replay::redis::{cross_case, time_shift::RedisTimeShiftSelector};
+use crate::replay::redis::{cross_case, shared_read::RedisSharedReadSelector};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -24,7 +24,7 @@ pub struct RedisCrossCaseReport {
     pub policy_revision: String,
     pub policy: PathBuf,
     pub effective_rule_id: String,
-    pub selector: RedisTimeShiftSelector,
+    pub selector: RedisSharedReadSelector,
     pub source_evidence: String,
     pub evidence: serde_json::Value,
     pub reused_existing: bool,
@@ -81,24 +81,17 @@ pub fn plan_redis_cross_case(feedback: RedisCrossCaseFeedback) -> Result<RedisCr
         .dependency_rules
         .iter_mut()
         .find(|rule| rule.id == feedback.rule_id)
-        .context("Redis cross-case requires an existing time-shift rule id")?;
+        .context("Redis cross-case requires an existing shared-read rule id")?;
     ensure!(
         rule.protocol == DependencyProtocol::Redis && rule.replay_scope == ReplayScope::Case,
-        "Redis cross-case requires an existing case-scoped Redis time-shift rule"
+        "Redis cross-case requires an existing case-scoped Redis shared-read rule"
     );
-    let Some(RedisSelector::TimeShift(read)) = rule.redis.as_ref() else {
-        anyhow::bail!("Redis cross-case requires an existing GET/HGET time-shift rule");
+    let Some(RedisSelector::SharedRead(read)) = rule.redis.as_ref() else {
+        anyhow::bail!("Redis cross-case requires an existing GET/HGET shared-read rule");
     };
-    let selector = RedisTimeShiftSelector {
-        host: rule
-            .target
-            .host
-            .clone()
-            .context("Redis cross-case rule has no host")?,
-        port: rule
-            .target
-            .port
-            .context("Redis cross-case rule has no port")?,
+    let selector = RedisSharedReadSelector {
+        host: rule.target.host.clone(),
+        port: rule.target.port,
         read: read.clone(),
     };
     rule.replay_scope = ReplayScope::RecordingRun;

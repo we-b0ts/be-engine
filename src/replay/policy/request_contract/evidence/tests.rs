@@ -329,32 +329,74 @@ fn script_json_microseconds_evidence_rejects_bad_copies_and_business_changes() {
 }
 
 #[test]
-fn publish_time_planning_composes_existing_uuid_and_preserves_stable_fields() {
+fn protected_publish_witnesses_use_global_identity_and_time_formats() {
     let source_id = "0123456789ab4def8123456789abcdef";
     let actual_id = "fedcba98765443218123456789abcdef";
-    let selector = json!({"key":"events","commands":[{"command":"PUBLISH","argument_values":{"1":{"json":{
-        "/data/0/completed_at":{"time":"preserve_relative","format":"iso8601_naive","utc_offset":"+00:00"}
-    }}}}]} );
     let payload = |id: &str, time: &str, status: &str| {
         json!({"event":"task:status","host_id":id,"data":[{"completed_at":time,"status":status}]})
             .to_string()
     };
     for (time, status, passes) in [
         ("1970-01-01T00:33:20.123456", "COMPLETED", true),
-        ("1970-01-01T00:16:40.123456", "COMPLETED", false),
+        // Equal values are implicit exact, without requiring a time strategy.
+        ("1970-01-01T00:16:40.123456", "COMPLETED", true),
+        ("1970-01-01T00:33:26.123456", "COMPLETED", false),
         ("1970-01-01T00:33:20.123456", "FAILED", false),
     ] {
         let mut fixture = Fixture::new();
-        let uuid = json!({"id":"publisher","protocol":"redis","target":{"host":"cache.test","port":6379},"redis":{"publish":{"channel":"events","uuid_field":"host_id","source_evidence":"Emitter initializes a process UUID v4"}}});
-        crate::replay::write_policy_fixture(&fixture.policy,serde_yaml::to_string(&json!({"version":3,"expected_response":"assertions_only","dependency_rules":[uuid]})).unwrap()).unwrap();
+        fs::write(
+            &fixture.policy,
+            r#"format: traffic-policy/v2
+json:
+  fields:
+    /host_id: {kind: identity, formats: [{hex: 32}]}
+    /data/*/completed_at: {kind: time, formats: [iso8601_naive]}
+"#,
+        )
+        .unwrap();
+        fixture.runtime.compiled = crate::replay::policy::load_replay_policy(&fixture.policy)
+            .unwrap()
+            .compiled;
         let source = payload(source_id, "1970-01-01T00:16:40.123456", "COMPLETED");
         let actual = payload(actual_id, time, status);
         fixture.candidate("PUBLISH", &["events", &source], &["events", &actual]);
         fixture
             .events
             .push(exchange("PUBLISH", &["events", &source]));
-        let plan = fixture.verify(selector.clone());
-        assert_eq!(plan.is_ok(), passes, "{time}: {status}");
+        fixture.report().unwrap();
+        let candidate = fixture.runtime.candidates().pop().unwrap();
+        let protected = crate::request_headers::decrypt_evidence(
+            &fixture.case,
+            &candidate.label(),
+            &candidate.encrypted_target,
+        )
+        .unwrap();
+        assert_eq!(fingerprint(&protected), candidate.target_fingerprint);
+        let actual: Vec<Vec<u8>> = serde_json::from_slice(&protected).unwrap();
+        let source = fixture.events[0]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(decode)
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            fingerprint(&serde_json::to_vec(&source).unwrap()),
+            candidate.source_fingerprint
+        );
+        let target = TargetKey {
+            host: "cache.test".into(),
+            port: 6379,
+        };
+        let mut context =
+            super::super::RedisRequestContext::without_exchange("case", &target, 0, "PUBLISH");
+        context.recorded_at = DateTime::from_timestamp(1000, 0);
+        context.actual_at = Some(candidate.actual_anchor);
+        let compared = fixture
+            .runtime
+            .preview_redis_context(&context, &source, &actual)
+            .expect("global JSON field formats select the decoded payload");
+        assert_eq!(compared.is_ok(), passes, "{time}: {status}");
     }
 }
 

@@ -1,0 +1,152 @@
+//! Redis scalars retain their Source wire form and use the shared field kernel.
+use super::json::{self, AnchorClocks, Comparison, Field, VerifiedTimeCopy};
+use crate::policy::{GLOBAL_REDIS_ID, GlobalField};
+use anyhow::{Context, Result, ensure};
+use serde_json::Value;
+
+#[derive(Debug, Clone)]
+pub(crate) struct Scalar {
+    pub(crate) logical: Value,
+    original: Vec<u8>,
+    pub(crate) json: bool,
+}
+
+pub(crate) fn decode(source: &[u8]) -> Result<Option<Scalar>> {
+    ensure!(
+        source.len() <= 1024 * 1024,
+        "Redis scalar exceeds the 1 MiB value limit"
+    );
+    if let Some(logical) = crate::json_value::parse(source) {
+        if logical.is_array() || logical.is_object() {
+            return Ok(None);
+        }
+        return Ok(Some(Scalar {
+            logical,
+            original: source.to_vec(),
+            json: true,
+        }));
+    }
+    let Ok(text) = std::str::from_utf8(source) else {
+        return Ok(None);
+    };
+    Ok(Some(Scalar {
+        logical: Value::String(text.into()),
+        original: source.to_vec(),
+        json: false,
+    }))
+}
+
+/// A declared string identity wins over an accidental JSON-number spelling.
+/// Source alone chooses this interpretation; Target cannot change the codec.
+pub(crate) fn decode_field(source: &[u8], field: &GlobalField) -> Result<Option<Scalar>> {
+    let Some(mut scalar) = decode(source)? else {
+        return Ok(None);
+    };
+    if scalar.logical.is_number()
+        && field.is_identity()
+        && !matches!(
+            field.select_contract(&scalar.logical),
+            Ok(crate::policy::FieldContract::Identity { .. })
+        )
+    {
+        let text = std::str::from_utf8(source)?;
+        let value = Value::String(text.into());
+        if matches!(
+            field.select_contract(&value),
+            Ok(crate::policy::FieldContract::Identity { .. })
+        ) {
+            scalar.logical = value;
+            scalar.json = false;
+        }
+    }
+    Ok(Some(scalar))
+}
+
+impl Scalar {
+    pub(crate) fn target(&self, bytes: &[u8]) -> Result<Value> {
+        ensure!(
+            bytes.len() <= 1024 * 1024,
+            "Redis scalar exceeds the 1 MiB value limit"
+        );
+        if self.json {
+            let value = crate::json_value::parse(bytes)
+                .context("Target changed the Source JSON scalar encoding")?;
+            ensure!(
+                !value.is_array() && !value.is_object(),
+                "Target scalar changed structure"
+            );
+            Ok(value)
+        } else {
+            Ok(Value::String(
+                std::str::from_utf8(bytes)
+                    .context("Target changed the Source text scalar encoding")?
+                    .into(),
+            ))
+        }
+    }
+
+    pub(crate) fn encode(&self, value: &Value) -> Result<Vec<u8>> {
+        if value == &self.logical {
+            return Ok(self.original.clone());
+        }
+        ensure!(
+            std::mem::discriminant(value) == std::mem::discriminant(&self.logical),
+            "Redis scalar delivery changed type"
+        );
+        if self.json {
+            Ok(serde_json::to_vec(value)?)
+        } else {
+            Ok(value
+                .as_str()
+                .context("Redis text scalar delivery requires a string")?
+                .as_bytes()
+                .to_vec())
+        }
+    }
+}
+
+pub(crate) fn compare(
+    source: &[u8],
+    target: &[u8],
+    field: &GlobalField,
+    clocks: AnchorClocks,
+    copies: &[VerifiedTimeCopy],
+) -> Result<Comparison> {
+    let Some(source) = decode_field(source, field)? else {
+        ensure!(
+            source == target,
+            "opaque or structured Redis scalar bytes changed"
+        );
+        return Ok(Comparison::default());
+    };
+    let target = source.target(target)?;
+    if source.logical == target && !field.is_identity() {
+        let mut result = Comparison::default();
+        result.evaluated.insert(GLOBAL_REDIS_ID.into());
+        return Ok(result);
+    }
+    let selected = plan(field).fields_with_clocks(&source.logical, clocks)?;
+    let fields = selected
+        .iter()
+        .map(|(pointer, contract)| Field {
+            rule_id: GLOBAL_REDIS_ID,
+            pointer,
+            contract,
+        })
+        .collect::<Vec<_>>();
+    Ok(json::compare_with_time_copies(
+        &source.logical,
+        &target,
+        &fields,
+        clocks,
+        copies,
+    ))
+}
+
+pub(crate) fn plan(field: &GlobalField) -> crate::policy::CompiledJsonPolicy {
+    crate::policy::CompiledJsonPolicy {
+        signatures: Default::default(),
+        fields: std::collections::BTreeMap::from([(String::new(), field.clone())]),
+        fingerprint: String::new(),
+    }
+}

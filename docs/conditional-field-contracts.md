@@ -1,30 +1,14 @@
 # Conditional field contracts
 
-A Source sibling can select whether another field's contract applies. This
-selection is explicit and deterministic; it never tries multiple formats against
-Target data. Conditions support one exact `relative_pointer` and either `equals`
-or `not_in` with 1–32 same-type scalar values. Relative pointers take exactly one
-parent step, such as `../type`; they cannot select the constrained field itself,
-escape that parent, or contain wildcards. Constants may be booleans, numbers or
-strings (at most 1024 bytes), with strict scalar types.
+Ordinary JSON fields use the single global format map. Missing fields are
+optional and time/identity null values are implicit, so ordinary formats need no
+business model discriminator or conditional wrapper. Source alone chooses among
+declared formats. See [global field formats](resource-field-contracts.md).
 
-## JSON and typed Protobuf fields
-
-```yaml
-contract:
-  /items/*/elapsed:
-    kind: conditional
-    when: {relative_pointer: ../status, equals: running}
-    contract: {kind: duration, unit: seconds}
-```
-
-The Source sibling alone selects the active branch. An inactive field compares
-exactly. The Target sibling must equal the corresponding Source sibling even if
-another contract covers that discriminator. Missing or invalid sibling values
-fail comparison. For unordered collections, the predicate follows each paired
-Source/Target element, not their original array positions. Typed Protobuf
-conditions require a declared scalar sibling binding compatible with the constant.
-The existing `not_in` spelling retains the same behavior.
+Native causal effects can still use a Source sibling predicate when generation
+or derivation truly depends on a business branch. They do not define ordinary
+field formats. Conditions select one exact sibling via `relative_pointer` and
+either `equals` or `not_in`; Target must preserve the same discriminator.
 
 ## Redis identity capture
 
@@ -65,7 +49,7 @@ compiler proves their sibling predicates disjoint; unconditional or overlapping
 claims still reject.
 
 The predicate controls capture only. Later declared reference operations such as
-SET, GET, APPEND and EXPIRE use the established case-local binding and need not
+SET, GET, APPEND and EXPIRE use the established case-local correspondence and need not
 carry a JSON `type` field. The existing identity equality, injectivity, resource,
 authentication, lane, command arguments and finite-consumption checks remain active.
 
@@ -79,8 +63,8 @@ authenticated in-memory view in both API and native dependency preflight. Plans
 freeze original artifacts and the managed key, keep private bytes out of public
 reports, and still require genuine independent Target Replay after Apply.
 
-Resource-owned MySQL/Redis identity fields and SSE/response identity fields can
-share one case-local `binding` when Source proves their locations are eligible
-for renaming. Native `effect.capture` bindings keep their separate capture and
-reference semantics; giving a response field the same label does not connect
-it to that native owner. See [identity domains](resource-field-contracts.md#identity-domains-and-read-delivery).
+Global JSON formats and explicit MySQL scalar identity formats participate in
+one internal correspondence based on complete typed Source values. Native
+captures and template tokens retain their additional causal checks while using
+that same correspondence; no authored group connects them. See
+[automatic identity correspondence](resource-field-contracts.md#automatic-identity-correspondence).

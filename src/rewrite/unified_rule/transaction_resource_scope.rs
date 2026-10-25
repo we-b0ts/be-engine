@@ -7,11 +7,15 @@ use crate::policy_evidence::{
 };
 
 fn rule() -> serde_json::Value {
-    json!({"id":"pet-date","surface":"dependency.request",
-        "match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
-            "operation":"SET","key":{"exact":"pet"}},"slot":"value","codec":"json",
-        "contract":{"/lastActiveDate":{"relative_time":"calendar_date","utc_offset":"+08:00"}},
-        "proof":{"source":"pet.py:update","fact":"The stored business date preserves its local day distance; counters remain exact"}})
+    json!({"format":"traffic-policy/v2","json":{"fields":{
+        "/members":{"kind":"unordered"},
+        "/lastActiveDate":{"kind":"time","formats":[{"format":"calendar_date","utc_offset":"+08:00"}]}
+    }}})
+}
+
+fn resource() -> Resource {
+    serde_json::from_value(json!({"protocol":"redis","endpoint":"cache.test:6379","database":0}))
+        .unwrap()
 }
 
 fn event(date: &str) -> serde_json::Value {
@@ -104,10 +108,7 @@ fn foreign_execution(fixture: &Fixture, event: &serde_json::Value, date: &str) -
                     connection_id: event["connection_id"].as_str().map(str::to_owned),
                     sequence: Some(1),
                 },
-                resource: Some(
-                    serde_json::from_value::<Resource>(rule()["match"]["resource"].clone())
-                        .unwrap(),
-                ),
+                resource: Some(resource()),
                 operation: "SET".into(),
                 slot: Slot::Value,
                 clocks: WitnessClocks {
@@ -144,20 +145,21 @@ fn foreign_execution(fixture: &Fixture, event: &serde_json::Value, date: &str) -
 fn resource_scope_is_not_serialized_and_foreign_source_needs_replay() {
     let fixture = fixture();
     foreign(&fixture, &event("2026-10-16"));
-    // A legacy API hint in a new proposal is not copied into resource matching.
-    let mut proposed = rule();
-    proposed["match"]["api"] = json!("GET /api");
-    write(&fixture.proposal, proposed);
     fixture.confirm();
     let plan = fixture.plan().unwrap();
     assert!(
-        plan.traffic_e2e_report["expanded_rules"][0]["match"]
-            .get("api")
-            .is_none()
+        plan.traffic_e2e_report["expanded_rules"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        plan.traffic_e2e_report["json"]["fields"]["/lastActiveDate"]["kind"],
+        "time"
     );
     let preflight = &plan.traffic_e2e_report["preflight"];
-    assert_eq!(preflight["source_validations"], 2);
-    assert_eq!(preflight["independent_target_validations"], 1);
+    assert_eq!(preflight["source_validations"], 3);
+    assert_eq!(preflight["independent_target_validations"], 2);
     assert_eq!(preflight["missing_target_witnesses"], 1);
     assert_eq!(
         preflight["resource_scope"]["affected_apis"],
@@ -171,34 +173,35 @@ fn resource_scope_is_not_serialized_and_foreign_source_needs_replay() {
 }
 
 #[test]
-fn resource_scope_validates_foreign_values_and_retains_resource_isolation() {
-    for other_resource in [false, true] {
+fn global_fields_apply_to_foreign_json_in_every_database() {
+    for database in [0, 1] {
         let fixture = fixture();
-        let mut other = event("invalid-date");
-        if other_resource {
-            other["database"] = json!(1);
-        }
+        let mut other = event("2026-10-16");
+        other["database"] = json!(database);
         foreign(&fixture, &other);
         fixture.confirm();
-        let planned = fixture.plan();
-        assert_eq!(planned.is_ok(), other_resource);
+        let plan = fixture.plan().unwrap();
+        assert_eq!(
+            plan.traffic_e2e_report["preflight"]["source_validations"],
+            3
+        );
     }
 }
 
 #[test]
 fn resource_scope_validates_independent_foreign_target_observations() {
-    for date in ["2026-10-16", "2026-10-17"] {
+    for date in ["2026-10-18", "2026-10-17"] {
         let fixture = fixture();
         foreign_execution(&fixture, &event("2026-10-16"), date);
         fixture.confirm();
         let plan = fixture.plan();
-        if date.ends_with("16") {
+        if date.ends_with("18") {
             assert!(plan.is_err());
         } else {
             let plan = plan.unwrap();
             assert_eq!(
                 plan.traffic_e2e_report["preflight"]["independent_target_validations"],
-                2
+                3
             );
             assert_eq!(
                 plan.traffic_e2e_report["preflight"]["missing_target_witnesses"],
@@ -280,7 +283,7 @@ fn resource_scope_checks_native_http_source_on_other_apis() {
     ] {
         let fixture = Fixture::new();
         let mut event = json!({"event_type":"http_exchange","id":"foreign-http",
-            "scheme":"http","authority":"client.test:8080","method":"POST","uri":"/responses",
+            "scheme":"http","authority":"client.test:8080","method":"POST","uri":"/responses?generated_at=1792108800",
             "request_body":body(json!({"input":"hello"})),"request_headers":{"x-stainless-lang":["python"]},
             "response_status":200,"response_headers":{},"response_body":body(json!({})),
             "timestamp":"2026-10-16T00:00:00Z","request_started_at":"2026-10-16T00:00:00Z","duration_ms":0,"outcome":"response"});
@@ -303,9 +306,9 @@ fn resource_scope_checks_native_http_source_on_other_apis() {
         foreign(&fixture, &event);
         write(
             &fixture.proposal,
-            json!({"id":"sdk","match":{"resource":{"protocol":"http","endpoint":"client.test:8080"},
-            "operation":"POST","path":"/responses"},"effect":{"kind":"http_client_metadata","headers":["x-stainless-lang"]},
-            "proof":{"source":"sdk.py:headers; consumer.py:route","fact":"The consumer never reads SDK runtime metadata"}}),
+            json!({"id":"query-clock","match":{"resource":{"protocol":"http","endpoint":"client.test:8080"},
+            "operation":"POST","path":"/responses"},"effect":{"kind":"http_request","query":{"generated_at":{"relative_time":"unix_seconds"}}},
+            "proof":{"source":"client.py:request","fact":"Source sends the current dependency request clock in generated_at"}}),
         );
         fixture.confirm();
         let planned = fixture.plan();
@@ -319,7 +322,7 @@ fn resource_scope_checks_native_http_source_on_other_apis() {
                     .is_none()
             );
             assert_eq!(
-                planned.traffic_e2e_report["preflight"]["rules"]["sdk"],
+                planned.traffic_e2e_report["preflight"]["rules"]["query-clock"],
                 if scenario == "valid" { 2 } else { 1 }
             );
         }

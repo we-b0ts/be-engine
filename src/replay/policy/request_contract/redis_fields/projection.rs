@@ -1,6 +1,5 @@
 //! Preserve immutable resource identities across legacy string projections.
 use super::*;
-use crate::policy::{FieldContract, Surface};
 
 pub(in crate::replay) struct ProtectedRedisArguments {
     pub source: Vec<Vec<u8>>,
@@ -22,10 +21,9 @@ impl RequestContracts {
         if original_source == projected_source && original_target == projected_target {
             return Ok(None);
         }
-        let scoped = self.scoped_compiled_redis(context, Surface::DependencyRequest);
-        if scoped.is_empty() {
+        let Some(global) = self.global_json() else {
             return Ok(None);
-        }
+        };
         ensure!(
             original_source.len() == projected_source.len()
                 && original_target.len() == projected_target.len()
@@ -43,40 +41,19 @@ impl RequestContracts {
             {
                 continue;
             }
-            let rules = Self::filter_redis_value_rules(&scoped, context, value);
-            if !crate::value_contract::identities::rules_have_identity(&rules) {
+            if crate::json_value::parse(&original_source[index]).is_none() {
                 continue;
             }
-            let plan = crate::value_contract::encoded::prepared_codec(&rules)?;
+            let plan = crate::value_codec::CodecPlan::compile(&crate::policy::Codec::Json)?;
             let source = plan.decode(&original_source[index])?;
             let target = plan.decode(&original_target[index])?;
             let projected_a = plan.decode(&projected_source[index])?;
             let projected_b = plan.decode(&projected_target[index])?;
-            let mut protected = BTreeSet::new();
-            for rule in &rules {
-                for (pattern, contract) in &rule.rule.contract {
-                    if !matches!(contract.unconditional(), FieldContract::Identity { .. }) {
-                        continue;
-                    }
-                    for pointer in crate::replay::policy::response::select_json_pointers(
-                        pattern,
-                        &source.logical,
-                        &target.logical,
-                    ) {
-                        if let FieldContract::Conditional { when, .. } = contract {
-                            protected.insert(
-                                when.peer_pointer(&pointer)
-                                    .context("identity condition has no physical peer")?,
-                            );
-                        }
-                        protected.insert(pointer);
-                        ensure!(
-                            protected.len() <= 8192,
-                            "Redis identity projection field bound exceeded"
-                        );
-                    }
-                }
-            }
+            let protected = global
+                .identity_fields(&source.logical)?
+                .into_iter()
+                .map(|(pointer, _)| pointer)
+                .collect::<BTreeSet<_>>();
             let protected = protected.into_iter().collect::<Vec<_>>();
             let restore = |projected: &crate::value_codec::DecodedValue,
                            original: &crate::value_codec::DecodedValue|

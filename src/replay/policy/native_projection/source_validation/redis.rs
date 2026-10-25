@@ -49,12 +49,19 @@ pub(super) fn validate(
             compiled.native.iter().any(|rule| {
                 if !matches!(
                     rule.rule.effect,
-                    NativeEffect::Identity(_)
-                        | NativeEffect::RedisSequence(_)
-                        | NativeEffect::RedisLock
-                        | NativeEffect::RedisPublishIdentity(_)
+                    NativeEffect::Identity(_) | NativeEffect::RedisSequence(_)
                 ) {
                     return false;
+                }
+                if rule.rule.selector.resource.is_none() {
+                    return runtime.request_contracts.native_rule_scope_matches(
+                        &rule.rule.id,
+                        Some(case.id),
+                        crate::policy::Protocol::Redis,
+                        &target,
+                        Some(&Database::Index(database)),
+                        username,
+                    );
                 }
                 let guard = NativeScopeGuard::from_rule(&rule.rule);
                 guard.matches_case(
@@ -111,7 +118,9 @@ pub(super) fn validate(
             normalized.source == normalized.actual,
             "Source identity self validation changed values"
         );
-        runtime.dynamic_values.commit(case.id, normalized.decision);
+        runtime
+            .dynamic_values
+            .commit(case.id, normalized.decision)?;
     }
     let clock = started(event)?;
     let context = RedisRequestContext {

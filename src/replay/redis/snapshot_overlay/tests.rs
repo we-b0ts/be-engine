@@ -39,6 +39,8 @@ fn capture(data: &str) -> RecordedCapture {
 
 fn record(reason: Option<&str>, response: &str) -> RecordedExchange {
     RecordedExchange {
+        lifecycle_cleanup: false,
+        parse_warnings: Vec::new(),
         rpc_callback_capture: None,
         id: None,
         timestamp: None,

@@ -107,6 +107,9 @@ pub struct ReplayEventCounts {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct NetworkEventCounts {
     pub unrecorded_targets: usize,
+    pub matched_connection_failures: usize,
+    pub unused_connection_failures: usize,
+    pub failed_connection_failures: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -641,6 +644,9 @@ fn merge_statuses(target: &mut BTreeMap<String, usize>, source: &BTreeMap<String
 impl ReplayEventCounts {
     fn add(&mut self, other: &Self) {
         self.network.unrecorded_targets += other.network.unrecorded_targets;
+        self.network.matched_connection_failures += other.network.matched_connection_failures;
+        self.network.unused_connection_failures += other.network.unused_connection_failures;
+        self.network.failed_connection_failures += other.network.failed_connection_failures;
         self.mysql.add(&other.mysql);
         self.http.add(&other.http);
         self.redis.add(&other.redis);

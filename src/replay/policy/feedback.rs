@@ -664,36 +664,9 @@ mod path_tests;
 #[path = "feedback/tests.rs"]
 mod tests;
 
-mod http_unordered;
-pub use http_unordered::{
-    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
-};
-
 mod redis_cross_case;
-mod redis_time_shift;
 pub use redis_cross_case::{
     RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, plan_redis_cross_case,
-};
-mod redis_unordered;
-pub use redis_time_shift::{
-    RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
-};
-
-pub use redis_unordered::{
-    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
-};
-
-mod http_header_timestamp;
-pub use http_header_timestamp::{
-    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
-    plan_http_header_timestamp,
-};
-
-mod redis_lock;
-pub use redis_lock::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};
-mod redis_publish;
-pub use redis_publish::{
-    RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, plan_redis_publish,
 };
 
 pub use generated_values::{DependencyRequestRuleFeedback, plan_dependency_request_rule};

@@ -53,37 +53,3 @@ fn repeated_messages_never_infer_a_scalar_type_for_an_unbound_descendant() {
     assert!(validate_contract_binding(&codec, "/rows/0", &duration).is_err());
     assert!(validate_contract_binding(&codec, "/rows/*/timestamp", &duration).is_err());
 }
-
-#[test]
-fn memcached_operation_availability_is_identical_for_json_and_protobuf() {
-    let json = r#"
-format: traffic-policy/v2
-rules:
-  - id: cache
-    surface: dependency.request
-    match:
-      resource: {protocol: memcached, endpoint: 'cache:11211'}
-      operation: SET
-      key: {exact: payload}
-    slot: value
-    codec: json
-    contract: {/items: {kind: unordered}}
-    proof: {source: 'source.rs:1', fact: 'items are collected without an order contract'}
-"#;
-    let protobuf=json.replace("codec: json","codec: {kind: protobuf, fields: {/items: {field_path: [1], field_type: string, repeated: true}}}");
-    for document in [json.to_owned(), protobuf] {
-        assert!(crate::policy::parse_policy(&document).is_ok());
-        assert!(
-            crate::policy::parse_policy(&document.replace("operation: SET", "operation: APPEND"))
-                .is_err()
-        );
-        let response = document
-            .replace("dependency.request", "dependency.response")
-            .replace("operation: SET", "operation: GETS");
-        assert!(crate::policy::parse_policy(&response).is_ok());
-        assert!(
-            crate::policy::parse_policy(&response.replace("operation: GETS", "operation: SET"))
-                .is_err()
-        );
-    }
-}

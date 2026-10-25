@@ -1,49 +1,7 @@
 //! Physical result-column identities and typed SQL field witness carriers.
 use super::*;
-use crate::mysql::sql::{
-    bounds,
-    field_bindings::{self, FieldIdentity},
-};
+use crate::mysql::sql::field_bindings::{self, FieldIdentity};
 use crate::policy::Codec;
-
-pub(in crate::replay) fn response_indices(
-    response: &RecordedMysqlResponse,
-    rule: &CompiledRule,
-    sql: Option<&str>,
-    database: Option<&str>,
-) -> Result<Vec<usize>> {
-    let analysis = if response
-        .columns
-        .iter()
-        .any(|c| c.database.is_none() || c.table.is_none() || c.column.is_none())
-    {
-        sql.and_then(bounds::statement)
-            .and_then(|tokens| field_bindings::analyze(&tokens, database))
-    } else {
-        None
-    };
-    response_indices_in(response, rule, analysis.as_deref())
-}
-
-pub(in crate::replay) fn response_indices_in(
-    response: &RecordedMysqlResponse,
-    rule: &CompiledRule,
-    analysis: Option<&field_bindings::FieldAnalysis>,
-) -> Result<Vec<usize>> {
-    if response.status != "resultset" {
-        return Ok(vec![]);
-    }
-    let mut output = Vec::new();
-    for index in 0..response.columns.len() {
-        let origin = response_origin(response, index, analysis);
-        if let Some(origin) = origin
-            && policy::mysql_field_matches(rule, &origin)?
-        {
-            output.push(index);
-        }
-    }
-    Ok(output)
-}
 
 /// Physical identity only; callers retain their own rule, row and lifecycle scope.
 pub(super) fn response_origin(
@@ -109,31 +67,3 @@ pub(super) fn value_bytes(value: &RecordedMysqlValue, codec: &Codec) -> Result<O
     };
     Ok(Some(serde_json::to_vec(&value)?))
 }
-
-pub(super) fn response_values(
-    response: &RecordedMysqlResponse,
-    rule: &CompiledRule,
-    sql: Option<&str>,
-    database: Option<&str>,
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-    ensure!(
-        !response.rows_truncated,
-        "SQL physical field requires complete rows"
-    );
-    let indexes = response_indices(response, rule, sql, database)?;
-    let mut output = Vec::new();
-    for (row_index, row) in response.rows.iter().enumerate() {
-        for index in &indexes {
-            let value = row
-                .get(*index)
-                .context("SQL physical field row is incomplete")?;
-            if let Some(bytes) = value_bytes(value, &rule.rule.codec)? {
-                output.push((format!("{row_index}:{index}").into_bytes(), bytes));
-            }
-        }
-    }
-    Ok(output)
-}
-
-#[cfg(test)]
-mod tests;

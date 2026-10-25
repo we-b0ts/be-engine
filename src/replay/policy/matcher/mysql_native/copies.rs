@@ -4,7 +4,7 @@ use crate::mysql::sql::field_bindings::FieldIdentity;
 use crate::replay::policy::request_contract::RequestContracts;
 use crate::value_contract::{
     json::VerifiedTimeCopy,
-    time_copies::{self, TimeCopyLookup, TimeCopyPosition, TimeCopyStore},
+    time_copies::{TimeCopyLookup, TimeCopyPosition, TimeCopyStore},
 };
 
 enum Source<'a> {
@@ -40,58 +40,47 @@ impl<'a> CopyProofs<'a> {
             clocks: Default::default(),
         }
     }
-    pub(super) fn prepare(
+    pub(super) fn prepare_global(
         &self,
-        rule: &CompiledRule,
-        value: &Value,
-        source: &FieldIdentity,
-        target: &FieldIdentity,
-        root: &str,
+        context: &crate::replay::mysql::contracts::automatic::RequestContext<'_>,
+        selected: &crate::replay::mysql::contracts::automatic::Selection,
+        origin: &FieldIdentity,
+        clocks: AnchorClocks,
     ) -> Result<Vec<TimeCopyLookup>> {
         if !self.available {
             return Ok(vec![]);
         }
-        let (Some(source_database), Some(target_database), Some(resource)) = (
-            source.database.as_deref(),
-            target.database.as_deref(),
-            rule.rule.selector.resource.as_ref(),
-        ) else {
+        let (Some(endpoint), Some(database)) =
+            (context.identity.target.as_ref(), origin.database.as_deref())
+        else {
             return Ok(vec![]);
         };
-        let source_position = TimeCopyPosition::Mysql {
-            host: &resource.endpoint.host,
-            port: resource.endpoint.port,
-            database: source_database,
-            table: &source.table,
-            column: &source.column,
+        let position = TimeCopyPosition::Mysql {
+            host: &endpoint.host,
+            port: endpoint.port,
+            database,
+            table: &origin.table,
+            column: &origin.column,
         };
-        let target_position = TimeCopyPosition::Mysql {
-            host: &resource.endpoint.host,
-            port: resource.endpoint.port,
-            database: target_database,
-            table: &target.table,
-            column: &target.column,
-        };
-        Ok(time_copies::leaves(value, rule)?
-            .into_iter()
-            .filter_map(|leaf| {
-                TimeCopyLookup::new_time(
-                    &leaf.time,
-                    source_position,
-                    target_position,
-                    &leaf.pattern,
-                    &leaf.pattern,
-                    &leaf.value,
-                    &rule.rule.id,
-                )
-                .map(|lookup| {
-                    lookup.at(
-                        &format!("{root}{}", leaf.pointer),
-                        &format!("{root}{}", leaf.pattern),
-                    )
-                })
-            })
-            .collect())
+        Ok(crate::replay::mysql::contracts::automatic::time_leaves(
+            selected,
+            context.policy,
+            clocks,
+        )?
+        .into_iter()
+        .filter_map(|leaf| {
+            TimeCopyLookup::new_time(
+                &leaf.time,
+                position,
+                position,
+                &leaf.pattern,
+                &leaf.pattern,
+                &leaf.value,
+                selected.id,
+            )
+            .map(|lookup| lookup.at(&leaf.pointer, &leaf.pattern))
+        })
+        .collect())
     }
 
     /// Every selected physical field contributes prepared hashes before this

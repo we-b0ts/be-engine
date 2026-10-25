@@ -132,6 +132,8 @@ pub struct AppConfig {
     pub tls: TlsConfig,
     #[serde(skip)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
+    #[serde(skip)]
+    pub async_api: std::collections::BTreeMap<String, crate::policy::AsyncApiRule>,
     /// Already admitted policy identity, used only for optional recording-time indexes.
     #[serde(skip)]
     pub global_projection_policy: Option<String>,

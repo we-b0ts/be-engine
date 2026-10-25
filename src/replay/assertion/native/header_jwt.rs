@@ -12,7 +12,10 @@ impl NativeResponseContext {
     ) -> Vec<(
         String,
         String,
-        std::result::Result<(), ResponseDifferenceKind>,
+        std::result::Result<
+            Vec<crate::value_contract::identities::IdentityPair>,
+            ResponseDifferenceKind,
+        >,
     )> {
         self.header_jwt
             .iter()
@@ -37,15 +40,28 @@ impl NativeResponseContext {
                     let ([source], [target]) = (source.as_slice(), target.as_slice()) else {
                         return Err(ResponseDifferenceKind::JwtInvalid);
                     };
-                    super::super::jwt::compare(
+                    let before = Value::String(source.clone());
+                    let after = Value::String(target.clone());
+                    let checked = super::super::jwt::compare(
                         &field.rule,
-                        &Value::String(source.clone()),
-                        &Value::String(target.clone()),
+                        &before,
+                        &after,
                         times,
                         &field.key.bytes,
                         field.key.kid.as_deref(),
                     )?;
-                    Ok(())
+                    let mut pairs = vec![super::super::jwt::identity_pair(
+                        &field.rule,
+                        &before,
+                        &after,
+                    )?];
+                    pairs.extend(checked.nonces.into_iter().map(|nonce| {
+                        crate::value_contract::identities::IdentityPair {
+                            source: serde_json::to_string(&nonce.source).expect("nonce string"),
+                            target: serde_json::to_string(&nonce.target).expect("nonce string"),
+                        }
+                    }));
+                    Ok(pairs)
                 })();
                 (field.id.clone(), name.into(), result)
             })

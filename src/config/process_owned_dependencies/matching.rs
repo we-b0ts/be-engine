@@ -27,7 +27,7 @@ impl BackgroundDependencyRuleConfig {
         };
         authorities
             .iter()
-            .any(|candidate| normalize_authority(candidate).as_deref() == Some(&authority))
+            .any(|candidate| authority_matches(candidate, &authority))
             && methods
                 .iter()
                 .any(|candidate| candidate.eq_ignore_ascii_case(method))
@@ -87,7 +87,7 @@ pub(super) fn matches(rule: &BackgroundDependencyRuleConfig, event: &RecorderEve
 
             authorities
                 .iter()
-                .any(|candidate| normalize_authority(candidate).as_deref() == Some(&authority))
+                .any(|candidate| authority_matches(candidate, &authority))
                 && methods
                     .iter()
                     .any(|candidate| candidate.eq_ignore_ascii_case(&exchange.method))
@@ -121,4 +121,18 @@ pub(super) fn matches(rule: &BackgroundDependencyRuleConfig, event: &RecorderEve
         }
         _ => false,
     }
+}
+
+/// A declared host selects that host at its recorded port. An explicit port
+/// remains an exact port selector; no default HTTP/HTTPS port is inferred.
+pub(super) fn authority_matches(candidate: &str, actual: &str) -> bool {
+    let (Ok(candidate), Ok(actual)) = (candidate.parse::<Authority>(), actual.parse::<Authority>())
+    else {
+        return false;
+    };
+    candidate.host().eq_ignore_ascii_case(actual.host())
+        && match candidate.port_u16() {
+            Some(port) => actual.port_u16() == Some(port),
+            None => candidate.as_str().eq_ignore_ascii_case(candidate.host()),
+        }
 }

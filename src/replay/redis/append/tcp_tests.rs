@@ -30,7 +30,21 @@ async fn state_observations_support_merged_batches_over_real_tcp() {
     replay_tcp(false, false, Some(&[b"abcd"])).await;
 }
 
+#[tokio::test]
+async fn key_only_append_and_expiry_rechunk_over_real_tcp() {
+    replay_tcp_scope(false, false, Some(&[b"a", b"b", b"cd"]), true).await;
+}
+
 async fn replay_tcp(reject_first: bool, commute_reads: bool, observation_chunks: Option<&[&[u8]]>) {
+    replay_tcp_scope(reject_first, commute_reads, observation_chunks, false).await;
+}
+
+async fn replay_tcp_scope(
+    reject_first: bool,
+    commute_reads: bool,
+    observation_chunks: Option<&[&[u8]]>,
+    key_only: bool,
+) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let case = root.join(".traffic-e2e/local/artifacts/recordings/run/apis/tasks/case");
@@ -72,7 +86,7 @@ async fn replay_tcp(reject_first: bool, commute_reads: bool, observation_chunks:
             "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1}]},
         "proof":{"source":"session.py:1","fact":"Source writes a generated block id, reads it and uses it in content keys"}});
     if observation_chunks.is_some() {
-        identity["effect"]["read_back"][0]["state_epochs"] = json!({"source":"session.py:5","fact":"Source reads the Case current identity between SET/DEL transitions; batch scheduling only changes the read count"});
+        identity["effect"]["read_back"][0]["state_epochs"] = json!(true);
     }
     let mut rules = vec![identity, rule()];
     if observation_chunks.is_some() {
@@ -80,6 +94,18 @@ async fn replay_tcp(reject_first: bool, commute_reads: bool, observation_chunks:
     }
     if commute_reads {
         rules.push(crate::replay::redis::read_commutation::tests::rule());
+    }
+    if key_only {
+        for rule in &mut rules {
+            if matches!(
+                rule["effect"]["kind"].as_str(),
+                Some("redis_append_stream" | "redis_expiry_refresh")
+            ) {
+                let selector = rule["match"].as_object_mut().unwrap();
+                selector.remove("resource");
+                selector.remove("api");
+            }
+        }
     }
     std::fs::write(
         root.join(".traffic-e2e/policy.yaml"),

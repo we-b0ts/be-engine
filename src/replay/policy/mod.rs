@@ -22,21 +22,14 @@ pub use feedback::{
 pub use feedback::{
     RedisCrossCaseFeedback, RedisCrossCasePlan, RedisCrossCaseReport, plan_redis_cross_case,
 };
-pub use feedback::{
-    RedisTimeShiftFeedback, RedisTimeShiftPlan, RedisTimeShiftReport, plan_redis_time_shift,
-};
 mod initialization;
 pub(crate) mod native_projection;
 pub(crate) use native_projection::validate_finite_sharing;
 pub(crate) use native_projection::{NativeSourceCase, validate_native_source_dependencies};
 mod matcher;
-pub(crate) use matcher::mysql_contract::{
-    compare_values as compare_mysql_values, selected_value as mysql_contract_value,
-    validate_selector as validate_mysql_value_selector, witness_matches as mysql_witness_matches,
-};
-pub(in crate::replay) use matcher::mysql_native::fields::{
-    matches_field as mysql_field_matches, values as mysql_field_values,
-};
+pub(crate) use matcher::mysql_contract::validate_selector as validate_mysql_value_selector;
+pub(in crate::replay) use matcher::mysql_native::compare_with_automatic as compare_mysql_with_automatic;
+
 pub(crate) use matcher::mysql_native::witness_matches as mysql_native_witness_matches;
 mod pattern;
 mod protobuf;
@@ -102,8 +95,8 @@ pub(in crate::replay) fn http_cross_case_rules(
             (
                 r.id,
                 crate::replay::HttpCrossCaseSelector {
-                    host: r.target.host.unwrap(),
-                    port: r.target.port.unwrap(),
+                    host: r.target.host,
+                    port: r.target.port,
                     method: http.method,
                     path: http.path,
                 },
@@ -112,10 +105,15 @@ pub(in crate::replay) fn http_cross_case_rules(
         .collect())
 }
 
-/// Redis scope rules reuse the exact selector of an existing time-shift rule.
+/// Redis sharing retains exact physical read identity and finite inventory.
 pub(in crate::replay) fn redis_cross_case_rules(
     path: &std::path::Path,
-) -> anyhow::Result<Vec<(String, crate::replay::RedisTimeShiftSelector)>> {
+) -> anyhow::Result<
+    Vec<(
+        String,
+        crate::replay::redis::shared_read::RedisSharedReadSelector,
+    )>,
+> {
     let loaded = load_replay_policy(path)?;
     Ok(loaded
         .document
@@ -127,16 +125,16 @@ pub(in crate::replay) fn redis_cross_case_rules(
             {
                 return None;
             }
-            let redis_value::RedisSelector::TimeShift(read) =
+            let redis_value::RedisSelector::SharedRead(read) =
                 rule.redis.expect("validated Redis scope")
             else {
-                unreachable!("validated Redis scope uses time-shift")
+                unreachable!("validated Redis scope uses shared read")
             };
             Some((
                 rule.id,
-                crate::replay::RedisTimeShiftSelector {
-                    host: rule.target.host.expect("validated Redis host"),
-                    port: rule.target.port.expect("validated Redis port"),
+                crate::replay::redis::shared_read::RedisSharedReadSelector {
+                    host: rule.target.host,
+                    port: rule.target.port,
                     read,
                 },
             ))
@@ -148,31 +146,7 @@ pub use feedback::{
     HttpCrossCaseFeedback, HttpCrossCasePlan, HttpCrossCaseReport, plan_http_cross_case,
 };
 
-pub(in crate::replay) mod http_client_metadata;
-mod http_headers;
-mod http_json;
-pub use http_headers::HttpHeaderTimestampSelector;
-pub(in crate::replay) use response::{response_pointer_matches, validate_json_pointer};
-
-pub use feedback::{
-    HttpUnorderedFeedback, HttpUnorderedPlan, HttpUnorderedReport, plan_http_unordered,
-};
-
 mod redis_value;
-
-pub use feedback::{
-    RedisUnorderedFeedback, RedisUnorderedPlan, RedisUnorderedReport, plan_redis_unordered,
-};
-
-pub use feedback::{
-    HttpHeaderTimestampFeedback, HttpHeaderTimestampPlan, HttpHeaderTimestampReport,
-    plan_http_header_timestamp,
-};
-
-pub use feedback::{RedisLockFeedback, RedisLockPlan, RedisLockReport, plan_redis_lock};
-pub use feedback::{
-    RedisPublishFeedback, RedisPublishPlan, RedisPublishReport, plan_redis_publish,
-};
 
 pub use feedback::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 

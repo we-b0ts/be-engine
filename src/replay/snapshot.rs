@@ -7,6 +7,7 @@ impl ReplayState {
         let allowed_unused_case_http_exchanges =
             self.unused_http_exchanges(ReplaySource::Case, true);
         ReplayReport {
+            connect_failures: self.connect_failures.snapshot(),
             policy_witnesses: self
                 .replay_policy
                 .as_ref()

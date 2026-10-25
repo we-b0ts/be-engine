@@ -1,13 +1,13 @@
 //! Closed contracts for stateful identities, signatures and acquisition effects.
 //! The compiler retains these as typed effects; protocol owners never reparse YAML.
-mod http_client_metadata;
 mod input;
+mod read_back;
 mod response;
 mod source;
 mod stateful;
 
-pub use http_client_metadata::*;
 pub use input::*;
+pub use read_back::is_key_only_read_back;
 pub use response::*;
 pub use source::*;
 pub use stateful::*;
@@ -35,14 +35,16 @@ impl<'de> Deserialize<'de> for PolicyRule {
             .and_then(serde_yaml::Value::as_str)
             .unwrap_or("<missing-id>")
             .to_owned();
+        if value.get("effect").is_none() {
+            return Err(serde::de::Error::custom(
+                "API/resource field rules are retired; declare formats in root json.fields or mysql.tables",
+            ));
+        }
         crate::policy::authoring::expand_rule(&mut value, None)
             .map_err(|error| serde::de::Error::custom(format!("rule {id:?}: {error:#}")))?;
-        if value.get("effect").is_some() {
-            serde_yaml::from_value::<NativeRule>(value).map(|rule| Self::Native(Box::new(rule)))
-        } else {
-            serde_yaml::from_value::<Rule>(value).map(|rule| Self::Value(Box::new(rule)))
-        }
-        .map_err(|error| serde::de::Error::custom(format!("rule {id:?}: {error}")))
+        serde_yaml::from_value::<NativeRule>(value)
+            .map(|rule| Self::Native(Box::new(rule)))
+            .map_err(|error| serde::de::Error::custom(format!("rule {id:?}: {error}")))
     }
 }
 
@@ -75,10 +77,10 @@ impl PolicyRule {
         }
     }
 
-    pub fn proof(&self) -> &Proof {
+    pub fn proof(&self) -> Option<&Proof> {
         match self {
-            Self::Value(rule) => &rule.proof,
-            Self::Native(rule) => &rule.proof,
+            Self::Value(rule) => Some(&rule.proof),
+            Self::Native(rule) => rule.proof.as_ref(),
         }
     }
 }
@@ -102,7 +104,8 @@ pub struct NativeRule {
     #[serde(rename = "match")]
     pub selector: NativeMatch,
     pub effect: NativeEffect,
-    pub proof: Proof,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof: Option<Proof>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<SourceCondition>,
 }
@@ -114,6 +117,8 @@ pub struct NativeMatch {
     pub api: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<Resource>,
+    #[serde(default, rename = "host", skip_serializing_if = "Option::is_none")]
+    pub http_host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,13 +153,14 @@ pub enum NativeKeySelector {
     },
 }
 
-/// Every nested relaxation retains its resolved proof in the IR. Authoring may
-/// inherit that proof locally, including bindings in a sequence.
+/// Plan proposals may attach Source evidence. Runtime contracts need only the
+/// declared behavior; absence of evidence is represented explicitly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Proven<T> {
     pub contract: T,
-    pub proof: Proof,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof: Option<Proof>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -165,14 +171,11 @@ pub enum NativeEffect {
     RedisAppendStream,
     RedisReadCommutation(RedisReadCommutationEffect),
     RedisExpiryRefresh(RedisExpiryRefreshEffect),
-    RedisLock,
-    RedisPublishIdentity(PublishIdentityEffect),
     ResponseJwt(ResponseJwtEffect),
     ResponseHeaderDate(HeaderDateEffect),
     ResponseGenerated(GeneratedEffect),
     ResponseBody(BodyEffect),
     HttpRequest(HttpRequestEffect),
-    HttpClientMetadata(HttpClientMetadataEffect),
     MysqlValues(MysqlValuesEffect),
     InputJwt(InputJwtEffect),
     InputSignedTimestamp(InputSignedTimestampEffect),
@@ -271,32 +274,9 @@ pub enum InputTokenTime {
 pub struct HttpRequestEffect {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
-    pub headers: BTreeMap<String, Proven<NativeTime>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
     pub query: BTreeMap<String, Proven<GeneratedValue>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
-    pub json: BTreeMap<String, Proven<HttpJsonField>>,
     #[serde(default)]
     pub multipart_boundary: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum HttpJsonField {
-    Random {
-        format: RandomEncoding,
-        length: usize,
-    },
-    Jwt {
-        algorithm: SignatureAlgorithm,
-        signing_key: StartupKey,
-        #[serde(skip)]
-        anchor: crate::policy::TimeAnchor,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        nonces: Vec<Proven<NonceClaim>>,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -308,17 +288,6 @@ pub struct MysqlValuesEffect {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
     pub values: BTreeMap<usize, Proven<SqlValueContract>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
-    pub response_time: BTreeMap<String, Proven<SqlResponseTime>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SqlResponseTime {
-    pub time: NativeTime,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub preserve_values: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -334,23 +303,8 @@ pub enum SqlValueContract {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GeneratedValue {
-    Bind {
-        binding: String,
-    },
-    Uuid {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        binding: Option<String>,
-    },
-    UuidV4 {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        binding: Option<String>,
-    },
-    NonEmpty {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        binding: Option<String>,
-    },
-    Reference {
-        binding: String,
-    },
+    Uuid {},
+    UuidV4 {},
+    NonEmpty {},
     Time(NativeTime),
 }

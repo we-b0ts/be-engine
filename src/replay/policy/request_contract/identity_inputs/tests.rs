@@ -1,5 +1,5 @@
 use super::*;
-use crate::policy::{Surface, compile_policy, parse_policy};
+use crate::policy::{compile_policy, parse_policy};
 use crate::value_contract::identities::IdentityPair;
 use serde_json::json;
 
@@ -7,34 +7,9 @@ const SOURCE: &str = "11111111-1111-4111-8111-111111111111";
 const TARGET: &str = "22222222-2222-4222-8222-222222222222";
 
 fn owner(uri: &str, body: Option<Value>, prefix: &str, format: &str) -> RequestContracts {
-    owner_with_prefixes(uri, body, &[prefix], format)
-}
-
-fn owner_with_prefixes(
-    uri: &str,
-    body: Option<Value>,
-    prefixes: &[&str],
-    format: &str,
-) -> RequestContracts {
-    let fields = prefixes
-        .iter()
-        .enumerate()
-        .map(|(index, prefix)| {
-            (
-                if index == 0 {
-                    "id".to_owned()
-                } else {
-                    format!("alias_{index}")
-                },
-                json!({"kind":"identity", "binding":"entity", "prefix":prefix, "format":format}),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>();
-    let document = json!({"format":"traffic-policy/v2", "resources":{"db":{
-        "protocol":"mysql", "endpoint":"db.test:3306", "database":"app",
-        "proof":{"source":"fixture.py:1", "fact":"Generated identifiers are copied across the declared physical fields"},
-        "tables":{"tasks":{"fields":fields}}
-    }}});
+    let document = json!({"format":"traffic-policy/v2", "mysql":{"tables":{"tasks":{
+        "pattern":"tasks", "fields":{"id":{"kind":"identity","formats":[{"prefix":prefix,"format":format}]}}
+    }}}});
     let mut owner = RequestContracts::default();
     owner
         .configure_compiled(Some(Arc::new(
@@ -60,22 +35,23 @@ fn owner_with_prefixes(
 
 fn pair(source: &str, target: &str) -> IdentityPair {
     IdentityPair {
-        domain: "entity".into(),
-        source: source.into(),
-        target: target.into(),
+        source: serde_json::to_string(source).unwrap(),
+        target: serde_json::to_string(target).unwrap(),
     }
 }
 
 #[test]
 fn provided_id_cannot_change_in_the_first_sql_predicate_update_or_insert() {
     let owner = owner("/tasks", Some(json!({"id":SOURCE})), "", "uuid");
-    let rules = owner
-        .compiled_rules()
-        .unwrap()
-        .rules
-        .iter()
-        .filter(|rule| rule.rule.surface == Surface::DependencyRequest)
-        .collect::<Vec<_>>();
+    let compiled = owner.compiled_rules().unwrap();
+    let identity = crate::replay::ReplaySessionIdentity {
+        target: Some(TargetKey {
+            host: "db.test".into(),
+            port: 3306,
+        }),
+        database: Some("app".into()),
+        username: None,
+    };
     for template in [
         "SELECT title FROM tasks WHERE id='ID'",
         "UPDATE tasks SET title='unchanged' WHERE id='ID'",
@@ -83,14 +59,27 @@ fn provided_id_cannot_change_in_the_first_sql_predicate_update_or_insert() {
     ] {
         let source = template.replace("ID", SOURCE);
         let target = template.replace("ID", TARGET);
-        let comparison = crate::replay::policy::compare_mysql_values(
+        let record = serde_json::from_value(
+            json!({"command":"COM_QUERY","database":"app","sql":source,"response":{"status":"ok"}}),
+        )
+        .unwrap();
+        let context = crate::replay::mysql::contracts::automatic::RequestContext::new(
+            compiled,
+            Default::default(),
+            &identity,
+            &record,
+        );
+        let comparison = crate::replay::policy::matcher::mysql_native::compare_with_automatic(
             Some("app"),
             Some(&source),
             None,
             Some(&target),
             None,
-            &rules,
+            &[],
+            &[],
             Default::default(),
+            None,
+            &context,
         )
         .unwrap();
         assert!(comparison.passed(), "{:?}", comparison.differences);
@@ -127,55 +116,49 @@ fn exact_decoded_path_query_json_and_numeric_inputs_are_fixed_anchors() {
                 .is_err()
         );
     }
-    for (body, prefix) in [
-        (json!({"id":"msg_11"}), "msg_"),
-        (json!({"id":11}), ""),
-        (json!({"id":"11"}), ""),
+    for (body, prefix, source, target) in [
+        (
+            json!({"id":"msg_11"}),
+            "msg_",
+            json!("msg_11"),
+            json!("msg_1011"),
+        ),
+        (json!({"id":11}), "", json!(11), json!(1011)),
+        (json!({"id":"11"}), "", json!("11"), json!("1011")),
     ] {
         let owner = owner("/tasks", Some(body), prefix, "decimal");
-        assert!(
-            owner
-                .preview_identity_pairs("case", &[pair("11", "1011")])
-                .is_err()
-        );
+        let pair = IdentityPair {
+            source: serde_json::to_string(&source).unwrap(),
+            target: serde_json::to_string(&target).unwrap(),
+        };
+        assert!(owner.preview_identity_pairs("case", &[pair]).is_err());
     }
 }
 
 #[test]
-fn prefix_only_domains_do_not_anchor_unrelated_bare_time_values() {
-    let time = "1712345678901";
-    for input in [
-        json!({"timestamp":1712345678901u64}),
-        json!({"timestamp":time}),
-    ] {
-        let owner = owner("/tasks", Some(input), "text-", "decimal");
-        assert!(
-            owner
-                .preview_identity_pairs("case", &[pair(time, "1912345678901")])
-                .is_ok()
-        );
-    }
-    let provided = owner(
+fn full_prefix_and_scalar_type_keep_unrelated_input_values_distinct() {
+    let contracts = owner(
         "/tasks",
-        Some(json!({"id":format!("text-{time}")})),
+        Some(json!({"timestamp":"11", "number":11})),
         "text-",
         "decimal",
     );
     assert!(
-        provided
-            .preview_identity_pairs("case", &[pair(time, "1912345678901")])
-            .is_err()
+        contracts
+            .preview_identity_pairs("case", &[pair("text-11", "text-1011")])
+            .is_ok()
     );
-    let raw_alias = owner_with_prefixes(
-        "/tasks",
-        Some(json!({"id":1712345678901u64})),
-        &["text-", ""],
-        "decimal",
-    );
+    let contracts = owner("/tasks", Some(json!({"id":"text-11"})), "text-", "decimal");
     assert!(
-        raw_alias
-            .preview_identity_pairs("case", &[pair(time, "1912345678901")])
+        contracts
+            .preview_identity_pairs("case", &[pair("text-11", "text-1011")])
             .is_err()
+    );
+    let contracts = owner("/tasks", Some(json!({"id":11})), "", "decimal");
+    assert!(
+        contracts
+            .preview_identity_pairs("case", &[pair("11", "1011")])
+            .is_ok()
     );
 }
 
@@ -227,11 +210,11 @@ fn input_index_fails_closed_on_bounds_and_invalid_path_escapes() {
 }
 
 #[test]
-fn incomplete_or_opaque_api_inputs_do_not_authorize_free_identity_renaming() {
+fn incomplete_or_redacted_api_inputs_do_not_authorize_identity_renaming() {
     for request in [
         json!({"body":{"encoding":"utf8","data":"", "truncated":true}}),
         json!({"body":{"encoding":"utf8","data":"", "truncated":false,"decode_error":"truncated gzip"}}),
-        json!({"body":{"encoding":"utf8","data":"opaque input", "truncated":false}}),
+        json!({"body":{"encoding":"utf8","data":"", "truncated":false,"redacted":true}}),
     ] {
         let owner = owner("/tasks", None, "", "uuid");
         owner
@@ -260,4 +243,27 @@ fn incomplete_or_opaque_api_inputs_do_not_authorize_free_identity_renaming() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn complete_opaque_multipart_inputs_keep_independently_generated_ids_eligible() {
+    let request = json!({"body":{"encoding":"utf8","truncated":false,
+        "data":"--file-boundary\r\nContent-Disposition: form-data; name=upload; filename=photo.png\r\n\r\nopaque bytes\r\n--file-boundary--"}});
+    for uri in [
+        "/uploads".to_string(),
+        format!("/uploads/{SOURCE}"),
+        format!("/uploads?id={SOURCE}"),
+    ] {
+        let owner = owner(&uri, None, "", "uuid");
+        owner
+            .state
+            .lock()
+            .unwrap()
+            .cases
+            .get_mut("case")
+            .unwrap()
+            .source_input_error = capture_error(&request, None);
+        let generated = owner.preview_identity_pairs("case", &[pair(SOURCE, TARGET)]);
+        assert_eq!(generated.is_ok(), uri == "/uploads");
+    }
 }

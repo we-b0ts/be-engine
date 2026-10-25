@@ -45,9 +45,9 @@ fn identity_only_source_bindings_have_totals_omissions_and_a_public_summary_page
     install(&fixture, frames(25, false, false), frames(25, true, false));
     let first = fixture.evidence();
     assert_eq!(first.facts["candidate_count"], 0);
-    assert_eq!(first.facts["source_entry"]["binding_count"], 25);
+    assert_eq!(first.facts["source_entry"]["location_count"], 25);
     assert_eq!(
-        first.facts["source_entry"]["bindings"]
+        first.facts["source_entry"]["locations"]
             .as_array()
             .unwrap()
             .len(),
@@ -58,9 +58,9 @@ fn identity_only_source_bindings_have_totals_omissions_and_a_public_summary_page
     assert_eq!(first.facts["pagination"]["scan_remaining"], false);
     let next = continuation(&fixture, &first.facts, "next_page");
     assert_eq!(next.facts["pagination"]["summary_offset"], 20);
-    assert_eq!(next.facts["source_entry"]["binding_count"], 25);
+    assert_eq!(next.facts["source_entry"]["location_count"], 25);
     assert_eq!(
-        next.facts["source_entry"]["bindings"]
+        next.facts["source_entry"]["locations"]
             .as_array()
             .unwrap()
             .len(),
@@ -69,7 +69,7 @@ fn identity_only_source_bindings_have_totals_omissions_and_a_public_summary_page
     assert_eq!(next.facts["candidate_count"], 0);
     assert!(next.facts["pagination"].get("next_page").is_none());
     assert_eq!(
-        next.facts["source_entry"]["bindings"][4]["binding"]["slot"]["sse_data"]["json_type"],
+        next.facts["source_entry"]["locations"][4]["location"]["slot"]["sse_data"]["json_type"],
         "response.part.24"
     );
     assert!(!serde_json::to_string(&next).unwrap().contains(PRIVATE));
@@ -82,22 +82,29 @@ fn candidate_summary_pages_and_scan_windows_both_reach_late_sse_frames() {
     install(&fixture, frames(300, false, true), frames(300, true, true));
     let first = fixture.evidence();
     assert_eq!(first.facts["observations_examined"], 256);
-    assert_eq!(first.facts["candidate_count"], 255);
-    assert_eq!(first.facts["summary_omitted"], 235);
+    assert_eq!(first.facts["candidate_count"], 1);
+    assert_eq!(first.facts["source_entry"]["summary_omitted"], 235);
     let page = continuation(&fixture, &first.facts, "next_page");
-    assert_eq!(page.facts["candidates"].as_array().unwrap().len(), 20);
     assert_eq!(
-        page.facts["candidates"][0]["draft_rule"]["slot"]["sse_data"]["json_type"],
+        page.facts["source_entry"]["locations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        20
+    );
+    assert_eq!(
+        page.facts["source_entry"]["locations"][0]["location"]["slot"]["sse_data"]["json_type"],
         "response.part.20"
     );
     let scan = continuation(&fixture, &first.facts, "next_scan");
     assert!(scan.facts["observations_examined"].as_u64().unwrap() <= 256);
-    assert_eq!(scan.facts["candidate_count"], 45);
+    assert_eq!(scan.facts["candidate_count"], 1);
+    assert_eq!(scan.facts["source_entry"]["location_count"], 45);
     assert_eq!(scan.facts["pagination"]["scan_remaining"], false);
     let second_page = continuation(&fixture, &scan.facts, "next_page");
     let final_page = continuation(&fixture, &second_page.facts, "next_page");
     assert_eq!(
-        final_page.facts["candidates"][4]["draft_rule"]["slot"]["sse_data"]["json_type"],
+        final_page.facts["source_entry"]["locations"][4]["location"]["slot"]["sse_data"]["json_type"],
         "response.completed"
     );
     assert_eq!(
@@ -128,7 +135,7 @@ fn scan_continuations_rotate_surfaces_and_reject_stale_issue_ids() {
         "dependency"
     );
     assert_eq!(
-        next.facts["source_entry"]["bindings"][0]["binding"]["surface"],
+        next.facts["source_entry"]["locations"][0]["location"]["surface"],
         "dependency.request"
     );
     assert_eq!(next.facts["observations_examined"], 256);
@@ -173,7 +180,9 @@ fn a_failed_case_late_in_inventory_is_examined_before_passing_cases() {
             .unwrap()
             .iter()
             .any(|candidate| candidate["witness_id"] == "case-300"
-                && candidate["draft_rule"]["contract"].get("/late").is_some())
+                && candidate["draft_policy"]["json"]["fields"]
+                    .get("/late")
+                    .is_some())
     );
     assert_eq!(facts["pagination"]["scan_remaining"], true);
 }
@@ -231,12 +240,12 @@ fn mysql_resultset_binding_survives_an_earlier_ok_response_and_exposes_read_back
     report["policy_witnesses"] = serde_json::to_value(store.sealed_manifest().unwrap()).unwrap();
     write(&fixture.paths.replay, report);
     let evidence = fixture.evidence();
-    let entries = evidence.facts["source_entry"]["bindings"]
+    let entries = evidence.facts["source_entry"]["locations"]
         .as_array()
         .unwrap();
     let mysql = entries
         .iter()
-        .filter(|entry| entry["binding"]["match"]["resource"]["protocol"] == "mysql")
+        .filter(|entry| entry["location"]["match"]["resource"]["protocol"] == "mysql")
         .collect::<Vec<_>>();
     assert_eq!(mysql.len(), 2);
     assert_eq!(mysql[0]["source_response_kind"], "ok");
@@ -244,21 +253,21 @@ fn mysql_resultset_binding_survives_an_earlier_ok_response_and_exposes_read_back
     assert_ne!(mysql[0]["witness_id"], mysql[1]["witness_id"]);
     for entry in &mysql {
         assert_eq!(entry["needs_sql_template"], false);
-        assert_eq!(entry["needs_schema"], true);
+        assert_eq!(entry["needs_schema"], false);
         assert_eq!(entry["source_intent_required"], true);
         for key in ["sql", "operation", "table_series"] {
-            assert!(entry["binding"]["match"].get(key).is_none());
+            assert!(entry["location"]["match"].get(key).is_none());
         }
         assert_eq!(entry["physical_fields"]["complete_coverage"], false);
     }
-    assert_eq!(mysql[0]["needs_physical_binding"], true);
+    assert_eq!(mysql[0]["needs_physical_location"], true);
     assert!(
         mysql[0]["physical_fields"]["fields"]
             .as_array()
             .unwrap()
             .is_empty()
     );
-    assert_eq!(mysql[1]["needs_physical_binding"], false);
+    assert_eq!(mysql[1]["needs_physical_location"], false);
     let fields = mysql[1]["physical_fields"]["fields"].as_array().unwrap();
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0]["database"], "app");
@@ -270,7 +279,7 @@ fn mysql_resultset_binding_survives_an_earlier_ok_response_and_exposes_read_back
         evidence
             .rule_hints
             .iter()
-            .any(|hint| hint.capability == "mysql_read_back")
+            .any(|hint| hint.capability == "resource_field_contract")
     );
 }
 
@@ -279,13 +288,12 @@ fn continuation_evidence_plans_reject_tampering_and_preserve_policy_freshness() 
     let fixture = fixture();
     response_issue(&fixture);
     install(&fixture, frames(25, false, true), frames(25, true, true));
-    let proposal = (0..25).map(|index| json!({
-        "id":format!("frame-{index}"),"surface":"api.response","match":{"api":"GET /api"},
-        "slot":{"sse_data":{"event":"message","json_type":format!("response.part.{index}")}},"codec":"json",
-        "contract":{"/created_at":{"relative_time":"unix_seconds"}},
-        "proof":{"source":"stream.py:clock","fact":"Source emits this request-relative creation timestamp; identity and all other fields stay exact"}
-    })).collect::<Vec<_>>();
-    write(&fixture.proposal, json!(proposal));
+    write(
+        &fixture.proposal,
+        json!({"format":"traffic-policy/v2","json":{"fields":{
+            "/created_at":{"kind":"time","formats":["unix_seconds"]}
+        }}}),
+    );
     let first = fixture.evidence();
     let page = continuation(&fixture, &first.facts, "next_page");
     assert!(page.evidence_id.starts_with("evidence-discovery:"));

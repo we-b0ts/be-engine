@@ -18,36 +18,6 @@ pub(crate) fn source_witness(
     Ok(serde_json::to_vec(&from_record(&record, surface)?)?)
 }
 
-pub(crate) fn witness_matches(event: &Value, rule: &crate::policy::CompiledRule) -> Result<bool> {
-    if event["event_type"] != "http_exchange" {
-        return Ok(false);
-    }
-    let record: RecordedHttpExchange = serde_json::from_value(event.clone())?;
-    let identity = identity_from_record(&record)?;
-    Ok(rule
-        .rule
-        .selector
-        .resource
-        .as_ref()
-        .is_some_and(|resource| {
-            resource.protocol == crate::policy::Protocol::Http
-                && resource
-                    .endpoint
-                    .host
-                    .eq_ignore_ascii_case(&identity.target.host)
-                && resource.endpoint.port == identity.target.port
-        })
-        && rule
-            .rule
-            .selector
-            .operation
-            .as_ref()
-            .is_some_and(|operation| operation.eq_ignore_ascii_case(&record.method))
-        && rule.rule.selector.path.as_ref().is_some_and(|path| {
-            crate::path_pattern::matches_path_pattern(path, &uri_path_only(&record.uri))
-        }))
-}
-
 pub(crate) fn witness_metadata_matches(event: &Value, metadata: &WitnessMetadata) -> Result<()> {
     let record: RecordedHttpExchange = serde_json::from_value(event.clone())?;
     let identity = identity_from_record(&record)?;
@@ -135,20 +105,38 @@ pub(crate) fn witness_value(bytes: &[u8], surface: Surface) -> Result<Option<Vec
     Ok(body)
 }
 
+/// Multipart is an HTTP protocol projection, independent of JSON field plans.
+/// The protected envelopes stay original; callers may skip their opaque-body
+/// comparison only after this Source-selected comparison succeeds.
+pub(crate) fn multipart_witness_matches(
+    source: &[u8],
+    target: &[u8],
+    surface: Surface,
+) -> Result<bool> {
+    if surface != Surface::DependencyRequest {
+        return Ok(false);
+    }
+    multipart_values_match(&parse(source)?, &parse(target)?)
+}
+
+fn multipart_values_match(source: &Value, target: &Value) -> Result<bool> {
+    let expected: HeaderSnapshot = serde_json::from_value(source["request_headers"].clone())?;
+    if !super::super::multipart::supports_headers(&expected) {
+        return Ok(false);
+    }
+    let actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
+    let source_body = capture(&source["request_body"])?;
+    let actual_body = capture(&target["request_body"])?;
+    match super::super::multipart::preview(&source_body, &expected, &actual_body, &actual) {
+        Some(result) => result.map(|()| true),
+        None => Ok(false),
+    }
+}
+
 pub(crate) fn validate_witness(
     source: &[u8],
     target: &[u8],
     surface: Surface,
-    clocks: AnchorClocks,
-) -> Result<()> {
-    validate_contract_witness(source, target, surface, &[], clocks)
-}
-
-pub(crate) fn validate_contract_witness(
-    source: &[u8],
-    target: &[u8],
-    surface: Surface,
-    native: &[&crate::policy::CompiledNativeRule],
     clocks: AnchorClocks,
 ) -> Result<()> {
     let mut source = parse(source)?;
@@ -175,31 +163,17 @@ pub(crate) fn validate_contract_witness(
             "HTTP Target request clock differs from its protected metadata"
         );
         let expected: HeaderSnapshot = serde_json::from_value(source["request_headers"].clone())?;
-        let actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
-        let metadata = crate::replay::policy::http_client_metadata::selected_headers(
-            native.iter().copied(),
-            &TargetKey {
-                host: source["endpoint"]["host"]
-                    .as_str()
-                    .context("HTTP Source host missing")?
-                    .into(),
-                port: u16::try_from(
-                    source["endpoint"]["port"]
-                        .as_u64()
-                        .context("HTTP Source port missing")?,
-                )?,
-            },
-            source["method"]
-                .as_str()
-                .context("HTTP Source method missing")?,
-            source["uri"].as_str().context("HTTP Source URI missing")?,
-        );
+        let mut actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
+        if multipart_values_match(&source, &target)? {
+            actual.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+            for (name, values) in &expected {
+                if name.eq_ignore_ascii_case("content-type") {
+                    actual.insert(name.clone(), values.clone());
+                }
+            }
+        }
         ensure!(
-            if metadata.is_empty() {
-                request_headers::native_contract_match(&expected, &actual)
-            } else {
-                request_headers::native_contract_match_with_metadata(&expected, &actual, &metadata)
-            },
+            request_headers::native_contract_match(&expected, &actual),
             "HTTP request native header contract differs"
         );
         ensure!(
@@ -231,8 +205,8 @@ pub(crate) fn validate_contract_witness(
             source["response_delivered_at"] == serde_json::to_value(clocks.delivery.source)?,
             "HTTP Source response clock differs from its protected metadata"
         );
-        let target_body = witness_value(target_bytes(&target)?.as_slice(), surface)?
-            .context("HTTP response has no body slot")?;
+        let target_body =
+            witness_value(target_bytes(&target)?.as_slice(), surface)?.unwrap_or_default();
         let source_headers: Option<HeaderSnapshot> =
             serde_json::from_value(source["response_headers"].clone())?;
         ensure!(
@@ -276,6 +250,7 @@ pub(super) fn has_integrity_headers(headers: Option<&HeaderSnapshot>) -> bool {
             matches!(
                 name.to_ascii_lowercase().as_str(),
                 "content-md5"
+                    | "etag"
                     | "digest"
                     | "content-digest"
                     | "repr-digest"

@@ -405,7 +405,6 @@ pub(in crate::replay::policy::feedback) fn proposed_rule(
         protocol: DependencyProtocol::Mysql,
         target: TargetSelector::default(),
         mysql: Some(MysqlSelector {
-            response_time_shift: BTreeMap::new(),
             command: "COM_QUERY".into(),
             sql: s.sql.clone(),
             tables: s.tables.clone(),

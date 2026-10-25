@@ -93,6 +93,9 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
         }
         NativeEffect::ProcessOwned(effect) => {
             empty_match(rule)?;
+            if let Some(task) = &effect.task_name {
+                text(task, "process task name", 128)?;
+            }
             if !effect.source_revision.is_empty() {
                 revision(&effect.source_revision)?;
             }
@@ -226,17 +229,29 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
             );
             match effect {
                 FiniteSharingEffect::Http => {
-                    resource(&rule.selector, Protocol::Http)?;
+                    if rule.selector.resource.is_some() {
+                        resource(&rule.selector, Protocol::Http)?;
+                    } else {
+                        ensure!(
+                            rule.selector.key.is_none()
+                                && rule.selector.sql.is_none()
+                                && rule.selector.tables.is_empty()
+                                && rule.selector.table_patterns.is_empty()
+                                && rule.selector.table_series.is_none(),
+                            "HTTP sharing cannot select Redis keys or SQL"
+                        );
+                    }
                     ensure!(
                         rule.selector.operation.is_some() && rule.selector.path.is_some(),
                         "HTTP sharing requires exact method and path"
                     );
                 }
-                FiniteSharingEffect::Redis {
-                    hash_field,
-                    response_time,
-                } => {
-                    resource(&rule.selector, Protocol::Redis)?;
+                FiniteSharingEffect::Redis { hash_field } => {
+                    if rule.selector.resource.is_some() {
+                        resource(&rule.selector, Protocol::Redis)?;
+                    } else {
+                        validate_discovered_redis_key(&rule.selector)?;
+                    }
                     ensure!(
                         rule.selector
                             .key
@@ -254,19 +269,6 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                             == hash_field.is_some(),
                         "HGET sharing requires one hash field"
                     );
-                    ensure!(
-                        (1..=32).contains(&response_time.len()),
-                        "Redis sharing requires explicit response-time fields"
-                    );
-                    for (pointer, time) in response_time {
-                        compiler::validate_pointer(pointer, false)?;
-                        proven(time, validate_time)?;
-                        ensure!(
-                            time.contract.anchor
-                                == super::super::TimeAnchor::DependencyRequestStart,
-                            "shared Redis response rebasing uses dependency request clocks"
-                        );
-                    }
                 }
             }
         }

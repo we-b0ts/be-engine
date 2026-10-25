@@ -2,7 +2,6 @@
 mod dependency_request;
 mod evidence;
 mod header_evidence;
-mod mysql_response;
 mod mysql_time;
 mod redis_time;
 mod request_evidence;

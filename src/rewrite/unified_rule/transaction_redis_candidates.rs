@@ -6,9 +6,12 @@ use crate::policy_evidence::{
 };
 
 fn proposal() -> serde_json::Value {
-    json!({"id":"asof","surface":"dependency.request","match":{"api":"GET /api","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"SET","key":{"exact":"as-of"}},
-        "slot":"value","codec":"json","contract":{"":{"relative_time":"unix_seconds"}},
-        "proof":{"source":"metrics.py:publish","fact":"Source writes a floating Unix-seconds observation with a strict retention TTL"}})
+    json!({"format":"traffic-policy/v2","redis":{"keys":{"as-of":{"kind":"time","formats":["unix_seconds"]}}}})
+}
+
+fn resource() -> Resource {
+    serde_json::from_value(json!({"protocol":"redis","endpoint":"cache.test:6379","database":0}))
+        .unwrap()
 }
 
 #[test]
@@ -64,10 +67,7 @@ fn redis_candidates_exclude_other_keys_but_preserve_same_key_options_and_missing
                 connection_id: Some(uuid::Uuid::nil().to_string()),
                 sequence: Some(1),
             },
-            resource: Some(
-                serde_json::from_value::<Resource>(proposal()["match"]["resource"].clone())
-                    .unwrap(),
-            ),
+            resource: Some(resource()),
             operation: "SET".into(),
             slot: Slot::Value,
             clocks: WitnessClocks {

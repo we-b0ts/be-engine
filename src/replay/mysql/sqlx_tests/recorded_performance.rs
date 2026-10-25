@@ -65,6 +65,7 @@ async fn captured_candidate_and_evidence_performance() {
                     fail_on_dirty: false,
                     fail_on_incomplete: false,
                     identity_pairs: Vec::new(),
+                    derived_input: None,
                 };
                 let result =
                     crate::replay::control::begin_case(&request, runtime.state.clone()).await;

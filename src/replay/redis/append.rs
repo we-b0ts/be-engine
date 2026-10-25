@@ -10,6 +10,8 @@ mod source;
 mod trace;
 pub(in crate::replay) use source::validate_source;
 #[cfg(test)]
+mod key_scope_tests;
+#[cfg(test)]
 mod recorded_tests;
 #[cfg(test)]
 mod tcp_tests;
@@ -436,14 +438,13 @@ impl RedisReplayState {
             }),
             read_back: None,
             time_read: None,
+            time_write: None,
             unified_delivery: None,
             rpc_push: None,
             rpc_response: None,
             publish_duration_ms: 0,
-            response_time_shift: None,
             index,
             connection_id: exchange.record.connection_id,
-            request_started_at: self.request_observed_at,
             response: format!(":{returned}\r\n").into_bytes(),
             timing: ReplayExchangeTiming::from_recorded(delay, DependencyExchangeOutcome::Response),
             requires_binding,

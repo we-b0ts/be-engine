@@ -115,7 +115,7 @@ fn mysql_capture_pair_binds_source_table_and_keeps_reference_tables_exact() {
             "{table}/{qualifier}"
         );
         if expected {
-            runtime.commit("case", result.decision);
+            runtime.commit("case", result.decision).unwrap();
         }
     }
     let source = "UPDATE other_0001 SET name='old-name'";

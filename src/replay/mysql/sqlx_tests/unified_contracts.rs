@@ -1,32 +1,8 @@
 use super::*;
 use sqlx::Executor;
 
-fn policy(surface: &str, operation: &str, sql: &str, slot: &str, delivery: bool) -> String {
-    format!(
-        r#"
-format: traffic-policy/v2
-rules:
-- id: sql-payload
-  surface: {surface}
-  match:
-    api: GET /users
-    resource: {{protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}}
-    operation: {operation}
-    sql: {sql:?}
-  slot: {slot}
-  codec: json
-  contract:
-    /members: {{kind: unordered}}
-    /time: {{kind: time, format: unix_microseconds, relation: preserve_offset}}
-  proof: {{source: 'sql_payload.py:10-25', fact: 'Source serializes a membership set and a request-relative microsecond timestamp'}}
-{}
-"#,
-        if delivery {
-            "  delivery: {rebase_time: [/time]}"
-        } else {
-            ""
-        }
-    )
+fn policy(_surface: &str, _operation: &str, _sql: &str, _slot: &str, _delivery: bool) -> String {
+    "format: traffic-policy/v2\njson:\n  fields:\n    /members: {kind: unordered}\n    /time: {kind: time, formats: [unix_microseconds]}\n".into()
 }
 
 fn payload(micros: i64, members: Value) -> String {
@@ -55,7 +31,7 @@ async fn sql_json_contract_preserves_statement_and_finite_consumption_over_tls()
         assert_eq!(state.mysql.events.matched_query_count,1);
         assert_eq!(state.mysql.events.unmatched_queries.len(),3);
         let report = state.replay_policy.as_ref().unwrap().report();
-        assert_eq!(report.dependency_rules.iter().find(|r| r.id=="sql-payload").unwrap().time_validations,1);
+        assert_eq!(report.global_formats.iter().find(|r| r.id=="global.json").unwrap().time_validations,1);
         assert_eq!(std::fs::read(temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl")).unwrap(),original);
         task.abort();
     }).await.unwrap();
@@ -74,26 +50,8 @@ async fn mysql_json_wildcard_times_preserve_array_shape_members_and_finite_consu
         record["connection_id"] = json!(uuid::Uuid::new_v4());
         record["query_sequence"] = json!(1);
         record["params"] = json!([{"kind":"string","value":payload(start).to_string()},{"kind":"integer","value":7}]);
-        let policy = format!(
-            r#"format: traffic-policy/v2
-rules:
-- id: block-times
-  match:
-    api: GET /users
-    resource: {{protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}}
-    operation: COM_STMT_EXECUTE
-    sql: {sql:?}
-  effect:
-    kind: mysql_values
-    values:
-      0:
-        kind: json
-        fields:
-          /blocks/*/timestamp: {{relative_time: unix_seconds}}
-  proof: {{source: 'blocks.py:create', fact: 'Each block carries its creation clock; array shape and other fields are stable'}}
-"#
-        );
-        let (temp, addr, runtime, task) = fixture_with_policy(&[record], Some(&policy)).await;
+        let policy = "format: traffic-policy/v2\njson:\n  fields:\n    /blocks/*/timestamp: {kind: time, formats: [unix_seconds]}\n";
+        let (temp, addr, runtime, task) = fixture_with_policy(&[record], Some(policy)).await;
         let observed = Utc::now();
         runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
         let good = payload(observed.timestamp());
@@ -128,9 +86,9 @@ rules:
         let report = state.replay_policy.as_ref().unwrap().report();
         assert_eq!(
             report
-                .dependency_rules
+                .global_formats
                 .iter()
-                .find(|r| r.id == "block-times")
+                .find(|r| r.id == "global.json")
                 .unwrap()
                 .time_validations,
             count as usize
@@ -250,6 +208,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
             fail_on_dirty: false,
             fail_on_incomplete: false,
             identity_pairs: Vec::new(),
+            derived_input: None,
         };
         let (ended, _) = crate::replay::control::handle_control_request(
             request("end", Some("case-id".into())),
@@ -294,21 +253,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
 #[tokio::test]
 async fn absent_sql_json_leaf_is_inactive_and_business_values_remain_exact() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let policy = r#"format: traffic-policy/v2
-rules:
-- id: optional-sql-time
-  surface: dependency.request
-  match:
-    api: GET /users
-    resource: {protocol: mysql, endpoint: '127.0.0.1:3306', database: appdb, username: root}
-    operation: COM_QUERY
-    sql: UPDATE settings SET json=? WHERE id=7
-  slot: {sql_value: 0}
-  codec: json
-  contract:
-    /updated_at: {kind: time, format: unix_seconds, relation: preserve_offset}
-  proof: {source: 'src/settings.rs:update', fact: 'Only request-derived updated_at may vary when present'}
-"#;
+        let policy = "format: traffic-policy/v2\njson:\n  fields:\n    /updated_at: {kind: time, formats: [unix_seconds]}\n";
         let sql = "UPDATE settings SET json='{\"stable\":7}' WHERE id=7";
         let record = exchange(sql, json!({"status":"ok","affected_rows":1}));
         let (temp, addr, runtime, server) = fixture_with_policy(&[record], Some(policy)).await;
@@ -321,11 +266,10 @@ rules:
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
         let report = state.replay_policy.as_ref().unwrap().report();
-        let rule = report.dependency_rules.iter().find(|rule| rule.id == "optional-sql-time").unwrap();
+        let rule = report.global_formats.iter().find(|rule| rule.id == "global.json").unwrap();
         assert!(!rule.applicable);
-        assert_eq!(rule.matches, 0);
+        assert_eq!(rule.validations, 0);
         assert!(report.unused_applicable_dependency_rule_ids.is_empty());
-        assert!(report.unavailable_value_slots.is_empty());
         assert_eq!(state.mysql.events.matched_query_count, 1);
         assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());

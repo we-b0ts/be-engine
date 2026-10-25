@@ -133,7 +133,7 @@ rules:
 }
 
 #[test]
-fn publish_time_and_uuid_bind_only_after_complete_match_and_consume_once() {
+fn global_publish_formats_commit_only_after_complete_match_and_consume_once() {
     let temp = tempfile::tempdir().unwrap();
     let case = temp.path().join("case");
     std::fs::create_dir(&case).unwrap();
@@ -145,10 +145,16 @@ fn publish_time_and_uuid_bind_only_after_complete_match_and_consume_once() {
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     std::fs::write(case.join("dependencies.jsonl"), "").unwrap();
     let policy = temp.path().join("policy.yaml");
-    crate::replay::write_policy_fixture(&policy,serde_yaml::to_string(&json!({"version":3,"expected_response":"assertions_only","dependency_rules":[
-        {"id":"host-id","protocol":"redis","target":{"host":"redis.test","port":6379},"redis":{"publish":{"channel":"events","uuid_field":"host_id","source_evidence":"Emitter initializes one process UUID v4"}}},
-        {"id":"time","protocol":"redis","case":{"method":"POST","path":"/callback"},"target":{"host":"redis.test","port":6379},"source_evidence":"Emitter generates local completion time","redis":{"key":"events","commands":[{"command":"PUBLISH","argument_values":{"1":{"json":{"/data/0/completed_at":{"time":"preserve_relative","format":"iso8601_naive","utc_offset":"+00:00"}}}}}]}}
-    ]})).unwrap()).unwrap();
+    std::fs::write(
+        &policy,
+        r#"format: traffic-policy/v2
+json:
+  fields:
+    /host_id: {kind: identity, formats: [{hex: 32}]}
+    /data/*/completed_at: {kind: time, formats: [iso8601_naive]}
+"#,
+    )
+    .unwrap();
     let cases = BTreeMap::from([(
         "case".into(),
         ReplayCase {
@@ -170,7 +176,6 @@ fn publish_time_and_uuid_bind_only_after_complete_match_and_consume_once() {
         request_contracts: policy.request_contracts.clone(),
         ..Default::default()
     };
-    state.configure_publish(policy.redis_publish_rules());
     for (sequence, time, status) in [
         (1, Some("1970-01-01T00:16:40.123456"), "COMPLETED"),
         (2, None, "RUNNING"),

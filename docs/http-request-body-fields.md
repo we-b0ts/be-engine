@@ -1,79 +1,50 @@
-# Generated HTTP dependency request fields
+# HTTP JSON fields
 
-An explicit native `http_request` effect can validate selected JSON body fields
-without changing the request, recording, or delivered dependency response.
-Use it for Source-proven generated request identifiers and HMAC JWTs.
+HTTP request bodies use the same `json.fields` formats as responses, SSE data,
+SQL JSON columns and Redis JSON values. Declare each path once, without an API,
+endpoint, request effect or business model. JWT fields reference named profiles:
 
 ```yaml
-id: chat-request-fields
-match:
-  api: POST /tasks
-  resource: {protocol: http, endpoint: 'chat.example:8100'}
-  operation: POST
-  path: /v1/responses
-effect:
-  kind: http_request
-  json:
-    /metadata/request_id: {kind: random, format: hex, length: 8}
-    /metadata/auth_token:
-      kind: jwt
-      algorithm: HS256
-      signing_key: {kind: target_env, name: SECRET_KEY}
-    /metadata/skill_identity_token:
-      kind: jwt
-      algorithm: HS256
-      signing_key: {kind: target_env, name: SECRET_KEY}
-proof:
-  source: src/client.rs:build_request
-  fact: The client generates the request ID and signs both tokens from this request's clock.
+format: traffic-policy/v2
+signatures:
+  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
+json:
+  fields:
+    /metadata/request_id: {kind: identity, formats: [{hex: 8}]}
+    /metadata/auth_token: {kind: jwt}
+    /metadata/skill_identity_token: {kind: jwt}
 ```
 
-Each field may supply its own inline proof. Pointers must be exact, non-root,
-nonoverlapping JSON Pointers; at most 32 fields may be selected. Missing fields,
-duplicate JSON members, malformed or over-budget JSON fail closed. The request
-endpoint, method, path, query, headers, unselected body fields, and finite
-dependency consumption retain their existing checks.
+`kind: jwt` uses the explicit `default` signature profile, or a named
+`signature` reference. A frozen key context verifies HMAC signatures and relative
+NumericDates; stable claims and globally declared claim formats remain checked.
+The internal correspondence applies to the complete token across carriers:
+equal Source tokens require equal Target tokens. Recognized equal JWTs still
+authenticate. The old authored identity `formats: [jwt]` syntax is rejected;
+there is no keyless JWT policy mode. See
+[signature profiles](signature-profiles.md).
 
-Random fields validate both Source and Target values against their declared
-encoding and exact length. They do not create a cross-request identity binding.
-Use a native `identity` rule when later dependencies must reference that value.
+Equal scalar values pass directly. Unknown scalar formats remain exact. A field
+missing on both sides is irrelevant; a field present on only one side differs.
+Null is exact and creates no timestamp or identity observation. Unselected JSON
+fields, array contents and native HTTP endpoint, method, query, headers and finite
+exchange consumption keep their existing comparisons.
 
-JWT fields support HS256, HS384, and HS512. These algorithms use a symmetric
-HMAC secret, not an asymmetric private key. The secret is resolved privately from
-an explicit existing Target startup environment or a declared read-only startup
-file. It never enters policy, plans, diagnostics, or Target request rewriting.
-Both Source and Target signatures must verify using the selected startup input;
-algorithm, signed headers, and stable claims must agree.
+Time and array ordering use the same global section:
 
-`exp` is required; `iat` and `nbf` retain their presence and types. Each timestamp
-must preserve its offset from its own physical dependency request start within
-the existing five-second bound. Historical Source tokens are evaluated at their
-recorded request clock, not at current wall time. No synthetic JSON timestamp
-anchor is required, and an authored `anchor` is rejected.
+```yaml
+json:
+  fields:
+    /requested_at: {kind: time, formats: [unix_seconds]}
+    /tools: {kind: unordered}
+```
 
-Optional explicit `nonces` use the existing typed UUID-v4/base64url nonce claims
-and staged case-local bijections. Without such a declaration every non-time
-claim remains exact. A failed field or unselected business-field difference
-commits neither bindings nor rule usage and cannot consume an exchange.
+Use unified `rule plan --file ... --evidence ...` and `rule apply`. The transaction
+checks the complete Source scope and protected Target observations, then requires
+a fresh Replay. Verified JWT fields require their explicitly declared startup
+signing profile; ordinary time/identity fields do not.
 
-Signature validation always reads the original signed bytes before identity
-normalization. After field validation, only the selected fields are masked in
-private comparison copies. Ordinary strict body matching and any nonoverlapping generic JSON time
-or unordered rules compare the remainder. This composes with existing native
-HTTP identity bindings. Overlapping ownership or incompatible body codecs are
-rejected before Replay.
-
-## Planning and verification
-
-Use the existing unified `rule plan --file ... --evidence ...` / `rule apply`
-transaction. Source preflight exercises the original complete body, validates
-every declared field, and freezes signing-input witnesses. Changed startup keys
-invalidate a pending plan. Source self-validation retains the obligation for a
-fresh genuine Target Replay; it cannot establish Target correctness.
-
-Recordings containing complete HTTP request bodies, dependency clocks, and the
-original startup signing input can be reused. Missing or truncated bodies and
-unavailable signing inputs remain evidence errors.
-
-Validation includes `cargo test http_json_jwt`, `cargo test http_body_jwt`, and
-`cargo test policy::native_compile::tests::http_request`.
+Native `http_request` effects retain transport-specific query and multipart
+contracts. Their former `json` field is rejected. Only the declared `api` request
+header/query/body positions authorize input time translation and re-signing;
+those positions reuse the existing strict native transformation owner.

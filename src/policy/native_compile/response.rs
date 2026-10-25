@@ -32,9 +32,6 @@ pub(super) fn validate_generated_response(value: &GeneratedResponse) -> Result<(
                             "decoded_bytes requires bounded base64 token"
                         );
                     }
-                    if let Some(binding) = &field.binding {
-                        identifier(binding, "template binding")?;
-                    }
                     Ok(())
                 })?;
             }

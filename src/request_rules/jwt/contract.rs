@@ -34,6 +34,20 @@ pub(crate) struct Nonce {
     pub target: String,
 }
 
+/// API response profiles prove fresh issuance. A carrier-independent format
+/// may also describe historical or not-yet-valid tokens stored as data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NumericDateMode {
+    Issued,
+    Format,
+}
+
+pub(crate) struct NumericDates {
+    pub(crate) time_validations: usize,
+    exp: [Option<i64>; 2],
+    iat: [Option<i64>; 2],
+}
+
 fn parse(value: &Value) -> Result<Token, Failure> {
     let raw = value.as_str().ok_or(Failure::Invalid)?;
     let token = Token::parse(raw)
@@ -84,46 +98,16 @@ pub(crate) fn compare_authenticated_claims(
     tolerance: i128,
     dynamic_claims: &[super::nonce::DynamicClaim],
 ) -> Result<Validated, Failure> {
-    if !(0..=5_000_000_000).contains(&tolerance) {
-        return Err(Failure::Time);
-    }
-    let integer = |value: &Value, name: &str| -> Result<Option<i64>, Failure> {
-        value
-            .get(name)
-            .map(|v| v.as_i64().ok_or(Failure::Time))
-            .transpose()
-    };
-    let iat = [integer(&source, "iat")?, integer(&target, "iat")?];
-    let mut time_validations = 0;
-    let exp = [integer(&source, "exp"), integer(&target, "exp")].map(|value| value.ok().flatten());
-    let [Some(source_exp), Some(target_exp)] = exp else {
+    let dates = compare_numeric_dates(
+        &mut source,
+        &mut target,
+        Some(anchors),
+        tolerance,
+        NumericDateMode::Issued,
+    )?;
+    let [Some(source_exp), Some(target_exp)] = dates.exp else {
         return Err(Failure::Time);
     };
-    for name in ["exp", "iat", "nbf"] {
-        let left = integer(&source, name)?;
-        let right = integer(&target, name)?;
-        if left.is_some() != right.is_some() || name == "exp" && left.is_none() {
-            return Err(Failure::Time);
-        }
-        if let (Some(left), Some(right)) = (left, right) {
-            time_validations += 1;
-            let [a, b] = anchors;
-            let left = i128::from(left) * 1_000_000_000;
-            let right = i128::from(right) * 1_000_000_000;
-            let source_offset = left.checked_sub(a).ok_or(Failure::Time)?;
-            let target_offset = right.checked_sub(b).ok_or(Failure::Time)?;
-            let source_latest = a.checked_add(tolerance).ok_or(Failure::Time)?;
-            let target_latest = b.checked_add(tolerance).ok_or(Failure::Time)?;
-            if target_offset.abs_diff(source_offset) > tolerance as u128
-                || name == "exp" && (left <= a || right <= b)
-                || name != "exp" && (left > source_latest || right > target_latest)
-            {
-                return Err(Failure::Time);
-            }
-            source.as_object_mut().ok_or(Failure::Invalid)?.remove(name);
-            target.as_object_mut().ok_or(Failure::Invalid)?.remove(name);
-        }
-    }
     let mut nonces = Vec::new();
     for claim in dynamic_claims {
         claim.validate().map_err(|_| Failure::Nonce)?;
@@ -160,8 +144,70 @@ pub(crate) fn compare_authenticated_claims(
     }
     Ok(Validated {
         nonces,
-        time_validations,
+        time_validations: dates.time_validations,
         exp: [source_exp, target_exp],
+        iat: dates.iat,
+    })
+}
+
+/// Only authenticated, header-checked claims may enter this projection. Removes
+/// the built-in time leaves after validation so the caller can compare all other
+/// claims with its own strictly bounded content strategy.
+pub(crate) fn compare_numeric_dates(
+    source: &mut Value,
+    target: &mut Value,
+    anchors: Option<[i128; 2]>,
+    tolerance: i128,
+    mode: NumericDateMode,
+) -> Result<NumericDates, Failure> {
+    if !(0..=5_000_000_000).contains(&tolerance) {
+        return Err(Failure::Time);
+    }
+    let integer = |value: &Value, name: &str| -> Result<Option<i64>, Failure> {
+        value
+            .get(name)
+            .map(|v| v.as_i64().ok_or(Failure::Time))
+            .transpose()
+    };
+    let iat = [integer(source, "iat")?, integer(target, "iat")?];
+    let mut time_validations = 0;
+    let exp = [integer(source, "exp")?, integer(target, "exp")?];
+    for name in ["exp", "iat", "nbf"] {
+        let left = integer(source, name)?;
+        let right = integer(target, name)?;
+        if left.is_some() != right.is_some()
+            || mode == NumericDateMode::Issued && name == "exp" && left.is_none()
+        {
+            return Err(Failure::Time);
+        }
+        if let (Some(left), Some(right)) = (left, right) {
+            time_validations += 1;
+            if mode == NumericDateMode::Format && left == right {
+                source.as_object_mut().ok_or(Failure::Invalid)?.remove(name);
+                target.as_object_mut().ok_or(Failure::Invalid)?.remove(name);
+                continue;
+            }
+            let [a, b] = anchors.ok_or(Failure::Time)?;
+            let left = i128::from(left) * 1_000_000_000;
+            let right = i128::from(right) * 1_000_000_000;
+            let source_offset = left.checked_sub(a).ok_or(Failure::Time)?;
+            let target_offset = right.checked_sub(b).ok_or(Failure::Time)?;
+            let source_latest = a.checked_add(tolerance).ok_or(Failure::Time)?;
+            let target_latest = b.checked_add(tolerance).ok_or(Failure::Time)?;
+            if target_offset.abs_diff(source_offset) > tolerance as u128
+                || mode == NumericDateMode::Issued
+                    && (name == "exp" && (left <= a || right <= b)
+                        || name != "exp" && (left > source_latest || right > target_latest))
+            {
+                return Err(Failure::Time);
+            }
+            source.as_object_mut().ok_or(Failure::Invalid)?.remove(name);
+            target.as_object_mut().ok_or(Failure::Invalid)?.remove(name);
+        }
+    }
+    Ok(NumericDates {
+        time_validations,
+        exp,
         iat,
     })
 }

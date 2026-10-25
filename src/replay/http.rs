@@ -41,6 +41,7 @@ use crate::DiscoveredTcpTarget;
 pub(crate) mod cross_case;
 mod evidence;
 mod identity;
+mod lifecycle;
 mod recording;
 pub(super) use evidence::register_global_exchange;
 pub(in crate::replay) mod request_headers;
@@ -86,6 +87,12 @@ pub(super) struct RecordedHttpExchange {
     response_stream: Option<crate::http::stream::ResponseStream>,
     #[serde(skip)]
     stream_delivery: Option<MatchedHttpExchangeReport>,
+    #[serde(skip)]
+    materialized_proxy_failure: bool,
+    #[serde(skip)]
+    cleanup_authorized: bool,
+    #[serde(skip)]
+    lifecycle_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     #[serde(default)]
     discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
     #[serde(default)]
@@ -127,6 +134,7 @@ pub(super) struct ReplayHttpExchange {
     record: RecordedHttpExchange,
     status: super::ReplayExchangeStatus,
     shared_origin: Option<cross_case::SharedOrigin>,
+    lifecycle_prefix: Option<Arc<crate::http::termination::PrefixDelivery>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -151,6 +159,8 @@ enum HttpReplayMatchError {
     Blackhole,
     BadGateway(String),
 }
+
+mod upstream_failure;
 
 #[derive(Debug, Default)]
 pub(super) struct HttpReplayEvents {
@@ -254,7 +264,11 @@ pub(super) fn register_http_exchange(
             Some(discovered.advertised_ip),
         )?;
     }
-    termination::validate_record(&record)?;
+    if record.cleanup_authorized {
+        lifecycle::validate_record(&record)?;
+    } else {
+        termination::validate_record(&record)?;
+    }
     let stream_mime = record
         .response_headers
         .as_ref()
@@ -294,11 +308,15 @@ pub(super) fn register_http_exchange(
         } else {
             decode_body(body)?.len()
         };
-        stream.validate(payload_len)?;
-        anyhow::ensure!(
-            record.error.is_none(),
-            "HTTP stream contains a capture error"
-        );
+        if record.cleanup_authorized {
+            stream.validate_prefix(payload_len)?;
+        } else {
+            stream.validate(payload_len)?;
+            anyhow::ensure!(
+                record.error.is_none(),
+                "HTTP stream contains a capture error"
+            );
+        }
     }
     let identity = identity_from_record(&record)?;
     let protocol = match identity.scheme {
@@ -331,6 +349,7 @@ pub(super) fn register_http_exchange(
         record,
         status: super::ReplayExchangeStatus::Available,
         shared_origin: None,
+        lifecycle_prefix: None,
     });
     Ok(())
 }
@@ -537,28 +556,41 @@ impl ReplayHttpExchange {
     }
 }
 
-fn http_request_mismatch_reason(
+/// Keep the already decoded body only when multipart may use it next.
+fn http_request_comparison(
     exchange: &ReplayHttpExchange,
     method: &Method,
     uri: &Uri,
     body: &[u8],
     ignored_query_params: &[String],
-) -> Option<String> {
+) -> (Option<String>, Option<Vec<u8>>) {
     if !exchange.record.method.eq_ignore_ascii_case(method.as_str()) {
-        return Some(format!(
-            "HTTP method mismatch: recorded {} actual {}",
-            exchange.record.method, method
-        ));
+        return (
+            Some(format!(
+                "HTTP method mismatch: recorded {} actual {}",
+                exchange.record.method, method
+            )),
+            None,
+        );
     }
     if let Some(reason) =
         uri_mismatch_reason(&exchange.record.uri, &uri.to_string(), ignored_query_params)
     {
-        return Some(reason);
+        return (Some(reason), None);
     }
     match decode_body(&exchange.record.request_body) {
-        Ok(recorded_body) if bodies_match(&recorded_body, body) => None,
-        Ok(_) => Some("HTTP request body did not match the recorded body".to_string()),
-        Err(error) => Some(format!("failed to decode recorded request body: {error}")),
+        Ok(recorded_body) => {
+            let mismatch = (!bodies_match(&recorded_body, body))
+                .then(|| "HTTP request body did not match the recorded body".to_string());
+            let multipart_body = (!exchange.record.request_body.truncated
+                && multipart::supports_headers(&exchange.record.request_headers))
+            .then_some(recorded_body);
+            (mismatch, multipart_body)
+        }
+        Err(error) => (
+            Some(format!("failed to decode recorded request body: {error}")),
+            None,
+        ),
     }
 }
 

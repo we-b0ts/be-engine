@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RedisRequestSelector {
-    #[serde(default)]
-    pub database: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<i64>,
     pub key: RedisValueKeySelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_contract: Option<super::key::KeyContract>,
@@ -216,7 +216,9 @@ impl TimeField {
 impl RedisRequestSelector {
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
-            self.database >= 0 && !self.commands.is_empty() && self.commands.len() <= 16,
+            self.database.is_none_or(|database| database >= 0)
+                && !self.commands.is_empty()
+                && self.commands.len() <= 16,
             "Redis request rules require a database and 1..16 commands"
         );
         self.key.validate()?;

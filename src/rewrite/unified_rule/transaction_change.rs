@@ -2,27 +2,34 @@
 use super::*;
 use serde_json::Value;
 
+fn generated(id: &str, api: &str) -> Value {
+    json!({"id":id,"match":{"api":api},"effect":{"kind":"response_generated",
+        "fields":{"/id":{"contract":{"kind":"uuid_v4"},"proof":{"source":"src/session.rs:12","fact":"Source creates a fresh UUID"}}}},
+        "proof":{"source":"src/session.rs:12","fact":"Source creates a fresh UUID"}})
+}
+
 fn fixture() -> Fixture {
-    Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
-        let mut other = super::super::rule();
-        other["id"] = json!("unrelated");
-        other["match"]["api"] = json!("GET /other");
+    let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v2","rules":[super::super::rule(),other]}),
+            json!({"format":"traffic-policy/v2",
+            "json":super::super::rule()["json"],
+            "rules":[generated("generated", "GET /api"),generated("unrelated", "GET /other")]}),
         );
         vec![]
-    })
+    });
+    fixture.replace_response_bodies(
+        br#"{"id":"11111111-1111-4111-8111-111111111111","members":[1,2],"business":"exact"}"#,
+        br#"{"id":"22222222-2222-4222-8222-222222222222","members":[2,1],"business":"exact"}"#,
+    );
+    fixture
 }
 
 fn proposal(fixture: &Fixture) {
-    let mut replacement = super::super::rule();
-    replacement["id"] = json!("members-merged");
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy-change/v1",
-        "replace_rules":["members"],
-        "policy":{"format":"traffic-policy/v2","rules":[replacement]}}),
+        json!({"format":"traffic-policy-change/v1","replace_rules":["generated"],
+        "policy":{"format":"traffic-policy/v2","rules":[generated("generated-merged", "GET /api")]}}),
     );
 }
 
@@ -37,11 +44,11 @@ fn explicit_replacement_is_atomic_preserves_unselected_rules_and_requires_replay
         assert_eq!(fs::read_to_string(fixture.policy()).unwrap(), original);
         assert_eq!(
             plan.traffic_e2e_report["replaced_rules"][0]["id"],
-            "members"
+            "generated"
         );
         assert_eq!(
             plan.traffic_e2e_report["expanded_rules"][0]["id"],
-            "members-merged"
+            "generated-merged"
         );
         assert_eq!(plan.traffic_e2e_report["verified"], false);
         if stale {
@@ -58,10 +65,14 @@ fn explicit_replacement_is_atomic_preserves_unselected_rules_and_requires_replay
             crate::policy::parse_policy(&fs::read_to_string(fixture.policy()).unwrap()).unwrap();
         assert_eq!(
             updated.rules.iter().map(PolicyRule::id).collect::<Vec<_>>(),
-            ["unrelated", "members-merged"]
+            ["unrelated", "generated-merged"]
         );
         let old = crate::policy::parse_policy(&original).unwrap();
-        assert_eq!(updated.rules[0], old.rules[1]);
+        assert_eq!(
+            crate::policy::native_semantics(updated.rules[0].as_native().unwrap()).unwrap(),
+            crate::policy::native_semantics(old.rules[1].as_native().unwrap()).unwrap()
+        );
+        assert!(updated.rules[0].proof().is_none());
     }
 }
 
@@ -74,7 +85,7 @@ fn replacement_cannot_hide_invalid_source_fields_or_unknown_owners() {
             serde_json::from_slice(&fs::read(&fixture.proposal).unwrap()).unwrap();
         match scenario {
             "invalid-field" => {
-                change["policy"]["rules"][0]["contract"] = json!({"/business":"unordered"})
+                change["policy"]["rules"][0]["effect"]["fields"] = json!({"/business":{"contract":{"kind":"uuid_v4"},"proof":{"source":"src/session.rs:12","fact":"Source UUID"}}})
             }
             "unknown" => change["replace_rules"] = json!(["missing"]),
             "foreign-api" => change["replace_rules"] = json!(["unrelated"]),
@@ -108,10 +119,9 @@ fn public_capture_consolidation_validates_the_replacements_before_consuming_them
         fs::write(project_path, serde_yaml::to_string(&project).unwrap()).unwrap();
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v2","source_revision":revision,"rules":[
+            json!({"format":"traffic-policy/v2","source_revision":revision,"json":super::super::rule()["json"],"rules":[
                 capture("capture-a", json!(["/api"])),
-                capture("capture-b", json!(["/other/*"])),
-                super::super::rule()
+                capture("capture-b", json!(["/other/*"]))
             ]}),
         );
         write(
@@ -179,7 +189,7 @@ fn public_capture_consolidation_validates_the_replacements_before_consuming_them
         crate::policy::parse_policy(&fs::read_to_string(fixture.policy()).unwrap()).unwrap();
     assert_eq!(
         updated.rules.iter().map(PolicyRule::id).collect::<Vec<_>>(),
-        ["capture-merged", "members"]
+        ["capture-merged"]
     );
     assert!(fixture.state().recording_refresh.is_some());
 }

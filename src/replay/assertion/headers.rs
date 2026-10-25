@@ -6,6 +6,7 @@ use super::model::{ResponseAssertionCaseReport, ResponseDifference, ResponseDiff
 use crate::http::response_headers::{STANDARD_RESPONSE_HEADERS, X_REQUEST_ID};
 use crate::recorder::HeaderMapSnapshot;
 pub(in crate::replay) mod date;
+mod global;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HeaderJwtCandidate {
@@ -13,16 +14,21 @@ pub struct HeaderJwtCandidate {
     pub jwt_candidate: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compare_with_rules(
     expected: Option<&HeaderMapSnapshot>,
     actual: Option<&HeaderMapSnapshot>,
     expected_request: Option<&HeaderMapSnapshot>,
     actual_request: Option<&HeaderMapSnapshot>,
     rules: &crate::replay::policy::response_headers::ResponseHeaderRules,
+    global: Option<&crate::policy::HttpPolicy>,
     times: super::time::RequestTimes,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
     compare_standard_headers(expected, actual, expected_request, actual_request, report)?;
+    if let Some(global) = global {
+        self::global::compare(expected, actual, global, times, report)?;
+    }
     let matching = rules
         .iter()
         .filter(|(api, _)| crate::replay::policy::response_headers::matches(api, &report.path))

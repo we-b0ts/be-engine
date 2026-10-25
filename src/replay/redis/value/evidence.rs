@@ -1,16 +1,13 @@
 //! Bounded mismatch witnesses; planning rechecks finalized Replay and immutable source.
 use super::super::{RedisReplayState, TargetConnection, TargetKey};
 use super::*;
+use crate::replay::assertion::protobuf;
 use crate::replay::{ReplaySource, command_matching::CommandExchangeScope};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{
-    fs,
-    io::{BufRead, BufReader},
-    path::Path,
-};
+use std::{fs, path::Path};
 const MAX_CANDIDATES: usize = 64;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -177,120 +174,5 @@ pub(crate) fn discover(report_path: &Path) -> Result<Value> {
         "does_not_prove": "Source evidence must establish unordered semantics and Protobuf element types; candidates do not change dependency ownership."}),
     )
 }
-pub(crate) fn verify(
-    source: &Path,
-    report_path: &Path,
-    selector: &RedisUnorderedSelector,
-) -> Result<Value> {
-    let evidence = discover(report_path)?;
-    ensure!(
-        evidence["omitted_candidates"] == 0,
-        "Redis unordered evidence is bounded; narrow and rerun Replay before planning"
-    );
-    let candidates: Vec<OrderCandidate> = serde_json::from_value(evidence["candidates"].clone())?;
-    let candidates = candidates
-        .into_iter()
-        .filter(|c| selector.selects(&c.selector))
-        .collect::<Vec<_>>();
-    ensure!(
-        !candidates.is_empty(),
-        "no verified Redis unordered candidate for this host, port, key and field; old reports require fresh Replay"
-    );
-    let (root, files) = crate::replay::recording_evidence::files(source)?;
-    let mut verified = vec![false; candidates.len()];
-    let mut records = Vec::new();
-    for file in files {
-        let source_case_id = crate::replay::recording_evidence::case_id(&file)?;
-        if !candidates
-            .iter()
-            .any(|c| c.source_case_id.as_deref().unwrap_or("Global") == source_case_id)
-        {
-            continue;
-        }
-        for (line, raw) in BufReader::new(fs::File::open(&file)?).lines().enumerate() {
-            let raw = raw?;
-            if raw.trim().is_empty() {
-                continue;
-            }
-            #[derive(Deserialize)]
-            struct Tag {
-                event_type: String,
-            }
-            let tag: Tag = serde_json::from_str(&raw).context("invalid dependency event")?;
-            if tag.event_type != "redis_exchange" {
-                continue;
-            }
-            let record: super::super::RecordedExchange = serde_json::from_str(&raw)?;
-            let fp = fingerprint(&record);
-            for (index, c) in candidates.iter().enumerate() {
-                if c.source_case_id.as_deref().unwrap_or("Global") != source_case_id
-                    || fp != c.recorded_exchange_fingerprint
-                {
-                    continue;
-                }
-                ensure!(
-                    record.replay_safe
-                        && !record.response.truncated
-                        && record.args.iter().all(|a| !a.truncated),
-                    "Redis unordered source is not replayable"
-                );
-                verify_source_selector(&record, c)?;
-                records.push(
-                    json!({"path": file.strip_prefix(&root)?, "line": line+1, "fingerprint": fp}),
-                );
-                verified[index] = true;
-            }
-        }
-    }
-    ensure!(
-        verified.iter().all(|v| *v),
-        "Redis unordered source evidence changed or is missing"
-    );
-    Ok(
-        json!({"candidates": candidates, "records": records, "evidence_revision": evidence["evidence_revision"]}),
-    )
-}
-fn verify_source_selector(
-    record: &super::super::RecordedExchange,
-    candidate: &OrderCandidate,
-) -> Result<()> {
-    let args = record
-        .args
-        .iter()
-        .map(super::super::RecordedCapture::decode)
-        .collect::<Result<Vec<_>>>()?;
-    let index = value_index(&record.command, &args)
-        .context("Redis source no longer contains a whole-string write")?;
-    ensure!(
-        candidate.command.eq_ignore_ascii_case(&record.command)
-            && candidate
-                .selector
-                .matches(&record.target_host, record.target_port, &args[0])
-            && record.response_kind != "error"
-            && record.outcome == crate::DependencyExchangeOutcome::Response,
-        "Redis unordered source selector or response is invalid"
-    );
-    match &candidate.selector.field {
-        RedisUnorderedField::Json { pointer } => {
-            let body = json::parse(&args[index])
-                .context("Redis unordered source JSON cannot be decoded")?;
-            ensure!(
-                body.pointer(pointer).is_some_and(Value::is_array),
-                "Redis unordered source array is missing"
-            );
-        }
-        field @ RedisUnorderedField::Protobuf { .. } => {
-            protobuf::compare_protobuf(
-                &args[index],
-                &args[index],
-                &[field.protobuf_rule().unwrap()],
-                &[],
-            )
-            .context("Redis unordered source Protobuf field/type is invalid")?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests;

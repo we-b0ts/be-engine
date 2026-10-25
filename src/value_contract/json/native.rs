@@ -13,6 +13,7 @@ pub(crate) struct NativeField<'a> {
     pub(crate) pointer: &'a str,
     pub(crate) contract: &'a GeneratedResponse,
     pub(crate) key: Option<&'a [u8]>,
+    pub(crate) global: Option<&'a crate::policy::CompiledJsonPolicy>,
 }
 
 /// A domain owner authenticates a leaf without mutating shared candidate state.
@@ -38,6 +39,7 @@ pub(crate) struct LeafContext<'a> {
 pub(crate) struct LeafObservations {
     pub(crate) time_validations: usize,
     pub(crate) nonces: Vec<NonceIdentity>,
+    pub(crate) identities: Vec<crate::value_contract::identities::IdentityPair>,
 }
 
 pub(crate) struct NonceIdentity {
@@ -64,6 +66,29 @@ pub(super) fn verify(
 ) -> Result<(), Difference> {
     let observed =
         (field.verifier)(context).map_err(|error| difference(context.source_pointer, &error))?;
+    for pair in &observed.identities {
+        let source = serde_json::from_str(&pair.source).map_err(|_| {
+            difference(
+                context.source_pointer,
+                "invalid authenticated identity scalar",
+            )
+        })?;
+        let target = serde_json::from_str(&pair.target).map_err(|_| {
+            difference(
+                context.source_pointer,
+                "invalid authenticated identity scalar",
+            )
+        })?;
+        decisions
+            .identities
+            .observe(&source, &target)
+            .map_err(|_| {
+                difference(
+                    context.source_pointer,
+                    "authenticated nonce bijection changed",
+                )
+            })?;
+    }
     for nonce in &observed.nonces {
         let values = decisions
             .nonces
@@ -97,13 +122,14 @@ pub(super) fn compare(
     clocks: AnchorClocks,
     decisions: &mut Decisions,
 ) -> Result<(), Difference> {
-    let comparison = crate::value_contract::generated::compare_value(
+    let mut comparison = crate::value_contract::generated::compare_value_global(
         source,
         target,
         field.contract,
         field.key,
         field.rule_id,
         clocks,
+        field.global,
     )
     .map_err(|error| {
         difference(
@@ -111,11 +137,19 @@ pub(super) fn compare(
             &format!("generated contract rejected value: {error:?}"),
         )
     })?;
+    if field.global.is_some()
+        && matches!(field.contract, GeneratedResponse::EncryptedJson { fields, .. } if fields.is_empty())
+    {
+        let context = serde_json::to_string(&(field.rule_id, pointer))
+            .expect("cipher occurrence context is serializable");
+        comparison.scope_schema_clocks_in(&context);
+    }
     merge(decisions, comparison).map_err(|error| difference(pointer, error))?;
     validate_relationships(decisions).map_err(|error| difference(pointer, &error.to_string()))
 }
 
 fn merge(decisions: &mut Decisions, comparison: Comparison) -> Result<(), &'static str> {
+    decisions.identities.merge(comparison.identities)?;
     decisions.evaluated.extend(comparison.evaluated);
     for (rule_id, count) in comparison.time_validations {
         *decisions.time_validations.entry(rule_id).or_default() += count;
@@ -173,6 +207,7 @@ mod tests {
             );
             Ok(LeafObservations {
                 time_validations: 0,
+                identities: vec![],
                 nonces: vec![NonceIdentity::new(
                     "/nonce".into(),
                     context.source.as_str().unwrap(),

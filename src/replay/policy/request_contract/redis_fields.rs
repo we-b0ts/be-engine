@@ -3,15 +3,21 @@ use super::*;
 use crate::policy::RedisContainer;
 use std::ops::Range;
 
+mod keys;
 mod native;
 mod projection;
 mod response;
 mod runtime;
+mod scalar;
+pub(super) use scalar::ScalarDelivery;
 mod time_copies;
+mod time_writes;
 pub(in crate::replay) use time_copies::PreparedRedisTimeRead;
 pub(crate) use time_copies::{
-    RedisTimeRead, redis_delivered_time_copies, redis_time_position, redis_time_write_proofs,
+    RedisTimeRead, redis_delivered_global_time_copies, redis_delivered_scalar_time_copies,
+    redis_time_position,
 };
+pub(in crate::replay) use time_writes::PreparedRedisTimeWrite;
 #[cfg(test)]
 mod tests;
 
@@ -92,6 +98,35 @@ pub(crate) fn redis_field_values<'a>(
         "LSET" => {
             ensure!(args.len() == 3, "LSET requires a key, index and value");
             push(List, 0, None, 2);
+        }
+        "EVAL" | "EVALSHA" => {
+            ensure!(args.len() >= 2, "{command} requires script and key count");
+            let keys = std::str::from_utf8(&args[1])
+                .context("Redis script key count is not UTF-8")?
+                .parse::<usize>()
+                .context("Redis script key count is invalid")?;
+            let start = keys
+                .checked_add(2)
+                .context("Redis script key count overflow")?;
+            ensure!(
+                start <= args.len(),
+                "Redis script key count exceeds arguments"
+            );
+            for index in start..args.len() {
+                if crate::json_value::parse(&args[index])
+                    .is_some_and(|value| value.is_object() || value.is_array())
+                {
+                    values.push(RedisFieldValue {
+                        container: String,
+                        key: if keys == 0 { &[] } else { &args[2] },
+                        hash_field: None,
+                        payload: Some(&args[index]),
+                        stored: false,
+                        argument: Some(index),
+                        response: None,
+                    });
+                }
+            }
         }
         _ => {}
     }

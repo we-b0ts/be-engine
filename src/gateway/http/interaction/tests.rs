@@ -250,9 +250,12 @@ async fn websocket_peer(listener: TcpListener, sid: &'static str) {
 async fn one_socket_records_overlapping_and_serial_ack_interactions_then_self_replays() {
     let temp = tempdir().unwrap();
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let state = AppState::new(config(temp.path(), upstream.local_addr().unwrap()))
-        .await
-        .unwrap();
+    let mut settings = config(temp.path(), upstream.local_addr().unwrap());
+    // This checks ACK causality, not the short idle deadline used by other
+    // fixtures. A fresh Target handshake may use its full one-second allowance
+    // before any business input becomes pending during parallel test execution.
+    settings.http_gateway.interaction.business_idle_ms = 1_000;
+    let state = AppState::new(settings).await.unwrap();
     let source = tokio::spawn(websocket_peer(upstream, "source"));
     let (address, recording) = gateway(state.clone()).await;
     let (mut client, _) = tokio_tungstenite::connect_async(format!(

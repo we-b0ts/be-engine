@@ -1,7 +1,6 @@
 use super::super::tests::{send_request, spawn_http_replay_with_policy, write_http_case};
 use super::*;
 use crate::replay::policy::test_fixture::ManagedFixtureDirectory as TempDir;
-use crate::{HttpUnorderedFeedback, plan_http_unordered};
 use serde_json::json;
 use std::{
     fs,
@@ -33,23 +32,11 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf) {
     (temp, case, policy)
 }
 
-fn feedback(case: &Path, policy: &Path, report: &Path) -> HttpUnorderedFeedback {
-    HttpUnorderedFeedback {
-        policy_path: policy.into(),
-        case_source: case.into(),
-        replay_report_path: report.into(),
-        rule_id: "erp-departments".into(),
-        selector: HttpUnorderedSelector {
-            host: HOST.into(),
-            port: 80,
-            method: "POST".into(),
-            path: "/membership".into(),
-            pointer: "/department_ids".into(),
-        },
-        source_evidence:
-            "service.py:216 membership: department IDs come from a set and results are keyed by ID"
-                .into(),
-    }
+fn install(policy: &Path, pointer: &str) {
+    let mut document = crate::policy::parse_policy(&fs::read_to_string(policy).unwrap()).unwrap();
+    let fields = &mut document.json.get_or_insert_with(Default::default).fields;
+    fields.insert(pointer.into(), crate::policy::GlobalField::Unordered);
+    crate::replay::write_policy_fixture(policy, serde_yaml::to_string(&document).unwrap()).unwrap();
 }
 
 async fn call(addr: SocketAddr, uri: &str, body: &str) -> Response<Incoming> {
@@ -94,16 +81,7 @@ async fn real_http_discovery_plan_apply_and_finite_replay() {
     for secret in ["private-identity", "recorded-members", "scope=one"] {
         assert!(!evidence.to_string().contains(secret));
     }
-    let error = plan_http_unordered(feedback(&case, &policy, &report))
-        .err()
-        .unwrap();
-    assert!(
-        error
-            .to_string()
-            .contains("legacy rule authoring is retired")
-    );
-    crate::replay::policy::test_fixture::install_http_unordered(feedback(&case, &policy, &report))
-        .unwrap();
+    install(&policy, "/department_ids");
     let text = fs::read_to_string(&policy).unwrap();
     assert!(text.contains("format: traffic-policy/v2"));
     assert!(!text.contains("query:"));
@@ -116,10 +94,9 @@ async fn real_http_discovery_plan_apply_and_finite_replay() {
         "recorded-members"
     );
     let report = serde_json::to_value(runtime.state.lock().await.snapshot_report()).unwrap();
-    let usage = &report["replay_policy"]["dependency_rules"][0];
-    assert_eq!(usage["id"], "erp-departments");
+    let usage = &report["replay_policy"]["global_formats"][0];
+    assert_eq!(usage["id"], "global.json");
     assert_eq!(usage["applicable"], true);
-    assert_eq!(usage["matches"], 1);
     assert_eq!(usage["validations"], 1);
     assert_eq!(
         report["replay_policy"]["unused_applicable_dependency_rule_ids"],
@@ -141,8 +118,7 @@ async fn unordered_keeps_query_presence_multiplicity_other_fields_and_array_cont
     let (temp, case, policy) = fixture().await;
     let report = temp.path().join("failed.json");
     failure_report(&case, &report).await;
-    crate::replay::policy::test_fixture::install_http_unordered(feedback(&case, &policy, &report))
-        .unwrap();
+    install(&policy, "/department_ids");
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec!["scope".into()], Some(policy), None).await;
     for (uri, body) in [
@@ -184,23 +160,9 @@ async fn unordered_keeps_query_presence_multiplicity_other_fields_and_array_cont
 }
 
 #[tokio::test]
-async fn stale_report_source_policy_and_missing_source_proof_cannot_apply() {
-    let (temp, case, policy) = fixture().await;
-    let report = temp.path().join("failed.json");
-    failure_report(&case, &report).await;
-    let mut no_proof = feedback(&case, &policy, &report);
-    no_proof.source_evidence.clear();
-    assert!(plan_http_unordered(no_proof).is_err());
-    let original = fs::read(&policy).unwrap();
-    let error = plan_http_unordered(feedback(&case, &policy, &report))
-        .err()
-        .unwrap();
-    assert!(
-        error
-            .to_string()
-            .contains("legacy rule authoring is retired")
-    );
-    assert_eq!(fs::read(&policy).unwrap(), original);
+async fn incomplete_discovery_keeps_fresh_replay_obligation() {
+    let (temp, _, _) = fixture().await;
+    let report = temp.path().join("incomplete.json");
     fs::write(
         &report,
         r#"{"finalized":true,"unmatched_http_requests":[{}]}"#,
@@ -210,7 +172,6 @@ async fn stale_report_source_policy_and_missing_source_proof_cannot_apply() {
         evidence::discover(&report).unwrap()["requires_fresh_replay"],
         true
     );
-    assert!(plan_http_unordered(feedback(&case, &policy, &report)).is_err());
 }
 
 #[test]
@@ -258,42 +219,20 @@ fn discovery_allows_separate_order_only_fields_without_treating_content_differen
 }
 
 #[tokio::test]
-async fn endpoint_and_schema_validation_reject_unreviewed_rule_expansion() {
-    let (temp, case, policy) = fixture().await;
-    let report = temp.path().join("failed.json");
-    failure_report(&case, &report).await;
-    for field in ["host", "port", "method", "path", "pointer"] {
-        let mut request = feedback(&case, &policy, &report);
-        match field {
-            "host" => request.selector.host = "another.example.test".into(),
-            "port" => request.selector.port = 81,
-            "method" => request.selector.method = "PUT".into(),
-            "path" => request.selector.path = "/another".into(),
-            _ => request.selector.pointer = "/ordered".into(),
-        }
-        assert!(plan_http_unordered(request).is_err(), "{field}");
-    }
-    crate::replay::policy::test_fixture::install_http_unordered(feedback(&case, &policy, &report))
-        .unwrap();
-    let original = fs::read_to_string(&policy).unwrap();
-    for invalid in [
-        original.replace("traffic-policy/v2", "traffic-policy/v1"),
-        original.replace("/department_ids:", "/bad~escape:"),
-        original.replace("path: /membership", "path: /membership*"),
-        original.replace(
-            "path: /membership",
-            "path: /membership\n    query: {nonce: {validate: uuid}}",
-        ),
+async fn schema_validation_rejects_unknown_formats_and_overlapping_global_paths() {
+    let (_temp, _case, policy) = fixture().await;
+    for fields in [
+        json!({"/bad~escape":{"kind":"unordered"}}),
+        json!({"/id":{"kind":"identity","formats":["unknown"]}}),
+        json!({"/groups/*/ids":{"kind":"unordered"},"/groups/0/ids":{"kind":"unordered"}}),
     ] {
-        fs::write(&policy, invalid).unwrap();
+        fs::write(
+            &policy,
+            json!({"format":"traffic-policy/v2","json":{"fields":fields}}).to_string(),
+        )
+        .unwrap();
         assert!(crate::validate_replay_policy(&policy).is_err());
     }
-    let mut loaded: Value = serde_yaml::from_str(&original).unwrap();
-    let mut duplicate = loaded["rules"][0].clone();
-    duplicate["id"] = json!("overlapping-rule");
-    loaded["rules"].as_array_mut().unwrap().push(duplicate);
-    fs::write(&policy, serde_yaml::to_string(&loaded).unwrap()).unwrap();
-    assert!(crate::validate_replay_policy(&policy).is_err());
 }
 
 #[tokio::test]
@@ -316,8 +255,7 @@ async fn a_rule_can_be_planned_for_one_path_while_another_unordered_path_still_b
     .unwrap();
     drop(state);
     task.abort();
-    let request = feedback(&case, &policy, &report);
-    crate::replay::policy::test_fixture::install_http_unordered(request.clone()).unwrap();
+    install(&policy, "/department_ids");
     let (addr, _, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy.clone()), None).await;
     assert_eq!(
@@ -325,10 +263,7 @@ async fn a_rule_can_be_planned_for_one_path_while_another_unordered_path_still_b
         StatusCode::BAD_GATEWAY
     );
     task.abort();
-    let mut second = request;
-    second.rule_id = "second-field".into();
-    second.selector.pointer = "/ordered".into();
-    crate::replay::policy::test_fixture::install_http_unordered(second).unwrap();
+    install(&policy, "/ordered");
     let (addr, _, task) = spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
     assert_eq!(call(addr, URI, &target).await.status(), StatusCode::OK);
     task.abort();

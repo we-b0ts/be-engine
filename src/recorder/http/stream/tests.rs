@@ -312,3 +312,75 @@ async fn cancellation_with_backpressure(flushed: bool) {
     source.abort();
     connection.abort();
 }
+
+#[tokio::test]
+async fn async_source_stop_retains_only_flushed_prefix_without_certifying_response_eof() {
+    for flushed in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = crate::AppConfig::default();
+        config.recording.output_dir = temp.path().join("recordings");
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+        config.async_api.insert(
+            "POST /responses".into(),
+            serde_json::from_value(serde_json::json!({
+                "when": {"/background":true}, "end":[{"redis":{"operation":"DEL","key":"done"}}]
+            }))
+            .unwrap(),
+        );
+        let state = AppState::new(config).await.unwrap();
+        let case = crate::recorder::CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "async-prefix".into(),
+            uri_group: None,
+        };
+        let guard = state.try_reserve_active_case(case.clone()).unwrap();
+        state.configure_case_observation(
+            case.id,
+            &hyper::Method::POST,
+            &"/responses".parse().unwrap(),
+            br#"{"background":true}"#,
+            Instant::now(),
+            std::time::Duration::ZERO,
+        );
+        state.activate_case_dependencies(&guard).unwrap();
+        let termination = ClientTermination::default();
+        let mut capture = Capture::new(context(&state, termination.clone()));
+        capture.bytes(b"prefix");
+        if flushed {
+            termination.delivery().flushed();
+        }
+        let drain_state = state.clone();
+        let case_id = case.id;
+        let draining =
+            tokio::spawn(async move { drain_state.drain_active_case_dependencies(case_id).await });
+        state.inner.active_cases.wait_for_quiescing().await;
+        termination.connection_observation().observe_engine_stop();
+        drop(capture);
+        let invalidation = draining.await.unwrap();
+        assert_eq!(invalidation.is_none(), flushed);
+        assert_eq!(state.active_case_invalidation(case.id).is_none(), flushed);
+        state
+            .recorder()
+            .flush_case_dependency_files(&state.recorder().case_staging_dir(&case))
+            .await
+            .unwrap();
+        let raw = tokio::fs::read_to_string(
+            state
+                .recorder()
+                .case_staging_dir(&case)
+                .join("dependencies.jsonl"),
+        )
+        .await
+        .unwrap();
+        let recorded: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(recorded["outcome"], "response");
+        assert_eq!(recorded["response_stream"]["complete"], false);
+        assert!(
+            recorded["error"]
+                .as_str()
+                .unwrap()
+                .contains("engine cleanup")
+        );
+    }
+}

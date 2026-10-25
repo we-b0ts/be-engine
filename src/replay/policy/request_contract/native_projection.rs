@@ -12,14 +12,9 @@ pub(in crate::replay::policy) fn sequence(
     rule: &n::NativeRule,
     effect: &n::RedisSequenceEffect,
 ) -> Result<config::RedisRequestSelector> {
-    let resource = rule
-        .selector
-        .resource
-        .as_ref()
-        .context("sequence resource is absent")?;
+    let resource = rule.selector.resource.as_ref();
     let selector = config::RedisRequestSelector {
-        database: resource.database.as_ref().and_then(crate::policy::Database::index)
-            .context("atomic Redis sequence requires an explicit database")?,
+        database: resource.and_then(|resource|resource.database.as_ref()).and_then(crate::policy::Database::index),
         key: super::super::native_projection::key(rule.selector.key.as_ref().context("sequence key is absent")?),
         key_contract: effect.key.as_ref().map(|value| key_contract(&value.contract)),
         commands: effect.commands.iter().map(|command| {
@@ -119,12 +114,7 @@ fn key_contract(value: &n::NativeKeyContract) -> key::KeyContract {
             separator: *separator,
             segment_index: *segment_index,
         },
-        n::NativeKeyContract::Capture {
-            binding,
-            template,
-            format,
-        } => key::KeyContract::Capture {
-            binding: binding.clone(),
+        n::NativeKeyContract::Capture { template, format } => key::KeyContract::Capture {
             template: template.clone(),
             format: match format {
                 n::KeyIdentityFormat::Hex { bytes } => key::KeyFormat::Hex { bytes: *bytes },
@@ -135,7 +125,6 @@ fn key_contract(value: &n::NativeKeyContract) -> key::KeyContract {
             },
         },
         n::NativeKeyContract::Reference(value) => key::KeyContract::Reference {
-            binding: value.binding.clone(),
             template: value.template.clone(),
             transform: transform(value.transform),
         },
@@ -144,7 +133,6 @@ fn key_contract(value: &n::NativeKeyContract) -> key::KeyContract {
 
 fn reference(value: &n::IdentityReference) -> key::IdentityReference {
     key::IdentityReference {
-        binding: value.binding.clone(),
         template: value.template.clone(),
         transform: transform(value.transform),
     }

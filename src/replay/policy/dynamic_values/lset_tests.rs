@@ -51,7 +51,7 @@ fn lset_conditional_capture_preserves_shape_index_bindings_and_unselected_fields
     assert_eq!(left["timestamp"], 1000);
     assert_eq!(right["timestamp"], 2000);
     assert_eq!(checked.source[1], b"-1");
-    runtime.commit("case", checked.decision);
+    runtime.commit("case", checked.decision).unwrap();
     assert!(
         runtime
             .redis(
@@ -127,7 +127,7 @@ fn lset_list_index_cannot_be_normalized_as_an_identity_reference() {
         )
         .unwrap()
         .unwrap();
-    runtime.commit("case", captured.decision);
+    runtime.commit("case", captured.decision).unwrap();
     let source = vec![
         b"blocks:7".to_vec(),
         b"0".to_vec(),

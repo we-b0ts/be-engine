@@ -84,7 +84,20 @@ impl RedisReplayState {
         if let Some(result) =
             self.request_preview(exchange, source, actual, original_source, original_actual)
         {
-            return result.is_ok();
+            return result
+                .and_then(|mut decision| {
+                    if let (Some(case), Some(normalized)) =
+                        (exchange.case_id.as_deref(), normalized.as_ref())
+                    {
+                        self.dynamic_values.join_identities(
+                            case,
+                            &normalized.decision,
+                            &mut decision,
+                        )?;
+                    }
+                    Ok(())
+                })
+                .is_ok();
         }
         if let Some(normalized) = normalized {
             let mut comparison = exchange.clone();
@@ -96,27 +109,22 @@ impl RedisReplayState {
     }
 
     fn arguments_match_plain(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
-        self.pubsub.matches(exchange, args).unwrap_or_else(|| {
-            self.publish_rules
-                .arguments_match(exchange, args)
-                .unwrap_or_else(|| {
-                    self.lock_tokens
-                        .arguments_match(exchange, &self.exchanges, args)
-                        .unwrap_or_else(|| {
-                            value::arguments_match(exchange, args, &self.value_rules)
-                        })
-                })
-        })
-    }
-
-    pub(in crate::replay) fn configure_lock_tokens(&mut self, rules: &[lock::LockTokenRule]) {
-        self.lock_tokens =
-            lock::LockTokens::prepare_scoped(&self.exchanges, rules, &self.request_contracts);
-    }
-    pub(in crate::replay) fn configure_publish(&mut self, rules: Vec<publish::PublishRule>) {
-        self.publish_rules
-            .configure_scope(self.request_contracts.clone());
-        self.publish_rules.configure(rules);
+        let normalized = match super::expiration::normalize(
+            &exchange.record.command,
+            &exchange.args,
+            args,
+            crate::value_contract::time::ClockPair {
+                source: exchange.record.started_at(),
+                target: self.request_observed_at,
+            },
+        ) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        let args = normalized.as_deref().unwrap_or(args);
+        self.pubsub
+            .matches(exchange, args)
+            .unwrap_or_else(|| value::arguments_match(exchange, args))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -301,26 +309,6 @@ impl RedisReplayState {
                         );
                     }
                 }
-                self.capture_publish_candidates(
-                    active_case_id,
-                    target,
-                    connection,
-                    resp_version,
-                    database,
-                    username,
-                    command,
-                    args,
-                );
-                self.capture_lock_candidates(
-                    active_case_id,
-                    target,
-                    connection,
-                    resp_version,
-                    database,
-                    username,
-                    command,
-                    args,
-                );
                 self.capture_value_candidates(
                     active_case_id,
                     target,
@@ -420,6 +408,21 @@ impl RedisReplayState {
         } else {
             None
         };
+        let time_write = if read_back_eligible {
+            self.request_contracts
+                .prepare_redis_time_write(
+                    &read_back_context,
+                    &exchange.args,
+                    args,
+                    &response,
+                    exchange.record.timestamp,
+                )
+                .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: format!("stored write provenance failed: {error:#}"),
+                })?
+        } else {
+            None
+        };
         let (read_back, read_back_write) = if read_back_eligible {
             (
                 self.request_contracts
@@ -444,16 +447,18 @@ impl RedisReplayState {
         };
         let unified_delivery = (exchange.record.outcome
             == crate::DependencyExchangeOutcome::Response)
-            .then_some(exchange.case_id.as_deref())
+            .then_some(active_case_id.or(exchange.case_id.as_deref()))
             .flatten()
             .and_then(|case| {
                 self.request_contracts.prepare_redis_delivery(
                     case,
+                    exchange.case_id.as_deref().unwrap_or(case),
                     target,
                     database,
                     username,
                     command,
                     &exchange.args,
+                    args,
                     &response,
                     exchange.record.timestamp,
                     self.request_observed_at,
@@ -466,27 +471,13 @@ impl RedisReplayState {
             .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: format!("response contract failed: {error:#}"),
             })?;
-        if read_back.is_some()
-            && (unified_delivery.is_some() || exchange.response_time_shift.is_some())
-        {
-            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
-                reason: "read_back cannot overlap another response delivery owner".into(),
-            });
-        }
-        if unified_delivery.is_some() && exchange.response_time_shift.is_some() {
-            return Err(CommandMatchDiagnostic::EvidenceUnavailable {
-                reason: "overlapping dependency delivery owners".into(),
-            });
-        }
         if unified_delivery.is_some()
             && (exchange.reusable_snapshot
-                || exchange.shared_rule_id.is_some()
                 || exchange.record.cache_snapshot_hit
                 || exchange.record.cache_snapshot_rule.is_some())
         {
             return Err(CommandMatchDiagnostic::EvidenceUnavailable {
-                reason: "value delivery rules cannot renew shared or snapshot response inventory"
-                    .into(),
+                reason: "value delivery rules cannot renew snapshot response inventory".into(),
             });
         }
         let mut rpc_exchange;
@@ -532,7 +523,7 @@ impl RedisReplayState {
         } else {
             comparison_args
         };
-        let request_decision = self
+        let mut request_decision = self
             .request_preview(
                 &normalized_exchange,
                 &normalized_exchange.args,
@@ -563,30 +554,43 @@ impl RedisReplayState {
         let response = read_back
             .as_ref()
             .map_or(response, |prepared| prepared.response.clone());
+        let mut identities = crate::replay::policy::request_contract::Decision::default();
+        if let (Some(case), Some(normalized)) = (exchange.case_id.as_deref(), normalized.as_ref()) {
+            self.dynamic_values
+                .join_identities(case, &normalized.decision, &mut identities)
+                .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: format!("native identity correspondence failed: {error:#}"),
+                })?;
+        }
+        if let Some(decision) = &mut request_decision
+            && let Some(identity) = decision.identity.take()
+        {
+            self.request_contracts
+                .merge_identity_decision(&mut identities, identity)
+                .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: format!("combined identity correspondence failed: {error:#}"),
+                })?;
+        }
+        self.request_contracts.commit(identities).map_err(|error| {
+            CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("identity correspondence commit failed: {error:#}"),
+            }
+        })?;
         self.request_contracts
             .commit_redis_read_back_write(read_back_write)
             .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: format!("read_back write commit failed: {error:#}"),
             })?;
-        let mut rule_ids = value::used_rules(&normalized_exchange, arguments, &self.value_rules);
+        let mut rule_ids = Vec::new();
         rule_ids.extend(exchange.read_commutation_rule.clone());
         if self.observations.is_refresh(index) {
             rule_ids.extend(exchange.observation_rule.clone());
         }
-        rule_ids.extend(self.lock_tokens.claim(&normalized_exchange, arguments));
-        if !request_decision
-            .as_ref()
-            .is_some_and(|(_, comparison)| comparison.is_some())
-        {
-            rule_ids.extend(self.publish_rules.claim(&normalized_exchange, arguments));
-        }
         if let (Some(case), Some(normalized)) = (exchange.case_id.as_deref(), normalized) {
-            self.dynamic_values.commit(case, normalized.decision);
+            self.dynamic_values
+                .commit_after_identities(case, normalized.decision);
         }
-        if let Some((decision, comparison)) = request_decision {
-            if let Some(comparison) = comparison {
-                rule_ids.extend(self.publish_rules.commit_json(comparison));
-            }
+        if let Some(decision) = request_decision {
             self.request_contracts.commit(decision).map_err(|error| {
                 CommandMatchDiagnostic::EvidenceUnavailable {
                     reason: format!("Redis resource relationship commit failed: {error:#}"),
@@ -608,7 +612,9 @@ impl RedisReplayState {
             };
         exchange.status = if exchange.reusable_snapshot || observation.is_some() {
             exchange.status
-        } else if exchange.timing.outcome().is_client_terminated() {
+        } else if exchange.timing.outcome().is_client_terminated()
+            && !exchange.record.lifecycle_cleanup
+        {
             ReplayExchangeStatus::AwaitingClientTermination
         } else {
             ReplayExchangeStatus::Responding
@@ -618,12 +624,11 @@ impl RedisReplayState {
             append: None,
             read_back,
             time_read,
-            request_started_at: self.request_observed_at,
+            time_write,
             unified_delivery,
             rpc_push: exchange.rpc_push,
             rpc_response,
             publish_duration_ms: exchange.record.duration_ms,
-            response_time_shift: exchange.response_time_shift.clone(),
             rule_ids,
             index,
             connection_id: exchange.record.connection_id,
@@ -669,7 +674,8 @@ impl RedisReplayState {
     ) -> Option<MatchedRedisExchange> {
         let index = match preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
-                && (exchange.record.response_kind == "error"
+                && (exchange.record.lifecycle_cleanup
+                    || exchange.record.response_kind == "error"
                     || exchange.record.outcome.termination().is_some()
                     || exchange.record.outcome.is_client_terminated())
                 && self
@@ -697,7 +703,9 @@ impl RedisReplayState {
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
         let exchange = &mut self.exchanges[index];
-        exchange.status = if exchange.timing.outcome().is_client_terminated() {
+        exchange.status = if exchange.timing.outcome().is_client_terminated()
+            && !exchange.record.lifecycle_cleanup
+        {
             ReplayExchangeStatus::AwaitingClientTermination
         } else {
             ReplayExchangeStatus::Responding
@@ -705,14 +713,13 @@ impl RedisReplayState {
         Some(MatchedRedisExchange {
             observation: None,
             append: None,
-            request_started_at: self.request_observed_at,
             unified_delivery: None,
             read_back: None,
             time_read: None,
+            time_write: None,
             rpc_push: None,
             rpc_response: None,
             publish_duration_ms: exchange.record.duration_ms,
-            response_time_shift: None,
             rule_ids: Vec::new(),
             index,
             connection_id: exchange.record.connection_id,

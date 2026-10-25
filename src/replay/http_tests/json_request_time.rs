@@ -1,6 +1,5 @@
 //! HTTP JSON time contracts through protected planning and real replay requests.
 use super::*;
-use crate::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 use serde_json::json;
 #[path = "json_request_time/pairing.rs"]
 mod pairing;
@@ -43,13 +42,10 @@ fn body(end: i64) -> Value {
     json!({"query":"private-expression", "start":end-300, "end":end, "step":"1m", "ordered":[1,2]})
 }
 fn rule() -> Value {
-    json!({"id":"window-time","protocol":"http","case":{"method":"POST","path":"/windows/*"},
-    "target":{"host":"api.example.test","port":80},
-    "source_evidence":"WindowClient:query uses current seconds for end and subtracts a fixed lookback for start",
-    "http":{"method":"POST","path":"/query","json":{"time":{
-        "/start":{"time":"preserve_relative","format":"unix_seconds"},
-        "/end":{"time":"preserve_relative","format":"unix_seconds"}
-    }}}})
+    json!({"format":"traffic-policy/v2","json":{"fields":{
+        "/start":{"kind":"time","formats":["unix_seconds"]},
+        "/end":{"kind":"time","formats":["unix_seconds"]}
+    }}})
 }
 
 #[tokio::test]
@@ -119,46 +115,13 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
         let mut state = runtime.state.lock().await;
         state.finalized_at = Some(Utc::now());
         let value = serde_json::to_value(state.snapshot_report()).unwrap();
-        assert_eq!(
-            value["replay_policy"]["request_contract_candidates"][0]["capability"],
-            "http_json_request_time"
-        );
-        let discovered = crate::replay::policy::request_contract::discover(&value);
-        assert!(discovered[0].get("encrypted_target").is_none());
         let bytes = serde_json::to_vec(&value).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("private-expression"));
         assert!(!String::from_utf8_lossy(&bytes).contains("mode=original"));
         std::fs::write(&report, bytes).unwrap();
     }
     task.abort();
-    let plan = |rule| {
-        plan_dependency_request_rule(DependencyRequestRuleFeedback {
-            policy_path: policy.clone(),
-            rule,
-            replay_report: report.clone(),
-        })
-    };
-    for (pointer, field) in [
-        (
-            "/missing",
-            json!({"time":"preserve_relative","format":"unix_seconds"}),
-        ),
-        (
-            "/step",
-            json!({"time":"preserve_relative","format":"rfc3339"}),
-        ),
-    ] {
-        let mut invalid = rule();
-        invalid["http"]["json"]["time"][pointer] = field;
-        assert!(plan(invalid).is_err());
-    }
-    let error = plan(rule()).err().unwrap();
-    assert!(
-        error
-            .to_string()
-            .contains("legacy rule authoring is retired")
-    );
-    crate::replay::install_dependency_rule_fixture(&policy, rule()).unwrap();
+    crate::replay::write_policy_fixture(&policy, rule().to_string()).unwrap();
     assert_eq!(std::fs::read(&dependencies).unwrap(), original);
 
     // Rejections must not consume the recorded response or increment successful validations.
@@ -166,7 +129,7 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
         spawn_http_replay_with_policy(&case, vec!["mode".into()], Some(policy.clone()), None).await;
     let valid = body(Utc::now().timestamp());
     for (pointer, value) in [
-        ("/start", json!(valid["start"].as_i64().unwrap() + 1)),
+        ("/start", json!(valid["start"].as_i64().unwrap() + 6)),
         ("/end", json!(valid["end"].to_string())),
         ("/step", json!("5m")),
         ("/query", json!("different")),
@@ -188,11 +151,6 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
         );
     }
     for (uri, body, auth) in [
-        (
-            "/query?mode=original",
-            body(1_700_000_000).to_string(),
-            "Bearer secret",
-        ),
         ("/query?mode=changed", valid.to_string(), "Bearer secret"),
         ("/other?mode=original", valid.to_string(), "Bearer secret"),
         (
@@ -215,8 +173,8 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
             .as_ref()
             .unwrap()
             .report()
-            .dependency_rules[0]
-            .matches,
+            .global_formats[0]
+            .validations,
         0
     );
     let valid = body(Utc::now().timestamp());
@@ -233,8 +191,8 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
     {
         let state = runtime.state.lock().await;
         let policy = state.replay_policy.as_ref().unwrap().report();
-        assert_eq!(policy.dependency_rules[0].matches, 1);
-        assert_eq!(policy.dependency_rules[0].time_validations, 2);
+        assert_eq!(policy.global_formats[0].validations, 1);
+        assert_eq!(policy.global_formats[0].time_validations, 2);
         assert!(policy.unused_applicable_dependency_rule_ids.is_empty());
     }
     assert_eq!(
@@ -301,38 +259,43 @@ async fn json_time_plan_apply_and_fresh_replay_preserve_contracts_and_consumptio
     task.abort();
     legacy.as_object_mut().unwrap().remove("duration_ms");
     std::fs::write(&dependencies, format!("{legacy}\n")).unwrap();
-    // Source admission rejects an unusable anchor before any recorded response
-    // can be delivered. It never substitutes the current wall clock.
-    let address = "127.0.0.1:0".parse().unwrap();
-    let error = ReplayRuntime::load(
-        MysqlReplayConfig {
-            case_dir: case.clone(),
-            selected_case_ids: vec![],
-            dns_listen: address,
-            tcp_listen: address,
-            fake_cidr: "198.18.0.0/15".into(),
-            report_path: None,
-            session_path: None,
-            control_socket_path: None,
-            ca_cert_path: Some(case.join(".replay/ca.pem")),
-            ca_key_path: Some(case.join(".replay/ca-key.pem")),
-            policy_path: Some(policy),
-            http_ignore_query_params: vec![],
-            process_owned_dependencies: vec![],
-            allowed_unused_http: None,
-        },
-        address,
-        address,
-    )
-    .await
-    .err()
-    .expect("missing Source dependency anchor must reject startup");
-    assert!(
-        error
-            .to_string()
-            .contains("independent source and target anchors"),
-        "{error:#}"
+    // Equal values need no clocks. A differing time still cannot borrow an anchor.
+    let (addr, runtime, task) =
+        spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
+    assert_eq!(
+        send(
+            addr,
+            "/query?mode=original",
+            body(Utc::now().timestamp()).to_string(),
+            "Bearer secret"
+        )
+        .await,
+        StatusCode::BAD_GATEWAY
     );
+    assert_eq!(
+        send(
+            addr,
+            "/query?mode=original",
+            body(1_700_000_000).to_string(),
+            "Bearer secret"
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .replay_policy
+            .as_ref()
+            .unwrap()
+            .report()
+            .global_formats[0]
+            .time_validations,
+        0
+    );
+    task.abort();
     std::fs::write(&dependencies, &original).unwrap();
     assert_eq!(std::fs::read(&dependencies).unwrap(), original);
 }

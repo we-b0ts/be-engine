@@ -335,7 +335,6 @@ pub(crate) struct FieldAnalysis {
     pub unresolved_database: bool,
     pub bindings: Vec<FieldBinding>,
     pub projections: Option<Vec<Option<FieldIdentity>>>,
-    columns: BTreeMap<String, Vec<usize>>,
     projection_labels: Option<Vec<String>>,
 }
 
@@ -347,31 +346,16 @@ impl FieldAnalysis {
             .ok()
             .map(|index| &self.bindings[index].field)
     }
-    pub(crate) fn for_column(&self, column: &str) -> impl Iterator<Item = &FieldBinding> {
-        self.columns
-            .get(&column.to_ascii_lowercase())
-            .into_iter()
-            .flatten()
-            .map(|index| &self.bindings[*index])
-    }
 }
 
 fn analyze_shape(shape: &str, database: Option<&str>) -> Option<FieldAnalysis> {
     let statement = parse(shape)?;
     let tables = statement_tables(&statement)?;
     let bindings = resolve_statement(&statement, &tables, database)?;
-    let mut columns = BTreeMap::<String, Vec<usize>>::new();
-    for (index, binding) in bindings.iter().enumerate() {
-        columns
-            .entry(binding.field.column.to_ascii_lowercase())
-            .or_default()
-            .push(index);
-    }
     Some(FieldAnalysis {
         unresolved_database: database.is_none()
             && tables.iter().any(|table| table.database.is_none()),
         bindings,
-        columns,
         projections: projection_statement(&statement, &tables, database),
         projection_labels: match &statement {
             Statement::Query(query) => match query.body.as_ref() {

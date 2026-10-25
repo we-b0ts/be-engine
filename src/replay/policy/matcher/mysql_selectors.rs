@@ -24,10 +24,7 @@ impl MysqlSelectors {
             let Some(mysql) = &rule.mysql else {
                 continue;
             };
-            let selector = if !mysql.params.is_empty()
-                || !mysql.sql_values.is_empty()
-                || !mysql.response_time_shift.is_empty()
-            {
+            let selector = if !mysql.params.is_empty() || !mysql.sql_values.is_empty() {
                 SqlSelector::Template(SqlValueTemplate::new(
                     &mysql.sql,
                     &mysql.tables,
@@ -77,7 +74,7 @@ impl MysqlSelectors {
             return false;
         };
         if !(mysql.command.eq_ignore_ascii_case(command)
-            || ((!mysql.sql_values.is_empty() || !mysql.response_time_shift.is_empty())
+            || (!mysql.sql_values.is_empty()
                 && matches!(command, "COM_QUERY" | "COM_STMT_EXECUTE")))
             || !rule_matches_target(rule, identity.target.as_ref())
             || mysql

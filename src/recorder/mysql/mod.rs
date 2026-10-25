@@ -136,25 +136,42 @@ async fn handle_mysql_connection(
     context: MysqlConnectionContext,
 ) -> Result<()> {
     let upstream_addr = context.upstream_addr.clone();
-    let upstream = match TcpStream::connect(&upstream_addr).await {
-        Ok(stream) => stream,
-        Err(err) => {
-            record_event_and_case_dependency(
+    let upstream =
+        if let Some((host, port)) = context.target_host.as_deref().zip(context.target_port) {
+            match crate::recorder::connect_failure::connect_upstream(
                 &state,
-                RecorderEvent::ProxyError(ProxyErrorEvent {
-                    id: Uuid::new_v4(),
-                    connection_id: None,
-                    timestamp: Utc::now(),
-                    protocol: "mysql".to_string(),
-                    client_addr: context.client_addr.clone(),
-                    target: Some(upstream_addr),
-                    error: err.to_string(),
-                }),
+                &client,
+                "mysql",
+                (host, port),
+                &upstream_addr,
             )
-            .await?;
-            return Err(err).context("failed to connect MySQL upstream");
-        }
-    };
+            .await
+            .context("failed to connect MySQL upstream")?
+            {
+                Some(stream) => stream,
+                None => return Ok(()),
+            }
+        } else {
+            match TcpStream::connect(&upstream_addr).await {
+                Ok(stream) => stream,
+                Err(error) => {
+                    record_event_and_case_dependency(
+                        &state,
+                        RecorderEvent::ProxyError(ProxyErrorEvent {
+                            id: Uuid::new_v4(),
+                            connection_id: None,
+                            timestamp: Utc::now(),
+                            protocol: "mysql".into(),
+                            client_addr: context.client_addr.clone(),
+                            target: Some(upstream_addr),
+                            error: error.to_string(),
+                        }),
+                    )
+                    .await?;
+                    return Err(error).context("failed to connect MySQL upstream");
+                }
+            }
+        };
 
     handle_connected_mysql(client, upstream, state, context).await
 }

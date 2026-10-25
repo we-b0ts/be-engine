@@ -30,7 +30,6 @@ pub(in crate::replay) struct NativeScopeGuard {
     pub selector: n::NativeMatch,
     pub when: Option<SourceCondition>,
     pub references: Vec<crate::policy::Resource>,
-    pub mysql_read_back: Vec<n::MysqlIdentityReadBack>,
 }
 
 #[derive(Debug)]
@@ -51,14 +50,6 @@ impl NativeScopeGuard {
                     .references
                     .iter()
                     .map(|reference| reference.contract.resource.clone())
-                    .collect(),
-                _ => vec![],
-            },
-            mysql_read_back: match &rule.effect {
-                n::NativeEffect::Identity(effect) => effect
-                    .mysql_read_back
-                    .iter()
-                    .map(|entry| entry.contract.clone())
                     .collect(),
                 _ => vec![],
             },
@@ -90,13 +81,15 @@ pub(in crate::replay) fn project_native(
     for compiled in rules {
         let rule = &compiled.rule;
         match &rule.effect {
+            n::NativeEffect::Identity(_) if n::is_key_only_read_back(rule) => {
+                // Key-only read state uses globally declared scalar identities
+                // and the causal write ledger, with no legacy capture model.
+            }
             n::NativeEffect::Identity(effect) => output
                 .document
                 .dynamic_values
                 .push(identity::project(rule, effect)?),
             n::NativeEffect::RedisSequence(_)
-            | n::NativeEffect::RedisLock
-            | n::NativeEffect::RedisPublishIdentity(_)
             | n::NativeEffect::HttpRequest(_)
             | n::NativeEffect::MysqlValues(_)
             | n::NativeEffect::FiniteSharing(_) => output
@@ -110,8 +103,7 @@ pub(in crate::replay) fn project_native(
             // Native protocol owners consume these typed effects directly.
             n::NativeEffect::RedisAppendStream
             | n::NativeEffect::RedisReadCommutation(_)
-            | n::NativeEffect::RedisExpiryRefresh(_)
-            | n::NativeEffect::HttpClientMetadata(_) => (),
+            | n::NativeEffect::RedisExpiryRefresh(_) => (),
             n::NativeEffect::InputJwt(effect) => input(&mut output, rule, effect)?,
             // The inbound runtime consumes this typed effect directly; no
             // legacy request-rule document represents custom signatures.
@@ -126,11 +118,20 @@ pub(in crate::replay) fn project_native(
 }
 
 fn dependency_rule(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
-    let resource = rule
-        .selector
-        .resource
-        .as_ref()
-        .context("native dependency has no resource")?;
+    let resource = rule.selector.resource.as_ref();
+    let protocol = resource
+        .map(|resource| resource.protocol)
+        .or(match &rule.effect {
+            n::NativeEffect::RedisSequence(_)
+            | n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Redis { .. }) => {
+                Some(crate::policy::Protocol::Redis)
+            }
+            n::NativeEffect::FiniteSharing(n::FiniteSharingEffect::Http) => {
+                Some(crate::policy::Protocol::Http)
+            }
+            _ => None,
+        })
+        .context("native dependency has no resource or protocol owner")?;
     Ok(ReplayDependencyRule {
         id: rule.id.clone(),
         when: condition(rule.when.as_ref()),
@@ -150,15 +151,17 @@ fn dependency_rule(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                 })
             })
             .transpose()?,
-        protocol: match resource.protocol {
+        protocol: match protocol {
             crate::policy::Protocol::Http => DependencyProtocol::Http,
             crate::policy::Protocol::Redis => DependencyProtocol::Redis,
             crate::policy::Protocol::Memcached => DependencyProtocol::Memcached,
             crate::policy::Protocol::Mysql => DependencyProtocol::Mysql,
         },
         target: TargetSelector {
-            host: Some(resource.endpoint.host.clone()),
-            port: Some(resource.endpoint.port),
+            host: resource
+                .map(|resource| resource.endpoint.host.clone())
+                .or_else(|| rule.selector.http_host.clone()),
+            port: resource.map(|resource| resource.endpoint.port),
         },
         mysql: None,
         http: None,
@@ -287,7 +290,10 @@ fn scalar(value: &crate::policy::SourceScalar) -> serde_json::Value {
     }
 }
 
-fn proof(value: &crate::policy::Proof) -> String {
+fn proof(value: Option<&crate::policy::Proof>) -> String {
+    let Some(value) = value else {
+        return String::new();
+    };
     use sha2::{Digest, Sha256};
     // The domain projection carries only a compact lookup certificate. Complete
     // inline proof remains in the compiled rule and every plan artifact.

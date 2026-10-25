@@ -73,7 +73,7 @@ fn recorded_read_back_source_policy_validates_without_changing_project_or_record
         };
         let entry = Proven {
             contract: RedisReadBack {
-                state_epochs: None,
+                state_epochs: false,
                 operation: "GET".into(),
                 write_operation: "SET".into(),
                 argument_index: 1,
@@ -128,4 +128,34 @@ fn recorded_read_back_source_policy_validates_without_changing_project_or_record
         assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
     assert_eq!(std::fs::read(&policy_path).unwrap(), policy_bytes);
+}
+
+#[test]
+fn key_only_read_back_source_preflight_requires_each_physical_endpoints_own_causal_write() {
+    let mut declaration = rule();
+    declaration["match"].as_object_mut().unwrap().remove("api");
+    declaration["match"]
+        .as_object_mut()
+        .unwrap()
+        .remove("resource");
+    declaration["effect"]["references"] = json!([]);
+    declaration["effect"]["read_back"][0]["state_epochs"] = json!(true);
+    let policy = compile(vec![declaration]);
+    let original = events();
+    assert!(check(&policy, &original).is_ok());
+    let mut foreign = original[1].clone();
+    foreign["id"] = json!(uuid::Uuid::new_v4());
+    foreign["target_host"] = json!("other.test");
+    foreign["connection_id"] = json!(uuid::Uuid::new_v4());
+    let mut missing_write = vec![original[0].clone(), foreign.clone()];
+    assert!(
+        check(&policy, &missing_write).is_err(),
+        "another physical endpoint cannot borrow the first endpoint's write"
+    );
+    let mut own_write = original[0].clone();
+    own_write["id"] = json!(uuid::Uuid::new_v4());
+    own_write["target_host"] = json!("other.test");
+    own_write["connection_id"] = foreign["connection_id"].clone();
+    missing_write.insert(1, own_write);
+    assert!(check(&policy, &missing_write).is_ok());
 }

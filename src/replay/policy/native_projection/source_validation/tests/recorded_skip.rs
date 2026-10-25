@@ -68,7 +68,7 @@ fn recorded_skip_source_contracts_validate_preserved_keys_and_independent_sessio
                     "resource":{"protocol":"redis","endpoint":format!("{}:{}",event["target_host"].as_str().unwrap(),event["target_port"]),
                         "database":event["database"],"username":event["username"]},
                     "key":{"kind":"affix","prefix":"wework_auth_session:"}},
-                    "effect":{"kind":"redis_sequence","key":{"kind":"capture","binding":"wework-session","template":"wework_auth_session:{value}","format":{"kind":"uuid_v4"}},
+                    "effect":{"kind":"redis_sequence","key":{"kind":"capture","template":"wework_auth_session:{value}","format":{"kind":"uuid_v4"}},
                     "commands":[{"operation":"SET","arguments":{"1":{"kind":"json","fields":{
                         "/poll_token":{"kind":"random","format":"base64url","length":43},
                         "/created_at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"},

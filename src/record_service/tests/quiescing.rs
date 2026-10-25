@@ -8,16 +8,22 @@ use std::path::{Path, PathBuf};
 #[test]
 #[ignore = "requires python3 and root or passwordless sudo for the fixed Source UID; no interception"]
 fn primary_stream_timeout_stops_source_and_archives_the_original_failure() {
-    runtime().block_on(exercise(false));
+    runtime().block_on(exercise(false, false));
 }
 
 #[test]
 #[ignore = "requires python3 and root or passwordless sudo for the fixed Source UID; no interception"]
 fn dependency_tail_deadline_stops_source_and_drains_a_dependency_that_never_replies() {
-    runtime().block_on(exercise(true));
+    runtime().block_on(exercise(true, false));
 }
 
-async fn exercise(tail_timeout: bool) {
+#[test]
+#[ignore = "requires python3 and root or passwordless sudo for the fixed Source UID; no interception"]
+fn async_case_deadline_stops_source_drains_original_io_and_completes_recording_normally() {
+    runtime().block_on(exercise(true, true));
+}
+
+async fn exercise(tail_timeout: bool, async_api: bool) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     super::super::source::prepare_fixed_identity().unwrap();
     let temp = tempfile::tempdir().unwrap();
@@ -78,7 +84,14 @@ async fn exercise(tail_timeout: bool) {
         source_address.to_string().into(),
         proxy_address.to_string().into(),
         dependency_address.to_string().into(),
-        if tail_timeout { "tail" } else { "primary" }.into(),
+        if async_api {
+            "async"
+        } else if tail_timeout {
+            "tail"
+        } else {
+            "primary"
+        }
+        .into(),
     ]);
     options.source_origin = format!("http://{source_address}");
     options.source_workdir = work;
@@ -102,6 +115,15 @@ async fn exercise(tail_timeout: bool) {
     config.mysql.enabled = false;
     config.http.enabled = tail_timeout;
     config.http.listen = proxy_address;
+    if async_api {
+        config.async_api.insert(
+            "POST /events".into(),
+            serde_json::from_value(serde_json::json!({
+                "when":{},"end":[{"mysql":{"sql":"UPDATE jobs SET status='completed' WHERE id=?"}}]
+            }))
+            .unwrap(),
+        );
+    }
     drop(sockets);
     let service = async {
         let mut forwards = super::super::kubernetes::PortForwards::default();
@@ -111,10 +133,12 @@ async fn exercise(tail_timeout: bool) {
     };
     let client = async {
         let mut client = connect(adapter_address).await;
-        client
-            .write_all(b"POST /events HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
-            .await
-            .unwrap();
+        let request = if async_api {
+            b"POST /events HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".as_slice()
+        } else {
+            b"POST /events HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".as_slice()
+        };
+        client.write_all(request).await.unwrap();
         let mut response = Vec::new();
         let result = client.read_to_end(&mut response).await;
         if let Err(error) = result {
@@ -131,7 +155,7 @@ async fn exercise(tail_timeout: bool) {
     })
     .await
     .expect("quarantine must stop the Source and finalize instead of keeping a fallback-only service alive");
-    assert!(outcome.is_err(), "a failed recording must return an error");
+    assert_eq!(outcome.is_ok(), async_api, "{outcome:?}");
     if let Some(dependency_task) = dependency_task {
         tokio::time::timeout(Duration::from_secs(2), dependency_task)
             .await
@@ -158,6 +182,49 @@ async fn exercise(tail_timeout: bool) {
     assert_eq!(runs.len(), 1);
     let report = read_json(&runs[0].join("recording-run.json"));
     assert_ne!(report["status"], "running");
+    if async_api {
+        assert_eq!(report["status"], "completed");
+        assert_eq!(report["published_cases"], 1);
+        assert_eq!(report["failed_cases"], 0);
+        let mut observations = Vec::new();
+        find_files(&runs[0], "async-api-observation.json", &mut observations);
+        assert_eq!(observations.len(), 1);
+        let observation = read_json(&observations[0]);
+        assert_eq!(observation["end_reason"], "timeout");
+        assert_eq!(observation["complete"], true);
+        let case = observations[0].parent().unwrap();
+        assert!(case.join("expected-response.json").exists());
+        assert!(!case.join("recording-error.json").exists());
+        let dependencies = std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap();
+        let terminated = dependencies
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|event| {
+                event["event_type"] == "http_exchange"
+                    && event["uri"]
+                        .as_str()
+                        .is_some_and(|uri| uri.ends_with("/never-replies"))
+            })
+            .unwrap();
+        assert_eq!(observation["source_stop_required"], true);
+        let reference = serde_json::json!({
+            "protocol": "http", "exchange_id": terminated["id"]
+        });
+        assert!(
+            observation["cleanup_refs"]
+                .as_array()
+                .unwrap()
+                .contains(&reference),
+            "Source stop cleanup must identify the exact original HTTP exchange"
+        );
+        assert!(
+            terminated["error"]
+                .as_str()
+                .is_some_and(|error| !error.is_empty())
+        );
+        assert!(terminated["response_status"].is_null());
+        return;
+    }
     assert_eq!(report["published_cases"], 0);
     assert_eq!(report["failed_cases"], 1);
     let mut errors = Vec::new();
@@ -268,13 +335,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         global dependency
         self.rfile.read(int(self.headers['Content-Length']))
-        if mode == 'tail':
+        if mode in ('tail', 'async'):
             host, port = proxy.split(':')
             dependency = socket.create_connection((host, int(port)))
             dependency.sendall(f'GET http://{upstream}/never-replies HTTP/1.1\r\nHost: {upstream}\r\nConnection: close\r\n\r\n'.encode())
             while not pathlib.Path('dependency-entered').exists():
                 time.sleep(0.001)
         self.send_response(200)
+        if mode == 'async':
+            self.send_header('Content-Length', '13')
+            self.end_headers()
+            self.wfile.write(b'data: ready\n\n')
+            self.wfile.flush()
+            return
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Transfer-Encoding', 'chunked')
         self.end_headers()

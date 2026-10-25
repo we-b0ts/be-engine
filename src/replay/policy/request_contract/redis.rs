@@ -55,7 +55,9 @@ impl RequestContracts {
                     target,
                     Some(&crate::policy::Database::Index(database)),
                     username,
-                ) && selector.database == database
+                ) && selector
+                    .database
+                    .is_none_or(|selected| selected == database)
                     && selector.commands.iter().any(|entry| {
                         entry.command == command
                             && entry.matches_identity(source)
@@ -127,7 +129,7 @@ impl RequestContracts {
             ..Default::default()
         };
         self.compare_key(
-            case,
+            context,
             rule,
             selector,
             source.first().context("source key missing")?,
@@ -161,15 +163,24 @@ impl RequestContracts {
                     }
                 }
                 Some(ArgumentRule::Time(field)) => {
-                    let source = serde_json::from_slice(source)?;
-                    let actual = serde_json::from_slice(actual)?;
-                    times.push(super::time::compare(
-                        &source,
-                        &actual,
-                        field,
-                        anchor(field),
-                    )?);
-                    decision.time_validations += 1;
+                    if super::time::automatic_redis(field) {
+                        if let Some(compared) =
+                            super::time::compare_wire_format(source, actual, field, anchor(field))?
+                        {
+                            times.push(compared);
+                            decision.time_validations += 1;
+                        }
+                    } else {
+                        let source = serde_json::from_slice(source)?;
+                        let actual = serde_json::from_slice(actual)?;
+                        times.push(super::time::compare(
+                            &source,
+                            &actual,
+                            field,
+                            anchor(field),
+                        )?);
+                        decision.time_validations += 1;
+                    }
                 }
                 Some(ArgumentRule::Json(fields)) => {
                     let mut source = crate::replay::json_order::parse(source)
@@ -208,7 +219,7 @@ impl RequestContracts {
                                 JsonField::Identity(reference) => self.compare_identity(
                                     case,
                                     rule,
-                                    selector.database,
+                                    context.database,
                                     &reference.identity,
                                     a.as_str()
                                         .context("source identity reference is not a string")?,
@@ -287,17 +298,24 @@ impl RequestContracts {
             "Redis resource field relationships changed: {:?}",
             resource_fields.differences
         );
-        decision.identity = Some(self.identity_decision(case, &resource_fields)?);
+        self.merge_identity_decision(
+            &mut decision,
+            self.identity_decision(case, &resource_fields)?,
+        )?;
         decision.ids.extend(resource_fields.evaluated);
         for (id, count) in resource_fields.time_validations {
             *decision.unified_time_validations.entry(id).or_default() += count;
         }
         if selector.commands.len() > 1 {
-            let key = (
-                case.into(),
-                rule.id.clone(),
-                config.key(source).context("Redis key is missing")?.to_vec(),
-            );
+            let key = SequenceKey {
+                case: case.into(),
+                rule: rule.id.clone(),
+                host: crate::replay::normalize_host(&context.target.host),
+                port: context.target.port,
+                database: context.database,
+                username: context.username.map(str::to_owned),
+                source_key: config.key(source).context("Redis key is missing")?.to_vec(),
+            };
             let previous = self
                 .state
                 .lock()

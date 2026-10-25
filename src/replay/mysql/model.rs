@@ -45,8 +45,6 @@ pub(in crate::replay) struct MatchedExchange {
     pub(in crate::replay) transaction_owner: Option<Option<String>>,
     pub(in crate::replay) value_delivery: Option<contracts::PreparedDelivery>,
     pub(in crate::replay) time_copy_delivery: Option<contracts::time_copies::PreparedRead>,
-    pub(in crate::replay) identity_delivery: Option<policy::dynamic_values::MysqlIdentityDelivery>,
-    pub(in crate::replay) response_time_shift_rules: Vec<String>,
     #[allow(dead_code)]
     pub(in crate::replay) source: ReplaySource,
     #[allow(dead_code)]
@@ -82,6 +80,8 @@ pub(in crate::replay) struct RecordedMysqlConnection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedMysqlExchange {
+    #[serde(skip)]
+    pub(in crate::replay) lifecycle_cleanup: bool,
     #[serde(default)]
     pub(in crate::replay) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(in crate::replay) server_status_before: Option<u16>,
@@ -171,6 +171,8 @@ pub(in crate::replay) struct RecordedMysqlValue {
 pub(in crate::replay) struct ReplayBodyCapture {
     pub(in crate::replay) encoding: String,
     pub(in crate::replay) data: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(in crate::replay) truncated: bool,
 }
 
 #[derive(Debug, Clone)]

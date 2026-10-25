@@ -1,8 +1,9 @@
 //! Post-match HTTP request-header auditing and protected difference evidence.
 use super::*;
+mod fingerprint;
+mod global;
 pub(in crate::replay) mod time_reference;
-pub(in crate::replay) mod timestamp;
-pub(crate) mod timestamp_evidence;
+pub(super) use global::preview as preview_global;
 
 const TRANSPORT_HEADERS: &[&str] = &[
     "host",
@@ -55,10 +56,6 @@ pub(in crate::replay) struct HeaderDifferenceReport {
     source_request_started_at: Option<chrono::DateTime<Utc>>,
     target_request_started_at: chrono::DateTime<Utc>,
     recorded_request_fingerprint: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rule_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    validation_error: Option<String>,
     expected: HeaderObservation,
     actual: HeaderObservation,
 }
@@ -69,10 +66,6 @@ struct HeaderObservation {
     #[serde(skip_serializing_if = "Option::is_none")]
     values: Option<Vec<String>>,
     protected: bool,
-}
-
-pub(in crate::replay) fn allows_timestamp_rule(name: &str) -> bool {
-    mode(name, &BTreeSet::new()) == Mode::Strict && !protected(name)
 }
 
 pub(super) fn capture(headers: &hyper::HeaderMap) -> HeaderSnapshot {
@@ -119,14 +112,6 @@ pub(in crate::replay) fn exact_contract_match(
 /// Match the native audit's acceptance modes. Body contracts cannot turn
 /// presence-only credentials or observational negotiation into exact values.
 pub(super) fn native_contract_match(expected: &HeaderSnapshot, actual: &HeaderSnapshot) -> bool {
-    native_contract_match_with_metadata(expected, actual, &BTreeMap::new())
-}
-
-pub(super) fn native_contract_match_with_metadata(
-    expected: &HeaderSnapshot,
-    actual: &HeaderSnapshot,
-    metadata: &BTreeMap<String, String>,
-) -> bool {
     let expected = normalized(expected);
     let actual = normalized(actual);
     let connection_headers = [&expected, &actual]
@@ -139,11 +124,7 @@ pub(super) fn native_contract_match_with_metadata(
     expected.keys().chain(actual.keys()).all(|name| {
         let before = expected.get(name);
         let after = actual.get(name);
-        match if metadata.contains_key(name) {
-            Mode::Observe
-        } else {
-            mode(name, &connection_headers)
-        } {
+        match mode(name, &connection_headers) {
             Mode::Ignore | Mode::Observe => true,
             Mode::Presence => before.is_some() == after.is_some(),
             Mode::SourcePresence => before.is_none() || after.is_some(),
@@ -226,36 +207,11 @@ impl ReplayState {
         actual: &HeaderSnapshot,
         request_started_at: chrono::DateTime<Utc>,
     ) {
+        let projected = global::audit_projection(self, exchange, actual, request_started_at);
+        let actual = projected.as_ref().unwrap_or(actual);
         let expected = normalized(&exchange.record.request_headers);
         let actual = normalized(actual);
         let source_time_reference = time_reference::source(&exchange.record);
-        let (rules, metadata) = self
-            .replay_policy
-            .as_ref()
-            .map(|policy| {
-                let context = crate::replay::policy::HttpPolicyContext {
-                    request_times: crate::replay::assertion::RequestTimes {
-                        source: source_time_reference,
-                        target: Some(request_started_at),
-                    },
-                    case_id: self.active_case_id.as_deref(),
-                    target: &exchange.identity.target,
-                    method: &exchange.record.method,
-                    recorded_uri: &exchange.record.uri,
-                    actual_uri: &exchange.record.uri,
-                };
-                let metadata = if exchange.source == ReplaySource::Case
-                    && exchange.case_id == self.active_case_id
-                    && exchange.shared_origin.is_none()
-                {
-                    policy.http_client_metadata_headers(&context)
-                } else {
-                    BTreeMap::new()
-                };
-                (policy.http_header_timestamp_rules(&context), metadata)
-            })
-            .unwrap_or_default();
-        let mut validated = Vec::new();
         let mut witness_fingerprint = None;
         let connection_headers = [&expected, &actual]
             .into_iter()
@@ -267,36 +223,16 @@ impl ReplayState {
         let names = expected
             .keys()
             .chain(actual.keys())
-            .chain(rules.keys())
             .collect::<BTreeSet<_>>();
         let target_event_index = self
             .http_events
             .matched_details
             .next_event_index(self.active_case_id.as_deref());
         for name in names {
-            let mode = if metadata.contains_key(name) {
-                Mode::Observe
-            } else {
-                mode(name, &connection_headers)
-            };
+            let mode = mode(name, &connection_headers);
             let recorded = expected.get(name);
             let sent = actual.get(name);
-            let time_rule = rules.get(name);
-            let time_result = time_rule.map(|(_, format)| {
-                timestamp::validate(
-                    *format,
-                    recorded.map(Vec::as_slice),
-                    sent.map(Vec::as_slice),
-                    crate::replay::assertion::RequestTimes {
-                        source: source_time_reference,
-                        target: Some(request_started_at),
-                    },
-                )
-            });
-            if let (Some((rule_id, _)), Some(Ok(()))) = (time_rule, &time_result) {
-                validated.push(rule_id.clone());
-            }
-            if mode == Mode::Ignore && time_rule.is_none() {
+            if mode == Mode::Ignore {
                 continue;
             }
             if mode == Mode::SourcePresence && (recorded.is_none() || sent.is_some()) {
@@ -305,33 +241,20 @@ impl ReplayState {
             let presence_differs = recorded.is_some() != sent.is_some();
             let unavailable = !presence_differs
                 && recorded.is_some_and(|values| values.iter().any(|v| v == "<redacted>"));
-            if recorded == sent
-                && !unavailable
-                && time_result.as_ref().is_none_or(|result| result.is_ok())
-            {
+            if recorded == sent && !unavailable {
                 continue;
             }
-            let dirty = time_result.as_ref().map_or_else(
-                || {
-                    !unavailable
-                        && (mode == Mode::Strict
-                            || mode == Mode::Presence && presence_differs
-                            || mode == Mode::SourcePresence && recorded.is_some() && sent.is_none())
-                },
-                |result| result.is_err(),
-            );
+            let dirty = !unavailable
+                && (mode == Mode::Strict
+                    || mode == Mode::Presence && presence_differs
+                    || mode == Mode::SourcePresence && recorded.is_some() && sent.is_none());
             if !dirty {
                 self.http_events.header_observation_count += 1;
                 if target_event_index >= crate::replay::report::SUCCESS_DETAIL_LIMIT {
                     continue;
                 }
             }
-            let validation_error = time_result.and_then(|result| result.err());
-            let kind = if validation_error.is_some() {
-                "header_timestamp_invalid"
-            } else if time_rule.is_some() {
-                "header_timestamp_validated"
-            } else if unavailable {
+            let kind = if unavailable {
                 "header_unavailable"
             } else if recorded.is_none() {
                 "header_added"
@@ -361,10 +284,7 @@ impl ReplayState {
                 method: exchange.record.method.clone(),
                 uri: uri_path_only(&exchange.record.uri),
                 header: name.clone(),
-                reason: match &validation_error {
-                    Some(error) => format!("{kind}: {name}: {error}"),
-                    None => format!("{kind}: {name}"),
-                },
+                reason: format!("{kind}: {name}"),
                 kind,
                 comparison: match mode {
                     Mode::Ignore => "ignore",
@@ -377,12 +297,8 @@ impl ReplayState {
                 source_request_started_at: source_time_reference,
                 target_request_started_at: request_started_at,
                 recorded_request_fingerprint: witness_fingerprint
-                    .get_or_insert_with(|| timestamp::recorded_fingerprint(&exchange.record))
+                    .get_or_insert_with(|| fingerprint::recorded_fingerprint(&exchange.record))
                     .clone(),
-                rule_id: time_rule
-                    .map(|(id, _)| id.clone())
-                    .or_else(|| metadata.get(name).cloned()),
-                validation_error,
                 expected,
                 actual,
             };
@@ -394,14 +310,6 @@ impl ReplayState {
             } else {
                 self.http_events.header_observations.push(report);
             }
-        }
-        if let Some(policy) = &mut self.replay_policy {
-            policy.commit_http_header_timestamps(&validated);
-            let observed = metadata
-                .into_iter()
-                .filter(|(name, _)| expected.contains_key(name) || actual.contains_key(name))
-                .collect();
-            policy.commit_http_client_metadata(&observed);
         }
     }
 }

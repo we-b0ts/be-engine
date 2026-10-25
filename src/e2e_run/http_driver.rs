@@ -138,6 +138,7 @@ pub(super) async fn capture_case(
     request_bytes: &[u8],
     actual_response_path: &Path,
     request_rules: Arc<RequestRuleRuntime>,
+    input_registration: (&Path, &str),
 ) -> Result<Vec<u8>> {
     let kind: RequestKind = serde_json::from_slice(request_bytes)?;
     if kind.protocol_version.is_some() {
@@ -159,6 +160,7 @@ pub(super) async fn capture_case(
         config.target_max_response_bytes,
     )
     .with_request_rule_runtime(request_rules)
+    .with_input_registration(input_registration.0, input_registration.1)
     .send_bytes(request_bytes, &request_path.display().to_string())
     .await?;
     let (encoding, data) = match std::str::from_utf8(&response.body) {

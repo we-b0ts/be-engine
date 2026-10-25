@@ -1,8 +1,5 @@
 use super::*;
 use crate::replay::ReplayState;
-use crate::{
-    RedisUnorderedFeedback, RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector,
-};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -112,24 +109,10 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
         "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
-    crate::replay::policy::test_fixture::install_redis_unordered(RedisUnorderedFeedback {
-        policy_path: policy.clone(),
-        case_source: case.clone(),
-        replay_report_path: report,
-        rule_id: "members".into(),
-        selector: RedisUnorderedSelector {
-            host: "redis.internal".into(),
-            port: 6379,
-            key: RedisValueKeySelector::Affix {
-                prefix: "members:".into(),
-                suffix: String::new(),
-            },
-            field: RedisUnorderedField::Json {
-                pointer: "/ids".into(),
-            },
-        },
-        source_evidence: "cache.py:42 membership IDs are constructed from a set".into(),
-    })
+    std::fs::write(
+        &policy,
+        "format: traffic-policy/v2\njson: {fields: {/ids: {kind: unordered}}}\n",
+    )
     .unwrap();
     let (addr, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
@@ -164,10 +147,12 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
         report["redis"]["unmatched"][0]["diagnostic"]["kind"],
         "lane_blocked"
     );
-    assert_eq!(report["replay_policy"]["dependency_rules"][0]["matches"], 1);
-    assert_eq!(
-        report["replay_policy"]["dependency_rules"][0]["validations"],
-        1
-    );
+    let usage = report["replay_policy"]["global_formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|format| format["id"] == "global.json")
+        .unwrap();
+    assert_eq!(usage["validations"], 1);
     task.abort();
 }

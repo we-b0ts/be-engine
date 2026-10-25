@@ -24,11 +24,12 @@ fn rule() -> CompiledNativeRule {
         id: "refresh-session".into(),
         selector: Default::default(),
         when: None,
-        proof: Proof {
+        proof: Some(Proof {
             source: "src/cache:refresh".into(),
             fact: "The process refreshes this exact key independently of APIs".into(),
-        },
+        }),
         effect: n::NativeEffect::ProcessOwned(n::ProcessOwnedEffect {
+            task_name: None,
             source_revision: String::new(),
             origin: None,
             selector: n::ProcessSelector::Redis {

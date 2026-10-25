@@ -8,57 +8,15 @@ use crate::policy::{TimeAnchor, TimeRelation, TimestampFormat};
 pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
     let mut projected = dependency_rule(rule)?;
     let selector = &rule.selector;
-    let resource = selector
-        .resource
-        .as_ref()
-        .context("dependency resource is absent")?;
+    let resource = selector.resource.as_ref();
     match &rule.effect {
         n::NativeEffect::RedisSequence(effect) => {
             projected.redis = Some(r::RedisSelector::Requests(
                 super::super::request_contract::native_projection::sequence(rule, effect)?,
             ));
-            projected.source_evidence = proof(&rule.proof);
-        }
-        n::NativeEffect::RedisLock => {
-            projected.redis = Some(r::RedisSelector::Lock(r::RedisLockConfig {
-                lock: r::RedisLockField {
-                    key: key(selector.key.as_ref().context("lock key is absent")?),
-                    source_evidence: proof(&rule.proof),
-                },
-            }))
-        }
-        n::NativeEffect::RedisPublishIdentity(effect) => {
-            projected.redis = Some(r::RedisSelector::Publish(r::RedisPublishConfig {
-                publish: r::RedisPublishField {
-                    channel: selector
-                        .key
-                        .as_ref()
-                        .and_then(n::NativeKeySelector::exact)
-                        .context("publisher channel is absent")?
-                        .into(),
-                    uuid_index: effect.uuid_index,
-                    uuid_field: effect.uuid_field.clone(),
-                    source_evidence: proof(&rule.proof),
-                },
-            }))
+            projected.source_evidence = proof(rule.proof.as_ref());
         }
         n::NativeEffect::HttpRequest(effect) => {
-            let mut headers = BTreeMap::new();
-            for (name, time) in &effect.headers {
-                ensure!(
-                    time.contract.anchor == TimeAnchor::DependencyRequestStart
-                        && time.contract.relation == TimeRelation::RequestWindow
-                        && time.contract.clock_group.is_none(),
-                    "HTTP header timestamps require the independent dependency request window"
-                );
-                headers.insert(
-                    name.clone(),
-                    super::super::http_headers::HttpHeaderRule::Timestamp {
-                        format: response_format(time.contract.format)?,
-                        source_evidence: proof(&time.proof),
-                    },
-                );
-            }
             projected.http = Some(c::HttpSelector {
                 multipart: effect.multipart_boundary.then_some(
                     super::super::request_contract::config::MultipartRule {
@@ -66,13 +24,6 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                             super::super::request_contract::config::NormalizeBoundary::Normalize,
                     },
                 ),
-                headers,
-                json: super::super::http_json::HttpJsonRules {
-                    fields: effect.json.iter().map(|(pointer, field)| {
-                        (pointer.clone(), field.contract.clone())
-                    }).collect(),
-                    ..Default::default()
-                },
                 method: selector
                     .operation
                     .clone()
@@ -105,13 +56,14 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
             });
         }
         n::NativeEffect::MysqlValues(effect) => {
+            let resource = resource.context("MySQL dependency resource is absent")?;
             let sql_values = effect
                 .values
                 .iter()
                 .map(|(index, value)| {
                     let value = match &value.contract {
                         n::SqlValueContract::Time(time) => {
-                            c::MysqlTimeValueRule::Scalar(mysql_time(time, &value.proof)?)
+                            c::MysqlTimeValueRule::Scalar(mysql_time(time, value.proof.as_ref())?)
                         }
                         n::SqlValueContract::Json { fields } => c::MysqlTimeValueRule::Json(
                             fields
@@ -119,34 +71,13 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                                 .map(|(pointer, value)| {
                                     Ok((
                                         pointer.clone(),
-                                        mysql_time(&value.contract, &value.proof)?,
+                                        mysql_time(&value.contract, value.proof.as_ref())?,
                                     ))
                                 })
                                 .collect::<Result<_>>()?,
                         ),
                     };
                     Ok((*index, value))
-                })
-                .collect::<Result<_>>()?;
-            let response_time_shift = effect
-                .response_time
-                .iter()
-                .map(|(name, value)| {
-                    ensure!(
-                        value.contract.time.anchor == TimeAnchor::DependencyRequestStart
-                            && value.contract.time.relation == TimeRelation::PreserveOffset
-                            && value.contract.time.format == TimestampFormat::SqlDatetime
-                            && value.contract.time.clock_group.is_none(),
-                        "MySQL delivery time preserves dependency-request-relative offsets"
-                    );
-                    Ok((
-                        name.clone(),
-                        c::mysql_response::MysqlResponseTimeField {
-                            time: c::TimeReference::PreserveRelative,
-                            format: c::mysql_response::MysqlResponseTimeFormat::MysqlDatetime,
-                            preserve_values: value.contract.preserve_values.clone(),
-                        },
-                    ))
                 })
                 .collect::<Result<_>>()?;
             projected.mysql = Some(c::MysqlSelector {
@@ -173,21 +104,15 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                     .map(|(index, value)| Ok((*index, generated(&value.contract)?)))
                     .collect::<Result<_>>()?,
                 sql_values,
-                response_time_shift,
             });
-            if !effect.response_time.is_empty() {
-                projected.source_evidence = proof(&rule.proof);
-            }
         }
         n::NativeEffect::FiniteSharing(effect) => {
             projected.replay_scope = ReplayScope::RecordingRun;
-            projected.source_evidence = proof(&rule.proof);
+            projected.source_evidence = proof(rule.proof.as_ref());
             match effect {
                 n::FiniteSharingEffect::Http => {
                     projected.http = Some(c::HttpSelector {
                         multipart: None,
-                        headers: BTreeMap::new(),
-                        json: super::super::http_json::HttpJsonRules::default(),
                         method: selector
                             .operation
                             .clone()
@@ -199,31 +124,16 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                         query: BTreeMap::new(),
                     })
                 }
-                n::FiniteSharingEffect::Redis {
-                    hash_field,
-                    response_time,
-                } => {
-                    let response_json=response_time.iter().map(|(pointer,time)| {
-                        ensure!(time.contract.anchor==TimeAnchor::DependencyRequestStart && time.contract.relation==TimeRelation::PreserveOffset && time.contract.clock_group.is_none(),"shared Redis delivery uses a dependency-request offset");
-                        let format=match time.contract.format {
-                            TimestampFormat::UnixSeconds=>crate::replay::redis::time_shift::RedisTimestampFormat::UnixSeconds,
-                            TimestampFormat::UnixMilliseconds=>crate::replay::redis::time_shift::RedisTimestampFormat::UnixMilliseconds,
-                            TimestampFormat::Rfc3339=>crate::replay::redis::time_shift::RedisTimestampFormat::Rfc3339,
-                            _=>anyhow::bail!("shared Redis delivery timestamp format is unsupported"),
-                        };
-                        Ok((pointer.clone(),crate::replay::redis::time_shift::RelativeTimeField {time:crate::replay::redis::time_shift::RelativeTime::PreserveRelative,format}))
-                    }).collect::<Result<_>>()?;
-                    projected.redis = Some(r::RedisSelector::TimeShift(
-                        crate::replay::redis::time_shift::RedisTimeShiftRead {
+                n::FiniteSharingEffect::Redis { hash_field } => {
+                    projected.redis = Some(r::RedisSelector::SharedRead(
+                        crate::replay::redis::shared_read::RedisSharedRead {
                             command: selector
                                 .operation
                                 .clone()
                                 .context("shared Redis command is absent")?,
                             database: resource
-                                .database
-                                .as_ref()
-                                .and_then(crate::policy::Database::index)
-                                .context("shared Redis database is absent")?,
+                                .and_then(|resource| resource.database.as_ref())
+                                .and_then(crate::policy::Database::index),
                             key: key(selector
                                 .key
                                 .as_ref()
@@ -233,7 +143,6 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                                     value: field.clone(),
                                 }
                             }),
-                            response_json,
                         },
                     ));
                 }
@@ -254,30 +163,28 @@ pub(in crate::replay::policy) fn generated(
         time: None,
     };
     match value {
-        n::GeneratedValue::Bind { binding } => result.bind = Some(binding.clone()),
-        n::GeneratedValue::Uuid { binding } => {
+        n::GeneratedValue::Uuid {} => {
             result.validate = Some(c::ValueValidator::Uuid);
-            result.bind = binding.clone();
+            result.bind = Some("automatic".into());
         }
-        n::GeneratedValue::UuidV4 { binding } => {
+        n::GeneratedValue::UuidV4 {} => {
             result.validate = Some(c::ValueValidator::UuidV4);
-            result.bind = binding.clone();
+            result.bind = Some("automatic".into());
         }
-        n::GeneratedValue::NonEmpty { binding } => {
-            result.bind = binding.clone();
+        n::GeneratedValue::NonEmpty {} => {
+            result.bind = Some("automatic".into());
             result.validate = Some(c::ValueValidator::NonEmpty);
         }
-        n::GeneratedValue::Reference { binding } => result.reference = Some(binding.clone()),
-        n::GeneratedValue::Time(_) => anyhow::bail!(
-            "typed time contracts use MySQL values or value codecs, not params/query generated-value bindings"
-        ),
+        n::GeneratedValue::Time(_) => {
+            anyhow::bail!("typed time contracts use MySQL values or value codecs")
+        }
     }
     Ok(result)
 }
 
 fn mysql_time(
     value: &n::NativeTime,
-    source: &crate::policy::Proof,
+    source: Option<&crate::policy::Proof>,
 ) -> Result<c::MysqlTimeFieldRule> {
     ensure!(
         value.anchor == TimeAnchor::DependencyRequestStart,

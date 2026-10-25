@@ -55,7 +55,7 @@ pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
                 .iter()
                 .map(|member| Proven {
                     contract: mysql(member),
-                    proof: proof.clone(),
+                    proof: Some(proof.clone()),
                 })
                 .collect(),
         },
@@ -101,7 +101,7 @@ pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
                         argv_count: script.argv_count,
                         identity_argv_index: script.identity_argv_index,
                     },
-                    proof: proof.clone(),
+                    proof: Some(proof.clone()),
                 }),
                 initial_load_timeout_ms: *initial_load_timeout_ms,
                 fields: fields.clone(),
@@ -132,6 +132,7 @@ pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
     Ok(super::rule(
         value.name().into(),
         n::NativeEffect::ProcessOwned(n::ProcessOwnedEffect {
+            task_name: None,
             source_revision: revision,
             selector,
             origin,

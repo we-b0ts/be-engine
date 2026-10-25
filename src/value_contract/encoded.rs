@@ -9,28 +9,6 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
-pub(crate) fn materialize(
-    source: &[u8],
-    rules: &[&CompiledRule],
-    clocks: AnchorClocks,
-) -> Result<Vec<u8>> {
-    let codec = prepared_codec(rules)?;
-    let decoded = codec.decode(source)?;
-    materialize_decoded(&decoded, rules, clocks)
-}
-
-pub(crate) fn materialize_decoded(
-    decoded: &DecodedValue,
-    rules: &[&CompiledRule],
-    clocks: AnchorClocks,
-) -> Result<Vec<u8>> {
-    let translated = crate::value_contract::delivery::materialize(&decoded.logical, rules, clocks)?;
-    let allowed = rules
-        .iter()
-        .flat_map(|rule| rule.delivery_time.keys().cloned())
-        .collect::<Vec<_>>();
-    decoded.encode(&translated, &allowed)
-}
 pub(crate) fn merged_codec(rules: &[&CompiledRule]) -> Result<Codec> {
     let mut codec = rules
         .first()

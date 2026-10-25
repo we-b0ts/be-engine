@@ -97,6 +97,29 @@ pub(super) async fn deliver_matched(
     mut matched: MatchedExchange,
     row_encoding: ResultRowEncoding,
 ) -> Result<SessionDirective> {
+    if matched.record.lifecycle_cleanup {
+        match super::lifecycle::deliver(
+            stream,
+            &state,
+            &matched,
+            session.request_started,
+            row_encoding,
+        )
+        .await
+        {
+            Ok(()) => {
+                state.lock().await.complete_exchange(&matched);
+                return Ok(SessionDirective::ClientTerminated);
+            }
+            Err(error) => {
+                state
+                    .lock()
+                    .await
+                    .fail_exchange(&matched, &session.identity(), &error.to_string());
+                return Err(error);
+            }
+        }
+    }
     if matched.timing.outcome().is_client_terminated()
         || matched.timing.outcome().is_server_terminated()
     {
@@ -141,27 +164,18 @@ pub(super) async fn deliver_matched(
 
     matched.timing.delay_response().await;
     let rendered_at = Utc::now();
+    let mut delivered_identities = None;
     if let Some(prepared) = &matched.value_delivery {
         match prepared.render(rendered_at) {
-            Ok(response) => matched.record.response = response,
+            Ok((response, identities)) => {
+                matched.record.response = response;
+                delivered_identities = identities;
+            }
             Err(error) => {
                 state.lock().await.fail_exchange(
                     &matched,
                     &session.identity(),
                     &format!("SQL response contract: {error:#}"),
-                );
-                return Err(error);
-            }
-        }
-    }
-    if let Some(prepared) = &matched.identity_delivery {
-        match prepared.render(&matched.record.response) {
-            Ok(response) => matched.record.response = response,
-            Err(error) => {
-                state.lock().await.fail_exchange(
-                    &matched,
-                    &session.identity(),
-                    &format!("SQL identity delivery: {error:#}"),
                 );
                 return Err(error);
             }
@@ -222,23 +236,13 @@ pub(super) async fn deliver_matched(
             &policy.request_contracts,
             &matched.record.response,
             rendered_at,
+            delivered_identities,
         )
     {
         replay.fail_exchange(
             &matched,
             &session.identity(),
             &format!("SQL response witness: {error:#}"),
-        );
-        return Err(error);
-    }
-    if let (Some(prepared), Some(policy)) =
-        (&matched.identity_delivery, replay.replay_policy.as_ref())
-        && let Err(error) = prepared.commit(&policy.dynamic_values, &matched.record.response)
-    {
-        replay.fail_exchange(
-            &matched,
-            &session.identity(),
-            &format!("SQL identity delivery witness: {error:#}"),
         );
         return Err(error);
     }

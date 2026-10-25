@@ -9,7 +9,6 @@ pub enum ClockScope {
     Shared,
     ArrayElement,
     Entity {
-        binding: String,
         relative_pointer: String,
     },
 }
@@ -18,10 +17,7 @@ pub enum ClockScope {
 #[serde(untagged, deny_unknown_fields)]
 enum ScopeDocument {
     Named(ScopeName),
-    Entity {
-        binding: String,
-        relative_pointer: String,
-    },
+    Entity { relative_pointer: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -36,13 +32,7 @@ impl From<ScopeDocument> for ClockScope {
         match value {
             ScopeDocument::Named(ScopeName::Shared) => Self::Shared,
             ScopeDocument::Named(ScopeName::ArrayElement) => Self::ArrayElement,
-            ScopeDocument::Entity {
-                binding,
-                relative_pointer,
-            } => Self::Entity {
-                binding,
-                relative_pointer,
-            },
+            ScopeDocument::Entity { relative_pointer } => Self::Entity { relative_pointer },
         }
     }
 }
@@ -52,13 +42,7 @@ impl From<ClockScope> for ScopeDocument {
         match value {
             ClockScope::Shared => Self::Named(ScopeName::Shared),
             ClockScope::ArrayElement => Self::Named(ScopeName::ArrayElement),
-            ClockScope::Entity {
-                binding,
-                relative_pointer,
-            } => Self::Entity {
-                binding,
-                relative_pointer,
-            },
+            ClockScope::Entity { relative_pointer } => Self::Entity { relative_pointer },
         }
     }
 }
@@ -78,18 +62,7 @@ impl ClockScope {
                 );
                 Ok(())
             }
-            Self::Entity {
-                binding,
-                relative_pointer,
-            } => {
-                ensure!(
-                    !binding.is_empty()
-                        && binding.len() <= 64
-                        && binding
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte)),
-                    "clock_scope binding requires a bounded identity identifier"
-                );
+            Self::Entity { relative_pointer } => {
                 ensure!(
                     relative_pointer.starts_with("../") && !relative_pointer.contains('*'),
                     "entity clock_scope requires an exact sibling pointer"
@@ -125,38 +98,49 @@ impl ClockScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::policy::{self, FieldContract, Rule, TrafficPolicy};
+    use serde_json::{Value, json};
 
-    fn value_rule(pointer: &str, scope: serde_json::Value) -> serde_json::Value {
-        json!({"id":"times","surface":"api.response","match":{"api":"GET /stream"},
-            "slot":{"sse_data":{"event":"message","json_type":"done"}},"codec":"json",
-            "contract":{pointer:{"relative_time":"unix_milliseconds","clock_group":"row-7","clock_scope":scope}},
+    fn value_rule(pointer: &str, scope: Value) -> Value {
+        json!({"id":"times","surface":"api.response","match":{"api":"GET /stream"},"slot":"body","codec":"json",
+            "contract":{pointer:{"kind":"time","format":"unix_milliseconds","relation":"preserve_offset","clock_group":"row-7","clock_scope":scope}},
             "proof":{"source":"blocks.py:create","fact":"Each item owns its generated clock"}})
     }
-
-    fn compile(rules: Vec<serde_json::Value>) -> Result<super::super::CompiledPolicy> {
-        super::super::parse_and_compile_policy(
-            &json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
-        )
+    fn compile(rules: Vec<Value>) -> Result<policy::CompiledPolicy> {
+        // Explicit internal IR fixtures exercise the scalar kernel. Public
+        // policies accept only root formats and native effects.
+        let rules = rules
+            .into_iter()
+            .map(|rule| serde_json::from_value::<Rule>(rule).map(Into::into))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        policy::compile_policy(&TrafficPolicy {
+            rules,
+            ..Default::default()
+        })
     }
 
     #[test]
-    fn authoring_roundtrip_preserves_names_and_new_scope_without_changing_defaults() {
-        let rule = value_rule("/blocks/*/timestamp", json!("array_element"));
-        let document = json!({"format":"traffic-policy/v2","rules":[rule]}).to_string();
-        let parsed = super::super::parse_policy(&document).unwrap();
-        let rendered = super::super::render_policy(&parsed).unwrap();
-        assert!(rendered.contains("clock_group: row-7"));
-        assert!(rendered.contains("clock_scope: array_element"));
-        assert_eq!(parsed, super::super::parse_policy(&rendered).unwrap());
-        let mut old = value_rule("/blocks/*/timestamp", json!("shared"));
-        old["contract"]["/blocks/*/timestamp"]
+    fn internal_scope_roundtrip_preserves_names_without_restoring_value_authoring() {
+        let rule: Rule =
+            serde_json::from_value(value_rule("/blocks/*/timestamp", json!("array_element")))
+                .unwrap();
+        let serialized = serde_json::to_value(&rule).unwrap();
+        assert_eq!(
+            serialized["contract"]["/blocks/*/timestamp"]["clock_scope"],
+            "array_element"
+        );
+        assert_eq!(
+            serialized["contract"]["/blocks/*/timestamp"]["clock_group"],
+            "row-7"
+        );
+        assert_eq!(serde_json::from_value::<Rule>(serialized).unwrap(), rule);
+        let mut default = value_rule("/blocks/*/timestamp", json!("shared"));
+        default["contract"]["/blocks/*/timestamp"]
             .as_object_mut()
             .unwrap()
             .remove("clock_scope");
-        let compiled = compile(vec![old]).unwrap();
         assert!(
-            compiled.rules[0].rule.contract["/blocks/*/timestamp"]
+            compile(vec![default]).unwrap().rules[0].rule.contract["/blocks/*/timestamp"]
                 .time()
                 .unwrap()
                 .clock_scope
@@ -165,44 +149,51 @@ mod tests {
     }
 
     #[test]
-    fn scope_validation_requires_arrays_or_an_explicit_identity_sibling() {
+    fn scope_validation_requires_arrays_or_an_identity_sibling() {
         assert!(compile(vec![value_rule("/timestamp", json!("array_element"))]).is_err());
         for scope in [
             json!("unknown"),
-            json!({"binding":"block","relative_pointer":"../../id"}),
-            json!({"binding":"block","relative_pointer":"../*"}),
-            json!({"binding":"block","relative_pointer":"../id","unknown":true}),
+            json!({"binding":"removed","relative_pointer":"../id"}),
+            json!({"relative_pointer":"../../id"}),
+            json!({"relative_pointer":"../*"}),
+            json!({"relative_pointer":"../id","unknown":true}),
         ] {
             assert!(compile(vec![value_rule("/blocks/*/timestamp", scope)]).is_err());
         }
-        let mut rule = value_rule(
-            "/blocks/*/timestamp",
-            json!({"binding":"block","relative_pointer":"../id"}),
-        );
+        let mut rule = value_rule("/blocks/*/timestamp", json!({"relative_pointer":"../id"}));
+        rule["slot"] = serde_json::to_value(crate::policy::Slot::SseData(
+            crate::policy::SseSelector::Event("message".into()),
+        ))
+        .unwrap();
         assert!(compile(vec![rule.clone()]).is_err());
         rule["contract"]["/blocks/*/id"] =
-            json!({"kind":"identity","binding":"block","prefix":"text-","format":"decimal"});
-        assert!(compile(vec![rule.clone()]).is_ok());
-        let parsed = super::super::parse_policy(
-            &json!({"format":"traffic-policy/v2","rules":[rule]}).to_string(),
-        )
-        .unwrap();
-        assert!(
-            super::super::render_policy(&parsed)
+            json!({"kind":"identity","prefix":"text-","format":"decimal"});
+        let compiled = compile(vec![rule]).unwrap();
+        assert!(matches!(
+            compiled.rules[0].rule.contract["/blocks/*/timestamp"]
+                .time()
                 .unwrap()
-                .contains("relative_pointer: ../id")
-        );
+                .clock_scope,
+            ClockScope::Entity { .. }
+        ));
+        assert!(matches!(
+            compiled.rules[0].rule.contract["/blocks/*/id"],
+            FieldContract::Identity { .. }
+        ));
     }
 
     #[test]
     fn scalar_native_adapters_reject_scopes_instead_of_discarding_them() {
         let proof = json!({"source":"source.py:clock","fact":"Synthetic scalar clock for scope admission regression"});
-        let mysql = json!({"id":"mysql","match":{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":"UPDATE items SET stamp=? WHERE id=?"},
-            "effect":{"kind":"mysql_values","values":{"0":{"relative_time":"unix_seconds","clock_scope":"array_element"}}},"proof":proof});
-        let http = json!({"id":"http","match":{"resource":{"protocol":"http","endpoint":"object.test:443"},"operation":"GET","path":"/object"},
-            "effect":{"kind":"http_request","headers":{"x-amz-date":{"request_time":"amz_date","clock_scope":"array_element"}}},"proof":proof});
+        let mysql = json!({"id":"mysql","match":{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":"UPDATE items SET stamp=? WHERE id=?"},"effect":{"kind":"mysql_values","values":{"0":{"relative_time":"unix_seconds","clock_scope":"array_element"}}},"proof":proof});
+        let http = json!({"id":"http","match":{"resource":{"protocol":"http","endpoint":"object.test:443"},"operation":"GET","path":"/object"},"effect":{"kind":"http_request","headers":{"x-amz-date":{"request_time":"amz_date","clock_scope":"array_element"}}},"proof":proof});
         for rule in [mysql, http] {
-            assert!(compile(vec![rule]).is_err());
+            assert!(
+                policy::parse_and_compile_policy(
+                    &json!({"format":"traffic-policy/v2","rules":[rule]}).to_string()
+                )
+                .is_err()
+            );
         }
     }
 }

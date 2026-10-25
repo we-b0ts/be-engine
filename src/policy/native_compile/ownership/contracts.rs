@@ -31,9 +31,6 @@ pub(super) fn native_contract(
                 }
                 _ => None,
             },
-            NativeOwnedSlot::SqlColumn(column) => {
-                Some(time(&effect.response_time.get(column)?.contract.time))
-            }
             _ => None,
         },
         NativeEffect::RedisSequence(effect) => effect.commands.iter().find_map(|command| {
@@ -61,12 +58,6 @@ pub(super) fn native_contract(
                 }
             })
         }),
-        NativeEffect::FiniteSharing(FiniteSharingEffect::Redis { response_time, .. }) => {
-            let OwnedLocation::JsonPointer { pointer } = &claim.location else {
-                return None;
-            };
-            Some(time(&response_time.get(pointer)?.contract))
-        }
         _ => None,
     }
 }

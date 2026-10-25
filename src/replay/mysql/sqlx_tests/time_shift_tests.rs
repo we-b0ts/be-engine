@@ -11,25 +11,15 @@ async fn mysql_time_shift_delivers_relative_expiry_through_tls_text_and_prepared
         ]),json!([[{"kind":"datetime","value":"2020-01-01 00:05:00.123456"},{"kind":"string","value":"stable"}]]));
         let records = [exchange(sql,response.clone()),exchange(sql,response.clone()),
             exchange("SELECT expires_at,owner FROM leases WHERE id=7",response)];
-        let rule = json!({"id":"lease-expiry","protocol":"mysql","case":{"method":"GET","path":"/users"},
-            "target":{"host":"127.0.0.1","port":3306},"source_evidence":"lease.py:acquire stores UTC now plus the lease duration",
-            "mysql":{"database":"appdb","sql":"SELECT expires_at,owner FROM leases WHERE id=? FOR UPDATE",
-            "response_time_shift":{"expires_at":{"time":"preserve_relative","format":"mysql_datetime"}}}});
-        let mut projection_rule = rule.clone();
-        projection_rule["id"] = json!("lease-expiry-projection");
-        projection_rule["mysql"]["sql"] = json!("SELECT expires_at,owner FROM leases WHERE id=?");
-        let write_rule: serde_yaml::Value = serde_yaml::from_str(r#"
-id: unrelated-write-time
-protocol: mysql
+        let policy = r#"format: traffic-policy/v2
 mysql:
-  database: appdb
-  sql: UPDATE leases SET updated_at=? WHERE id=?
-  sql_values: {0: {time: preserve_relative}}
-"#).unwrap();
-        let mut policy = serde_yaml::to_value(json!({"version":3,"expected_response":"assertions_only","dependency_rules":[rule,projection_rule]})).unwrap();
-        policy["dependency_rules"].as_sequence_mut().unwrap().push(write_rule);
-        let policy = serde_yaml::to_string(&policy).unwrap();
-        let (temp,addr,runtime,task) = fixture_with_policy(&records,Some(&policy)).await;
+  tables:
+    leases:
+      pattern: leases
+      fields:
+        expires_at: {kind: time, formats: [{format: sql_datetime, utc_offset: '+00:00'}]}
+"#;
+        let (temp,addr,runtime,task) = fixture_with_policy(&records,Some(policy)).await;
         let before = chrono::Utc::now().naive_utc();
         let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let text = client.fetch_one(sql).await.unwrap();
@@ -47,11 +37,9 @@ mysql:
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count,3);
         let report = state.replay_policy.as_ref().unwrap().report();
-        let usage = report.dependency_rules.iter().find(|rule| rule.id == "lease-expiry").unwrap();
-        assert_eq!(usage.matches,2);
-        let unused = report.dependency_rules.iter().find(|rule| rule.id == "unrelated-write-time").unwrap();
-        assert_eq!(unused.matches,0);
-        assert_eq!(unused.time_validations,0);
+        let usage = report.global_formats.iter().find(|format| format.id == "global.mysql").unwrap();
+        assert_eq!(usage.validations, 2);
+        assert_eq!(usage.time_validations, 2);
         assert!(state.mysql.exchanges.iter().all(|exchange| exchange.record.response.rows[0][0].value == Some(json!("2020-01-01 00:05:00.123456"))));
         drop(state);
         client.close().await.unwrap();

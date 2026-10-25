@@ -1,7 +1,7 @@
 //! Redis value-slot adapter for the shared compiled contract evaluator.
 //! This adapter never claims lanes, consumes exchanges, or changes auth/key/options.
 use super::*;
-use crate::policy::{CompiledPolicy, CompiledRule, Protocol, Surface};
+use crate::policy::{CompiledPolicy, Protocol, Surface};
 use crate::policy_evidence::{
     AssociationOutcome, ClockPair as WitnessClockPair, ObservationRetention, SourceIdentity,
     SourceRole, TargetRole, WitnessClocks, WitnessMetadata, WitnessStore,
@@ -59,32 +59,27 @@ impl RequestContracts {
     pub(in crate::replay) fn retains_value_witnesses(&self) -> bool {
         self.witnesses.is_some()
     }
-    pub(in crate::replay::policy) fn configure_compiled(
+    pub(in crate::replay) fn configure_compiled(
         &mut self,
         compiled: Option<Arc<CompiledPolicy>>,
     ) -> Result<()> {
-        self.mysql_selection = Arc::new(mysql_selection::MysqlSelection::new(compiled.as_deref())?);
-        let mut prefixes = BTreeMap::<String, BTreeSet<String>>::new();
-        for contract in compiled
-            .iter()
-            .flat_map(|policy| &policy.rules)
-            .flat_map(|rule| rule.rule.contract.values())
+        if let Some(global) = compiled
+            .as_ref()
+            .and_then(|policy| policy.global_json.as_ref())
+            && global.signatures.needs_prepare()
         {
-            if let crate::policy::FieldContract::Identity {
-                binding, prefix, ..
-            } = contract.unconditional()
+            let root = match self
+                .input_origin
+                .as_ref()
+                .context("JWT runtime input origin unavailable")?
             {
-                prefixes
-                    .entry(binding.clone())
-                    .or_default()
-                    .insert(prefix.clone());
-            }
+                derived_inputs::InputOrigin::Root(root) => root.clone(),
+                derived_inputs::InputOrigin::Policy(policy) => {
+                    crate::config::resolve_unified_policy_root(policy)?
+                }
+            };
+            global.signatures.prepare(&root)?;
         }
-        ensure!(
-            prefixes.values().all(|prefixes| prefixes.len() <= 64),
-            "identity binding exceeds 64 literal prefix variants"
-        );
-        self.identity_prefixes = Arc::new(prefixes);
         self.compiled = compiled;
         Ok(())
     }
@@ -98,14 +93,6 @@ impl RequestContracts {
         if !observe_sources {
             return Ok(());
         }
-        // Eager policy construction already validated Source applicability before
-        // the protected store existed. Recount unavailable slots during this full
-        // retention scan, rather than counting the same Source observation twice.
-        self.state
-            .lock()
-            .expect("request contracts")
-            .unavailable_value_slots
-            .clear();
         let cases = self
             .state
             .lock()
@@ -241,26 +228,6 @@ impl RequestContracts {
         self.compiled.as_ref()
     }
 
-    pub(in crate::replay) fn matches_compiled_case(
-        &self,
-        rule: &CompiledRule,
-        case: Option<&str>,
-    ) -> bool {
-        let Some(case) = case else {
-            return false;
-        };
-        let Ok(anchor) = self.anchor(case) else {
-            return false;
-        };
-        rule.rule.selector.matches_api(&anchor.method, &anchor.path)
-            && rule.rule.when.as_ref().is_none_or(|condition| {
-                anchor
-                    .source_body
-                    .as_ref()
-                    .is_some_and(|body| condition.matches_body(body))
-            })
-    }
-
     /// Native domains select immutable Source scope before any value rewriting.
     /// A native rule never borrows a Target body or an unknown rule identity.
     pub(in crate::replay) fn native_rule_scope_matches(
@@ -282,6 +249,42 @@ impl RequestContracts {
             return false;
         };
         let guard = super::super::native_projection::NativeScopeGuard::from_rule(&rule.rule);
+        if let Some(host) = &rule.rule.selector.http_host
+            && (protocol != Protocol::Http
+                || crate::replay::normalize_host(host)
+                    != crate::replay::normalize_host(&target.host))
+        {
+            return false;
+        }
+        if rule.rule.selector.resource.is_none()
+            && matches!(
+                rule.rule.effect,
+                crate::policy::NativeEffect::FiniteSharing(
+                    crate::policy::native::FiniteSharingEffect::Http
+                )
+            )
+        {
+            return protocol == Protocol::Http
+                && guard.matches_case(&anchor.method, &anchor.path, anchor.source_body.as_ref());
+        }
+        if rule.rule.selector.resource.is_none()
+            && (matches!(
+                rule.rule.effect,
+                crate::policy::NativeEffect::RedisAppendStream
+                    | crate::policy::NativeEffect::RedisExpiryRefresh(_)
+                    | crate::policy::NativeEffect::RedisReadCommutation(_)
+                    | crate::policy::NativeEffect::RedisSequence(_)
+                    | crate::policy::NativeEffect::FiniteSharing(
+                        crate::policy::native::FiniteSharingEffect::Redis { .. }
+                    )
+            ) || crate::policy::native::is_key_only_read_back(&rule.rule))
+        {
+            return protocol == Protocol::Redis
+                && database
+                    .and_then(crate::policy::Database::index)
+                    .is_some_and(|observed| observed >= 0)
+                && guard.matches_case(&anchor.method, &anchor.path, anchor.source_body.as_ref());
+        }
         guard.matches_case(&anchor.method, &anchor.path, anchor.source_body.as_ref())
             && guard.matches_capture_resource(protocol, target, database, username)
     }
@@ -326,8 +329,25 @@ impl RequestContracts {
     ) -> Option<Result<Decision>> {
         // A contextual native owner retains its sequence, identity and clock
         // relationships. Resource fields cover every other storage operation.
-        self.preview_redis_legacy(context, source, actual)
-            .or_else(|| self.preview_unified_redis(context, source, actual))
+        if let Some(result) = self.preview_redis_legacy(context, source, actual) {
+            return Some(result);
+        }
+        let keys =
+            match self.project_known_redis_keys(context.case, context.command, source, actual) {
+                Ok(keys) => keys,
+                Err(error) => return Some(Err(error)),
+            };
+        let actual = keys.as_deref().unwrap_or(actual);
+        self.preview_unified_redis(context, source, actual)
+            .or_else(|| {
+                keys.is_some().then(|| {
+                    ensure!(
+                        source == actual,
+                        "Redis arguments outside accepted key identities changed"
+                    );
+                    Ok(Decision::default())
+                })
+            })
     }
 
     pub(super) fn preview_unified_redis(
@@ -552,48 +572,6 @@ impl RequestContracts {
             tracing::warn!(%error, "recorded Redis response witness could not be persisted; coverage is incomplete");
         }
     }
-
-    pub(super) fn unified_reports(
-        &self,
-        state: &State,
-    ) -> Vec<super::super::report::DependencyRuleReport> {
-        self.compiled
-            .iter()
-            .flat_map(|policy| &policy.rules)
-            .filter_map(|compiled| {
-                let rule = &compiled.rule;
-                if rule.surface == Surface::ApiResponse {
-                    return None;
-                }
-                let protocol = match rule.selector.resource.as_ref()?.protocol {
-                    Protocol::Redis => DependencyProtocol::Redis,
-                    Protocol::Http => DependencyProtocol::Http,
-                    Protocol::Memcached => DependencyProtocol::Memcached,
-                    Protocol::Mysql => DependencyProtocol::Mysql,
-                };
-                let matches = state.usage.get(&rule.id).copied().unwrap_or_default();
-                Some(super::super::report::DependencyRuleReport {
-                    id: rule.id.clone(),
-                    protocol,
-                    kind: Some(if rule.surface == Surface::DependencyResponse {
-                        "source_to_delivery"
-                    } else {
-                        "dependency_request"
-                    }),
-                    applicable: state.applicable.contains(&rule.id),
-                    matches,
-                    binds: 0,
-                    references: 0,
-                    validations: matches,
-                    time_validations: state
-                        .time_validations
-                        .get(&rule.id)
-                        .copied()
-                        .unwrap_or_default(),
-                })
-            })
-            .collect()
-    }
 }
 
 pub(super) fn value_index(command: &str, length: usize) -> Option<usize> {
@@ -603,6 +581,3 @@ pub(super) fn value_index(command: &str, length: usize) -> Option<usize> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests;

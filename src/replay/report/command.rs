@@ -111,15 +111,9 @@ pub(in crate::replay) struct CommandProtocolReport {
     pub(in crate::replay) append_streams_omitted: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) pubsub: Option<PubSubReport>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) time_shifts: Vec<crate::replay::redis::time_shift::TimeShiftObservation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) unordered_value:
         Option<crate::replay::redis::value::evidence::OrderEvidence>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) lock_tokens: Option<crate::replay::redis::lock::evidence::LockEvidence>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) publish: Option<crate::replay::redis::publish::evidence::PublishEvidence>,
     pub(in crate::replay) connections: usize,
     pub(in crate::replay) matched_count: usize,
     pub(in crate::replay) matched: Vec<CommandMatchedReport>,

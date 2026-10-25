@@ -2,37 +2,17 @@ use super::*;
 
 const IDENTITY_POLICY: &str = r#"format: traffic-policy/v2
 resources:
-  cache:
-    protocol: redis
-    endpoint: cache.test:6379
-    database: 0
-    proof: {source: app/cache.rs:1-20, fact: 'The generated ID is copied between stored entities; timestamps preserve request offsets'}
-    keys:
-      - key: {prefix: 'session:'}
-        container: string
-        value:
-          codec: json
-          fields:
-            /id: {kind: identity, binding: task, prefix: '', format: decimal}
-            /peer: {kind: identity, binding: task, prefix: '', format: decimal}
-            /at: {relative_time: unix_seconds}
-      - key: {prefix: 'hash:'}
-        container: hash
-        value:
-          codec: json
-          fields:
-            /id: {kind: identity, binding: task, prefix: '', format: decimal}
-      - key: {prefix: 'list:'}
-        container: list
-        value:
-          codec: json
-          fields:
-            /id: {kind: identity, binding: task, prefix: '', format: decimal}
+  cache: {protocol: redis, endpoint: 'cache.test:6379', database: 0}
+json:
+  fields:
+    /id: {kind: identity, formats: [decimal]}
+    /peer: {kind: identity, formats: [decimal]}
+    /at: {kind: time, formats: [unix_seconds]}
 "#;
 
 fn identity_runtime() -> RequestContracts {
     let policy = crate::policy::parse_and_compile_policy(IDENTITY_POLICY).unwrap();
-    let mut owner = runtime("string", false, false);
+    let mut owner = runtime();
     owner.configure_compiled(Some(Arc::new(policy))).unwrap();
     owner
 }
@@ -72,6 +52,7 @@ fn delivery(
     owner
         .prepare_redis_delivery(
             "case",
+            "case",
             &TargetKey {
                 host: "cache.test".into(),
                 port: 6379,
@@ -79,6 +60,7 @@ fn delivery(
             0,
             None,
             command,
+            &args(values),
             &args(values),
             response,
             DateTime::from_timestamp(1000, 0),
@@ -201,12 +183,12 @@ fn source_self_validation_does_not_anchor_generated_values() {
 }
 
 #[test]
-fn resource_identity_and_time_compose_with_native_json_ownership() {
+fn global_identity_and_time_compose_with_native_json_ownership() {
     let owner = native_runtime(json!({
         "id":"native-clock",
         "match":{"api":"POST /sessions", "resource":"cache", "key":{"kind":"affix","prefix":"session:","suffix":""}},
         "effect":{"kind":"redis_sequence", "commands":[{"operation":"SET", "arguments":{"1":{"kind":"json", "fields":{
-            "/at":{"relative_time":"unix_seconds"}
+            "/at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"}
         }}}}]},
         "proof":{"source":"app/cache.rs:1", "fact":"The contextual operation also validates the native timestamp"}
     }));
@@ -246,7 +228,7 @@ fn native_key_only_contract_uses_global_value_fields_and_keeps_options_exact() {
         "match":{"api":"POST /sessions", "resource":"cache", "key":{"kind":"affix","prefix":"session:","suffix":""}},
         "effect":{
             "kind":"redis_sequence",
-            "key":{"kind":"capture","binding":"session-key","template":"session:{value}","format":{"kind":"hex","bytes":2}},
+            "key":{"kind":"capture","template":"session:{value}","format":{"kind":"hex","bytes":2}},
             "commands":[{"operation":"SET","arguments":{}}]
         },
         "proof":{"source":"app/cache.rs:1", "fact":"The key contains a generated session slot; entity payload fields have resource contracts"}

@@ -20,7 +20,7 @@ Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 [HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
 strict matching and fresh verification.
 Source-proven arrays in outbound JSON requests use [HTTP unordered rules](http-unordered-rules.md).
-Source-proven SDK request metadata uses [scoped HTTP client metadata](http-client-metadata.md).
+SDK request headers retain ordinary strict presence and value comparison. Global HTTP formats validate generated values without allowing missing headers.
 Failed outbound requests expose [HTTP request body evidence](http-request-evidence.md),
 including exact protected body pages, raw differences and recorded rule results.
 Rule planning reuses [recording indexes and sealed Source content identities](rule-evidence-index.md)
@@ -38,7 +38,7 @@ Source-proven expiry drift in Redis JSON read responses uses explicit
 [Redis time-shift rules](redis-time-shift-rules.md), discovered through worker
 source diagnosis without heuristic hints.
 
-Source-proven Redis ownership tokens use [Redis lock rules](redis-lock-rules.md),
+Source-proven Redis ownership tokens use [Redis scalar formats](redis-scalar-formats.md),
 with bounded token-only witnesses, explicit endpoint/key scope and fresh Replay.
 
 Source-generated identities shared across decoded SQL, JSON and Redis keys use
@@ -57,6 +57,10 @@ URL query tokens, typed base64url nonces, RS256 public-key verification from
 recorded MySQL results, and linked integer/RFC3339 expiry and TTL fields.
 [JSON response time rules](response-time-rules.md) validate source-proven expiry
 and scheduled-time offsets through explicit `preserve_relative` timestamps.
+
+[Content formats and carrier bindings](content-policy-layout.md) describes global
+string templates, HTTP acquisition/path declarations, shared DOCX fields, API
+encryption/header positions and default multipart comparison.
 
 ## Rust Tooling
 
@@ -981,8 +985,10 @@ assertion-only `expected-response.json` contract, dependency rule scoping,
 runner-owned generated-scalar and unordered response fields, and dirty-evidence
 behavior.
 
-Process-owned asynchronous HTTP work uses a bounded `process_owned` rule with
-explicit authority, method, path prefix and Source proof. Unbounded unused-host
+Process-owned asynchronous HTTP work uses
+`process_dependencies.tasks.<actual-Source-task-name>.requests`, with explicit
+HTTP host, method/path scope and independent Source proof. A task can group
+requests across protocols. Finite initialization reads use `localcache.requests`. Unbounded unused-host
 exemptions are retired. Finite sharing does not authorize unused work. Use the
 same unified rule transaction described below; preserve target initialization,
 refresh and readiness behavior when the dependency drives business state.
@@ -3044,16 +3050,18 @@ effect:
   source_revision: ''
   selector:
     protocol: http
-    authorities: [config.api.demo.test]
+    authorities: [config.internal]
     methods: [GET]
-    path_prefixes: [/1/config/service]
+    path_prefixes: [/refresh]
 proof:
   source: src/config/refresh.rs:42
   fact: A process scheduler refreshes this exact endpoint independently of APIs.
 ```
 
 Initialization creates an empty policy and adds no service-specific ownership
-rules. HTTP, Motan and Memcached ownership preserves their existing finite
+rules. Vintage configuration and naming HTTP calls remain ordinary Case dependencies;
+response capture and protocol decoding do not grant process ownership.
+HTTP, Motan and Memcached ownership preserves their existing finite
 consumption. Redis snapshot-producing selectors affect capture and runtime;
 new authorization conservatively requires fresh recording. Classification-only
 changes may derive a report from immutable complete Source evidence, while
@@ -3077,9 +3085,9 @@ traffic-e2e config recorder apply process-owned-dependencies \
   --source-revision 0123456789abcdef \
   --evidence 'src/config/refresh.rs:42 process-level scheduled refresh' \
   http \
-  --authority config.api.demo.test \
+  --authority config.internal \
   --method GET \
-  --path-prefix /1/config/service
+  --path-prefix /refresh
 ```
 
 The action requires at least one matching unused case HTTP exchange and rejects

@@ -72,6 +72,19 @@ pub(in crate::replay) async fn handle_connection(
         let Some(command) = parse_client_command(&packet) else {
             continue;
         };
+        let stopping = {
+            let state = state.lock().await;
+            state.target_session_stopped
+                || state.async_case_quiescing()
+                || state
+                    .active_case_id
+                    .as_ref()
+                    .is_some_and(|case| state.target_stop_prepared.contains(case))
+        };
+        if stopping {
+            session.control.reset()?;
+            break;
+        }
         match command.command_name.as_str() {
             "COM_QUIT" => break,
             "COM_PING" | "COM_INIT_DB" => {

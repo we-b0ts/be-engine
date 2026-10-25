@@ -1,6 +1,5 @@
 use super::*;
 use serde_json::json;
-mod http_client_metadata;
 mod lset;
 mod protocols;
 mod read_back;
@@ -56,7 +55,7 @@ fn source_session_validates_independent_random_json_with_a_generated_session_key
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([17; 32]);
     let definition = json!({"id":"create-session","match":{"api":"POST /tasks","resource":resource(),
         "key":{"kind":"affix","prefix":"sessions:"}},"effect":{"kind":"redis_sequence",
-        "key":{"contract":{"kind":"capture","binding":"session","template":"sessions:{value}","format":{"kind":"uuid_v4"}},"proof":proof()},
+        "key":{"contract":{"kind":"capture","template":"sessions:{value}","format":{"kind":"uuid_v4"}},"proof":proof()},
         "commands":[{"operation":"SET","arguments":{"1":{"contract":{"kind":"json","fields":{
             "/poll_token":{"contract":{"kind":"random","format":"base64url","length":43},"proof":proof()},
             "/created_at":{"contract":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"},"proof":proof()}
@@ -144,84 +143,6 @@ fn source_session_requires_each_identity_reference_after_a_valid_capture() {
     early["request_started_at"] = json!("1970-01-01T00:16:40Z");
     early["sequence"] = json!(0);
     assert!(check(&policy, &[early, capture]).is_err());
-}
-
-#[test]
-fn source_session_lock_requires_successful_acquire_before_same_identity_release() {
-    let policy = compile(vec![
-        json!({"id":"lock","match":{"api":"POST /tasks","resource":resource(),"key":{"kind":"exact","value":"lock:one"}},"effect":{"kind":"redis_lock"},"proof":proof()}),
-    ]);
-    let mut acquire = redis("SET", &["lock:one", "token", "NX", "PX", "30000"], 1);
-    acquire["response_kind"] = json!("simple_string");
-    acquire["response"]["data"] = json!("+OK\r\n");
-    let release = redis("DELEX", &["lock:one", "IFEQ", "token"], 2);
-    assert_eq!(
-        check(&policy, &[acquire.clone(), release.clone()])
-            .unwrap()
-            .rules["lock"],
-        2
-    );
-    assert!(check(&policy, std::slice::from_ref(&release)).is_err());
-    let mut failed = acquire.clone();
-    failed["response_kind"] = json!("null_bulk_string");
-    failed["response"]["data"] = json!("$-1\r\n");
-    assert!(check(&policy, &[failed, release.clone()]).is_err());
-    let mut early = release.clone();
-    early["timestamp"] = json!("1970-01-01T00:16:40Z");
-    early["request_started_at"] = json!("1970-01-01T00:16:40Z");
-    early["sequence"] = json!(0);
-    assert!(check(&policy, &[early, acquire.clone()]).is_err());
-    for field in ["database", "username"] {
-        let mut wrong = release.clone();
-        wrong[field] = if field == "database" {
-            json!(1)
-        } else {
-            json!("reader")
-        };
-        assert!(check(&policy, &[acquire.clone(), wrong]).is_err());
-    }
-    let mut unfinished = acquire.clone();
-    unfinished["request_started_at"] = json!("1970-01-01T00:16:40Z");
-    unfinished["timestamp"] = json!("1970-01-01T00:16:41.500000001Z");
-    unfinished["duration_ms"] = json!(1500);
-    let mut overlaps = release;
-    overlaps["request_started_at"] = json!("1970-01-01T00:16:41.500000000Z");
-    overlaps["duration_ms"] = json!(499);
-    assert!(check(&policy, &[unfinished, overlaps]).is_err());
-    acquire.as_object_mut().unwrap().remove("timestamp");
-    acquire
-        .as_object_mut()
-        .unwrap()
-        .remove("request_started_at");
-    assert!(check(&policy, &[acquire]).is_err());
-}
-
-#[test]
-fn source_session_publish_validates_complete_uuid_marker_and_business_remainder() {
-    let policy = compile(vec![
-        json!({"id":"publisher","match":{"api":"POST /tasks","resource":resource(),"operation":"PUBLISH","key":{"kind":"exact","value":"events"}},"effect":{"kind":"redis_publish_identity","uuid_field":"host_id"},"proof":proof()}),
-    ]);
-    let event = redis(
-        "PUBLISH",
-        &[
-            "events",
-            r#"{"host_id":"0123456789ab4def8123456789abcdef","body":"kept"}"#,
-        ],
-        1,
-    );
-    assert_eq!(
-        check(&policy, std::slice::from_ref(&event)).unwrap().rules["publisher"],
-        1
-    );
-    for body in [
-        r#"{"body":"kept"}"#,
-        r#"{"host_id":"not-a-uuid","body":"kept"}"#,
-        r#"{"host_id":"0123456789ab4def8123456789abcdef","host_id":"0123456789ab4def8123456789abcdef"}"#,
-    ] {
-        let mut invalid = event.clone();
-        invalid["args"][1]["data"] = json!(body);
-        assert!(check(&policy, &[invalid]).is_err());
-    }
 }
 
 #[test]

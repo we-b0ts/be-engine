@@ -64,7 +64,7 @@ fn rpush_integer_capture_is_typed_case_local_and_keeps_other_fields_exact() {
         .unwrap()
         .unwrap();
     assert_eq!(normalized.source, normalized.actual);
-    runtime.commit("case", normalized.decision);
+    runtime.commit("case", normalized.decision).unwrap();
     assert!(
         runtime
             .redis(
@@ -321,7 +321,7 @@ fn prefix_capture_keeps_complete_keys_options_database_and_unselected_json_exact
         .unwrap();
     assert_eq!(compared.source[0], b"task:12");
     assert_eq!(compared.source, compared.actual);
-    runtime.commit("case", compared.decision);
+    runtime.commit("case", compared.decision).unwrap();
     assert!(
         runtime
             .redis(
@@ -416,7 +416,7 @@ fn patterned_capture_supports_hset_and_reports_source_applicability() {
         .unwrap()
         .unwrap();
     assert_eq!(compared.source, compared.actual);
-    runtime.commit("case", compared.decision);
+    runtime.commit("case", compared.decision).unwrap();
     assert_eq!(runtime.rule_reports()[0].matches, 1);
 }
 

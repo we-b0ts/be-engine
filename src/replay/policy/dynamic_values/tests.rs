@@ -62,7 +62,7 @@ fn a_single_capture_authorizes_sql_json_and_redis_references_without_a_format() 
             .normalize_arguments(Some("case"), &endpoint(6379), &source, &actual)
             .is_none()
     );
-    runtime.commit("case", decision);
+    runtime.commit("case", decision).unwrap();
     let (source, actual) = runtime
         .normalize_arguments(Some("case"), &endpoint(6379), &source, &actual)
         .unwrap()
@@ -116,7 +116,9 @@ fn a_single_capture_authorizes_sql_json_and_redis_references_without_a_format() 
 #[test]
 fn mappings_do_not_leak_to_other_cases_ports_or_global_dependencies() {
     let runtime = runtime();
-    runtime.commit("case", capture(&runtime, "old-name", "new-name").unwrap());
+    runtime
+        .commit("case", capture(&runtime, "old-name", "new-name").unwrap())
+        .unwrap();
     let source = vec![b"old-name".to_vec()];
     let actual = vec![b"new-name".to_vec()];
     assert!(
@@ -145,7 +147,9 @@ fn mappings_do_not_leak_to_other_cases_ports_or_global_dependencies() {
 #[test]
 fn identity_changes_collapses_and_stable_key_changes_remain_failures() {
     let runtime = runtime();
-    runtime.commit("case", capture(&runtime, "old-name", "new-name").unwrap());
+    runtime
+        .commit("case", capture(&runtime, "old-name", "new-name").unwrap())
+        .unwrap();
     assert!(capture(&runtime, "old-name", "third-name").is_err());
     assert!(capture(&runtime, "different-name", "new-name").is_err());
     assert!(
@@ -185,7 +189,9 @@ fn identity_changes_collapses_and_stable_key_changes_remain_failures() {
 #[test]
 fn http_paths_queries_and_json_share_the_case_binding() {
     let runtime = runtime();
-    runtime.commit("case", capture(&runtime, "old-name", "new-name").unwrap());
+    runtime
+        .commit("case", capture(&runtime, "old-name", "new-name").unwrap())
+        .unwrap();
     let actual_uri: hyper::Uri = "/items/new-name?name=new%2Dname&stable=1".parse().unwrap();
     let normalized = runtime
         .http(
@@ -217,7 +223,7 @@ fn rule_scope_and_optional_uuid_shape_are_validated() {
     assert!(invalid.validate().is_err());
     let mut invalid = rule();
     invalid.source_evidence.clear();
-    assert!(invalid.validate().is_err());
+    assert!(invalid.validate().is_ok());
     let mut invalid = rule();
     invalid.format = Some(DynamicValueFormat::Uuid);
     assert!(invalid.validate_value("opaque-name").is_err());
@@ -252,7 +258,7 @@ fn redis_hset_json_capture_preserves_other_fields_and_database() {
         .unwrap()
         .unwrap();
     assert_eq!(normalized.source, normalized.actual);
-    runtime.commit("case", normalized.decision);
+    runtime.commit("case", normalized.decision).unwrap();
     let wrong = vec![
         b"anchor".to_vec(),
         b"field".to_vec(),
@@ -372,7 +378,7 @@ fn integer_http_identity_preserves_type_and_only_normalizes_the_declared_pointer
         serde_json::from_slice::<serde_json::Value>(&normalized.source_body).unwrap(),
         serde_json::from_slice::<serde_json::Value>(&normalized.actual_body).unwrap()
     );
-    runtime.commit("case", normalized.decision);
+    runtime.commit("case", normalized.decision).unwrap();
     let normalized = compare(br#"{"id":20,"business_id":20,"text":"20","method":"list"}"#).unwrap();
     assert_ne!(
         serde_json::from_slice::<serde_json::Value>(&normalized.source_body).unwrap(),

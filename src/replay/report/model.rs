@@ -2,6 +2,7 @@ use super::super::*;
 
 #[derive(Debug, Serialize)]
 pub(in crate::replay) struct ReplayReport {
+    pub(in crate::replay) connect_failures: connect_failure::Report,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) policy_witnesses: Option<crate::policy_evidence::WitnessManifest>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -88,7 +89,8 @@ impl ReplayReport {
     }
 
     pub(in crate::replay) fn is_dirty(&self) -> bool {
-        !self.unrecorded_targets.is_empty()
+        self.connect_failures.is_dirty()
+            || !self.unrecorded_targets.is_empty()
             || self
                 .unmatched_queries
                 .iter()

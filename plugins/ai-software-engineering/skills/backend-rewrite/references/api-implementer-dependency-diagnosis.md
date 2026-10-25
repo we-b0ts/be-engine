@@ -3,7 +3,9 @@
 Read after [API Implementer Diagnosis](api-implementer-diagnosis.md) when
 the current issue or evidence concerns missing recordings, dirty
 dependencies, or MySQL/Redis compatibility. Use only the relevant
-sections below; the common evidence and handoff contracts still apply.
+sections below; the [shared rule evidence contract](rule-policy.md) and the
+common handoff contract still apply. Use current returned queries, capabilities
+and planner commands; do not reconstruct commands from historical flag examples.
 
 Also read the API-triggered traffic section when unused dependencies may come
 from a source-detached API task.
@@ -166,7 +168,8 @@ out-of-order calls remain target behavior issues when proven by source evidence.
 MySQL supports source-proven process-owned SELECT templates with exact
 connection identity and exact, numeric-series, or patterned physical tables,
 including `AS {{table}}_id` aliases tied to the selected table. Return the
-source-proven selector inputs. Such rules can reclassify existing unused
+source task name and selector inputs under `process_dependencies`. Such
+declarations can reclassify existing unused
 evidence without a new recording; target unmatched queries and incomplete
 evidence remain dirty.
 
@@ -176,24 +179,26 @@ not a prerequisite for discovering a dependency-value rule. Continue to use
 the [gate order](api-implementer-diagnosis.md#work-scope-contract) when deciding
 which failure owns the next repair.
 For HTTP request-body mismatches, inspect `http_unordered_candidates` and the
-`unordered` hint. Same-request array reorderings may support
-a shared `dependency.request` unordered JSON contract; prove source collection and downstream
-semantics, then return the endpoint, JSON Pointer and source citation to the
-coordinator. An HTTP JSON array is ordered by default. A response unordered
-rule does not apply to dependency requests. Complete existing exchanges do not
-require new recording evidence for this rule.
+`unordered` hint. Same-request array reorderings may support a global
+`json.fields` unordered declaration; prove Source collection and downstream
+semantics, then return the logical JSON Pointer and source citation to the
+coordinator. This declaration applies across supported response and dependency
+JSON carriers. An array remains ordered without that Source-proven declaration.
+Submit the newly proven fields or formats; ordinary proposals add them while
+preserving existing declarations and format order. Existing
+complete exchanges need genuine Replay, not new recording evidence, for this change.
 
 For HTTP `unmatched_target`, also inspect `cross_case_candidates` and the
 `cross-case` hint. A verified same-run exchange may support a source-proven
-shared initialization scope rule through the returned `http cross-case` planner.
+`localcache.requests` declaration through the returned planner.
 Return the source proof and exact selector inputs. Shared initialization scope
 is not background ownership or permission to ignore a request.
 
 Classify the representative protocol cluster by source ownership:
 
 - request-owned and required: repair target call topology or Replay support;
-- process-owned and case-independent: use a supported process-owned recording
-  rule; separately repair target state behavior when source and response
+- process-owned and case-independent: return the real Source task and supported
+  `process_dependencies` declaration; separately repair target state behavior when source and response
   evidence prove the dependency is response-driving;
 - unresolved: retain the dirty evidence and name the missing proof.
 
@@ -203,8 +208,8 @@ recording-rule proposal must use
 the current dirty-cluster evidence ID and one protocol-specific planner returned
 in `applicable_rule_planners`. Run its exact read-only help argv and return only
 the source-proven selector inputs to the workflow coordinator. Replay evidence, case
-source, and source revision come from engine state and are not rule
-inputs. Return exactly one proven ownership classification:
+source, and immutable Source revision come from engine state; do not invent them
+or replace the provided identity. Return exactly one proven ownership classification:
 `request-owned`, `process-owned`, or `unresolved`. A request-owned result requires
 normal target implementation; it cannot justify a process-owned rule. Never
 rewrite Replay reports, trim traffic, or edit immutable capture files.
@@ -212,19 +217,19 @@ rewrite Replay reports, trim traffic, or edit immutable capture files.
 For dependency value mismatches, inspect each entry returned in
 `rule_hints`. Run its exact `help` command, then verify the described value
 mechanism in source and in the representative dependency details before
-planning it. In the currently supported Memcached case,
-`protobuf-timestamp` applies only to a `SET` value whose selected top-level
-protobuf varint field is source-proven current Unix seconds. The hint is a
-discovery mechanism, not authorization to apply the rule.
+planning it. For Memcached, inspect the returned operation, encoding and typed
+capability before proposing a format. A protocol name or byte pattern alone
+does not establish a supported schema; unknown encodings stay exact. The hint
+is discovery guidance, not authorization to apply a rule.
 
 ## API-triggered asynchronous process traffic
 
 A source-proven detached API task may produce unused dependencies inside another
 API's recording window. Redis GET, single-key DEL and LRANGE can use
 a self-contained `process_owned` rule with explicit API origin and the unified
-`rule plan --file rule.yaml --evidence <id>` transaction.
+proposal transaction returned by the engine under the [shared contract](rule-policy.md).
 See [API-origin process rules](../../../../../docs/api-triggered-process-traffic.md).
-`trigger_source.request_body_json` selects typed scalars by JSON Pointer in the
+The native `effect.origin.request_body` selects typed scalars by JSON Pointer in the
 triggering inbound REQUEST BODY: `/background: true` means JSON
 `{"background":true}`, never URL query, response JSON, or the victim API's body.
 Trace spawning and cleanup in source, then supply one explicit successful
@@ -239,8 +244,9 @@ MySQL API-origin SELECT rules use a typed `process_owned` effect with inline
 origin and `identity_value_index`. The zero-based template `?` slot must be an
 identity equality or singleton IN predicate; other endpoint/table/SQL bounds
 remain exact. Use the same origin capture as related Redis rules. An ordinary
-same-name, exact-selector rule may be narrowed through plan/apply, never reused
-as API-origin proof. Do not classify every SELECT on a task table as background.
+same-name rule is not API-origin proof. A scope change requires the engine's
+explicit replacement proposal and complete preflight. Do not classify every
+SELECT on a task table as background.
 
 When a helper has polling/cancel callers, also trace indirect detached-task
 callers such as terminal result collectors and accumulated-content helpers.
@@ -249,15 +255,15 @@ in its own detached lifecycle can still produce process-owned dependencies.
 Plan proves recording correlation and scope, while source evidence proves
 caller ownership.
 
-API-origin Redis DEL accepts an exact ordered `key_sequence` through repeated
-`--key-sequence-template`; every key must bind the same captured identity.
-For EVALSHA, `--script JSON` declares an exact SHA-1, ordered KEYS envelope,
+API-origin Redis DEL accepts an exact ordered `key_sequence` in its typed
+selector; every key must bind the same captured identity.
+For EVALSHA, the typed `script` contract declares an exact SHA-1, ordered KEYS envelope,
 ARGV count and `identity_argv_index`. Date-keyed metrics may still carry the task
 ID in ARGV. SCRIPT EXISTS requires a proven adjacent same-connection invocation.
 
 API-origin MySQL also supports bounded single-row UPDATEs. Complete transaction
-boundaries require `--include-transaction-boundaries`, consistent wire sequences
-and server flags. `--transaction-member JSON` can admit explicit read-only helper
+boundaries require `include_transaction_boundaries`, consistent wire sequences
+and server flags. Typed `transaction_members` can admit explicit read-only helper
 selectors only inside a fully proven transaction. Ordinary write rules, broad
 COMMIT/ROLLBACK exceptions and standalone member matches remain unsupported.
 Inspect actual dirty summaries: source-recorded ROLLBACKs may already be optional

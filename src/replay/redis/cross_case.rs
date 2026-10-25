@@ -52,7 +52,7 @@ fn recorded_fingerprint(record: &RecordedExchange, args: &[Vec<u8>]) -> String {
 pub(in crate::replay) fn verify_candidate(
     source: &Path,
     report_path: &Path,
-    selector: &time_shift::RedisTimeShiftSelector,
+    selector: &shared_read::RedisSharedReadSelector,
 ) -> Result<Value> {
     selector.validate()?;
     exact_read(selector)?;
@@ -70,13 +70,18 @@ pub(in crate::replay) fn verify_candidate(
         .filter_map(|item| {
             let case_id = item["case_id"].as_str()?;
             let fingerprint = item["request_fingerprint"].as_str()?;
-            (item["target"]["host"]
+            (item["target"]["host"].as_str().is_some_and(|host| {
+                selector
+                    .host
+                    .as_ref()
+                    .is_none_or(|selected| normalize_host(host) == normalize_host(selected))
+            }) && item["target"]["port"].as_u64().is_some_and(|port| {
+                selector
+                    .port
+                    .is_none_or(|selected| port == u64::from(selected))
+            }) && item["command"]
                 .as_str()
-                .is_some_and(|host| normalize_host(host) == normalize_host(&selector.host))
-                && item["target"]["port"].as_u64() == Some(u64::from(selector.port))
-                && item["command"]
-                    .as_str()
-                    .is_some_and(|command| command.eq_ignore_ascii_case(&selector.read.command)))
+                .is_some_and(|command| command.eq_ignore_ascii_case(&selector.read.command)))
             .then_some((case_id, fingerprint))
         })
         .collect::<Vec<_>>();
@@ -96,7 +101,11 @@ pub(in crate::replay) fn verify_candidate(
         let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
         let mut selected_lanes = BTreeMap::<Uuid, usize>::new();
         let mut selected_identities = BTreeSet::new();
-        for entry in index.redis.iter().filter(|entry| entry.key == key) {
+        for entry in index
+            .redis
+            .iter()
+            .filter(|entry| key.as_ref().is_none_or(|key| entry.key == *key))
+        {
             let bytes = reader.read(&file, &index.stamp, &entry.location)?;
             let raw = std::str::from_utf8(&bytes)?.trim_end_matches(['\r', '\n']);
             let line = entry.location.line - 1;
@@ -150,7 +159,7 @@ pub(in crate::replay) fn verify_candidate(
     }))
 }
 
-pub(in crate::replay) fn exact_read(selector: &time_shift::RedisTimeShiftSelector) -> Result<()> {
+pub(in crate::replay) fn exact_read(selector: &shared_read::RedisSharedReadSelector) -> Result<()> {
     use super::key_selector::RedisValueKeySelector;
     ensure!(
         matches!(selector.read.key, RedisValueKeySelector::Exact { .. })
@@ -166,7 +175,7 @@ pub(in crate::replay) fn exact_read(selector: &time_shift::RedisTimeShiftSelecto
 
 fn shareable(
     record: &RecordedExchange,
-    selector: &time_shift::RedisTimeShiftSelector,
+    _selector: &shared_read::RedisSharedReadSelector,
 ) -> Result<()> {
     ensure!(
         record.global_dependency_reason.is_none()
@@ -174,7 +183,19 @@ fn shareable(
             && !record.cache_snapshot_hit,
         "Redis cross-case requires an ordinary case-owned read"
     );
-    time_shift::ResponseShift::prepare(record, &[("cross-case".into(), selector.read.clone())])?;
+    ensure!(
+        record.replay_safe
+            && !record.session_setup
+            && record.outcome == DependencyExchangeOutcome::Response
+            && record.response_kind == "bulk_string"
+            && !record.response.truncated
+            && record.args.iter().all(|arg| !arg.truncated),
+        "Redis sharing requires a complete successful ordinary bulk read"
+    );
+    ensure!(
+        crate::replay::redis_bulk_payload(&record.response.decode()?)?.is_some(),
+        "Redis sharing requires one complete bulk response"
+    );
     Ok(())
 }
 
@@ -244,13 +265,19 @@ pub(in crate::replay) fn load(
         }
         let index = crate::dependency_index::load_file(&file)?;
         let lane_counts = lane_counts(&index)?;
-        let keys = rules
+        let mut keys = rules
             .iter()
             .map(|(_, s)| selector_key(s))
             .collect::<Result<BTreeSet<_>>>()?;
+        let any_scope = keys.remove(&None);
+        let keys = keys.into_iter().flatten().collect::<BTreeSet<_>>();
         let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
         let mut selected = Vec::new();
-        for entry in index.redis.iter().filter(|entry| keys.contains(&entry.key)) {
+        for entry in index
+            .redis
+            .iter()
+            .filter(|entry| any_scope || keys.contains(&entry.key))
+        {
             let raw = reader.read(&file, &index.stamp, &entry.location)?;
             let record: RecordedExchange =
                 serde_json::from_slice(&raw).context("invalid Redis exchange evidence")?;
@@ -274,6 +301,14 @@ pub(in crate::replay) fn load(
                 );
                 selected.push((rule_id.clone(), record));
             }
+        }
+        if !selected.is_empty() {
+            state.shared_source_directories.insert(
+                origin.clone(),
+                file.parent()
+                    .context("shared Source directory is absent")?
+                    .to_owned(),
+            );
         }
         let mut selected_lanes = BTreeMap::<Uuid, usize>::new();
         for (_, record) in &selected {
@@ -320,22 +355,27 @@ pub(in crate::replay) fn load(
     Ok(())
 }
 
-fn selector_key(selector: &time_shift::RedisTimeShiftSelector) -> Result<String> {
+fn selector_key(selector: &shared_read::RedisSharedReadSelector) -> Result<Option<String>> {
     use super::key_selector::RedisValueKeySelector;
     let RedisValueKeySelector::Exact { value } = &selector.read.key else {
         anyhow::bail!("cross-case requires exact key");
+    };
+    let (Some(host), Some(port), Some(database)) =
+        (&selector.host, selector.port, selector.read.database)
+    else {
+        return Ok(None);
     };
     let mut args = vec![value.as_bytes().to_vec()];
     if let Some(RedisValueKeySelector::Exact { value }) = &selector.read.hash_field {
         args.push(value.as_bytes().to_vec());
     }
-    Ok(crate::dependency_index::redis_key(
-        &selector.host,
-        selector.port,
-        selector.read.database,
+    Ok(Some(crate::dependency_index::redis_key(
+        host,
+        port,
+        database,
         &selector.read.command,
         &args,
-    ))
+    )))
 }
 
 fn lane_counts(index: &crate::dependency_index::FileIndex) -> Result<BTreeMap<Uuid, usize>> {

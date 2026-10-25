@@ -5,11 +5,10 @@ mod candidates;
 mod conditional_redis_tests;
 mod config;
 mod http;
+mod identities;
 #[cfg(test)]
 mod lset_tests;
 mod mysql;
-mod mysql_read_back;
-pub(in crate::replay) use mysql_read_back::{MysqlIdentityDelivery, MysqlIdentityReadBackReport};
 #[cfg(test)]
 mod mysql_table_tests;
 mod path_candidates;
@@ -20,9 +19,7 @@ mod scopes;
 mod source;
 mod source_coverage;
 mod strings;
-pub(in crate::replay) use audit::{
-    DynamicBindingReport, from_native_read_report, from_native_report, from_report,
-};
+pub(in crate::replay) use audit::{DynamicBindingReport, from_native_report, from_report};
 pub(in crate::replay) use candidates::CaptureCandidate;
 pub(in crate::replay) use config::validate;
 pub use config::{
@@ -56,6 +53,8 @@ pub(in crate::replay) struct DynamicDecision {
 #[cfg(test)]
 type NormalizedArguments = (Vec<Vec<u8>>, Vec<Vec<u8>>);
 
+// Raw captures retain causal resource scope and Source text for substring delivery.
+// Equality and injectivity are enforced only by identity_owner's common store.
 type CaseBindings = BTreeMap<String, BTreeMap<String, Vec<IdentityPair>>>;
 
 #[derive(Debug, Clone, Default)]
@@ -66,10 +65,9 @@ pub(in crate::replay) struct DynamicValues {
     native_guards: Arc<BTreeMap<String, super::native_projection::NativeScopeGuard>>,
     native_cases: Arc<BTreeMap<String, BTreeSet<String>>>,
     bindings: Arc<Mutex<CaseBindings>>,
+    identity_owner: super::request_contract::RequestContracts,
     candidates: Arc<Mutex<Vec<CaptureCandidate>>>,
     applicable: Arc<Mutex<BTreeSet<String>>>,
-    mysql_capture_clocks: Arc<Mutex<mysql_read_back::CaptureClocks>>,
-    mysql_read_backs: Arc<Mutex<Vec<MysqlIdentityReadBackReport>>>,
 }
 
 impl DynamicValues {
@@ -87,10 +85,9 @@ impl DynamicValues {
             native_guards: Arc::default(),
             native_cases: Arc::default(),
             bindings: Arc::new(Mutex::new(BTreeMap::new())),
+            identity_owner: super::request_contract::RequestContracts::default(),
             candidates: Arc::new(Mutex::new(Vec::new())),
             applicable: Arc::new(Mutex::new(BTreeSet::new())),
-            mysql_capture_clocks: Arc::default(),
-            mysql_read_backs: Arc::default(),
         }
     }
     pub(in crate::replay::policy) fn set_request(
@@ -133,10 +130,7 @@ impl DynamicValues {
                     .is_some_and(|ids| ids.contains(&rule.id)))
     }
     pub(in crate::replay) fn begin_case(&self, case_id: &str) {
-        self.mysql_read_backs
-            .lock()
-            .expect("SQL identity deliveries")
-            .retain(|row| row.case_id != case_id);
+        self.identity_owner.clear_identities(case_id);
         self.candidates
             .lock()
             .expect("capture candidates")
@@ -146,7 +140,16 @@ impl DynamicValues {
             .expect("dynamic bindings")
             .remove(case_id);
     }
-    pub(in crate::replay) fn commit(&self, case_id: &str, decision: DynamicDecision) {
+    pub(in crate::replay) fn commit(&self, case_id: &str, decision: DynamicDecision) -> Result<()> {
+        self.commit_shared_identities(case_id, &decision)?;
+        self.commit_after_identities(case_id, decision);
+        Ok(())
+    }
+    pub(in crate::replay) fn commit_after_identities(
+        &self,
+        case_id: &str,
+        decision: DynamicDecision,
+    ) {
         let mut bindings = self.bindings.lock().expect("dynamic bindings");
         for (rule, pair) in decision.pairs {
             let pairs = bindings
@@ -225,17 +228,8 @@ impl DynamicValues {
             pairs.len() < 256 || pairs.contains(&pair),
             "dynamic capture exceeds 256 identities per case/rule"
         );
-        for previous in pairs {
-            ensure!(
-                previous.source != pair.source || previous.target == pair.target,
-                "dynamic identity changed its target reference"
-            );
-            ensure!(
-                previous.target != pair.target || previous.source == pair.source,
-                "distinct dynamic identities collapsed"
-            );
-        }
-        Ok(())
+        drop(bindings);
+        self.check_shared_pair(case_id, rule, pair, pending)
     }
     #[cfg(test)]
     pub(in crate::replay) fn normalize_arguments(

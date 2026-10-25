@@ -9,7 +9,30 @@ fn generated() -> serde_json::Value {
 }
 
 #[test]
-fn native_response_and_value_rules_share_the_public_strict_payload_transaction() {
+fn public_apply_rejects_a_changed_independent_source_proof_before_writing_runtime_policy() {
+    let fixture = Fixture::new();
+    fixture.replace_response_bodies(
+        br#"{"id":"11111111-1111-4111-8111-111111111111"}"#,
+        br#"{"id":"22222222-2222-4222-8222-222222222222"}"#,
+    );
+    write(&fixture.proposal, generated());
+    fixture.confirm();
+    let planned = fixture.plan().unwrap();
+    let original = fs::read(fixture.policy()).unwrap();
+    let events_path =
+        crate::internal_runtime::root(fixture.root()).join("rewrite/rule-plans/events.json");
+    let mut events: serde_json::Value =
+        serde_json::from_slice(&fs::read(&events_path).unwrap()).unwrap();
+    events["plans"]["GET /api"]["plan"]["unified"]["source_proofs"]["rules"][0]["proof"]["fact"] =
+        json!("Changed Source claim after plan publication");
+    write(&events_path, events);
+    let error = apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap_err();
+    assert!(format!("{error:#}").contains("Source proof snapshot changed"));
+    assert_eq!(fs::read(fixture.policy()).unwrap(), original);
+}
+
+#[test]
+fn native_response_and_global_formats_share_the_public_strict_payload_transaction() {
     for changed_business in [false, true] {
         let fixture = Fixture::new();
         let source =
@@ -23,7 +46,7 @@ fn native_response_and_value_rules_share_the_public_strict_payload_transaction()
             .replace_response_bodies(source.to_string().as_bytes(), target.to_string().as_bytes());
         write(
             &fixture.proposal,
-            json!([super::super::rule(), generated()]),
+            json!({"format":"traffic-policy/v2","json":super::super::rule()["json"],"rules":[generated()]}),
         );
         fixture.confirm();
         let planned = fixture.plan();
@@ -37,7 +60,7 @@ fn native_response_and_value_rules_share_the_public_strict_payload_transaction()
                 .as_array()
                 .unwrap()
                 .len(),
-            2
+            1
         );
         assert_eq!(
             planned.traffic_e2e_report["preflight"]["rules"]["generated"],
@@ -284,7 +307,7 @@ fn independent_redis_nonce_with_key_capture_survives_public_plan_and_apply() {
         json!({"id":"session-nonce","match":{"api":"GET /api",
         "resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
         "key":{"kind":"affix","prefix":"sessions:"}},"effect":{"kind":"redis_sequence",
-        "key":{"kind":"capture","binding":"session","template":"sessions:{value}","format":{"kind":"uuid_v4"}},
+        "key":{"kind":"capture","template":"sessions:{value}","format":{"kind":"uuid_v4"}},
         "commands":[{"operation":"SET","arguments":{"1":{"kind":"json","fields":{
             "/poll_token":{"kind":"random","format":"base64url","length":43}
         }}}}]},"proof":proof}),

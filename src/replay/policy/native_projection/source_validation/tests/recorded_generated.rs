@@ -77,7 +77,7 @@ fn recorded_generated_rpc_and_celery_source_contracts_validate_without_changing_
                         &api,
                         subscribe,
                         json!({"kind":"affix","prefix":"celery-task-meta-"}),
-                        json!({"kind":"redis_sequence","key":{"kind":"capture","binding":"conversion-task","template":"celery-task-meta-{value}","format":{"kind":"uuid_v4"}},"commands":[{"operation":"SUBSCRIBE","arguments":{}},{"operation":"UNSUBSCRIBE","arguments":{}}]}),
+                        json!({"kind":"redis_sequence","key":{"kind":"capture","template":"celery-task-meta-{value}","format":{"kind":"uuid_v4"}},"commands":[{"operation":"SUBSCRIBE","arguments":{}},{"operation":"UNSUBSCRIBE","arguments":{}}]}),
                     ),
                     rule(
                         "queued-task",
@@ -85,9 +85,9 @@ fn recorded_generated_rpc_and_celery_source_contracts_validate_without_changing_
                         publish,
                         json!({"kind":"exact","value":queue}),
                         json!({"kind":"redis_sequence","commands":[{"operation":"LPUSH","arguments":{"1":{"kind":"json","fields":{
-                            "/headers/id":{"kind":"identity","binding":"conversion-task","template":"{value}","transform":"identity"},
-                            "/headers/root_id":{"kind":"identity","binding":"conversion-task","template":"{value}","transform":"identity"},
-                            "/properties/correlation_id":{"kind":"identity","binding":"conversion-task","template":"{value}","transform":"identity"},
+                            "/headers/id":{"kind":"identity","template":"{value}","transform":"identity"},
+                            "/headers/root_id":{"kind":"identity","template":"{value}","transform":"identity"},
+                            "/properties/correlation_id":{"kind":"identity","template":"{value}","transform":"identity"},
                             "/properties/delivery_tag":{"kind":"random","format":"uuid","length":36},
                             "/properties/reply_to":{"kind":"random","format":"uuid","length":36},
                             "/headers/origin":{"kind":"random","format":"string","max_length":255}

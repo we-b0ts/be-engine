@@ -2,7 +2,6 @@
 use super::super::config::fingerprint;
 use super::*;
 use serde::{Deserialize, Serialize};
-mod http_json;
 #[cfg(test)]
 mod tests;
 
@@ -114,23 +113,10 @@ impl RequestContracts {
         actual: &[u8],
         headers: &BTreeMap<String, Vec<String>>,
         clocks: crate::replay::assertion::RequestTimes,
-        actual_uri: &str,
     ) {
         if source == actual {
             return;
         }
-        self.observe_http_json(
-            case,
-            target,
-            method,
-            path,
-            source,
-            source_headers,
-            actual,
-            headers,
-            clocks,
-            actual_uri,
-        );
         if crate::replay::http::multipart::compare(source, source_headers, actual, headers).is_err()
         {
             return;
@@ -246,10 +232,6 @@ pub(in crate::replay::policy) fn verify_capture(
     capture_id: Option<&str>,
 ) -> Result<usize> {
     let dynamic_rules = &document.dynamic_values;
-    let mut publish = crate::replay::redis::publish::PublishRules::default();
-    publish.configure(super::super::redis_value::publish_rules(
-        &document.dependency_rules,
-    ));
     let mut validated = BTreeSet::new();
     let mut matched_cases = BTreeSet::new();
     let mut dynamic_cases = BTreeMap::new();
@@ -259,10 +241,7 @@ pub(in crate::replay::policy) fn verify_capture(
         .flatten()
     {
         let candidate: Candidate = serde_json::from_value(item.clone())?;
-        let protocol = if matches!(
-            candidate.capability.as_str(),
-            "http_multipart" | "http_json_request_time"
-        ) {
+        let protocol = if candidate.capability == "http_multipart" {
             DependencyProtocol::Http
         } else {
             DependencyProtocol::Redis
@@ -272,8 +251,8 @@ pub(in crate::replay::policy) fn verify_capture(
                 .target
                 .host
                 .as_ref()
-                .is_none_or(|host| !host.eq_ignore_ascii_case(&candidate.host))
-            || rule.target.port != Some(candidate.port)
+                .is_some_and(|host| !host.eq_ignore_ascii_case(&candidate.host))
+            || rule.target.port.is_some_and(|port| port != candidate.port)
         {
             continue;
         }
@@ -297,18 +276,19 @@ pub(in crate::replay::policy) fn verify_capture(
             Ok(bytes)
         };
         let request: Value = serde_json::from_slice(&read(dir.join("request.json"), witnesses)?)?;
-        let Some(scope) = &rule.case_selector else {
-            continue;
-        };
         if rule
             .when
             .as_ref()
             .is_some_and(|condition| !condition.matches_request(&request))
-            || request["method"] != scope.method
-            || !super::super::pattern::path_pattern_matches(
-                &scope.path,
-                &super::super::pattern::uri_path(request["uri"].as_str().unwrap_or_default()),
-            )
+            || rule.case_selector.as_ref().is_some_and(|scope| {
+                request["method"] != scope.method
+                    || !super::super::pattern::path_pattern_matches(
+                        &scope.path,
+                        &super::super::pattern::uri_path(
+                            request["uri"].as_str().unwrap_or_default(),
+                        ),
+                    )
+            })
         {
             continue;
         }
@@ -343,7 +323,10 @@ pub(in crate::replay::policy) fn verify_capture(
                     source_input_error,
                     source_uri: request["uri"].as_str().unwrap_or_default().to_owned(),
                     source_body,
-                    method: scope.method.clone(),
+                    method: request["method"]
+                        .as_str()
+                        .context("Source method missing")?
+                        .into(),
                     path: super::super::pattern::uri_path(request["uri"].as_str().unwrap()),
                     recorded,
                     actual: Some(candidate.actual_anchor),
@@ -402,7 +385,9 @@ pub(in crate::replay::policy) fn verify_capture(
                 else {
                     continue;
                 };
-                if selector.database != candidate.database
+                if selector
+                    .database
+                    .is_some_and(|database| database != candidate.database)
                     || selector
                         .commands
                         .iter()
@@ -450,23 +435,6 @@ pub(in crate::replay::policy) fn verify_capture(
                 let actual_args = normalized
                     .as_ref()
                     .map_or(actual.as_slice(), |n| n.actual.as_slice());
-                let publish_comparison = if candidate.command == "PUBLISH" {
-                    publish
-                        .preview_json(
-                            crate::replay::redis::publish::json::JsonContext {
-                                case_id: Some(&candidate.case_id),
-                                host: &candidate.host,
-                                port: candidate.port,
-                                database: candidate.database,
-                                username: event["username"].as_str(),
-                            },
-                            source_args,
-                            actual_args,
-                        )
-                        .transpose()?
-                } else {
-                    None
-                };
                 runtime.compare_redis(
                     &super::RedisRequestContext {
                         case: &candidate.case_id,
@@ -487,16 +455,9 @@ pub(in crate::replay::policy) fn verify_capture(
                     },
                     rule,
                     &single,
-                    publish_comparison
-                        .as_ref()
-                        .map_or(source_args, |c| &c.source),
-                    publish_comparison
-                        .as_ref()
-                        .map_or(actual_args, |c| &c.actual),
+                    source_args,
+                    actual_args,
                 )?;
-                if let Some(comparison) = publish_comparison {
-                    publish.commit_json(comparison);
-                }
                 let capture_differs = capture_id.is_none_or(|id| {
                     normalized
                         .as_ref()
@@ -508,7 +469,7 @@ pub(in crate::replay::policy) fn verify_capture(
                         &normalized.decision,
                         report,
                     )?;
-                    dynamic.commit(&candidate.case_id, normalized.decision);
+                    dynamic.commit(&candidate.case_id, normalized.decision)?;
                 }
                 if !capture_differs {
                     continue;
@@ -516,12 +477,7 @@ pub(in crate::replay::policy) fn verify_capture(
                 validated.insert(candidate.command.clone());
                 matched_cases.insert(candidate.case_id.clone());
             } else {
-                let uri_matches = if candidate.capability == "http_json_request_time" {
-                    super::super::pattern::uri_path(event["uri"].as_str().unwrap_or_default())
-                        == candidate.path
-                } else {
-                    event["uri"] == candidate.path
-                };
+                let uri_matches = event["uri"] == candidate.path;
                 if event["event_type"] != "http_exchange"
                     || event["method"] != candidate.command
                     || !uri_matches
@@ -553,13 +509,6 @@ pub(in crate::replay::policy) fn verify_capture(
                     continue;
                 }
                 decode(&event["response_body"])?;
-                if candidate.capability == "http_json_request_time" {
-                    if http_json::verify(rule, &candidate, &event, &source, &actual, &dir)? {
-                        validated.insert(candidate.command.clone());
-                        matched_cases.insert(candidate.case_id.clone());
-                    }
-                    continue;
-                }
                 let actual: HttpWitness = serde_json::from_slice(&actual)?;
                 let mut headers: BTreeMap<String, Vec<String>> =
                     serde_json::from_value(event["request_headers"].clone())?;
@@ -639,7 +588,7 @@ fn validate_source_commands(
     for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
         let event: Value = serde_json::from_slice(line)?;
         if event["event_type"] != "redis_exchange"
-            || event["database"] != selector.database
+            || event["database"] != candidate.database
             || event["target_host"] != candidate.host
             || event["target_port"] != candidate.port
             || event["replay_safe"] != true

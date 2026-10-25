@@ -84,22 +84,44 @@ target repair, migration route, blocker status, or completion state.
 ## Unified Policy Boundary
 
 `project.policy` names one `traffic-policy/v2` document, normally
-`.traffic-e2e/policy.yaml`. Declare persistent physical fields under `resources`
-and API output fields under `responses`; retain contextual/stateful effects in
-`rules`. Named resource references and `field_ref` reuse identity and strategy
-without duplicating them per SQL or command. See
+`.traffic-e2e/policy.yaml`. Declare one global JSON field-format map under
+`json.fields`, independent of APIs, SSE events, database columns and cache keys.
+JSON-valued columns are recognized automatically; native MySQL time types use
+protocol metadata. Declare otherwise explicit scalar formats under
+`mysql.tables.<name>.fields` with a physical `pattern`. Identity correspondence
+is maintained internally from complete typed Source values; rules describe
+formats only. `redis.keys` combines scalar formats, key formats, ordered
+commands and supported key-local state permissions without resource/database
+selectors. `http.headers` retains strict presence/count/order; missing SDK
+headers are not waivable. `localcache.requests` identifies finite initialization
+reads; `process_dependencies.tasks.<actual-Source-task-name>.requests` groups
+real process work across protocols. HTTP lifetime entries require a host.
+Named root `signatures` profiles centralize algorithms and private startup key
+references. Global `kind: jwt` verifies HMAC signatures/NumericDates and retains
+complete-token correspondence. The old authored identity `formats: [jwt]` is
+rejected; there is no keyless JWT policy mode. `api` positions explicitly declare
+input re-signing and extra response nonce/expiry checks. Global JSON templates
+share complete typed identities across embedded URL slots. `http.requests` owns
+explicit generated path templates; `http.response_rewrite` owns JSON URL
+acquisition and address rewriting. `docx.fields` is reused
+by scoped API codec bindings; API encryption positions bind envelopes and keys,
+while plaintext reuses global JSON formats. Supported multipart boundaries are
+compared as protocol encoding without a project exemption. These declarations
+reuse existing typed owners and preserve Source-proof and scope requirements.
+See [content formats and carrier bindings](../../../../docs/content-policy-layout.md) and
 [resource-field contracts](../../../../docs/resource-field-contracts.md) for
-schema, supported carriers, conditions and clock relationships. Current bounded
+schema, supported carriers and dependency lifetime boundaries. Current bounded
 evidence supplies discovery and capability metadata; it does not supply Source proof. During managed rewrites, the backend-rewrite skill owns the single
-`rule plan --file ... --evidence ...` / `rule apply <plan-id>` transaction.
+`rule plan --file ... --evidence ...` / `rule apply --plan <plan-id>` transaction.
 Plans expand the complete rule, protect unselected evidence and expose remaining
 Replay, reclassification or recording obligations. Source self-validation does
 not create independent Target evidence. Protocol framing, sessions and finite
 consumption remain with the protocol owner.
 
 API route-pattern bootstrap retains `traffic-e2e config recorder ...
-case-path-patterns`. It updates capture effects in the same policy and preserves
-unrelated rules and proofs. Old verification/Source document formats and
+case-path-patterns`. `recording.case_paths` declares those paths and is rendered
+last, preserving their capture identity and order. Bootstrap updates capture effects in the same policy and preserves
+unrelated runtime permissions and separate plan evidence. Old verification/Source document formats and
 codec-specific rule planners are retired.
 
 ## Engine Capability Diagnosis

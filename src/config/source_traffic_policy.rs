@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +28,8 @@ pub struct SourceTrafficPolicyConfig {
     pub breeze_capture: Vec<SourceTrafficBreezeCaptureConfig>,
     #[serde(default)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub async_api: BTreeMap<String, crate::policy::AsyncApiRule>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -58,31 +60,7 @@ impl SourceTrafficPolicyConfig {
             http_response_rewrite: Vec::new(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: Vec::new(),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn repository_defaults() -> Self {
-        Self {
-            version: SOURCE_TRAFFIC_POLICY_VERSION,
-            http: SourceTrafficHttpPolicyConfig::default(),
-            http_response_rewrite: Vec::new(),
-            breeze_capture: Vec::new(),
-            process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
-                name: "breeze_vintage".to_string(),
-                authorities: vec![
-                    "config.api.demo.test".to_string(),
-                    "static.config.api.demo.test".to_string(),
-                    "register.kailash.demo.test".to_string(),
-                ],
-                methods: vec!["GET".to_string()],
-                path_prefixes: vec![
-                    "/1/config/service".to_string(),
-                    "/naming/service".to_string(),
-                ],
-                source_revision: String::new(),
-                source_evidence: "traffic-e2e system default: Weibo Breeze Vintage configuration and naming refresh are process-owned".to_string(),
-            }],
+            async_api: BTreeMap::new(),
         }
     }
 
@@ -117,6 +95,7 @@ impl SourceTrafficPolicyConfig {
             self.version,
             SOURCE_TRAFFIC_POLICY_VERSION
         );
+        crate::policy::compile_async_api(&self.async_api)?;
         let mut snapshots = BTreeSet::new();
         for capture in &self.breeze_capture {
             ensure!(
@@ -179,6 +158,7 @@ impl SourceTrafficPolicyConfig {
             .extend(self.http_response_rewrite.iter().cloned());
         config.http_response_rewrite.validate()?;
         config.process_owned_dependencies = self.process_owned_dependencies.clone();
+        config.async_api = self.async_api.clone();
         Ok(())
     }
 }
@@ -209,9 +189,10 @@ mod tests {
     }
 
     #[test]
-    fn repository_defaults_use_global_http_policy() {
-        let rules = SourceTrafficPolicyConfig::repository_defaults();
+    fn initial_policy_has_no_implicit_service_ownership() {
+        let rules = SourceTrafficPolicyConfig::empty();
         assert_eq!(rules.http, SourceTrafficHttpPolicyConfig::default());
+        assert!(rules.process_owned_dependencies.is_empty());
         rules.validate().unwrap();
     }
 

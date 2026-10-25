@@ -1,10 +1,9 @@
-//! Outbound JSON JWT contracts use the public transaction and freeze startup keys.
+//! Global JWT verification freezes signing inputs in the sealed plan transaction.
 use super::*;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 
 const KEY: &str = "synthetic-outbound-transaction-signing-key";
 const NOW: i64 = 1_792_108_801;
-const RULE: &str = "chat-signed-fields";
 
 fn token(skill: bool, key: &str) -> String {
     let claims = if skill {
@@ -48,19 +47,15 @@ fn prepare(fixture: &Fixture, invalid_token: Option<bool>) -> (PathBuf, Vec<u8>,
         "duration_ms":0,"outcome":"response","error":null
     });
     fs::write(&dependencies, format!("{event}\n")).unwrap();
-    let jwt = json!({"kind":"jwt","algorithm":"HS256",
-        "signing_key":{"kind":"target_env","name":"SECRET_KEY"}});
     write(
         &fixture.proposal,
-        json!({"id":RULE,"match":{"api":"GET /api",
-            "resource":{"protocol":"http","endpoint":"chat.example.test:80"},
-            "operation":"POST","path":"/chat"},
-            "effect":{"kind":"http_request","json":{
-                "/metadata/request_id":{"kind":"random","format":"hex","length":8},
-                "/metadata/auth_token":jwt,
-                "/metadata/skill_identity_token":jwt
-            }},
-            "proof":{"source":"src/chat.rs:issue","fact":"Source generates an eight-character hex request ID and signs two request-relative JWTs with the startup key"}}),
+        json!({"format":"traffic-policy/v2","signatures":{
+            "default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}
+        },"json":{"fields":{
+            "/metadata/request_id":{"kind":"identity","formats":[{"hex":8}]},
+            "/metadata/auth_token":{"kind":"jwt"},
+            "/metadata/skill_identity_token":{"kind":"jwt"}
+        }}}),
     );
     // The installed historical attempt represents the same startup inputs.
     let mut state = fixture.state();
@@ -74,80 +69,79 @@ fn prepare(fixture: &Fixture, invalid_token: Option<bool>) -> (PathBuf, Vec<u8>,
 }
 
 #[test]
-fn http_body_jwt_plan_apply_freezes_key_and_requires_fresh_target_replay() {
-    for change_key in [false, true] {
+fn global_http_jwt_plans_authenticate_source_and_freeze_the_private_signing_key() {
+    for scenario in ["apply", "bad-auth-token", "bad-skill-token", "changed-key"] {
         let fixture = Fixture::new();
-        let (dependencies, original_recording, original_oracle) = prepare(&fixture, None);
-        let original_policy = fs::read(fixture.policy()).unwrap();
+        let invalid_signature = match scenario {
+            "bad-auth-token" => Some(false),
+            "bad-skill-token" => Some(true),
+            _ => None,
+        };
+        let (dependencies, recording, oracle) = prepare(&fixture, invalid_signature);
         fixture.confirm();
-        let planned = fixture.plan().unwrap();
-        assert_eq!(planned.traffic_e2e_report["status"], "planned_needs_replay");
-        assert_eq!(planned.traffic_e2e_report["preflight"]["rules"][RULE], 1);
-        assert_eq!(
-            planned.traffic_e2e_report["preflight"]["source_validations"],
-            1
+        let plan = fixture.plan();
+        if invalid_signature.is_some() {
+            assert!(
+                plan.is_err(),
+                "invalid Source token must fail complete preflight"
+            );
+            continue;
+        }
+        let plan = plan.unwrap();
+        assert!(
+            plan.traffic_e2e_report["rule_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|id| id == "global.json")
         );
-        assert_eq!(
-            planned.traffic_e2e_report["preflight"]["stateful_target_obligations"],
-            json!([RULE])
+        assert!(
+            plan.traffic_e2e_report["expanded_rules"]
+                .as_array()
+                .unwrap()
+                .is_empty()
         );
+        assert_eq!(plan.traffic_e2e_report["verified"], false);
         assert_eq!(
-            planned.traffic_e2e_report["preflight"]["independent_target_validations"],
+            plan.traffic_e2e_report["preflight"]["independent_target_validations"],
             0
         );
-        assert_eq!(planned.traffic_e2e_report["verified"], false);
-        assert!(!serde_json::to_string(&planned).unwrap().contains(KEY));
-        assert_eq!(fs::read(fixture.policy()).unwrap(), original_policy);
         let env = fixture
             .root()
             .join(crate::repository::LOCAL_TARGET_ENV_PATH);
-        let state = fixture.state();
-        let saved = state.rule_plan.as_ref().unwrap().unified.as_ref().unwrap();
-        assert!(saved.artifacts.iter().any(|artifact| artifact.path == env));
-        if change_key {
-            fs::write(&env, "SECRET_KEY=rotated-synthetic-key\n").unwrap();
-            assert!(apply_rewrite_rule(fixture.context(), &planned.plan_id).is_err());
-            assert_eq!(fs::read(fixture.policy()).unwrap(), original_policy);
-        } else {
-            let applied = apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
-            assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
-            assert_eq!(applied.traffic_e2e_report["verified"], false);
-            assert_eq!(
-                applied.traffic_e2e_report["status"],
-                "applied_pending_replay"
-            );
-            assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
-            let text = fs::read_to_string(fixture.policy()).unwrap();
-            assert!(text.contains("http_request"));
-            assert!(!text.contains(KEY));
-        }
-        assert_eq!(fs::read(&dependencies).unwrap(), original_recording);
-        assert_eq!(
-            fs::read(
-                dependencies
-                    .parent()
-                    .unwrap()
-                    .join("expected-response.json")
-            )
-            .unwrap(),
-            original_oracle
+        assert!(
+            fixture
+                .state()
+                .rule_plan
+                .as_ref()
+                .unwrap()
+                .unified
+                .as_ref()
+                .unwrap()
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.path == env)
         );
-    }
-}
-
-#[test]
-fn http_body_jwt_plan_rejects_either_source_signature_before_policy_changes() {
-    for invalid_token in [false, true] {
-        let fixture = Fixture::new();
-        let (dependencies, original_recording, original_oracle) =
-            prepare(&fixture, Some(invalid_token));
-        let original_policy = fs::read(fixture.policy()).unwrap();
-        fixture.confirm();
-        let error = fixture.plan().unwrap_err();
-        assert!(format!("{error:#}").contains("Signature"), "{error:#}");
-        assert!(fixture.state().rule_plan.is_none());
-        assert_eq!(fs::read(fixture.policy()).unwrap(), original_policy);
-        assert_eq!(fs::read(&dependencies).unwrap(), original_recording);
+        let public = serde_json::to_string(&plan.traffic_e2e_report).unwrap();
+        assert!(!public.contains(KEY));
+        assert!(!public.contains(&token(false, KEY)));
+        if scenario == "changed-key" {
+            fs::write(&env, "SECRET_KEY=changed-after-planning\n").unwrap();
+            assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
+            continue;
+        }
+        let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+        assert_eq!(
+            applied.traffic_e2e_report["status"],
+            "applied_pending_replay"
+        );
+        assert!(fixture.state().rule_replay_pending);
+        let policy = fs::read_to_string(fixture.policy()).unwrap();
+        assert!(policy.contains("kind: jwt"));
+        assert!(policy.contains("signatures:"));
+        assert!(!policy.contains("http_request"));
+        assert!(!policy.contains(KEY));
+        assert_eq!(fs::read(&dependencies).unwrap(), recording);
         assert_eq!(
             fs::read(
                 dependencies
@@ -156,7 +150,7 @@ fn http_body_jwt_plan_rejects_either_source_signature_before_policy_changes() {
                     .join("expected-response.json")
             )
             .unwrap(),
-            original_oracle
+            oracle
         );
     }
 }

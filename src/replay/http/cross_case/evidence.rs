@@ -45,8 +45,10 @@ fn discover_selected(
         .filter(|r| {
             selector.is_none_or(|s| {
                 r.request_fingerprint.is_some()
-                    && r.target.host == super::super::super::normalize_host(&s.host)
-                    && r.target.port == s.port
+                    && s.host.as_ref().is_none_or(|host| {
+                        r.target.host == super::super::super::normalize_host(host)
+                    })
+                    && s.port.is_none_or(|port| r.target.port == port)
                     && r.method.eq_ignore_ascii_case(&s.method)
                     && uri_path_only(&r.uri) == s.path
             })
@@ -181,22 +183,19 @@ pub(crate) fn verify_candidate(
             .is_some_and(|items| items.iter().any(|item| {
                 item["request_match"] == "verified"
                     && serde_json::from_value::<HttpCrossCaseSelector>(item["selector"].clone())
-                        .is_ok_and(|candidate| candidate == *selector)
+                        .is_ok_and(|candidate| selector.covers(&candidate))
             })),
         "no verified cross-case candidate for this selector; rerun replay if request identity evidence is unavailable"
     );
     // Validate all exchanges authorized by the selector, including ones outside the bounded preview.
     let (_, files) = recording::files(source)?;
-    let keys = std::collections::BTreeSet::from([crate::dependency_index::http_key(
-        &selector.host,
-        selector.port,
-        &selector.method,
-        &selector.path,
-    )]);
+    let keys = selector
+        .index_key()
+        .map(|key| std::collections::BTreeSet::from([key]));
     let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
     let mut checked = 0usize;
     for file in files {
-        recording::visit_matching(&file, &keys, &mut reader, |_, record| {
+        recording::visit_matching_or_all(&file, keys.as_ref(), &mut reader, |_, record| {
             if selector.matches(&record) {
                 require_replayable(&record)?;
                 checked += 1;

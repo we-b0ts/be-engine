@@ -20,33 +20,18 @@ pub(super) fn verify(
     case: &str,
     directory: &Path,
     request: &Value,
-    ordinary: &[&CompiledRule],
+    global: Option<&crate::policy::CompiledJsonPolicy>,
     native: &[&CompiledNativeRule],
     result: &mut Preflight,
 ) -> Result<()> {
     let super::super::manifest::PrimaryResponse { source, target } =
         bundle.primary_response(case, directory)?;
     let source_payload = crate::replay::response_payload_pair(request, &source, None)?;
-    let interaction = ordinary
-        .iter()
-        .copied()
-        .filter(|rule| matches!(rule.rule.slot, crate::policy::Slot::SseData(_)))
-        .collect::<Vec<_>>();
-    let ordinary = ordinary
-        .iter()
-        .copied()
-        .filter(|rule| rule.rule.slot == crate::policy::Slot::Body)
-        .collect::<Vec<_>>();
     let native = native
         .iter()
         .copied()
         .filter(|rule| source_payload.body_available || !rule.rule.effect.is_response_body())
         .collect::<Vec<_>>();
-    let ordinary = if source_payload.body_available {
-        ordinary.as_slice()
-    } else {
-        &[]
-    };
     let context = NativeResponseContext::from_rules(&native, root, directory)?;
     for (path, digest) in context.key_witnesses() {
         bundle.freeze(path)?;
@@ -68,18 +53,12 @@ pub(super) fn verify(
     let checked = compare_payload(
         &source_payload.source,
         &source_payload.source,
-        ordinary,
+        global,
         &native,
         &context,
         clocks,
     )?;
     let mut source_ids = checked;
-    source_ids.extend(compare_interaction(
-        &source_payload,
-        &interaction,
-        source_times,
-        false,
-    )?);
     for (id, _, result) in context.header_results(
         source_payload.source_headers.as_ref(),
         source_payload.source_headers.as_ref(),
@@ -127,12 +106,11 @@ pub(super) fn verify(
         pair.target
             .as_deref()
             .context("independent Target response is unavailable")?,
-        ordinary,
+        global,
         &native,
         &context,
         clocks,
     )?;
-    compare_interaction(&pair, &interaction, pair.times, true)?;
     compare_headers(
         &native,
         &pair.source_headers,
@@ -155,38 +133,11 @@ pub(super) fn verify(
     Ok(())
 }
 
-fn compare_interaction(
-    pair: &crate::replay::ResponsePayloadPair,
-    rules: &[&CompiledRule],
-    times: crate::value_contract::time::ClockPair,
-    target: bool,
-) -> Result<BTreeSet<String>> {
-    if rules.is_empty() {
-        return Ok(BTreeSet::new());
-    }
-    let source = pair.source_interaction.as_ref();
-    let checked = crate::replay::compare_interaction(
-        source,
-        if target {
-            pair.target_interaction.as_ref()
-        } else {
-            source
-        },
-        rules,
-        times,
-    )?;
-    ensure!(
-        checked.passed(),
-        "SSE response contract failed: {}",
-        serde_json::to_string(&checked.differences)?
-    );
-    Ok(checked.evaluated)
-}
-
+#[allow(clippy::too_many_arguments)]
 fn compare_payload(
     source: &[u8],
     target: &[u8],
-    ordinary: &[&CompiledRule],
+    global: Option<&crate::policy::CompiledJsonPolicy>,
     native: &[&CompiledNativeRule],
     context: &NativeResponseContext,
     clocks: AnchorClocks,
@@ -196,7 +147,7 @@ fn compare_payload(
     ).collect::<Vec<_>>();
     if !opaque.is_empty() {
         ensure!(
-            ordinary.is_empty() && context.is_empty(),
+            context.is_empty(),
             "opaque API body requires one compiled codec owner"
         );
         ensure!(
@@ -205,8 +156,8 @@ fn compare_payload(
         );
         return Ok(opaque.iter().map(|rule| rule.rule.id.clone()).collect());
     }
-    if !ordinary.is_empty() || !context.is_empty() {
-        let comparison = context.compare_encoded(source, target, ordinary, clocks)?;
+    if !context.is_empty() {
+        let comparison = context.compare_encoded_global(source, target, &[], global, clocks)?;
         ensure!(
             comparison.passed(),
             "API response contract failed: {}",

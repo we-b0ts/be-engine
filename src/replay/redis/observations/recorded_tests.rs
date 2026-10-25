@@ -61,7 +61,7 @@ fn recorded_observation_lifetimes_validate_without_editing_source() {
             let id = format!("observations-{}", id.trim_start_matches("sha256:"));
             let effect = if e["command"] == "GET" {
                 json!({"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1},"references":[{"resource":resource}],
-                "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1,"state_epochs":{"source":"caller-selected immutable Source trace","fact":"Source acceptance checks SET/DEL state observations without authorizing project policy"}}]})
+                "read_back":[{"operation":"GET","write_operation":"SET","argument_index":1,"state_epochs":true}]})
             } else {
                 json!({"kind":"redis_expiry_refresh"})
             };

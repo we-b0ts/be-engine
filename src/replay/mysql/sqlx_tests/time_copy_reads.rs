@@ -4,22 +4,10 @@ use sqlx::Executor;
 
 fn policy() -> &'static str {
     r#"format: traffic-policy/v2
-resources:
-  task_store:
-    protocol: mysql
-    endpoint: 127.0.0.1:3306
-    database: appdb
-    username: root
-    proof: {source: 'models.py:task', fact: 'The task document retains read creation time and updates its independent audit clock'}
-    tables:
-      tasks:
-        fields:
-          payload:
-            codec: json
-            fields:
-              /createdAt: {relative_time: iso8601_naive}
-              /updatedAt: {relative_time: iso8601_naive}
-rules: []
+json:
+  fields:
+    /createdAt: {kind: time, formats: [iso8601_naive]}
+    /updatedAt: {kind: time, formats: [iso8601_naive]}
 "#
 }
 fn payload(updated: &str) -> Value {
@@ -76,7 +64,11 @@ async fn historical_read_then_immediate_write_on_another_connection_is_repeatabl
                 .await
                 .unwrap();
             let mut document: Value = serde_json::from_str(row.get::<&str, _>("payload")).unwrap();
-            assert_eq!(document["createdAt"], "2010-01-01T00:00:00");
+            let created = document["createdAt"].as_str().unwrap();
+            assert!(chrono::NaiveDateTime::parse_from_str(created, "%Y-%m-%dT%H:%M:%S%.f").is_ok());
+            // Preserve the actual materialized historical value on the later
+            // write; authorization comes from this completed read delivery.
+            let delivered_created = document["createdAt"].clone();
             let observed = Utc::now();
             runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
             document["updatedAt"] = json!(
@@ -84,6 +76,7 @@ async fn historical_read_then_immediate_write_on_another_connection_is_repeatabl
                     .format("%Y-%m-%dT%H:%M:%S%.6f")
                     .to_string()
             );
+            assert_eq!(document["createdAt"], delivered_created);
             let result = sqlx::query("UPDATE tasks SET payload=? WHERE id=?")
                 .bind(document.to_string())
                 .bind(index as i64)

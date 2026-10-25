@@ -12,29 +12,15 @@ mod order;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CompiledPolicy {
+    pub global_json: Option<CompiledJsonPolicy>,
+    pub mysql: Option<MysqlPolicy>,
+    pub redis: Option<RedisPolicy>,
+    pub http: Option<HttpPolicy>,
+    pub async_api: BTreeMap<String, AsyncApiRule>,
+    pub signatures: BTreeMap<String, SignatureDefinition>,
     pub rules: Vec<CompiledRule>,
     pub native: Vec<CompiledNativeRule>,
     pub fingerprints: PolicyFingerprints,
-    pub origins: BTreeMap<String, String>,
-    #[serde(skip)]
-    resource_index: BTreeMap<(Surface, Protocol, String, u16), Vec<usize>>,
-}
-
-impl CompiledPolicy {
-    /// Immutable endpoint buckets avoid scanning unrelated rules during Replay.
-    pub fn resource_rules<'a>(
-        &'a self,
-        surface: Surface,
-        protocol: Protocol,
-        host: &str,
-        port: u16,
-    ) -> impl Iterator<Item = &'a CompiledRule> + use<'a> {
-        self.resource_index
-            .get(&(surface, protocol, host.to_ascii_lowercase(), port))
-            .into_iter()
-            .flatten()
-            .map(|index| &self.rules[*index])
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,8 +33,6 @@ pub struct CompiledRule {
     pub capabilities: Vec<CapabilityId>,
     pub fingerprint: String,
     pub field_proofs: BTreeMap<String, Proof>,
-    #[serde(skip)]
-    pub(crate) mysql_tables: Option<std::sync::Arc<crate::config::mysql_tables::TableMatcher>>,
     #[serde(skip)]
     pub(crate) codec_plan: std::sync::Arc<crate::value_codec::CodecPlan>,
 }
@@ -95,36 +79,49 @@ fn decode_policy(yaml: &str) -> Result<TrafficPolicy> {
 }
 
 pub fn compile_policy(document: &TrafficPolicy) -> Result<CompiledPolicy> {
-    let expanded = super::lower_policy(document)?;
-    compile_expanded(document, expanded)
+    let expanded = super::authoring::expanded(document)?;
+    compile_expanded(document, expanded.rules)
 }
 
 fn compile_expanded(
     document: &TrafficPolicy,
-    expanded_policy: super::ExpandedPolicy,
+    expanded_rules: Vec<PolicyRule>,
 ) -> Result<CompiledPolicy> {
     ensure!(
         document.format == POLICY_FORMAT,
         "policy format must be {POLICY_FORMAT:?}"
     );
     ensure!(
-        expanded_policy.rules.len() <= 4096,
+        expanded_rules.len() <= 4096,
         "policy contains more than 4096 rules"
     );
+    super::signatures::validate(&document.signatures)?;
+    let global_json = document
+        .json
+        .as_ref()
+        .map(|json| json.compile_with_signatures(&document.signatures))
+        .transpose()?;
+    if let Some(mysql) = &document.mysql {
+        mysql.validate()?;
+    }
+    if let Some(redis) = &document.redis {
+        redis.validate()?;
+    }
+    let http = document
+        .http
+        .as_ref()
+        .map(HttpPolicy::compile)
+        .transpose()?;
+    let async_api = compile_async_api(&document.async_api.clone().unwrap_or_default())?;
     let mut ids = BTreeSet::new();
-    let mut rules = Vec::with_capacity(expanded_policy.rules.len());
+    let mut rules = Vec::with_capacity(expanded_rules.len());
     let mut native = vec![];
-    for rule in &expanded_policy.rules {
+    for rule in &expanded_rules {
         ensure!(ids.insert(rule.id()), "duplicate rule id {:?}", rule.id());
         match rule {
             PolicyRule::Value(rule) => {
-                let mut compiled =
+                let compiled =
                     compile_rule(rule).with_context(|| format!("invalid rule {:?}", rule.id))?;
-                if let Some(proofs) = expanded_policy.field_proofs.get(&rule.id) {
-                    compiled.field_proofs = proofs.clone();
-                    compiled.fingerprint =
-                        digest("traffic-policy/declared-rule/v2", &(rule, proofs))?;
-                }
                 rules.push(compiled);
             }
             PolicyRule::Native(rule) => native.push(compile_native(rule)?),
@@ -132,17 +129,25 @@ fn compile_expanded(
     }
     rules.sort_by(|left, right| left.rule.id.cmp(&right.rule.id));
     order::native(&mut native);
-    super::native_compile::ownership::validate_field_references(
-        document,
-        &expanded_policy.origins,
-        &rules,
-        &native,
-    )?;
     validate_rule_overlaps(&rules)?;
-    interaction::validate_bindings(&rules)?;
+    interaction::validate_identity_scopes(&rules)?;
     validate_field_claims(&rules, &native)?;
-    let mut expanded = expanded_policy.rules.iter().collect::<Vec<_>>();
+    let mut expanded = expanded_rules.iter().collect::<Vec<_>>();
     order::expanded(&mut expanded);
+    let semantic = expanded
+        .iter()
+        .map(|rule| match rule {
+            PolicyRule::Native(rule) => super::native_compile::semantic_rule(rule),
+            PolicyRule::Value(rule) => {
+                let mut value = serde_json::to_value(rule)?;
+                value
+                    .as_object_mut()
+                    .expect("typed value rule")
+                    .remove("proof");
+                Ok(value)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
     let runtime = rules
         .iter()
         .map(|rule| RuntimeIdentity {
@@ -158,30 +163,36 @@ fn compile_expanded(
             capabilities: &rule.capabilities,
         })
         .collect::<Vec<_>>();
-    let mut resource_index = BTreeMap::<_, Vec<_>>::new();
-    for (index, rule) in rules.iter().enumerate() {
-        if let Some(resource) = &rule.rule.selector.resource {
-            resource_index
-                .entry((
-                    rule.rule.surface,
-                    resource.protocol,
-                    resource.endpoint.host.to_ascii_lowercase(),
-                    resource.endpoint.port,
-                ))
-                .or_default()
-                .push(index);
-        }
-    }
     Ok(CompiledPolicy {
+        global_json,
+        mysql: document.mysql.clone(),
+        redis: document.redis.clone(),
+        http,
+        async_api: async_api.clone(),
+        signatures: document.signatures.clone(),
         fingerprints: PolicyFingerprints {
             full: digest(
                 "traffic-policy/full/v2",
-                &(&expanded, &expanded_policy.field_proofs),
+                &(
+                    &semantic,
+                    &document.json,
+                    &document.mysql,
+                    &document.redis,
+                    &document.http,
+                    &document.async_api,
+                    &document.signatures,
+                ),
             )?,
             runtime: digest(
                 "traffic-policy/runtime/v1",
                 &(
                     runtime,
+                    &document.json,
+                    &document.mysql,
+                    &document.redis,
+                    &document.http,
+                    &async_api,
+                    &document.signatures,
                     native
                         .iter()
                         .filter(|rule| {
@@ -192,14 +203,32 @@ fn compile_expanded(
                         .collect::<Vec<_>>(),
                 ),
             )?,
-            capture: digest(
-                "traffic-policy/capture/v1",
-                &native
-                    .iter()
-                    .filter(|rule| rule.domain == NativeDomain::Capture || affects_snapshot(rule))
-                    .map(|rule| &rule.fingerprint)
-                    .collect::<Vec<_>>(),
-            )?,
+            capture: if async_api.is_empty() {
+                digest(
+                    "traffic-policy/capture/v1",
+                    &native
+                        .iter()
+                        .filter(|rule| {
+                            rule.domain == NativeDomain::Capture || affects_snapshot(rule)
+                        })
+                        .map(|rule| &rule.fingerprint)
+                        .collect::<Vec<_>>(),
+                )?
+            } else {
+                digest(
+                    "traffic-policy/capture/v1",
+                    &(
+                        &native
+                            .iter()
+                            .filter(|rule| {
+                                rule.domain == NativeDomain::Capture || affects_snapshot(rule)
+                            })
+                            .map(|rule| &rule.fingerprint)
+                            .collect::<Vec<_>>(),
+                        &async_api,
+                    ),
+                )?
+            },
             classification: digest(
                 "traffic-policy/classification/v1",
                 &native
@@ -211,8 +240,6 @@ fn compile_expanded(
         },
         rules,
         native,
-        origins: expanded_policy.origins,
-        resource_index,
     })
 }
 
@@ -284,7 +311,7 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
                 !matches!(time.clock_scope, ClockScope::Entity { .. })
                     || (rule.surface == Surface::ApiResponse
                         && matches!(rule.slot, Slot::SseData(_))),
-                "entity clock_scope requires an SSE identity binding"
+                "entity clock_scope requires an SSE identity sibling"
             );
             ensure!(
                 time.format != TimestampFormat::CalendarDate || time.clock_scope.is_shared(),
@@ -312,12 +339,11 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
                 );
             }
             FieldContract::Unordered => {}
-            FieldContract::Identity {
-                binding,
-                prefix,
-                format,
-            } => {
-                interaction::validate_identity(rule, binding, prefix, *format)?;
+            FieldContract::IdentityAnchor => {
+                anyhow::bail!("identity anchors are internal comparator decisions")
+            }
+            FieldContract::Identity { prefix, format } => {
+                interaction::validate_identity(rule, prefix, *format)?;
             }
             FieldContract::Conditional { .. } => unreachable!("nested field conditions rejected"),
         }
@@ -373,17 +399,6 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
             .keys()
             .map(|path| (path.clone(), rule.proof.clone()))
             .collect(),
-        mysql_tables: if matches!(rule.slot, Slot::SqlField(_)) {
-            Some(std::sync::Arc::new(
-                crate::config::mysql_tables::TableMatcher::new(
-                    &rule.selector.tables,
-                    &rule.selector.table_patterns,
-                    rule.selector.table_series.as_ref(),
-                )?,
-            ))
-        } else {
-            None
-        },
         codec_plan: std::sync::Arc::new(crate::value_codec::CodecPlan::compile(&rule.codec)?),
     })
 }

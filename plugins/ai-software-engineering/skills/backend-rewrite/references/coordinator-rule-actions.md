@@ -2,16 +2,22 @@
 
 Only the confirmed workflow coordinator plans/applies rules. Require the worker's
 Source conclusions and exact proposed selectors; return semantic questions to the
-Source owner. Rules live in the single file named by `project.policy`; default
-`.traffic-e2e/policy.yaml`. Declare stable physical fields under `resources`, API
-output fields under `responses`, and contextual/stateful behavior under `rules`.
-Reuse named resources and `field_ref`; proof inherits only within its declaration
-subtree or rule. See [resource-field contracts](../../../../../docs/resource-field-contracts.md).
-At the first relevant value mismatch, request the worker's physical field
-inventory and Source semantics together: time format/relation, duration
-unit/branch, unordered consumer behavior, or every eligible location of a shared
-identity. Inspect existing declarations before adding an owner. A missing
-mechanical draft does not postpone a Source-proven proposal.
+Source owner. Follow the [shared rule evidence contract](rule-policy.md): relevant
+API `rule_hints`, queries, planners and current actions drive the work. Rules live
+in the single file named by `project.policy`; default
+`.traffic-e2e/policy.yaml`. Declare one global JSON field-format map under
+`json.fields`. APIs, SSE data, MySQL JSON columns and Redis values share it;
+JSON carriers require no repeated codec declaration. Enable `mysql` for native
+DATE/DATETIME/TIMESTAMP metadata inference and use `mysql.tables` only for other
+explicit scalar formats by table/column without repeated database selectors.
+Use `redis.keys` for scalar formats, key formats, ordered commands and supported
+key-local state behavior; omit resource/database selectors. `http.headers`
+formats retain strict presence/count/order; missing SDK headers require a Target
+fix, not a policy waiver. Additional uncovered compound behavior stays native. See [global field formats](../../../../../docs/resource-field-contracts.md).
+At the first relevant mismatch, inspect the existing global paths and require
+Source-proven time/identity formats or unordered semantics. An identity rule
+only describes a format; correspondence is maintained internally from complete
+typed Source values. A missing mechanical draft does not postpone a valid proposal.
 See [unified rule contracts](../../../../../docs/unified-rule-contracts.md) and
 [worker diagnosis](api-implementer-rule-diagnosis.md).
 
@@ -25,52 +31,58 @@ backend-rewrite rule apply --plan <returned-plan-id>
 ```
 
 The proposal may be one rule, a list, or a full `traffic-policy/v2` authored
-document containing `resources`, `responses` and contextual `rules`. Additive
-amendments preserve existing declaration identity, fields and proofs; omissions
-never delete permissions. Unsupported declaration replacements reject.
+document containing global formats, dependency lifetimes and any additional
+native `rules`. Ordinary proposals add new fields and append new formats to
+existing declarations, preserving the old order and deduplicating exact matches.
+Unmentioned fields remain unchanged; `json: {fields: {}}` does not clear them.
+Intentional changes, removals or clears use `traffic-policy-change/v1` with
+`replace_sections` and the complete desired maps for those sections. Review all
+removals. `replace_rules` independently names native replacements and is optional;
+see the [shared proposal contract](rule-policy.md).
 Review affected surfaces, immutable Source scope, complete coverage, staged
 relationships, strict remainder, residual failures and verification obligations.
 Discovery drafts prefill observed selectors and request missing Source facts;
 a candidate never authorizes its own proof. PB requires actual typed schema
 bindings. Do not guess clock units, a timezone, a key source or random permissions.
 
-For ordinary identity fields, plan the complete eligible MySQL/Redis/response
-inventory with one case-local `binding` and a consistent format. Source values
-define equality and distinctness at runtime; a specific creation SQL or first
-capture event is unnecessary. Reads deliver established Target IDs and anchor
-unknown inputs. Do not split this into capture, Replay and one-reference-at-a-time
-plans. Mixed fixed/external IDs require expressible eligibility guards; keep
-existing narrow native owners when a whole-column declaration would broaden
-permission. Derived keys/URLs, hashes, signatures and finite state retain their
-additional typed effects and their own evidence requirements.
+For ordinary JSON fields, declare each root-relative pointer once with
+`kind` and `formats`; time always uses relative differences. Identity formats
+may include literal prefixes. Equal complete typed Source IDs must remain equal
+in Target across supported fields and carriers, while distinct IDs cannot merge.
+The engine establishes that correspondence internally. Reads reuse established
+Target IDs and anchor unknown inputs. Generic URL fields use `kind: url` with
+`formats: [url]`; decoded query text uses the same global pointer formats.
+Verified JWT fields use `kind: jwt` with an optional named `signature` profile;
+root `signatures` defines the algorithm and startup key once. The old authored
+identity `formats: [jwt]` syntax is rejected; there is no keyless JWT policy mode.
+`api` request positions explicitly authorize re-signing; response positions retain
+nonce echoes and signed expiry companion checks. For Source-proven compound strings,
+encoded content, DOCX fields, generated headers or learned-response addresses,
+consult [content formats and carrier bindings](../../../../../docs/content-policy-layout.md)
+when the evidence calls for them. Supported multipart boundaries need no policy.
+See [signature profiles](../../../../../docs/signature-profiles.md).
 
-For new dependency value rules and native resource effects, omit `match.api`.
-Select protocol, endpoint, database/user and the physical data position from
-Source behavior. MySQL field declarations select tables/columns independently
-of SQL; Redis declarations select key/container/hash-field and decoded path.
-Contextual native effects keep their required operation/statement selectors and
-can reference declared strategies through `field_ref`. The API identifies the issue and transaction only; root
-inbound `when` predicates cannot scope a new resource rule. Review complete
-cross-API Source coverage and each API's independent Target evidence. Missing
-Target evidence requires genuine Replay. Keep explicit `calendar_date`
-`utc_offset`. Existing explicitly API-scoped relationships retain their previous
-scope and proof when extended; primary response assertions still select an API.
+Use `mysql.tables.<logical-name>` with a physical `pattern` and column `fields`
+for explicit scalar identities or formats that native metadata cannot infer.
+Do not add API, SQL-template or value-ordinal copies of a global JSON strategy.
+Known PB schemas remain explicit; unrecognized encoding compares exact bytes.
+Review system-wide Source coverage and independent Target evidence after global
+changes. Missing Target evidence requires genuine Replay. Calendar dates retain
+an explicit format `utc_offset` where local-date semantics require it.
 
 Discovery is paged independently from complete plan coverage. Follow
-`pagination.next_page.command` for omitted candidate/Source-binding summaries
+`pagination.next_page.command` for omitted candidate/Source-location summaries
 and `pagination.next_scan.command` for remaining observations, including long
 SSE streams. Counts describe one bounded scan window. Inspect the separate
-`source_entry.binding_count`/`summary_omitted` and explicit
+`source_entry.location_count`/`summary_omitted` and explicit
 `bounded_analysis.nonresumable_limits`; an empty page does not prove a missing
 capability. Continuations reject an obsolete active issue. Supported dependency
 capability hints still require independent Source conclusions and full planning.
 
-For SSE, inspect discovery's `source_entry.bindings` for exact event/type slots
-even if there is no mechanical candidate. Require the worker's Source clock or
-identity variability/eligibility proof and include every eligible event/pointer,
-including terminal output and related resource fields. A shared case-local
-identity `binding` preserves equality and injectivity across those locations;
-missing events and event order remain strict. See
+For SSE, discovery's `source_entry.locations` locates observed data, but
+ordinary field formats belong in the same global JSON map used by other
+carriers. Nested terminal output may need a distinct root-relative pointer.
+Event presence, order, envelopes and unselected text remain strict. See
 [SSE value contracts](../../../../../docs/sse-value-contracts.md).
 When `policy_freshness.requires_fresh_replay` is true, follow its refresh command
 and scheduling gates before planning; discovery observations remain diagnostic.
@@ -107,38 +119,50 @@ Use `case-pattern` for pre-inventory capture catalog bootstrap. The Source-gap
 `route`/`recorder-capture` workflows below remain explicit acquisition owners and
 write the same unified policy atomically. They are not value relaxations.
 
-## Redis APPEND Streams
+## Redis Key Behavior And Dependency Lifetimes
 
-For Source-proven nonempty APPEND buffering, use `effect.kind: redis_append_stream`
-with an explicit Redis resource/database and key selector. Require ordered
-byte concatenation and observation/reset boundary proof; differing chunk sizes
-alone are insufficient. Complete Source preflight checks cumulative RESP lengths
-and preserves fresh Replay obligations. Other calls, including expiry refreshes,
-retain ordinary finite matching. See [APPEND streams](../../../../../docs/redis-append-stream.md).
+Declare `append_stream: true`, `read_commutation: true`, `expiry_refresh: true`
+or scalar identity `read_back: true` on a bounded `redis.keys` pattern. No API,
+resource alias or database selector is needed. The engine retains actual
+endpoint/database/authentication partitions and complete causal Source proof.
+APPEND preserves all ordered bytes and read/reset fences; finite nil polling
+retains its call counts; positive TTL refresh retains exact TTLs; current-ID
+read-back cannot borrow a future/deleted identity. Historical reads before an
+owned successful SET stay finite. Inspect the earliest Target admission error.
 
-## Redis Independent Polling
+`commands` lists ordered Redis operations. Selected scalar time arguments use
+one format; script operations retain exact script digests. Optional `key_format`
+describes a generated wildcard key segment. Complete JSON values always use
+root `json.fields`. Do not author bindings, shared clock groups or relations.
+See [key declarations](../../../../../docs/redis-key-contracts.md),
+[APPEND](../../../../../docs/redis-append-stream.md),
+[read-back](../../../../../docs/redis-read-back.md) and
+[state observations](../../../../../docs/redis-state-observations.md).
 
-For Source-proven cancellation polling concurrent with unrelated writes,
-`effect.kind: redis_read_commutation` permits finite nil GET observations to
-cross their incidental connection order. Require an explicit Redis
-resource/database and key selector plus the independent-task Source proof.
-Complete preflight rejects non-nil reads, mutations, ambiguous key access and
-stateful read lanes. Every recorded read remains required; this does not
-authorize optional or extra polling. Use the unified plan/apply transaction and
-fresh Replay before attributing any remaining count mismatch. See
-[finite read commutation](../../../../../docs/redis-read-commutation.md).
+Keep dependency lifetime classification separate from formats:
 
-## Redis Read-back
+```yaml
+source_revision: immutable-source-image-v1
+localcache:
+  requests:
+    - redis: {operation: HGET, key: token_v2, field: '3061639762'}
+    - http: {host: auth.example.com, method: GET, path: /.well-known/jwks.json}
+process_dependencies:
+  tasks:
+    refresh_signing_keys:
+      requests:
+        - http: {host: auth.example.com, method: GET, path: /keys/}
+```
 
-Ordinary resource identity fields already provide mapped same-Case read delivery
-and unknown-input anchors. For additional native Redis write-then-read flows,
-update the existing `identity`
-or `redis_sequence` rule with `effect.read_back`; do not duplicate its capture
-or introduce a Target cache to compensate for a recorded generated ID. Require
-the worker's exact same-key write/read Source proof and selected fields. GET
-can return the matched SET value; LRANGE can return selected RPUSH/LSET JSON
-fields. Planning requires positive complete Source witnesses and Apply retains
-fresh Replay obligations. See [Redis read-back](../../../../../docs/redis-read-back.md).
+Use actual logical Source task names; one task may contain requests from several
+protocols. `localcache.requests` declares finite initialization dependencies, not
+cache objects or blanket reusable responses. HTTP lifetime entries require a
+host, and actual observed ports remain paired. MySQL process requests keep
+precise SQL selectors and transaction boundaries. Each proposed entry supplies
+independent Source proof; runtime output omits evidence metadata. These
+classifications do not implement initial load, refresh, fallback or readiness
+state in Target. `async_api` separately records one finite asynchronous case
+through its configured end resource, dependency failure or engine deadline.
 
 ## Recorder Capture
 

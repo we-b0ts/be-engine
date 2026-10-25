@@ -19,10 +19,16 @@ pub(super) fn expand(
     parent: Option<&Value>,
     revision: Option<&str>,
 ) -> Result<Value> {
+    if raw.is_none() && parent.is_none_or(Value::is_null) {
+        return Ok(Value::Null);
+    }
     expand_inner(raw, parent, revision, false)
 }
 
 pub(super) fn expand_capture(raw: Option<Value>, revision: Option<&str>) -> Result<Value> {
+    if raw.is_none() {
+        return Ok(Value::Null);
+    }
     expand_inner(raw, None, revision, true)
 }
 
@@ -91,42 +97,6 @@ fn expand_inner(
         result.insert("source".into(), source.into());
     }
     Ok(Value::Mapping(result))
-}
-
-pub(super) fn compact(
-    value: &Value,
-    parent: Option<&Value>,
-    revision: Option<&str>,
-) -> Option<Value> {
-    if Some(value) == parent {
-        return None;
-    }
-    let mut result = value.as_mapping().expect("typed proof").clone();
-    if let Some(parent) = parent.and_then(Value::as_mapping) {
-        result.retain(|key, value| parent.get(key) != Some(value));
-    }
-    if let Some(revision) = revision
-        && let Some(source) = result.get_mut("source")
-        && let Some(text) = source.as_str()
-        && let Some(path) = text.strip_suffix(&format!(" @ {revision}"))
-    {
-        *source = path.into();
-    }
-    if result.get("source").and_then(Value::as_str) == Some("") {
-        result.remove("source");
-    } else if let Some(source) = result.get_mut("source") {
-        let references = crate::policy::proof::references(source.as_str().expect("typed source"))
-            .expect("validated Source references");
-        if references.len() > 1 {
-            *source = Value::Sequence(
-                references
-                    .into_iter()
-                    .map(|s| Value::String(s.into()))
-                    .collect(),
-            );
-        }
-    }
-    Some(Value::Mapping(result))
 }
 
 pub(super) fn source_effect(

@@ -5,20 +5,11 @@ use serde_json::Value;
 
 const PRIVATE_EVENT: &str = "synthetic-private-stream-event";
 
-fn proposal(conditional: bool) -> Value {
-    let proof = json!({"source":"responses.py:create","fact":"Source creates request-relative timestamps and fresh UUIDs"});
-    let mut rules = json!([
-        {"id":"response-time","surface":"api.response","match":{"api":"GET /api"},
-         "slot":"body","codec":"json","contract":{"/created_at":{"relative_time":"unix_seconds"}},"proof":proof},
-        {"id":"response-id","match":{"api":"GET /api"},
-         "effect":{"kind":"response_generated","fields":{"/id":{"kind":"uuid_v4"}}},"proof":proof}
-    ]);
-    if conditional {
-        for rule in rules.as_array_mut().unwrap() {
-            rule["when"] = json!({"request_body_json":{"/stream":{"equals":false}}});
-        }
-    }
-    rules
+fn proposal(_conditional: bool) -> Value {
+    json!({"format":"traffic-policy/v2","json":{"fields":{
+        "/created_at":{"kind":"time","formats":["unix_seconds"]},
+        "/id":{"kind":"identity","formats":["uuid"]}
+    }}})
 }
 
 fn tamper(value: &mut Value) {
@@ -40,8 +31,8 @@ fn stream(target: bool) -> Value {
     let mut output = json!({"status":200,"body":raw_body(b""),
         "headers":{"content-type":["text/event-stream"],"content-disposition":["attachment; filename=2026-10-16.txt"]},
         "interaction":{"version":1,"protocol":"sse","events":[
-            {"sequence":1,"offset_ms":10,"heartbeat":false,"message":{"kind":"text","data":PRIVATE_EVENT}},
-            {"sequence":2,"offset_ms":20,"heartbeat":false,"message":{"kind":"text","data":"terminal"}}
+            {"sequence":1,"offset_ms":10,"heartbeat":false,"message":{"kind":"text","data":json!({"event":null,"data":PRIVATE_EVENT,"id":null,"retry":null}).to_string()}},
+            {"sequence":2,"offset_ms":20,"heartbeat":false,"message":{"kind":"text","data":json!({"event":null,"data":"terminal","id":null,"retry":null}).to_string()}}
         ],"end":{"reason":"server_eof","offset_ms":30,"pending":[],"clean":true}}});
     if target {
         output["version"] = json!(1);
@@ -145,8 +136,7 @@ fn interaction_rules_plan_apply_mixed_encrypted_evidence_without_claiming_stream
         let report = &planned.traffic_e2e_report;
         assert_eq!(report["preflight"]["source_validations"], 1);
         assert_eq!(report["preflight"]["independent_target_validations"], 1);
-        assert_eq!(report["preflight"]["rules"]["response-time"], 1);
-        assert_eq!(report["preflight"]["rules"]["response-id"], 1);
+        assert_eq!(report["preflight"]["rules"]["global.json"], 1);
         assert_eq!(report["verified"], false);
         assert!(
             !serde_json::to_string(report)
@@ -218,7 +208,7 @@ fn interaction_rules_keep_events_order_closure_headers_and_carriers_strict() {
             checked
                 .differences
                 .iter()
-                .any(|diff| diff.pointer == pointer),
+                .any(|diff| diff.pointer.starts_with(pointer)),
             "{scenario}: {:?}",
             checked.differences
         );
@@ -258,14 +248,13 @@ fn interaction_rules_reject_private_evidence_tampering_and_stale_keys() {
 #[test]
 fn interaction_rules_require_a_positive_ordinary_body_witness() {
     let fixture = mixed("");
-    let mut rules = proposal(true);
-    for rule in rules.as_array_mut().unwrap() {
-        rule["when"]["request_body_json"]["/stream"]["equals"] = json!(true);
-    }
-    write(&fixture.proposal, rules);
+    write(
+        &fixture.proposal,
+        json!({"format":"traffic-policy/v2","json":{"fields":{"/absent":{"kind":"unordered"}}}}),
+    );
     let error = format!("{:#}", fixture.plan().unwrap_err());
     assert!(
-        error.contains("selects no complete Source witness"),
+        error.contains("no complete Source witness") || error.contains("no Source witness"),
         "{error}"
     );
 }
@@ -285,7 +274,7 @@ fn interaction_rules_preserve_private_header_date_and_jwt_contracts() {
     let proof = json!({"source":"responses.py:headers","fact":"Source formats the request date and signs request-relative validity in the response headers"});
     let when = json!({"request_body_json":{"/stream":{"equals":true}}});
     let mut rules = proposal(false);
-    rules.as_array_mut().unwrap().extend([
+    rules["rules"] = json!([
         json!({"id":"stream-date","match":{"api":"GET /api"},"when":when,
             "effect":{"kind":"response_header_date","header":"content-disposition","parameter":"filename","format":"%Y-%m-%d"},"proof":proof}),
         json!({"id":"stream-jwt","match":{"api":"GET /api"},"when":when,

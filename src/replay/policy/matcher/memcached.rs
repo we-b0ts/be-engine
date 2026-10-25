@@ -1,20 +1,7 @@
 //! Memcached value-slot contracts; protocol arguments and lifecycle remain outside policy.
 use super::*;
-use crate::policy::{CompiledRule, Surface};
 
 impl ReplayPolicyRuntime {
-    pub(in crate::replay) fn memcached_compiled_rules(
-        &self,
-        surface: Surface,
-        case_id: Option<&str>,
-        target: &TargetKey,
-        command: &str,
-        key: Option<&[u8]>,
-    ) -> Vec<&CompiledRule> {
-        self.request_contracts
-            .memcached_compiled_rules(surface, case_id, target, command, key)
-    }
-
     pub(in crate::replay) fn preview_memcached(
         &self,
         context: &MemcachedPolicyContext<'_>,
@@ -22,15 +9,11 @@ impl ReplayPolicyRuntime {
         if self.request_contracts.compiled_rules().is_none() {
             return self.preview_legacy_memcached(context);
         }
-        let selected = self.memcached_compiled_rules(
-            Surface::DependencyRequest,
-            context.case_id,
-            context.target,
-            context.command,
-            context.key,
-        );
-        if selected.is_empty() {
+        if self.request_contracts.global_json().is_none() {
             return exact_memcached_value(context.recorded_value, context.actual_value);
+        }
+        if context.recorded_value.is_none() && context.actual_value.is_none() {
+            return exact_memcached_value(None, None);
         }
         let (Some(source), Some(target)) = (context.recorded_value, context.actual_value) else {
             return Err(
@@ -52,7 +35,18 @@ impl ReplayPolicyRuntime {
             None,
             None,
         );
-        let comparison = crate::replay::contract_value::compare(source, target, &selected, clocks)
+        let comparison = self
+            .request_contracts
+            .compare_global_case_value(
+                context
+                    .case_id
+                    .context("Memcached JSON comparison needs a case")
+                    .map_err(|error| error.to_string())?,
+                source,
+                target,
+                &[],
+                clocks,
+            )
             .map_err(|error| error.to_string())?;
         if !comparison.passed() {
             return Err(format!(
@@ -61,9 +55,14 @@ impl ReplayPolicyRuntime {
             ));
         }
         let mut decision = DependencyRuleDecision::default();
-        decision
-            .value_contracts
-            .push(super::super::request_contract::Decision::from_value_comparison(comparison));
+        let identity = context
+            .case_id
+            .map(|case| self.request_contracts.identity_decision(case, &comparison))
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let mut value = super::super::request_contract::Decision::from_value_comparison(comparison);
+        value.identity = identity;
+        decision.value_contracts.push(value);
         Ok(decision)
     }
 

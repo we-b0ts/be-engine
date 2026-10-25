@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::Result;
@@ -43,6 +44,11 @@ pub(super) fn report(
     let methods = match &scope {
         RewriteWorkScope::Api { api } => super::super::api_selector::members(state, &api.parse()?),
     };
+    let mut discovery_ids = queries
+        .iter()
+        .filter(|query| super::is_rule_discovery_query(state, issue, &query.query_id))
+        .map(|query| query.query_id.clone())
+        .collect::<BTreeSet<_>>();
     let mut method_issues = Vec::new();
     for api in &methods {
         let Ok(selected) = super::super::inventory::scoped(state, Some(&api.parse()?)) else {
@@ -58,6 +64,14 @@ pub(super) fn report(
                     Vec::new()
                 };
             if api != &state.api {
+                discovery_ids.extend(
+                    method_queries
+                        .iter()
+                        .filter(|query| {
+                            super::is_rule_discovery_query(&selected, method_issue, &query.query_id)
+                        })
+                        .map(|query| query.query_id.clone()),
+                );
                 queries.extend(method_queries.clone());
             }
             method_issues
@@ -66,7 +80,7 @@ pub(super) fn report(
     }
     let rule_discovery = queries
         .iter()
-        .filter(|q| q.purpose.starts_with("Discover bounded typed rule drafts"))
+        .filter(|query| discovery_ids.contains(&query.query_id))
         .collect::<Vec<_>>();
     let facts = json!({ "work_scope": scope, "issue": issue, "method_apis": methods,
         "method_issues": method_issues,"rule_discovery":rule_discovery });

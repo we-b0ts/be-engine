@@ -10,9 +10,9 @@ fn window() -> ReplayDependencyRule {
 }
 fn capture() -> ReplayDependencyRule {
     rule(
-        json!({"key":{"prefix":"sessions:"},"key_contract":{"kind":"capture","binding":"session","template":"sessions:{value}","format":{"kind":"hex","bytes":2}},
+        json!({"key":{"prefix":"sessions:"},"key_contract":{"kind":"capture","template":"sessions:{value}","format":{"kind":"hex","bytes":2}},
         "commands":[{"command":"SET","argument_values":{"1":{"json":{
-            "/id":{"identity":{"binding":"session","template":"{value}"}},
+            "/id":{"identity":{"template":"{value}"}},
             "/expires_at":{"time":"preserve_relative","format":"unix_seconds"}
         }}}}]}),
     )
@@ -79,6 +79,151 @@ fn compare(
     runtime
         .preview_redis("case", &target(), 0, command, &args(source), &args(actual))
         .expect("selected key contract")
+}
+
+fn prefixed_global_runtime() -> RequestContracts {
+    let compiled = crate::policy::parse_and_compile_policy(
+        r#"format: traffic-policy/v2
+resources:
+  cache: {protocol: redis, endpoint: 'cache.test:6379', database: 0}
+json:
+  fields:
+    /session_id: {kind: identity, formats: [{prefix: vnc-, hex: 4}]}
+rules:
+- id: prefixed-key
+  match:
+    resource: cache
+    key: {kind: affix, prefix: 'sessions:', suffix: ''}
+  effect:
+    kind: redis_sequence
+    key: {kind: capture, template: 'sessions:vnc-{value}', format: {kind: hex, bytes: 2}}
+    commands: [{operation: SET, arguments: {}}]
+"#,
+    )
+    .unwrap();
+    let mut projection =
+        crate::replay::policy::native_projection::project_native(&compiled.native).unwrap();
+    let mut owner = runtime(projection.document.dependency_rules.remove(0));
+    owner.configure_compiled(Some(Arc::new(compiled))).unwrap();
+    owner
+}
+
+#[test]
+fn complete_prefixed_key_identity_and_global_json_share_one_atomic_correspondence() {
+    let owner = prefixed_global_runtime();
+    let source = [
+        "sessions:vnc-ab12",
+        r#"{"session_id":"vnc-ab12","stable":true}"#,
+        "EX",
+        "60",
+    ];
+    for (key, body, ttl) in [
+        (
+            "sessions:vnc-cd34",
+            r#"{"session_id":"vnc-ef56","stable":true}"#,
+            "60",
+        ),
+        (
+            "sessions:vnc-cd34",
+            r#"{"session_id":"vnc-cd34","stable":false}"#,
+            "60",
+        ),
+        (
+            "sessions:vnc-cd34",
+            r#"{"session_id":"vnc-cd34","stable":true}"#,
+            "61",
+        ),
+    ] {
+        assert!(compare(&owner, "SET", &source, &[key, body, "EX", ttl]).is_err());
+        assert!(owner.key_binding_report().is_empty());
+        assert!(!owner.has_identities("case"));
+    }
+    let actual = [
+        "sessions:vnc-cd34",
+        r#"{"session_id":"vnc-cd34","stable":true}"#,
+        "EX",
+        "60",
+    ];
+    let accepted = compare(&owner, "SET", &source, &actual).unwrap();
+    assert!(
+        !owner.has_identities("case"),
+        "preview cannot publish key or JSON identities"
+    );
+    owner.commit(accepted).unwrap();
+    assert!(
+        owner
+            .knows_identity_value("case", &json!("vnc-ab12"), &json!("vnc-cd34"))
+            .unwrap()
+    );
+    assert!(
+        owner
+            .knows_identity_value("case", &json!("ab12"), &json!("cd34"))
+            .unwrap()
+    );
+    let target = target();
+    let context = RedisRequestContext::without_exchange("case", &target, 0, "HSET");
+    for (token, passes) in [("vnc-cd34", true), ("vnc-ef56", false)] {
+        let body = json!({"session_id":token,"stable":true}).to_string();
+        assert_eq!(
+            owner
+                .preview_redis_context(
+                    &context,
+                    &args(&["references", "field", source[1]]),
+                    &args(&["references", "field", &body])
+                )
+                .unwrap()
+                .is_ok(),
+            passes
+        );
+    }
+}
+
+#[test]
+fn a_preceding_json_identity_rejects_a_conflicting_prefixed_key_without_partial_capture() {
+    let owner = prefixed_global_runtime();
+    let target = target();
+    let context = RedisRequestContext::without_exchange("case", &target, 0, "HSET");
+    let source = r#"{"session_id":"vnc-ab12","stable":true}"#;
+    let actual = r#"{"session_id":"vnc-cd34","stable":true}"#;
+    owner
+        .commit(
+            owner
+                .preview_redis_context(
+                    &context,
+                    &args(&["references", "field", source]),
+                    &args(&["references", "field", actual]),
+                )
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        compare(
+            &owner,
+            "SET",
+            &["sessions:vnc-ab12", source],
+            &[
+                "sessions:vnc-ef56",
+                r#"{"session_id":"vnc-ef56","stable":true}"#
+            ]
+        )
+        .is_err()
+    );
+    assert!(owner.key_binding_report().is_empty());
+    assert!(
+        !owner
+            .knows_identity_value("case", &json!("ab12"), &json!("ef56"))
+            .unwrap()
+    );
+    assert!(
+        compare(
+            &owner,
+            "SET",
+            &["sessions:vnc-ab12", source],
+            &["sessions:vnc-cd34", actual]
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -188,6 +333,7 @@ fn key_and_json_identity_and_time_are_validated_atomically() {
     ] {
         assert!(compare(&runtime, "SET", &source, &[key, body, "EX", ttl]).is_err());
         assert!(runtime.key_binding_report().is_empty());
+        assert!(!runtime.has_identities("case"));
     }
     let actual = [
         "sessions:cd34",
@@ -198,6 +344,16 @@ fn key_and_json_identity_and_time_are_validated_atomically() {
     let decision = compare(&runtime, "SET", &source, &actual).unwrap();
     assert!(runtime.key_binding_report().is_empty());
     runtime.commit(decision).unwrap();
+    assert!(runtime.has_identities("case"));
+    let global_pair = crate::value_contract::identities::IdentityPair {
+        source: serde_json::to_string("ab12").unwrap(),
+        target: serde_json::to_string("other-target").unwrap(),
+    };
+    assert!(
+        runtime
+            .preview_identity_pairs("case", &[global_pair])
+            .is_err()
+    );
     let reports = runtime.key_binding_report();
     assert_eq!(reports.len(), 1);
     let public = serde_json::to_string(&reports).unwrap();
@@ -231,9 +387,9 @@ fn key_and_json_identity_and_time_are_validated_atomically() {
 fn later_references_need_committed_capture_and_can_verify_sha256_derivation() {
     let mut selected = capture();
     let reference = rule(
-        json!({"key":{"prefix":"tickets:"},"key_contract":{"kind":"capture","binding":"ticket","template":"tickets:{value}","format":{"kind":"hex","bytes":2}},
+        json!({"key":{"prefix":"tickets:"},"key_contract":{"kind":"capture","template":"tickets:{value}","format":{"kind":"hex","bytes":2}},
         "commands":[{"command":"SET","argument_values":{"1":{"json":{
-            "/session_id":{"identity":{"binding":"session","template":"session-{value}"}}
+            "/session_id":{"identity":{"template":"session-{value}"}}
         }}}}]}),
     );
     let runtime = runtime(selected.clone());
@@ -322,7 +478,6 @@ fn later_references_need_committed_capture_and_can_verify_sha256_derivation() {
     );
     let mut decision = Decision::default();
     let ref_hash = IdentityReference {
-        binding: "session".into(),
         template: "hash:{value}".into(),
         transform: Transform::Sha256,
     };
@@ -351,7 +506,7 @@ fn later_references_need_committed_capture_and_can_verify_sha256_derivation() {
                 &format!("hash:{:x}", Sha256::digest(b"cd34")),
                 &mut decision
             )
-            .is_err()
+            .is_ok()
     );
 }
 
@@ -362,7 +517,7 @@ fn malformed_or_conflicting_committed_proofs_are_rejected() {
         host: "cache.test".into(),
         port: 6379,
         database: 0,
-        binding: "session".into(),
+        username: None,
         source_fingerprint: fingerprint("source"),
         target_fingerprint: fingerprint("actual"),
     };
@@ -406,7 +561,6 @@ fn shaped_key_capture_preserves_fixed_affixes_and_json_identity() {
         unreachable!()
     };
     selector.key_contract = Some(KeyContract::Capture {
-        binding: "session".into(),
         template: "sessions:nonce-{value}:meta".into(),
         format: KeyFormat::Base64url { bytes: 18 },
     });

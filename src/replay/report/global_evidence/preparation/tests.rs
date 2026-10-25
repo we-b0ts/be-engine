@@ -47,7 +47,7 @@ async fn recorded(
     let policy = owner.join("policy.yaml");
     fs::write(
         &policy,
-        crate::config::SourceTrafficPolicyConfig::repository_defaults()
+        crate::config::SourceTrafficPolicyConfig::empty()
             .render()
             .unwrap(),
     )
@@ -360,12 +360,27 @@ async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_record
         .unwrap();
     let original_inode = fs::metadata(original_root.join("0.json")).unwrap().ino();
     let mut document = crate::policy::parse_policy(&fs::read_to_string(&policy).unwrap()).unwrap();
-    let crate::policy::PolicyRule::Native(rule) = &mut document.rules[0] else {
-        panic!("expected native fixture rule");
-    };
-    rule.proof
-        .fact
-        .push_str("; additional reviewed Source fact");
+    document.rules.push(
+        crate::policy::NativeRule {
+            id: "additional-config".into(),
+            selector: Default::default(),
+            proof: None,
+            when: None,
+            effect: crate::policy::NativeEffect::ProcessOwned(
+                crate::policy::native::ProcessOwnedEffect {
+                    task_name: None,
+                    source_revision: String::new(),
+                    origin: None,
+                    selector: crate::policy::native::ProcessSelector::Http {
+                        authorities: vec!["additional-config.test".into()],
+                        methods: vec!["GET".into()],
+                        path_prefixes: vec!["/".into()],
+                    },
+                },
+            ),
+        }
+        .into(),
+    );
     fs::write(&policy, crate::policy::render_policy(&document).unwrap()).unwrap();
     let changed_config =
         crate::AppConfig::load(origin.path().join(".traffic-e2e/project.yaml")).unwrap();
@@ -433,7 +448,7 @@ async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_record
 }
 
 fn config_policy(_config: &crate::AppConfig) -> String {
-    crate::config::SourceTrafficPolicyConfig::repository_defaults()
+    crate::config::SourceTrafficPolicyConfig::empty()
         .render()
         .unwrap()
 }

@@ -135,10 +135,12 @@ fn path_capture_cannot_rebind_a_source_or_collapse_two_source_names() {
             )
             .unwrap()
     };
-    runtime.commit(
-        "case",
-        preview("aabbccddeeff", "112233445566").unwrap().decision,
-    );
+    runtime
+        .commit(
+            "case",
+            preview("aabbccddeeff", "112233445566").unwrap().decision,
+        )
+        .unwrap();
     assert!(preview("aabbccddeeff", "665544332211").is_err());
     assert!(preview("ffeeddccbbaa", "112233445566").is_err());
     assert!(preview("aabbccddeeff", "112233445566").is_ok());
@@ -349,7 +351,7 @@ fn pending_path_capture_preserves_payload_and_committed_binding_checks_sql_json_
             .normalize_arguments(Some("case"), &db, &left, &right)
             .is_none()
     );
-    runtime.commit("case", value.decision);
+    runtime.commit("case", value.decision).unwrap();
     let (a, b) = runtime
         .normalize_arguments(Some("case"), &db, &left, &right)
         .unwrap()

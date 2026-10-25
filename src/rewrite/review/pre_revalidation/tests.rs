@@ -352,7 +352,12 @@ fn final_receipt_expires_on_code_policy_recording_workflow_inventory_or_skip_cha
                 let mut policy =
                     crate::policy::parse_policy(std::str::from_utf8(&policy_bytes).unwrap())
                         .unwrap();
-                policy.rules.push(serde_json::from_value(serde_json::json!({"id":"final-members","surface":"api.response","match":{"api":"GET /api"},"slot":"body","codec":"json","contract":{"/members":{"kind":"unordered"}},"proof":{"source":"tests.rs:members","fact":"The fixture models a reviewed unordered membership contract"}})).unwrap());
+                policy.json = Some(
+                    serde_json::from_value(
+                        serde_json::json!({"fields":{"/members":{"kind":"unordered"}}}),
+                    )
+                    .unwrap(),
+                );
                 fs::write(&policy_path, serde_yaml::to_string(&policy).unwrap()).unwrap();
             }
             "recording" => state.recording_run_id.push_str("-new"),

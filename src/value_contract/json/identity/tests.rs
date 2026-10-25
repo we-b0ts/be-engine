@@ -3,14 +3,13 @@ use serde_json::json;
 
 fn contract(format: IdentityFormat) -> FieldContract {
     FieldContract::Identity {
-        binding: "entity".into(),
         prefix: "msg_".into(),
         format,
     }
 }
 
 #[test]
-fn identity_bindings_span_rule_ids_and_preserve_bijection_without_cross_case_state() {
+fn identities_span_rule_ids_and_preserve_bijection_without_cross_case_state() {
     let contract = contract(IdentityFormat::Decimal);
     let compare = |source: Value, target: Value, id: &str| {
         super::super::compare(
@@ -169,9 +168,8 @@ fn fixed_hex_identity_validates_both_sides_and_preserves_shared_bijection() {
 }
 
 #[test]
-fn numeric_ids_share_tokens_with_string_positions_without_relaxing_scalar_types() {
+fn numeric_and_string_ids_have_distinct_typed_keys_without_relaxing_scalar_types() {
     let contract = FieldContract::Identity {
-        binding: "entity".into(),
         prefix: String::new(),
         format: IdentityFormat::Decimal,
     };
@@ -189,9 +187,9 @@ fn numeric_ids_share_tokens_with_string_positions_without_relaxing_scalar_types(
     };
     let mut numeric = compare(json!(11), json!(1011));
     assert!(numeric.passed());
-    numeric.merge_and_validate(compare(json!("11"), json!("1011")));
-    assert!(numeric.passed());
     numeric.merge_and_validate(compare(json!("11"), json!("1012")));
+    assert!(numeric.passed());
+    numeric.merge_and_validate(compare(json!("11"), json!("1013")));
     assert!(!numeric.passed());
     for (source, target) in [
         (json!(11), json!("1011")),
@@ -207,7 +205,6 @@ fn numeric_ids_share_tokens_with_string_positions_without_relaxing_scalar_types(
 #[test]
 fn base64url_tokens_require_the_declared_length_and_url_safe_alphabet() {
     let contract = FieldContract::Identity {
-        binding: "session".into(),
         prefix: String::new(),
         format: IdentityFormat::Base64Url(8),
     };
@@ -228,4 +225,76 @@ fn base64url_tokens_require_the_declared_length_and_url_safe_alphabet() {
         assert!(!compare("abCD12_-", bad).passed());
         assert!(!compare(bad, "abCD12_-").passed());
     }
+}
+
+#[test]
+fn full_prefixed_values_are_distinct_and_same_values_link_across_formats_and_paths() {
+    let decimal = FieldContract::Identity {
+        prefix: "user_".into(),
+        format: IdentityFormat::Decimal,
+    };
+    let other = FieldContract::Identity {
+        prefix: "order_".into(),
+        format: IdentityFormat::Decimal,
+    };
+    let fields = [
+        Field {
+            rule_id: "ids",
+            pointer: "/user",
+            contract: &decimal,
+        },
+        Field {
+            rule_id: "ids",
+            pointer: "/order",
+            contract: &other,
+        },
+    ];
+    assert!(
+        super::super::compare(
+            &json!({"user":"user_11","order":"order_11"}),
+            &json!({"user":"user_1011","order":"order_1012"}),
+            &fields,
+            AnchorClocks::default(),
+        )
+        .passed()
+    );
+    let decimal = FieldContract::Identity {
+        prefix: "".into(),
+        format: IdentityFormat::Decimal,
+    };
+    let hex = FieldContract::Identity {
+        prefix: "".into(),
+        format: IdentityFormat::Hex(2),
+    };
+    let fields = [
+        Field {
+            rule_id: "ids",
+            pointer: "/id",
+            contract: &decimal,
+        },
+        Field {
+            rule_id: "ids",
+            pointer: "/item/id",
+            contract: &hex,
+        },
+    ];
+    let source = json!({"id":"11","item":{"id":"11"}});
+    assert!(
+        super::super::compare(
+            &source,
+            &json!({"id":"22","item":{"id":"22"}}),
+            &fields,
+            AnchorClocks::default()
+        )
+        .passed()
+    );
+    assert!(
+        !super::super::compare(
+            &source,
+            &json!({"id":"22","item":{"id":"33"}}),
+            &fields,
+            AnchorClocks::default()
+        )
+        .passed()
+    );
 }

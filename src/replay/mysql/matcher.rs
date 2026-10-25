@@ -510,9 +510,6 @@ impl ReplayState {
         };
         exchange.status = ReplayExchangeStatus::Consumed;
         self.refresh_mysql_global_report(matched.index);
-        if let Some(policy) = &mut self.replay_policy {
-            policy.commit_mysql_response_shift(&matched.response_time_shift_rules);
-        }
         let case_id = matched.report.case_id.clone();
         push_success_detail(
             &mut self.mysql.events.matched_query_count,

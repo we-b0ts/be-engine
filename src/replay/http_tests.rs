@@ -18,6 +18,8 @@ mod dynamic_values;
 mod http_body_jwt;
 #[path = "http_tests/json_request_time.rs"]
 mod json_request_time;
+#[path = "http_tests/multipart.rs"]
+mod multipart;
 #[path = "http_tests/request_contracts.rs"]
 mod request_contracts;
 #[path = "http_tests/server_termination.rs"]
@@ -113,6 +115,9 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
         }),
         response_stream: None,
         stream_delivery: None,
+        materialized_proxy_failure: false,
+        cleanup_authorized: false,
+        lifecycle_stop: None,
         discovered_tcp_targets: vec![DiscoveredTcpTarget {
             protocol: "motan".to_string(),
             alias: "vintage-node-10-145-1-107.trp.test".to_string(),
@@ -180,6 +185,9 @@ fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
         }),
         response_stream: None,
         stream_delivery: None,
+        materialized_proxy_failure: false,
+        cleanup_authorized: false,
+        lifecycle_stop: None,
         discovered_tcp_targets: vec![DiscoveredTcpTarget {
             protocol: "http".to_string(),
             alias: "http-10-145-1-107-8881.trp.test".to_string(),

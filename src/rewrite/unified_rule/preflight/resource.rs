@@ -18,26 +18,27 @@ pub(super) struct ResourceRecord {
 
 pub(super) fn selected(policy: &CompiledPolicy, ids: &BTreeSet<String>) -> BTreeSet<String> {
     policy
-        .rules
+        .native
         .iter()
         .filter(|r| {
             ids.contains(&r.rule.id)
-                && r.rule.surface != Surface::ApiResponse
+                && r.domain == NativeDomain::Runtime
+                && r.rule.selector.resource.is_some()
                 && r.rule.selector.api.is_none()
+                && !source::owns(r)
         })
         .map(|r| r.rule.id.clone())
         .chain(
-            policy
-                .native
-                .iter()
-                .filter(|r| {
-                    ids.contains(&r.rule.id)
-                        && r.domain == NativeDomain::Runtime
-                        && r.rule.selector.resource.is_some()
-                        && r.rule.selector.api.is_none()
-                        && !source::owns(r)
+            ids.iter()
+                .filter(|id| {
+                    (id.as_str() == crate::policy::GLOBAL_JSON_ID && policy.global_json.is_some())
+                        || (id.as_str() == "global.mysql" && policy.mysql.is_some())
+                        || (id.as_str() == "global.redis" && policy.redis.is_some())
+                        || (id.as_str() == crate::policy::GLOBAL_HTTP_ID && policy.http.is_some())
+                        || (id.as_str() == crate::policy::ASYNC_API_ID
+                            && !policy.async_api.is_empty())
                 })
-                .map(|r| r.rule.id.clone()),
+                .cloned(),
         )
         .collect()
 }
@@ -107,16 +108,6 @@ impl ResourceRecord {
 /// Keep complete envelopes and traces for matching cases. Native preselection
 /// retains related reads and mutations; the Source session proves exact slots.
 fn matches(policy: &CompiledPolicy, ids: &BTreeSet<String>, event: &Value) -> Result<bool> {
-    for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-        let candidates = policy
-            .rules
-            .iter()
-            .filter(|rule| ids.contains(&rule.rule.id) && rule.rule.surface == surface)
-            .collect::<Vec<_>>();
-        if !dependency::selected_rules(&candidates, event)?.is_empty() {
-            return Ok(true);
-        }
-    }
     let protocol = dependency::protocol(event);
     for rule in policy.native.iter().filter(|r| ids.contains(&r.rule.id)) {
         if matches!(rule.rule.effect, NativeEffect::MysqlValues(_)) {
@@ -125,21 +116,21 @@ fn matches(policy: &CompiledPolicy, ids: &BTreeSet<String>, event: &Value) -> Re
             }
             continue;
         }
-        if matches!(
-            rule.rule.effect,
-            NativeEffect::HttpRequest(_) | NativeEffect::HttpClientMetadata(_)
-        ) && (rule
-            .rule
-            .selector
-            .operation
-            .as_deref()
-            .is_some_and(|method| event["method"].as_str() != Some(method))
-            || rule.rule.selector.path.as_deref().is_some_and(|path| {
-                !event["uri"]
-                    .as_str()
-                    .and_then(|raw| raw.parse::<hyper::Uri>().ok())
-                    .is_some_and(|uri| crate::path_pattern::matches_path_pattern(path, uri.path()))
-            }))
+        if matches!(rule.rule.effect, NativeEffect::HttpRequest(_))
+            && (rule
+                .rule
+                .selector
+                .operation
+                .as_deref()
+                .is_some_and(|method| event["method"].as_str() != Some(method))
+                || rule.rule.selector.path.as_deref().is_some_and(|path| {
+                    !event["uri"]
+                        .as_str()
+                        .and_then(|raw| raw.parse::<hyper::Uri>().ok())
+                        .is_some_and(|uri| {
+                            crate::path_pattern::matches_path_pattern(path, uri.path())
+                        })
+                }))
         {
             continue;
         }
@@ -242,7 +233,11 @@ pub(super) fn prepare(
     };
     let mut foreign: BTreeMap<String, BTreeMap<String, PathBuf>> = BTreeMap::new();
     for file in files {
-        let mut hit = false;
+        let mut hit = ids.contains(crate::policy::GLOBAL_JSON_ID)
+            || ids.contains("global.mysql")
+            || ids.contains("global.redis")
+            || ids.contains(crate::policy::GLOBAL_HTTP_ID)
+            || ids.contains(crate::policy::ASYNC_API_ID);
         crate::dependency_index::proof::visit(
             &file,
             |_| Ok(true),

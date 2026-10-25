@@ -319,8 +319,15 @@ fn recorded_mysql_candidate_preflight() {
             .unwrap();
     }
     let fixture = Fixture::new();
-    let checked =
-        preflight::verify(&root, &fixture.state(), &mut bundle, &compiled, &selected).unwrap();
+    let checked = preflight::verify(
+        &root,
+        &fixture.state(),
+        &mut bundle,
+        &compiled,
+        &compiled,
+        &selected,
+    )
+    .unwrap();
     assert_eq!(checked.source_validations, 3);
     assert_eq!(checked.independent_target_validations, 1);
     assert_eq!(checked.missing_target_witnesses, 2);

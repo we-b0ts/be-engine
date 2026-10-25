@@ -11,6 +11,7 @@ use crate::dependency_index::{FileIndex, RecordLocation, RecordReader};
 pub(super) struct CaseInventory {
     pub index: FileIndex,
     pub skip: BTreeSet<usize>,
+    pub cleanup: BTreeSet<control::dependency_tail::RecordedReference>,
 }
 
 #[derive(Debug)]
@@ -293,6 +294,7 @@ fn install(
         &mut targets,
         &mut identities,
         &deferred.process_rules,
+        &inventory.cleanup,
     )?;
     ensure!(
         targets.len() == deferred.known_targets.len(),

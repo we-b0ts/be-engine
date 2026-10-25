@@ -1,7 +1,6 @@
-//! Compose case-owned time validation and existing PUBLISH UUID bindings atomically.
+//! Compose global value formats with case-owned request validation atomically.
 use super::*;
 use crate::replay::policy::request_contract::Decision;
-use publish::json::{JsonComparison, JsonContext};
 
 impl RedisReplayState {
     pub(super) fn request_preview(
@@ -11,7 +10,7 @@ impl RedisReplayState {
         actual: &[Vec<u8>],
         original_source: &[Vec<u8>],
         original_actual: &[Vec<u8>],
-    ) -> Option<Result<(Decision, Option<JsonComparison>)>> {
+    ) -> Option<Result<Decision>> {
         if exchange.source != ReplaySource::Case || exchange.shared_rule_id.is_some() {
             return None;
         }
@@ -45,29 +44,24 @@ impl RedisReplayState {
         let (source, actual) = protected.as_ref().map_or((source, actual), |protected| {
             (protected.source.as_slice(), protected.actual.as_slice())
         });
+        let expiration = match super::super::expiration::normalize(
+            &exchange.record.command,
+            source,
+            actual,
+            crate::value_contract::time::ClockPair {
+                source: exchange.record.started_at(),
+                target: self.request_observed_at,
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => return Some(Err(error)),
+        };
+        let actual = expiration.as_deref().unwrap_or(actual);
         let preview = |source: &[Vec<u8>], actual: &[Vec<u8>]| {
             self.request_contracts
                 .preview_redis_context(&context, source, actual)
         };
-        let original = preview(source, actual)?;
-        if exchange.record.command != "PUBLISH" {
-            return Some(original.map(|d| (d, None)));
-        }
-        let context = JsonContext {
-            case_id: exchange.case_id.as_deref(),
-            host: &target.host,
-            port: target.port,
-            database: exchange.record.database,
-            username: exchange.record.username.as_deref(),
-        };
-        let Some(comparison) = self.publish_rules.preview_json(context, source, actual) else {
-            return Some(original.map(|d| (d, None)));
-        };
-        Some(comparison.and_then(|comparison| {
-            let decision = preview(&comparison.source, &comparison.actual)
-                .context("PUBLISH time selector changed during UUID comparison")??;
-            Ok((decision, Some(comparison)))
-        }))
+        preview(source, actual)
     }
 }
 

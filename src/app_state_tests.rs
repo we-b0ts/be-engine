@@ -273,6 +273,80 @@ fn redis_get_dependency(host: &str, port: u16, key: &str) -> RecorderEvent {
 }
 
 #[tokio::test]
+async fn vintage_http_remains_a_structured_case_dependency_without_explicit_ownership() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = case_limit_test_config(&temp);
+    config.http_gateway.ready.enabled = false;
+    config.recording.traffic_jsonl = TrafficJsonlMode::Full;
+    crate::config::SourceTrafficPolicyConfig::empty()
+        .apply_to(&mut config)
+        .unwrap();
+    let state = AppState::new(config).await.unwrap();
+    let case = CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: "api".into(),
+        uri_group: None,
+    };
+    let guard = state.try_reserve_active_case(case.clone()).unwrap();
+    state.activate_case_dependencies(&guard).unwrap();
+    let body = serde_json::to_vec(&serde_json::json!({"servers":["127.0.0.1:12345"],"version":1}))
+        .unwrap();
+    for authority in [
+        "config.api.demo.test",
+        "static.config.api.demo.test",
+        "register.kailash.demo.test",
+    ] {
+        for path in ["/1/config/service", "/naming/service"] {
+            let mut event = http_dependency(authority, path);
+            let RecorderEvent::HttpExchange(exchange) = &mut event else {
+                unreachable!()
+            };
+            exchange
+                .response_headers
+                .as_mut()
+                .unwrap()
+                .insert("content-type".into(), vec!["application/json".into()]);
+            exchange.response_body = Some(capture_body(&body, body.len()));
+            state.record_event(event);
+        }
+    }
+    drop(guard);
+    state.recorder().publish_case(&case).await.unwrap();
+    state.recorder().finish_run().await.unwrap();
+    let data =
+        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
+            .await
+            .unwrap();
+    let records = data
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 6);
+    for record in records {
+        assert_eq!(record["event_type"], "http_exchange");
+        assert_eq!(record["response_status"], 200);
+        assert_eq!(
+            record["response_headers"]["content-type"][0],
+            "application/json"
+        );
+        assert_eq!(
+            crate::api_trigger::decode(&record["response_body"]).unwrap(),
+            body
+        );
+        assert!(record.get("global_dependency_reason").is_none());
+    }
+    let global = state.recorder().run_dir.join("global-dependencies.jsonl");
+    assert!(
+        !global.exists()
+            || tokio::fs::read_to_string(global)
+                .await
+                .unwrap()
+                .trim()
+                .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn background_http_enters_global_pool_but_not_case_dependencies() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = AppConfig::default();
@@ -280,9 +354,9 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
     config.recording.traffic_jsonl = TrafficJsonlMode::Full;
     config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Http {
         name: "config-refresh".to_string(),
-        authorities: vec!["config.api.demo.test".to_string()],
+        authorities: vec!["config.internal".to_string()],
         methods: vec!["GET".to_string()],
-        path_prefixes: vec!["/1/config/service".to_string()],
+        path_prefixes: vec!["/refresh".to_string()],
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
     }];
@@ -300,8 +374,8 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
     state.activate_case_dependencies(&guard).unwrap();
 
     let background = http_dependency(
-        "config.api.demo.test",
-        "/1/config/service?action=lookup&group=reload.properties",
+        "config.internal",
+        "/refresh?action=lookup&group=reload.properties",
     );
     state.record_event(background);
     drop(guard);
@@ -311,7 +385,7 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
     let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
-    assert!(traffic.contains("config.api.demo.test"));
+    assert!(traffic.contains("config.internal"));
     assert!(traffic.contains("\"stored_len\":314066"));
     let dependencies =
         tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))

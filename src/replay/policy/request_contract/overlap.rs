@@ -24,8 +24,12 @@ pub(in crate::replay::policy) fn validate(
                     .host
                     .as_ref()
                     .zip(other.target.host.as_ref())
-                    .is_none_or(|(a, b)| !a.eq_ignore_ascii_case(b))
-                || rule.target.port != other.target.port
+                    .is_some_and(|(a, b)| !a.eq_ignore_ascii_case(b))
+                || rule
+                    .target
+                    .port
+                    .zip(other.target.port)
+                    .is_some_and(|(a, b)| a != b)
             {
                 continue;
             }
@@ -37,26 +41,18 @@ pub(in crate::replay::policy) fn validate(
             }
             let overlap = match (&rule.redis, &other.redis) {
                 (Some(RedisSelector::Requests(a)), Some(RedisSelector::Requests(b))) => {
-                    a.database == b.database
+                    a.database.zip(b.database).is_none_or(|(a, b)| a == b)
                         && a.key.overlaps(&b.key)
                         && a.commands
                             .iter()
                             .any(|c| b.commands.iter().any(|d| c.command == d.command))
-                }
-                (Some(RedisSelector::Requests(a)), Some(RedisSelector::Value(b))) => {
-                    a.key.overlaps(&b.key)
-                }
-                (Some(RedisSelector::Requests(a)), Some(RedisSelector::Lock(b))) => {
-                    a.key.overlaps(&b.lock.key)
                 }
                 _ => rule
                     .http
                     .as_ref()
                     .zip(other.http.as_ref())
                     .is_some_and(|(a, b)| {
-                        (b.multipart.is_some()
-                            || !a.json.time.is_empty()
-                            || !b.json.time.is_empty())
+                        b.multipart.is_some()
                             && a.method == b.method
                             && crate::path_pattern::path_patterns_overlap(&a.path, &b.path)
                     }),
@@ -93,9 +89,9 @@ pub(in crate::replay::policy) fn validate(
                     rule.target
                         .host
                         .as_ref()
-                        .is_some_and(|h| h.eq_ignore_ascii_case(&target.host))
-                        && rule.target.port == Some(target.port)
-                        && a.database == *database
+                        .is_none_or(|h| h.eq_ignore_ascii_case(&target.host))
+                        && rule.target.port.is_none_or(|port| port == target.port)
+                        && a.database.is_none_or(|selected| selected == *database)
                         && a.key.overlaps(key)
                         && a.commands
                             .iter()
@@ -131,7 +127,6 @@ pub(in crate::replay::policy) fn validate(
                         target,
                         method,
                         path,
-                        json_pointer,
                         ..
                     },
                 ) => {
@@ -142,12 +137,6 @@ pub(in crate::replay::policy) fn validate(
                         && rule.target.port == Some(target.port)
                         && a.method == *method
                         && crate::path_pattern::path_patterns_overlap(&a.path, path)
-                        && (a.json.fields.is_empty()
-                            || json_pointer.as_ref().is_some_and(|pointer| {
-                                a.json.fields.keys().any(|owned| {
-                                    super::super::response_locations_overlap(pointer, owned)
-                                })
-                            }))
                 }
                 _ => false,
             };

@@ -1,12 +1,9 @@
 //! Decode the SSE envelope and its JSON data separately, preserving all framing.
 use super::*;
 use crate::interaction::stream::SseEvent;
-use crate::policy::Slot;
 
 #[cfg(test)]
-mod clock_scope_tests;
-#[cfg(test)]
-mod tests;
+mod global_tests;
 
 pub(crate) fn decode_sse(message: &WireMessage) -> Result<SseEvent> {
     ensure!(
@@ -21,7 +18,7 @@ pub(crate) fn decode_sse(message: &WireMessage) -> Result<SseEvent> {
 pub(super) fn compare_message(
     source: &WireMessage,
     target: &WireMessage,
-    rules: &[&CompiledRule],
+    global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::super::RequestTimes,
     pointer: &str,
 ) -> Comparison {
@@ -30,25 +27,7 @@ pub(super) fn compare_message(
         mismatch(&mut result, pointer);
         return result;
     };
-    let source_json = crate::json_value::parse(source_event.data.as_bytes());
-    let selected = rules
-        .iter()
-        .copied()
-        .filter(|rule| {
-            let Slot::SseData(selector) = &rule.rule.slot else {
-                return false;
-            };
-            selector.event() == source_event.event.as_deref().unwrap_or("message")
-                && selector.json_type().is_none_or(|expected| {
-                    source_json
-                        .as_ref()
-                        .and_then(|v| v.get("type"))
-                        .and_then(serde_json::Value::as_str)
-                        == Some(expected)
-                })
-        })
-        .collect::<Vec<_>>();
-    if selected.is_empty() {
+    if global.is_none() {
         if source != target {
             mismatch(&mut result, pointer);
         }
@@ -67,33 +46,17 @@ pub(super) fn compare_message(
             mismatch(&mut result, &format!("{pointer}/sse/{field}"));
         }
     }
-    let checked = (|| -> Result<Comparison> {
-        let codec = crate::value_codec::CodecPlan::compile(&crate::policy::Codec::Json)?;
-        let source = codec.decode(source_event.data.as_bytes())?;
-        let target = codec.decode(target_event.data.as_bytes())?;
-        let mut checked = crate::value_contract::encoded::compare_decoded(
-            &source,
-            &target,
-            &selected,
-            crate::value_contract::json::AnchorClocks {
-                case: times,
-                dependency: times,
-                ..Default::default()
-            },
-        )?;
-        // A broad event-only rule cannot relax another rule's discriminator.
-        if selected
-            .iter()
-            .any(|r| matches!(&r.rule.slot, Slot::SseData(s) if s.json_type().is_some()))
-            && source.logical.get("type") != target.logical.get("type")
-        {
-            checked.differences.push(Difference {
-                pointer: "/type".into(),
-                reason: "SSE JSON type discriminator changed".into(),
-            });
-        }
-        Ok(checked)
-    })();
+    let checked = crate::value_contract::global::compare(
+        source_event.data.as_bytes(),
+        target_event.data.as_bytes(),
+        global.expect("global JSON field strategy checked"),
+        &[],
+        crate::value_contract::json::AnchorClocks {
+            case: times,
+            dependency: times,
+            ..Default::default()
+        },
+    );
     match checked {
         Ok(mut checked) => {
             for diff in &mut checked.differences {

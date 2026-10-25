@@ -1,110 +1,54 @@
 # Redis write-to-read delivery
 
-Replay normally returns the immutable Source response. An `identity` or
-`redis_sequence` rule can explicitly declare `effect.read_back` to return
-selected values from an earlier successfully matched Target write to the same
-key. This supports ordinary Redis clients that write a generated block ID or
-creation timestamp, read it, and reuse it in subsequent writes.
+Global JSON and scalar identity formats preserve complete Source-to-Target
+correspondence across writes and reads. An established Source ID delivers its
+Target counterpart; an unknown historical input anchors itself. Structured JSON
+needs no per-key field declaration. Accepted JSON writes can also supply bounded
+same-key temporal counterparts when both Source and Target causality are proven.
+This does not authorize additional reads.
 
-Update the existing write rule. Keep its ID, API, resource, database, key,
-capture, references and request contracts. Add a read declaration and Source
-proof of both the write and subsequent read. The planner permits a same-ID
-update that appends `read_back` declarations or identity `references` while
-preserving the existing capture, scope, contracts, prior declarations and proofs.
-Put the new read proof
-on its declaration rather than changing the existing write proof. No declaration
-means no change to existing delivery behavior.
-
-An installed raw SET identity read-back can also gain an independent
-`state_epochs` proof through the same transaction. Preserve the existing read
-declaration and its proof; add only the new state observation permission.
-Replacing or removing an installed state proof remains unsupported. Complete
-Source validation and fresh Replay are required for this one-way upgrade; see
-[state observations](redis-state-observations.md).
-
-For an `identity` rule capturing SET argument 1 as a raw block ID:
+For Source-proven variable GET observations of the latest raw SET identity,
+add the key-local read-back permission:
 
 ```yaml
-effect:
-  kind: identity
-  value_type: string
-  capture: {kind: redis_argument, index: 1}
-  references:
-    - resource: {protocol: redis, endpoint: 'cache.test:6379', database: 0}
-  read_back:
-    - operation: GET
-      write_operation: SET
-      argument_index: 1
+redis:
+  keys:
+    'chat:streaming:text_block:*':
+      kind: identity
+      formats: [{prefix: text-, format: decimal}]
+      read_back: true
 ```
 
-The containing rule must select an API, explicit Redis database and key, and
-`match.operation: SET`. If Source SET writes `old` and Target SET writes `new`,
-a later matching Source GET returning `old` delivers `new`. Subsequent commands
-still have to match their recorded exchanges using the existing identity rule.
+The engine lowers this to its existing SET/DEL/GET state owner. There is no
+business lock rule, authored binding, resource/database selector or capture-first
+plan sequence. Source proof on the proposed key declaration must establish all
+writers, complete causal SET/DEL states and a positive write-to-read witness.
+The published runtime policy omits that proof. Use the ordinary coordinator
+`rule plan --file … --evidence …` and returned `rule apply --plan …` transaction.
 
-For a `redis_sequence` rule already owning JSON timestamp fields in SET
-argument 1, add only the preserved field to its read declaration:
+If Source SET writes `old` and Target SET writes `new`, a later Source GET of
+`old` delivers `new` only after that matched Target SET succeeds. A future write,
+a different physical endpoint/database, another authentication identity or an
+ambiguous write cannot supply the value. GETs before the first owned successful
+SET retain their ordinary finite inventory and fence that first mutation.
+Profiles with no supported successful SET remain ordinary finite traffic.
 
-```yaml
-read_back:
-  - operation: GET
-    write_operation: SET
-    argument_index: 1
-    json_pointers: [/started_at]
-```
+Current-state observations can reuse a proven response within one SET/DEL
+lifetime, but every Source-observed state must still be observed by Target.
+Creation, deletion and all other mutations remain finite. TTL, lane, response
+outcome and successful delivery checks remain with the Redis adapter. See
+[state observations](redis-state-observations.md) for state boundaries and limits.
 
-The delivered `/started_at` equals the exact Target timestamp previously
-written. It is not recalculated using the GET clock. Other fields, including
-`/last_activity_at`, retain their original Source values. Target remains
-responsible for updating those fields according to Source behavior.
+Additional list or compound write/read relationships not expressed by the
+compact key declaration retain their typed native `identity`/`redis_sequence`
+read-back contracts. Such a contract owns selected GET or LRANGE values from
+an earlier successful SET, RPUSH or LSET; every selected JSON pointer must
+already belong to that native capture or contract. It does not replace ordinary
+global field formats or authorize extra reads by itself.
 
-For list metadata owned by a conditional RPUSH identity capture, declare:
-
-```yaml
-read_back:
-  - operation: LRANGE
-    write_operation: RPUSH
-    argument_index: 1
-    json_pointers: [/id, /_content_key]
-```
-
-Each selected field must already belong to that rule's capture or declared
-copies. The writer's Source sibling condition, such as `/type == text`, also
-selects LRANGE elements. Other element kinds remain unchanged. LSET argument 2
-can similarly authorize LRANGE delivery when the write contract supports it.
-
-## Evidence and limits
-
-Bindings are scoped to the Case, API, endpoint, database, authenticated user,
-Source key and its matched Target key. A fully matched write must have a
-successful recorded response. The read must follow the original write on the
-same Source connection, or start after its completion on another connection.
-Its selected Source value must equal a bound Source write value. Conflicting
-Target values for the same Source value are rejected. This is a bounded value
-reference, not a general Redis emulator: expiration, deletion, list mutations,
-request order and finite consumption keep their recorded contracts.
-
-Null and error responses are unchanged and provide no positive read witness.
-For Source-proven variable counts of current-identity GETs, a raw SET identity
-declaration may opt into [state observations](redis-state-observations.md) with
-its own `state_epochs` proof. Ordinary declarations remain finite.
-Selected JSON values must be non-null scalars. RESP responses and write values
-are limited to 1 MiB, LRANGE to 1024 elements, RPUSH to 128 elements, declarations
-to 16 per rule, JSON pointers to 32 per declaration, and runtime bindings to
-4096 / 16 MiB. Public audits retain fingerprints and original write/read
-identities; derived response evidence uses the existing protected witness store.
-Shared, Global and snapshot inventory cannot gain read-back permissions.
-Combining read-back with another time/value delivery owner on the same exchange
-is rejected. Existing delivery overlap requires a separately reviewed policy change.
-
-Use the ordinary coordinator transaction:
-
-```text
-backend-rewrite rule plan --file updated-rules.yaml --evidence <current-evidence-id>
-backend-rewrite rule apply --plan <returned-plan-id>
-```
-
-Planning exercises complete Source traces and requires a positive successful
-write-to-read witness for every new declaration. Source self-validation cannot
-certify the Target. Applying this update retains a fresh genuine Replay
-obligation and leaves original recordings unchanged.
+Response and write values remain bounded to 1 MiB; native LRANGE is limited to
+1024 elements, RPUSH to 128 elements, declarations to 16 per rule and selected
+JSON pointers to 32. Runtime correspondence is bounded to 4096 entries / 16 MiB.
+Public audits contain fingerprints and original write/read identities rather
+than values. Immutable recording files are never modified. Complete Source
+self-validation grants a fresh genuine Replay obligation, not a Target pass.

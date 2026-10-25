@@ -6,8 +6,8 @@ use crate::replay::report::{build_dependency_evidence, report_has_case_dirty_eve
 use hyper::client::conn::http1;
 use serde_json::json;
 use std::path::PathBuf;
-mod client_metadata;
-mod timestamp_tests;
+mod global_tests;
+mod sdk_headers;
 
 const HOST: &str = "api.example.test";
 const BODY: &str = "{\"input\":1}";
@@ -135,6 +135,7 @@ async fn business_header_differences_return_the_response_and_fail_dirty_gates() 
             fail_on_dirty: true,
             fail_on_incomplete: false,
             identity_pairs: Vec::new(),
+            derived_input: None,
         },
         runtime.state.clone(),
     )
@@ -148,6 +149,7 @@ async fn business_header_differences_return_the_response_and_fail_dirty_gates() 
             fail_on_dirty: true,
             fail_on_incomplete: true,
             identity_pairs: Vec::new(),
+            derived_input: None,
         },
         runtime.state.clone(),
         None,

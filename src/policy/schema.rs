@@ -12,10 +12,13 @@ pub const POLICY_FORMAT: &str = "traffic-policy/v2";
 pub struct TrafficPolicy {
     pub format: String,
     pub source_revision: Option<String>,
+    pub json: Option<super::JsonPolicy>,
+    pub mysql: Option<super::MysqlPolicy>,
+    pub redis: Option<super::RedisPolicy>,
+    pub http: Option<super::HttpPolicy>,
+    pub async_api: Option<BTreeMap<String, super::AsyncApiRule>>,
+    pub signatures: BTreeMap<String, super::SignatureDefinition>,
     pub resources: BTreeMap<String, super::ResourceDeclaration>,
-    pub responses: BTreeMap<String, super::ResponseDeclaration>,
-    /// Authoring reference sites survive typed normalization and write-back.
-    pub field_references: BTreeMap<String, Vec<super::FieldReferenceUse>>,
     pub rules: Vec<super::PolicyRule>,
 }
 
@@ -24,9 +27,13 @@ impl Default for TrafficPolicy {
         Self {
             format: POLICY_FORMAT.into(),
             source_revision: None,
+            json: None,
+            mysql: None,
+            redis: None,
+            http: None,
+            async_api: None,
+            signatures: BTreeMap::new(),
             resources: BTreeMap::new(),
-            responses: BTreeMap::new(),
-            field_references: BTreeMap::new(),
             rules: Vec::new(),
         }
     }
@@ -469,6 +476,9 @@ impl From<Codec> for CodecDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FieldContract {
+    /// Internal exact equality that still reserves the complete identity value.
+    #[serde(skip)]
+    IdentityAnchor,
     /// The inactive branch compares the selected field exactly.
     Conditional {
         when: FieldCondition,
@@ -477,7 +487,6 @@ pub enum FieldContract {
     Unordered,
     /// Source-proven generated/derived identity, shared across one replay case.
     Identity {
-        binding: String,
         #[serde(default)]
         prefix: String,
         format: IdentityFormat,
@@ -504,6 +513,11 @@ pub enum FieldContract {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "IdentityFormatDocument", into = "IdentityFormatDocument")]
 pub enum IdentityFormat {
+    /// Bounded nonempty UTF-8 text, with any literal prefix checked separately.
+    String,
+    BoundedString(usize),
+    /// Complete compact JWT shape, without inspecting business claims or verifying signatures.
+    Jwt,
     Decimal,
     Uuid,
     /// Exact number of lowercase hexadecimal characters after the literal prefix.
@@ -517,12 +531,15 @@ pub enum IdentityFormat {
 enum IdentityFormatDocument {
     Named(IdentityFormatName),
     Hex { hex: usize },
+    StringLimit { string: usize },
     Base64Url { base64url: usize },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum IdentityFormatName {
+    String,
+    Jwt,
     Decimal,
     Uuid,
 }
@@ -530,9 +547,12 @@ enum IdentityFormatName {
 impl From<IdentityFormatDocument> for IdentityFormat {
     fn from(value: IdentityFormatDocument) -> Self {
         match value {
+            IdentityFormatDocument::Named(IdentityFormatName::String) => Self::String,
+            IdentityFormatDocument::Named(IdentityFormatName::Jwt) => Self::Jwt,
             IdentityFormatDocument::Named(IdentityFormatName::Decimal) => Self::Decimal,
             IdentityFormatDocument::Named(IdentityFormatName::Uuid) => Self::Uuid,
             IdentityFormatDocument::Hex { hex } => Self::Hex(hex),
+            IdentityFormatDocument::StringLimit { string } => Self::BoundedString(string),
             IdentityFormatDocument::Base64Url { base64url } => Self::Base64Url(base64url),
         }
     }
@@ -541,9 +561,12 @@ impl From<IdentityFormatDocument> for IdentityFormat {
 impl From<IdentityFormat> for IdentityFormatDocument {
     fn from(value: IdentityFormat) -> Self {
         match value {
+            IdentityFormat::Jwt => Self::Named(IdentityFormatName::Jwt),
+            IdentityFormat::String => Self::Named(IdentityFormatName::String),
             IdentityFormat::Decimal => Self::Named(IdentityFormatName::Decimal),
             IdentityFormat::Uuid => Self::Named(IdentityFormatName::Uuid),
             IdentityFormat::Hex(hex) => Self::Hex { hex },
+            IdentityFormat::BoundedString(string) => Self::StringLimit { string },
             IdentityFormat::Base64Url(base64url) => Self::Base64Url { base64url },
         }
     }
