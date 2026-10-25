@@ -1,23 +1,104 @@
-//! Replace global format sections atomically and retain named endpoint aliases.
-use crate::policy::TrafficPolicy;
-use anyhow::{Result, ensure};
+//! Global declarations add fields and ordered formats without replacing owners.
+use crate::policy::{GlobalField, TrafficPolicy};
+use anyhow::{Context, Result, ensure};
+use std::collections::{BTreeMap, BTreeSet};
 
+mod formats;
+#[cfg(test)]
+mod incremental_tests;
+
+#[cfg(test)]
 pub(super) fn merge(document: &mut TrafficPolicy, proposed: &TrafficPolicy) -> Result<bool> {
+    merge_with_replacements(document, proposed, &BTreeSet::new())
+}
+
+pub(super) fn merge_with_replacements(
+    document: &mut TrafficPolicy,
+    proposed: &TrafficPolicy,
+    replace: &BTreeSet<String>,
+) -> Result<bool> {
     let mut candidate = document.clone();
-    if proposed.json.is_some() {
-        candidate.json = proposed.json.clone();
+    if let Some(json) = &proposed.json {
+        if replace.contains("json") {
+            candidate.json = Some(json.clone());
+        } else if !json.fields.is_empty() {
+            fields(
+                &mut candidate.json.get_or_insert_default().fields,
+                &json.fields,
+                "json.fields",
+            )?;
+        }
     }
-    if proposed.mysql.is_some() {
-        candidate.mysql = proposed.mysql.clone();
+    if let Some(mysql) = &proposed.mysql {
+        if replace.contains("mysql") {
+            candidate.mysql = Some(mysql.clone());
+        } else {
+            let tables = &mut candidate.mysql.get_or_insert_default().tables;
+            for (name, table) in &mysql.tables {
+                if let Some(current) = tables.get_mut(name) {
+                    ensure!(
+                        current.pattern == table.pattern,
+                        "existing MySQL table pattern cannot be changed by an additive proposal"
+                    );
+                    for (column, field) in &table.fields {
+                        let canonical = current
+                            .fields
+                            .keys()
+                            .find(|name| name.eq_ignore_ascii_case(column))
+                            .cloned()
+                            .unwrap_or_else(|| column.clone());
+                        field_entry(&mut current.fields, &canonical, field)
+                            .with_context(|| format!("mysql.tables.{name}.fields.{column}"))?;
+                    }
+                } else {
+                    let mut table = table.clone();
+                    for field in table.fields.values_mut() {
+                        let original = field.clone();
+                        formats::merge(field, &original)?;
+                    }
+                    tables.insert(name.clone(), table);
+                }
+            }
+        }
     }
-    if proposed.redis.is_some() {
-        candidate.redis = proposed.redis.clone();
+    if let Some(redis) = &proposed.redis {
+        if replace.contains("redis") {
+            candidate.redis = Some(redis.clone());
+        } else if !redis.keys.is_empty() {
+            fields(
+                &mut candidate.redis.get_or_insert_default().keys,
+                &redis.keys,
+                "redis.keys",
+            )?;
+        }
     }
-    if proposed.http.is_some() {
-        candidate.http = proposed.http.clone();
+    if let Some(http) = &proposed.http {
+        if replace.contains("http") {
+            candidate.http = Some(http.clone());
+        } else if !http.headers.is_empty() {
+            fields(
+                &mut candidate.http.get_or_insert_default().headers,
+                &http.headers,
+                "http.headers",
+            )?;
+        }
     }
-    if proposed.async_api.is_some() {
-        candidate.async_api = proposed.async_api.clone();
+    if let Some(apis) = &proposed.async_api {
+        if replace.contains("async_api") {
+            candidate.async_api = Some(apis.clone());
+        } else if !apis.is_empty() {
+            let current = candidate.async_api.get_or_insert_default();
+            for (api, rule) in apis {
+                if let Some(existing) = current.get(api) {
+                    ensure!(
+                        existing == rule,
+                        "existing async API contract cannot be changed by an additive proposal"
+                    );
+                } else {
+                    current.insert(api.clone(), rule.clone());
+                }
+            }
+        }
     }
     for (name, signature) in &proposed.signatures {
         if let Some(current) = candidate.signatures.get(name) {
@@ -39,9 +120,36 @@ pub(super) fn merge(document: &mut TrafficPolicy, proposed: &TrafficPolicy) -> R
             candidate.resources.insert(name.clone(), resource.clone());
         }
     }
+    crate::policy::compile_policy(&candidate)?;
     let changed = &candidate != document;
     *document = candidate;
     Ok(changed)
+}
+
+fn fields(
+    current: &mut BTreeMap<String, GlobalField>,
+    proposed: &BTreeMap<String, GlobalField>,
+    location: &str,
+) -> Result<()> {
+    for (name, field) in proposed {
+        field_entry(current, name, field).with_context(|| format!("{location}.{name}"))?;
+    }
+    Ok(())
+}
+
+fn field_entry(
+    current: &mut BTreeMap<String, GlobalField>,
+    name: &str,
+    proposed: &GlobalField,
+) -> Result<()> {
+    if let Some(existing) = current.get_mut(name) {
+        formats::merge(existing, proposed)?;
+    } else {
+        let mut field = proposed.clone();
+        formats::merge(&mut field, proposed)?;
+        current.insert(name.into(), field);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -68,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn global_sections_replace_instead_of_accumulating_old_field_strategies() {
+    fn global_sections_add_fields_and_empty_maps_do_not_clear_existing_strategies() {
         let parse = |fields: Value| {
             crate::policy::parse_policy(
                 &json!({"format":"traffic-policy/v2","json":{"fields":fields}}).to_string(),
@@ -78,14 +186,22 @@ mod tests {
         let mut original = parse(json!({"/old":{"kind":"identity","formats":["uuid"]}}));
         let next = parse(json!({"/created_at":{"kind":"time","formats":["unix_seconds"]}}));
         assert!(merge(&mut original, &next).unwrap());
-        assert_eq!(original.json, next.json);
+        assert!(original.json.as_ref().unwrap().fields.contains_key("/old"));
+        assert!(
+            original
+                .json
+                .as_ref()
+                .unwrap()
+                .fields
+                .contains_key("/created_at")
+        );
         assert!(!merge(&mut original, &next).unwrap());
-        assert!(merge(&mut original, &parse(json!({}))).unwrap());
-        assert!(original.json.unwrap().fields.is_empty());
+        assert!(!merge(&mut original, &parse(json!({}))).unwrap());
+        assert_eq!(original.json.unwrap().fields.len(), 2);
     }
 
     #[test]
-    fn redis_section_replaces_atomically_and_can_clear_last_scalar_format() {
+    fn redis_section_adds_scalar_formats_and_explicit_replacement_can_clear_them() {
         let parse = |keys: Value| {
             crate::policy::parse_policy(
                 &json!({"format":"traffic-policy/v2","redis":{"keys":keys}}).to_string(),
@@ -95,8 +211,16 @@ mod tests {
         let mut current = parse(json!({"old":{"kind":"identity","formats":["uuid"]}}));
         let next = parse(json!({"as-of":{"kind":"time","formats":["unix_seconds"]}}));
         assert!(merge(&mut current, &next).unwrap());
-        assert_eq!(current.redis, next.redis);
-        assert!(merge(&mut current, &parse(json!({}))).unwrap());
+        assert_eq!(current.redis.as_ref().unwrap().keys.len(), 2);
+        assert!(!merge(&mut current, &parse(json!({}))).unwrap());
+        assert!(
+            merge_with_replacements(
+                &mut current,
+                &parse(json!({})),
+                &BTreeSet::from(["redis".into()])
+            )
+            .unwrap()
+        );
         assert!(current.redis.unwrap().keys.is_empty());
     }
 
@@ -120,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn headers_and_async_lifecycle_replace_atomically_and_absence_preserves_them() {
+    fn empty_headers_and_async_maps_are_noop_unless_replacement_is_explicit() {
         let parse = |value: Value| crate::policy::parse_policy(&value.to_string()).unwrap();
         let mut document = parse(json!({"format":"traffic-policy/v2",
             "http":{"headers":{"x-amz-date":{"kind":"time","formats":["amz_date"]}}},
@@ -131,7 +255,16 @@ mod tests {
         assert_eq!(document, before);
         let next =
             parse(json!({"format":"traffic-policy/v2","http":{"headers":{}},"async_api":{}}));
-        assert!(merge(&mut document, &next).unwrap());
+        assert!(!merge(&mut document, &next).unwrap());
+        assert_eq!(document, before);
+        assert!(
+            merge_with_replacements(
+                &mut document,
+                &next,
+                &BTreeSet::from(["http".into(), "async_api".into()])
+            )
+            .unwrap()
+        );
         assert!(document.http.unwrap().headers.is_empty());
         assert!(document.async_api.unwrap().is_empty());
     }

@@ -166,6 +166,6 @@ reparses its API positions against its current definitions. Source self-checks,
 private delivery copies and signature verification do not certify Target
 behavior by themselves.
 
-AES envelopes, multipart, DOCX and WSS path derivation retain their existing
-native typed contracts. They are not covered by a signature profile or by
+AES envelopes, multipart, DOCX and WSS path derivation use the
+[content formats and carrier bindings](content-policy-layout.md). They are not covered by a signature profile or by
 automatic JSON recognition.

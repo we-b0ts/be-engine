@@ -8,6 +8,8 @@ use crate::value_contract::{
 #[cfg(test)]
 mod signature_tests;
 #[cfg(test)]
+mod template_tests;
+#[cfg(test)]
 mod tests;
 
 impl RequestContracts {
@@ -125,6 +127,38 @@ impl RequestContracts {
                 *logical
                     .pointer_mut(&pointer)
                     .context("global URL delivery field disappeared")? = rebuilt;
+                pointers.push(pointer);
+            }
+        }
+        for (pointer, document) in
+            crate::value_contract::global_protocol::template::selected(global, source)?
+        {
+            let mut tokens = document.logical.clone();
+            let entries = document
+                .fields()
+                .iter()
+                .map(|(name, format)| {
+                    Ok(IdentityDelivery {
+                        prefix: &format.prefix,
+                        format: format.format,
+                        value: document
+                            .logical
+                            .get(name)
+                            .context("template token disappeared")?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let preview = self.with_identity_proposals(combined.identity.iter())?;
+            let (values, nested) = preview.identity_deliveries(case, &entries)?;
+            self.merge_identity_decision(&mut combined, nested)?;
+            for (name, value) in document.fields().keys().zip(values) {
+                tokens[name] = value;
+            }
+            let rebuilt = Value::String(document.rebuild(&tokens)?);
+            if logical.pointer(&pointer) != Some(&rebuilt) {
+                *logical
+                    .pointer_mut(&pointer)
+                    .context("global template delivery field disappeared")? = rebuilt;
                 pointers.push(pointer);
             }
         }

@@ -3,6 +3,7 @@ use super::json::{LeafContext, LeafObservations, VerifiedField};
 use crate::policy::{CompiledJsonPolicy, GLOBAL_JSON_ID, GlobalField, GlobalUrlFormat};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 pub(crate) mod jwt;
+pub(crate) mod template;
 pub(crate) mod url;
 type Check<'a> = Box<dyn Fn(LeafContext<'_>) -> Result<LeafObservations, String> + 'a>;
 pub(crate) struct ProtocolChecks<'a> {
@@ -26,6 +27,15 @@ pub(crate) fn checks<'a>(
 ) -> anyhow::Result<ProtocolChecks<'a>> {
     let mut checks: Vec<(String, Check<'a>)> = Vec::new();
     for (pattern, field) in &plan.fields {
+        if let GlobalField::Template { formats } = field {
+            for pointer in super::delivery::select(pattern, source)? {
+                checks.push((
+                    pointer,
+                    Box::new(move |context| template::compare(context, formats)),
+                ));
+            }
+            continue;
+        }
         if let GlobalField::Jwt { signature } = field {
             for pointer in super::delivery::select(pattern, source)? {
                 checks.push((

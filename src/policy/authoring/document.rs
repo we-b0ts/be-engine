@@ -3,7 +3,9 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::{Mapping, Value};
 
-use super::{dependency_lifetimes, proof, redis_keys, resources, signatures, walk};
+use super::{
+    api, dependency_lifetimes, http, proof, recording, redis_keys, resources, signatures, walk,
+};
 use crate::policy::{PolicyRule, TrafficPolicy};
 
 #[derive(Deserialize)]
@@ -13,13 +15,17 @@ struct Document {
     #[serde(default, deserialize_with = "declared_revision")]
     source_revision: Option<String>,
     #[serde(default)]
+    recording: Option<recording::Declaration>,
+    #[serde(default)]
     json: Option<crate::policy::JsonPolicy>,
     #[serde(default)]
     mysql: Option<crate::policy::MysqlPolicy>,
     #[serde(default)]
     redis: Option<RedisDocument>,
     #[serde(default)]
-    http: Option<crate::policy::HttpPolicy>,
+    http: Option<http::HttpDocument>,
+    #[serde(default)]
+    docx: Option<api::DocxDefinition>,
     #[serde(default)]
     localcache: Option<dependency_lifetimes::Declaration>,
     #[serde(default)]
@@ -27,7 +33,7 @@ struct Document {
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
     signatures: std::collections::BTreeMap<String, crate::policy::SignatureDefinition>,
     #[serde(default)]
-    api: Option<signatures::ApiDefinitions>,
+    api: Option<api::ApiDefinitions>,
     #[serde(default, deserialize_with = "optional_async_api")]
     async_api: Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRule>>,
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
@@ -77,9 +83,19 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
             resources::validate(&document.resources)?;
             crate::policy::signatures::validate(&document.signatures)?;
             let (redis, nested_rules) = redis_document(document.redis)?;
+            let (http, http_rules) = http::expand(document.http, &document.resources)?;
             let mut declared_rules = document.rules;
+            declared_rules.extend(recording::expand(
+                document.recording,
+                document.source_revision.as_deref(),
+            )?);
             declared_rules.extend(nested_rules);
-            declared_rules.extend(signatures::expand(document.api, &document.signatures)?);
+            declared_rules.extend(http_rules);
+            declared_rules.extend(api::expand(
+                document.api,
+                &document.signatures,
+                document.docx.as_ref(),
+            )?);
             declared_rules.extend(dependency_lifetimes::expand(
                 document.localcache,
                 document.process_dependencies,
@@ -105,7 +121,7 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
                 json: document.json,
                 mysql: document.mysql,
                 redis,
-                http: document.http,
+                http,
                 async_api: document.async_api,
                 signatures: document.signatures,
                 resources: document.resources,
@@ -136,14 +152,24 @@ fn redis_document(
 
 fn sort_rules(rules: &mut [PolicyRule]) {
     rules.sort_by_key(|rule| {
+        // Recorder response plugins use first-match precedence. Keep this
+        // family in its authored order rather than sorting generated IDs.
+        if capture_response(rule) {
+            return (true, false, false, String::new());
+        }
         (
+            false,
             redis_rule(rule),
             redis_keys::generated(rule)
                 || dependency_lifetimes::generated(rule)
-                || signatures::generated(rule),
+                || signatures::generated(rule)
+                || api::generated(rule)
+                || http::generated(rule),
             if redis_keys::generated(rule)
                 || dependency_lifetimes::generated(rule)
                 || signatures::generated(rule)
+                || api::generated(rule)
+                || http::generated(rule)
             {
                 rule.id().to_owned()
             } else {
@@ -151,6 +177,33 @@ fn sort_rules(rules: &mut [PolicyRule]) {
             },
         )
     });
+}
+
+fn capture_response(rule: &PolicyRule) -> bool {
+    matches!(rule, PolicyRule::Native(rule)
+        if matches!(rule.effect, crate::policy::NativeEffect::CaptureHttpResponse(_)))
+}
+
+fn compact_capture_suffix(document: &TrafficPolicy) -> std::collections::BTreeSet<String> {
+    let mut selected = std::collections::BTreeSet::new();
+    let mut probe = Mapping::new();
+    // Parsing appends HTTP response rewrites after native rules. Only a representable
+    // suffix can move there without changing capture/plugin precedence.
+    for rule in document
+        .rules
+        .iter()
+        .rev()
+        .filter(|rule| capture_response(rule))
+    {
+        if !matches!(
+            http::compact(rule, &document.resources, &mut probe),
+            Ok(true)
+        ) {
+            break;
+        }
+        selected.insert(rule.id().to_owned());
+    }
+    selected
 }
 
 fn redis_rule(rule: &PolicyRule) -> bool {
@@ -227,7 +280,7 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
         "policy format must be traffic-policy/v2"
     );
     let mut root = Mapping::new();
-    root.insert("format".into(), document.format.into());
+    root.insert("format".into(), document.format.clone().into());
     if let Some(revision) = &document.source_revision {
         root.insert("source_revision".into(), revision.clone().into());
     }
@@ -267,13 +320,33 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
     );
     let mut rules = vec![];
     let mut redis_rules = vec![];
+    let mut recording_root = Mapping::new();
+    let recording_id = recording::selected(&document.rules, document.source_revision.as_deref())?;
     let resource_names = resources::names(&document.resources)?;
+    let compact_captures = compact_capture_suffix(&document);
     let capture_first = document.rules.iter().filter(|rule| matches!(rule,
         PolicyRule::Native(rule) if matches!(rule.effect, crate::policy::NativeEffect::CaptureHttp(_))));
     let remaining = document.rules.iter().filter(|rule| !matches!(rule,
         PolicyRule::Native(rule) if matches!(rule.effect, crate::policy::NativeEffect::CaptureHttp(_))));
     for rule in capture_first.chain(remaining) {
+        if recording_id.as_deref() == Some(rule.id())
+            && recording::compact(
+                rule,
+                document.source_revision.as_deref(),
+                &mut recording_root,
+            )?
+        {
+            continue;
+        }
         if signatures::compact(rule, &document.signatures, &mut root)? {
+            continue;
+        }
+        if api::compact(rule, &mut root)? {
+            continue;
+        }
+        if (!capture_response(rule) || compact_captures.contains(rule.id()))
+            && http::compact(rule, &document.resources, &mut root)?
+        {
             continue;
         }
         if dependency_lifetimes::compact(rule, &document.resources, &mut root)? {
@@ -301,6 +374,11 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
             .expect("serialized Redis settings mapping")
             .insert("rules".into(), Value::Sequence(redis_rules));
     }
-    root.insert("rules".into(), Value::Sequence(rules));
+    if !rules.is_empty() {
+        root.insert("rules".into(), Value::Sequence(rules));
+    }
+    // Recording scope is the final authoring section regardless of native ID
+    // order or whether earlier declarations retain compatibility rules.
+    root.extend(recording_root);
     Ok(root.into())
 }

@@ -14,7 +14,7 @@ use crate::policy::{
     NativeEffect, NativeMatch, NativeRule, PolicyRule, Proof, SignatureDefinition,
 };
 
-mod declarations;
+pub(super) mod declarations;
 mod reverse;
 use declarations::*;
 

@@ -277,6 +277,33 @@ fn status_is_compact_and_overview_preserves_diagnostics_and_confirmation() {
     );
     assert_eq!(overview.facts["work_scope"]["api"], "/api");
     assert!(overview.applicable_rule_planners.is_empty());
+    let discovery = overview
+        .queries
+        .iter()
+        .find(|query| {
+            super::super::is_rule_discovery_query(
+                &state,
+                state.active_issue.as_ref().unwrap(),
+                &query.query_id,
+            )
+        })
+        .unwrap();
+    assert!(
+        !discovery
+            .purpose
+            .starts_with("Discover bounded typed rule drafts")
+    );
+    assert_eq!(overview.facts["rule_discovery"], json!([discovery]));
+    let hint = overview
+        .rule_hints
+        .iter()
+        .find(|hint| hint.capability == "unified_value_contract")
+        .unwrap();
+    assert_eq!(hint.help.argv, discovery.command.argv);
+    assert!(
+        hint.hint.len() < 400,
+        "ordinary guidance remains bounded; capabilities are queried on demand"
+    );
     let delta = overview
         .queries
         .iter()
@@ -287,8 +314,56 @@ fn status_is_compact_and_overview_preserves_diagnostics_and_confirmation() {
     let report = query_rewrite_evidence(context(target.path()), &delta.query_id).unwrap();
     assert_eq!(report.facts["regressed"], true);
     assert!(report.queries.is_empty());
+    assert!(
+        report
+            .rule_hints
+            .iter()
+            .any(|hint| hint.capability == "unified_value_contract"
+                && hint.help.argv == discovery.command.argv)
+    );
     assert_eq!(
         serde_json::to_value(store.load().unwrap().unwrap()).unwrap(),
         before
     );
+}
+
+#[test]
+fn overview_discovers_each_method_by_query_identity_instead_of_human_purpose() {
+    let target = configured_target();
+    let mut state = api_state();
+    inventory::install(&mut state, vec!["GET /api".into(), "POST /api".into()]).unwrap();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.active_issue = Some(issue("get-issue"));
+    worker::confirm_current_for_test(&mut state);
+    inventory::activate_requested(&mut state, Some(&"POST /api".parse().unwrap())).unwrap();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.active_issue = Some(issue("post-issue"));
+    worker::confirm_current_for_test(&mut state);
+    let selected_issue = state.active_issue.as_ref().unwrap();
+    let report = super::report(
+        target.path(),
+        &state,
+        RewriteWorkScope::Api { api: "/api".into() },
+        selected_issue,
+        &api_query_id(&state, selected_issue),
+    )
+    .unwrap();
+    let queries = report.facts["rule_discovery"].as_array().unwrap();
+    assert_eq!(queries.len(), 2);
+    let ids = queries
+        .iter()
+        .map(|query| query["query_id"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ids.len(), 2);
+    assert!(
+        report
+            .queries
+            .iter()
+            .filter(|query| ids.contains(query.query_id.as_str()))
+            .count()
+            == 2
+    );
+    for query in queries {
+        assert_eq!(query["command"]["cwd"], json!(target.path()));
+    }
 }

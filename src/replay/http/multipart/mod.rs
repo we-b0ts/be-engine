@@ -7,23 +7,66 @@ use std::collections::BTreeMap;
 type Headers = BTreeMap<String, Vec<String>>;
 const MAX_BODY: usize = 16 * 1024 * 1024;
 
+struct Document<'a> {
+    parameters: Vec<(String, String)>,
+    parts: Vec<&'a [u8]>,
+}
+
+impl<'a> Document<'a> {
+    fn parse(body: &'a [u8], headers: &Headers) -> Result<Self> {
+        let (parameters, boundary) = content_type(headers)?;
+        Ok(Self {
+            parameters,
+            parts: parts(body, &boundary)?,
+        })
+    }
+
+    fn compare(&self, actual: &Self) -> Result<()> {
+        ensure!(
+            self.parameters == actual.parameters,
+            "multipart content-type parameters differ"
+        );
+        ensure!(self.parts == actual.parts, "multipart parts differ");
+        Ok(())
+    }
+}
+
+/// Check the same bounded Content-Type grammar before materializing body bytes.
+/// A supported header alone never selects multipart without a complete body.
+pub(super) fn supports_headers(headers: &Headers) -> bool {
+    content_type(headers).is_ok()
+}
+
+/// A complete supported Source selects this protocol comparison. Unknown or
+/// incomplete Source encodings retain the ordinary exact-byte matcher; a
+/// selected Target can never fall back after a malformed body or header.
+pub(super) fn preview(
+    source: &[u8],
+    source_headers: &Headers,
+    actual: &[u8],
+    actual_headers: &Headers,
+) -> Option<Result<()>> {
+    let source = Document::parse(source, source_headers).ok()?;
+    Some((|| {
+        let mut source_identity = source_headers.clone();
+        let mut actual_identity = actual_headers.clone();
+        source_identity.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+        actual_identity.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+        ensure!(
+            super::request_headers::exact_contract_match(&source_identity, &actual_identity),
+            "multipart identity headers differ"
+        );
+        source.compare(&Document::parse(actual, actual_headers)?)
+    })())
+}
+
 pub(in crate::replay) fn compare(
     source: &[u8],
     source_headers: &Headers,
     actual: &[u8],
     actual_headers: &Headers,
 ) -> Result<()> {
-    let (source_type, source_boundary) = content_type(source_headers)?;
-    let (actual_type, actual_boundary) = content_type(actual_headers)?;
-    ensure!(
-        source_type == actual_type,
-        "multipart content-type parameters differ"
-    );
-    ensure!(
-        parts(source, &source_boundary)? == parts(actual, &actual_boundary)?,
-        "multipart parts differ"
-    );
-    Ok(())
+    Document::parse(source, source_headers)?.compare(&Document::parse(actual, actual_headers)?)
 }
 
 /// Protected planning witness: exact part bytes are represented by SHA-256 digests.
@@ -33,13 +76,14 @@ pub(in crate::replay) struct MultipartContract {
     part_fingerprints: Vec<String>,
 }
 pub(in crate::replay) fn contract(body: &[u8], headers: &Headers) -> Result<MultipartContract> {
-    let (parameters, boundary) = content_type(headers)?;
-    let part_fingerprints = parts(body, &boundary)?
+    let document = Document::parse(body, headers)?;
+    let part_fingerprints = document
+        .parts
         .into_iter()
         .map(|part| format!("{:x}", Sha256::digest(part)))
         .collect();
     Ok(MultipartContract {
-        parameters,
+        parameters: document.parameters,
         part_fingerprints,
     })
 }

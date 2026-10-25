@@ -84,6 +84,7 @@ pub(super) fn verify(
     root: &Path,
     state: &RewriteState,
     bundle: &mut Bundle,
+    previous: &CompiledPolicy,
     policy: &CompiledPolicy,
     selected: &BTreeSet<String>,
 ) -> Result<Preflight> {
@@ -102,8 +103,14 @@ pub(super) fn verify(
         }
     }
     let mut result = Preflight::default();
+    let pending_recording = state.recording_refresh.is_some();
+    if pending_recording {
+        result
+            .obligations
+            .insert(crate::config::native_policy::SourceObligation::FreshRecording);
+    }
     identities::require_replay(policy, selected, &mut result);
-    source::verify(root, state, bundle, policy, selected, &mut result)?;
+    source::verify(root, state, bundle, previous, policy, selected, &mut result)?;
     let (scope, mut foreign) = resource::prepare(root, state, bundle, policy, selected)?;
     global_values::verify(root, bundle, policy, selected, &mut result)?;
     global_values::global_trace(state, bundle, policy, selected, &mut result)?;
@@ -116,7 +123,13 @@ pub(super) fn verify(
         bundle.artifacts.append(&mut other.artifacts);
     }
     result.resource_scope = scope;
-    async_api::verify(bundle, policy, selected, &mut result)?;
+    async_api::verify(
+        bundle,
+        policy,
+        selected,
+        pending_recording || previous.async_api != policy.async_api,
+        &mut result,
+    )?;
 
     session::verify(root, bundle, policy, selected, &mut result)?;
     for id in selected {

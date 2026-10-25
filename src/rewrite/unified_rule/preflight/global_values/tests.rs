@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+mod multipart;
 mod provenance;
 
 fn policy() -> CompiledPolicy {

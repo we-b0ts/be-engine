@@ -444,6 +444,7 @@ impl NativeResponseContext {
                 pointer: &field.pointer,
                 contract: &field.contract,
                 key: field.key.as_ref().map(EncryptionKeySnapshot::bytes),
+                global,
             })
             .collect::<Vec<_>>();
         type Verifier<'a> =

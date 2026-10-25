@@ -13,12 +13,18 @@ mod api_time_transaction;
 mod append_transaction;
 #[path = "transaction_calendar_date.rs"]
 mod calendar_date_transaction;
+#[path = "transaction_capture_refresh.rs"]
+mod capture_refresh_transaction;
 #[path = "transaction_change.rs"]
 mod change_transaction;
 #[path = "transaction_concurrency.rs"]
 mod concurrency_transaction;
 #[path = "transaction_conditional_identity.rs"]
 mod conditional_identity_transaction;
+#[path = "transaction_declaration_changes.rs"]
+mod declaration_changes_transaction;
+#[path = "transaction_definition_context.rs"]
+mod definition_context_transaction;
 #[path = "transaction_dependency.rs"]
 mod dependency_transaction;
 #[path = "transaction_global_formats.rs"]

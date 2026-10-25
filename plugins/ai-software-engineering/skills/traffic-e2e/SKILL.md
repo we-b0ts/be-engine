@@ -100,8 +100,15 @@ Named root `signatures` profiles centralize algorithms and private startup key
 references. Global `kind: jwt` verifies HMAC signatures/NumericDates and retains
 complete-token correspondence. The old authored identity `formats: [jwt]` is
 rejected; there is no keyless JWT policy mode. `api` positions explicitly declare
-input re-signing and extra response nonce/expiry checks. Multipart, DOCX, WSS
-path derivation and AES envelopes retain their existing native typed rules. See
+input re-signing and extra response nonce/expiry checks. Global JSON templates
+share complete typed identities across embedded URL slots. `http.requests` owns
+explicit generated path templates; `http.response_rewrite` owns JSON URL
+acquisition and address rewriting. `docx.fields` is reused
+by scoped API codec bindings; API encryption positions bind envelopes and keys,
+while plaintext reuses global JSON formats. Supported multipart boundaries are
+compared as protocol encoding without a project exemption. These declarations
+reuse existing typed owners and preserve Source-proof and scope requirements.
+See [content formats and carrier bindings](../../../../docs/content-policy-layout.md) and
 [resource-field contracts](../../../../docs/resource-field-contracts.md) for
 schema, supported carriers and dependency lifetime boundaries. Current bounded
 evidence supplies discovery and capability metadata; it does not supply Source proof. During managed rewrites, the backend-rewrite skill owns the single
@@ -112,7 +119,8 @@ not create independent Target evidence. Protocol framing, sessions and finite
 consumption remain with the protocol owner.
 
 API route-pattern bootstrap retains `traffic-e2e config recorder ...
-case-path-patterns`. It updates capture effects in the same policy and preserves
+case-path-patterns`. `recording.case_paths` declares those paths and is rendered
+last, preserving their capture identity and order. Bootstrap updates capture effects in the same policy and preserves
 unrelated runtime permissions and separate plan evidence. Old verification/Source document formats and
 codec-specific rule planners are retired.
 

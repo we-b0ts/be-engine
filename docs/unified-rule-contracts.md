@@ -20,6 +20,7 @@ not an old-format fallback hidden behind the new schema.
 
 `traffic-policy/v2` declares one carrier-independent `json.fields` map. Fields
 use `kind: time` or `kind: identity` with `formats`, or `kind: unordered`.
+Source case capture uses `recording.case_paths` with the root `source_revision`.
 Time comparisons preserve relative differences. JSON payloads are recognized
 automatically in supported carriers, including MySQL columns; no per-column,
 API, SSE event or cache-key JSON declaration is required. Root `mysql` enables
@@ -35,17 +36,24 @@ types are preserved. Reads reuse established Target IDs and anchor unknown input
 Dependency lifetimes use `localcache.requests` and
 `process_dependencies.tasks.<actual-Source-task-name>.requests`; HTTP entries
 require a host and process classification requires immutable `source_revision`.
-One task can contain requests from multiple protocols. Native effects remain
-for additional relationships, typed PB schemas, signed-input/JWT cryptography,
-multipart, DOCX, WSS path derivation and AES envelopes. Named `signatures`
+One task can contain requests from multiple protocols. Source-proven compound
+strings use global templates; outbound paths use `http.requests`, learned
+response addresses use `http.response_rewrite`, and API positions bind encrypted
+JSON or shared DOCX formats while preserving applicability scope. Supported
+multipart boundaries compare through the protocol engine without a project rule.
+Native owners retain additional relationships, typed PB schemas and cryptography.
+Named `signatures`
 profiles and `api` positions deduplicate existing signing owners; global
 `kind: jwt` additionally verifies HMAC signatures and claims through the same
 frozen key context. The old authored identity `formats: [jwt]` syntax is rejected;
 JWT declarations require `kind: jwt` and a named verification profile.
-See [signature profiles](signature-profiles.md). Global JSON inference does not
-automatically cover multipart/DOCX/WSS/AES compound formats. Supplied global
-`json` and `mysql` sections replace their whole section through plan/apply;
-omitted sections are preserved. See [global field formats](resource-field-contracts.md)
+See [signature profiles](signature-profiles.md) and
+[content formats and carrier bindings](content-policy-layout.md). Explicit codec
+bindings and Source proof remain required where documented. Ordinary proposals
+add fields and append new formats while preserving existing declarations, order
+and exact deduplication. Intentional section changes or removals require an
+explicit `traffic-policy-change/v1` proposal with `replace_sections` and complete
+replacement maps. See [global field formats](resource-field-contracts.md)
 for the current schema and complete examples. The inventory below records the
 earlier design baseline.
 
@@ -209,9 +217,15 @@ Old resource field graphs, response declarations, per-API value rules and
 for native protocol, cryptographic and causal effects. Native rules retain their
 stateful scope; their Source explanations remain in the separate plan evidence.
 
-A supplied root JSON/MySQL/Redis section replaces that entire section during plan/apply;
-an omitted section preserves it. `json: {fields: {}}` clears all JSON formats.
-Native rule changes retain explicit replacement IDs and frozen Source evidence.
+Supplied JSON/MySQL/Redis/HTTP declarations add new fields by default. Formats on
+an existing field append in authored order and deduplicate exact matches, so an
+existing `[format-a]` plus `[format-b]` becomes `[format-a, format-b]`. Existing
+fields remain, and an ordinary empty map does not clear them. Incompatible kind,
+profile, table-pattern or existing asynchronous API changes reject by default.
+Explicit `replace_sections` in a `traffic-policy-change/v1` proposal authorizes
+replacement only for the named, supplied sections; complete desired maps and
+removed declarations must be reviewed. Native replacements retain explicit
+`replace_rules` IDs and frozen Source evidence.
 The renderer emits simple kind/formats fields on one line and verifies that
 parsing its output preserves the compiled policy fingerprint.
 
@@ -528,7 +542,8 @@ Source fact and supported formats; the engine owns decoding and correspondence. 
 what stays strict, affected coverage, residual differences and the exact next
 verification action. They never ask workers to construct internal fingerprints.
 
-Ordinary documents remain additive; omitting an existing rule does not delete it.
+Ordinary documents remain additive; omitting an existing rule or field does not
+delete it, and adding a supported format preserves the existing format order.
 An explicit reviewed replacement uses the same plan/apply CLI with this wrapper:
 
 ```yaml
@@ -554,6 +569,14 @@ Source/Target coverage preflight. Existing primary response/input rules cannot b
 removed across another API's issue. This is not permission for an unproven
 replacement or implicit deletion. Whole-policy compare-and-swap, durable apply
 intent, stale-input rejection, recovery and required fresh Replay remain active.
+
+The same wrapper optionally accepts `replace_sections: [json, mysql, redis, http,
+async_api]`. List only the sections intentionally being changed or cleared and
+provide each complete desired section under `policy`; unlisted sections keep
+the ordinary additive behavior. For example, clearing JSON requires an explicit
+`replace_sections: [json]` and `policy.json: {fields: {}}`. A section-only change
+may omit `replace_rules`. The plan exposes additions and removals before apply;
+neither mode bypasses Source proof, complete preflight or genuine verification.
 
 Distinguish candidate, needs-proof/schema/evidence, stale, unsupported,
 planned, applied-pending-verification, verified, residual-failure and

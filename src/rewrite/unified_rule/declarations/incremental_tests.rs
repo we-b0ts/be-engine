@@ -1,0 +1,166 @@
+use super::*;
+use serde_json::{Value, json};
+
+fn policy(value: Value) -> TrafficPolicy {
+    crate::policy::parse_policy(&value.to_string()).unwrap()
+}
+
+#[test]
+fn formats_append_in_original_order_and_reapplication_is_a_noop() {
+    for (first, addition, expected) in [
+        (
+            json!({"kind":"time","formats":["rfc3339"]}),
+            json!({"kind":"time","formats":["unix_seconds","rfc3339","unix_seconds"]}),
+            json!(["rfc3339", "unix_seconds"]),
+        ),
+        (
+            json!({"kind":"identity","formats":["uuid"]}),
+            json!({"kind":"identity","formats":["decimal","uuid","decimal"]}),
+            json!(["uuid", "decimal"]),
+        ),
+        (
+            json!({"kind":"template","formats":[{"template":"a-{id}","fields":{"id":"uuid"}}]}),
+            json!({"kind":"template","formats":[{"template":"b-{id}","fields":{"id":"uuid"}}]}),
+            json!([{"template":"a-{id}","fields":{"id":"uuid"}},{"template":"b-{id}","fields":{"id":"uuid"}}]),
+        ),
+    ] {
+        let mut current = policy(
+            json!({"format":"traffic-policy/v2","json":{"fields":{"/value":first,"/retained":{"kind":"unordered"}}}}),
+        );
+        let proposed =
+            policy(json!({"format":"traffic-policy/v2","json":{"fields":{"/value":addition}}}));
+        assert!(merge(&mut current, &proposed).unwrap());
+        assert_eq!(
+            serde_json::to_value(&current.json.as_ref().unwrap().fields["/value"]).unwrap()["formats"],
+            expected
+        );
+        assert!(
+            current
+                .json
+                .as_ref()
+                .unwrap()
+                .fields
+                .contains_key("/retained")
+        );
+        assert!(!merge(&mut current, &proposed).unwrap());
+    }
+}
+
+#[test]
+fn additions_reuse_existing_single_protocol_format_limits() {
+    for (kind, original, addition) in [
+        ("url", "url", "aws_sigv4"),
+        ("duration", "seconds", "milliseconds"),
+    ] {
+        let mut current = policy(json!({"format":"traffic-policy/v2","json":{"fields":{
+            "/value":{"kind":kind,"formats":[original]}
+        }}}));
+        let same = current.clone();
+        assert!(!merge(&mut current, &same).unwrap());
+        let different = policy(json!({"format":"traffic-policy/v2","json":{"fields":{
+            "/value":{"kind":kind,"formats":[addition]}
+        }}}));
+        assert!(merge(&mut current, &different).is_err());
+        assert_eq!(current, same);
+    }
+}
+
+#[test]
+fn physical_carriers_add_formats_without_replacing_other_fields_or_native_permissions() {
+    let mut current = policy(json!({"format":"traffic-policy/v2",
+        "mysql":{"tables":{"tasks":{"pattern":"tasks_*","fields":{"ID":{"kind":"identity","formats":["decimal"]},"retained":{"kind":"time","formats":["unix_seconds"]}}}}},
+        "redis":{"keys":{"id":{"kind":"identity","formats":["uuid"]},"stream:*":{"append_stream":true}}},
+        "http":{"headers":{"x-id":{"kind":"identity","formats":["uuid"]},"x-retained":{"kind":"time","formats":["unix_seconds"]}}}
+    }));
+    let original_rules = current.rules.clone();
+    let proposed = policy(json!({"format":"traffic-policy/v2",
+        "mysql":{"tables":{"tasks":{"pattern":"tasks_*","fields":{"id":{"kind":"identity","formats":["uuid"]}}}}},
+        "redis":{"keys":{"id":{"kind":"identity","formats":["decimal"]}}},
+        "http":{"headers":{"X-ID":{"kind":"identity","formats":["decimal"]}}}
+    }));
+    assert!(merge(&mut current, &proposed).unwrap());
+    assert_eq!(
+        current.rules, original_rules,
+        "format additions must not change stateful native permissions"
+    );
+    assert_eq!(
+        current.mysql.as_ref().unwrap().tables["tasks"].fields.len(),
+        2
+    );
+    assert!(
+        current.mysql.as_ref().unwrap().tables["tasks"]
+            .fields
+            .contains_key("ID")
+    );
+    assert_eq!(
+        serde_json::to_value(&current.mysql.as_ref().unwrap().tables["tasks"].fields["ID"])
+            .unwrap()["formats"],
+        json!(["decimal", "uuid"])
+    );
+    assert_eq!(
+        serde_json::to_value(&current.redis.as_ref().unwrap().keys["id"]).unwrap()["formats"],
+        json!(["uuid", "decimal"])
+    );
+    assert_eq!(
+        serde_json::to_value(&current.http.as_ref().unwrap().headers["x-id"]).unwrap()["formats"],
+        json!(["uuid", "decimal"])
+    );
+    assert!(
+        current
+            .http
+            .as_ref()
+            .unwrap()
+            .headers
+            .contains_key("x-retained")
+    );
+    assert!(!merge(&mut current, &proposed).unwrap());
+}
+
+#[test]
+fn additive_conflicts_are_atomic_and_mysql_empty_presence_still_enables_native_inference() {
+    let original = policy(json!({"format":"traffic-policy/v2",
+        "json":{"fields":{"/id":{"kind":"identity","formats":["uuid"]}}},
+        "mysql":{"tables":{"t":{"pattern":"tasks_*","fields":{"id":{"kind":"identity","formats":["decimal"]}}}}}
+    }));
+    for proposed in [
+        policy(
+            json!({"format":"traffic-policy/v2","json":{"fields":{"/id":{"kind":"time","formats":["unix_seconds"]}}}}),
+        ),
+        policy(
+            json!({"format":"traffic-policy/v2","mysql":{"tables":{"t":{"pattern":"other_*","fields":{"id":{"kind":"identity","formats":["decimal"]}}}}}}),
+        ),
+    ] {
+        let mut current = original.clone();
+        assert!(merge(&mut current, &proposed).is_err());
+        assert_eq!(current, original);
+    }
+    let mut current = TrafficPolicy::default();
+    let empty = policy(json!({"format":"traffic-policy/v2","mysql":{}}));
+    assert!(merge(&mut current, &empty).unwrap());
+    assert!(
+        crate::policy::compile_policy(&current)
+            .unwrap()
+            .mysql
+            .is_some()
+    );
+    assert!(!merge(&mut current, &empty).unwrap());
+    let mut current = original.clone();
+    assert!(!merge(&mut current, &empty).unwrap());
+    assert_eq!(current, original);
+}
+
+#[test]
+fn async_api_additions_keep_existing_completion_contracts() {
+    let declaration = |api: &str, key: &str| {
+        policy(json!({"format":"traffic-policy/v2","async_api":{
+            api:{"when":{"/background":true},"end":[{"redis":{"operation":"DEL","key":key}}]}
+        }}))
+    };
+    let mut current = declaration("POST /one", "one");
+    assert!(merge(&mut current, &declaration("POST /two", "two")).unwrap());
+    assert_eq!(current.async_api.as_ref().unwrap().len(), 2);
+    assert!(!merge(&mut current, &declaration("POST /one", "one")).unwrap());
+    let before = current.clone();
+    assert!(merge(&mut current, &declaration("POST /one", "changed")).is_err());
+    assert_eq!(current, before);
+}

@@ -58,6 +58,7 @@ impl ReplayState {
         let mut matching_dynamic_decision =
             crate::replay::policy::dynamic_values::DynamicDecision::default();
         let mut matching_request_decision = None;
+        let mut matching_multipart = false;
         let mut closest_mismatch = None;
         let mut body_comparisons = Vec::new();
         let mut omitted_body_comparisons = 0;
@@ -227,9 +228,40 @@ impl ReplayState {
                 let headers = declared_headers.as_ref().unwrap_or(headers);
                 let mut request_decision = None;
                 let mut body_comparison = None;
-                if (mismatch.is_none()
-                    || mismatch.as_deref()
-                        == Some("HTTP request body did not match the recorded body"))
+                let multipart = if multipart::supports_headers(&exchange.record.request_headers)
+                    && !exchange.record.request_body.truncated
+                    && (mismatch.is_none()
+                        || mismatch.as_deref()
+                            == Some("HTTP request body did not match the recorded body"))
+                {
+                    decode_body(&exchange.record.request_body)
+                        .ok()
+                        .and_then(|source_body| {
+                            multipart::preview(
+                                &source_body,
+                                &exchange.record.request_headers,
+                                body,
+                                headers,
+                            )
+                        })
+                } else {
+                    None
+                };
+                let multipart_selected = multipart.is_some();
+                let mut multipart_matched = false;
+                if let Some(result) = multipart {
+                    match result {
+                        Ok(()) => {
+                            mismatch = None;
+                            multipart_matched = true;
+                        }
+                        Err(_) => mismatch = Some("HTTP multipart request differs".into()),
+                    }
+                }
+                if !multipart_selected
+                    && (mismatch.is_none()
+                        || mismatch.as_deref()
+                            == Some("HTTP request body did not match the recorded body"))
                     && let Some(policy) = &self.replay_policy
                     && let Some(result) = contracts::preview_request(
                         policy,
@@ -406,6 +438,7 @@ impl ReplayState {
                     }
                 }
                 matching_request_decision = request_decision;
+                matching_multipart = multipart_matched;
                 matching_index = Some(index);
                 matching_policy_decision = policy_decision;
                 if let Some(normalized) = normalized {
@@ -536,7 +569,7 @@ impl ReplayState {
             }
         }
         let mut audited_headers = headers.clone();
-        if matching_request_decision.is_some() {
+        if matching_multipart || matching_request_decision.is_some() {
             audited_headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
             for (name, values) in &exchange.record.request_headers {
                 if name.eq_ignore_ascii_case("content-type") {

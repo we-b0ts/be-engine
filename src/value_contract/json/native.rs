@@ -13,6 +13,7 @@ pub(crate) struct NativeField<'a> {
     pub(crate) pointer: &'a str,
     pub(crate) contract: &'a GeneratedResponse,
     pub(crate) key: Option<&'a [u8]>,
+    pub(crate) global: Option<&'a crate::policy::CompiledJsonPolicy>,
 }
 
 /// A domain owner authenticates a leaf without mutating shared candidate state.
@@ -121,13 +122,14 @@ pub(super) fn compare(
     clocks: AnchorClocks,
     decisions: &mut Decisions,
 ) -> Result<(), Difference> {
-    let comparison = crate::value_contract::generated::compare_value(
+    let mut comparison = crate::value_contract::generated::compare_value_global(
         source,
         target,
         field.contract,
         field.key,
         field.rule_id,
         clocks,
+        field.global,
     )
     .map_err(|error| {
         difference(
@@ -135,6 +137,13 @@ pub(super) fn compare(
             &format!("generated contract rejected value: {error:?}"),
         )
     })?;
+    if field.global.is_some()
+        && matches!(field.contract, GeneratedResponse::EncryptedJson { fields, .. } if fields.is_empty())
+    {
+        let context = serde_json::to_string(&(field.rule_id, pointer))
+            .expect("cipher occurrence context is serializable");
+        comparison.scope_schema_clocks_in(&context);
+    }
     merge(decisions, comparison).map_err(|error| difference(pointer, error))?;
     validate_relationships(decisions).map_err(|error| difference(pointer, &error.to_string()))
 }

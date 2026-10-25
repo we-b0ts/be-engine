@@ -41,6 +41,7 @@ pub(super) fn verify(
     root: &Path,
     state: &RewriteState,
     bundle: &mut Bundle,
+    previous: &CompiledPolicy,
     policy: &CompiledPolicy,
     selected: &BTreeSet<String>,
     result: &mut Preflight,
@@ -75,7 +76,7 @@ pub(super) fn verify(
         },
         rule_ids: rules.iter().map(|rule| rule.rule.id.clone()).collect(),
     };
-    let proof =
+    let mut proof =
         crate::config::native_policy::validate_source(record.scope(root, &policy.native), &rules)?;
     for (id, count) in &proof.rules {
         ensure!(
@@ -87,6 +88,15 @@ pub(super) fn verify(
     }
     for path in &proof.inventory.artifact_paths {
         bundle.freeze(path)?;
+    }
+    // A retained acquisition declaration still proves its complete Source
+    // inventory. Only a changed acquisition policy creates a new recapture
+    // obligation; an earlier unfinished recording refresh must remain pending.
+    if previous.fingerprints.capture == policy.fingerprints.capture
+        && state.recording_refresh.is_none()
+    {
+        proof.obligations.remove(&SourceObligation::FreshRecording);
+        proof.pending_effect_evidence.clear();
     }
     record.inventory = proof.inventory;
     result.obligations.extend(proof.obligations);

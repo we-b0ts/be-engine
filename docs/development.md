@@ -58,6 +58,10 @@ recorded MySQL results, and linked integer/RFC3339 expiry and TTL fields.
 [JSON response time rules](response-time-rules.md) validate source-proven expiry
 and scheduled-time offsets through explicit `preserve_relative` timestamps.
 
+[Content formats and carrier bindings](content-policy-layout.md) describes global
+string templates, HTTP acquisition/path declarations, shared DOCX fields, API
+encryption/header positions and default multipart comparison.
+
 ## Rust Tooling
 
 Use the standard Cargo workflow:

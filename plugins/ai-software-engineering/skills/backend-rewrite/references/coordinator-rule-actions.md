@@ -2,7 +2,9 @@
 
 Only the confirmed workflow coordinator plans/applies rules. Require the worker's
 Source conclusions and exact proposed selectors; return semantic questions to the
-Source owner. Rules live in the single file named by `project.policy`; default
+Source owner. Follow the [shared rule evidence contract](rule-policy.md): relevant
+API `rule_hints`, queries, planners and current actions drive the work. Rules live
+in the single file named by `project.policy`; default
 `.traffic-e2e/policy.yaml`. Declare one global JSON field-format map under
 `json.fields`. APIs, SSE data, MySQL JSON columns and Redis values share it;
 JSON carriers require no repeated codec declaration. Enable `mysql` for native
@@ -30,9 +32,13 @@ backend-rewrite rule apply --plan <returned-plan-id>
 
 The proposal may be one rule, a list, or a full `traffic-policy/v2` authored
 document containing global formats, dependency lifetimes and any additional
-native `rules`. Supplied `json`, `mysql`, `redis` and `http` format sections
-replace their whole section atomically; omission preserves it.
-`json: {fields: {}}` clears JSON formats. Native replacement IDs remain explicit.
+native `rules`. Ordinary proposals add new fields and append new formats to
+existing declarations, preserving the old order and deduplicating exact matches.
+Unmentioned fields remain unchanged; `json: {fields: {}}` does not clear them.
+Intentional changes, removals or clears use `traffic-policy-change/v1` with
+`replace_sections` and the complete desired maps for those sections. Review all
+removals. `replace_rules` independently names native replacements and is optional;
+see the [shared proposal contract](rule-policy.md).
 Review affected surfaces, immutable Source scope, complete coverage, staged
 relationships, strict remainder, residual failures and verification obligations.
 Discovery drafts prefill observed selectors and request missing Source facts;
@@ -50,9 +56,11 @@ Verified JWT fields use `kind: jwt` with an optional named `signature` profile;
 root `signatures` defines the algorithm and startup key once. The old authored
 identity `formats: [jwt]` syntax is rejected; there is no keyless JWT policy mode.
 `api` request positions explicitly authorize re-signing; response positions retain
-nonce echoes and signed expiry companion checks through existing typed owners. Multipart, DOCX, WSS path
-derivation and AES envelopes also remain native; no automatic global support
-is implied. See [signature profiles](../../../../../docs/signature-profiles.md).
+nonce echoes and signed expiry companion checks. For Source-proven compound strings,
+encoded content, DOCX fields, generated headers or learned-response addresses,
+consult [content formats and carrier bindings](../../../../../docs/content-policy-layout.md)
+when the evidence calls for them. Supported multipart boundaries need no policy.
+See [signature profiles](../../../../../docs/signature-profiles.md).
 
 Use `mysql.tables.<logical-name>` with a physical `pattern` and column `fields`
 for explicit scalar identities or formats that native metadata cannot infer.

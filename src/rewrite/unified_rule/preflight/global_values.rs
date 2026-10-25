@@ -542,6 +542,11 @@ fn compare_prepared(
         before.len() == after.len(),
         "global JSON dependency value inventory changed"
     );
+    if dependency::protocol(event) == Some(Protocol::Http)
+        && crate::replay::http_multipart_witness_matches(source, native_target, surface)?
+    {
+        return Ok(comparison);
+    }
     let Some(plan) = &policy.global_json else {
         return Ok(comparison);
     };

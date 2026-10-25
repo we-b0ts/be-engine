@@ -102,8 +102,9 @@ is unclear.
   framing, pairing, transactions and finite consumption. Identity correspondence
   is internal, case-local and keyed by complete typed values, independently of
   authored paths and format lists.
-  Whole JWT strings are identity formats; the pure global comparator neither
-  resolves keys nor verifies signatures or claims. `request_rules/derived` and
+  Global JWT formats verify signatures and claims using immutable key snapshots
+  loaded before comparison, then stage complete-token correspondence.
+  `request_rules/derived` and
   `replay/policy/request_contract/derived_inputs` independently reconstruct actual
   native input re-signing at its precise send clock using frozen startup keys.
   Private `replay/control/derived_input` admission anchors complete delivered
@@ -1192,10 +1193,30 @@ explicit repository-wide audit.
   commits the joint header, body, query and delivery decision. The protocol owner
   retains strict remainder comparison, independent witnesses and finite delivery.
   Explicit native JWT transformations continue to resolve signing inputs through
-  `signing_keys`; ordinary JWT format declarations use opaque complete identities.
+  `signing_keys`; global JWT formats verify signatures and claims against
+  independently frozen keys before publishing complete-token identities.
 
 
 ## Unified policy responsibilities
+
+- `policy/authoring/api` owns API codec/envelope/header bindings and shared DOCX
+  field declarations; signature positions delegate to the signature owner.
+  `policy/authoring/http` owns compact request path-identity declarations
+  and the separate `http.response_rewrite` acquisition list. Both lower to existing native owners, preserve Source proofs
+  and fold only lossless canonical forms. Ordered capture precedence remains
+  independent of generated IDs and rendering groups.
+  `policy/authoring/recording` owns case path selection and its original Source
+  revision/capture identity; the document renderer writes this section last.
+- `policy/global_json/template` validates global string layouts and typed slot
+  formats. `value_contract/global_protocol/template` owns Source-only layout
+  selection, exact literals, token validation and staged complete identities.
+  Delivery adapters reconstruct only those selected slots. API encryption
+  bindings retain private key snapshots and IV relationships; decoded plaintext
+  without legacy overrides reuses the global JSON comparator.
+- `replay/http/multipart` owns bounded protocol equivalence for complete Source
+  form-data. Matching, final header audits and protected witness verification
+  share its parser; it does not change recorded bytes, other headers, finite
+  consumption or cross-case sharing fingerprints.
 
 - `policy/signatures` owns named algorithm/key declarations and the private
   immutable key registry. Pure compilation validates references without startup

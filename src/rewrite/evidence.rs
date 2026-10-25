@@ -93,6 +93,15 @@ fn requested_query(
         })
 }
 
+pub(super) fn is_rule_discovery_query(
+    state: &RewriteState,
+    issue: &RewriteIssue,
+    query_id: &str,
+) -> bool {
+    requested_query(state, issue, query_id)
+        .is_some_and(|(kind, _)| kind == QUERY_UNIFIED_RULE_CANDIDATES)
+}
+
 pub(super) fn query(
     target_root: &Path,
     state: &RewriteState,
@@ -131,7 +140,7 @@ pub(super) fn query(
     } else if kind == QUERY_UNIFIED_RULE_CANDIDATES {
         (unified_discovery::facts(target_root, state, issue, requested_id)?,
             vec!["A mechanical draft requires Source code proof and full selected evidence validation. Derived delivery never proves independent Target response behavior.".into()],
-            "Inspect draft_rule or Source bindings. Follow pagination.next_page for omitted summaries and pagination.next_scan for remaining observations. Fill Source proof and use the returned unified planner; bounded discovery never proves complete coverage.".into())
+            "Inspect draft_rule or Source bindings. Follow pagination.next_page for omitted summaries and pagination.next_scan for remaining observations. Draft fields and formats add to current declarations; inspect the planned changes, add Source proof and use the returned planner. Bounded discovery never proves complete coverage.".into())
     } else {
         facts(target_root, state, issue, kind, offset)?
     };
@@ -682,12 +691,15 @@ pub(super) fn unified_rule_hint(
     root: &Path,
     state: &RewriteState,
 ) -> Option<super::evidence_model::RewriteRuleHint> {
-    let command = commands(root, state)
-        .into_iter()
-        .find(|q| q.query_id.ends_with("unified-rule-candidates"))?;
+    let command = commands(root, state).into_iter().find(|q| {
+        state
+            .active_issue
+            .as_ref()
+            .is_some_and(|issue| is_rule_discovery_query(state, issue, &q.query_id))
+    })?;
     Some(super::evidence_model::RewriteRuleHint {
         capability:"unified_value_contract".into(),rule:"traffic-policy/v2".into(),
-        hint:"Inspect source_entry.locations and the global json.fields map at the first relevant mismatch, including when no draft exists. Declare Source-proven time or identity formats and unordered semantics once per logical JSON pointer; APIs, SSE events, tables and cache keys share that map. JSON-valued columns need no codec declaration. Native MySQL time types use protocol metadata when mysql is enabled; other scalar formats use mysql.tables or redis.keys by native carrier. The engine infers identity correspondence from complete typed Source values and preserves equality and distinctness internally. Keep extra native relationships explicit, inspect complete coverage and residual failures, apply and complete genuine Replay. Bounded discovery never establishes complete coverage or permission.".into(),
+        hint:"Use the differences and Source locations to diagnose this issue. This query exposes supported content formats and carrier bindings, even when no draft exists. Rules require Source proof, complete plan validation and genuine Replay; equal/null observations do not authorize a rule.".into(),
         help:command.command,
     })
 }

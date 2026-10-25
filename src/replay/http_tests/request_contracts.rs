@@ -1,4 +1,4 @@
-//! Multipart authoring through actual failed HTTP requests and a fresh runtime.
+//! Native multipart rules retain their evidence and finite-delivery accounting.
 use super::*;
 use crate::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 use serde_json::json;
@@ -37,7 +37,7 @@ async fn send(addr: SocketAddr, body: String, authorization: &str) -> StatusCode
     status
 }
 #[tokio::test]
-async fn multipart_plan_apply_requires_immutable_current_witness_and_fresh_replay() {
+async fn multipart_default_and_native_rule_keep_finite_delivery_and_protected_evidence() {
     let temp = tempdir().unwrap();
     let root = temp.path();
     let contents = format!("private-file-bytes{}", "x".repeat(1024 * 1024));
@@ -89,7 +89,7 @@ async fn multipart_plan_apply_requires_immutable_current_witness_and_fresh_repla
         .unwrap();
     assert_eq!(
         send(addr, multipart("target-boundary", file), "Bearer secret").await,
-        StatusCode::BAD_GATEWAY
+        StatusCode::OK
     );
     let report = root.join("replay.json");
     {

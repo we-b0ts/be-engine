@@ -79,7 +79,7 @@ fn redis_process_ownership_stays_under_redis_without_changing_its_scope() {
     let rendered = render_policy(&policy).unwrap();
     let authored: Value = serde_yaml::from_str(&rendered).unwrap();
     assert_eq!(authored["redis"]["rules"].as_array().unwrap().len(), 1);
-    assert!(authored["rules"].as_array().unwrap().is_empty());
+    assert!(authored.get("rules").is_none());
     assert_eq!(
         authored["redis"]["rules"][0]["effect"]["selector"]["operation"],
         "HSCAN"

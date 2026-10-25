@@ -115,7 +115,8 @@ rerun initialization.
   behavior to manufacture a pass, or replace engine aggregation with scripts.
 - Rule diagnosis and source proof belong to the API implementer; planning,
   application, and fresh verification follow the coordinator's rule protocol.
-  Use current evidence and follow required policy-refresh actions.
+  Follow the [shared rule evidence contract](references/rule-policy.md): current
+  API hints, evidence queries and legal actions drive rule work.
 - Target behavior must use normal product code and configuration, never recorded
   results, expected responses, Replay sessions, reports, or private engine state.
 - Only the coordinator executes workflow mutations and formal acceptance.

@@ -83,19 +83,29 @@ fn runtime_rules_omit_proofs_while_provided_plan_proofs_remain_validated() {
     let parsed = parse_policy(&input).unwrap();
     let output = render_policy(&parsed).unwrap();
     let reparsed = parse_policy(&output).unwrap();
-    assert_eq!(reparsed.rules[0].id(), "paths");
-    assert!(reparsed.rules[0].proof().is_none());
+    let paths = reparsed
+        .rules
+        .iter()
+        .find(|rule| rule.id() == "paths")
+        .unwrap();
+    assert!(paths.proof().is_none());
     assert_eq!(
         compile_policy(&parsed).unwrap().fingerprints,
         compile_policy(&reparsed).unwrap().fingerprints
     );
     let mut changed = reparsed.clone();
-    if let PolicyRule::Native(rule) = &mut changed.rules[0] {
-        rule.proof = Some(Proof {
-            source: String::new(),
-            fact: "The same acquisition scope has a shorter explanation".into(),
-        });
-    }
+    let PolicyRule::Native(rule) = changed
+        .rules
+        .iter_mut()
+        .find(|rule| rule.id() == "paths")
+        .unwrap()
+    else {
+        panic!("recording scope must retain its native acquisition owner");
+    };
+    rule.proof = Some(Proof {
+        source: String::new(),
+        fact: "The same acquisition scope has a shorter explanation".into(),
+    });
     assert_eq!(
         compile_policy(&changed).unwrap().fingerprints.capture,
         compile_policy(&reparsed).unwrap().fingerprints.capture

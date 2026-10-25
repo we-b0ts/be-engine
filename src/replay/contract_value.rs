@@ -130,6 +130,7 @@ impl Delivery {
 
     pub(in crate::replay) fn has_identities(&self) -> bool {
         self.global.fields.values().any(|field| field.is_identity()
+            || matches!(field, crate::policy::GlobalField::Template { .. })
             || matches!(field,crate::policy::GlobalField::Url {formats} if formats == &[crate::policy::GlobalUrlFormat::Url]))
     }
 

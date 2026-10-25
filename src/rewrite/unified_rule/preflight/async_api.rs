@@ -5,17 +5,20 @@ pub(super) fn verify(
     bundle: &mut Bundle,
     policy: &CompiledPolicy,
     selected: &BTreeSet<String>,
+    requires_recording: bool,
     result: &mut Preflight,
 ) -> Result<()> {
     if !selected.contains(crate::policy::ASYNC_API_ID) {
         return Ok(());
     }
-    result
-        .obligations
-        .insert(crate::config::native_policy::SourceObligation::FreshRecording);
-    result
-        .pending_effect_evidence
-        .insert(crate::policy::ASYNC_API_ID.into());
+    if requires_recording {
+        result
+            .obligations
+            .insert(crate::config::native_policy::SourceObligation::FreshRecording);
+        result
+            .pending_effect_evidence
+            .insert(crate::policy::ASYNC_API_ID.into());
+    }
     if policy.async_api.is_empty() {
         return Ok(());
     }

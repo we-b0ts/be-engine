@@ -170,6 +170,7 @@ impl Drafts {
         }
         self.values.push(json!({"candidate_id":id,"witness_id":witness,"mechanism":contract["kind"],
             "draft_policy":{"format":"traffic-policy/v2","json":{"fields":{&location.pattern:contract}}},
+            "section_update":"add",
             "source_proof_required":true,"plan_ready":false}));
         Ok(())
     }

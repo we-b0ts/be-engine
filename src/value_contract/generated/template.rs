@@ -48,7 +48,7 @@ pub(crate) fn validate_template(template: &str) -> anyhow::Result<BTreeSet<Strin
     Ok(slots.into_iter().map(|(_, name)| name.into()).collect())
 }
 
-fn extract<'a>(
+pub(crate) fn extract<'a>(
     value: &'a str,
     template: &str,
 ) -> Result<BTreeMap<String, &'a str>, GeneratedError> {
@@ -178,12 +178,14 @@ mod tests {
                 pointer: "/session_id",
                 contract: &session,
                 key: None,
+                global: None,
             },
             json::NativeField {
                 rule_id: "link",
                 pointer: "/url",
                 contract: &url,
                 key: None,
+                global: None,
             },
         ];
         let compare = |target: &Value| {

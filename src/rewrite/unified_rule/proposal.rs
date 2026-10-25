@@ -2,6 +2,9 @@
 use crate::policy::{NativeEffect, PolicyRule, Surface, TrafficPolicy};
 use anyhow::{Result, ensure};
 
+#[cfg(test)]
+mod http_scope_tests;
+
 /// The issue owns the transaction, not a dependency resource's matching scope.
 /// Existing policy entries retain their proven scope until explicitly migrated.
 pub(super) fn prepare_scopes(
@@ -10,6 +13,8 @@ pub(super) fn prepare_scopes(
     active_api: &str,
 ) -> Result<()> {
     for rule in &mut document.rules {
+        let authored_http_scope =
+            crate::policy::preserves_http_api_scope(rule, &document.resources)?;
         let legacy_scope = existing
             .rules
             .iter()
@@ -34,7 +39,7 @@ pub(super) fn prepare_scopes(
             api.as_deref().is_none_or(|api| api == active_api),
             "rule proposal belongs to another API issue"
         );
-        if resource && !legacy_scope {
+        if resource && !legacy_scope && !authored_http_scope {
             ensure!(
                 !when,
                 "resource rules cannot depend on an inbound API body; select the dependency resource and value instead"

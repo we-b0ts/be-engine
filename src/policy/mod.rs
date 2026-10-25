@@ -4,6 +4,7 @@
 mod authoring;
 mod capability;
 pub(crate) use authoring::expanded as expand_policy;
+pub(crate) use authoring::preserves_http_api_scope;
 pub(crate) use authoring::require_source_proof;
 pub(crate) use authoring::retired_authoring;
 pub use authoring::{effective_rules, render_policy, require_source_proofs};

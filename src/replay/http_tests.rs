@@ -18,6 +18,8 @@ mod dynamic_values;
 mod http_body_jwt;
 #[path = "http_tests/json_request_time.rs"]
 mod json_request_time;
+#[path = "http_tests/multipart.rs"]
+mod multipart;
 #[path = "http_tests/request_contracts.rs"]
 mod request_contracts;
 #[path = "http_tests/server_termination.rs"]

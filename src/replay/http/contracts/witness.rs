@@ -105,6 +105,34 @@ pub(crate) fn witness_value(bytes: &[u8], surface: Surface) -> Result<Option<Vec
     Ok(body)
 }
 
+/// Multipart is an HTTP protocol projection, independent of JSON field plans.
+/// The protected envelopes stay original; callers may skip their opaque-body
+/// comparison only after this Source-selected comparison succeeds.
+pub(crate) fn multipart_witness_matches(
+    source: &[u8],
+    target: &[u8],
+    surface: Surface,
+) -> Result<bool> {
+    if surface != Surface::DependencyRequest {
+        return Ok(false);
+    }
+    multipart_values_match(&parse(source)?, &parse(target)?)
+}
+
+fn multipart_values_match(source: &Value, target: &Value) -> Result<bool> {
+    let expected: HeaderSnapshot = serde_json::from_value(source["request_headers"].clone())?;
+    if !super::super::multipart::supports_headers(&expected) {
+        return Ok(false);
+    }
+    let actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
+    let source_body = capture(&source["request_body"])?;
+    let actual_body = capture(&target["request_body"])?;
+    match super::super::multipart::preview(&source_body, &expected, &actual_body, &actual) {
+        Some(result) => result.map(|()| true),
+        None => Ok(false),
+    }
+}
+
 pub(crate) fn validate_witness(
     source: &[u8],
     target: &[u8],
@@ -135,7 +163,15 @@ pub(crate) fn validate_witness(
             "HTTP Target request clock differs from its protected metadata"
         );
         let expected: HeaderSnapshot = serde_json::from_value(source["request_headers"].clone())?;
-        let actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
+        let mut actual: HeaderSnapshot = serde_json::from_value(target["request_headers"].clone())?;
+        if multipart_values_match(&source, &target)? {
+            actual.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+            for (name, values) in &expected {
+                if name.eq_ignore_ascii_case("content-type") {
+                    actual.insert(name.clone(), values.clone());
+                }
+            }
+        }
         ensure!(
             request_headers::native_contract_match(&expected, &actual),
             "HTTP request native header contract differs"

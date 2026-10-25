@@ -73,6 +73,7 @@ impl Drafts {
                 {
                     self.values.push(json!({"candidate_id":id,"witness_id":witness,"mechanism":"http_header_time",
                         "draft_policy":{"format":"traffic-policy/v2","http":{"headers":{name:{"kind":"time","formats":[format]}}}},
+                        "section_update":"add",
                         "source_proof_required":true,"plan_ready":false}));
                 }
                 break;
@@ -109,6 +110,8 @@ mod tests {
             json!(["amz_date"])
         );
         assert_eq!(candidates[0]["location_count"], 2);
+        assert_eq!(candidates[0]["section_update"], "add");
+        assert!(candidates[0].get("preserve_existing_fields").is_none());
         assert!(candidates[0]["draft_policy"].get("rules").is_none());
         assert!(candidates[0]["draft_policy"].get("resources").is_none());
     }

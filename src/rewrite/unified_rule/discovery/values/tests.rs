@@ -58,6 +58,8 @@ fn real_array_elements_and_cases_share_one_proof_required_draft() {
     );
     assert_eq!(candidate["plan_ready"], false);
     assert_eq!(candidate["source_proof_required"], true);
+    assert_eq!(candidate["section_update"], "add");
+    assert!(candidate.get("preserve_existing_fields").is_none());
     assert_eq!(candidate["mechanism"], "time");
     let policy = serde_json::from_value(candidate["draft_policy"].clone()).unwrap();
     crate::policy::compile_policy(&policy).unwrap();

@@ -29,12 +29,23 @@ impl Comparison {
     /// Independent physical values do not acquire relationships from sharing a
     /// declaration. Explicit Source clock groups retain their original scope.
     pub(crate) fn scope_schema_clocks(&mut self, occurrence: usize) {
+        self.scope_schema_clocks_in(&format!("physical-value:{occurrence}"));
+    }
+
+    /// Nested decoded values keep their own occurrence while allowing outer
+    /// carriers to add another scope. Hash contexts to keep physical pointers
+    /// out of the private relationship keys as well as ordinary diagnostics.
+    pub(crate) fn scope_schema_clocks_in(&mut self, context: &str) {
+        use sha2::{Digest, Sha256};
+        let context = Sha256::digest(context.as_bytes());
         self.relationships = std::mem::take(&mut self.relationships)
             .into_iter()
             .map(|((anchor, group, scope), pairs)| {
                 let group = group.map(|group| {
-                    if crate::policy::is_schema_clock_group(&group) {
-                        format!("{group}.{occurrence}")
+                    if crate::policy::is_schema_clock_group(
+                        group.split(".occurrence.").next().unwrap_or(&group),
+                    ) {
+                        format!("{group}.occurrence.{context:x}")
                     } else {
                         group
                     }
@@ -185,6 +196,78 @@ mod tests {
             },
         ];
         assert!(!compare(&source, &source, &invalid, clocks).passed());
+    }
+
+    #[test]
+    fn nested_schema_occurrences_keep_outer_carriers_and_explicit_groups_distinct() {
+        let automatic = contract("schema.0123456789abcdef0123456789abcdef");
+        let explicit = contract("source-clock");
+        let fields = [
+            Field {
+                rule_id: "global",
+                pointer: "/automatic",
+                contract: &automatic,
+            },
+            Field {
+                rule_id: "explicit",
+                pointer: "/explicit",
+                contract: &explicit,
+            },
+        ];
+        let clocks = AnchorClocks {
+            dependency: time::ClockPair {
+                source: chrono::DateTime::from_timestamp(1000, 0),
+                target: chrono::DateTime::from_timestamp(2000, 0),
+            },
+            ..Default::default()
+        };
+        let mut nested = compare(
+            &json!({"automatic":1010,"explicit":1020}),
+            &json!({"automatic":2010,"explicit":2020}),
+            &fields,
+            clocks,
+        );
+        assert!(nested.passed());
+        nested.scope_schema_clocks_in("cipher:/user");
+        let inner = nested.relationships.clone();
+        nested.scope_schema_clocks(1);
+        let mut other = Comparison {
+            relationships: inner,
+            ..Default::default()
+        };
+        other.scope_schema_clocks(2);
+        let automatic_groups = |comparison: &Comparison| {
+            comparison
+                .relationships
+                .keys()
+                .filter_map(|(_, group, _)| group.clone())
+                .filter(|group| group.starts_with("schema."))
+                .collect::<Vec<_>>()
+        };
+        assert_ne!(automatic_groups(&nested), automatic_groups(&other));
+        for comparison in [&nested, &other] {
+            assert!(
+                comparison
+                    .relationships
+                    .keys()
+                    .any(|(_, group, _)| group.as_deref() == Some("source-clock")),
+                "explicit Source clock groups must remain unchanged"
+            );
+        }
+        let mut conflicting = compare(
+            &json!({"automatic":1010,"explicit":1020}),
+            &json!({"automatic":2011,"explicit":2021}),
+            &fields,
+            clocks,
+        );
+        assert!(conflicting.passed());
+        conflicting.scope_schema_clocks_in("cipher:/user");
+        conflicting.scope_schema_clocks(2);
+        nested.merge_and_validate(conflicting);
+        assert!(
+            !nested.passed(),
+            "explicit Source groups still relate independent carrier observations"
+        );
     }
 }
 

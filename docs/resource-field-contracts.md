@@ -345,14 +345,15 @@ retain their original bytes. Ordinary response assertion compares independently
 observed values. Original recordings are never modified, and successful wire
 delivery remains distinct from constructing a derived response.
 
-Native effects under `rules` retain typed PB schemas, signed-input and JWT
-cryptographic checks, multipart, DOCX, WSS path derivation, encrypted AES
-envelopes and additional causal relationships. These compound formats are not
-automatically covered by global JSON inference. Resource aliases identify the
-protocol endpoint, database and user for those effects. Ordinary JSON formats
-belong in the global map; API, SSE, table and cache selectors do not duplicate
-them. Extra native constraints still validate their owned fields and unselected
-content; they do not grant blanket permission to ignore a global format.
+[Content formats and carrier bindings](content-policy-layout.md) cover global
+string templates, HTTP acquisition and path contracts, shared DOCX fields and
+scoped API encryption/header positions. Supported multipart comparison is an
+engine protocol capability. Explicit bindings retain their existing typed
+owners, scope and causal checks; they do not grant blanket permission to ignore
+a global format. Native effects remain available for extra relationships that
+cannot be represented losslessly. Resource aliases retain physical protocol,
+endpoint, database and user identity. Ordinary JSON formats stay in the global
+map; API, SSE, table and cache selectors do not duplicate them.
 
 ## Compilation, Replay and plan/apply
 
@@ -376,10 +377,16 @@ the same complete-value graph as JSON and storage identities. Protected
 unavailable Source headers remain exact. See [header formats](http-header-formats.md).
 
 Managed changes use `rule plan --file ... --evidence ...` and
-`rule apply --plan ...`. A supplied root `json`, `mysql`, `redis` or `http` section replaces
-that complete section atomically. Omitting a section preserves it; supplying
-`json: {fields: {}}` clears the last JSON format declaration. Additional native
-effects retain their own explicit plan/apply lifecycle.
+`rule apply --plan ...`. A supplied root `json`, `mysql`, `redis` or `http`
+format section adds to current declarations. New positions retain existing
+fields; compatible formats at one position append in the existing order with
+exact duplicates removed. Conflicting kinds or immutable settings reject.
+An omitted section or an empty format map does not remove existing declarations.
+Target workers need only describe their currently required additions.
+Whole-section replacement is explicit through `traffic-policy-change/v1`
+`replace_sections`, with the complete intended map for each listed section.
+The plan reports declaration additions, changes and removals before publication.
+Additional native effects retain their own explicit plan/apply lifecycle.
 
 Recording lifecycle is separate from value formats. `async_api` matches the
 original API and literal request JSON fields, then retains the case until a

@@ -64,14 +64,14 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     if query == QUERY_REPRESENTATIVES && has_response_jwt(facts) {
         hints.push(RewriteRuleHint {
             capability: "response_jwt".into(), rule: "response-jwt".into(),
-            hint: "Response observations contain a compact signed JWT candidate (HS256/HS384/HS512/RS256), directly or inside an HTTP(S) URL query; decoding alone does not prove generation or a valid signature. Define named signatures profiles once, with kind, algorithm and private startup key provenance. Global json.fields kind: jwt uses the explicit default profile, or signature: <name>; it authenticates HMAC signatures, NumericDates, stable/declared claims and complete-token correspondence across carriers. Global RS256 fails closed; existing exact native recorded-public-key assertions remain available. The retired identity formats: [jwt] authoring syntax is rejected; use kind: jwt with a named profile, not a keyless bypass. Generic URL query fields reuse the same global formats. API request headers/query/body explicitly authorize re-signing through existing strict input owners. API response positions retain necessary query token selection, nonce echo and signed expiry companion checks. Inspect signing_key_discovery and immutable Source facts, publish no key bytes, and finish genuine Replay.".into(),
+            hint: "A recorded response contains a JWT candidate; decoding does not prove generation or a valid signature. Trace Source signing and key configuration using signing_key_discovery without exposing key bytes. Named signatures profiles and global JWT formats cover ordinary tokens; API response positions retain additional signed relationships. Consult docs/signature-profiles.md only after confirming the Source behavior, then return a Source-backed proposal for plan/apply and genuine Replay.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(), "plan".into(), "--help".into()], Vec::new()),
         });
     }
     if query == QUERY_REPRESENTATIVES && has_header_difference(facts, 0) {
         hints.push(RewriteRuleHint {
             capability: "response_header_date".into(), rule: "header-date".into(),
-            hint: "A response header difference can contain a current-date filename. Review header_date_candidates, then prove the source date format and timezone. Declare response_header_date with the header, format, timezone and optional parameter (filename also checks filename*) in a self-contained rule, then plan, apply and complete fresh Replay. Each side must use its own request calendar date; disposition, filename prefix/extension, other parameters, multiplicity and body remain checked. Ordinary scalar header formats instead belong under http.headers. Header presence, count and order cannot be waived, including SDK metadata headers. Existing recordings are reusable.".into(),
+            hint: "Inspect the header difference and header_date_candidates, then trace Source construction. If Source proves a generated filename date, preserve its API scope and propose the response header position described in docs/content-policy-layout.md. Stable filename text, other parameters and header presence/count/order remain required. A differing header alone authorizes no exception. Submit Source proof for plan/apply and complete fresh Replay.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(),"plan".into(),"--help".into()], Vec::new()),
         });
     }
@@ -83,7 +83,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     {
         hints.push(RewriteRuleHint {
             capability: "dynamic_value".into(), rule: "dynamic-value".into(),
-            hint: "If an identity differs, inspect complete Source locations and declare its format once per global json.fields pointer, mysql.tables scalar column, redis.keys scalar value or http.headers name. JSON is detected across supported carriers without API, table-column or cache-key codec copies. Equal complete typed Source values require equal Target values internally; distinct identities cannot merge. No authored binding, field_ref or generator-first capture is needed. Reads reuse established Target values and anchor unknown historical inputs. Equal values, paired nulls and paired absence are implicit; one-sided presence and unselected content remain strict. Failed candidates commit no identities. Additional native contracts remain for unsupported compound formats and cryptographic transformations. Plan with independent Source proof and finish genuine Replay.".into(),
+            hint: "Inspect the reported identity candidates and trace Source generation and reuse before choosing a format. Reuse the existing global declarations; Source-proven composite strings can use a global template while retaining literal text and complete identity values. Source-known outbound path positions belong under http.requests. Consult docs/content-policy-layout.md for those authoring choices. Equal values, nulls and absent fields do not prove generation. Return independent Source proof for plan/apply and fresh Replay.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(),"plan".into(),"--help".into()], Vec::new()),
         });
     }
@@ -94,7 +94,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
     {
         hints.push(RewriteRuleHint {
             capability: "dependency_request".into(), rule: "dependency-request".into(),
-            hint: "Review protected dependency_request_candidates and trace Source behavior. Use the single json.fields map for decoded JSON, mysql.tables patterns/fields for scalar columns not inferred from SQL temporal metadata, redis.keys for scalar values, key formats and ordered commands, and http.headers for scalar headers. Ordinary formats need no API, resource alias, binding, clock_group or relation declaration. Unknown encodings remain exact. Protocol TTLs retain their native units and expiry checks. localcache.requests marks finite shared initialization reads; HTTP entries require an explicit host. process_dependencies.tasks.<Source-task-name>.requests groups actual process dependencies across protocols. Neither lifetime declaration relaxes request content or creates response data. Multipart, DOCX, WSS path derivation and encrypted AES envelopes still require their existing native typed contracts; no automatic global support is implied. Named signatures centralize algorithm/key definitions; global kind: jwt authenticates through its named profile, while API positions retain explicit input rewriting and extra nonce/expiry checks. Review complete Source coverage and independent Target witnesses, plan/apply, then finish genuine Replay. See docs/resource-field-contracts.md and docs/redis-generated-requests.md.".into(),
+            hint: "Inspect the protected dependency_request_candidates and compare them with Source behavior. Reuse existing formats and preserve protocol, resource, content and finite-call checks. Complete supported multipart requests already compare their ordered parts; outer-boundary differences need no policy exception. For a Source-proven format or carrier gap, consult docs/content-policy-layout.md and return the smallest declaration with Source proof for plan/apply. Missing drafts, equal responses and null values grant no permission; complete genuine Replay after application.".into(),
             help: super::super::super::action::command(root, vec!["rule".into(),"plan".into(),"--help".into()], Vec::new()),
         });
     }
@@ -208,6 +208,85 @@ mod tests {
                 .any(|hint| hint.capability == "redis_key_request"
                     && hint.hint.contains("not proof")
                     && hint.hint.contains("key_format"))
+        );
+    }
+
+    #[test]
+    fn current_carrier_guidance_keeps_existing_planners_without_recommending_retired_authoring() {
+        let root = Path::new("/target");
+        let header = json!({"representative":{"pointer":"$headers/content-disposition",
+            "header_date_candidates":[{"parameter":"filename","format":"%Y-%m-%d"}]}});
+        let hinted = hints(root, QUERY_REPRESENTATIVES, &header);
+        assert_eq!(hinted[0].capability, "response_header_date");
+        assert!(hinted[0].hint.contains("API scope"));
+        assert!(hinted[0].hint.contains("docs/content-policy-layout.md"));
+        assert!(hinted[0].hint.contains("Source proof"));
+        assert!(!hinted[0].hint.contains("Declare response_header_date"));
+        assert!(!hinted[0].hint.contains("timezone"));
+        assert_eq!(
+            planners(
+                root,
+                RewriteIssueKind::Response,
+                QUERY_REPRESENTATIVES,
+                &header,
+                "current"
+            )[0]
+            .evidence_id,
+            "current"
+        );
+
+        let multipart = json!({"dependency_request_candidates":[{"capability":"http_multipart"}]});
+        let hinted = hints(root, QUERY_DIRTY_CLUSTERS, &multipart);
+        assert_eq!(hinted.len(), 1);
+        assert_eq!(hinted[0].capability, "dependency_request");
+        assert!(
+            hinted[0]
+                .hint
+                .contains("outer-boundary differences need no policy exception")
+        );
+        assert!(!hinted[0].hint.contains("multipart_boundary"));
+        assert!(!hinted[0].hint.contains("native typed contracts"));
+        assert!(hinted[0].help.argv.contains(&"--help".into()));
+        let available = planners(
+            root,
+            RewriteIssueKind::Dependency,
+            QUERY_DIRTY_CLUSTERS,
+            &multipart,
+            "current",
+        );
+        assert_eq!(available[0].capability, "dependency_request");
+        assert!(
+            available[0]
+                .command
+                .argv
+                .ends_with(&["--evidence".into(), "current".into()])
+        );
+    }
+
+    #[test]
+    fn compound_format_guidance_requires_existing_candidate_evidence_not_value_appearance() {
+        let root = Path::new("/target");
+        for value in [
+            Value::Null,
+            json!("wss://example/sessions/random?ticket=random"),
+            json!("c29tZS1iYXNlNjQ"),
+        ] {
+            let facts = json!({"representative":{"pointer":"/url",
+                "expected":{"presence":"present","value":value},
+                "actual":{"presence":"present","value":value}}});
+            assert!(hints(root, QUERY_REPRESENTATIVES, &facts).is_empty());
+            assert!(hints(root, QUERY_DIRTY_CLUSTERS, &facts).is_empty());
+        }
+        let candidate = json!({"dynamic_capture_candidates":[{"capture":{"protocol":"http"}}]});
+        let hinted = hints(root, QUERY_DIRTY_CLUSTERS, &candidate);
+        assert_eq!(hinted.len(), 1);
+        assert_eq!(hinted[0].capability, "dynamic_value");
+        assert!(hinted[0].hint.contains("global template"));
+        assert!(hinted[0].hint.contains("http.requests"));
+        assert!(hinted[0].hint.contains("Source proof"));
+        assert!(
+            !hinted[0].hint.contains("template:"),
+            "routine hints should not embed a configuration example"
         );
     }
 }

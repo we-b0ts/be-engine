@@ -136,6 +136,41 @@ pub(super) fn validate_proposal(input: &str) -> Result<()> {
             }
         }
     }
+    // Carrier bindings expand through the same typed owners as runtime. Check
+    // their complete subtree so codec fields and HTTP path references cannot
+    // acquire permission merely by moving outside the legacy rules list.
+    let carrier_declarations = value.get("recording").is_some()
+        || value.get("http").is_some_and(|http| {
+            http.get("requests").is_some() || http.get("response_rewrite").is_some()
+        })
+        || value
+            .get("api")
+            .and_then(serde_yaml::Value::as_mapping)
+            .is_some_and(|apis| {
+                apis.values().any(|api| {
+                    api.get("response")
+                        .is_some_and(|response| response.get("body").is_some())
+                })
+            });
+    if carrier_declarations
+        && value.get("format").and_then(serde_yaml::Value::as_str)
+            == Some(crate::policy::POLICY_FORMAT)
+    {
+        let document: TrafficPolicy = serde_yaml::from_value(value.clone())?;
+        for rule in document.rules.iter().filter(|rule| {
+            rule.id().starts_with("http.request.")
+                || rule.id().starts_with("api.binding.")
+                || rule.as_native().is_some_and(|rule| {
+                    matches!(
+                        rule.effect,
+                        crate::policy::NativeEffect::CaptureHttp(_)
+                            | crate::policy::NativeEffect::CaptureHttpResponse(_)
+                    )
+                })
+        }) {
+            crate::policy::require_source_proof(&mut serde_yaml::to_value(rule)?, revision)?;
+        }
+    }
     Ok(())
 }
 

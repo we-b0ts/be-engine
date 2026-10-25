@@ -55,7 +55,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
     let mut add = |capability: &str, rule: &str, instruction: &str| {
         hints.push(RewriteRuleHint {
         capability: capability.into(), rule: rule.into(),
-        hint: format!("{instruction} Write a self-contained traffic-policy/v2 rule with fresh Source file:line proof: at most three file references and a causal fact of at most 200 UTF-8 bytes. Use one document source_revision. Use rule plan --file <rule.yaml> --evidence <evidence-id>, inspect the immutable plan, apply, then complete its genuine Replay or recording obligations."),
+        hint: format!("{instruction} Return a traffic-policy/v2 proposal with fresh Source file:line proof and the current evidence ID. Use rule plan --file <rule.yaml> --evidence <evidence-id>, review the plan, apply, then complete its genuine Replay or recording obligations."),
         help: help(root),
     })
     };
@@ -87,7 +87,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
                         "The focused-E2E response has a Hessian2 candidate. Select source-proven sets or joined strings through a typed response_body effect; joined strings require the proven separator."
                     }
                     "docx" => {
-                        "DOCX OPC package differences can use source-proven XML timestamp fields. Each decompressed part and its native package association remain evidence; declare the exact part and element."
+                        "The response has DOCX OPC package differences. Trace the differing part and element to Source before proposing a shared DOCX format and the API codec position. Consult docs/content-policy-layout.md; package members and unselected XML remain strict."
                     }
                     _ => {
                         "Review the complete focused-E2E response and trace Source encoding before declaring a codec or a field contract."
@@ -101,7 +101,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         add(
             "http_response_url",
             "recorder_capture",
-            "Trace the reported IP to Source generation. A capture_http_response effect must declare exact authority, method, path and proven URL pointers. Review path construction and existing scope, then verify a fresh recording. Static addresses require Source configuration or a Source mock.",
+            "Trace the reported IP to the exact Source response and URL location. If Source confirms a learned address, review http.response_rewrite in docs/content-policy-layout.md and preserve the original capture identity and scope. A capture change requires fresh recording; static addresses need Source configuration or a Source mock.",
         );
         return hints;
     }
@@ -109,7 +109,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         add(
             "jwt_time_shift",
             "input_token_rebase",
-            "Trace the inbound token location and signing key in the frozen startup inputs. Declare input_jwt with an explicit algorithm and relative-time contract; Source signature and lifetime evidence are required.",
+            "Trace the inbound token location and signing key in the frozen startup inputs. A named signature profile and API request position authorize re-signing with preserved relative time. Source signature and lifetime evidence are required; consult docs/signature-profiles.md for the supported declaration.",
         );
         return hints;
     }
@@ -117,7 +117,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         add(
             "redis_bootstrap",
             "process_ownership",
-            "Trace process startup and initialization ownership in Source. A process_owned effect requires its Source revision and complete acquisition inventory; unused calls alone do not prove ownership.",
+            "Trace the named Source startup task and complete initialization inventory before proposing process_dependencies. Inspect existing lifetime declarations; unused calls alone do not prove process ownership.",
         );
         return hints;
     }
@@ -139,7 +139,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
             add(
                 capability,
                 "unordered",
-                "Inspect protected Source/Target differences and declare the collection once in root json.fields with kind: unordered. The same JSON path applies to requests, responses and stored JSON across APIs and transports. Preserve element associations, duplicate counts and unselected business fields. Native HTTP method, endpoint, path, query, headers and finite consumption stay checked. Use the unified rule plan/apply transaction with a complete policy proposal.",
+                "Inspect protected Source/Target differences and declare the collection once in root json.fields with kind: unordered. The same JSON path applies to requests, responses and stored JSON across APIs and transports. Preserve element associations, duplicate counts and unselected business fields. Native HTTP method, endpoint, path, query, headers and finite consumption stay checked. Use the returned planner with an additive proposal.",
             );
             add(
                 if protocol == "http" {
@@ -148,7 +148,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
                     "redis_cross_case"
                 },
                 "cross-case",
-                "A matching exchange in another case is a sharing candidate. A finite_sharing effect needs complete Source inventory plus proof of shared initialization, refresh and side effects. Value contracts do not change ownership, snapshot admission or available responses.",
+                "A matching exchange in another case is only a sharing candidate. Trace Source initialization, refresh and side effects before proposing localcache.requests. A value format cannot authorize reuse or manufacture a response.",
             );
         }
     }
@@ -159,7 +159,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
         add(
             "http_response_url",
             "recorder_capture",
-            "Packet rejection counts identify neither an IP nor its origin. Inspect Source calls and use route --cause unrecorded-ip with current evidence when the endpoint is known. A capture_http_response effect requires Source URL provenance and a fresh recording.",
+            "Packet rejection counts identify neither an IP nor its origin. Inspect Source calls and use route --cause unrecorded-ip with current evidence when the endpoint is known. Review any learned-response address through http.response_rewrite only with Source URL provenance; capture changes require fresh recording.",
         );
     }
     if facts["clusters"]

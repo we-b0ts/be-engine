@@ -7,6 +7,9 @@ use serde_json::Value;
 
 use super::{ClockScope, FieldContract, IdentityFormat, TimeAnchor, TimeRelation, TimestampFormat};
 
+mod template;
+pub use template::GlobalTemplateFormat;
+
 pub const GLOBAL_JSON_ID: &str = "global.json";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +41,9 @@ pub enum GlobalField {
     },
     Url {
         formats: Vec<super::GlobalUrlFormat>,
+    },
+    Template {
+        formats: Vec<GlobalTemplateFormat>,
     },
     Jwt {
         #[serde(
@@ -112,10 +118,12 @@ pub struct GlobalIdentityFormat {
 enum IdentityFormatDocument {
     Named(IdentityFormat),
     Hex {
+        #[serde(default)]
         prefix: String,
         hex: usize,
     },
     Base64Url {
+        #[serde(default)]
         prefix: String,
         base64url: usize,
     },
@@ -246,6 +254,15 @@ impl GlobalField {
             Self::Url { formats } => {
                 ensure!(formats.len() == 1, "URL requires one known protocol format")
             }
+            Self::Template { formats } => {
+                ensure!(
+                    !formats.is_empty() && formats.len() <= 16,
+                    "template requires 1..16 formats"
+                );
+                for format in formats {
+                    format.validate()?;
+                }
+            }
             Self::Jwt { signature } => ensure!(
                 !signature.is_empty() && signature.len() <= 128,
                 "JWT requires a bounded named signature"
@@ -357,7 +374,7 @@ impl GlobalField {
                     })
                 })
                 .context("Source value matches no declared identity format"),
-            Self::Url { .. } | Self::Jwt { .. } => {
+            Self::Url { .. } | Self::Jwt { .. } | Self::Template { .. } => {
                 anyhow::bail!("protocol leaves use the prepared verifier")
             }
             Self::Duration { formats } => {
@@ -499,7 +516,10 @@ impl CompiledJsonPolicy {
     ) -> Result<Vec<(String, FieldContract)>> {
         let mut fields = Vec::new();
         for (pattern, field) in &self.fields {
-            if matches!(field, GlobalField::Url { .. }) {
+            if matches!(
+                field,
+                GlobalField::Url { .. } | GlobalField::Template { .. }
+            ) {
                 continue;
             }
             if matches!(field, GlobalField::Jwt { .. }) {

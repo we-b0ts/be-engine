@@ -23,9 +23,9 @@ pub(super) struct Api {
     pub response: Option<Response>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Request {
+pub(in crate::policy::authoring) struct Request {
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
     pub headers: BTreeMap<String, Header>,
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
@@ -43,9 +43,9 @@ pub(super) struct Response {
     pub headers: BTreeMap<String, JwtResponse>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged, deny_unknown_fields)]
-pub(super) enum Reference {
+pub(in crate::policy::authoring) enum Reference {
     Name(String),
     Detailed {
         #[serde(default = "default_name")]
@@ -63,9 +63,9 @@ impl Reference {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Header {
+pub(in crate::policy::authoring) struct Header {
     #[serde(default = "default_name")]
     pub signature: String,
     #[serde(default)]
@@ -73,9 +73,9 @@ pub(super) struct Header {
     #[serde(default)]
     pub proof: Option<Proof>,
 }
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum HeaderScheme {
+pub(in crate::policy::authoring) enum HeaderScheme {
     #[default]
     Raw,
     Bearer,
@@ -83,7 +83,7 @@ pub(super) enum HeaderScheme {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Body {
+pub(in crate::policy::authoring) struct Body {
     #[serde(default = "default_name")]
     pub signature: String,
     #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
@@ -97,7 +97,7 @@ pub(super) struct Body {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct JwtResponse {
+pub(in crate::policy::authoring) struct JwtResponse {
     #[serde(default = "default_name")]
     pub signature: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,7 +135,7 @@ impl JwtResponse {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Nonce {
+pub(in crate::policy::authoring) struct Nonce {
     pub pointer: String,
     pub format: NonceFormat,
     #[serde(default, skip_serializing_if = "Option::is_none")]

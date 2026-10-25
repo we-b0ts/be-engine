@@ -67,6 +67,26 @@ fn source_writer_preserves_shared_revision_and_expanded_nested_proofs() {
     let after = crate::policy::parse_policy(&rendered).unwrap();
     assert_eq!(after.source_revision, baseline.source_revision);
     for rule in &baseline.rules {
+        if let Some(native) = rule.as_native()
+            && let n::NativeEffect::CaptureHttp(capture) = &native.effect
+        {
+            let updated = after
+                .rules
+                .iter()
+                .find(|other| other.id() == rule.id())
+                .unwrap()
+                .as_native()
+                .unwrap();
+            assert_eq!(updated.selector, native.selector);
+            assert_eq!(updated.when, native.when);
+            assert_eq!(updated.proof, native.proof);
+            let n::NativeEffect::CaptureHttp(updated) = &updated.effect else {
+                panic!("recording acquisition owner");
+            };
+            assert_eq!(updated.source_revision, capture.source_revision);
+            assert_eq!(updated.case_paths, ["/api", "/added/*"]);
+            continue;
+        }
         assert_eq!(
             after.rules.iter().find(|other| other.id() == rule.id()),
             Some(rule)
@@ -75,6 +95,18 @@ fn source_writer_preserves_shared_revision_and_expanded_nested_proofs() {
     assert!(after.rules.iter().all(|rule| rule.proof().is_none()));
     assert!(!rendered.contains("proof:"));
     assert!(!rendered.contains(" @ sha256:"));
+    let authored: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(authored["recording"]["name"], "observed-case-scope");
+    assert_eq!(
+        after
+            .rules
+            .iter()
+            .filter(|rule| rule
+                .as_native()
+                .is_some_and(|rule| matches!(rule.effect, n::NativeEffect::CaptureHttp(_))))
+            .count(),
+        1
+    );
     let after_compiled = crate::policy::compile_policy(&after).unwrap();
     assert_eq!(
         compiled.fingerprints.runtime,

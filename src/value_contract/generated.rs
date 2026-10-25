@@ -83,6 +83,7 @@ pub(crate) enum GeneratedError {
 
 /// A caller supplies its immutable startup-key snapshot. This function cannot
 /// resolve environment values, consume recorded exchanges or write evidence.
+#[cfg(test)]
 pub(crate) fn compare_value(
     source: &Value,
     target: &Value,
@@ -90,6 +91,20 @@ pub(crate) fn compare_value(
     key: Option<&[u8]>,
     rule_id: &str,
     clocks: AnchorClocks,
+) -> Result<Comparison, GeneratedError> {
+    compare_value_global(source, target, contract, key, rule_id, clocks, None)
+}
+
+/// Decode only the explicitly bound envelope; plaintext uses the same global
+/// JSON plan as every other carrier. Legacy local contracts remain explicit.
+pub(crate) fn compare_value_global(
+    source: &Value,
+    target: &Value,
+    contract: &GeneratedResponse,
+    key: Option<&[u8]>,
+    rule_id: &str,
+    clocks: AnchorClocks,
+    global: Option<&crate::policy::CompiledJsonPolicy>,
 ) -> Result<Comparison, GeneratedError> {
     let source = source.as_str().ok_or(GeneratedError::InvalidType)?;
     let target = target.as_str().ok_or(GeneratedError::InvalidType)?;
@@ -155,7 +170,23 @@ pub(crate) fn compare_value(
                     contract,
                 })
                 .collect::<Vec<_>>();
-            let mut compared = json::compare(&source, &target, &selected, clocks);
+            let mut compared = if fields.is_empty() {
+                if let Some(global) = global {
+                    crate::value_contract::global::compare_logical_with_time_copies(
+                        &source,
+                        &target,
+                        global,
+                        &[],
+                        clocks,
+                        &[],
+                    )
+                    .map_err(|_| GeneratedError::ContractMismatch)?
+                } else {
+                    json::compare(&source, &target, &selected, clocks)
+                }
+            } else {
+                json::compare(&source, &target, &selected, clocks)
+            };
             if !compared.passed() {
                 return Err(GeneratedError::ContractMismatch);
             }

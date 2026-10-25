@@ -3,12 +3,13 @@
 Read this after tracing Source and Target behavior. The authored
 `traffic-policy/v2` document lives at `project.policy`. Workers return Source
 conclusions and a proposed declaration/rule document; the coordinator plans/applies it.
-The complete schema, examples and lifecycle are in
-[unified rule contracts](../../../../../docs/unified-rule-contracts.md).
+Follow the [shared rule evidence contract](rule-policy.md) for API-driven hints,
+evidence, additive proposals, explicit replacement and verification boundaries. The complete technical
+contracts are in [unified rule contracts](../../../../../docs/unified-rule-contracts.md).
 
 ## Rule Discovery From Source Diagnosis
 
-Use `facts.rule_guidance`, mechanical candidates, declared capability requirements
+Use returned `rule_hints`, mechanical candidates, declared capability requirements
 and the current evidence ID. A candidate establishes a possible mechanism, not
 business permission. At the first relevant mismatch, inspect existing declarations
 and `source_entry.locations`, even when `candidates` is empty. Return the smallest
@@ -16,6 +17,10 @@ Source-proven scope, exact field and
 encoding, Source file/symbol, and a fact explaining the allowed relationship.
 An absent candidate does not mean the capability is unavailable. Ask for missing
 schema or clock evidence rather than guessing from field names or values.
+Drafts are proof-required additive directions. Submit the new fields or formats;
+existing declarations and format order are preserved with exact duplicates removed.
+Use an explicit replacement proposal only for an intended change or removal, as
+described in the [shared contract](rule-policy.md).
 
 Declare one global `json.fields` map with time/identity `formats` and
 `unordered` semantics, independent of APIs, SSE events and storage carriers.
@@ -53,13 +58,15 @@ See [global field formats](../../../../../docs/resource-field-contracts.md).
 | PUBLISH UUID and JSON times | Global JSON identity and time formats; no publisher-specific rule | Channel, stable members, complete-value correspondence and atomic commit |
 | Additional signed JWT nonce/expiry relationships, including URL-contained tokens | `api.<METHOD path>.response.json` or `headers` position referencing a named signature, with `query`, nonce/echo and companion contracts | Both signatures, stable claims/URL bytes, unique header/query values, exact signed lifetime and body expiry/issued-at/TTL |
 | JWT token reused in several locations | Global `kind: jwt` with default/named root `signatures` profile; HMAC verification and global claim formats | Valid signatures, NumericDates, stable claims and complete Source-equal/Target-equal token correspondence |
-| Encrypted JSON with random IV | `response_generated` / `encrypted_json` with declared envelope and effective startup key | Valid padding, plaintext structure and all unselected plaintext; ciphertext is not whole-field random |
-| Generated URL/session fragments | Global `kind: url, formats: [url]` plus global decoded query-field formats; uncovered compound templates remain native | Fixed scheme/authority/path/query and identity equality |
-| Current date in a header or DOCX field | `response_header_date` or `response_body` | Timezone, static filename/header/XML and other archive parts |
+| Source-proven encoded JSON with a random IV | Return the API decode location, Source encoding and effective key provenance; plaintext uses the global JSON formats. Consult [carrier bindings](../../../../../docs/content-policy-layout.md) | Valid padding, plaintext structure and all unselected plaintext; ciphertext is not whole-field random |
+| Source-proven generated URL/session fragments | Use a global string template for compound literal/identity content, or the ordinary URL format for query-only content; consult [content formats](../../../../../docs/content-policy-layout.md) | Fixed scheme/authority/path/query, complete identity values and equality |
+| Source-proven generated storage path reused by HTTP and SQL | Return the physical outbound request position and its cross-resource use under `http.requests`; consult [generated paths](../../../../../docs/content-policy-layout.md) | API scope where present, exact business fragments and resource permissions |
+| Current date in a header or DOCX field | Inspect the typed candidates, prove Source generation, and keep the API header/codec position; DOCX fields are shared. Consult [carrier bindings](../../../../../docs/content-policy-layout.md) | Request-date relation, static filename/header/XML and other archive parts |
+| Only the outer boundary differs in a complete supported multipart request | The engine already compares ordered parts; no boundary policy is required. Diagnose any remaining part/header/content mismatch | Ordered parts, filenames, part headers, payloads and ordinary finite calls |
 | Expired inbound JWT | `api` request header/query position referencing a named signature profile; preserve exact raw/Bearer scheme | Original signature, invalid-authentication cases and relative validity |
 | Shared process initialization recorded in another case | `localcache.requests` with complete Source lifetime proof; HTTP host is required | Same-run immutable inventory, exact request identity and single consumption |
 | Detached Source work appears unused in another case | `process_dependencies.tasks.<actual-Source-task-name>.requests` with Source task/lifetime proof; additional API-origin causality stays native | Original attribution, lane/transaction/identity boundaries and reversible classification |
-| Missing Source acquisition or IP learned from a response | `capture_http`, `capture_breeze` or `capture_http_response` | Real new Recording and provenance of original/transformed response |
+| Missing Source acquisition or IP learned from a response | Follow the returned Source-acquisition route; learned-response URL positions use `http.response_rewrite` with the original capture identity | Real new Recording and provenance of original/transformed response |
 
 Relative naive timestamps cancel a shared UTC offset; prove consistent Source/Target
 timezone behavior. `calendar_date` and absolute request windows retain explicit
@@ -86,8 +93,9 @@ Equal fixed/external IDs, nulls and sentinels compare exactly; one-sided presenc
 and unrecognized differing values remain failures. Source behavior must justify
 every declared format; random-looking bytes alone grant no identity permission.
 Supported key formats/command sequences and GET/EXPIRE count permissions belong
-under `redis.keys`. Multipart, DOCX, WSS path derivation, AES envelopes and actual
-signature transformations retain their existing native typed effects.
+under `redis.keys`. Use the [content and carrier guide](../../../../../docs/content-policy-layout.md)
+only when Source calls for a template, codec binding or generated header strategy.
+Complete supported multipart boundaries are handled by the engine and need no rule.
 For read/modify/write historical timestamps, preserve the delivered input: schema
 fields use successful same-case physical-field/path read-copy provenance. Equal
 Source/Target values pass directly; changed copied historical values still need
@@ -106,26 +114,14 @@ response signatures and cannot sign inbound requests.
 
 Check `facts.policy_freshness` first. If it requires Replay, return its structured
 refresh action; changing evidence IDs cannot repair stale evidence. The coordinator
-uses the same entrypoint for value and native effects:
-
-```text
-backend-rewrite rule plan --file rule.yaml --evidence <current-evidence-id>
-backend-rewrite rule apply --plan <returned-plan-id>
-```
+follows the returned planner and legal actions under the [shared contract](rule-policy.md).
 
 Return the proposed authored v2 declaration/rule document, complete Source
 coverage of its global formats/lifetimes, current evidence ID, missing proof,
 and residual differences. Do not execute apply or Replay as an implementer.
-The plan verifies all selected complete immutable observations, freezes policy,
-startup/schema/key and Source inventory, and returns an effect diff and obligations.
-Source self-validation and derived delivery copies are distinct from independent
-Target observations. Stateful changes always require actual Replay; acquisition
-and snapshot changes may additionally require a fresh Recording. No-op plans
-preserve existing policy bytes and require no artificial verification.
-
-`dependency-rule` and the old flag-based `rule plan` interface are retired.
-The engine's returned `rule recover` action safely retires old or interrupted
-plans; never edit workflow state or reuse a stale plan.
+The engine's plan and subsequent actions own complete coverage, stale checks,
+application, recovery and genuine verification. Do not recreate those decisions
+from a worker report or edit workflow state.
 
 Memcached `SET` exptime retains native protocol comparison: relative TTL and zero
 stay exact, absolute expirations compare remaining TTL within the fixed engine
