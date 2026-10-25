@@ -193,13 +193,8 @@ impl ReplayState {
                 if exchange.shared_origin.is_some() {
                     ignored_query_params.clear();
                 }
-                let mut mismatch = http_request_mismatch_reason(
-                    exchange,
-                    method,
-                    uri,
-                    body,
-                    &ignored_query_params,
-                );
+                let (mut mismatch, multipart_source_body) =
+                    http_request_comparison(exchange, method, uri, body, &ignored_query_params);
 
                 let mut declared_headers = None;
                 if (mismatch.is_none()
@@ -228,22 +223,18 @@ impl ReplayState {
                 let headers = declared_headers.as_ref().unwrap_or(headers);
                 let mut request_decision = None;
                 let mut body_comparison = None;
-                let multipart = if multipart::supports_headers(&exchange.record.request_headers)
-                    && !exchange.record.request_body.truncated
-                    && (mismatch.is_none()
-                        || mismatch.as_deref()
-                            == Some("HTTP request body did not match the recorded body"))
+                let multipart = if mismatch.is_none()
+                    || mismatch.as_deref()
+                        == Some("HTTP request body did not match the recorded body")
                 {
-                    decode_body(&exchange.record.request_body)
-                        .ok()
-                        .and_then(|source_body| {
-                            multipart::preview(
-                                &source_body,
-                                &exchange.record.request_headers,
-                                body,
-                                headers,
-                            )
-                        })
+                    multipart_source_body.and_then(|source_body| {
+                        multipart::preview(
+                            &source_body,
+                            &exchange.record.request_headers,
+                            body,
+                            headers,
+                        )
+                    })
                 } else {
                     None
                 };

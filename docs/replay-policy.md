@@ -110,16 +110,21 @@ policy:
 
 Only the named old IDs are removed. The planner rejects unknown IDs and a
 response/input rule owned by another API issue. Every new or revised permission
-passes the ordinary complete Source and independent Target preflight; an empty
-replacement is rejected. Resource rules can consolidate prior API scopes only
+passes the ordinary complete Source and independent Target preflight; a proposal
+without explicit policy content is rejected. Resource rules can consolidate prior API scopes only
 through complete resource evidence. The plan displays the old rules, expanded
 replacement rules and whole-policy diff. Unselected rules remain unchanged.
 Publication reuses the original policy compare-and-swap, frozen witnesses,
 durable write intent and recovery, and requires fresh genuine Replay. A change
 proposal is not a persisted policy format. Ordinary rule documents remain
-additive; omitting an old rule or declaration never deletes it. Supplied global format sections replace their complete section atomically;
-omission preserves the existing section. Native rule replacement stays
-explicit and evidence-bound.
+additive: new fields are retained alongside existing declarations, and compatible
+formats append in their existing order with exact duplicates removed. Omitting a
+rule or field, or supplying an empty format map, never deletes existing content.
+Whole-section replacement or clearing requires explicit `replace_sections` in
+the change wrapper and the complete desired maps for the named sections.
+`replace_rules` independently names native replacements and may be omitted for
+a section-only change. Both modes remain evidence-bound and show additions and
+removals in the plan before apply.
 Capture HTTP consolidation must preserve the exact existing path union, Source
 revision and selectors. Breeze capture and ordered Source-response rewrites
 cannot be deleted or replaced through this value-rule transaction. Prospective

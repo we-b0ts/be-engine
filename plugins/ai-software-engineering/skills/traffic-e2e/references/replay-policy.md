@@ -102,12 +102,15 @@ same pending plan after an interruption; `rule recover --plan <plan-id>` resolve
 interrupted transaction through the coordinator. Do not edit a managed policy
 or recording to bypass this transaction.
 
-A supplied root `json`, `mysql` or `redis` section replaces that entire section; omitted
-sections preserve current content. An empty `json.fields` map clears all JSON
-formats. Endpoint aliases and native rules remain additive. Explicit native rule
-replacement uses `traffic-policy-change/v1` with `replace_rules` and complete
-replacement native rules. Every plan freezes original evidence and policy;
-Apply retains the fresh genuine Replay obligation.
+Ordinary root `json`, `mysql`, `redis` and `http` declarations add fields and append
+compatible formats in the existing order, deduplicating exact matches. Omitted
+fields and sections remain unchanged; an empty `json.fields` map does not clear
+existing formats. Endpoint aliases and native rules also remain additive.
+Intentional section replacement or clearing uses `traffic-policy-change/v1` with
+`replace_sections` and complete desired maps for those sections. Native replacement
+uses the independent, optional `replace_rules` list and complete replacement rules.
+Review additions and removals in the plan. Every plan freezes original evidence
+and policy; apply retains the fresh genuine Replay obligation.
 
 ## Three Comparison Surfaces
 

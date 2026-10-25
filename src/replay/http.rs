@@ -556,28 +556,41 @@ impl ReplayHttpExchange {
     }
 }
 
-fn http_request_mismatch_reason(
+/// Keep the already decoded body only when multipart may use it next.
+fn http_request_comparison(
     exchange: &ReplayHttpExchange,
     method: &Method,
     uri: &Uri,
     body: &[u8],
     ignored_query_params: &[String],
-) -> Option<String> {
+) -> (Option<String>, Option<Vec<u8>>) {
     if !exchange.record.method.eq_ignore_ascii_case(method.as_str()) {
-        return Some(format!(
-            "HTTP method mismatch: recorded {} actual {}",
-            exchange.record.method, method
-        ));
+        return (
+            Some(format!(
+                "HTTP method mismatch: recorded {} actual {}",
+                exchange.record.method, method
+            )),
+            None,
+        );
     }
     if let Some(reason) =
         uri_mismatch_reason(&exchange.record.uri, &uri.to_string(), ignored_query_params)
     {
-        return Some(reason);
+        return (Some(reason), None);
     }
     match decode_body(&exchange.record.request_body) {
-        Ok(recorded_body) if bodies_match(&recorded_body, body) => None,
-        Ok(_) => Some("HTTP request body did not match the recorded body".to_string()),
-        Err(error) => Some(format!("failed to decode recorded request body: {error}")),
+        Ok(recorded_body) => {
+            let mismatch = (!bodies_match(&recorded_body, body))
+                .then(|| "HTTP request body did not match the recorded body".to_string());
+            let multipart_body = (!exchange.record.request_body.truncated
+                && multipart::supports_headers(&exchange.record.request_headers))
+            .then_some(recorded_body);
+            (mismatch, multipart_body)
+        }
+        Err(error) => (
+            Some(format!("failed to decode recorded request body: {error}")),
+            None,
+        ),
     }
 }
 

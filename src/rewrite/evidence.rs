@@ -140,7 +140,7 @@ pub(super) fn query(
     } else if kind == QUERY_UNIFIED_RULE_CANDIDATES {
         (unified_discovery::facts(target_root, state, issue, requested_id)?,
             vec!["A mechanical draft requires Source code proof and full selected evidence validation. Derived delivery never proves independent Target response behavior.".into()],
-            "Inspect draft_rule or Source bindings. Follow pagination.next_page for omitted summaries and pagination.next_scan for remaining observations. Draft fields and formats add to current declarations; inspect the planned changes, add Source proof and use the returned planner. Bounded discovery never proves complete coverage.".into())
+            "Inspect candidates[].draft_policy and source_entry.locations. Follow pagination.next_page for omitted summaries and pagination.next_scan for remaining observations. Draft fields and formats add to current declarations; inspect the planned changes, add Source proof and use the returned planner. Bounded discovery never proves complete coverage.".into())
     } else {
         facts(target_root, state, issue, kind, offset)?
     };

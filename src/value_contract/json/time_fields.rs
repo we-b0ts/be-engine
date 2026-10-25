@@ -29,6 +29,9 @@ impl Comparison {
     /// Independent physical values do not acquire relationships from sharing a
     /// declaration. Explicit Source clock groups retain their original scope.
     pub(crate) fn scope_schema_clocks(&mut self, occurrence: usize) {
+        if self.relationships.is_empty() {
+            return;
+        }
         self.scope_schema_clocks_in(&format!("physical-value:{occurrence}"));
     }
 
@@ -37,6 +40,9 @@ impl Comparison {
     /// out of the private relationship keys as well as ordinary diagnostics.
     pub(crate) fn scope_schema_clocks_in(&mut self, context: &str) {
         use sha2::{Digest, Sha256};
+        if self.relationships.is_empty() {
+            return;
+        }
         let context = Sha256::digest(context.as_bytes());
         self.relationships = std::mem::take(&mut self.relationships)
             .into_iter()
