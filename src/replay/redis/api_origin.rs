@@ -31,10 +31,7 @@ impl RedisReplayState {
         let origins = crate::api_trigger::load(source, &rules)?;
         let mut independent = 0;
         for exchange in &mut self.exchanges {
-            if exchange.source != ReplaySource::Case
-                || self
-                    .connection_scopes
-                    .is_stateful(exchange.record.connection_id)
+            if exchange.source != ReplaySource::Case || self.connection_scopes.is_stateful(exchange)
             {
                 continue;
             }

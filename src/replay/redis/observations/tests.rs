@@ -2,6 +2,7 @@ use super::super::append::tests::{event, request, rule as append_rule, state};
 use super::*;
 use serde_json::{Value, json};
 mod applicability;
+mod case_scope;
 mod foreign_reads;
 
 #[test]

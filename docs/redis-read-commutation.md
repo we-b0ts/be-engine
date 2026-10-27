@@ -22,9 +22,11 @@ The native planner and Replay share complete Source validation for each
 selected Case/key. All selected GET responses must be RESP nil bulk values.
 Same-key `DEL` is allowed only with its original zero response and stays an
 ordinary finite, ordered command. Mutations, non-nil responses, multi-key
-observations, ambiguous script key access, foreign Case/Global overlap and
-stateful or transactional read connections reject the proof. Late overlapping
-inventory cannot extend an installed permission. No partial permission is
+observations, ambiguous script key access, Global/shared overlap and
+stateful or transactional read connections reject the proof. Another ordinary
+Case's reads or writes do not participate in this Case's proof or consumption,
+whether loaded before or after preparation. The prepared Case's own inventory
+cannot be extended. No partial permission is
 installed when any selected key fails validation.
 
 Only proven GET exchanges leave the ordinary connection-order barrier. Their

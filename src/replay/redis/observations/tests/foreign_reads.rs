@@ -127,7 +127,7 @@ fn shared_key_readback_owns_only_its_writer_case_for_eager_and_lazy_inventory() 
 }
 
 #[test]
-fn foreign_writes_or_expiry_observers_never_extend_an_owned_state_profile() {
+fn foreign_writes_or_expiry_observers_leave_an_owned_state_profile_unchanged() {
     for (command, args, response) in [
         (
             "SET",
@@ -142,25 +142,25 @@ fn foreign_writes_or_expiry_observers_never_extend_an_owned_state_profile() {
         ),
         ("TTL", vec![b"current:1".as_slice()], b":30\r\n".as_slice()),
     ] {
-        let (_root, mut state) = setup(true);
-        let mut foreign = event(3, command, &args, response);
-        foreign["connection_id"] = json!(Uuid::from_u128(2));
-        add(&mut state, "reader", foreign.clone()).unwrap();
-        assert!(
-            state.prepare_observations("case").is_err(),
-            "accepted foreign {command}"
-        );
-        assert!(
-            state
-                .exchanges
-                .iter()
-                .all(|exchange| exchange.observation_rule.is_none())
-        );
-        let (_root, mut state) = setup(true);
-        state.prepare_observations("case").unwrap();
-        assert!(
-            add(&mut state, "reader", foreign).is_err(),
-            "accepted late foreign {command}"
-        );
+        for lazy in [false, true] {
+            let (_root, mut state) = setup(true);
+            let mut foreign = event(3, command, &args, response);
+            foreign["connection_id"] = json!(Uuid::from_u128(2));
+            if !lazy {
+                add(&mut state, "reader", foreign.clone()).unwrap();
+            }
+            state.prepare_observations("case").unwrap();
+            if lazy {
+                add(&mut state, "reader", foreign).unwrap();
+            }
+            perform(&mut state, "SET", &[b"current:1", b"target"]);
+            assert_eq!(
+                perform(&mut state, "GET", &[b"current:1"]),
+                b"$6\r\ntarget\r\n",
+                "foreign {command}, lazy={lazy}"
+            );
+            assert!(state.exchanges[2].observation_rule.is_none());
+            assert_eq!(state.exchanges[2].status, ReplayExchangeStatus::Available);
+        }
     }
 }

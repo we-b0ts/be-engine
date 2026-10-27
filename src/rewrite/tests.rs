@@ -328,6 +328,7 @@ fn reclassification_fixture() -> (
             dependencies: crate::E2eDependencyGate::Clean,
         },
         diagnosis: crate::E2eDiagnosis {
+            replay_finalized: None,
             egress_rejections: None,
             counts,
             response_differences: crate::E2eResponseDifferenceDiagnosis {

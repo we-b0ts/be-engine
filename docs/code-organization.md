@@ -350,7 +350,9 @@ is unclear.
   reservations, derived lengths, delivery completion and fingerprint-only range
   audits. Its `trace` child validates complete immutable Source byte order,
   resets and observation fences; `source` reuses that preparation for native
-  rule preflight. Ordinary Redis adapters retain all non-APPEND matching and
+  rule preflight. A preexisting prefix needs only a Source-derived length base;
+  its contents and creator remain outside this Case's increment proof.
+  Ordinary Redis adapters retain all non-APPEND matching and
   finite consumption. Partial byte delivery is separate from active transport.
   Stream key selection reuses the request-contract owner's projection of
   already accepted complete identities; stream bytes remain with the APPEND owner.
@@ -362,14 +364,21 @@ is unclear.
   permission; its `source` child rejects mutations and overlapping ownership
   before installing any permission. `redis/key_access` supplies conservative
   key-access exclusion to both Source proofs, and `redis/native_source` loads
-  their complete scoped Source inventories. Native command matching and
+  their complete scoped Source inventories. `redis/case_scope` identifies other
+  ordinary Case records consistently for preparation and later inventory
+  additions: they cannot establish or invalidate this Case's proof. Global,
+  snapshot and explicitly shared ownership retain their separate boundary.
+  `redis/connection_scope` partitions ordinary stateful lanes by Case, while
+  Global and explicit session setup retain connection-wide constraints.
+  Native command matching and
   delivery retain connection eligibility, claims and finite consumption.
   `redis/observations` owns explicit SET/DEL state observations and positive TTL
   refresh equivalence. Its `source` child validates complete, isolated key
-  lifetimes before installing observation permissions; request contracts retain
-  write-to-read identity rendering. Read-back preparation excludes another
-  Case's ordinary finite GET from the owner's proof and observation slots;
-  foreign mutations and Global/shared inventory remain ownership fences.
+  lifetimes before installing observation permissions; an initial successful
+  EXPIRE may establish existing-key context without a Case-local creator.
+  Request contracts retain write-to-read identity rendering. Preparation and
+  observation slots exclude other ordinary Cases' reads and writes; mutations
+  inside this Case and Global/shared inventory retain their ownership fences.
   Mutation matching, APPEND bytes and transport completion remain with their
   existing owners.
   `redis/observations/closed_expiry` proves unchanged scalar lifetimes whose

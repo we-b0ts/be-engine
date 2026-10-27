@@ -49,7 +49,8 @@ pub(super) fn source_inventory(
                             &target,
                             Some(&Database::Index(event["database"].as_i64().unwrap_or(0))),
                             // Retain other users' records on the same database,
-                            // so complete Source preparation can reject key overlap.
+                            // so each Case's proof can reject conflicting users
+                            // without consulting another ordinary Case's history.
                             r.rule
                                 .selector
                                 .resource

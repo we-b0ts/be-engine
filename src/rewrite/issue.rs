@@ -12,10 +12,14 @@ pub(super) fn from_e2e(
 ) -> RewriteIssue {
     let (kind, owner, summary, pointer, possible_causes) = match result.gates.responses {
         _ if result.gates.replay == E2eReplayGate::Incomplete
-            && result.diagnosis.counts.executed > 0 => (
+            && result.diagnosis.counts.executed > 0
+            && result.diagnosis.replay_finalized != Some(true) => (
             RewriteIssueKind::Replay,
             RewriteIssueOwner::TrafficE2eSystem,
-            format!("Replay did not finalize after {} of {} cases executed; repair the runtime before planning from this incomplete attempt",result.diagnosis.counts.executed,result.diagnosis.counts.selected),
+            format!(
+                "Replay evidence is incomplete after {} of {} cases executed; inspect lifecycle and coverage diagnostics before planning from this incomplete attempt",
+                result.diagnosis.counts.executed, result.diagnosis.counts.selected
+            ),
             None,
             vec!["replay_lifecycle_or_control_failure".into(),"incomplete_replay_publication".into()],
         ),
@@ -120,7 +124,14 @@ pub(super) fn from_e2e(
         _ if result.gates.replay == E2eReplayGate::Incomplete => (
             RewriteIssueKind::Replay,
             RewriteIssueOwner::TrafficE2eSystem,
-            "Replay evidence is incomplete".to_string(),
+            if result.diagnosis.replay_finalized == Some(true) {
+                format!(
+                    "Replay finalized, but evidence is incomplete after {} of {} selected cases executed",
+                    result.diagnosis.counts.executed, result.diagnosis.counts.selected
+                )
+            } else {
+                "Replay evidence is incomplete".to_string()
+            },
             None,
             vec!["replay_lifecycle_or_capability_gap".to_string()],
         ),
@@ -340,6 +351,67 @@ mod tests {
             let issue = from_e2e("GET /api", &result, "target".into());
             assert_eq!(issue.owner, expected);
         }
+    }
+
+    fn partial_run_result() -> E2eApiRunResult {
+        serde_json::from_value(serde_json::json!({
+            "run_key":"run","api":"POST /api/callback","attempt":1,"status":"failed","passed":false,"progress":"progress.yaml",
+            "gates":{"responses":"nonpassing","replay":"incomplete","dependencies":"unknown"},
+            "diagnosis":{
+                "replay_finalized":true,
+                "counts":{"selected":200,"executed":40,"response_passed":0,"response_nonpassing":40,"response_incomplete":160},
+                "execution_failures":[{"case_id":"interrupted","kind":"dependency_unmatched","request_completed":false}],
+                "response_differences":{"total_differences":0,"indexed_differences":0,"omitted_differences":0,"failure_clusters":[],"omitted_failure_clusters":0},
+                "lifecycle_errors":["API \"POST /api/callback\" stopped after reaching the configured failure limit of 40 case(s)"]
+            }
+        })).unwrap()
+    }
+
+    #[test]
+    fn finalized_failure_limited_replay_keeps_the_dependency_cause() {
+        let result = partial_run_result();
+        let issue = from_e2e("POST /api/callback", &result, "target".into());
+        assert_eq!(issue.kind, RewriteIssueKind::Dependency);
+        assert_eq!(issue.owner, RewriteIssueOwner::SourceInvestigation);
+        assert!(issue.summary.contains("dependencies did not match"));
+        assert!(
+            !issue
+                .possible_causes
+                .iter()
+                .any(|cause| cause.contains("lifecycle"))
+        );
+        assert_eq!(result.gates.replay, E2eReplayGate::Incomplete);
+        assert!(!result.passed);
+    }
+
+    #[test]
+    fn unfinalized_and_legacy_partial_replay_keep_the_system_owner() {
+        for finalized in [Some(false), None] {
+            let mut result = partial_run_result();
+            result.diagnosis.replay_finalized = finalized;
+            let issue = from_e2e("POST /api/callback", &result, "target".into());
+            assert_eq!(issue.kind, RewriteIssueKind::Replay);
+            assert_eq!(issue.owner, RewriteIssueOwner::TrafficE2eSystem);
+            assert!(issue.summary.contains("40 of 200"));
+        }
+    }
+
+    #[test]
+    fn finalized_partial_coverage_does_not_claim_finalization_failed() {
+        let mut result = partial_run_result();
+        result.diagnosis.execution_failures.clear();
+        result.gates.responses = E2eResponseGate::Incomplete;
+        let issue = from_e2e("POST /api/callback", &result, "target".into());
+        assert_eq!(issue.kind, RewriteIssueKind::Replay);
+        assert!(issue.summary.contains("Replay finalized"));
+        assert!(issue.summary.contains("40 of 200"));
+        assert!(!issue.summary.contains("did not finalize"));
+
+        result.gates.responses = E2eResponseGate::Nonpassing;
+        assert_eq!(
+            from_e2e("POST /api/callback", &result, "target".into()).kind,
+            RewriteIssueKind::Response
+        );
     }
 
     #[test]

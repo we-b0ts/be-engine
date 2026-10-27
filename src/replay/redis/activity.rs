@@ -18,7 +18,7 @@ const MAX_BYTES: usize = 1024 * 1024;
 pub(super) struct ActivityRefreshes {
     prepared: BTreeSet<String>,
     profiles: Vec<Profile>,
-    owned: BTreeSet<(Uuid, u64)>,
+    owned: BTreeMap<String, BTreeSet<(Uuid, u64)>>,
     pending: BTreeMap<Uuid, usize>,
     calls: BTreeMap<String, usize>,
     charged: BTreeSet<usize>,
@@ -107,8 +107,12 @@ pub(in crate::replay) struct ActivityAudit {
 
 impl ActivityRefreshes {
     pub(super) fn owns(&self, e: &ReplayExchange) -> bool {
-        self.owned
-            .contains(&(e.record.connection_id, e.record.sequence))
+        e.source == ReplaySource::Case
+            && e.case_id.as_deref().is_some_and(|case| {
+                self.owned.get(case).is_some_and(|owned| {
+                    owned.contains(&(e.record.connection_id, e.record.sequence))
+                })
+            })
     }
     pub(super) fn has_in_flight(&self) -> bool {
         !self.pending.is_empty()
@@ -139,11 +143,14 @@ impl ActivityRefreshes {
         &self,
         record: &RecordedExchange,
         args: &[Vec<u8>],
+        source: ReplaySource,
+        case_id: Option<&str>,
     ) -> Result<()> {
         ensure!(
             !self.profiles.iter().any(|p| p.database == record.database
                 && target_matches(&p.target, &record.target_host, record.target_port)
-                && super::key_access::touches(&record.command, args, &p.key)),
+                && super::key_access::touches(&record.command, args, &p.key)
+                && !super::case_scope::is_other_ordinary_case(&p.case, source, case_id, record)),
             "cannot add overlapping activity refresh inventory after Source preparation"
         );
         Ok(())

@@ -340,7 +340,11 @@ fn delivery_failure_never_consumes_pending_source_and_disables_stream() {
 #[test]
 fn source_lengths_errors_transactions_and_mutations_do_not_gain_permissions() {
     for events in [
-        vec![event(1, "APPEND", &[b"content:1", b"ab"], b":3\r\n")],
+        vec![event(1, "APPEND", &[b"content:1", b"ab"], b":1\r\n")],
+        vec![
+            event(1, "APPEND", &[b"content:1", b"ab"], b":3\r\n"),
+            event(2, "APPEND", &[b"content:1", b"cd"], b":6\r\n"),
+        ],
         vec![event(1, "APPEND", &[b"content:1", b"ab"], b"-ERR bad\r\n")],
         vec![
             event(1, "MULTI", &[], b"+OK\r\n"),
@@ -446,7 +450,7 @@ fn reset_preserves_literal_bytes_even_when_ordinary_set_would_compare_json_seman
 }
 
 #[test]
-fn a_global_or_foreign_case_touch_cannot_be_borrowed_by_an_append_rule() {
+fn foreign_case_touches_are_independent_while_global_touches_remain_ownership_fences() {
     for source in [ReplaySource::Case, ReplaySource::Global] {
         let events = [event(1, "APPEND", &[b"content:1", b"ab"], b":2\r\n")];
         let (_root, mut state) = state(&events, vec![rule()]);
@@ -464,8 +468,16 @@ fn a_global_or_foreign_case_touch_cannot_be_borrowed_by_an_append_rule() {
                 &[],
             )
             .unwrap();
-        assert!(request(&mut state, "APPEND", &[b"content:1", b"ab"]).is_err());
-        assert_eq!(state.exchanges[0].status, ReplayExchangeStatus::Available);
+        let append = request(&mut state, "APPEND", &[b"content:1", b"ab"]);
+        if source == ReplaySource::Case {
+            state.complete_exchange(&append.unwrap());
+            assert!(request(&mut state, "GET", &[b"content:1"]).is_err());
+            assert_eq!(state.exchanges[0].status, ReplayExchangeStatus::Consumed);
+            assert_eq!(state.exchanges[1].status, ReplayExchangeStatus::Available);
+        } else {
+            assert!(append.is_err());
+            assert_eq!(state.exchanges[0].status, ReplayExchangeStatus::Available);
+        }
     }
 }
 
@@ -571,22 +583,43 @@ fn declared_script_keys_preserve_fences_and_unproven_key_inventories_stay_conser
 }
 
 #[test]
-fn prepared_inventory_cannot_gain_late_case_or_global_touches() {
+fn prepared_inventory_allows_other_cases_but_keeps_current_case_and_global_frozen() {
     for source in [ReplaySource::Case, ReplaySource::Global] {
         let events = [event(1, "APPEND", &[b"content:1", b"ab"], b":2\r\n")];
         let (_root, mut state) = state(&events, vec![rule()]);
         state.prepare_append_case("case").unwrap();
-        assert!(
-            state
-                .register_exchange(
-                    serde_json::from_value(event(2, "GET", &[b"content:1"], b"$2\r\nab\r\n"))
-                        .unwrap(),
-                    source,
-                    Some("other"),
-                    &mut BTreeMap::new(),
-                    &[],
-                )
-                .is_err()
+        let addition = state.register_exchange(
+            serde_json::from_value(event(2, "GET", &[b"content:1"], b"$2\r\nab\r\n")).unwrap(),
+            source,
+            Some("other"),
+            &mut BTreeMap::new(),
+            &[],
         );
+        if source == ReplaySource::Case {
+            addition.unwrap();
+            assert!(
+                state
+                    .register_exchange(
+                        serde_json::from_value(event(
+                            3,
+                            "APPEND",
+                            &[b"content:other", b"x"],
+                            b":1\r\n"
+                        ))
+                        .unwrap(),
+                        ReplaySource::Case,
+                        Some("case"),
+                        &mut BTreeMap::new(),
+                        &[],
+                    )
+                    .is_err(),
+                "the complete current Case inventory must remain immutable"
+            );
+            let append = request(&mut state, "APPEND", &[b"content:1", b"ab"]).unwrap();
+            state.complete_exchange(&append);
+            assert!(request(&mut state, "GET", &[b"content:1"]).is_err());
+        } else {
+            assert!(addition.is_err());
+        }
     }
 }

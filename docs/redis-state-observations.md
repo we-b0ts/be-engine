@@ -30,12 +30,13 @@ supported successful SET keep their finite slots and fence the first mutation;
 a profile without an owned SET gains no reusable reads. Within an owned state,
 GET must equal the latest SET value or nil after DEL.
 
-Another Case's ordinary finite single-key GET may touch the same concrete key.
-It supplies no state proof or observation slots to the writing Case, and keeps
-its own recorded response and finite consumption. A Case with only historical
-reads cannot borrow another Case's SET or Target value. Foreign mutations,
-expiry observers, shared/reusable reads and Global inventory still reject the
-owned state proof; this permission does not simulate state across Cases.
+Another ordinary Case may read or write the same concrete key. Its records
+neither supply state proof or observation slots nor invalidate the current
+Case's proof. It keeps its own responses and finite consumption. A Case with
+only historical reads cannot borrow another Case's SET or Target value. Within
+the current Case, unsupported mutations and expiry observers remain invalid;
+Global/shared or reusable inventory retains its separate ownership boundary.
+This permission does not simulate state across Cases.
 
 Only unconditional SET, GET, successful DEL/UNLINK and positive TTL refreshes
 are supported in the owned state. Implicit expiry, unknown writers or mutations,
@@ -57,15 +58,19 @@ redis:
     'task:stream:*': {expiry_refresh: true}
 ```
 
-The proposed key proof must establish one fixed positive TTL, complete owned
-lifetimes and absence of expiry observers or external writers. Key-local
+The proposed key proof must establish one fixed positive TTL and the selected
+Case's state boundaries without incompatible expiry observations. Key-local
 APPEND and expiry permissions can share one entry; actual physical resources
 remain independent.
 
-All selected Source EXPIREs must return integer 1 on a key established by a
-successful ordinary Case SET, APPEND or list creation. The TTL and complete
-arguments stay exact. A Target cannot refresh before creation or after DEL,
-change seconds, add NX/XX options or borrow a refresh from a future lifetime.
+All selected Source EXPIREs must return integer 1. A successful ordinary Case
+SET, APPEND or list creation can establish the key; an initial successful EXPIRE
+can instead prove that the key already existed, without knowing its value or
+creator. Earlier Case-local accesses retain finite delivery requirements.
+The TTL and complete arguments stay exact. A Target cannot cross an unmatched
+creation or refresh after a proven DEL, change seconds, add NX/XX options or
+borrow a refresh from a future lifetime. Initial existing-key refreshes retain
+an actual Target refresh and a bounded runtime observation window.
 One successfully delivered refresh covers equivalent Source EXPIREs of that
 lifetime; additional refreshes use the same proven response.
 
@@ -85,7 +90,8 @@ SET or another lifetime cannot supply this proof. Content and list work remain
 independent and retain every ordinary consumption requirement.
 
 Source proof excludes TTL/PTTL/expiry observations, unsupported key mutations,
-implicit expiration, mixed TTLs, stateful lanes and overlapping ownership. The
+implicit expiration, mixed TTLs, stateful lanes and conflicting ownership within
+the selected Case. Global/shared inventory remains separate. The
 Source key lifetime and runtime observation window must remain below the
 smallest proven positive TTL. SET/DEL lifetime transitions and every ordinary
 content/list write still match and deliver through their existing owners.
@@ -97,8 +103,9 @@ and 4096 Target observations per Case. Each profile has at most 1024 states.
 Responses and raw SET values are bounded to 1 MiB. Every actual delivery remains
 tracked even when concurrent reads share a Source witness. Transport failure
 keeps the Case dirty; it cannot be hidden by another successful observation.
-Prepared inventory cannot acquire later overlapping records, except another
-Case's ordinary finite GET under the read-back partition described above.
+A prepared Case cannot acquire additional records. Loading another ordinary
+Case, including one that writes the same key, cannot change installed proof or
+consume its observations. Later Global/shared overlaps retain their rejection.
 
 `redis.state_observations` contains at most 1000 audits with rule, Case, key
 fingerprints, Target admission index, original Source witness, state-changing

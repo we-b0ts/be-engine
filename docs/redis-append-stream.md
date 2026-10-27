@@ -11,8 +11,8 @@ redis:
     'content:*': {append_stream: true}
 ```
 
-In an annotated plan proposal, attach the key's independent Source proof of
-all writers, initial length, ordered buffering and read/reset boundaries. The
+In an annotated plan proposal, attach independent Source proof of the selected
+Case's writes, response lengths, ordered buffering and read/reset boundaries. The
 runtime policy omits proof metadata. Resource and database selectors are not
 authored; preparation and runtime preserve each actual endpoint, database,
 authentication identity and Case key, including pooled connections.
@@ -39,9 +39,12 @@ hold the interaction close barrier open as an in-flight network response.
 GET, MGET, length/range reads, expiry observations and mutations fence the stream
 at their original Source byte boundary. A Target cannot read early or append past
 an unclaimed fence. SET/SETEX/PSETEX and DEL/UNLINK establish new epochs; an APPEND
-cannot merge across them. A reset's value/options remain byte exact. Initial
-string length must be proven by the APPEND integer response and any captured
-successful reset; an unknown nonempty initial value is unsupported.
+cannot merge across them. A reset's value/options remain byte exact. The first
+successful APPEND response supplies the initial length by subtracting its
+appended byte count. A nonempty preexisting value is supported without learning
+its contents or borrowing its creation from another Case. Later responses must
+agree with that base plus this Case's appended bytes; captured resets establish
+new bases. APPEND never manufactures a read of the unknown prefix.
 
 Successful unconditional positive EXPIRE/PEXPIRE refreshes remain ordinary finite
 exchanges with exact arguments and responses. Chunk equivalence does not permit
@@ -50,10 +53,14 @@ changing, skipping, merging or adding these refresh calls. They require a separa
 to authorize count equivalence. Other commands keep
 their ordinary matching, timing and consumption contracts. Unknown mutations,
 transactional/watched sessions, ambiguous Source ordering, failed APPENDs and
-overlapping Case/Global/authentication ownership do not gain stream permission.
+Global/shared inventory or conflicting Case-local authentication ownership do
+not gain stream permission. Another ordinary Case's access to the same key is
+outside this proof: it neither contributes bytes nor invalidates the stream.
 Script exclusions use Redis's declared nonempty `numkeys` inventory; missing or
 unknown key declarations stay conservative. Source proof must cover all writers,
-including script key use. Prepared stream inventory cannot acquire later touches.
+including script key use within the selected Case. A prepared Case's inventory
+cannot be extended; loading another ordinary Case cannot change its proof or
+consume its byte ranges. Global/shared inventory retains its separate boundary.
 Captured APPEND response delays are charged once when a Source exchange is first
 reserved; a merged call sums those delays and later pieces of an already charged
 Source exchange add no duplicate delay.

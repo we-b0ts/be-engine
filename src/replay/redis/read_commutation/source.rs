@@ -28,9 +28,12 @@ pub(super) fn prepare(
             && target_matches(&profile.target, &e.record.target_host, e.record.target_port)
             && super::super::key_access::touches(&e.record.command, &e.args, &profile.key)
     }) {
+        if super::super::case_scope::is_other_ordinary_exchange(case, exchange) {
+            continue;
+        }
         ensure!(
             exchange.source == ReplaySource::Case && exchange.case_id.as_deref() == Some(case),
-            "read commutation key overlaps another Case or Global inventory"
+            "read commutation key overlaps Global or shared inventory"
         );
         ensure!(
             exchange.shared_rule_id.is_none()
@@ -53,9 +56,7 @@ pub(super) fn prepare(
         match exchange.record.command.as_str() {
             "GET" => {
                 ensure!(
-                    !state
-                        .connection_scopes
-                        .is_stateful(exchange.record.connection_id),
+                    !state.connection_scopes.is_stateful(exchange),
                     "read commutation cannot relax stateful or transactional Source lanes"
                 );
                 ensure!(

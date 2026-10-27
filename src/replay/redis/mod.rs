@@ -35,6 +35,7 @@ pub(in crate::replay) use cross_case::load as load_cross_case;
 pub(in crate::replay) mod activity;
 mod api_origin;
 pub(in crate::replay) mod append;
+mod case_scope;
 pub(crate) mod expiration;
 #[cfg(test)]
 mod field_identity_tests;
@@ -355,9 +356,9 @@ impl RedisReplayState {
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
         self.append_streams
-            .check_inventory_addition(&record, &args)?;
+            .check_inventory_addition(&record, &args, source, case_id)?;
         self.read_commutation
-            .check_inventory_addition(&record, &args)?;
+            .check_inventory_addition(&record, &args, source, case_id)?;
         let response = record.response.decode()?;
         ensure!(
             record
@@ -379,7 +380,7 @@ impl RedisReplayState {
             reusable_snapshot,
         )?;
         self.activity_refresh
-            .check_inventory_addition(&record, &args)?;
+            .check_inventory_addition(&record, &args, source, case_id)?;
         let connection_independent = is_connection_independent_background(
             source,
             record.global_dependency_reason.as_deref(),
@@ -401,7 +402,8 @@ impl RedisReplayState {
         {
             return Ok(());
         }
-        self.connection_scopes.register(&record, &args);
+        self.connection_scopes
+            .register(&record, &args, source, case_id);
         let exchange_index = self.exchanges.len();
         self.case_exchange_index
             .register(source, case_id, exchange_index);

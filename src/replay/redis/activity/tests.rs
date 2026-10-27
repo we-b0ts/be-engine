@@ -3,6 +3,8 @@ use super::*;
 use crate::replay::redis::append::tests::{event, request, rule as append_rule, state_with_policy};
 use serde_json::json;
 
+#[path = "tests/case_scope.rs"]
+mod case_scope_tests;
 #[path = "recorded_tests.rs"]
 mod recorded_tests;
 #[path = "tests/source.rs"]

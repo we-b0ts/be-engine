@@ -149,6 +149,13 @@ total, returned and omitted counts. Follow `execution_failures_query` and each
 `pagination.next_page` for remaining Cases from the same issue attempt. Missing
 rows in the overview do not prove a Case had no rejected dependency.
 
+Terminal E2E `diagnosis.replay_finalized` reports session publication separately
+from selected-case coverage. A failure-limited attempt can finalize normally
+while its Replay gate remains incomplete. Such an attempt retains its observed
+dependency or response cause; incomplete coverage alone does not prove that
+Replay failed to finalize. Older results without this field keep conservative
+lifecycle attribution.
+
 Socket.IO interactions apply global `json.fields` at each event/ACK business
 argument root, just as other logical JSON carriers do. Protocol kind, namespace,
 normalized server event ACK identity, event name, argument order/count and binary

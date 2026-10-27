@@ -49,6 +49,7 @@ fn result(api: &str, passed: bool) -> crate::E2eApiRunResult {
             dependencies: crate::E2eDependencyGate::Clean,
         },
         diagnosis: crate::E2eDiagnosis {
+            replay_finalized: None,
             egress_rejections: None,
             counts: crate::E2eDiagnosisCounts {
                 selected: 1,

@@ -15,9 +15,7 @@ impl RedisReplayState {
                 || !exchange.record.parse_warnings.is_empty()
                 || exchange.record.cache_snapshot_rule.is_some()
                 || exchange.record.cache_snapshot_hit
-                || self
-                    .connection_scopes
-                    .is_stateful(exchange.record.connection_id)
+                || self.connection_scopes.is_stateful(exchange)
             {
                 continue;
             }

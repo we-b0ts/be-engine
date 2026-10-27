@@ -89,6 +89,8 @@ impl RedisReplayState {
                 e.observation_rule = Some(profile.rule.clone());
                 self.activity_refresh
                     .owned
+                    .entry(case.into())
+                    .or_default()
                     .insert((e.record.connection_id, e.record.sequence));
             }
             self.activity_refresh.profiles.push(profile);
@@ -128,6 +130,9 @@ fn prepare(
         if !super::super::key_access::touches(&e.record.command, &e.args, &profile.key) {
             continue;
         }
+        if super::super::case_scope::is_other_ordinary_exchange(case, e) {
+            continue;
+        }
         ensure!(
             e.source == ReplaySource::Case
                 && e.case_id.as_deref() == Some(case)
@@ -141,7 +146,7 @@ fn prepare(
                 && e.record.resp_version == profile.resp_version
                 && normalize_optional(e.record.username.as_deref())
                     == normalize_optional(profile.username.as_deref())
-                && !state.connection_scopes.is_stateful(e.record.connection_id),
+                && !state.connection_scopes.is_stateful(e),
             "activity refresh requires isolated successful Case inventory without foreign writers, expiry observers or stateful lanes"
         );
         timeline.push((index, e));

@@ -28,7 +28,10 @@ SETs need a preceding GET, the same TTL/options and object fields; only the
 explicit timestamp leaves may vary, using recognized global JSON time formats
 inside the existing fixed five-second request window. Missing fields, business
 changes, implicit expiration, scripts/unknown commands, TTL observers, stateful
-connections, foreign/shared ownership or ambiguous causal clocks reject proof.
+connections, Case-local conflicting ownership, Global/shared inventory or
+ambiguous causal clocks reject proof. Another ordinary Case's access to the
+same key cannot provide a witness or invalidate this Case's proof, including
+when its records are loaded later.
 Source lifetime duration, including deletion, must remain below the positive TTL.
 
 At runtime creation and deletion retain their ordinary finite matching. Within

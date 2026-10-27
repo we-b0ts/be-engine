@@ -47,12 +47,15 @@ impl ReadCommutation {
         &self,
         record: &RecordedExchange,
         args: &[Vec<u8>],
+        source: ReplaySource,
+        case_id: Option<&str>,
     ) -> Result<()> {
         ensure!(
             !self.profiles.iter().any(|p| {
                 record.database == p.database
                     && target_matches(&p.target, &record.target_host, record.target_port)
                     && super::key_access::touches(&record.command, args, &p.key)
+                    && !super::case_scope::is_other_ordinary_case(&p.case, source, case_id, record)
             }),
             "cannot add overlapping inventory after read commutation Source preparation"
         );
