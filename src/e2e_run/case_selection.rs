@@ -84,10 +84,11 @@ pub(super) fn prepare(
             continue;
         }
         let previous: ActiveRunState = store::read_yaml(&path)?;
-        let Some(previous_selection) = &previous.case_selection else {
-            continue;
-        };
-        if previous_selection.workflow_id != iteration.workflow_id
+        if previous
+            .case_selection
+            .as_ref()
+            .is_some_and(|selection| selection.workflow_id != iteration.workflow_id)
+            || !previous.status.is_terminal()
             || previous.run_key != layout.run_key
             || previous.case_source != inventory.case_source
             || previous.source_revision != inventory.source_revision
@@ -95,22 +96,24 @@ pub(super) fn prepare(
         {
             continue;
         }
-        let mut passed = previous_selection.skipped_passed_case_ids.clone();
-        if previous.replay_finalized {
-            passed.extend(
-                previous
-                    .cases
-                    .iter()
-                    .filter(|case| {
-                        case.group_id == group.group_id
-                            && case.status == CaseStatus::Passed
-                            && case.assertion_passed == Some(true)
-                            && case.replay_clean == Some(true)
-                            && case.execution_failure.is_none()
-                    })
-                    .map(|case| case.case_id.clone()),
-            );
-        }
+        let mut passed = previous
+            .case_selection
+            .as_ref()
+            .map(|selection| selection.skipped_passed_case_ids.clone())
+            .unwrap_or_default();
+        passed.extend(
+            previous
+                .cases
+                .iter()
+                .filter(|case| {
+                    case.group_id == group.group_id
+                        && case.status == CaseStatus::Passed
+                        && case.assertion_passed == Some(true)
+                        && case.replay_clean == Some(true)
+                        && case.execution_failure.is_none()
+                })
+                .map(|case| case.case_id.clone()),
+        );
         // An explicit rerun of an already passing API still produces real evidence.
         if group
             .cases

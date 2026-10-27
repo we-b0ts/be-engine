@@ -1909,8 +1909,14 @@ their cases internally. The first attempt runs every case. Later attempts retain
 failed, incomplete and unexecuted cases, including cases left by the per-API
 failure limit, and accumulate passed-case skips within the same workflow and
 unchanged Source/API inventory. Final revalidation and standalone `run`/`run-api`
-always execute the full selected API inventory. Missing or legacy selection state
-starts a new full baseline. The setting defaults to false and can be changed
+always execute the full selected API inventory. Only the latest attempt is read:
+if it ran two cases and one passed cleanly, the next repair selects only the
+remaining case. Cases already omitted by that latest selection stay omitted.
+Independently completed clean cases remain eligible even when later session
+cleanup fails. A latest full result without selection metadata
+can supply those outcomes when its complete Source/API inventory matches.
+There is no scan, restoration or separate ledger for older attempts. Missing
+latest evidence starts a full baseline. The setting defaults to false and can be changed
 between attempts without changing target fingerprints.
 
 Skipped passes are scheduling history, never fresh response or dependency

@@ -2,6 +2,8 @@ use super::*;
 use crate::e2e_run::{focused_batch, model::RunStatus, test_session};
 use std::path::Path;
 
+mod last_result;
+
 fn fixture(root: &Path) -> (RunLayout, CaseGroupInventory, ReplayIteration) {
     let (layout, mut inventory, _) = test_session::session(root);
     std::fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
@@ -177,20 +179,11 @@ fn final_round_disabled_setting_new_workflow_and_changed_inventory_run_every_cas
 }
 
 #[test]
-fn unfinalized_response_only_and_legacy_passes_are_not_skipped() {
+fn dirty_cases_are_retried_even_when_their_primary_responses_passed() {
     let root = tempfile::tempdir().unwrap();
     let (layout, inventory, iteration) = fixture(root.path());
     let mut first = attempt(&layout, &mut inventory.clone(), &iteration);
     pass(&mut first, "-0");
-    first.replay_finalized = false;
-    save(&layout, &first);
-    assert_eq!(
-        attempt(&layout, &mut inventory.clone(), &iteration)
-            .cases
-            .len(),
-        10
-    );
-    first.replay_finalized = true;
     for case in &mut first.cases {
         case.replay_clean = Some(false);
     }
