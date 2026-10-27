@@ -10,6 +10,7 @@ fn stateful(rule: &CompiledNativeRule) -> bool {
         | NativeEffect::RedisReadCommutation(_)
         | NativeEffect::RedisReadObservation
         | NativeEffect::RedisExpiryRefresh(_)
+        | NativeEffect::RedisActivityRefresh(_)
         | NativeEffect::HttpRequest(_)
         | NativeEffect::InputJwt(_)
         | NativeEffect::InputSignedTimestamp(_) => true,

@@ -238,6 +238,20 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
                 false,
             );
         }
+        NativeEffect::RedisActivityRefresh(_) => {
+            add(
+                S::DependencyRequest,
+                L::RedisArgument(1),
+                OwnedLocation::Scalar,
+                false,
+            );
+            add(
+                S::DependencyResponse,
+                L::Value,
+                OwnedLocation::Scalar,
+                false,
+            );
+        }
         NativeEffect::RedisReadCommutation(_)
         | NativeEffect::RedisReadObservation
         | NativeEffect::RedisExpiryRefresh(_) => {

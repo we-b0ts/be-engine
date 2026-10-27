@@ -8,6 +8,7 @@ mod absence;
 #[cfg(test)]
 mod recorded_tests;
 mod source;
+pub(super) use source::validate_causal_order;
 #[cfg(test)]
 pub(super) mod tests;
 

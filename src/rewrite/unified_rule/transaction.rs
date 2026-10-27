@@ -7,6 +7,8 @@ use crate::rewrite::{
     recover_rewrite_rule_plan,
 };
 
+#[path = "transaction_activity_refresh.rs"]
+mod activity_refresh_transaction;
 #[path = "transaction_api_time.rs"]
 mod api_time_transaction;
 #[path = "transaction_append.rs"]

@@ -7,6 +7,7 @@ use serde::Serialize;
 use super::native::*;
 use super::{Proof, Protocol, SourceCondition, TimestampFormat, compiler};
 
+mod activity_refresh;
 mod http_request;
 pub(crate) mod ownership;
 mod read_back;
@@ -123,6 +124,7 @@ impl NativeEffect {
             Self::RedisReadCommutation(_) => "finite_read_commutation",
             Self::RedisReadObservation => "key_lifetime_absent_read",
             Self::RedisExpiryRefresh(_) => "key_lifetime_expiry_refresh",
+            Self::RedisActivityRefresh(_) => "key_lifetime_activity_refresh",
             Self::ResponseJwt(_) => "signed_response",
             Self::ResponseHeaderDate(_) => "header_calendar_date",
             Self::ResponseGenerated(_) => "generated_response",
@@ -247,6 +249,7 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
     match &rule.effect {
         NativeEffect::Identity(effect) => validate_identity(rule, effect),
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
+        NativeEffect::RedisActivityRefresh(effect) => activity_refresh::validate(rule, effect),
         NativeEffect::RedisReadCommutation(_)
         | NativeEffect::RedisReadObservation
         | NativeEffect::RedisExpiryRefresh(_) => {

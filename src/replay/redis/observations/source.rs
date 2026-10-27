@@ -330,7 +330,9 @@ pub(super) fn prepare(
     Ok(Some(profile))
 }
 
-pub(super) fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Result<()> {
+pub(in crate::replay::redis) fn validate_causal_order(
+    timeline: &[(usize, &ReplayExchange)],
+) -> Result<()> {
     let mut lanes = BTreeMap::new();
     let mut previous: Option<&ReplayExchange> = None;
     for (_, exchange) in timeline {

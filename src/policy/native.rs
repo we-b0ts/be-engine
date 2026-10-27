@@ -172,6 +172,7 @@ pub enum NativeEffect {
     RedisReadCommutation(RedisReadCommutationEffect),
     RedisReadObservation,
     RedisExpiryRefresh(RedisExpiryRefreshEffect),
+    RedisActivityRefresh(RedisActivityRefreshEffect),
     ResponseJwt(ResponseJwtEffect),
     ResponseHeaderDate(HeaderDateEffect),
     ResponseGenerated(GeneratedEffect),

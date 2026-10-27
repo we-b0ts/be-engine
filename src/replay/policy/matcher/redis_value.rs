@@ -15,6 +15,7 @@ impl ReplayPolicyRuntime {
                         | crate::policy::NativeEffect::RedisReadCommutation(_)
                         | crate::policy::NativeEffect::RedisReadObservation
                         | crate::policy::NativeEffect::RedisExpiryRefresh(_)
+                        | crate::policy::NativeEffect::RedisActivityRefresh(_)
                 )
             })
             .map(|r| {
@@ -23,6 +24,9 @@ impl ReplayPolicyRuntime {
                     id: r.rule.id.clone(),
                     protocol: super::super::config::DependencyProtocol::Redis,
                     kind: Some(match r.rule.effect {
+                        crate::policy::NativeEffect::RedisActivityRefresh(_) => {
+                            "redis_activity_refresh"
+                        }
                         crate::policy::NativeEffect::RedisReadCommutation(_) => {
                             "redis_read_commutation"
                         }

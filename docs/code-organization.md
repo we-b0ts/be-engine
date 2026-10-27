@@ -372,6 +372,12 @@ is unclear.
   foreign mutations and Global/shared inventory remain ownership fences.
   Mutation matching, APPEND bytes and transport completion remain with their
   existing owners.
+  `redis/activity` owns independently declared JSON metadata refresh lifetimes.
+  Its `source` child proves complete isolated read/SET histories and TTL bounds;
+  `value` reuses global timestamp formats and the shared time kernel while
+  retaining exact unselected fields. `runtime` renders current Target state and
+  `lifecycle` retains finite creation/deletion, actual delivery and bounded audits.
+  It does not grant APPEND or content/list consumption permission.
 
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into

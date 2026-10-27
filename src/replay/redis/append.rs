@@ -441,6 +441,7 @@ impl RedisReplayState {
         }
         let exchange = &self.exchanges[index];
         Ok(Some(MatchedRedisExchange {
+            refresh: None,
             observation: None,
             append: Some(PreparedAppend {
                 profile: profile_index,

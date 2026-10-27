@@ -272,6 +272,7 @@ impl RequestContracts {
                 rule.rule.effect,
                 crate::policy::NativeEffect::RedisAppendStream
                     | crate::policy::NativeEffect::RedisExpiryRefresh(_)
+                    | crate::policy::NativeEffect::RedisActivityRefresh(_)
                     | crate::policy::NativeEffect::RedisReadCommutation(_)
                     | crate::policy::NativeEffect::RedisReadObservation
                     | crate::policy::NativeEffect::RedisSequence(_)

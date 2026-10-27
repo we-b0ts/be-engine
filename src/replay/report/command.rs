@@ -101,6 +101,9 @@ pub(crate) struct CommandSnapshotOverlayReport {
 #[derive(Debug, Clone, Default, Serialize)]
 pub(in crate::replay) struct CommandProtocolReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) activity_refreshes: Vec<crate::replay::redis::activity::ActivityAudit>,
+    pub(in crate::replay) activity_refreshes_omitted: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) state_observations:
         Vec<crate::replay::redis::observations::ObservationAudit>,
     pub(in crate::replay) state_observations_omitted: usize,
