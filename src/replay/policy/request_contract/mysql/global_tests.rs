@@ -37,7 +37,9 @@ fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire(
         )
         .unwrap();
     owner.commit_identity(mapped).unwrap();
-    let payload = json!({"created_at":1577836805_i64,"item_id":A,"stable":7}).to_string();
+    let payload = format!(
+        r#"{{ "stable":7,"mcpServers":{{"zeta":{{"url":"z"}},"alpha":{{"baseUrl":"a"}}}}, "item_id":"{A}","created_at":1577836805 }}"#
+    );
     let event = json!({"event_type":"mysql_exchange","command":"COM_QUERY","database":"app","target_host":"db.test","target_port":3306,
         "sql":"SELECT id,payload,created_at FROM tasks","timestamp":"2020-01-01T00:00:00Z","duration_ms":0,
         "response":{"status":"resultset","columns":[
@@ -95,6 +97,15 @@ fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire(
     .unwrap();
     assert_eq!(rendered["item_id"], X);
     assert_eq!(rendered["created_at"], 1767225605_i64);
+    assert_eq!(
+        delivered.rows[0][1]
+            .value
+            .as_ref()
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        payload.replace(A, X).replace("1577836805", "1767225605")
+    );
     assert_eq!(
         delivered.rows[0][2].value.as_ref().unwrap(),
         &json!("2026-01-01 00:00:05")

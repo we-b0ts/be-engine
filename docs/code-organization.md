@@ -1225,6 +1225,10 @@ explicit repository-wide audit.
 - `json_value` owns bounded strict JSON decoding with duplicate-member
   rejection. Replay JSON normalization and signed-token validation share it;
   selector expansion and collection normalization stay in Replay.
+  Its `render` child replaces derived scalar tokens in the original JSON byte
+  carrier, preserving member order and all unchanged lexical data. Shared JSON
+  codecs and MySQL JSON-cell delivery reuse it; policy authorization remains
+  with their existing logical contract owners.
   Original semantic record readers may supply their envelope budget explicitly;
   ordinary value decoding retains its 1 MiB bound. `dependency/http_limits` owns
   the 64 MiB raw-body and derived HTTP witness/record byte budgets, shared by

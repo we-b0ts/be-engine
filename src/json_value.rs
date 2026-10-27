@@ -1,5 +1,6 @@
 //! Strict JSON decoding: duplicate object members must not be silently discarded.
 mod numbers;
+pub(crate) mod render;
 use serde::{
     Deserialize, Deserializer,
     de::{self, MapAccess, SeqAccess, Visitor},

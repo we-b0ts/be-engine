@@ -348,6 +348,7 @@ fn json_uses_duplicate_rejecting_decode_and_the_same_authorized_delivery_api() {
     let mut edited = decoded.logical.clone();
     edited["time"] = json!(2);
     let output = decoded.encode(&edited, &["/time".into()]).unwrap();
+    assert_eq!(output, br#"{ "time": 2, "stable": 7 }"#);
     assert_eq!(
         serde_json::from_slice::<Value>(&output).unwrap(),
         json!({"time":2,"stable":7})

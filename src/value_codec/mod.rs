@@ -98,7 +98,7 @@ impl DecodedValue {
         }
         let output = match &self.protobuf {
             Some(document) => document.encode(logical),
-            None => Ok(serde_json::to_vec(logical)?),
+            None => crate::json_value::render::derived(&self.original, logical),
         }?;
         ensure!(
             output.len() <= 1024 * 1024,

@@ -20,7 +20,9 @@ pub(in crate::replay::mysql::contracts) fn write_value(
         }
         output.value = Some(logical);
     } else {
-        let bytes = serde_json::to_vec(&logical)?;
+        let original_bytes = super::super::value_bytes(original)?
+            .context("MySQL JSON delivery lost its original bytes")?;
+        let bytes = crate::json_value::render::derived(&original_bytes, &logical)?;
         if output.raw.is_some() {
             output.raw = Some(ReplayBodyCapture {
                 truncated: false,

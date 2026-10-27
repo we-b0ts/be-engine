@@ -160,7 +160,9 @@ fn global_read_delivery_preserves_opaque_values_nil_and_array_order() {
     let raw = array(&[
         bulk("opaque"),
         b"$-1\r\n".to_vec(),
-        bulk(r#"{"at":1010,"stable":true}"#),
+        bulk(
+            r#"{ "mcpServers":{"zeta":{"url":"z"},"alpha":{"baseUrl":"a"}}, "at":1010,"stable":true }"#,
+        ),
     ]);
     let keys = args(&["first", "missing", "third"]);
     let delivery = runtime
@@ -190,7 +192,11 @@ fn global_read_delivery_preserves_opaque_values_nil_and_array_order() {
     assert!(values[1].payload.is_none());
     assert_eq!(
         crate::json_value::parse(values[2].payload.unwrap()).unwrap(),
-        json!({"at":2010,"stable":true})
+        json!({"mcpServers":{"zeta":{"url":"z"},"alpha":{"baseUrl":"a"}},"at":2010,"stable":true})
+    );
+    assert_eq!(
+        values[2].payload.unwrap(),
+        br#"{ "mcpServers":{"zeta":{"url":"z"},"alpha":{"baseUrl":"a"}}, "at":2010,"stable":true }"#
     );
 }
 
