@@ -282,7 +282,7 @@ fn an_initial_existing_key_can_be_deleted_before_an_owned_new_lifetime() {
 }
 
 #[test]
-fn pooled_initial_read_must_deliver_before_deletion_and_recreation() {
+fn pooled_initial_read_must_be_claimed_before_deletion_and_recreation() {
     let mut own = [
         event(1, "GET", &[b"content:1"], b"$3\r\nold\r\n"),
         event(2, "DEL", &[b"content:1"], b":1\r\n"),
@@ -297,9 +297,14 @@ fn pooled_initial_read_must_deliver_before_deletion_and_recreation() {
     assert!(request(&mut state, "SET", &[b"content:1", b"new"]).is_err());
     let read = request(&mut state, "GET", &[b"content:1"]).unwrap();
     assert_eq!(read.response, b"$3\r\nold\r\n");
-    assert!(request(&mut state, "DEL", &[b"content:1"]).is_err());
+    let deletion = request(&mut state, "DEL", &[b"content:1"]).unwrap();
+    assert_eq!(
+        state.exchanges[read.index].status,
+        ReplayExchangeStatus::Responding
+    );
+    state.complete_exchange(&deletion);
+    assert!(state.has_case_in_flight());
     state.complete_exchange(&read);
-    perform(&mut state, "DEL", &[b"content:1"]);
     perform(&mut state, "SET", &[b"content:1", b"new"]);
     perform(&mut state, "EXPIRE", &[b"content:1", b"60"]);
     assert!(state.snapshot().unused_case.is_empty());
@@ -338,12 +343,15 @@ fn pooled_initial_list_update_and_reads_keep_their_finite_order() {
     );
     assert!(request(&mut state, "LRANGE", &[b"content:1", b"0", b"-1"]).is_err());
     let update = request(&mut state, "LSET", &[b"content:1", b"0", b"new"]).unwrap();
-    assert!(request(&mut state, "LRANGE", &[b"content:1", b"0", b"-1"]).is_err());
-    state.complete_exchange(&update);
+    let read = request(&mut state, "LRANGE", &[b"content:1", b"0", b"-1"]).unwrap();
+    assert_eq!(read.response, b"*1\r\n$3\r\nnew\r\n");
     assert_eq!(
-        perform(&mut state, "LRANGE", &[b"content:1", b"0", b"-1"]),
-        b"*1\r\n$3\r\nnew\r\n"
+        state.exchanges[update.index].status,
+        ReplayExchangeStatus::Responding
     );
+    state.complete_exchange(&read);
+    assert!(state.has_case_in_flight());
+    state.complete_exchange(&update);
     perform(&mut state, "EXPIRE", &[b"content:1", b"60"]);
     assert!(state.snapshot().unused_case.is_empty());
 }

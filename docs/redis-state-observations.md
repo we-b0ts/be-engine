@@ -66,7 +66,12 @@ remain independent.
 All selected Source EXPIREs must return integer 1. A successful ordinary Case
 SET, APPEND or list creation can establish the key; an initial successful EXPIRE
 can instead prove that the key already existed, without knowing its value or
-creator. Earlier Case-local accesses retain finite delivery requirements.
+creator. Earlier Case-local accesses retain finite delivery requirements. Their
+request order uses the ordinary Redis admission rule: a claimed Case request
+in `Responding` satisfies order even while response completion is being recorded.
+Pooled reads and writes may therefore proceed without racing that bookkeeping.
+Unclaimed, failed and client-termination requests still block later accesses;
+final consumption and initial refresh eligibility still require delivery.
 The TTL and complete arguments stay exact. A Target cannot cross an unmatched
 creation or refresh after a proven DEL, change seconds, add NX/XX options or
 borrow a refresh from a future lifetime. Initial existing-key refreshes retain

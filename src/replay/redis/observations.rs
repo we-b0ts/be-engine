@@ -2,6 +2,7 @@
 //! Reads/refreshes may repeat or coalesce inside a lifetime; mutations stay finite.
 use super::*;
 use crate::policy::{Database, NativeEffect, Protocol};
+use crate::replay::command_matching::CommandExchangeScope;
 use crate::replay::report::command::CommandMatchDiagnostic;
 use sha2::{Digest, Sha256};
 mod absence;
@@ -512,15 +513,16 @@ impl RedisReplayState {
         index: usize,
     ) -> std::result::Result<(), CommandMatchDiagnostic> {
         for profile in &self.observations.profiles {
+            // Pooled request order follows claims; delivery completion is tracked separately.
             if let Some(position) = profile.initial_accesses.iter().position(|&i| i == index)
                 && profile.initial_accesses[..position]
                     .iter()
-                    .any(|&i| !self.exchanges[i].status.is_consumed())
+                    .any(|&i| !self.exchanges[i].satisfies_lane_order())
             {
                 return Err(self.observation_mismatch(
                     profile,
                     &profile.epochs[0],
-                    "finite initial existing-key accesses must complete in Source order",
+                    "finite initial existing-key accesses must be claimed in Source order",
                 ));
             }
             let Some(position) = profile
