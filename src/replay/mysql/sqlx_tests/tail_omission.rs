@@ -95,6 +95,12 @@ async fn missing_business_read_stays_dirty_and_is_the_only_pending_reference() {
     let state = runtime.state.lock().await;
     let failures = state.dependency_tails.failures();
     assert_eq!(failures[0]["kind"], "case_no_progress");
+    assert!(
+        failures[0]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("recorded dependencies remain unconsumed (pending: 1)")
+    );
     let waiting = &failures[0]["waiting"];
     assert_eq!(waiting["pending_source_dependencies"], 1);
     assert_eq!(waiting["references"][0]["reference"]["sequence"], 5);

@@ -221,6 +221,7 @@ fn redis_rule(rule: &PolicyRule) -> bool {
                 | crate::policy::NativeEffect::RedisReadCommutation(_)
                 | crate::policy::NativeEffect::RedisReadObservation
                 | crate::policy::NativeEffect::RedisExpiryRefresh(_)
+                | crate::policy::NativeEffect::RedisActivityRefresh(_)
         )
         || matches!(&rule.effect, crate::policy::NativeEffect::ProcessOwned(effect)
             if matches!(effect.selector, crate::policy::native::ProcessSelector::Redis { .. }))

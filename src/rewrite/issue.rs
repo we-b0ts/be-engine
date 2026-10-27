@@ -2,6 +2,7 @@ use crate::{
     E2eApiRunResult, E2eDependencyGate, E2eReplayGate, E2eResponseGate, ResponseDifferenceKind,
 };
 
+use super::evidence::execution;
 use super::fingerprint;
 use super::model::{RewriteIssue, RewriteIssueKind, RewriteIssueOwner};
 
@@ -12,24 +13,51 @@ pub(super) fn from_e2e(
 ) -> RewriteIssue {
     let (kind, owner, summary, pointer, possible_causes) = match result.gates.responses {
         _ if result.gates.replay == E2eReplayGate::Incomplete
-            && result.diagnosis.counts.executed > 0 => (
-            RewriteIssueKind::Replay,
-            RewriteIssueOwner::TrafficE2eSystem,
-            format!("Replay did not finalize after {} of {} cases executed; repair the runtime before planning from this incomplete attempt",result.diagnosis.counts.executed,result.diagnosis.counts.selected),
-            None,
-            vec!["replay_lifecycle_or_control_failure".into(),"incomplete_replay_publication".into()],
-        ),
+            && result.diagnosis.counts.executed > 0
+            && result.diagnosis.replay_finalized != Some(true) =>
+        {
+            (
+                RewriteIssueKind::Replay,
+                RewriteIssueOwner::TrafficE2eSystem,
+                format!(
+                    "Replay evidence is incomplete after {} of {} cases executed; inspect lifecycle and coverage diagnostics before planning from this incomplete attempt",
+                    result.diagnosis.counts.executed, result.diagnosis.counts.selected
+                ),
+                None,
+                vec![
+                    "replay_lifecycle_or_control_failure".into(),
+                    "incomplete_replay_publication".into(),
+                ],
+            )
+        }
         _ if !result.diagnosis.execution_failures.is_empty() => (
             RewriteIssueKind::Dependency,
             RewriteIssueOwner::SourceInvestigation,
-            "Replay interrupted requests because dependencies did not match; inspect execution_failures before downstream response differences".to_string(),
+            if execution::has_unconsumed_dependencies(&result.diagnosis.execution_failures) {
+                "Recorded Case dependencies remain unconsumed; inspect execution_failures and implement or correct the corresponding Target dependency calls before evaluating response differences".into()
+            } else {
+                "Replay interrupted requests because dependencies did not match; inspect execution_failures before downstream response differences".into()
+            },
             None,
-            vec![
-                "dependency_unmatched".to_string(),
-                "request_owned_target_call_mismatch".to_string(),
-                "source_proven_value_contract_missing".to_string(),
-                "replay_capability_gap".to_string(),
-            ],
+            if execution::has_unconsumed_dependencies(&result.diagnosis.execution_failures) {
+                let mut causes = vec![
+                    "recorded_dependency_unconsumed".into(),
+                    "target_dependency_call_missing_or_divergent".into(),
+                    "target_async_continuation_incomplete".into(),
+                    "replay_capability_gap".into(),
+                ];
+                if execution::has_rejected_dependencies(&result.diagnosis.execution_failures) {
+                    causes.push("dependency_unmatched".into());
+                }
+                causes
+            } else {
+                vec![
+                    "dependency_unmatched".to_string(),
+                    "request_owned_target_call_mismatch".to_string(),
+                    "source_proven_value_contract_missing".to_string(),
+                    "replay_capability_gap".to_string(),
+                ]
+            },
         ),
         E2eResponseGate::Nonpassing => {
             let representative = result.diagnosis.representative.as_ref();
@@ -120,7 +148,14 @@ pub(super) fn from_e2e(
         _ if result.gates.replay == E2eReplayGate::Incomplete => (
             RewriteIssueKind::Replay,
             RewriteIssueOwner::TrafficE2eSystem,
-            "Replay evidence is incomplete".to_string(),
+            if result.diagnosis.replay_finalized == Some(true) {
+                format!(
+                    "Replay finalized, but evidence is incomplete after {} of {} selected cases executed",
+                    result.diagnosis.counts.executed, result.diagnosis.counts.selected
+                )
+            } else {
+                "Replay evidence is incomplete".to_string()
+            },
             None,
             vec!["replay_lifecycle_or_capability_gap".to_string()],
         ),
@@ -340,6 +375,117 @@ mod tests {
             let issue = from_e2e("GET /api", &result, "target".into());
             assert_eq!(issue.owner, expected);
         }
+    }
+
+    fn partial_run_result() -> E2eApiRunResult {
+        serde_json::from_value(serde_json::json!({
+            "run_key":"run","api":"POST /api/callback","attempt":1,"status":"failed","passed":false,"progress":"progress.yaml",
+            "gates":{"responses":"nonpassing","replay":"incomplete","dependencies":"unknown"},
+            "diagnosis":{
+                "replay_finalized":true,
+                "counts":{"selected":200,"executed":40,"response_passed":0,"response_nonpassing":40,"response_incomplete":160},
+                "execution_failures":[{"case_id":"interrupted","kind":"dependency_unmatched","request_completed":false}],
+                "response_differences":{"total_differences":0,"indexed_differences":0,"omitted_differences":0,"failure_clusters":[],"omitted_failure_clusters":0},
+                "lifecycle_errors":["API \"POST /api/callback\" stopped after reaching the configured failure limit of 40 case(s)"]
+            }
+        })).unwrap()
+    }
+
+    #[test]
+    fn finalized_failure_limited_replay_keeps_the_dependency_cause() {
+        let result = partial_run_result();
+        let issue = from_e2e("POST /api/callback", &result, "target".into());
+        assert_eq!(issue.kind, RewriteIssueKind::Dependency);
+        assert_eq!(issue.owner, RewriteIssueOwner::SourceInvestigation);
+        assert!(issue.summary.contains("dependencies did not match"));
+        assert!(
+            !issue
+                .possible_causes
+                .iter()
+                .any(|cause| cause.contains("lifecycle"))
+        );
+        assert_eq!(result.gates.replay, E2eReplayGate::Incomplete);
+        assert!(!result.passed);
+    }
+
+    #[test]
+    fn unconsumed_dependencies_point_to_target_calls_and_keep_existing_gates_and_owner() {
+        let mut result = partial_run_result();
+        result.diagnosis.execution_failures = vec![serde_json::json!({
+            "kind":"case_no_progress","case_id":"unconsumed","request_completed":false,
+            "failures":[{"kind":"case_no_progress","waiting":{
+                "no_progress_timeout_ms":5000,"pending_source_dependencies":7}}]
+        })];
+        let issue = from_e2e("POST /api/callback", &result, "target".into());
+        assert_eq!(issue.kind, RewriteIssueKind::Dependency);
+        assert_eq!(issue.owner, RewriteIssueOwner::SourceInvestigation);
+        assert!(
+            issue
+                .summary
+                .starts_with("Recorded Case dependencies remain unconsumed")
+        );
+        assert!(
+            issue
+                .summary
+                .contains("corresponding Target dependency calls")
+        );
+        assert!(!issue.summary.contains("did not match"));
+        assert!(
+            issue
+                .possible_causes
+                .iter()
+                .any(|cause| cause == "recorded_dependency_unconsumed")
+        );
+        assert!(
+            !issue
+                .possible_causes
+                .iter()
+                .any(|cause| cause == "dependency_unmatched")
+        );
+        assert_eq!(result.gates.replay, E2eReplayGate::Incomplete);
+        assert_eq!(result.gates.dependencies, E2eDependencyGate::Unknown);
+        assert!(!result.passed);
+        result
+            .diagnosis
+            .execution_failures
+            .push(serde_json::json!({"kind":"dependency_unmatched"}));
+        let mixed = from_e2e("POST /api/callback", &result, "target".into());
+        assert!(
+            mixed
+                .possible_causes
+                .iter()
+                .any(|cause| cause == "dependency_unmatched")
+        );
+    }
+
+    #[test]
+    fn unfinalized_and_legacy_partial_replay_keep_the_system_owner() {
+        for finalized in [Some(false), None] {
+            let mut result = partial_run_result();
+            result.diagnosis.replay_finalized = finalized;
+            let issue = from_e2e("POST /api/callback", &result, "target".into());
+            assert_eq!(issue.kind, RewriteIssueKind::Replay);
+            assert_eq!(issue.owner, RewriteIssueOwner::TrafficE2eSystem);
+            assert!(issue.summary.contains("40 of 200"));
+        }
+    }
+
+    #[test]
+    fn finalized_partial_coverage_does_not_claim_finalization_failed() {
+        let mut result = partial_run_result();
+        result.diagnosis.execution_failures.clear();
+        result.gates.responses = E2eResponseGate::Incomplete;
+        let issue = from_e2e("POST /api/callback", &result, "target".into());
+        assert_eq!(issue.kind, RewriteIssueKind::Replay);
+        assert!(issue.summary.contains("Replay finalized"));
+        assert!(issue.summary.contains("40 of 200"));
+        assert!(!issue.summary.contains("did not finalize"));
+
+        result.gates.responses = E2eResponseGate::Nonpassing;
+        assert_eq!(
+            from_e2e("POST /api/callback", &result, "target".into()).kind,
+            RewriteIssueKind::Response
+        );
     }
 
     #[test]

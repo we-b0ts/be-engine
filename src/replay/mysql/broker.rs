@@ -1,6 +1,20 @@
 use super::*;
 
 pub(in crate::replay) async fn handle_connection(
+    tcp_stream: TcpStream,
+    peer_addr: SocketAddr,
+    target: Option<TargetKey>,
+    state: Arc<Mutex<ReplayState>>,
+    ca: Arc<MitmCa>,
+) -> Result<()> {
+    super::wire_diagnostics::connection(
+        peer_addr,
+        handle_connection_inner(tcp_stream, peer_addr, target, state, ca),
+    )
+    .await
+}
+
+async fn handle_connection_inner(
     mut tcp_stream: TcpStream,
     peer_addr: SocketAddr,
     target: Option<TargetKey>,
@@ -43,6 +57,7 @@ pub(in crate::replay) async fn handle_connection(
             login.username.clone(),
         );
     }
+    super::wire_diagnostics::response_kind("login_ok", Some(SERVER_STATUS_AUTOCOMMIT));
     write_packet_and_flush(
         &mut stream,
         MysqlPacket {
@@ -66,12 +81,14 @@ pub(in crate::replay) async fn handle_connection(
     };
     loop {
         let Some(packet) = read_packet(&mut stream).await? else {
+            super::wire_diagnostics::client_eof();
             break;
         };
         session.request_started = tokio::time::Instant::now();
         let Some(command) = parse_client_command(&packet) else {
             continue;
         };
+        super::wire_diagnostics::request(&packet, &command.command_name);
         let stopping = {
             let state = state.lock().await;
             state.target_session_stopped
@@ -121,6 +138,7 @@ pub(in crate::replay) async fn handle_connection(
                 if command.command_name == "COM_INIT_DB" {
                     session.database = command.query.clone();
                 }
+                super::wire_diagnostics::response_kind("control_ok", Some(session.status_flags));
                 write_packet_and_flush(
                     &mut stream,
                     MysqlPacket {

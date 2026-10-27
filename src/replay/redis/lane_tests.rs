@@ -116,7 +116,9 @@ fn finite_process_get_unblocks_case_lane_and_keeps_consumption_and_session_bound
         if stateful {
             let mut setup = state.exchanges[0].record.clone();
             setup.session_setup = true;
-            state.connection_scopes.register(&setup, &[]);
+            state
+                .connection_scopes
+                .register(&setup, &[], ReplaySource::Case, Some("case"));
         }
         state.apply_finite_process_order(std::slice::from_ref(&rule));
         if stateful {

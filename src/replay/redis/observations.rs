@@ -2,12 +2,15 @@
 //! Reads/refreshes may repeat or coalesce inside a lifetime; mutations stay finite.
 use super::*;
 use crate::policy::{Database, NativeEffect, Protocol};
+use crate::replay::command_matching::CommandExchangeScope;
 use crate::replay::report::command::CommandMatchDiagnostic;
 use sha2::{Digest, Sha256};
 mod absence;
+mod closed_expiry;
 #[cfg(test)]
 mod recorded_tests;
 mod source;
+pub(super) use source::validate_causal_order;
 #[cfg(test)]
 pub(super) mod tests;
 
@@ -29,24 +32,6 @@ impl Kind {
     }
 }
 
-fn finite_other_case_get(
-    owner: &str,
-    source: ReplaySource,
-    case: Option<&str>,
-    record: &RecordedExchange,
-    args: &[Vec<u8>],
-) -> bool {
-    source == ReplaySource::Case
-        && case.is_some_and(|case| case != owner)
-        && record.command == "GET"
-        && args.len() == 1
-        && record.outcome == DependencyExchangeOutcome::Response
-        && !record.session_setup
-        && !record.cache_snapshot_hit
-        && record.cache_snapshot_rule.is_none()
-        && record.global_dependency_reason.is_none()
-}
-
 #[derive(Debug)]
 struct Epoch {
     mutation: Option<usize>,
@@ -64,10 +49,12 @@ struct Profile {
     resp_version: u8,
     key: Vec<u8>,
     finite_prefix: Vec<usize>,
+    initial_accesses: Vec<usize>,
     epochs: Vec<Epoch>,
     valid_for_seconds: Option<u64>,
     prepared_at: chrono::DateTime<chrono::Utc>,
     failed: bool,
+    closed_expiry: Vec<closed_expiry::Lifetime>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +77,8 @@ pub(in crate::replay) struct ObservationAudit {
     source_witness: super::super::report::command::CommandExchangeRefReport,
     source_epoch_mutation: Option<super::super::report::command::CommandExchangeRefReport>,
     covered_source_observations: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage: Option<closed_expiry::Coverage>,
 }
 
 #[derive(Debug, Default)]
@@ -100,6 +89,8 @@ pub(super) struct Observations {
     calls: BTreeMap<String, usize>,
     in_flight: BTreeMap<Uuid, usize>,
     mutations_at: BTreeMap<usize, chrono::DateTime<chrono::Utc>>,
+    initial_expiry_at: BTreeMap<usize, chrono::DateTime<chrono::Utc>>,
+    expiry_by_exchange: BTreeMap<usize, Vec<(usize, usize)>>,
     audits: Vec<ObservationAudit>,
     omitted: usize,
 }
@@ -154,10 +145,9 @@ impl Observations {
             !self.profiles.iter().any(|p| record.database == p.database
                 && target_matches(&p.target, &record.target_host, record.target_port)
                 && super::key_access::touches(&record.command, args, &p.key)
-                && !(p.kind.is_read()
-                    && !reusable_snapshot
-                    && finite_other_case_get(&p.case, source, case, record, args))),
-            "cannot add overlapping state-observation inventory after Source preparation"
+                && (reusable_snapshot
+                    || !super::case_scope::is_other_ordinary_case(&p.case, source, case, record))),
+            "cannot add Global or explicitly shared key inventory after Case state preparation"
         );
         Ok(())
     }
@@ -246,14 +236,28 @@ impl RedisReplayState {
                     profiles.len() < MAX_KEYS,
                     "state observations exceed Case key limit"
                 );
-                profiles.extend(source::prepare(self, case, &rule.id, kind, seed)?);
+                profiles.extend(
+                    source::prepare(self, case, &rule.id, kind, seed).with_context(|| {
+                        format!(
+                            "state observation rule={} key_fingerprint={} case={case}",
+                            rule.id,
+                            fingerprint(&seed.args[0]),
+                        )
+                    })?,
+                );
             }
         }
         ensure!(
             profiles
                 .iter()
-                .map(|p| p.finite_prefix.len()
-                    + p.epochs.iter().map(|e| e.observations.len()).sum::<usize>())
+                .map(|p| {
+                    let finite = if p.kind == Kind::Expiry {
+                        p.initial_accesses.len()
+                    } else {
+                        p.finite_prefix.len()
+                    };
+                    finite + p.epochs.iter().map(|e| e.observations.len()).sum::<usize>()
+                })
                 .sum::<usize>()
                 <= MAX_OBSERVATIONS,
             "state observations exceed Case Source observation limit"
@@ -270,6 +274,7 @@ impl RedisReplayState {
         // All Source proofs must succeed before any lane permission is installed.
         for profile in profiles {
             let owner = self.observations.profiles.len();
+            self.observations.index_closed_expiry(owner, &profile);
             for (epoch, entry) in profile.epochs.iter().enumerate() {
                 for &index in &entry.observations {
                     self.exchanges[index].observation_rule = Some(profile.rule.clone());
@@ -295,7 +300,7 @@ impl RedisReplayState {
         args: &[Vec<u8>],
     ) -> std::result::Result<Option<usize>, CommandMatchDiagnostic> {
         let mut selected = None;
-        for profile in &self.observations.profiles {
+        for (profile_index, profile) in self.observations.profiles.iter().enumerate() {
             if Some(profile.case.as_str()) != case
                 || profile.database != database
                 || profile.resp_version != resp_version
@@ -352,7 +357,21 @@ impl RedisReplayState {
             {
                 return Err(reject("absent-state deletion has not completed delivery"));
             }
-            if epoch.mutation.is_none() && !profile.finite_prefix.is_empty() {
+            if profile.kind == Kind::Expiry
+                && epoch.mutation.is_none()
+                && profile
+                    .finite_prefix
+                    .iter()
+                    .any(|&index| !self.exchanges[index].status.is_consumed())
+            {
+                return Err(reject(
+                    "finite Source accesses must finish before the initial existing-key refresh",
+                ));
+            }
+            if profile.kind != Kind::Expiry
+                && epoch.mutation.is_none()
+                && !profile.finite_prefix.is_empty()
+            {
                 let prefix = profile
                     .finite_prefix
                     .iter()
@@ -418,20 +437,32 @@ impl RedisReplayState {
             if profile.failed {
                 return Err(reject("an earlier observation delivery failed"));
             }
-            let established_at = epoch
-                .mutation
-                .and_then(|i| self.observations.mutations_at.get(&i))
-                .copied()
-                .unwrap_or(profile.prepared_at);
-            let expirable = epoch.mutation.is_some_and(|i| {
+            let established_at = match epoch.mutation {
+                Some(index) => Some(
+                    self.observations
+                        .mutations_at
+                        .get(&index)
+                        .copied()
+                        .unwrap_or(profile.prepared_at),
+                ),
+                None if profile.kind == Kind::Expiry => self
+                    .observations
+                    .initial_expiry_at
+                    .get(&profile_index)
+                    .copied(),
+                None => None,
+            };
+            let expirable = epoch.mutation.map_or(profile.kind == Kind::Expiry, |i| {
                 !matches!(self.exchanges[i].record.command.as_str(), "DEL" | "UNLINK")
             });
             if expirable
-                && !profile.valid_for_seconds.is_none_or(|seconds| {
-                    chrono::Utc::now()
-                        .signed_duration_since(established_at)
-                        .num_milliseconds()
-                        < i64::try_from(seconds.saturating_mul(1000)).unwrap_or(i64::MAX)
+                && established_at.is_some_and(|established_at| {
+                    !profile.valid_for_seconds.is_none_or(|seconds| {
+                        chrono::Utc::now()
+                            .signed_duration_since(established_at)
+                            .num_milliseconds()
+                            < i64::try_from(seconds.saturating_mul(1000)).unwrap_or(i64::MAX)
+                    })
                 })
             {
                 return Err(reject("key lifetime exceeds its proven positive TTL"));
@@ -482,6 +513,18 @@ impl RedisReplayState {
         index: usize,
     ) -> std::result::Result<(), CommandMatchDiagnostic> {
         for profile in &self.observations.profiles {
+            // Pooled request order follows claims; delivery completion is tracked separately.
+            if let Some(position) = profile.initial_accesses.iter().position(|&i| i == index)
+                && profile.initial_accesses[..position]
+                    .iter()
+                    .any(|&i| !self.exchanges[i].satisfies_lane_order())
+            {
+                return Err(self.observation_mismatch(
+                    profile,
+                    &profile.epochs[0],
+                    "finite initial existing-key accesses must be claimed in Source order",
+                ));
+            }
             let Some(position) = profile
                 .epochs
                 .iter()
@@ -519,7 +562,8 @@ impl RedisReplayState {
         Ok(())
     }
 
-    pub(super) fn record_observation_mutation(&mut self, index: usize) {
+    pub(super) fn record_observation_mutation(&mut self, index: usize, args: &[Vec<u8>]) {
+        self.reserve_closed_expiry(index, args);
         if self
             .observations
             .profiles
@@ -539,6 +583,16 @@ impl RedisReplayState {
         args: &[Vec<u8>],
     ) -> Option<Prepared> {
         let &(profile, epoch) = self.observations.owners.get(&index)?;
+        if self.observations.profiles[profile].kind == Kind::Expiry
+            && self.observations.profiles[profile].epochs[epoch]
+                .mutation
+                .is_none()
+        {
+            self.observations
+                .initial_expiry_at
+                .entry(profile)
+                .or_insert_with(chrono::Utc::now);
+        }
         let case = &self.observations.profiles[profile].case;
         let prepared = Prepared {
             profile,
@@ -588,6 +642,7 @@ impl RedisReplayState {
             source_witness: reference(witness),
             source_epoch_mutation: epoch.mutation.map(reference),
             covered_source_observations: covered,
+            coverage: None,
         };
         for &index in &epoch.observations {
             let exchange = &mut self.exchanges[index];

@@ -7,7 +7,8 @@ use serde_yaml::{Mapping, Value};
 use sha2::{Digest, Sha256};
 
 use crate::policy::native::{
-    NativeKeySelector, RedisExpiryRefreshEffect, RedisReadCommutationEffect,
+    NativeKeySelector, RedisActivityRefreshEffect, RedisExpiryRefreshEffect,
+    RedisReadCommutationEffect,
 };
 use crate::policy::{
     GlobalField, NativeEffect, NativeMatch, NativeRule, PolicyRule, Proof, Resource,
@@ -32,6 +33,7 @@ enum Behavior {
     ReadCommutation,
     ReadObservation,
     ExpiryRefresh,
+    ActivityRefresh(RedisActivityRefreshEffect),
     ReadBack,
     Commands {
         key_format: Option<key_format::KeyFormat>,
@@ -46,6 +48,7 @@ impl Behavior {
             Self::ReadCommutation => "read_commutation",
             Self::ReadObservation => "read_observation",
             Self::ExpiryRefresh => "expiry_refresh",
+            Self::ActivityRefresh(_) => "activity_refresh",
             Self::ReadBack => "read_back",
             Self::Commands { .. } => "commands",
         }
@@ -55,6 +58,7 @@ impl Behavior {
             Self::Append => Some("APPEND"),
             Self::ReadCommutation | Self::ReadObservation => Some("GET"),
             Self::ExpiryRefresh => Some("EXPIRE"),
+            Self::ActivityRefresh(_) => None,
             Self::ReadBack => Some("SET"),
             Self::Commands { .. } => None,
         }
@@ -72,6 +76,7 @@ impl Behavior {
             }
             Self::ReadObservation => NativeEffect::RedisReadObservation,
             Self::ExpiryRefresh => NativeEffect::RedisExpiryRefresh(RedisExpiryRefreshEffect {}),
+            Self::ActivityRefresh(effect) => NativeEffect::RedisActivityRefresh(effect.clone()),
             Self::ReadBack => stateful::lower_read_back(resource, proof),
             Self::Commands {
                 key_format,
@@ -126,6 +131,9 @@ impl<'de> Deserialize<'de> for Entry {
                 .remove("key_format")
                 .map(serde_yaml::from_value::<key_format::KeyFormat>)
                 .transpose()?;
+            if let Some(value) = fields.remove("activity_refresh") {
+                behaviors.push(Behavior::ActivityRefresh(serde_yaml::from_value(value)?));
+            }
             let commands = fields
                 .remove("commands")
                 .map(serde_yaml::from_value::<commands::Commands>)
@@ -273,6 +281,7 @@ pub(super) fn compact(rule: &PolicyRule, root: &mut Mapping) -> Result<bool> {
         NativeEffect::RedisReadCommutation(_) => Behavior::ReadCommutation,
         NativeEffect::RedisReadObservation => Behavior::ReadObservation,
         NativeEffect::RedisExpiryRefresh(_) => Behavior::ExpiryRefresh,
+        NativeEffect::RedisActivityRefresh(effect) => Behavior::ActivityRefresh(effect.clone()),
         effect if stateful::is_read_back(effect, None) => Behavior::ReadBack,
         NativeEffect::RedisSequence(effect) if effect.read_back.is_empty() => {
             let key_format = if let Some(key) = &effect.key {
@@ -315,6 +324,7 @@ pub(super) fn compact(rule: &PolicyRule, root: &mut Mapping) -> Result<bool> {
         .as_mapping_mut()
         .context("Redis key declaration requires a mapping")?;
     let value = match &behavior {
+        Behavior::ActivityRefresh(effect) => serde_yaml::to_value(effect)?,
         Behavior::Commands {
             key_format,
             declarations,

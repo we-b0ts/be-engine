@@ -3,6 +3,7 @@ use super::*;
 
 /// Payload bytes remain private process memory and must not enter plan reports.
 pub(crate) struct ResponsePayloadPair {
+    pub(crate) status_difference: Option<(u16, u16)>,
     pub(crate) source_interaction: Option<crate::interaction::model::OutputObservation>,
     pub(crate) target_interaction: Option<crate::interaction::model::OutputObservation>,
     pub(crate) body_available: bool,
@@ -14,6 +15,21 @@ pub(crate) struct ResponsePayloadPair {
 }
 
 pub(crate) fn response_payload_pair(
+    request: &serde_json::Value,
+    source: &serde_json::Value,
+    target: Option<&serde_json::Value>,
+) -> Result<ResponsePayloadPair> {
+    let output = response_rule_payload_pair(request, source, target)?;
+    ensure!(
+        output.status_difference.is_none(),
+        "response status differs"
+    );
+    Ok(output)
+}
+
+/// Rule evidence retains status observations separately from value validation.
+/// Artifact decoding and carrier integrity remain mandatory for both sides.
+pub(crate) fn response_rule_payload_pair(
     request: &serde_json::Value,
     source: &serde_json::Value,
     target: Option<&serde_json::Value>,
@@ -42,6 +58,7 @@ pub(crate) fn response_payload_pair(
     };
     let source_body = business_body(&request, bytes, oneway, "Source response")?;
     let mut output = ResponsePayloadPair {
+        status_difference: None,
         source_interaction: source.interaction,
         target_interaction: None,
         body_available,
@@ -82,11 +99,9 @@ pub(crate) fn response_payload_pair(
             source_body.gateway_metadata_matches(&target_body),
             "response gateway metadata differs"
         );
-        ensure!(
-            source_body.carrier_status().unwrap_or(source_status)
-                == target_body.carrier_status().unwrap_or(target.status),
-            "response status differs"
-        );
+        let before = source_body.carrier_status().unwrap_or(source_status);
+        let after = target_body.carrier_status().unwrap_or(target.status);
+        output.status_difference = (before != after).then_some((before, after));
         output.target = Some(target_body.body().into());
         output.target_interaction = target.interaction;
         output.times.target = target.request_sent_at;

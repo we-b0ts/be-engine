@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use uuid::Uuid;
 
-use super::{RecordedExchange, ReplayExchange};
+use super::{RecordedExchange, ReplayExchange, ReplaySource};
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct TargetConnection {
@@ -23,25 +26,50 @@ impl Default for TargetConnection {
 
 #[derive(Debug, Default)]
 pub(super) struct ConnectionScopes {
-    // A whole recorded lane remains bound if any retained command depends on
-    // connection state. Detect this during loading, before requests can match.
-    stateful: BTreeSet<Uuid>,
+    // Ordinary Case commands bind only their Case's lane. Global commands and
+    // explicit session_setup retain a connection-wide boundary, even when a
+    // setup record carries a Case origin.
+    stateful_global: BTreeSet<Uuid>,
+    stateful_cases: BTreeMap<String, BTreeSet<Uuid>>,
     owners: BTreeMap<(Option<String>, Uuid), Uuid>,
 }
 
 impl ConnectionScopes {
-    pub(super) fn is_stateful(&self, connection_id: Uuid) -> bool {
-        self.stateful.contains(&connection_id)
+    pub(super) fn is_stateful(&self, exchange: &ReplayExchange) -> bool {
+        self.stateful_global
+            .contains(&exchange.record.connection_id)
+            || (exchange.source == ReplaySource::Case
+                && exchange.case_id.as_deref().is_some_and(|case| {
+                    self.stateful_cases
+                        .get(case)
+                        .is_some_and(|lanes| lanes.contains(&exchange.record.connection_id))
+                }))
     }
 
-    pub(super) fn register(&mut self, record: &RecordedExchange, args: &[Vec<u8>]) {
+    pub(super) fn register(
+        &mut self,
+        record: &RecordedExchange,
+        args: &[Vec<u8>],
+        source: ReplaySource,
+        case_id: Option<&str>,
+    ) {
         if record.session_setup || !pool_compatible(&record.command, args) {
-            self.stateful.insert(record.connection_id);
+            if !record.session_setup
+                && source == ReplaySource::Case
+                && let Some(case) = case_id
+            {
+                self.stateful_cases
+                    .entry(case.into())
+                    .or_default()
+                    .insert(record.connection_id);
+            } else {
+                self.stateful_global.insert(record.connection_id);
+            }
         }
     }
 
     fn requires_binding(&self, exchange: &ReplayExchange) -> bool {
-        !exchange.connection_independent && self.stateful.contains(&exchange.record.connection_id)
+        !exchange.connection_independent && self.is_stateful(exchange)
     }
 
     pub(super) fn matches(

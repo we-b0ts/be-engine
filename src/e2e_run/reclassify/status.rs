@@ -1,13 +1,15 @@
 //! Read-only shared-session classification checks, scoped to one coordinator query.
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+
+use crate::case_group::PreparedGroupMembership;
 
 use super::{
     super::{E2eRunContext, config, model::RunLayout, store, support},
@@ -20,7 +22,7 @@ struct QuerySnapshot {
 }
 
 struct RunSnapshot {
-    prepared_case_ids: BTreeMap<String, BTreeSet<String>>,
+    prepared_groups: BTreeMap<String, PreparedGroupMembership>,
     states: BTreeMap<String, ActiveRunState>,
     pending_session: Option<String>,
     rules_fingerprint: String,
@@ -122,12 +124,12 @@ fn focused_state_path(layout: &RunLayout, api: &str) -> PathBuf {
 
 impl RunSnapshot {
     fn read(layout: &RunLayout, policy: &Path) -> Result<Self> {
-        let prepared_case_ids = crate::case_group::load_prepared_case_ids(
+        let prepared_groups = crate::case_group::load_prepared_membership(
             &layout.group_index_path,
             &layout.case_source,
         )?;
         let mut states = BTreeMap::new();
-        for api in prepared_case_ids.keys() {
+        for api in prepared_groups.keys() {
             let path = focused_state_path(layout, api);
             if path.is_file() {
                 states.insert(api.clone(), store::read_yaml(&path)?);
@@ -147,7 +149,7 @@ impl RunSnapshot {
         let (_, fingerprints) =
             crate::config::SourceTrafficPolicyConfig::load_with_fingerprints(policy)?;
         Ok(Self {
-            prepared_case_ids,
+            prepared_groups,
             states,
             pending_session,
             rules_fingerprint: fingerprints.classification,
@@ -187,7 +189,11 @@ impl RunSnapshot {
                 primary,
                 state,
                 group_id,
-                self.prepared_case_ids[group_id].iter().map(String::as_str),
+                self.prepared_groups[group_id]
+                    .case_ids
+                    .iter()
+                    .map(String::as_str),
+                &self.prepared_groups[group_id].case_inventory_id,
             )?;
             members.push(state);
         }

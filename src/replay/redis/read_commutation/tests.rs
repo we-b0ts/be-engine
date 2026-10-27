@@ -4,6 +4,9 @@ use crate::replay::redis::append::tests::event;
 use crate::replay::report::command::CommandMatchDiagnostic;
 use serde_json::{Value, json};
 
+#[path = "case_scope_tests.rs"]
+mod case_scope_tests;
+
 pub(in crate::replay::redis) fn rule() -> Value {
     json!({"id":"poll","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},
         "operation":"GET","key":{"kind":"numeric","prefix":"cancel:"}},
@@ -184,7 +187,7 @@ fn missing_rule_other_api_and_other_resource_keep_lane_order() {
 }
 
 #[test]
-fn foreign_global_transactional_and_late_inventory_cannot_borrow_proof() {
+fn ordinary_cases_are_independent_but_global_transactional_and_late_own_inventory_stay_guarded() {
     for foreign in [ReplaySource::Case, ReplaySource::Global] {
         let (_root, mut state) =
             state(&[event(1, "GET", &[b"cancel:1"], b"$-1\r\n")], vec![rule()]);
@@ -197,7 +200,11 @@ fn foreign_global_transactional_and_late_inventory_cannot_borrow_proof() {
                 &[],
             )
             .unwrap();
-        assert!(state.prepare_read_commutation("case").is_err());
+        assert_eq!(
+            state.prepare_read_commutation("case").is_err(),
+            foreign == ReplaySource::Global
+        );
+        assert!(state.exchanges[1].read_commutation_rule.is_none());
     }
     let events = [
         event(1, "WATCH", &[b"other"], b"+OK\r\n"),

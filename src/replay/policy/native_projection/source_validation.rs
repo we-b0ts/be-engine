@@ -119,6 +119,11 @@ pub(crate) fn validate_native_source_dependencies(
     for key in runtime.request_contracts.signing_keys() {
         checked.key_witnesses.extend(key.witnesses().cloned());
     }
+    for (id, count) in
+        crate::replay::redis::activity::validate_source(&runtime.request_contracts, cases)?
+    {
+        *checked.rules.entry(id).or_default() += count;
+    }
     checked.rules.retain(|id, _| {
         compiled
             .native
@@ -140,6 +145,7 @@ fn dependency_effect(effect: &NativeEffect) -> bool {
             | NativeEffect::RedisReadCommutation(_)
             | NativeEffect::RedisReadObservation
             | NativeEffect::RedisExpiryRefresh(_)
+            | NativeEffect::RedisActivityRefresh(_)
             | NativeEffect::RedisSequence(_)
             | NativeEffect::HttpRequest(_)
             | NativeEffect::MysqlValues(_)

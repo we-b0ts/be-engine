@@ -13,6 +13,9 @@ pub(super) fn project(state: &ActiveRunState, api: &str) -> ActiveRunState {
     let mut selected = state.clone();
     selected.apis.retain(|item| item.group_id == api);
     selected.cases.retain(|case| case.group_id == api);
+    if let Some(selection) = &mut selected.case_selection {
+        selection.project(api);
+    }
     // Session-wide dependency/finalization failures remain shared. A response
     // mismatch in another method does not invalidate this method's response gate.
     selected.errors.retain(|error| {

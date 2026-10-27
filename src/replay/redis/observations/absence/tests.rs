@@ -135,3 +135,78 @@ fn absent_read_preserves_historical_reads_and_rejects_failed_delivery() {
     assert!(state.case_is_dirty("case"));
     assert!(request(&mut state, "GET", &[b"cancel:1"]).is_err());
 }
+
+fn concurrent_absent_reads() -> Vec<Value> {
+    let mut source = events();
+    source[1]["timestamp"] = json!("2020-01-01T00:00:03Z");
+    source[2]["connection_id"] = json!(Uuid::from_u128(1));
+    source[2]["request_started_at"] = json!("2020-01-01T00:00:02.500Z");
+    source[2]["timestamp"] = json!("2020-01-01T00:00:03.500Z");
+    source[3]["request_started_at"] = json!("2020-01-01T00:00:03.250Z");
+    source
+}
+
+#[test]
+fn concurrent_nil_reads_and_noop_closing_deletion_preserve_absent_state() {
+    let mut source = concurrent_absent_reads();
+    source.insert(0, event(0, "GET", &[b"unrelated:cache"], b"$-1\r\n"));
+    let (_root, mut state) = state(&source, vec![rule()]);
+    // A valid concurrent proof must not reject the Case's first unrelated call.
+    let first = request(&mut state, "GET", &[b"unrelated:cache"]).unwrap();
+    state.complete_exchange(&first);
+    assert_eq!(perform(&mut state, "DEL"), b":1\r\n");
+    for _ in 0..5 {
+        assert_eq!(perform(&mut state, "GET"), b"$-1\r\n");
+    }
+    let closing = request(&mut state, "DEL", &[b"cancel:1"]).unwrap();
+    assert!(request(&mut state, "GET", &[b"cancel:1"]).is_err());
+    state.complete_exchange(&closing);
+    assert!(request(&mut state, "GET", &[b"cancel:1"]).is_err());
+    assert!(state.snapshot().unused_case.is_empty());
+}
+
+#[test]
+fn concurrent_absent_proof_still_rejects_unknown_clocks_real_removal_and_lane_reversal() {
+    let mut unknown = concurrent_absent_reads();
+    unknown[2]["request_started_at"] = Value::Null;
+    unknown[2]["timestamp"] = Value::Null;
+    let mut removal = concurrent_absent_reads();
+    removal[0]["timestamp"] = json!("2020-01-01T00:00:02.750Z");
+    let mut reversal = concurrent_absent_reads();
+    reversal[2]["connection_id"] = json!(Uuid::nil());
+    reversal[2]["sequence"] = json!(1);
+    let mut non_nil = concurrent_absent_reads();
+    non_nil[2]["response"] = event(3, "GET", &[b"cancel:1"], b"$1\r\nx\r\n")["response"].clone();
+    for (kind, source) in [
+        ("unknown clocks", unknown),
+        ("initial removal overlap", removal),
+        ("lane reversal", reversal),
+        ("non-nil observation", non_nil),
+    ] {
+        let (_root, mut state) = state(&source, vec![rule()]);
+        assert!(state.prepare_observations("case").is_err(), "{kind}");
+        assert!(state.observations.profiles.is_empty());
+        assert!(state.exchanges.iter().all(|e| e.observation_rule.is_none()));
+    }
+}
+
+#[test]
+fn conflicting_boundary_reports_rule_key_and_both_source_access_clocks() {
+    let mut source = concurrent_absent_reads();
+    source[0]["timestamp"] = json!("2020-01-01T00:00:02.750Z");
+    let (_root, mut state) = state(&source, vec![rule()]);
+    let error = format!("{:#}", state.prepare_observations("case").unwrap_err());
+    for location in [
+        "rule=cancel-state",
+        "key_fingerprint=",
+        "before connection=",
+        "after connection=",
+        "sequence=1",
+        "sequence=3",
+        "start=",
+        "end=",
+    ] {
+        assert!(error.contains(location), "missing {location}: {error}");
+    }
+    assert!(!error.contains("cancel:1"));
+}

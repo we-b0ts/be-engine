@@ -75,7 +75,11 @@ async fn run_attempt_and_transition(
         state.bump();
         RewriteStore::new(target_root)?.save(state)?;
     }
-    let results = crate::e2e_run::run_e2e_apis(context.clone(), &apis).await?;
+    let iteration = crate::e2e_run::ReplayIteration {
+        workflow_id: state.workflow_id.clone(),
+        final_round: in_round,
+    };
+    let results = crate::e2e_run::run_e2e_apis(context.clone(), &apis, Some(&iteration)).await?;
     let current_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     if current_target_fingerprint != replay_target_fingerprint {
         state.phase = RewritePhase::ApiPending;

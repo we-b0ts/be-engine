@@ -249,6 +249,8 @@ fn finalized_replay_consumes_the_request_for_passed_and_dirty_results() {
                 },
             },
             diagnosis: crate::E2eDiagnosis {
+                case_selection: None,
+                replay_finalized: None,
                 egress_rejections: None,
                 counts: crate::E2eDiagnosisCounts {
                     selected: 1,

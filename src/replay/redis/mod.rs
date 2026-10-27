@@ -32,8 +32,10 @@ pub(crate) use request_identity::request_fingerprint;
 pub(in crate::replay) mod cross_case;
 use crate::replay::json_order as json;
 pub(in crate::replay) use cross_case::load as load_cross_case;
+pub(in crate::replay) mod activity;
 mod api_origin;
 pub(in crate::replay) mod append;
+mod case_scope;
 pub(crate) mod expiration;
 #[cfg(test)]
 mod field_identity_tests;
@@ -168,6 +170,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    refresh: Option<activity::Prepared>,
     observation: Option<observations::Prepared>,
     append: Option<append::PreparedAppend>,
     read_back: Option<super::policy::request_contract::PreparedReadBack>,
@@ -189,6 +192,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    activity_refresh: activity::ActivityRefreshes,
     pub(super) shared_source_directories: BTreeMap<String, PathBuf>,
     observations: observations::Observations,
     read_commutation: read_commutation::ReadCommutation,
@@ -257,6 +261,7 @@ impl RedisReplayState {
 
     pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
         self.observations.has_in_flight()
+            || self.activity_refresh.has_in_flight()
             || self.exchanges.iter().enumerate().any(|(index, e)| {
                 e.source == ReplaySource::Case
                     && !self.append_streams.idle_source(index)
@@ -270,6 +275,7 @@ impl RedisReplayState {
 
     pub(in crate::replay) fn has_in_flight(&self) -> bool {
         self.observations.has_in_flight()
+            || self.activity_refresh.has_in_flight()
             || self.exchanges.iter().enumerate().any(|(index, e)| {
                 !self.append_streams.idle_source(index)
                     && matches!(
@@ -329,6 +335,7 @@ impl RedisReplayState {
         );
         self.read_commutation.check_case_addition(source, case_id)?;
         self.observations.check_case_addition(source, case_id)?;
+        self.activity_refresh.check_case_addition(source, case_id)?;
         record.outcome.validate()?;
         ensure!(
             record
@@ -349,9 +356,9 @@ impl RedisReplayState {
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
         self.append_streams
-            .check_inventory_addition(&record, &args)?;
+            .check_inventory_addition(&record, &args, source, case_id)?;
         self.read_commutation
-            .check_inventory_addition(&record, &args)?;
+            .check_inventory_addition(&record, &args, source, case_id)?;
         let response = record.response.decode()?;
         ensure!(
             record
@@ -372,6 +379,8 @@ impl RedisReplayState {
             case_id,
             reusable_snapshot,
         )?;
+        self.activity_refresh
+            .check_inventory_addition(&record, &args, source, case_id)?;
         let connection_independent = is_connection_independent_background(
             source,
             record.global_dependency_reason.as_deref(),
@@ -393,7 +402,8 @@ impl RedisReplayState {
         {
             return Ok(());
         }
-        self.connection_scopes.register(&record, &args);
+        self.connection_scopes
+            .register(&record, &args, source, case_id);
         let exchange_index = self.exchanges.len();
         self.case_exchange_index
             .register(source, case_id, exchange_index);
@@ -420,7 +430,9 @@ impl RedisReplayState {
     }
 
     fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
-        if let Some(append) = &matched.append {
+        if let Some(refresh) = &matched.refresh {
+            self.complete_activity(refresh);
+        } else if let Some(append) = &matched.append {
             self.complete_append(append);
         } else if let Some(observation) = &matched.observation {
             self.complete_observation(observation, matched.index);
@@ -430,6 +442,7 @@ impl RedisReplayState {
                 exchange.status = ReplayExchangeStatus::Consumed;
             }
         }
+        self.complete_closed_expiry(matched);
         self.refresh_global_report(matched.index);
         let case_id = matched.report.case_id.clone();
         push_success_detail(
@@ -442,6 +455,10 @@ impl RedisReplayState {
     }
 
     fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
+        self.fail_closed_expiry(matched.index);
+        if let Some(refresh) = &matched.refresh {
+            self.fail_activity(refresh);
+        }
         if let Some(append) = &matched.append {
             self.fail_append(append);
         }
@@ -473,6 +490,8 @@ impl RedisReplayState {
             append_streams_omitted: self.append_streams.omitted(),
             state_observations: self.observations.reports(),
             state_observations_omitted: self.observations.omitted(),
+            activity_refreshes: self.activity_refresh.reports(),
+            activity_refreshes_omitted: self.activity_refresh.omitted(),
             pubsub: self.pubsub.report(),
             unordered_value: Some(self.unordered_value.clone()),
             connections: self.events.connections,

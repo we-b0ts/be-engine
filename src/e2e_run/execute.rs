@@ -93,7 +93,7 @@ pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
 }
 
 pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApiRunResult> {
-    Ok(run_e2e_apis(context, &[api_key.to_string()])
+    Ok(run_e2e_apis(context, &[api_key.to_string()], None)
         .await?
         .remove(0))
 }
@@ -102,6 +102,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
 pub(crate) async fn run_e2e_apis(
     context: E2eRunContext,
     api_keys: &[String],
+    iteration: Option<&super::ReplayIteration>,
 ) -> Result<Vec<E2eApiRunResult>> {
     let api_key = api_keys
         .first()
@@ -138,7 +139,7 @@ pub(crate) async fn run_e2e_apis(
                 .cloned()
         })
         .collect::<Result<Vec<_>>>()?;
-    let focused_inventory = CaseGroupInventory {
+    let mut focused_inventory = CaseGroupInventory {
         case_source: inventory.case_source.clone(),
         source_revision: inventory.source_revision.clone(),
         case_inventory_id: inventory.case_inventory_id.clone(),
@@ -180,7 +181,9 @@ pub(crate) async fn run_e2e_apis(
             interrupted.finished_at = Some(Utc::now());
             interrupted.push_error("stale focused attempt recovered before rerun");
             mark_unfinished_cases(&mut interrupted);
-            summarize_apis_without_aggregate(&layout, &mut interrupted, &focused_inventory);
+            let mut interrupted_inventory = focused_inventory.clone();
+            super::case_selection::restrict(&mut interrupted_inventory, &interrupted)?;
+            summarize_apis_without_aggregate(&layout, &mut interrupted, &interrupted_inventory);
         }
         finish_focused_and_publish(
             &config,
@@ -225,12 +228,15 @@ pub(crate) async fn run_e2e_apis(
         .max()
         .unwrap_or(0)
         + 1;
+    let selection =
+        super::case_selection::prepare(&global_layout, &mut focused_inventory, iteration)?;
     let mut state = ActiveRunState::new(
         layout.run_key.clone(),
         attempt,
         &focused_inventory,
         &layout.active_dir,
     );
+    state.case_selection = selection;
     state.replay_report = allocate_replay_report(
         &layout.case_source,
         &layout.run_key,
@@ -368,12 +374,13 @@ pub(crate) async fn recover_focused_e2e_api(context: E2eRunContext, api_key: &st
         .find(|group| group.group_id == api_key)
         .with_context(|| format!("prepared API group not found: {api_key}"))?
         .clone();
-    let focused_inventory = CaseGroupInventory {
+    let mut focused_inventory = CaseGroupInventory {
         case_source: inventory.case_source.clone(),
         source_revision: inventory.source_revision.clone(),
         case_inventory_id: inventory.case_inventory_id.clone(),
         groups: vec![group],
     };
+    super::case_selection::restrict(&mut focused_inventory, &state)?;
     if state.apis.is_empty() {
         summarize_apis_without_aggregate(&layout, &mut state, &focused_inventory);
     }

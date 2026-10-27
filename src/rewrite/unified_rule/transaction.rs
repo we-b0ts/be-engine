@@ -7,6 +7,8 @@ use crate::rewrite::{
     recover_rewrite_rule_plan,
 };
 
+#[path = "transaction_activity_refresh.rs"]
+mod activity_refresh_transaction;
 #[path = "transaction_api_time.rs"]
 mod api_time_transaction;
 #[path = "transaction_append.rs"]
@@ -61,6 +63,8 @@ mod redis_candidates_transaction;
 mod redis_pairs_transaction;
 #[path = "transaction_resource_scope.rs"]
 mod resource_scope_transaction;
+#[path = "transaction_response_status.rs"]
+mod response_status_transaction;
 #[path = "transaction_rule_evidence.rs"]
 mod rule_evidence_transaction;
 #[path = "transaction_scope.rs"]

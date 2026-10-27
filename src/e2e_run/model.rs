@@ -328,6 +328,8 @@ pub(super) struct ApiExecution {
 pub(super) struct ActiveRunState {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_selection: Option<super::case_selection::CaseSelection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_fingerprint: Option<String>,
     pub run_key: String,
     pub sequence: u64,
@@ -404,6 +406,7 @@ impl ActiveRunState {
         Self {
             version: STATE_VERSION,
             run_key,
+            case_selection: None,
             sequence,
             status: RunStatus::Running,
             started_at: Utc::now(),

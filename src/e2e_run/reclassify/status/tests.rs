@@ -1,6 +1,8 @@
 use super::*;
 use crate::e2e_run::{reclassify, test_session};
 
+mod retry_selection;
+
 #[test]
 fn interrupted_startup_without_a_session_does_not_block_status_or_authorize_revision() {
     let target = tempfile::tempdir().unwrap();

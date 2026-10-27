@@ -37,6 +37,10 @@ is unclear.
   materialization. `replay/exchange` owns shared termination timing and validation;
   protocol delivery owns claims, consumption and dirty reporting. See
   [dependency termination](dependency-termination.md).
+  `replay/mysql/wire_diagnostics` owns opt-in connection-local protocol envelopes
+  and request counters. It exposes packet lengths, sequence numbers and leading
+  tags separately from transport flush results, without SQL or response values.
+  Protocol encoding and delivery remain in their existing owners.
 
 - `interaction/model` owns versioned input programs and independent output
   observations. `policy` validates protocol completion profiles and bounded
@@ -111,6 +115,10 @@ is unclear.
   `control/dependency_tail/progress` owns the Replay-only no-progress clock and
   bounded pending-reference observations. It excludes real resource I/O and
   unrelated process activity, and records only the stalling Case as incomplete.
+  Its diagnostic leads with unconsumed recorded dependencies and Target-call
+  guidance, retaining idle timing as the stop condition rather than attribution.
+  `rewrite/evidence/execution` shares that distinction with issue summaries and
+  evidence guidance while preserving actual Target-request rejection diagnoses.
   `control/server` owns bounded control connections; mutations stay serialized
   while read-only observations remain available during dependency waits.
   `control/case_execution` exposes actual dependency rejection separately from unused inventory;
@@ -130,6 +138,10 @@ is unclear.
   finalized session and exact request fingerprint without inventing a Source pair.
   Selected independent observation clocks stay authenticated and bounded with
   their IDs; they describe actual admission, not inferred business task origin.
+  `rewrite/evidence/redis_stream_progress` projects bounded Case-local APPEND
+  admission cursors and original Source fragments from retained audits. It owns
+  omission reporting, exposes no payload and does not infer delivery, pair a
+  rejected request or change protocol matching.
   `control/case_cleanup` owns failure-phase deadlines and the shared actual-I/O
   barrier. Its final empty-I/O observation stays locked through Case ownership
   release, preventing a new delivery from entering between the check and release.
@@ -342,27 +354,47 @@ is unclear.
   reservations, derived lengths, delivery completion and fingerprint-only range
   audits. Its `trace` child validates complete immutable Source byte order,
   resets and observation fences; `source` reuses that preparation for native
-  rule preflight. Ordinary Redis adapters retain all non-APPEND matching and
+  rule preflight. A preexisting prefix needs only a Source-derived length base;
+  its contents and creator remain outside this Case's increment proof.
+  Ordinary Redis adapters retain all non-APPEND matching and
   finite consumption. Partial byte delivery is separate from active transport.
   Stream key selection reuses the request-contract owner's projection of
   already accepted complete identities; stream bytes remain with the APPEND owner.
   `redis/observations/absence` proves absent-state read lifetimes between owned
-  deletion boundaries; the existing observation runtime owns bounded repeats,
+  deletion boundaries and concurrent accesses that preserve that proven state,
+  retaining per-connection order and initial-reset causal fences. The existing observation runtime owns bounded repeats,
   delivery and audit. Native policy compilation and normal plan/apply retain
   permission ownership. `redis/read_commutation` owns explicit finite nil-observation ordering
   permission; its `source` child rejects mutations and overlapping ownership
   before installing any permission. `redis/key_access` supplies conservative
   key-access exclusion to both Source proofs, and `redis/native_source` loads
-  their complete scoped Source inventories. Native command matching and
+  their complete scoped Source inventories. `redis/case_scope` identifies other
+  ordinary Case records consistently for preparation and later inventory
+  additions: they cannot establish or invalidate this Case's proof. Global,
+  snapshot and explicitly shared ownership retain their separate boundary.
+  `redis/connection_scope` partitions ordinary stateful lanes by Case, while
+  Global and explicit session setup retain connection-wide constraints.
+  Native command matching and
   delivery retain connection eligibility, claims and finite consumption.
   `redis/observations` owns explicit SET/DEL state observations and positive TTL
   refresh equivalence. Its `source` child validates complete, isolated key
-  lifetimes before installing observation permissions; request contracts retain
-  write-to-read identity rendering. Read-back preparation excludes another
-  Case's ordinary finite GET from the owner's proof and observation slots;
-  foreign mutations and Global/shared inventory remain ownership fences.
+  lifetimes before installing observation permissions; an initial successful
+  EXPIRE may establish existing-key context without a Case-local creator.
+  Request contracts retain write-to-read identity rendering. Preparation and
+  observation slots exclude other ordinary Cases' reads and writes; mutations
+  inside this Case and Global/shared inventory retain their ownership fences.
   Mutation matching, APPEND bytes and transport completion remain with their
   existing owners.
+  `redis/observations/closed_expiry` proves unchanged scalar lifetimes whose
+  matched TTL-bearing SET makes refreshes redundant until a successful finite
+  deletion. It owns monotonic lifetime bounds, delivery-complete coverage and
+  explicit closure audits; it grants no content or lifecycle mutation omission.
+  `redis/activity` owns independently declared JSON metadata refresh lifetimes.
+  Its `source` child proves complete isolated read/SET histories and TTL bounds;
+  `value` reuses global timestamp formats and the shared time kernel while
+  retaining exact unselected fields. `runtime` renders current Target state and
+  `lifecycle` retains finite creation/deletion, actual delivery and bounded audits.
+  It does not grant APPEND or content/list consumption permission.
 
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into
@@ -425,11 +457,12 @@ is unclear.
   retain exact trailing/repeated separators without aliasing; wildcard matching
   and dynamic source-route grammar stay strict. Unrelated valid noncanonical
   requests cannot block inventory discovery or finalized recording adoption.
-  `case_group/snapshot` reads prepared membership for read-only projections
+  `case_group/snapshot` reads prepared membership and fingerprints for read-only projections
   without discovering recording cases. `e2e_run/reclassify/status` owns the
   query-scoped shared-session snapshot and compact report classification codec;
   `reclassify/session` retains the common identity/membership checks and full
-  execution preflight. Coordinator status scopes snapshots to one query.
+  execution preflight. Both paths reuse `e2e_run/case_selection` to validate
+  selected/skipped case partitions. Coordinator status scopes snapshots to one query.
   `rewrite/case_patterns` canonicalizes persisted recording observations while
   pattern identification waits; `rewrite/regression_scope/recording` validates
   the pin and selectors against that adopted snapshot without rediscovery.
@@ -493,8 +526,10 @@ is unclear.
   Socket.IO Redis-adapter identity correlation. Its `echo` child associates exact
   finite Source PUBLISH payloads with recorded self-echo notifications and delivers
   admitted Target payloads to confirmed subscribers without subscription-age delays.
-  Notification pages retain payload digests; their sparse lookup is built only
-  when a Target adapter PUBLISH needs it. The `subscription_evidence` child
+  Notification pages retain payload digests; `echo` prepares sparse lookups for
+  loaded adapter publishers before Replay readiness and shares them across Cases.
+  Command delivery only reads prepared lookups; inventory construction stays
+  outside Target connection handling. The `subscription_evidence` child
   resolves exact recording-level anchors and canonical single-use aliases.
   The adapter retains subscription anchors required by linked RPC callbacks;
   command matching applies their preference within the existing ownership scope
@@ -775,6 +810,13 @@ is unclear.
   and exposes only its recorded elapsed time for the HTTP execution budget.
   The driver adds its ordinary execution allowance to that duration; response
   status, headers and body remain with assertions and never become Target inputs.
+- `e2e_run/case_selection` owns repair-attempt case selection, workflow and
+  immutable API-inventory boundaries, and historical passed-case skips. It reads
+  the opt-in local regression setting, preserves failed and unexecuted inputs,
+  and always selects every case for final revalidation. Protocol loading and
+  target cache behavior remain with their existing owners. Published reports
+  contain only actual session membership; Source rule validation retains the
+  complete canonical API scope, including skipped cases.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state
@@ -1422,7 +1464,10 @@ explicit repository-wide audit.
   changing matching, ownership or consumption.
   `preflight/{api,dependency,session,source}` delegates primary response, native
   envelope, stateful Source trace and whole-recording proof to their existing
-  owners. `preflight/resource` enumerates complete recording scope for API-free
+  owners. `preflight/response` records available primary responses with different
+  statuses as unvalidated Target witnesses, keeping rule publication separate
+  from Replay status acceptance without weakening artifact integrity or Source
+  validation. `preflight/resource` enumerates complete recording scope for API-free
   resource rules and freezes relevant API memberships and foreign execution
   identities, including missing Target evidence. `preflight/payload` validates
   each execution with its own protected Target witnesses and clocks. Primary

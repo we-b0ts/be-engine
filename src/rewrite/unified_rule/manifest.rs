@@ -148,6 +148,17 @@ impl Bundle {
             .case_source
             .clone()
             .context("rule requires finalized recordings")?;
+        let summary = crate::e2e_run::finalized_focused_attempt_summary(
+            crate::E2eRunContext {
+                target_root: root.into(),
+                case_source: source.clone(),
+                run_key: None,
+            },
+            state
+                .group_id
+                .as_deref()
+                .context("rule requires prepared API group")?,
+        )?;
         let evidence = crate::resolve_e2e_response_rule_evidence(
             crate::E2eRunContext {
                 target_root: root.into(),
@@ -226,18 +237,20 @@ impl Bundle {
             "prepared API inventory changed"
         );
         for case in group.cases {
-            ensure!(
-                aggregate["selected_case_ids"]
-                    .as_array()
-                    .is_some_and(|ids| ids.iter().any(|v| v == &case.case_id)),
-                "aggregate omits a selected Source case"
-            );
-            ensure!(
-                output.replay["cases"]
-                    .as_array()
-                    .is_some_and(|items| items.iter().any(|c| c["case_id"] == case.case_id)),
-                "Replay report omits a selected Source case"
-            );
+            if summary.selected_case_ids.contains(&case.case_id) {
+                ensure!(
+                    aggregate["selected_case_ids"]
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().any(|v| v == &case.case_id)),
+                    "aggregate omits a selected Source case"
+                );
+                ensure!(
+                    output.replay["cases"]
+                        .as_array()
+                        .is_some_and(|items| items.iter().any(|c| c["case_id"] == case.case_id)),
+                    "Replay report omits a selected Source case"
+                );
+            }
             for name in ["request.json", "dependencies.jsonl"] {
                 output.freeze(&case.case_dir.join(name))?;
             }

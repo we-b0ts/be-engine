@@ -20,10 +20,11 @@ use crate::{
 };
 
 mod access;
-mod execution;
+pub(super) mod execution;
 mod redis_argument;
 pub use redis_argument::query_rewrite_redis_argument_for_scope;
 mod http_requests;
+mod redis_stream_progress;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod mysql_diagnosis;
 mod overview;
@@ -378,8 +379,8 @@ fn facts(
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }
             mysql_diagnosis::attach(&mut facts);
             let limitations = dirty_cluster_limitations(&facts);
-            let next_step = if facts["execution_failures"].as_array().is_some_and(|failures|!failures.is_empty()) {
-                format!("This request was interrupted by Replay because a dependency did not match. Inspect execution_failures[].failures and its target_event_index first. A service HTTP 5xx, absent stream events and unused later calls are downstream observations. {}",mysql_diagnosis::next_step(&facts))
+            let next_step = if let Some(failures) = facts["execution_failures"].as_array().filter(|failures| !failures.is_empty()) {
+                format!("{} {}",execution::guidance(failures),mysql_diagnosis::next_step(&facts))
             } else {mysql_diagnosis::next_step(&facts)};
             Ok((
                 facts,
@@ -642,12 +643,6 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         .representative
         .as_ref()
         .is_some_and(|representative| representative.pointer.starts_with("$headers/"));
-    if issue.kind == RewriteIssueKind::Response && issue.representative.is_some() {
-        queries.push((
-            QUERY_CASE_RESPONSE_DIFFERENCES,
-            "Inspect all response differences in the representative case before implementation",
-        ));
-    }
     let dependency_evidence_first = matches!(
         issue.kind,
         RewriteIssueKind::Dependency | RewriteIssueKind::Replay
@@ -660,6 +655,16 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         queries.push((
             QUERY_SOURCE_PROCESS_TRAFFIC,
             source_process_evidence_purpose(issue.kind),
+        ));
+    }
+    if matches!(
+        issue.kind,
+        RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+    ) && issue.representative.is_some()
+    {
+        queries.push((
+            QUERY_CASE_RESPONSE_DIFFERENCES,
+            "Inspect all response differences in the representative case before implementation",
         ));
     }
     queries.push((

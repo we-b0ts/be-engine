@@ -17,6 +17,7 @@ fn redis_mechanisms_follow_observed_operations_without_assuming_source_proof() {
         (
             "GET",
             vec![
+                "redis_activity_refresh",
                 "redis_finite_process_get",
                 "redis_read_back",
                 "redis_read_commutation",
@@ -102,6 +103,7 @@ fn unified_source_bindings_expose_supported_delivery_without_inventing_target_ev
     assert_eq!(
         found,
         vec![
+            "redis_activity_refresh",
             "redis_append_stream",
             "redis_finite_process_get",
             "redis_read_back",

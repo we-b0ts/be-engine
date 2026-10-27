@@ -167,6 +167,7 @@ fn administrator_can_rearm_replay_after_a_matching_out_of_band_run() {
     let mut state = out_of_band_retry_state(&target_fingerprint);
     let options = retry_options();
     let observed = crate::e2e_run::E2eFocusedAttemptSummary {
+        selected_case_ids: Default::default(),
         attempt: 13,
         passed: true,
         case_source: PathBuf::from("/cases"),
@@ -191,6 +192,7 @@ fn replay_retry_rejects_a_changed_target_or_nonpassing_external_attempt() {
     let options = retry_options();
     let mut state = out_of_band_retry_state(&target_fingerprint);
     let nonpassing = crate::e2e_run::E2eFocusedAttemptSummary {
+        selected_case_ids: Default::default(),
         attempt: 13,
         passed: false,
         case_source: PathBuf::from("/cases"),

@@ -1,9 +1,10 @@
 //! Finite Socket.IO adapter self-echoes follow admitted PUBLISH calls, not subscription age.
 use super::*;
-use crate::dependency_index::{Paged, RecordRef};
+use crate::dependency_index::RecordRef;
 use inventory::NotificationEntry;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
+mod preparation;
 
 type Digest = [u8; 32];
 fn endpoint(record: &RecordedPush) -> TargetKey {
@@ -18,17 +19,17 @@ pub(super) type EchoIndex =
 #[derive(Debug, Default)]
 pub(super) struct Echoes {
     publishers: HashSet<(TargetKey, Digest)>,
+    channels: HashSet<(TargetKey, Vec<u8>)>,
 }
 impl Echoes {
     pub(super) fn register(&mut self, record: &RecordedExchange, args: &[Vec<u8>]) {
         if let Some(digest) = rpc::echo_digest(&args[0], &args[1]) {
-            self.publishers.insert((
-                TargetKey {
-                    host: normalize_host(&record.target_host),
-                    port: record.target_port,
-                },
-                digest,
-            ));
+            let target = TargetKey {
+                host: normalize_host(&record.target_host),
+                port: record.target_port,
+            };
+            self.publishers.insert((target.clone(), digest));
+            self.channels.insert((target, args[0].clone()));
         }
     }
     pub(super) fn controls(&self, record: &RecordedPush, digest: Option<Digest>) -> bool {
@@ -51,7 +52,6 @@ struct Job {
 enum JobInventory {
     Indexed {
         lane: usize,
-        pages: Paged<NotificationEntry>,
         source: Arc<crate::dependency_index::RecordSource>,
         index: Arc<OnceLock<EchoIndex>>,
     },
@@ -103,7 +103,7 @@ impl PubSubState {
                 {
                     return None;
                 }
-                let inventory = if let Some((lane, pages, source)) =
+                let inventory = if let Some((lane, _, source)) =
                     self.indexed.job(sub.source_connection, sub.sequence)
                 {
                     let indexed = &self.indexed.lanes[lane];
@@ -114,7 +114,6 @@ impl PubSubState {
                     }
                     JobInventory::Indexed {
                         lane,
-                        pages,
                         source,
                         index: indexed.echoes.clone(),
                     }
@@ -150,29 +149,12 @@ fn candidates(job: &JobInventory, prepared: &Prepared) -> Result<Vec<(PushId, Ve
     match job {
         JobInventory::Indexed {
             lane,
-            pages,
             source,
             index,
         } => {
             let lookup = index
-                .get_or_init(|| {
-                    let build = || -> Result<_> {
-                        let mut result: BTreeMap<Digest, Vec<(usize, NotificationEntry)>> =
-                            BTreeMap::new();
-                        for page in 0..pages.pages() {
-                            for (offset, entry) in pages.read_page(page)?.into_iter().enumerate() {
-                                if let Some(digest) = entry.adapter_echo {
-                                    result
-                                        .entry(digest)
-                                        .or_default()
-                                        .push((pages.page_start(page) + offset, entry));
-                                }
-                            }
-                        }
-                        Ok(result)
-                    };
-                    build().map_err(|error| format!("{error:#}"))
-                })
+                .get()
+                .context("adapter echo index was not prepared before Replay readiness")?
                 .as_ref()
                 .map_err(|error| anyhow!("adapter echo index unavailable: {error}"))?;
             if let Some(entries) = lookup.get(&prepared.digest) {

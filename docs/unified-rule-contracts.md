@@ -86,6 +86,18 @@ field ownership. Planning uses protected immutable artifacts and independent
 Target observations; it never rewrites recordings. See
 [SSE value contracts](sse-value-contracts.md).
 
+Rule planning and application do not require primary response status acceptance.
+Preflight always validates the selected Source values. When an available Target
+response has a different status, it is retained in
+`preflight.unvalidated_target_witnesses` with its Case, surface, reason and both
+statuses; it counts as neither a missing witness nor a validated Target pair.
+The plan returns `planned_needs_replay` and can be applied immediately, returning
+`applied_pending_replay`. This applies to JSON, HTTP header and native API
+response rules without classifying the cause of the status difference. Equal
+statuses retain strict Target value checks, including error statuses. Artifact
+authentication, decoding and stale checks remain mandatory. Applying the rule
+still requires fresh genuine Replay, whose status assertions remain strict.
+
 Inbound request JWT translation, Source capture admission, Source response
 rewrite, process ownership, API-origin attribution, finite sharing and snapshot
 admission remain explicit typed effects. They are not additional permissions

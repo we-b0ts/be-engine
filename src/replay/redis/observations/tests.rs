@@ -2,9 +2,24 @@ use super::super::append::tests::{event, request, rule as append_rule, state};
 use super::*;
 use serde_json::{Value, json};
 mod applicability;
+mod case_scope;
 mod foreign_reads;
+mod pooled_order;
 
-fn read_rule(epochs: bool) -> Value {
+#[test]
+fn concurrent_identity_reads_retain_their_state_transition_causal_fence() {
+    let mut events = vec![
+        event(1, "SET", &[b"current:1", b"old"], b"+OK\r\n"),
+        event(2, "GET", &[b"current:1"], b"$3\r\nold\r\n"),
+    ];
+    events[0]["timestamp"] = json!("2020-01-01T00:00:02.500Z");
+    events[1]["connection_id"] = json!(Uuid::from_u128(1));
+    let (_root, mut state) = state(&events, vec![read_rule(true)]);
+    assert!(state.prepare_observations("case").is_err());
+    assert!(state.observations.profiles.is_empty());
+}
+
+pub(super) fn read_rule(epochs: bool) -> Value {
     let mut r = json!({"id":"current-state","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"operation":"SET","key":{"kind":"affix","prefix":"current:"}},
         "effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1},
           "references":[{"resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0}}],

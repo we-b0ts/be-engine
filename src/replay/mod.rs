@@ -137,7 +137,7 @@ pub struct ReplayConfig {
 }
 
 pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 10;
-pub const DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS: u64 = 5_000;
+pub const DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(
     Debug,
@@ -725,6 +725,7 @@ pub(crate) use assertion::native::{
 };
 pub(crate) use assertion::{
     ResponsePayloadPair, compare_interaction_global, decode_sse, response_payload_pair,
+    response_rule_payload_pair,
 };
 pub(crate) use mysql::contracts::{
     request_candidates_related as mysql_request_candidates_related,

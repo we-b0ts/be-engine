@@ -546,7 +546,7 @@ mod tests {
         let case = directory.path().join("cases");
         std::fs::create_dir_all(&case).unwrap();
         let resolved = resolve(replay_args(Some(case.clone()), None)).unwrap();
-        assert_eq!(resolved.case_no_progress_timeout_ms, 5000);
+        assert_eq!(resolved.case_no_progress_timeout_ms, 2000);
         let config = directory.path().join("replay.yaml");
         std::fs::write(&config, "replay:\n  case_no_progress_timeout_ms: 12000\n").unwrap();
         assert_eq!(

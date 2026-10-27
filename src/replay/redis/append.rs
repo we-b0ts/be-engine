@@ -10,6 +10,8 @@ mod source;
 mod trace;
 pub(in crate::replay) use source::validate_source;
 #[cfg(test)]
+mod case_scope_tests;
+#[cfg(test)]
 mod identity_key_tests;
 #[cfg(test)]
 mod key_scope_tests;
@@ -121,10 +123,13 @@ impl AppendStreams {
         &self,
         record: &RecordedExchange,
         args: &[Vec<u8>],
+        source: ReplaySource,
+        case_id: Option<&str>,
     ) -> Result<()> {
         ensure!(
             !self.profiles.iter().any(|profile| {
-                record.database == profile.database
+                !super::case_scope::is_other_ordinary_case(&profile.case, source, case_id, record)
+                    && record.database == profile.database
                     && target_matches(&profile.target, &record.target_host, record.target_port)
                     && super::key_access::touches(&record.command, args, &profile.key)
             }),
@@ -359,11 +364,8 @@ impl RedisReplayState {
             .iter()
             .filter_map(|piece| {
                 let exchange = &self.exchanges[piece.index];
-                (!exchange.connection_independent
-                    && self
-                        .connection_scopes
-                        .is_stateful(exchange.record.connection_id))
-                .then_some(exchange.record.connection_id)
+                (!exchange.connection_independent && self.connection_scopes.is_stateful(exchange))
+                    .then_some(exchange.record.connection_id)
             })
             .collect::<BTreeSet<_>>();
         ensure!(
@@ -420,7 +422,7 @@ impl RedisReplayState {
         let rule_id = profile.rule.clone();
         let indices = pieces.iter().map(|p| p.index).collect::<Vec<_>>();
         for &index in &indices {
-            self.record_observation_mutation(index);
+            self.record_observation_mutation(index, args);
         }
         let profile = &mut self.append_streams.profiles[profile_index];
         profile.reserved = to;
@@ -441,6 +443,7 @@ impl RedisReplayState {
         }
         let exchange = &self.exchanges[index];
         Ok(Some(MatchedRedisExchange {
+            refresh: None,
             observation: None,
             append: Some(PreparedAppend {
                 profile: profile_index,

@@ -30,11 +30,13 @@ pub(super) fn prepare(
     };
     ensure!(
         !exchanges.iter().any(|e| same_database(e)
-            && (e.case_id.as_deref() != Some(case)
+            && !super::super::case_scope::is_other_ordinary_exchange(case, e)
+            && (e.source != ReplaySource::Case
+                || e.case_id.as_deref() != Some(case)
                 || normalize_optional(e.record.username.as_deref())
                     != normalize_optional(seed.record.username.as_deref()))
             && touches(&e.record.command, &e.args, &key)),
-        "append stream key overlaps another Case or Global inventory"
+        "append stream key overlaps Global/shared inventory or another Case-local authentication identity"
     );
     let mut timeline = exchanges
         .iter()
@@ -81,7 +83,7 @@ pub(super) fn prepare(
         in_flight: BTreeMap::new(),
         failed: false,
     };
-    let mut base = 0_usize;
+    let mut base = None;
     let mut epoch_start = 0_usize;
     let mut initial_known = true;
     let mut last_access: Option<&ReplayExchange> = None;
@@ -134,12 +136,27 @@ pub(super) fn prepare(
                 profile.pieces.len() < MAX_PIECES && offset + bytes.len() <= MAX_BYTES,
                 "append stream Source inventory exceeds bounds"
             );
+            let returned = integer(&exchange.response_bytes()?)?;
+            let appended = (offset - epoch_start)
+                .checked_add(bytes.len())
+                .context("append stream Source length overflow")?;
+            let base = match base {
+                Some(base) => base,
+                None => {
+                    // APPEND proves its own increment and resulting length;
+                    // the preexisting prefix bytes are outside this Case.
+                    let initial = returned
+                        .checked_sub(appended)
+                        .context("APPEND response is shorter than the appended Source bytes")?;
+                    base = Some(initial);
+                    initial
+                }
+            };
             let expected = base
-                .checked_add(offset - epoch_start)
-                .and_then(|n| n.checked_add(bytes.len()))
+                .checked_add(appended)
                 .context("append stream Source length overflow")?;
             ensure!(
-                integer(&exchange.response_bytes()?)? == expected,
+                returned == expected,
                 "APPEND response does not prove the cumulative Source byte length"
             );
             profile.bytes.extend_from_slice(bytes);
@@ -172,7 +189,7 @@ pub(super) fn prepare(
         let success = exchange.record.outcome == DependencyExchangeOutcome::Response;
         match exchange.record.command.as_str() {
             "DEL" | "UNLINK" if success && integer(&response).is_ok() => {
-                base = 0;
+                base = Some(0);
                 epoch_start = offset;
                 initial_known = true;
             }
@@ -182,11 +199,13 @@ pub(super) fn prepare(
                 } else {
                     2
                 };
-                base = exchange
-                    .args
-                    .get(value)
-                    .context("append stream reset lacks value")?
-                    .len();
+                base = Some(
+                    exchange
+                        .args
+                        .get(value)
+                        .context("append stream reset lacks value")?
+                        .len(),
+                );
                 epoch_start = offset;
                 initial_known = true;
             }

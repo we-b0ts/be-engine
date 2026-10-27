@@ -420,6 +420,22 @@ mod tests {
     use crate::e2e_run::model::MAX_TARGET_STARTUP_TIMEOUT_SECONDS;
 
     #[test]
+    fn replay_idle_budget_defaults_to_two_seconds_and_preserves_explicit_overrides() {
+        let absent: ReplayProjectConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(absent.case_no_progress_timeout_ms, 2000);
+        assert_eq!(
+            crate::replay::ReplayLifecycleConfig::default()
+                .case_no_progress_timeout
+                .as_millis(),
+            2000
+        );
+        let explicit: ReplayProjectConfig =
+            serde_json::from_value(serde_json::json!({"case_no_progress_timeout_ms":5000}))
+                .unwrap();
+        assert_eq!(explicit.case_no_progress_timeout_ms, 5000);
+    }
+
+    #[test]
     fn older_project_replay_settings_preserve_recorded_timing_until_fast_is_requested() {
         let absent: ReplayProjectConfig = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(absent.pre_match);

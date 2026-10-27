@@ -150,9 +150,11 @@ completion from repeated attempts.
 
 
 Replay dependency-tail idle waits use `project.replay.case_no_progress_timeout_ms`
-(default `5000`, positive), or direct `replay --case-no-progress-timeout-ms`.
+(default `2000`, positive), or direct `replay --case-no-progress-timeout-ms`.
 In-flight resource delivery retains its own I/O budget; no progress between
-calls ends only the current Case as `case_no_progress`. Inspect the execution
+calls ends only the current Case as `case_no_progress`. The message leads with
+recorded dependencies left unconsumed and asks Target implementers to inspect
+their corresponding calls; the idle wait is a secondary stop detail. Inspect the execution
 failure query and bounded pending references, independently of the primary
 HTTP status. The next Case continues. Read-only Replay `status` remains
 available during `end` and exposes `session.waiting`. This does not change

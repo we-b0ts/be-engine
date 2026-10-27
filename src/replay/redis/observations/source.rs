@@ -69,6 +69,7 @@ pub(super) fn prepare(
             .context("observation Source key missing")?
             .clone(),
         finite_prefix: vec![],
+        initial_accesses: vec![],
         epochs: vec![Epoch {
             mutation: None,
             observations: vec![],
@@ -76,6 +77,7 @@ pub(super) fn prepare(
         valid_for_seconds: None,
         prepared_at: chrono::Utc::now(),
         failed: false,
+        closed_expiry: vec![],
     };
     let mut timeline = Vec::new();
     for (index, e) in state.exchanges.iter().enumerate().filter(|(_, e)| {
@@ -94,18 +96,13 @@ pub(super) fn prepare(
         if !super::super::key_access::touches(&e.record.command, &e.args, &profile.key) {
             continue;
         }
-        if kind.is_read()
-            && e.shared_rule_id.is_none()
-            && !e.reusable_snapshot
-            && finite_other_case_get(case, e.source, e.case_id.as_deref(), &e.record, &e.args)
-        {
-            // A different Case's finite read neither mutates this key nor
-            // supplies this Case's write/read proof or observation slots.
+        if super::super::case_scope::is_other_ordinary_exchange(case, e) {
+            // Another ordinary Case owns its own state, observations and mutations.
             continue;
         }
         ensure!(
             e.source == ReplaySource::Case && e.case_id.as_deref() == Some(case),
-            "state observation key overlaps another Case or Global inventory"
+            "state observation key overlaps Global or explicitly shared inventory"
         );
         ensure!(
             e.shared_rule_id.is_none()
@@ -118,13 +115,17 @@ pub(super) fn prepare(
                 && e.record.resp_version == profile.resp_version
                 && normalize_optional(e.record.username.as_deref())
                     == normalize_optional(profile.username.as_deref())
-                && !state.connection_scopes.is_stateful(e.record.connection_id),
+                && !state.connection_scopes.is_stateful(e),
             "state observations require ordinary successful Case exchanges with one user/protocol"
         );
         timeline.push((index, e));
     }
     timeline.sort_by_key(|(index, e)| (e.record.started_at(), *index));
-    validate_causal_order(&timeline)?;
+    if kind == Kind::AbsentRead {
+        super::absence::validate_causal_order(&timeline)?;
+    } else {
+        validate_causal_order(&timeline)?;
+    }
     if kind == Kind::AbsentRead {
         super::absence::prepare(&mut profile, &mut timeline)?;
     }
@@ -170,8 +171,11 @@ pub(super) fn prepare(
         }
     }
     let mut value: Option<Vec<u8>> = None;
-    let mut alive = false;
+    // A successful expiry can observe a key that predates this Case. Read-back
+    // and absent-read permissions still need their own explicit state proof.
+    let mut alive = (kind != Kind::Expiry).then_some(false);
     let mut refresh: Option<Vec<Vec<u8>>> = None;
+    let key_trace = timeline.iter().map(|(index, _)| *index).collect::<Vec<_>>();
     let first = timeline
         .first()
         .and_then(|(_, e)| e.record.earliest_start());
@@ -202,20 +206,24 @@ pub(super) fn prepare(
                     positive_ttl(&mut profile, &e.args[2], &e.args[3])?;
                 }
                 value = Some(e.args[1].clone());
-                alive = true;
+                alive = Some(true);
                 new_epoch(&mut profile, index)?;
             }
             "DEL" | "UNLINK" => {
                 let removed = integer(&response)?;
                 let initial_absence = kind == Kind::AbsentRead && profile.epochs.len() == 1;
                 ensure!(
-                    removed >= i64::from(alive)
-                        && usize::try_from(removed).is_ok_and(|n| n <= e.args.len())
-                        && (initial_absence || e.args.len() != 1 || removed == i64::from(alive)),
+                    usize::try_from(removed).is_ok_and(|n| n <= e.args.len())
+                        && alive.is_none_or(|alive| {
+                            removed >= i64::from(alive)
+                                && (initial_absence
+                                    || e.args.len() != 1
+                                    || removed == i64::from(alive))
+                        }),
                     "state observation deletion has an invalid response"
                 );
                 value = None;
-                alive = false;
+                alive = Some(false);
                 new_epoch(&mut profile, index)?;
             }
             "GET" if kind.is_read() => {
@@ -243,7 +251,7 @@ pub(super) fn prepare(
                     e.args.len() == 2
                         && e.args[0] == profile.key
                         && integer(&response)? == 1
-                        && alive,
+                        && alive != Some(false),
                     "state observation supports only successful positive-TTL refreshes on a proven existing key"
                 );
                 positive_ttl(
@@ -255,6 +263,7 @@ pub(super) fn prepare(
                     },
                     &e.args[1],
                 )?;
+                alive = Some(true);
                 if kind == Kind::Expiry {
                     ensure!(
                         e.record.command == "EXPIRE",
@@ -268,6 +277,16 @@ pub(super) fn prepare(
                     } else {
                         refresh = Some(e.args.clone());
                     }
+                    if profile.epochs.len() == 1
+                        && profile.epochs[0].mutation.is_none()
+                        && profile.epochs[0].observations.is_empty()
+                    {
+                        profile.finite_prefix = key_trace
+                            .iter()
+                            .take_while(|&&candidate| candidate != index)
+                            .copied()
+                            .collect();
+                    }
                     profile.epochs.last_mut().unwrap().observations.push(index);
                 }
             }
@@ -276,27 +295,38 @@ pub(super) fn prepare(
                     e.args.len() == 2 && e.args[0] == profile.key && integer(&response)? >= 0,
                     "expiry refresh needs a successful Case APPEND"
                 );
-                if !alive {
+                if alive != Some(true) {
                     new_epoch(&mut profile, index)?;
                 }
-                alive = true;
+                alive = Some(true);
             }
             "RPUSH" | "LPUSH" if kind == Kind::Expiry => {
                 ensure!(
                     e.args.len() >= 2 && e.args[0] == profile.key && integer(&response)? > 0,
                     "expiry refresh needs a successful Case list creation"
                 );
-                if !alive {
+                if alive != Some(true) {
                     new_epoch(&mut profile, index)?;
                 }
-                alive = true;
+                alive = Some(true);
             }
-            "LSET" if kind == Kind::Expiry => ensure!(
-                alive && response == b"+OK\r\n",
-                "expiry refresh LSET lacks a known list"
-            ),
+            "LSET" if kind == Kind::Expiry => {
+                ensure!(
+                    alive != Some(false) && response == b"+OK\r\n",
+                    "expiry refresh LSET lacks an existing list"
+                );
+                alive = Some(true);
+            }
             "GET" | "MGET" | "GETRANGE" | "STRLEN" | "LRANGE" | "LLEN" | "EXISTS" | "TYPE"
-                if kind == Kind::Expiry => {}
+                if kind == Kind::Expiry =>
+            {
+                ensure!(
+                    profile.epochs.len() != 1
+                        || profile.epochs[0].observations.is_empty()
+                        || !observes_absence(e, &profile.key, &response),
+                    "initial existing-key expiry interval contains an absent-key observation"
+                );
+            }
             _ => anyhow::bail!(
                 "state observation key has an unsupported mutation, script or expiry observation"
             ),
@@ -323,10 +353,51 @@ pub(super) fn prepare(
         return Ok(None);
     }
     ensure!(observed, "state observations lack Source witnesses");
+    if kind == Kind::Expiry {
+        let first_mutation = profile.epochs.iter().find_map(|epoch| epoch.mutation);
+        for &index in &key_trace {
+            if Some(index) == first_mutation && profile.initial_accesses.is_empty() {
+                break;
+            }
+            let command = state.exchanges[index].record.command.as_str();
+            if !matches!(command, "EXPIRE" | "PEXPIRE") {
+                ensure!(
+                    profile.initial_accesses.len() < MAX_OBSERVATIONS,
+                    "initial existing-key accesses exceed the Source observation limit"
+                );
+                profile.initial_accesses.push(index);
+            }
+            if Some(index) == first_mutation {
+                break;
+            }
+        }
+        profile.closed_expiry = closed_expiry::prove(state, &profile, &key_trace);
+    }
     Ok(Some(profile))
 }
 
-fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Result<()> {
+fn observes_absence(exchange: &ReplayExchange, key: &[u8], response: &[u8]) -> bool {
+    let single_key = exchange.args.len() == 1 && exchange.args[0] == key;
+    match exchange.record.command.as_str() {
+        "GET" => single_key && (response == b"$-1\r\n" || response == b"_\r\n"),
+        "EXISTS" | "LLEN" => single_key && response == b":0\r\n",
+        "TYPE" => single_key && (response == b"+none\r\n" || response == b"$4\r\nnone\r\n"),
+        "LRANGE" => {
+            exchange.args.len() == 3
+                && exchange.args[0] == key
+                && exchange.args.get(1).is_some_and(|arg| arg == b"0")
+                && exchange.args.get(2).is_some_and(|arg| arg == b"-1")
+                && response == b"*0\r\n"
+        }
+        // Empty strings/ranges and a nil MGET member do not prove absence:
+        // MGET also returns nil for an existing key of a non-string type.
+        _ => false,
+    }
+}
+
+pub(in crate::replay::redis) fn validate_causal_order(
+    timeline: &[(usize, &ReplayExchange)],
+) -> Result<()> {
     let mut lanes = BTreeMap::new();
     let mut previous: Option<&ReplayExchange> = None;
     for (_, exchange) in timeline {
@@ -339,18 +410,33 @@ fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Result<()> {
             );
         }
         if let Some(before) = previous {
-            ensure!(
-                before.record.connection_id == exchange.record.connection_id
-                    || before
-                        .record
-                        .timestamp
-                        .zip(exchange.record.earliest_start())
-                        .is_some_and(|(end, start)| end <= start),
-                "state observation Source accesses overlap or lack causal clocks"
-            );
+            require_causal_order(before, exchange)?;
         }
         previous = Some(exchange);
     }
+    Ok(())
+}
+
+pub(super) fn require_causal_order(before: &ReplayExchange, after: &ReplayExchange) -> Result<()> {
+    ensure!(
+        before.record.connection_id == after.record.connection_id
+            || before
+                .record
+                .timestamp
+                .zip(after.record.earliest_start())
+                .is_some_and(|(end, start)| end <= start),
+        "state observation Source accesses overlap or lack causal clocks: \
+         before connection={} sequence={} start={:?} end={:?}; \
+         after connection={} sequence={} start={:?} end={:?}",
+        before.record.connection_id,
+        before.record.sequence,
+        before.record.earliest_start(),
+        before.record.timestamp,
+        after.record.connection_id,
+        after.record.sequence,
+        after.record.earliest_start(),
+        after.record.timestamp,
+    );
     Ok(())
 }
 

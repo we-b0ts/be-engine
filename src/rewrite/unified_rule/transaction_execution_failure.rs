@@ -47,7 +47,37 @@ fn overview_prioritizes_dependency_cause_without_replacing_the_retained_issue() 
     );
     assert_eq!(
         serde_json::to_value(fixture.state()).unwrap(),
-        serde_json::to_value(original).unwrap()
+        serde_json::to_value(&original).unwrap()
+    );
+
+    // Historical no-progress evidence retains its waiting details while leading with unused calls.
+    focused["cases"][0]["execution_failure"] = json!({
+        "kind":"case_no_progress","case_id":"case-1","request_completed":false,
+        "failures":[{"kind":"case_no_progress","waiting":{
+            "no_progress_timeout_ms":5000,"pending_source_dependencies":7,
+            "references":[{"reference":{"protocol":"mysql","sequence":1127},"state":"Available"}]
+        }}]
+    });
+    fs::write(&state_path, serde_yaml::to_string(&focused).unwrap()).unwrap();
+    let unconsumed = query_rewrite_evidence_for_scope(fixture.context(), &scope).unwrap();
+    assert_eq!(
+        unconsumed.facts["primary_failure"]["kind"],
+        "case_execution_incomplete"
+    );
+    assert!(
+        unconsumed
+            .next_step
+            .starts_with("Recorded Case dependencies remain unconsumed")
+    );
+    assert!(unconsumed.next_step.contains("corresponding Target calls"));
+    assert!(!unconsumed.next_step.contains("did not match"));
+    assert_eq!(
+        unconsumed.facts["execution_failures"][0]["failures"][0]["waiting"]["no_progress_timeout_ms"],
+        5000
+    );
+    assert_eq!(
+        unconsumed.facts["issue"],
+        serde_json::to_value(original.active_issue.as_ref().unwrap()).unwrap()
     );
 
     // A runtime interruption supersedes case failures without replacing the

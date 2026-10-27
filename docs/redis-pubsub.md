@@ -109,8 +109,15 @@ do not authorize new notifications. Each subscription retains its recorded
 database and authenticated identity; Redis PUBLISH fan-out remains independent
 of the publisher’s logical database. Other Global messages keep their recorded
 timing and bytes. Notification indexes retain only digests and locations; the
-sparse digest lookup is built from metadata on first admitted adapter use, with
-payloads loaded only for selected echoes.
+sparse digest lookups needed by the loaded adapter publishers are prepared from
+metadata before Replay publishes readiness. APIs without those publishers skip
+this preparation. Each subscription's lookup is shared across the session's
+Cases, while payloads are loaded only for selected echoes. Preparation runs on
+a blocking worker before Target connections are admitted, so the first PUBLISH
+and subsequent commands on its connection do not pay the full inventory scan.
+The lookup remains an in-memory session cache; a fresh Replay prepares its own
+lookup without reusing notification consumption state. Preparation failures stop
+startup, and preparation counts and elapsed time are logged without payloads.
 
  A Case-owned callback keeps its
 publisher pending until it reaches the confirmed subscriber. A late Global

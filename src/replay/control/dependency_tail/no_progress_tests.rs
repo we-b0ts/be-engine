@@ -5,7 +5,7 @@ use crate::replay::control::{begin_case, end_case, handle_control_request, run_c
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
-async fn default_five_second_idle_budget_ends_only_the_current_case() {
+async fn two_second_idle_reports_unconsumed_dependencies_and_preserves_session() {
     let fixture = fixture(Some(900_000), 1).await;
     let state = fixture.runtime.state.clone();
     state.lock().await.case_dependency_post_response_window = Duration::ZERO;
@@ -29,7 +29,7 @@ async fn default_five_second_idle_budget_ends_only_the_current_case() {
     {
         tokio::task::yield_now().await;
     }
-    tokio::time::advance(Duration::from_millis(4_999)).await;
+    tokio::time::advance(Duration::from_millis(1_999)).await;
     assert!(!ending.is_finished());
     tokio::time::advance(Duration::from_millis(26)).await;
     let ended = ending.await.unwrap();
@@ -38,8 +38,12 @@ async fn default_five_second_idle_budget_ends_only_the_current_case() {
     let (failure, _) =
         handle_control_request(command("case_execution_status"), state.clone(), None, None).await;
     assert_eq!(failure["kind"], "case_no_progress");
+    let reason = failure["failures"][0]["reason"].as_str().unwrap();
+    assert!(reason.starts_with("recorded dependencies remain unconsumed (pending: 1)"));
+    assert!(reason.contains("check whether Target executes the recorded calls"));
+    assert!(reason.contains("stopped waiting after 2000 ms"));
     let waiting = &failure["failures"][0]["waiting"];
-    assert_eq!(waiting["no_progress_timeout_ms"], 5000);
+    assert_eq!(waiting["no_progress_timeout_ms"], 2000);
     assert_eq!(waiting["pending_source_dependencies"], 1);
     assert_eq!(waiting["actual_io_in_flight"], false);
     assert_eq!(waiting["references"][0]["reference"]["protocol"], "redis");
@@ -63,6 +67,7 @@ async fn default_five_second_idle_budget_ends_only_the_current_case() {
         report["case_execution_failures"][0]["kind"],
         "case_no_progress"
     );
+    assert_eq!(report["case_execution_failures"][0]["reason"], reason);
     assert!(crate::replay::report_has_case_dirty_events(&report));
 }
 

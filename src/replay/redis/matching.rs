@@ -9,6 +9,9 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
     pub(super) fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
+        if self.activity_refresh.owns(exchange) {
+            return false;
+        }
         let original_source = exchange.args.as_slice();
         let original_actual = args;
         if exchange.source == ReplaySource::Case
@@ -209,6 +212,23 @@ impl RedisReplayState {
                 }
             })?;
             self.prepare_append_case(case).map_err(append::diagnostic)?;
+            self.prepare_activity_case(case).map_err(|error| {
+                CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: format!("activity refresh Source proof failed: {error:#}"),
+                }
+            })?;
+            if let Some(matched) = self.match_activity(
+                case,
+                target,
+                connection,
+                resp_version,
+                database,
+                username,
+                command,
+                args,
+            )? {
+                return Ok(matched);
+            }
             if command == "APPEND"
                 && let Some(matched) = self
                     .match_append(
@@ -379,6 +399,7 @@ impl RedisReplayState {
             }
         };
         self.check_observation_mutation(index)?;
+        self.check_activity_mutation(index)?;
         self.check_append_barrier(index, args)
             .map_err(append::diagnostic)?;
         let response = self.exchanges[index].response_bytes().map_err(|error| {
@@ -613,7 +634,12 @@ impl RedisReplayState {
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
         let observation = self.reserve_observation(index, args);
-        self.record_observation_mutation(index);
+        let refresh = self
+            .reserve_activity_mutation(index, args)
+            .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
+                reason: format!("activity lifecycle failed: {error:#}"),
+            })?;
+        self.record_observation_mutation(index, args);
         let exchange = &mut self.exchanges[index];
         let timing =
             if (exchange.reusable_snapshot || observation.is_some()) && exchange.matched_once {
@@ -631,6 +657,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Ok(MatchedRedisExchange {
+            refresh,
             observation,
             append: None,
             read_back,
@@ -723,6 +750,7 @@ impl RedisReplayState {
             ReplayExchangeStatus::Responding
         };
         Some(MatchedRedisExchange {
+            refresh: None,
             observation: None,
             append: None,
             unified_delivery: None,

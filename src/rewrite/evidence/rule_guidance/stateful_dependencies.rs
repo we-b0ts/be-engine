@@ -56,6 +56,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
                     "redis_read_observation",
                     "redis_read_back",
                     "redis_state_observations",
+                    "redis_activity_refresh",
                 ]);
             }
             if operation(cluster, "LRANGE") {
@@ -94,6 +95,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
                             "redis_read_observation",
                             "redis_read_back",
                             "redis_state_observations",
+                            "redis_activity_refresh",
                         ]);
                     }
                     Some("LRANGE") => {
@@ -123,6 +125,9 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
 
 fn instruction(capability: &str) -> &'static str {
     match capability {
+        "redis_activity_refresh" => {
+            "Declare redis.keys.<bounded-pattern>.activity_refresh: {fields: [/last_activity_at]} only for Source-proven metadata heartbeat refreshes; timestamp formats remain in json.fields. Prove the complete isolated SET/GET/DEL lifetime, byte-exact current-value Source reads, stable unselected object fields and one unchanged positive EX TTL. Target GET returns its current matched SET value, and each refresh SET requires an actual delivered GET and changes only declared current timestamps. Creation/deletion, stream bytes and content/list reads stay finite. No absent-key polling, arbitrary writes, APPEND permission or skipped reads is granted. See docs/redis-activity-refresh.md."
+        }
         "redis_finite_process_get" => {
             "For independently proven process work, declare process_dependencies.tasks.<actual-task>.requests with redis operation: GET, bounded ports and exact keys, omitting initial_load_timeout_ms. Every original response stays single-use, changing values stay distinct, and exhaustion fails. A task name is a grouping label, not captured issuer provenance: prove every selected Source occurrence independently of request paths, including sibling APIs using the same key. Existing snapshot seeds/hits cannot supply finite evidence. This classification grants no default response, wildcard, stateful-session relaxation or reuse; adding a positive initial_load_timeout_ms instead retains initialization snapshot acquisition and its fresh-recording obligation. See docs/process-owned-redis.md."
         }

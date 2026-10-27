@@ -5,6 +5,7 @@ mod admin_startup;
 mod assertion_publication;
 mod branch;
 mod case_progress;
+mod case_selection;
 mod config;
 mod delivery;
 mod dirty_evidence;
@@ -50,6 +51,7 @@ pub use admin_startup::{
     StartupSnapshotRecaptureOptions, StartupSnapshotRecaptureResult, recapture_startup_snapshot,
 };
 
+pub(crate) use case_selection::ReplayIteration;
 pub(crate) use config::render_project_config;
 pub(crate) use config::resolve_project;
 pub(crate) use config::with_project_resolution_cache;
@@ -163,6 +165,7 @@ pub(crate) struct E2eFocusedAttemptSummary {
     pub(crate) passed: bool,
     pub(crate) case_source: PathBuf,
     pub(crate) case_inventory_id: String,
+    pub(crate) selected_case_ids: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

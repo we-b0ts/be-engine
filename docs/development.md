@@ -149,6 +149,13 @@ total, returned and omitted counts. Follow `execution_failures_query` and each
 `pagination.next_page` for remaining Cases from the same issue attempt. Missing
 rows in the overview do not prove a Case had no rejected dependency.
 
+Terminal E2E `diagnosis.replay_finalized` reports session publication separately
+from selected-case coverage. A failure-limited attempt can finalize normally
+while its Replay gate remains incomplete. Such an attempt retains its observed
+dependency or response cause; incomplete coverage alone does not prove that
+Replay failed to finalize. Older results without this field keep conservative
+lifecycle attribution.
+
 Socket.IO interactions apply global `json.fields` at each event/ACK business
 argument root, just as other logical JSON carriers do. Protocol kind, namespace,
 normalized server event ACK identity, event name, argument order/count and binary
@@ -1886,6 +1893,8 @@ all recorded APIs.
 max_implementers: 16
 # Optional: continue passing Replay beyond a completed group when selected.
 auto_next: false
+# Skip previously passed cases during repair Replay; final revalidation stays full.
+retry_failed_only: false
 # Omitted or empty only selects every API in the recorded inventory.
 only:
   - "/api/users/*"
@@ -1893,6 +1902,32 @@ only:
 skip:
   - "/api/users"
 ```
+
+Set `retry_failed_only: true` to skip previously passed cases during repair Replay.
+The caller continues using `next`; the engine selects APIs as usual and filters
+their cases internally. The first attempt runs every case. Later attempts retain
+failed, incomplete and unexecuted cases, including cases left by the per-API
+failure limit, and accumulate passed-case skips within the same workflow and
+unchanged Source/API inventory. Final revalidation and standalone `run`/`run-api`
+always execute the full selected API inventory. Only the latest attempt is read:
+if it ran two cases and one passed cleanly, the next repair selects only the
+remaining case. Cases already omitted by that latest selection stay omitted.
+Independently completed clean cases remain eligible even when later session
+cleanup fails. A latest full result without selection metadata
+can supply those outcomes when its complete Source/API inventory matches.
+There is no scan, restoration or separate ledger for older attempts. Missing
+latest evidence starts a full baseline. The setting defaults to false and can be changed
+between attempts without changing target fingerprints.
+
+Skipped passes are scheduling history, never fresh response or dependency
+evidence. `diagnosis.case_selection` reports available, selected and skipped
+counts; other attempt counts describe only selected cases. Existing explicit
+localcache and cross-case dependency rules still load from the complete recording.
+Logical progress keeps the recorded case totals and cannot mark a partially
+selected API fully verified, even when that repair attempt passes.
+Skipping requests can nevertheless change application-local cache warmup or other
+state established by earlier requests. Use full Replay when cases depend on those
+side effects; the engine does not infer or synthesize cache contents.
 
 Set `auto_next: true` to let an unscoped `next` continue after fresh passing
 Replay when the next globally scheduled action is also Replay. During an active
@@ -2534,7 +2569,7 @@ slower hosts. It changes the execution budget, not response or dependency assert
 The target's native HTTP port is the port in
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback.
 
-`project.replay.case_no_progress_timeout_ms` defaults to `5000` and must be
+`project.replay.case_no_progress_timeout_ms` defaults to `2000` and must be
 positive. It bounds Replay-only idle waiting for unfinished dependency tails
 after the recorded primary inputs have completed. Real resource delivery,
 including an upstream SSE response, keeps its existing I/O budget; successful
@@ -2543,6 +2578,10 @@ does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
 CLI exposes the same setting as `--case-no-progress-timeout-ms`.
 
 On expiry, only the current Case records `case_no_progress` and ends incomplete.
+Its message leads with the number of recorded dependencies left unconsumed and
+asks Target implementers to check the corresponding calls. The idle wait and
+absence of in-flight dependency I/O are secondary stop details, rather than a
+claim that a Target call was rejected or that the primary HTTP request timed out.
 The next Case still runs. Native reports retain `case_execution_failures`,
 matched/Target-unmatched/Source-unused evidence and bounded pending Source
 references; runner execution-failure queries retain an independently observed
@@ -2888,6 +2927,9 @@ action projections reuse one snapshot per query; the next query reloads changed
 rules, sessions, and reports. Report checks deserialize only classification
 metadata and skip unrelated JSON values. Actual evidence revision still loads
 and validates the recording inventory and progress before writing anything.
+Both paths validate a repair subset using the same prepared API fingerprint and
+complete partition of selected and skipped passed cases. Missing, overlapping,
+unknown or duplicate case identities remain invalid; final Replay cannot skip.
 While case pattern identification waits, a pinned recording reuses the pending
 batch's persisted API observations even before installing the API inventory.
 Status still checks the completed recording manifest and current selectors;
@@ -3599,6 +3641,31 @@ artifact and changes no matching or acceptance result.
 their Case/dependency clocks, so admission time can be correlated with transport
 evidence without reading the private witness graph. A clock does not prove which
 application task initiated the call.
+
+`append_stream_progress` summarizes up to sixteen Source key fingerprint groups
+for that same Case, with each group's last retained APPEND admission cursor and
+up to eight original Source connection/sequence fragments. Grouping does not
+infer physical resource or state epoch ownership. Omitted groups, fragments and
+report-wide audit omissions remain explicit. These audits contain fingerprints and byte
+offsets, never stream contents. Admission does not prove transport delivery or
+Source consumption, and an omitted audit can advance a cursor beyond the last
+retained row. The selected unmatched call gains no inferred Source counterpart.
+
+Dependency-primary and Replay issues with a response representative also expose
+the existing bounded `case-response-differences` query. Dirty dependencies remain
+the first diagnosis; status, header and body differences remain independently
+queryable even when another Case was interrupted by a dependency rejection.
+
+For a suspected MySQL response-stream alignment defect, set
+`RUST_LOG=info,traffic_e2e::replay::mysql::wire_diagnostics=debug` on the normal
+engine workflow command. The existing replay log then includes a diagnostic
+connection ID, peer and connection-local command counter, receive/send packet
+sequence, payload length and response leading byte. The encoder's response kind
+and generated connection status flags distinguish PrepareOK metadata from an
+ordinary OK, which both start with zero. It records transport flush
+success and client EOF separately. A buffered message is not proof of a flush
+or client parsing. This trace is disabled by default and contains no SQL,
+parameters, column names or row values; no matching or protocol behavior changes.
 
 With Socket.IO `preserve_input_timing: false`, recorded client idle offsets are
 not slept. Explicit completion and actual server-event ACK bindings still gate

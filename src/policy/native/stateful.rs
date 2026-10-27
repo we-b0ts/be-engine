@@ -145,6 +145,13 @@ pub struct RedisReadCommutationEffect {}
 #[serde(deny_unknown_fields)]
 pub struct RedisExpiryRefreshEffect {}
 
+/// Only declared JSON timestamp leaves may change during a key's refresh lifetime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisActivityRefreshEffect {
+    pub fields: Vec<String>,
+}
+
 /// An explicit same-key read may return selected values from a matched write.
 /// Empty pointers select a raw bulk value; nonempty pointers select JSON scalars.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

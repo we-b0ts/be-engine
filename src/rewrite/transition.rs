@@ -112,6 +112,9 @@ fn current_attempt_delta(attempts: &[RewriteAttemptSummary]) -> Option<RewriteAt
     let [.., previous, current] = attempts else {
         return None;
     };
+    if previous.counts.selected != current.counts.selected {
+        return None;
+    }
     let passed_delta =
         current.counts.response_passed as i64 - previous.counts.response_passed as i64;
     let nonpassing_delta =

@@ -23,6 +23,7 @@ impl RedisReplayState {
             })
             .collect::<Vec<_>>();
         json!({"count":count, "references":references, "omitted":count.saturating_sub(4),
-            "observations":self.observations.in_flight_diagnostic()})
+            "observations":self.observations.in_flight_diagnostic(),
+            "activity_refreshes":self.activity_refresh.in_flight_diagnostic()})
     }
 }
