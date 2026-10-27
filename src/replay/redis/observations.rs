@@ -246,7 +246,15 @@ impl RedisReplayState {
                     profiles.len() < MAX_KEYS,
                     "state observations exceed Case key limit"
                 );
-                profiles.extend(source::prepare(self, case, &rule.id, kind, seed)?);
+                profiles.extend(
+                    source::prepare(self, case, &rule.id, kind, seed).with_context(|| {
+                        format!(
+                            "state observation rule={} key_fingerprint={} case={case}",
+                            rule.id,
+                            fingerprint(&seed.args[0]),
+                        )
+                    })?,
+                );
             }
         }
         ensure!(

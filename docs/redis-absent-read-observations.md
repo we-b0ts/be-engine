@@ -21,6 +21,15 @@ non-nil observations, multi-key access, foreign mutations, stateful connections
 and transactional ownership reject the proof. Ordinary finite reads in another
 Case neither establish this lifetime nor supply observations for it.
 
+Source accesses on different connections can overlap inside the established
+absent state. Observations and later deletions preserve that same state, so they
+need no artificial total order across connections. Every connection retains its
+wire order and concurrent evidence requires complete request/response clocks.
+The initial deletion remains causally fenced from all historical and subsequent
+accesses; overlapping that initial reset is rejected. All Source state and
+ownership checks still complete before any permission is installed. Identity
+read-back and expiry-refresh contracts retain their own causal requirements.
+
 One successful Target observation can cover recorded nil reads in its current
 epoch; additional reads can repeat that same witnessed nil response. The initial
 deletion must finish delivery before permission begins. The closing deletion

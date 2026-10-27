@@ -124,7 +124,11 @@ pub(super) fn prepare(
         timeline.push((index, e));
     }
     timeline.sort_by_key(|(index, e)| (e.record.started_at(), *index));
-    validate_causal_order(&timeline)?;
+    if kind == Kind::AbsentRead {
+        super::absence::validate_causal_order(&timeline)?;
+    } else {
+        validate_causal_order(&timeline)?;
+    }
     if kind == Kind::AbsentRead {
         super::absence::prepare(&mut profile, &mut timeline)?;
     }
@@ -326,7 +330,7 @@ pub(super) fn prepare(
     Ok(Some(profile))
 }
 
-fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Result<()> {
+pub(super) fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Result<()> {
     let mut lanes = BTreeMap::new();
     let mut previous: Option<&ReplayExchange> = None;
     for (_, exchange) in timeline {
@@ -339,18 +343,33 @@ fn validate_causal_order(timeline: &[(usize, &ReplayExchange)]) -> Result<()> {
             );
         }
         if let Some(before) = previous {
-            ensure!(
-                before.record.connection_id == exchange.record.connection_id
-                    || before
-                        .record
-                        .timestamp
-                        .zip(exchange.record.earliest_start())
-                        .is_some_and(|(end, start)| end <= start),
-                "state observation Source accesses overlap or lack causal clocks"
-            );
+            require_causal_order(before, exchange)?;
         }
         previous = Some(exchange);
     }
+    Ok(())
+}
+
+pub(super) fn require_causal_order(before: &ReplayExchange, after: &ReplayExchange) -> Result<()> {
+    ensure!(
+        before.record.connection_id == after.record.connection_id
+            || before
+                .record
+                .timestamp
+                .zip(after.record.earliest_start())
+                .is_some_and(|(end, start)| end <= start),
+        "state observation Source accesses overlap or lack causal clocks: \
+         before connection={} sequence={} start={:?} end={:?}; \
+         after connection={} sequence={} start={:?} end={:?}",
+        before.record.connection_id,
+        before.record.sequence,
+        before.record.earliest_start(),
+        before.record.timestamp,
+        after.record.connection_id,
+        after.record.sequence,
+        after.record.earliest_start(),
+        after.record.timestamp,
+    );
     Ok(())
 }
 

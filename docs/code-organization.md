@@ -347,7 +347,8 @@ is unclear.
   Stream key selection reuses the request-contract owner's projection of
   already accepted complete identities; stream bytes remain with the APPEND owner.
   `redis/observations/absence` proves absent-state read lifetimes between owned
-  deletion boundaries; the existing observation runtime owns bounded repeats,
+  deletion boundaries and concurrent accesses that preserve that proven state,
+  retaining per-connection order and initial-reset causal fences. The existing observation runtime owns bounded repeats,
   delivery and audit. Native policy compilation and normal plan/apply retain
   permission ownership. `redis/read_commutation` owns explicit finite nil-observation ordering
   permission; its `source` child rejects mutations and overlapping ownership
