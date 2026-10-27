@@ -195,6 +195,7 @@ pub(crate) fn primary_interaction_failure(
     use crate::interaction::model::EndReason;
     let failure = match reason {
         EndReason::RequestTimeout => "interaction_request_timeout",
+        EndReason::DependencyFailure => "interaction_dependency_failure",
         EndReason::MaxDuration => "interaction_max_duration",
         EndReason::TransportError => "interaction_transport_error",
         EndReason::ProtocolError => "interaction_protocol_error",

@@ -188,6 +188,78 @@ fn global_fields_apply_to_foreign_json_in_every_database() {
     }
 }
 
+fn interrupted_foreign_execution(fixture: &Fixture) -> PathBuf {
+    let replay = foreign_execution(fixture, &event("2026-10-16"), "2026-10-17");
+    let state_path = replay
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("state.yaml");
+    let mut state: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    state["status"] = "interrupted".into();
+    state["replay_finalized"] = false.into();
+    state["aggregate_complete"] = false.into();
+    for name in ["assertions_report", "aggregate_report"] {
+        fs::remove_file(state[name].as_str().unwrap()).unwrap();
+    }
+    fs::write(&state_path, serde_yaml::to_string(&state).unwrap()).unwrap();
+    state_path
+}
+
+#[test]
+fn interrupted_foreign_attempt_preserves_source_coverage_and_fresh_replay_obligation() {
+    let fixture = fixture();
+    interrupted_foreign_execution(&fixture);
+    fixture.confirm();
+    let plan = fixture.plan().unwrap();
+    let preflight = &plan.traffic_e2e_report["preflight"];
+    assert_eq!(preflight["source_validations"], 3);
+    assert_eq!(preflight["independent_target_validations"], 2);
+    assert_eq!(preflight["missing_target_witnesses"], 1);
+    assert!(
+        preflight["resource_scope"]["unavailable_executions"]["POST /other"]["sha256"]
+            .as_str()
+            .is_some()
+    );
+    apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+    assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+}
+
+#[test]
+fn interrupted_foreign_attempt_identity_and_later_completion_invalidate_the_plan() {
+    for completed in [false, true] {
+        let fixture = fixture();
+        let state_path = interrupted_foreign_execution(&fixture);
+        fixture.confirm();
+        let plan = fixture.plan().unwrap();
+        if completed {
+            foreign_execution(&fixture, &event("2026-10-16"), "2026-10-17");
+        } else {
+            let mut state: serde_yaml::Value =
+                serde_yaml::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+            state["sequence"] = 2.into();
+            fs::write(&state_path, serde_yaml::to_string(&state).unwrap()).unwrap();
+        }
+        assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
+        assert!(
+            fs::read_to_string(fixture.policy())
+                .unwrap()
+                .contains("rules: []")
+        );
+    }
+}
+
+#[test]
+fn missing_artifacts_in_a_complete_foreign_attempt_remain_an_error() {
+    let fixture = fixture();
+    let replay = foreign_execution(&fixture, &event("2026-10-16"), "2026-10-17");
+    fs::remove_file(replay.parent().unwrap().join("assertions.json")).unwrap();
+    fixture.confirm();
+    assert!(fixture.plan().is_err());
+}
+
 #[test]
 fn resource_scope_validates_independent_foreign_target_observations() {
     for date in ["2026-10-18", "2026-10-17"] {

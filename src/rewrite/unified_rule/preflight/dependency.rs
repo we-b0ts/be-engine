@@ -54,7 +54,7 @@ pub(super) fn selects_native_sql(rule: &CompiledNativeRule, event: &Value) -> Re
     crate::replay::mysql_native_witness_matches(event, rule)
 }
 
-pub(in crate::rewrite::unified_rule) fn source_witness(
+pub(in crate::rewrite) fn source_witness(
     surface: Surface,
     event: &Value,
     key_context: &Path,
@@ -159,7 +159,7 @@ pub(super) fn compare_pair(
     Ok(report.evaluated.len())
 }
 
-pub(in crate::rewrite::unified_rule) fn values(
+pub(in crate::rewrite) fn values(
     surface: Surface,
     event: &Value,
     raw: &[u8],

@@ -21,6 +21,11 @@ continue to apply; a failure requiring Source isolation ends the wait early.
 After this wait, the supervisor stops Source and then closes retained dependency
 connections as engine cleanup before finalizing the recording.
 
+The run manifest distinguishes external SIGTERM/SIGINT (`shutdown_signal`) from
+an internal safety stop (`source_isolation_required`). Source isolation can
+complete a valid recording after an asynchronous dependency failure or deadline;
+it does not imply that the operator stopped the container.
+
 If an uncommitted case is still incomplete after 15 seconds, it fails with
 `shutdown_case_drain_timeout`. An earlier independent case failure is preserved.
 The supervisor writes `recording-shutdown.json` before stopping Source, retaining
@@ -71,11 +76,18 @@ An API that returns before its work finishes can retain the ordinary Case with
 ```yaml
 async_api:
   POST /api/v1/responses:
-    when: {/background: true}
-    end:
-      - mysql:
-          sql: "UPDATE jobs SET status = 'completed' WHERE id = ?"
-      - redis: {operation: DEL, key: 'job:finished:*'}
+    - when_response: {/status: queued}
+      end:
+        - http:
+            method: POST
+            endpoint: executor.example.com:80
+            path: /submit
+    - when: {/background: true}
+      when_response: {/status: in_progress}
+      end:
+        - mysql:
+            sql: "UPDATE jobs SET status = 'completed' WHERE id = ?"
+        - redis: {operation: DEL, key: 'job:finished:*'}
 ```
 
 These are illustrative terminal resources; choose the actual final dependency
@@ -91,16 +103,46 @@ Optional database and endpoint selectors
 restrict the physical resource; omitted database selectors match any Source
 database. Source and Target still use the same physical connection identity.
 
-Source request JSON selects the asynchronous lifecycle. Dependencies remain in
+Each API accepts an ordered scenario array. `when` matches literal Source request
+JSON fields; `when_response` matches literal fields in the complete Source
+response JSON. All fields in each condition must match. Optional
+`unless_response` excludes a scenario when all its fields match; for example,
+`unless_response: {/is_latest: true}` excludes a distinct response variant.
+Missing fields differ from JSON null, and strings are not coerced into booleans.
+The first scenario satisfying both request and response conditions selects the
+lifecycle. Completion resources and occurrence counts are isolated by scenario.
+The legacy single-scenario mapping remains accepted. Target response content
+never selects an asynchronous lifecycle.
+
+HTTP ends require a complete successful dependency exchange for the declared
+method, physical endpoint and exact path; query parameters do not affect path
+selection. The default accepts any 2xx status; optional `status_codes: [200, 202]`
+restricts successful statuses. A connection or request send alone cannot prove
+completion. A submission end covers the acknowledged handoff, not subsequent
+work: a later executor callback is a separate inbound HTTP request. Choose
+conditions that identify the actual submission branch; `queued` alone is not a
+universal executor mode indicator.
+
+Dependencies remain in
 the ordinary Case after the primary response is sent. Any declared terminal
 resource, any ordinary dependency failure, or the existing common request
 deadline completes observation. There is no policy timeout or failure toggle.
 Known process-owned traffic does not end or become part of the Case. A terminal
 access observed before the primary response finishes is retained without
-truncating that response.
+truncating that response. When response conditions select a scenario, its early
+events are retained from case admission; an HTTP dependency may finish before,
+after, or across the primary response. If no scenario matches, ordinary capture
+and dependency drain apply without an asynchronous wait.
+
+Optional `CLIENT SETINFO LIB-NAME` / `LIB-VER` exchanges use the same precise SDK
+metadata exemption as semantic dependency recording. An unsupported metadata
+reply cannot finish asynchronous business observation or request Source
+isolation. Required setup failures (`AUTH`, `SELECT`, `HELLO`), incomplete or
+unsafe exchanges, and business-command errors retain their failure behavior.
 
 `async-api-observation.json` records `end_reason` as `resource`,
-`dependency_failure`, or `timeout`. The latter two stop Source through normal
+`dependency_failure`, or `timeout`, together with the zero-based selected
+`scenario_index`. The latter two end reasons stop Source through normal
 recording supervision so its detached worker cannot leak into another Case.
 Admitted I/O retains its original ownership until the real termination and queued
 evidence have drained. The ordinary Case and recording finish normally; this is

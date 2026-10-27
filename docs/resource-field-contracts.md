@@ -284,6 +284,10 @@ A root `mysql: {}` enables automatic native time inference without scalar
 declarations. DATE, DATETIME and TIMESTAMP inference uses recorded wire types and physical
 column origins. Only an inferred value near the independent Source request
 clock is translated on input delivery; historical and epoch values remain exact.
+Each inferred or globally declared scalar time is checked independently at its
+physical SQL value or result cell. Sharing a native type or format does not
+declare a cross-column or cross-row clock relationship; those relationships
+require an explicit contextual rule.
 Column names such as `created_at` are not type evidence. JSON
 payload recognition is independent of the physical column declaration. Where
 the recorded protocol or SQL shape does not establish a safe native type or
@@ -392,9 +396,11 @@ The plan reports declaration additions, changes and removals before publication.
 Additional native effects retain their own explicit plan/apply lifecycle.
 
 Recording lifecycle is separate from value formats. `async_api` matches the
-original API and literal request JSON fields, then retains the case until a
+original API and literal Source request/response JSON fields, selecting the
+first matching scenario in its ordered array, then retains the case until a
 declared successful resource, an ordinary dependency access failure or the
-engine's existing request deadline. An end resource's bounded `occurrence`
+engine's existing request deadline. HTTP terminals require a complete successful
+exchange at the declared endpoint, method and path. A Redis end's bounded `occurrence`
 counts successful commands for one physical resource. Lifecycle changes affect
 capture fingerprints and require fresh recording evidence. Existing complete
 Source cases can still replay when their immutable dependency inventory proves

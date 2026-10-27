@@ -8,6 +8,10 @@ use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
+mod close_completion;
+mod fast_execution;
+mod heartbeat_behavior;
+
 fn policy() -> InteractionPolicy {
     InteractionPolicy {
         business_idle_ms: 100,

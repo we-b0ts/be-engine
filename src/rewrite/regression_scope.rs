@@ -32,10 +32,12 @@ pub(super) fn has_skips(state: &RewriteState) -> bool {
 pub(super) fn apply(target_root: &Path, state: &mut RewriteState) -> Result<bool> {
     let policy = config::RegressionScope::load(target_root)?;
     // A running deterministic traffic operation finishes before inputs change.
-    if !matches!(
-        super::traffic_operation::state(target_root)?,
-        super::traffic_operation::TrafficOperationState::Absent
-    ) {
+    if super::execution::owned_by_other_process(target_root)?
+        || !matches!(
+            super::traffic_operation::state(target_root)?,
+            super::traffic_operation::TrafficOperationState::Absent
+        )
+    {
         return Ok(false);
     }
     let mut changed = recording::apply(target_root, state, &policy)?;

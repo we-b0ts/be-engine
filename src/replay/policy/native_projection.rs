@@ -103,6 +103,7 @@ pub(in crate::replay) fn project_native(
             // Native protocol owners consume these typed effects directly.
             n::NativeEffect::RedisAppendStream
             | n::NativeEffect::RedisReadCommutation(_)
+            | n::NativeEffect::RedisReadObservation
             | n::NativeEffect::RedisExpiryRefresh(_) => (),
             n::NativeEffect::InputJwt(effect) => input(&mut output, rule, effect)?,
             // The inbound runtime consumes this typed effect directly; no

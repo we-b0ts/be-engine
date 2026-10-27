@@ -4,6 +4,7 @@ use anyhow::{Result, ensure};
 use serde_json::Value;
 use std::collections::BTreeMap;
 mod contracts;
+mod socketio;
 pub(crate) use contracts::decode_sse;
 
 use super::model::ResponseAssertionCaseReport;
@@ -112,6 +113,7 @@ pub(crate) fn compare_outputs_global(
     let expected_events = comparable(expected)?;
     let actual_events = comparable(actual)?;
     let sse = expected.protocol == Protocol::Sse && actual.protocol == Protocol::Sse;
+    let socketio = expected.protocol == Protocol::SocketIo && actual.protocol == Protocol::SocketIo;
     if expected_events.len() != actual_events.len() {
         mismatch(&mut report, "$interaction/events/length");
     }
@@ -132,21 +134,31 @@ pub(crate) fn compare_outputs_global(
             if expected.kind != actual.kind {
                 mismatch(&mut report, &pointer);
             }
-            let mut comparison = crate::value_contract::global::compare(
-                &expected.decode()?,
-                &actual.decode()?,
-                global,
-                &[],
-                crate::value_contract::json::AnchorClocks {
-                    case: times,
-                    dependency: times,
-                    ..Default::default()
-                },
-            )?;
+            let adapted = if socketio {
+                socketio::compare_message(expected, actual, global, times, &pointer)?
+            } else {
+                None
+            };
+            let mut comparison = if let Some(comparison) = adapted {
+                comparison
+            } else {
+                let mut comparison = crate::value_contract::global::compare(
+                    &expected.decode()?,
+                    &actual.decode()?,
+                    global,
+                    &[],
+                    crate::value_contract::json::AnchorClocks {
+                        case: times,
+                        dependency: times,
+                        ..Default::default()
+                    },
+                )?;
+                for difference in &mut comparison.differences {
+                    difference.pointer = format!("{pointer}/data{}", difference.pointer);
+                }
+                comparison
+            };
             comparison.scope_schema_clocks(index);
-            for difference in &mut comparison.differences {
-                difference.pointer = format!("{pointer}/data{}", difference.pointer);
-            }
             report.merge_and_validate(comparison);
         } else if expected != actual {
             mismatch(&mut report, &pointer);
@@ -160,10 +172,13 @@ fn partial_message(observation: &OutputObservation) -> Result<Option<Vec<u8>>> {
         return Ok(None);
     };
     ensure!(
-        observation.end.reason == crate::interaction::model::EndReason::ClientClose
-            && matches!(observation.protocol, Protocol::Sse | Protocol::Ndjson)
+        matches!(
+            observation.end.reason,
+            crate::interaction::model::EndReason::ClientClose
+                | crate::interaction::model::EndReason::DependencyFailure
+        ) && matches!(observation.protocol, Protocol::Sse | Protocol::Ndjson)
             && message.kind == MessageKind::Binary,
-        "partial stream message requires binary evidence of a framed HTTP client close"
+        "partial stream message requires binary evidence of a framed HTTP close or failed dependency"
     );
     let bytes = message.decode()?;
     ensure!(!bytes.is_empty(), "partial stream message cannot be empty");

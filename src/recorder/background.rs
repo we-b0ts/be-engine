@@ -341,12 +341,13 @@ impl BackgroundDependencyMatcher {
             .map(|rule| rule.name.as_str())
             .or_else(|| {
                 self.rules.iter().find_map(|rule| {
-                    crate::config::process_owned_dependencies::redis_rule_matches(
-                        rule,
-                        target_port,
-                        command,
-                        args,
-                    )
+                    (rule.uses_redis_snapshot()
+                        && crate::config::process_owned_dependencies::redis_rule_matches(
+                            rule,
+                            target_port,
+                            command,
+                            args,
+                        ))
                     .then(|| rule.name())
                 })
             })
@@ -360,7 +361,7 @@ impl BackgroundDependencyMatcher {
                 matches!(
                     rule,
                     BackgroundDependencyRuleConfig::Redis { ports, trigger_source: None, .. }
-                        if ports.contains(&port)
+                        if rule.uses_redis_snapshot() && ports.contains(&port)
                 )
             })
     }

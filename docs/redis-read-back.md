@@ -32,12 +32,22 @@ a different physical endpoint/database, another authentication identity or an
 ambiguous write cannot supply the value. GETs before the first owned successful
 SET retain their ordinary finite inventory and fence that first mutation.
 Profiles with no supported successful SET remain ordinary finite traffic.
+Ordinary single-key GETs in other Cases retain their own finite responses and
+neither block this Case's owned state nor borrow its Target writes. Cross-Case
+mutations and Global/shared/reusable inventory remain proof conflicts.
 
 Current-state observations can reuse a proven response within one SET/DEL
 lifetime, but every Source-observed state must still be observed by Target.
 Creation, deletion and all other mutations remain finite. TTL, lane, response
 outcome and successful delivery checks remain with the Redis adapter. See
 [state observations](redis-state-observations.md) for state boundaries and limits.
+
+When global JSON delivery and native read-back both apply, their complete
+logical JSON values must agree, including all stable fields, established
+identities and exact timestamps copied from the successful write. JSON object
+order, whitespace and equivalent escapes do not create a value conflict.
+After validation, Redis delivers the native write's original bytes. Scalar
+values, unselected carriers and every surrounding RESP byte remain exact.
 
 Additional list or compound write/read relationships not expressed by the
 compact key declaration retain their typed native `identity`/`redis_sequence`

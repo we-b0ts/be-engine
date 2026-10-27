@@ -72,7 +72,7 @@ pub(crate) fn validate_native_source_dependencies(
                     "duplicate complete Source exchange identity"
                 );
             }
-            match event["event_type"].as_str() {
+            let validation = match event["event_type"].as_str() {
                 Some("redis_exchange") => redis::validate(
                     &mut runtime,
                     &mut redis_state,
@@ -80,13 +80,19 @@ pub(crate) fn validate_native_source_dependencies(
                     case,
                     event,
                     &mut coverage,
-                )?,
-                Some("http_exchange") => http::validate(&mut runtime, case, event, &mut coverage)?,
-                Some("mysql_exchange") => {
-                    mysql::validate(&mut runtime, case, event, &mut coverage)?
-                }
-                _ => (),
-            }
+                ),
+                Some("http_exchange") => http::validate(&mut runtime, case, event, &mut coverage),
+                Some("mysql_exchange") => mysql::validate(&mut runtime, case, event, &mut coverage),
+                _ => Ok(()),
+            };
+            validation.with_context(|| format!(
+                "Source dependency proof failed: case={}, event_type={}, connection_id={}, sequence={}",
+                case.id,
+                event["event_type"].as_str().unwrap_or("unknown"),
+                event["connection_id"].as_str().unwrap_or("unknown"),
+                event["sequence"].as_u64().or_else(|| event["query_sequence"].as_u64())
+                    .map_or_else(|| "unknown".into(), |sequence| sequence.to_string()),
+            ))?;
         }
     }
     runtime.request_contracts.finish_source_session()?;
@@ -132,6 +138,7 @@ fn dependency_effect(effect: &NativeEffect) -> bool {
         NativeEffect::Identity(_)
             | NativeEffect::RedisAppendStream
             | NativeEffect::RedisReadCommutation(_)
+            | NativeEffect::RedisReadObservation
             | NativeEffect::RedisExpiryRefresh(_)
             | NativeEffect::RedisSequence(_)
             | NativeEffect::HttpRequest(_)

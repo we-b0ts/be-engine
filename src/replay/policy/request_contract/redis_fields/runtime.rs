@@ -169,6 +169,15 @@ impl RequestContracts {
             } else {
                 crate::value_contract::global::compare(source, actual, global, &[], clocks)?
             };
+            let comparison = self.pre_match_value(
+                case,
+                source,
+                actual,
+                global,
+                clocks,
+                comparison,
+                !value.stored || !self.has_time_copies(case),
+            );
             compared.merge_and_validate(comparison);
         }
         Ok(compared)

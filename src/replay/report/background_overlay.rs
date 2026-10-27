@@ -490,12 +490,14 @@ fn take_array(object: &mut serde_json::Map<String, Value>, field: &str) -> Vec<V
 fn dirty_case_ids(report: &Value) -> BTreeSet<String> {
     let mut case_ids = BTreeSet::new();
     for field in [
+        "case_execution_failures",
         "unmatched_queries",
         "unsupported_commands",
         "unused_case_exchanges",
         "unmatched_http_requests",
         "unsupported_http_exchanges",
         "http_request_header_mismatches",
+        "dependency_pre_matches",
         "unused_case_http_exchanges",
     ] {
         collect_case_ids(report, field, &mut case_ids);

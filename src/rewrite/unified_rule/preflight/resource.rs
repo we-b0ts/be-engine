@@ -14,6 +14,8 @@ pub(super) struct ResourceRecord {
     /// Only identities/counts are public; original payloads remain protected.
     pub affected_apis: BTreeSet<String>,
     executions: BTreeMap<String, Option<Vec<Artifact>>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    unavailable_executions: BTreeMap<String, Artifact>,
 }
 
 pub(super) fn selected(policy: &CompiledPolicy, ids: &BTreeSet<String>) -> BTreeSet<String> {
@@ -51,16 +53,28 @@ fn context(root: &Path, source: &Path) -> crate::E2eRunContext {
     }
 }
 
-fn execution(root: &Path, source: &Path, api: &str) -> Result<Option<Vec<Artifact>>> {
+fn execution(
+    root: &Path,
+    source: &Path,
+    api: &str,
+) -> Result<(Option<Vec<Artifact>>, Option<Artifact>)> {
     crate::rewrite::rule_plans::events::ensure_not_replaying(root, api)?;
-    crate::e2e_run::optional_response_rule_evidence(context(root, source), api)?
-        .map(|(e, state)| {
-            [e.replay, e.assertions, e.aggregate, state]
-                .iter()
-                .map(|path| Artifact::capture(path))
-                .collect()
-        })
-        .transpose()
+    use crate::e2e_run::OptionalResponseRuleEvidence;
+    match crate::e2e_run::optional_response_rule_evidence(context(root, source), api)? {
+        OptionalResponseRuleEvidence::Absent => Ok((None, None)),
+        OptionalResponseRuleEvidence::Unavailable(state) => {
+            Ok((None, Some(Artifact::capture(&state)?)))
+        }
+        OptionalResponseRuleEvidence::Available(e, state) => Ok((
+            Some(
+                [e.replay, e.assertions, e.aggregate, state]
+                    .iter()
+                    .map(|path| Artifact::capture(path))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            None,
+        )),
+    }
 }
 
 fn groups(index: Option<&Path>, source: &Path) -> Result<BTreeMap<String, String>> {
@@ -96,8 +110,10 @@ impl ResourceRecord {
             );
         }
         for (api, evidence) in &self.executions {
+            let (current, unavailable) = execution(root, &self.case_source, api)?;
             ensure!(
-                execution(root, &self.case_source, api)? == *evidence,
+                current == *evidence
+                    && unavailable.as_ref() == self.unavailable_executions.get(api),
                 "resource Target execution changed after planning; obtain fresh evidence"
             );
         }
@@ -230,6 +246,7 @@ pub(super) fn prepare(
         case_groups: BTreeMap::new(),
         affected_apis: BTreeSet::new(),
         executions: BTreeMap::new(),
+        unavailable_executions: BTreeMap::new(),
     };
     let mut foreign: BTreeMap<String, BTreeMap<String, PathBuf>> = BTreeMap::new();
     for file in files {
@@ -283,7 +300,7 @@ pub(super) fn prepare(
     }
     let mut output = Vec::new();
     for (api, cases) in foreign {
-        let evidence = execution(root, case_source, &api)?;
+        let (evidence, unavailable) = execution(root, case_source, &api)?;
         let mut other = Bundle {
             inventory_path: bundle.inventory_path.clone(),
             replay_path: bundle.replay_path.clone(),
@@ -292,6 +309,16 @@ pub(super) fn prepare(
             cases,
             artifacts: BTreeMap::new(),
         };
+        if let Some(unavailable) = unavailable {
+            other.freeze(&unavailable.path)?;
+            ensure!(
+                other.artifacts[&unavailable.path] == unavailable,
+                "unfinished foreign Replay changed while planning"
+            );
+            record
+                .unavailable_executions
+                .insert(api.clone(), unavailable);
+        }
         if let Some(artifacts) = &evidence {
             for artifact in artifacts {
                 other.freeze(&artifact.path)?;

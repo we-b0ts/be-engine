@@ -3,14 +3,16 @@ use crate::policy::{AsyncMysqlEnd, AsyncRedisEnd};
 use crate::recorder::{
     MysqlExchangeEvent, MysqlExchangeResponse, RedisExchangeEvent, capture_body,
 };
+use hyper::Method;
 use serde_json::json;
 use uuid::Uuid;
 
-fn scope(end: Vec<AsyncEnd>) -> AsyncScope {
-    AsyncScope {
-        api: "POST /api/v1/responses".into(),
+fn scope(end: Vec<AsyncEnd>) -> ResourceScope {
+    ResourceScope {
         rule: AsyncApiRule {
             when: BTreeMap::from([("/background".into(), json!(true))]),
+            when_response: Default::default(),
+            unless_response: Default::default(),
             end,
         },
         progress: Default::default(),
@@ -104,7 +106,10 @@ fn end() -> AsyncEnd {
 #[test]
 fn source_request_selects_exact_api_and_literal_background_condition() {
     let scope = scope(vec![end()]);
-    let rules = BTreeMap::from([(scope.api, scope.rule)]);
+    let rules = BTreeMap::from([(
+        "POST /api/v1/responses".into(),
+        crate::policy::AsyncApiRules(vec![scope.rule]),
+    )]);
     for (method, uri, body, expected) in [
         (
             Method::POST,
@@ -264,6 +269,79 @@ fn server_dependency_errors_end_even_when_they_are_not_terminal_resources() {
     let signal = scope.observe(&event).unwrap();
     assert_eq!(signal.end_reason, AsyncEndReason::DependencyFailure);
     assert_eq!(signal.resource_index, None);
+}
+
+fn client_info_error() -> RecorderEvent {
+    let mut event = redis("CLIENT", b"SETINFO");
+    if let RecorderEvent::RedisExchange(exchange) = &mut event {
+        exchange.args.extend([
+            capture_body(b"LIB-NAME", 4096),
+            capture_body(b"redis-py", 4096),
+        ]);
+        exchange.session_setup = true;
+        exchange.response_kind = "error".into();
+        exchange.response = capture_body(b"-ERR unknown subcommand 'SETINFO'\r\n", 4096);
+    }
+    event
+}
+
+#[test]
+fn optional_redis_client_metadata_error_does_not_replace_two_del_completion() {
+    let scope = scope(vec![AsyncEnd::Redis(AsyncRedisEnd {
+        operation: "DEL".into(),
+        occurrence: 2,
+        key: "chat:cancel:*".into(),
+        database: None,
+        endpoint: None,
+    })]);
+    let metadata = client_info_error();
+    assert!(!crate::recorder::should_append_case_dependency(&metadata));
+    assert!(scope.observe(&metadata).is_none());
+    assert!(scope.observe(&redis("DEL", b"chat:cancel:42")).is_none());
+    let signal = scope.observe(&redis("DEL", b"chat:cancel:42")).unwrap();
+    assert_eq!(signal.end_reason, AsyncEndReason::Resource);
+}
+
+#[test]
+fn required_or_incomplete_redis_setup_errors_still_require_source_isolation() {
+    for variant in [
+        "AUTH",
+        "SELECT",
+        "HELLO",
+        "unknown_attribute",
+        "truncated",
+        "unsafe",
+        "terminated",
+        "snapshot_hit",
+    ] {
+        let scope = scope(vec![end()]);
+        let mut event = client_info_error();
+        if let RecorderEvent::RedisExchange(exchange) = &mut event {
+            match variant {
+                "AUTH" | "SELECT" | "HELLO" => exchange.command = variant.into(),
+                "unknown_attribute" => exchange.args[1] = capture_body(b"OTHER", 4096),
+                "truncated" => exchange.response.truncated = true,
+                "unsafe" => exchange.replay_safe = false,
+                "terminated" => exchange.outcome = DependencyExchangeOutcome::ClientTerminated,
+                "snapshot_hit" => {
+                    exchange.command = "GET".into();
+                    exchange.args = vec![capture_body(b"business:key", 4096)];
+                    exchange.session_setup = false;
+                    exchange.cache_snapshot_hit = true;
+                }
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(
+            crate::recorder::should_append_case_dependency(&event),
+            variant != "snapshot_hit"
+        );
+        assert_eq!(
+            scope.observe(&event).unwrap().end_reason,
+            AsyncEndReason::DependencyFailure,
+            "{variant}"
+        );
+    }
 }
 
 #[test]

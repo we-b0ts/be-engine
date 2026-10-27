@@ -204,9 +204,13 @@ impl Transport {
                         send_payload(&tx, &bytes, limit).await
                     }
                     .await;
-                    if let Err(error) = result {
-                        let _ = tx.send(ReaderEvent::Error(format!("{error:#}"))).await;
-                        break;
+                    match result {
+                        Ok(true) => break,
+                        Ok(false) => {}
+                        Err(error) => {
+                            let _ = tx.send(ReaderEvent::Error(format!("{error:#}"))).await;
+                            break;
+                        }
                     }
                 }
             }));
@@ -365,12 +369,28 @@ impl Transport {
     }
 
     pub(super) async fn close(&mut self, code: Option<u16>, reason: &str) -> Result<()> {
+        self.finish_close(code, reason, true).await
+    }
+
+    /// Rejected or otherwise failed requests must not wait for the peer's application loop.
+    pub(super) async fn abort(&mut self, code: Option<u16>, reason: &str) -> Result<()> {
+        self.finish_close(code, reason, false).await
+    }
+
+    async fn finish_close(
+        &mut self,
+        code: Option<u16>,
+        reason: &str,
+        wait_for_peer: bool,
+    ) -> Result<()> {
+        let websocket = matches!(self.outgoing, Outgoing::WebSocket(_));
         match &mut self.outgoing {
             Outgoing::Closed => return Ok(()),
             Outgoing::WebSocket(writer) => {
                 let result = async {
                     if self.socket_io && !self.engine_close_sent {
                         writer.send(Message::Text("1".into())).await?;
+                        self.engine_close_sent = true;
                     }
                     writer
                         .send(Message::Close(code.map(|code| CloseFrame {
@@ -395,6 +415,14 @@ impl Transport {
                     self.send(&WireMessage::text("1")).await?;
                 }
             }
+        }
+        // Flushing our close is not completion of the peer's close operation.
+        // In particular, a preceding Socket.IO namespace disconnect can still
+        // be awaiting real application cleanup before the peer processes CLOSE.
+        // Retain the live reader and Case until actual peer termination; the
+        // caller bounds this I/O and can interrupt it on dependency rejection.
+        if websocket && wait_for_peer {
+            while let Some(ReaderEvent::Message(_) | ReaderEvent::Ping(_)) = self.recv().await {}
         }
         self.outgoing = Outgoing::Closed;
         self.reader.abort();
@@ -497,13 +525,15 @@ fn with_sid(uri: &Uri, sid: &str) -> Result<Uri> {
     Ok(url.as_str().parse()?)
 }
 
-async fn send_payload(tx: &mpsc::Sender<ReaderEvent>, bytes: &[u8], limit: usize) -> Result<()> {
+async fn send_payload(tx: &mpsc::Sender<ReaderEvent>, bytes: &[u8], limit: usize) -> Result<bool> {
+    let mut closed = false;
     for message in parse_payload(bytes, limit)? {
+        closed |= message.kind == MessageKind::Text && message.data == "1";
         tx.send(ReaderEvent::Message(message))
             .await
             .context("Engine.IO receiver stopped")?;
     }
-    Ok(())
+    Ok(closed)
 }
 
 fn parse_payload(bytes: &[u8], limit: usize) -> Result<Vec<WireMessage>> {

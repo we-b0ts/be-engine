@@ -62,6 +62,9 @@ pub(super) fn status_action(root: &Path, state: &RewriteState) -> Result<Option<
     if let Some(required) = review::gate(root, state, &project.pr_base)? {
         return Ok(Some(required));
     }
+    if super::engine_retry::pending(state, &state.active_slice) {
+        return Ok(Some(action::state_action(root, state)));
+    }
     Ok(Some(action::replay_advance(
         root,
         &state.api,

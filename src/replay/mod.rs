@@ -36,6 +36,7 @@ pub(crate) use policy::validate_finite_sharing as validate_native_finite_sharing
 pub(crate) use policy::{NativeSourceCase, validate_native_source_dependencies};
 pub(crate) use report::source_owned_match;
 mod control;
+pub(crate) use redis::request_fingerprint as redis_request_fingerprint;
 mod deferred;
 mod dependencies;
 mod loading;
@@ -80,7 +81,7 @@ pub(crate) use mysql::contracts::automatic::Metadata as MysqlInferenceMetadata;
 pub(crate) use mysql::contracts::source_witness as mysql_source_witness;
 pub(crate) use mysql::contracts::time_copies::global::delivered_witness_time_copies as mysql_global_delivered_time_copies;
 pub(crate) use mysql::contracts::{
-    IdentityPreflight as MysqlIdentityPreflight,
+    IdentityPreflight as MysqlIdentityPreflight, mysql_witness_sql_value,
     normalize_identity_witnesses as mysql_normalize_identity_witnesses,
 };
 pub(crate) use policy::mysql_native_witness_matches;
@@ -136,9 +137,31 @@ pub struct ReplayConfig {
 }
 
 pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 10;
+pub const DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS: u64 = 5_000;
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayHttpStreamTiming {
+    Fast,
+    #[default]
+    Recorded,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayLifecycleConfig {
+    pub pre_match: bool,
+    pub http_stream_timing: ReplayHttpStreamTiming,
+    pub case_no_progress_timeout: std::time::Duration,
     pub request_timeout: std::time::Duration,
     pub case_dependency_post_response_window: std::time::Duration,
     pub dependency_loading: ReplayDependencyLoading,
@@ -147,6 +170,11 @@ pub struct ReplayLifecycleConfig {
 impl Default for ReplayLifecycleConfig {
     fn default() -> Self {
         Self {
+            pre_match: false,
+            http_stream_timing: ReplayHttpStreamTiming::Recorded,
+            case_no_progress_timeout: std::time::Duration::from_millis(
+                DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS,
+            ),
             request_timeout: std::time::Duration::from_millis(
                 crate::config::HttpGatewayConfig::default().request_timeout_ms,
             ),
@@ -398,6 +426,8 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 
 #[derive(Debug)]
 struct ReplayState {
+    http_stream_timing: ReplayHttpStreamTiming,
+    case_cleanup: control::case_cleanup::CaseCleanup,
     connect_failures: connect_failure::Inventory,
     deferred: Option<Arc<deferred::DeferredDependencies>>,
     egress_counter_reader: Option<ReplayEgressCounterReader>,
@@ -697,6 +727,7 @@ pub(crate) use assertion::{
     ResponsePayloadPair, compare_interaction_global, decode_sse, response_payload_pair,
 };
 pub(crate) use mysql::contracts::{
+    request_candidates_related as mysql_request_candidates_related,
     validate_contract_candidate as mysql_validate_contract_candidate,
     validate_contract_witness as mysql_validate_contract_witness,
 };

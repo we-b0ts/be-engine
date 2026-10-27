@@ -120,6 +120,159 @@ async fn source_connection(
     }
 }
 
+// Tungstenite fixes the callback error type to an unboxed HTTP response.
+#[allow(clippy::result_large_err)]
+fn asgi_headers(
+    _: &tokio_tungstenite::tungstenite::handshake::server::Request,
+    mut response: tokio_tungstenite::tungstenite::handshake::server::Response,
+) -> Result<
+    tokio_tungstenite::tungstenite::handshake::server::Response,
+    tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+> {
+    response
+        .headers_mut()
+        .insert("server", "uvicorn".parse().unwrap());
+    Ok(response)
+}
+
+/// Like an ASGI WebSocket stack, the protocol reader can echo WS CLOSE while
+/// the application is still awaiting namespace teardown. Only application-side
+/// Engine.IO closure after the late resource call proves this operation ended.
+async fn source_with_automatic_protocol_close(
+    stream: TcpStream,
+    turn: usize,
+    dependency: SocketAddr,
+    application_closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let socket = tokio_tungstenite::accept_hdr_async(stream, asgi_headers)
+        .await
+        .unwrap();
+    let (writer, mut reader) = socket.split();
+    let writer = std::sync::Arc::new(tokio::sync::Mutex::new(writer));
+    let protocol_writer = writer.clone();
+    let (frames, mut input) = tokio::sync::mpsc::channel(8);
+    let protocol = tokio::spawn(async move {
+        while let Some(Ok(message)) = reader.next().await {
+            if let Message::Close(frame) = message {
+                let _ = protocol_writer
+                    .lock()
+                    .await
+                    .send(Message::Close(frame))
+                    .await;
+                break;
+            }
+            if frames.send(message).await.is_err() {
+                break;
+            }
+        }
+    });
+    writer.lock().await.send(Message::Text(format!("0{{\"sid\":\"session-{turn}\",\"upgrades\":[],\"pingInterval\":1000,\"pingTimeout\":1000}}").into())).await.unwrap();
+    assert_eq!(input.recv().await.unwrap(), Message::Text("40".into()));
+    writer
+        .lock()
+        .await
+        .send(Message::Text("40{}".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        input.recv().await.unwrap(),
+        Message::Text(format!("421[\"ask\",{turn}]").into())
+    );
+    writer
+        .lock()
+        .await
+        .send(Message::Text(format!("431[{turn}]").into()))
+        .await
+        .unwrap();
+    assert_eq!(input.recv().await.unwrap(), Message::Text("1".into()));
+    // No resource I/O exists at close; the call starts beyond the100ms window.
+    tokio::time::sleep(Duration::from_millis(180)).await;
+    late_dependency(dependency, turn).await;
+    // Python Engine.IO marks the application SID closed but can leave its
+    // writer awaiting the client's WS close rather than initiating one.
+    application_closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    protocol.await.unwrap();
+}
+
+async fn asgi_source(listener: TcpListener, dependency: SocketAddr, invalid_after_close: bool) {
+    let sessions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::BTreeMap::<
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    >::new()));
+    let turns = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    loop {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let sessions = sessions.clone();
+        let turns = turns.clone();
+        tokio::spawn(async move {
+            let mut bytes = [0; 8192];
+            let head = timeout(Duration::from_secs(1), async {
+                loop {
+                    let count = stream.peek(&mut bytes).await.unwrap();
+                    if bytes[..count].windows(4).any(|part| part == b"\r\n\r\n") {
+                        break String::from_utf8(bytes[..count].to_vec()).unwrap();
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            if head
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("upgrade: websocket"))
+            {
+                let turn = turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                sessions
+                    .lock()
+                    .await
+                    .insert(format!("session-{turn}"), closed.clone());
+                source_with_automatic_protocol_close(stream, turn, dependency, closed).await;
+            } else {
+                read_head(&mut stream).await;
+                let uri = head
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap();
+                let url = url::Url::parse(&format!("http://localhost{uri}")).unwrap();
+                let sid = url
+                    .query_pairs()
+                    .find(|(key, _)| key == "sid")
+                    .unwrap()
+                    .1
+                    .into_owned();
+                assert!(
+                    url.query_pairs()
+                        .any(|(key, value)| key == "transport" && value == "websocket")
+                );
+                let closed = sessions
+                    .lock()
+                    .await
+                    .get(&sid)
+                    .unwrap()
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                let (status, body) = if closed {
+                    (
+                        "400 Bad Request",
+                        serde_json::to_string(&if invalid_after_close {
+                            format!("Invalid session {sid}")
+                        } else {
+                            format!("Session is disconnected {sid}")
+                        })
+                        .unwrap(),
+                    )
+                } else {
+                    ("200 OK", "6".into())
+                };
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+        });
+    }
+}
+
 async fn client_interaction(address: SocketAddr, protocol: Protocol, turn: usize) {
     if protocol == Protocol::Sse {
         let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build_http();
@@ -165,11 +318,15 @@ async fn client_interaction(address: SocketAddr, protocol: Protocol, turn: usize
             socket.next().await.unwrap().unwrap(),
             Message::Text(format!("431[{turn}]").into())
         );
-        assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+        let close = socket.next().await;
+        assert!(
+            matches!(close, Some(Ok(Message::Close(_)))),
+            "recording close: {close:?}"
+        );
     }
 }
 
-async fn consecutive_cases(protocol: Protocol) {
+async fn consecutive_cases(protocol: Protocol, after_close: bool) {
     let temp = tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let state = AppState::new(config(temp.path(), listener.local_addr().unwrap()))
@@ -184,6 +341,10 @@ async fn consecutive_cases(protocol: Protocol) {
     );
     let (dependency, server, capture, observed) = redis_capture(state.clone()).await;
     let source = tokio::spawn(async move {
+        if after_close {
+            asgi_source(listener, dependency, false).await;
+            return;
+        }
         for turn in 1..=2 {
             let (stream, _) = listener.accept().await.unwrap();
             source_connection(stream, protocol, turn, dependency, observed.clone()).await;
@@ -240,10 +401,52 @@ async fn consecutive_cases(protocol: Protocol) {
 
 #[tokio::test]
 async fn consecutive_sse_cases_reuse_source_and_keep_late_dependencies_in_their_case() {
-    consecutive_cases(Protocol::Sse).await;
+    consecutive_cases(Protocol::Sse, false).await;
 }
 
 #[tokio::test]
 async fn consecutive_socketio_cases_reuse_source_and_keep_late_dependencies_in_their_case() {
-    consecutive_cases(Protocol::SocketIo).await;
+    consecutive_cases(Protocol::SocketIo, false).await;
+}
+
+#[tokio::test]
+async fn consecutive_socketio_cases_capture_resources_started_during_peer_close() {
+    consecutive_cases(Protocol::SocketIo, true).await;
+}
+
+#[tokio::test]
+async fn unknown_asgi_session_does_not_certify_application_close() {
+    let temp = tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let state = AppState::new(config(temp.path(), listener.local_addr().unwrap()))
+        .await
+        .unwrap();
+    let (dependency, server, capture, _) = redis_capture(state.clone()).await;
+    let source = tokio::spawn(asgi_source(listener, dependency, true));
+    let (address, gateway) = gateway(state.clone()).await;
+    client_interaction(address, Protocol::SocketIo, 1).await;
+    let writers = state.capture_dependency_targets();
+    let case = writers.cases[0].0.clone();
+    drop(writers);
+    assert!(
+        state
+            .inner
+            .active_cases
+            .wait_for_no_active_case(Duration::from_secs(3))
+            .await
+    );
+    let failed = state.recorder().case_failed_dir(&case);
+    let error: Value = serde_json::from_slice(
+        &tokio::fs::read(failed.join("recording-error.json"))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(error["reason"], "interaction_transport_failed");
+    assert!(!state.recorder().case_dir(&case).exists());
+    assert!(*state.inner.interactions.source_stop.borrow());
+    source.abort();
+    server.abort();
+    capture.abort();
+    gateway.abort();
 }

@@ -121,6 +121,7 @@ impl NativeEffect {
             Self::RedisSequence(_) => "atomic_request_sequence",
             Self::RedisAppendStream => "append_stream_equivalence",
             Self::RedisReadCommutation(_) => "finite_read_commutation",
+            Self::RedisReadObservation => "key_lifetime_absent_read",
             Self::RedisExpiryRefresh(_) => "key_lifetime_expiry_refresh",
             Self::ResponseJwt(_) => "signed_response",
             Self::ResponseHeaderDate(_) => "header_calendar_date",
@@ -246,7 +247,9 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
     match &rule.effect {
         NativeEffect::Identity(effect) => validate_identity(rule, effect),
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
-        NativeEffect::RedisReadCommutation(_) | NativeEffect::RedisExpiryRefresh(_) => {
+        NativeEffect::RedisReadCommutation(_)
+        | NativeEffect::RedisReadObservation
+        | NativeEffect::RedisExpiryRefresh(_) => {
             if selector.resource.is_none() {
                 validate_discovered_redis_key(selector)?;
             } else {

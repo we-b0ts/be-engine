@@ -22,6 +22,7 @@ pub(super) struct IndexedLane {
     // Available is implicit. A notification costs session memory only after an
     // actual Target subscription attempts its delivery.
     statuses: BTreeMap<usize, ReplayExchangeStatus>,
+    pub(super) echoes: Arc<std::sync::OnceLock<super::echo::EchoIndex>>,
 }
 
 #[derive(Debug, Default)]
@@ -75,6 +76,7 @@ impl IndexedNotifications {
                 writer: None,
                 count,
                 statuses: BTreeMap::new(),
+                echoes: Arc::default(),
             });
             self.total += count;
         }
@@ -122,6 +124,7 @@ impl IndexedNotifications {
                     writer: Some(PageWriter::new(reference.source.path())?),
                     count: 0,
                     statuses: BTreeMap::new(),
+                    echoes: Arc::default(),
                 });
                 self.by_anchor.insert(key, index);
                 index
@@ -147,6 +150,7 @@ impl IndexedNotifications {
                 location: reference.location,
                 duration_ms,
                 ordinal: self.total,
+                adapter_echo: rpc::echo_digest(&frame.channel, &frame.payload),
             })?;
         lane.count += 1;
         self.total += 1;

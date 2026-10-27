@@ -3,6 +3,67 @@
 use super::*;
 
 #[tokio::test]
+async fn finite_process_get_unblocks_recorded_case_in_a_loaded_replay() {
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let lane = Uuid::new_v4();
+    let records = [
+        redis_hash_dependency(lane, 1, "GET", &["monitor"], b"$1\r\n1\r\n"),
+        redis_hash_dependency(lane, 2, "DEL", &["business"], b":1\r\n"),
+        redis_hash_dependency(lane, 3, "GET", &["monitor"], b"$-1\r\n"),
+    ];
+    let original = records
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), &original)
+        .await
+        .unwrap();
+    let rule = serde_json::from_value(serde_json::json!({
+        "protocol":"redis","name":"monitor","ports":[6379],"command":"GET",
+        "keys":["monitor"],"source_revision":"abcdef1","source_evidence":"monitor.py:loop"
+    }))
+    .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) =
+        spawn_replay_with_background(&case_dir, Some(report_path.clone()), vec![rule]).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    for (request, expected) in [
+        (
+            b"*2\r\n$3\r\nDEL\r\n$8\r\nbusiness\r\n".as_slice(),
+            b":1\r\n".as_slice(),
+        ),
+        (
+            b"*2\r\n$3\r\nGET\r\n$7\r\nmonitor\r\n".as_slice(),
+            b"$1\r\n1\r\n".as_slice(),
+        ),
+        (
+            b"*2\r\n$3\r\nGET\r\n$7\r\nmonitor\r\n".as_slice(),
+            b"$-1\r\n".as_slice(),
+        ),
+    ] {
+        client.write_all(request).await.unwrap();
+        let mut response = vec![0; expected.len()];
+        tokio::time::timeout(Duration::from_secs(2), client.read_exact(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response, expected);
+    }
+    let report = wait_for_matched_count(&report_path, "redis", 3).await;
+    assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
+    assert_eq!(
+        tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+            .await
+            .unwrap(),
+        original
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn background_hscan_does_not_block_a_following_mget_in_the_source_lane() {
     let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");

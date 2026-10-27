@@ -17,8 +17,10 @@ fn redis_mechanisms_follow_observed_operations_without_assuming_source_proof() {
         (
             "GET",
             vec![
+                "redis_finite_process_get",
                 "redis_read_back",
                 "redis_read_commutation",
+                "redis_read_observation",
                 "redis_state_observations",
             ],
         ),
@@ -101,8 +103,10 @@ fn unified_source_bindings_expose_supported_delivery_without_inventing_target_ev
         found,
         vec![
             "redis_append_stream",
+            "redis_finite_process_get",
             "redis_read_back",
             "redis_read_commutation",
+            "redis_read_observation",
             "redis_state_observations"
         ]
     );
@@ -124,6 +128,24 @@ fn unified_source_bindings_expose_supported_delivery_without_inventing_target_ev
             .all(|planner| planner.capability != "mysql_read_back")
     );
     assert!(capabilities(&facts).is_empty());
+}
+
+#[test]
+fn finite_process_get_guidance_requires_issuer_proof_and_preserves_finite_evidence() {
+    let facts = json!({"clusters":[{"protocol":"redis","operations":{"GET":1}}]});
+    let hint = hints(Path::new("/target"), QUERY_DIRTY_CLUSTERS, &facts)
+        .into_iter()
+        .find(|hint| hint.capability == "redis_finite_process_get")
+        .unwrap();
+    assert!(hint.hint.contains("not captured issuer provenance"));
+    assert!(hint.hint.contains("sibling APIs using the same key"));
+    assert!(hint.hint.contains("single-use"));
+    assert!(hint.hint.contains("exhaustion fails"));
+    assert!(hint.hint.contains("omitting initial_load_timeout_ms"));
+    assert!(
+        hint.hint
+            .contains("snapshot seeds/hits cannot supply finite evidence")
+    );
 }
 
 #[test]

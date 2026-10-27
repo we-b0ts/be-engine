@@ -66,6 +66,7 @@ fn result(api: &str, passed: bool) -> crate::E2eApiRunResult {
             },
             representative: None,
             lifecycle_errors: Vec::new(),
+            execution_failures: Vec::new(),
         },
         progress: "unused-progress.yaml".into(),
         runtime_outputs: Vec::new(),

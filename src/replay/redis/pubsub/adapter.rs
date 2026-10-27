@@ -4,9 +4,12 @@ use std::collections::HashMap;
 type Realm = (TargetKey, i64, Option<String>);
 type Scope = (bool, Option<String>);
 type RequestKey = (Scope, Uuid, u64);
+type SessionKey = (Realm, String, String);
 #[derive(Debug, Default)]
 pub(super) struct Bindings {
     hosts: HashMap<(Realm, String), String>,
+    sessions: HashMap<SessionKey, String>,
+    session_targets: HashMap<SessionKey, String>,
     callbacks: HashMap<(Realm, rpc::Identity), rpc::Identity>,
     callback_targets: HashMap<(Realm, rpc::Identity), rpc::Identity>,
     host_targets: HashMap<(Realm, String), String>,
@@ -74,8 +77,16 @@ impl PubSubState {
                 record.rpc_callback_capture.is_none(),
                 "RPC capture marker requires a supported RPC request"
             );
+            if rpc::broadcast(&record.command, args)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                self.echoes.register(record, args);
+            }
             return Ok(None);
         };
+        self.echoes.register(record, args);
         ensure!(
             self.bindings
                 .publishers
@@ -158,23 +169,25 @@ impl PubSubState {
         Ok(())
     }
 
-    pub(in crate::replay::redis) fn is_rpc_source(&self, exchange: &ReplayExchange) -> bool {
+    pub(in crate::replay::redis) fn is_adapter_source(&self, exchange: &ReplayExchange) -> bool {
         exchange.rpc_push.is_some()
             || exchange.record.rpc_callback_capture.as_deref() == Some("bounded_window")
+            || rpc::broadcast(&exchange.record.command, &exchange.args)
+                .ok()
+                .flatten()
+                .is_some()
     }
 
+    #[cfg(test)]
     pub(in crate::replay::redis) fn matches(
         &self,
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<bool> {
-        if !self.is_rpc_source(exchange) {
-            return None;
-        }
-        Some(
-            self.compatible_request(exchange, args)
-                .is_some_and(|(source, actual)| source.matches(&actual)),
-        )
+        self.is_adapter_source(exchange).then(|| {
+            self.comparison_args(exchange, args)
+                .is_some_and(|comparison| comparison.source == comparison.actual)
+        })
     }
 
     /// Translate protocol identities in private comparison copies only. Payload
@@ -184,6 +197,15 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<RpcComparison> {
+        if let Some((source, actual)) = self.compatible_broadcast(exchange, args) {
+            return Some(RpcComparison {
+                source: vec![
+                    exchange.args[0].clone(),
+                    serde_json::to_vec(&source.comparison_value(&actual)).ok()?,
+                ],
+                actual: vec![args[0].clone(), serde_json::to_vec(&actual.value).ok()?],
+            });
+        }
         let (source, actual) = self.compatible_request(exchange, args)?;
         Some(RpcComparison {
             source: vec![
@@ -194,12 +216,46 @@ impl PubSubState {
         })
     }
 
+    fn compatible_broadcast(
+        &self,
+        exchange: &ReplayExchange,
+        args: &[Vec<u8>],
+    ) -> Option<(rpc::Broadcast, rpc::Broadcast)> {
+        let source = rpc::broadcast(&exchange.record.command, &exchange.args)
+            .ok()
+            .flatten()?;
+        let actual = rpc::broadcast(&exchange.record.command, args)
+            .ok()
+            .flatten()?;
+        let realm = (
+            TargetKey {
+                host: normalize_host(&exchange.record.target_host),
+                port: exchange.record.target_port,
+            },
+            exchange.record.database,
+            exchange.record.username.clone(),
+        );
+        (exchange.args.first() == args.first()
+            && source.envelope_matches(&actual)
+            && self
+                .bindings
+                .hosts
+                .get(&(realm.clone(), source.host.clone()))
+                .is_none_or(|host| *host == actual.host)
+            && self
+                .bindings
+                .host_targets
+                .get(&(realm, actual.host.clone()))
+                .is_none_or(|host| *host == source.host))
+        .then_some((source, actual))
+    }
+
     fn compatible_request(
         &self,
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<(rpc::Request, rpc::Request)> {
-        if !self.is_rpc_source(exchange) {
+        if !self.is_adapter_source(exchange) {
             return None;
         }
         let source = rpc::request(&exchange.record.command, &exchange.args)
@@ -217,7 +273,24 @@ impl PubSubState {
             exchange.record.username.clone(),
         );
         (exchange.args.first() == args.first()
-            && source.identity.sid == actual.identity.sid
+            && self
+                .bindings
+                .sessions
+                .get(&(
+                    realm.clone(),
+                    source.identity.namespace.clone(),
+                    source.identity.sid.clone(),
+                ))
+                .is_none_or(|sid| *sid == actual.identity.sid)
+            && self
+                .bindings
+                .session_targets
+                .get(&(
+                    realm.clone(),
+                    actual.identity.namespace.clone(),
+                    actual.identity.sid.clone(),
+                ))
+                .is_none_or(|sid| *sid == source.identity.sid)
             && source.identity.namespace == actual.identity.namespace
             && source.envelope_matches(&actual)
             && self
@@ -248,7 +321,24 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<Vec<u8>> {
-        if !self.is_rpc_source(exchange) {
+        if !self.is_adapter_source(exchange) {
+            return None;
+        }
+        if let Some((source, actual)) = self.compatible_broadcast(exchange, args) {
+            let realm = (
+                TargetKey {
+                    host: normalize_host(&exchange.record.target_host),
+                    port: exchange.record.target_port,
+                },
+                exchange.record.database,
+                exchange.record.username.clone(),
+            );
+            self.bindings
+                .hosts
+                .insert((realm.clone(), source.host.clone()), actual.host.clone());
+            self.bindings
+                .host_targets
+                .insert((realm, actual.host), source.host);
             return None;
         }
         let source = rpc::request(&exchange.record.command, &exchange.args)
@@ -264,6 +354,22 @@ impl PubSubState {
             },
             exchange.record.database,
             exchange.record.username.clone(),
+        );
+        self.bindings.sessions.insert(
+            (
+                realm.clone(),
+                source.identity.namespace.clone(),
+                source.identity.sid.clone(),
+            ),
+            actual.identity.sid.clone(),
+        );
+        self.bindings.session_targets.insert(
+            (
+                realm.clone(),
+                actual.identity.namespace.clone(),
+                actual.identity.sid.clone(),
+            ),
+            source.identity.sid.clone(),
         );
         self.bindings.callback_targets.insert(
             (realm.clone(), actual.identity.clone()),
@@ -290,6 +396,7 @@ impl PubSubState {
             .expect("validated callback");
         payload["host_id"] = actual.identity.host.into();
         payload["id"] = actual.identity.id.into();
+        payload["sid"] = actual.identity.sid.into();
         *parts.last_mut().expect("push payload") =
             serde_json::to_vec(&payload).expect("JSON serializes");
         let name = frame.name.to_ascii_lowercase();

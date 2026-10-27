@@ -35,6 +35,8 @@ struct Execution {
     id: String,
     pid: u32,
     request: Request,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recording_run_id: Option<String>,
     finished: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -99,6 +101,10 @@ fn start(target_root: &Path, request: Request) -> Result<RewriteActionEnvelope> 
         drop(lock);
         return super::worker::runtime::current_envelope(target_root);
     }
+    let recording_run_id = store
+        .load()?
+        .map(|state| state.recording_run_id)
+        .filter(|id| !id.is_empty());
     let id = format!("operation-{}", uuid::Uuid::new_v4().simple());
     let directory = root(target_root);
     fs::create_dir_all(&directory)?;
@@ -132,6 +138,7 @@ fn start(target_root: &Path, request: Request) -> Result<RewriteActionEnvelope> 
         id,
         pid: child.id(),
         request,
+        recording_run_id,
         finished: false,
         error: None,
     };
@@ -227,6 +234,9 @@ pub(super) fn update_next_scope(options: &RewriteNextOptions) -> Result<()> {
 }
 
 pub fn retry(context: RewriteContext, id: &str) -> Result<RewriteActionEnvelope> {
+    // Adopting a new batch may retire the previous failed invocation. Never
+    // retry its frozen API selection against the replacement recording.
+    RewriteStore::new(&context.target_root)?.load()?;
     let execution = load(&context.target_root)?.context("coordinator operation is absent")?;
     ensure!(
         execution.id == id && execution.finished && execution.error.is_some(),
@@ -273,6 +283,25 @@ pub(super) fn retire_finished(target_root: &Path) -> Result<()> {
         fs::remove_file(path(target_root))?;
     }
     Ok(())
+}
+
+/// Called only after validating an explicitly selected replacement batch.
+/// Old markers without a recording identity belong to the replaced snapshot.
+pub(super) fn reconcile_recording_change(target_root: &Path, selected: &str) -> Result<bool> {
+    let Some(execution) = load(target_root)? else {
+        return Ok(true);
+    };
+    if !execution.finished {
+        return Ok(execution.pid == std::process::id()
+            && execution
+                .recording_run_id
+                .as_deref()
+                .is_none_or(|id| id == selected));
+    }
+    if execution.recording_run_id.as_deref() != Some(selected) {
+        fs::remove_file(path(target_root))?;
+    }
+    Ok(true)
 }
 
 pub(super) fn busy(target_root: &Path) -> Result<bool> {

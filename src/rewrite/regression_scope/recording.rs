@@ -122,6 +122,9 @@ pub(super) fn apply(
         state.recording_refresh.is_none(),
         "{PATH}: remove recording_run_id before completing the pending recorder-capture refresh"
     );
+    if !super::super::execution::reconcile_recording_change(target_root, &selection.run_id)? {
+        return Ok(false);
+    }
     inventory::reset_for_recording(state);
     state.recording_apis = selection.scope;
     state.recording_run_id = selection.run_id;

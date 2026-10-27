@@ -226,6 +226,25 @@ async fn observe_close_action(
     server_eof: bool,
     headers_delay_ms: u64,
 ) -> Result<ReplayResponse> {
+    observe_close_action_with_timing(
+        data,
+        action,
+        business_idle_ms,
+        server_eof,
+        headers_delay_ms,
+        true,
+    )
+    .await
+}
+
+async fn observe_close_action_with_timing(
+    data: &'static str,
+    action: InputAction,
+    business_idle_ms: u64,
+    server_eof: bool,
+    headers_delay_ms: u64,
+    preserve_timing: bool,
+) -> Result<ReplayResponse> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -248,6 +267,7 @@ async fn observe_close_action(
     });
     let mut policy = policy();
     policy.business_idle_ms = business_idle_ms;
+    policy.preserve_input_timing = preserve_timing;
     let mut transcript = InputTranscript::new(Protocol::Sse, policy);
     transcript.actions.push(action);
     let client = Client::builder(TokioExecutor::new()).build_http();
@@ -496,4 +516,19 @@ async fn subscription_input_cannot_bypass_post_response_completion() {
         .err()
         .unwrap();
     assert!(error.to_string().contains("requires a GET request"));
+}
+
+#[tokio::test]
+async fn fast_close_skips_source_idle_but_waits_for_actual_resource_completion() {
+    let mut action = close_action(40_000);
+    action.after = vec![0];
+    action.gap_start_ms = Some(1);
+    let response =
+        observe_close_action_with_timing("data: [DONE]\n\n", action, 300, false, 40, false)
+            .await
+            .unwrap();
+    assert_eq!(response.observation.end.reason, EndReason::ClientClose);
+    assert!(response.observation.end.clean);
+    assert!(response.observation.end.offset_ms >= 40);
+    assert!(response.observation.end.offset_ms - response.observation.events[0].offset_ms < 30);
 }

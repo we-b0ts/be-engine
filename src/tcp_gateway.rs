@@ -376,7 +376,13 @@ async fn handle_http_request(
     let capture_context = pending.context();
     pending
         .run(async {
-            match crate::http::client::send_observed(state.client(), outbound, started).await {
+            match crate::http::client::send_observed(
+                state.recording_http_client(&entry.domain),
+                outbound,
+                started,
+            )
+            .await
+            {
                 Ok(upstream_response) => {
                     if stream::is_stream(upstream_response.headers()) {
                         return stream::response(

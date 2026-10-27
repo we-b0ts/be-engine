@@ -35,7 +35,7 @@ struct Document {
     #[serde(default)]
     api: Option<api::ApiDefinitions>,
     #[serde(default, deserialize_with = "optional_async_api")]
-    async_api: Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRule>>,
+    async_api: Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRules>>,
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
     resources: std::collections::BTreeMap<String, crate::policy::ResourceDeclaration>,
     #[serde(default)]
@@ -53,7 +53,7 @@ struct RedisDocument {
 
 fn optional_async_api<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRule>>, D::Error> {
+) -> Result<Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRules>>, D::Error> {
     crate::policy::strict_map::unique_map(deserializer).map(Some)
 }
 
@@ -219,6 +219,7 @@ fn redis_rule(rule: &PolicyRule) -> bool {
             crate::policy::NativeEffect::RedisSequence(_)
                 | crate::policy::NativeEffect::RedisAppendStream
                 | crate::policy::NativeEffect::RedisReadCommutation(_)
+                | crate::policy::NativeEffect::RedisReadObservation
                 | crate::policy::NativeEffect::RedisExpiryRefresh(_)
         )
         || matches!(&rule.effect, crate::policy::NativeEffect::ProcessOwned(effect)

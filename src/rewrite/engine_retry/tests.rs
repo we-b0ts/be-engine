@@ -1,4 +1,5 @@
 use super::*;
+mod active_worker;
 mod final_route;
 
 fn traditional_pending(slice: &RewriteSliceState) -> bool {
@@ -68,6 +69,66 @@ fn changed_engine_and_legacy_attempts_get_one_permit_without_target_changes() {
     assert!(!traditional_pending(
         &runtime_state(Some(current)).active_slice
     ));
+}
+
+fn partial_response_state() -> RewriteState {
+    let mut state = runtime_state(Some("engine-revision-v1:older"));
+    state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Response;
+    state.active_issue.as_mut().unwrap().owner = RewriteIssueOwner::TargetCode;
+    state.attempts[0].counts.selected = 16;
+    state.attempts[0].counts.executed = 2;
+    state.attempts[0].counts.response_nonpassing = 2;
+    state.attempts[0].counts.response_incomplete = 14;
+    state.attempts[0].gates.responses = crate::E2eResponseGate::Nonpassing;
+    state
+}
+
+#[test]
+fn interrupted_response_can_refresh_while_an_unrelated_implementation_stays_parked() {
+    let target = worker::tests::configured_target();
+    let mut state = partial_response_state();
+    sibling(&mut state, "POST /socket.io/", RewriteIssueKind::Response);
+    let parked = state.parked_slices.get_mut("POST /socket.io/").unwrap();
+    parked.attempts[0].counts.executed = 16;
+    parked.attempts[0].gates.replay = crate::E2eReplayGate::Complete;
+    let parked_before = serde_json::to_value(&state.parked_slices).unwrap();
+    let issue_before = serde_json::to_value(&state.active_issue).unwrap();
+    assert!(!last_unfinished_route(&state, &state.api));
+    assert!(pending(&state, &state.active_slice));
+    let scope = api_selector::work_scope(&state, &state.api);
+    assert!(worker::scheduler::acceptance_gate(target.path(), &state, &scope).is_none());
+    assert!(!worker::runtime::scopes(&state).contains(&scope));
+    assert!(
+        worker::runtime::scopes(&state)
+            .contains(&api_selector::work_scope(&state, "POST /socket.io/"))
+    );
+    assert!(consume(&mut state.active_slice, false));
+    assert!(!consume(&mut state.active_slice, false));
+    assert_eq!(
+        serde_json::to_value(&state.active_issue).unwrap(),
+        issue_before
+    );
+    assert_eq!(
+        serde_json::to_value(&state.parked_slices).unwrap(),
+        parked_before
+    );
+}
+
+#[test]
+fn interrupted_response_retry_does_not_release_complete_unknown_or_quality_failures() {
+    let current = crate::build_info::ENGINE_FINGERPRINT;
+    for variant in 0..6 {
+        let mut state = partial_response_state();
+        match variant {
+            0 => state.attempts[0].engine_fingerprint = Some(current.into()),
+            1 => state.attempts[0].engine_fingerprint = None,
+            2 => state.attempts[0].counts.executed = state.attempts[0].counts.selected,
+            3 => state.attempts[0].counts.executed = 0,
+            4 => state.attempts[0].gates.replay = crate::E2eReplayGate::Complete,
+            _ => state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::TargetQuality,
+        }
+        assert!(!eligible(&state.active_slice, current), "variant {variant}");
+    }
 }
 
 #[test]

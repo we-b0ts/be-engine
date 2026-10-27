@@ -9,6 +9,17 @@ use tokio::sync::{Mutex, Notify};
 pub(crate) enum RecordingCompletionReason {
     PerApiCaseLimitReached,
     ShutdownSignal,
+    SourceIsolationRequired,
+}
+
+impl RecordingCompletionReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::PerApiCaseLimitReached => "per_api_case_limit_reached",
+            Self::ShutdownSignal => "shutdown_signal",
+            Self::SourceIsolationRequired => "source_isolation_required",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

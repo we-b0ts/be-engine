@@ -8,7 +8,7 @@ impl RequestContracts {
     /// Only protocol-owned key slots and opaque script ARGV references change;
     /// TTLs, indices and structured values retain
     /// their existing comparator and their original independent observations.
-    pub(in crate::replay::policy::request_contract) fn project_known_redis_keys(
+    pub(in crate::replay) fn project_known_redis_keys(
         &self,
         case: &str,
         command: &str,

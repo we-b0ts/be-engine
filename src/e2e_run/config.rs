@@ -115,6 +115,10 @@ pub(crate) fn render_project_config(
                 runtime_outputs: Vec::new(),
             },
             replay: ReplayProjectConfig {
+                pre_match: true,
+                http_stream_timing: Default::default(),
+                case_no_progress_timeout_ms:
+                    crate::replay::DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS,
                 startup_timeout_seconds: super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
                 request_timeout_allowance_seconds:
                     super::model::DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS,
@@ -239,6 +243,11 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         })
         .transpose()?;
     let project = ResolvedProjectConfig {
+        replay_pre_match: config.project.replay.pre_match,
+        replay_http_stream_timing: config.project.replay.http_stream_timing,
+        replay_case_no_progress_timeout: Duration::from_millis(
+            config.project.replay.case_no_progress_timeout_ms,
+        ),
         replay_loading: config.project.replay.dependency_loading,
         target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
         target_build_contexts: managed.build_contexts,
@@ -409,6 +418,22 @@ mod tests {
 
     use super::*;
     use crate::e2e_run::model::MAX_TARGET_STARTUP_TIMEOUT_SECONDS;
+
+    #[test]
+    fn older_project_replay_settings_preserve_recorded_timing_until_fast_is_requested() {
+        let absent: ReplayProjectConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(absent.pre_match);
+        assert_eq!(
+            absent.http_stream_timing,
+            crate::replay::ReplayHttpStreamTiming::Recorded
+        );
+        let explicit: ReplayProjectConfig =
+            serde_json::from_value(serde_json::json!({"http_stream_timing":"fast"})).unwrap();
+        assert_eq!(
+            explicit.http_stream_timing,
+            crate::replay::ReplayHttpStreamTiming::Fast
+        );
+    }
 
     fn write_input_project(root: &Path, recorder: &crate::config::AppConfig) {
         let recorder = serde_yaml::to_string(recorder).unwrap();

@@ -1,6 +1,6 @@
 use super::*;
 
-fn cold_records() -> Vec<Value> {
+pub(super) fn cold_records() -> Vec<Value> {
     let connection = Uuid::new_v4();
     let mut records = vec![
         exchange(

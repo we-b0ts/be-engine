@@ -26,6 +26,10 @@ localcache:
     - redis: {operation: HGET, key: token_v2, field: '3061639762'}
 ```
 
+Source-proven nil polling inside owned deletion boundaries can instead use
+`read_observation: true`; see [absent read observations](redis-absent-read-observations.md).
+This permission requires complete Source proof and a fresh Replay.
+
 `kind`/`formats` describe scalar values; complete JSON values are recognized
 and use `json.fields`. `key_format` describes the wildcard segment of a key
 and requires its ordered `commands` list. A time-window key uses

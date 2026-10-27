@@ -49,6 +49,7 @@ pub(crate) struct RecordedHttpClient {
     max_response_bytes: usize,
     request_rules: Option<Arc<crate::request_rules::RequestRuleRuntime>>,
     input_registration: Option<(PathBuf, String)>,
+    execution_failure: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 pub(crate) struct RecordedHttpResponse {
@@ -78,7 +79,16 @@ impl RecordedHttpClient {
             max_response_bytes,
             request_rules: None,
             input_registration: None,
+            execution_failure: None,
         }
+    }
+
+    pub(crate) fn with_execution_failure(
+        mut self,
+        failure: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Self {
+        self.execution_failure = failure;
+        self
     }
 
     #[cfg(test)]
@@ -158,6 +168,7 @@ impl RecordedHttpClient {
                 transcript,
                 self.request_timeout,
                 self.max_response_bytes,
+                self.execution_failure.clone(),
             )
             .await?;
             return Ok(RecordedHttpResponse {
@@ -172,18 +183,19 @@ impl RecordedHttpClient {
             });
         }
         let deadline = tokio::time::Instant::now() + self.request_timeout;
-        let response = tokio::time::timeout_at(deadline, self.client.request(request))
-            .await
-            .context("recorded HTTP request timed out")?
-            .context("recorded HTTP request failed")?;
+        let mut failure = self.execution_failure.clone();
+        let response = tokio::select! {
+            biased;
+            _=crate::dependency::execution::rejected(&mut failure) => return Err(crate::dependency::execution::UnmatchedDependency {observed_status:None}.into()),
+            response=tokio::time::timeout_at(deadline,self.client.request(request)) => response.context("recorded HTTP request timed out")?.context("recorded HTTP request failed")?,
+        };
         let status = response.status();
         let headers = response_headers::snapshot_standard(response.headers());
-        let body = tokio::time::timeout_at(
-            deadline,
-            collect_limited(response.into_body(), self.max_response_bytes),
-        )
-        .await
-        .context("recorded HTTP request timed out")??;
+        let body = tokio::select! {
+            biased;
+            _=crate::dependency::execution::rejected(&mut failure) => return Err(crate::dependency::execution::UnmatchedDependency {observed_status:Some(status.as_u16())}.into()),
+            body=tokio::time::timeout_at(deadline,collect_limited(response.into_body(),self.max_response_bytes))=>body.context("recorded HTTP request timed out")??,
+        };
         Ok(RecordedHttpResponse {
             request_sent_at,
             request_rules,
@@ -364,3 +376,6 @@ mod tests {
         assert_eq!(request.headers()["x-request-id"], "one");
     }
 }
+
+#[cfg(test)]
+mod failure_tests;

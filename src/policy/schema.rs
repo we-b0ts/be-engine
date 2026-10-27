@@ -16,7 +16,7 @@ pub struct TrafficPolicy {
     pub mysql: Option<super::MysqlPolicy>,
     pub redis: Option<super::RedisPolicy>,
     pub http: Option<super::HttpPolicy>,
-    pub async_api: Option<BTreeMap<String, super::AsyncApiRule>>,
+    pub async_api: Option<BTreeMap<String, super::AsyncApiRules>>,
     pub signatures: BTreeMap<String, super::SignatureDefinition>,
     pub resources: BTreeMap<String, super::ResourceDeclaration>,
     pub rules: Vec<super::PolicyRule>,

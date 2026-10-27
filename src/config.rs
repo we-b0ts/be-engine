@@ -133,7 +133,7 @@ pub struct AppConfig {
     #[serde(skip)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
     #[serde(skip)]
-    pub async_api: std::collections::BTreeMap<String, crate::policy::AsyncApiRule>,
+    pub async_api: std::collections::BTreeMap<String, crate::policy::AsyncApiRules>,
     /// Already admitted policy identity, used only for optional recording-time indexes.
     #[serde(skip)]
     pub global_projection_policy: Option<String>,

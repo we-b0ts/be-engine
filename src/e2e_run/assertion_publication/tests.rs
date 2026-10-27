@@ -124,6 +124,7 @@ fn published_jwt_evidence_survives_first_publish_replacement_and_retired_authori
             replay_clean: Some(true),
             response_assertion: Some(summary.clone()),
             response_unavailable_reason: None,
+            execution_failure: None,
         });
         let mut assertions = AssertionReport::new(&state, true);
         assertions.cases.push(AssertionCase {

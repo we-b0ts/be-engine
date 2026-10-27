@@ -1,19 +1,25 @@
 //! Scoped kubectl children and bounded pipe handling; never owns Source requests.
 
-use std::{net::SocketAddr, process::Stdio, time::Duration};
+use std::{
+    net::SocketAddr,
+    process::{ExitStatus, Stdio},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
     process::{Child, Command},
-    sync::{oneshot, watch},
+    sync::watch,
 };
 
+use super::diagnostics::ForwardDiagnostics;
 use crate::config::KubernetesConfig;
 
 const LINE_LIMIT: usize = 4096;
 const OUTPUT_LIMIT: u64 = 1024 * 1024;
 const STDERR_LIMIT: u64 = 16 * 1024;
+const EXIT_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub(super) struct KubectlChild {
     child: Child,
@@ -72,63 +78,82 @@ impl KubectlChild {
     pub(super) async fn forward(
         mut self,
         identity: String,
-        ready: oneshot::Sender<SocketAddr>,
+        mut on_ready: impl FnMut(SocketAddr) -> Result<()>,
         mut stopped: watch::Receiver<bool>,
+        readiness_timeout: Duration,
     ) -> Result<()> {
         let stdout = self.child.stdout.take().context("missing kubectl stdout")?;
         let stderr = self.child.stderr.take().context("missing kubectl stderr")?;
         let mut stdout = Lines::new(stdout);
         let mut stderr = Lines::new(stderr);
-        let mut ready = Some(ready);
+        let mut ready = false;
+        let ready_deadline = tokio::time::Instant::now() + readiness_timeout;
         let mut stdout_open = true;
         let mut stderr_open = true;
+        let mut diagnostics = ForwardDiagnostics::new(self.child.id());
         loop {
             tokio::select! {
                 biased;
                 _ = stopped.changed() => {
                     if let Some(status) = self.child.try_wait().context("failed inspecting kubectl")? {
-                        bail!("kubectl port-forward for {identity} exited before shutdown ({status})");
+                        drain_output(&mut stdout, stdout_open, &mut stderr, stderr_open, &mut diagnostics).await;
+                        diagnostics.emit_exit(&identity, &status, true);
+                        return Ok(());
                     }
-                    return self.stop().await;
+                    let status = self.stop().await?;
+                    drain_output(&mut stdout, stdout_open, &mut stderr, stderr_open, &mut diagnostics).await;
+                    diagnostics.emit_exit(&identity, &status, true);
+                    return Ok(());
                 },
                 status = self.child.wait() => {
-                    bail!("kubectl port-forward for {identity} exited ({})", status.context("failed waiting for kubectl")?);
+                    let status = status.context("failed waiting for kubectl")?;
+                    drain_output(&mut stdout, stdout_open, &mut stderr, stderr_open, &mut diagnostics).await;
+                    diagnostics.emit_exit(&identity, &status, false);
+                    bail!("kubectl port-forward for {identity} exited ({status}); {}", diagnostics.summary());
+                }
+                _ = tokio::time::sleep_until(ready_deadline), if !ready => {
+                    let status = self.stop().await?;
+                    drain_output(&mut stdout, stdout_open, &mut stderr, stderr_open, &mut diagnostics).await;
+                    diagnostics.emit_exit(&identity, &status, false);
+                    bail!("kubectl port-forward readiness timed out for {identity}; {}", diagnostics.summary());
                 }
                 line = stdout.next(), if stdout_open => {
                     match line? {
                         Some(line) => {
+                            diagnostics.stdout(&line);
                             if let Some(address) = ready_address(&line)? {
-                                ensure!(ready.is_some(), "kubectl reported duplicate listeners for {identity}");
-                                if ready.take().unwrap().send(address).is_err() {
-                                    return self.stop().await;
-                                }
+                                ensure!(!ready, "kubectl reported duplicate listeners for {identity}");
+                                diagnostics.ready(address);
+                                on_ready(address)?;
+                                ready = true;
                             }
                         }
                         None => stdout_open = false,
                     }
                 }
                 line = stderr.next(), if stderr_open => {
-                    stderr_open = line?.is_some();
+                    match line? {
+                        Some(line) => diagnostics.stderr(&line),
+                        None => stderr_open = false,
+                    }
                 }
             }
         }
     }
 
-    async fn stop(&mut self) -> Result<()> {
+    async fn stop(&mut self) -> Result<ExitStatus> {
         self.signal(libc::SIGTERM);
-        match tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await {
-            Ok(status) => {
-                status.context("failed reaping kubectl")?;
-            }
+        let status = match tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await {
+            Ok(status) => status.context("failed reaping kubectl")?,
             Err(_) => {
                 self.signal(libc::SIGKILL);
-                self.child.wait().await.context("failed reaping kubectl")?;
+                self.child.wait().await.context("failed reaping kubectl")?
             }
-        }
+        };
         // Authentication plugins can outlive the direct child. Keep them scoped too.
         self.signal(libc::SIGKILL);
         self.group = None;
-        Ok(())
+        Ok(status)
     }
 
     fn signal(&self, signal: libc::c_int) {
@@ -139,6 +164,43 @@ impl KubectlChild {
             }
         }
     }
+}
+
+async fn drain_output(
+    stdout: &mut Lines<impl AsyncRead + Unpin>,
+    mut stdout_open: bool,
+    stderr: &mut Lines<impl AsyncRead + Unpin>,
+    mut stderr_open: bool,
+    diagnostics: &mut ForwardDiagnostics,
+) {
+    // A child can exit before its final output wins the supervisor select.
+    // Descendant auth plugins can retain the pipe; never let diagnostics delay
+    // failure handling indefinitely or replace the original exit status.
+    let mut stderr_drained = !stderr_open;
+    let _ = tokio::time::timeout(EXIT_OUTPUT_DRAIN_TIMEOUT, async {
+        while stdout_open || stderr_open {
+            tokio::select! {
+                line = stdout.next(), if stdout_open => {
+                    match line {
+                        Ok(Some(line)) => diagnostics.stdout(&line),
+                        _ => stdout_open = false,
+                    }
+                }
+                line = stderr.next(), if stderr_open => {
+                    match line {
+                        Ok(Some(line)) => diagnostics.stderr(&line),
+                        Ok(None) => {
+                            stderr_open = false;
+                            stderr_drained = true;
+                        }
+                        Err(_) => stderr_open = false,
+                    }
+                }
+            }
+        }
+    })
+    .await;
+    diagnostics.stderr_drained(stderr_drained);
 }
 
 impl Drop for KubectlChild {

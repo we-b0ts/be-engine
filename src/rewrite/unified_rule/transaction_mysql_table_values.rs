@@ -143,5 +143,13 @@ fn sql_value_table_discovery_retains_source_entry_for_unrelated_target_statement
                     .is_some_and(|fields| fields.iter().any(|field| field["column"] == "payload")))
         );
         assert_eq!(report.facts["requires_genuine_replay"], true);
+        assert!(
+            report.facts["source_entry"]["locations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["protected_sql_value_pointers"]["value"]
+                    == "/sql_values/<sql-token-index>/value")
+        );
     }
 }

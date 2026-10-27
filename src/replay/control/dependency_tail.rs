@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -17,14 +17,24 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 pub(in crate::replay) const TARGET_STOP_CLEANUP_GRACE: Duration = Duration::from_secs(30);
 mod metadata;
 mod ownership;
+mod progress;
 pub(in crate::replay) use metadata::load_cleanup_refs;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(in crate::replay) struct CaseTails {
     cases: BTreeMap<String, Option<CaseTail>>,
     process_rules: Vec<crate::BackgroundDependencyRuleConfig>,
-    async_rules: BTreeMap<String, crate::policy::AsyncApiRule>,
+    async_rules: BTreeMap<String, crate::policy::AsyncApiRules>,
     request_timeout: Duration,
+    no_progress_timeout: Duration,
+    waits: BTreeMap<String, serde_json::Value>,
+    failures: BTreeMap<String, serde_json::Value>,
+}
+
+impl Default for CaseTails {
+    fn default() -> Self {
+        Self::with_process_rules(Vec::new())
+    }
 }
 
 impl CaseTails {
@@ -42,17 +52,39 @@ impl CaseTails {
             process_rules,
             async_rules: BTreeMap::new(),
             request_timeout: crate::replay::ReplayLifecycleConfig::default().request_timeout,
+            no_progress_timeout: Duration::from_millis(
+                crate::replay::DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS,
+            ),
+            waits: BTreeMap::new(),
+            failures: BTreeMap::new(),
         }
     }
 
     pub(in crate::replay) fn with_async_rules(
         mut self,
-        rules: BTreeMap<String, crate::policy::AsyncApiRule>,
+        rules: BTreeMap<String, crate::policy::AsyncApiRules>,
         request_timeout: Duration,
     ) -> Self {
         self.async_rules = rules;
         self.request_timeout = request_timeout;
         self
+    }
+
+    pub(in crate::replay) fn with_no_progress_timeout(mut self, timeout: Duration) -> Self {
+        self.no_progress_timeout = timeout;
+        self
+    }
+
+    pub(in crate::replay) fn failure(&self, case: &str) -> Option<&serde_json::Value> {
+        self.failures.get(case)
+    }
+
+    pub(in crate::replay) fn failures(&self) -> Vec<serde_json::Value> {
+        self.failures.values().cloned().collect()
+    }
+
+    pub(in crate::replay) fn waiting(&self, case: &str) -> Option<&serde_json::Value> {
+        self.waits.get(case)
     }
 }
 
@@ -86,7 +118,7 @@ struct SelectedExchange {
     lifecycle_gate: Option<Arc<AtomicBool>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub(in crate::replay) enum RecordedReference {
     Redis { connection_id: Uuid, sequence: u64 },
@@ -126,6 +158,13 @@ fn exchange_status(
             .map(|exchange| exchange.status),
         ResolvedExchange::Http(index) => state.http_exchange_status(index),
         ResolvedExchange::Connect(index) => state.connect_failures.status(index),
+    }
+}
+
+fn permits_unstarted_omission(state: &ReplayState, exchange: ResolvedExchange) -> bool {
+    match exchange {
+        ResolvedExchange::Mysql(index) => state.mysql.permits_unstarted_omission(index),
+        _ => false,
     }
 }
 
@@ -219,14 +258,15 @@ pub(in crate::replay) async fn deadline(
     state: &Arc<Mutex<ReplayState>>,
     case_id: &str,
 ) -> Option<Instant> {
-    state
-        .lock()
-        .await
-        .dependency_tails
-        .cases
-        .get(case_id)
-        .and_then(Option::as_ref)
-        .and_then(|tail| tail.deadline)
+    let state = state.lock().await;
+    state.case_cleanup.deadline(case_id).or_else(|| {
+        state
+            .dependency_tails
+            .cases
+            .get(case_id)
+            .and_then(Option::as_ref)
+            .and_then(|tail| tail.deadline)
+    })
 }
 
 /// The caller keeps this Case active while stopping the corresponding Target.
@@ -247,18 +287,19 @@ pub(super) async fn cleanup_deadline(
     state: &Arc<Mutex<ReplayState>>,
     case_id: &str,
 ) -> Option<Instant> {
-    state
-        .lock()
-        .await
-        .dependency_tails
-        .cases
-        .get(case_id)
-        .and_then(Option::as_ref)
-        .and_then(|tail| {
-            tail.stop_prepared_at
-                .map(|at| at + TARGET_STOP_CLEANUP_GRACE)
-                .or(tail.deadline)
-        })
+    let state = state.lock().await;
+    state.case_cleanup.deadline(case_id).or_else(|| {
+        state
+            .dependency_tails
+            .cases
+            .get(case_id)
+            .and_then(Option::as_ref)
+            .and_then(|tail| {
+                tail.stop_prepared_at
+                    .map(|at| at + TARGET_STOP_CLEANUP_GRACE)
+                    .or(tail.deadline)
+            })
+    })
 }
 
 impl ReplayState {
@@ -309,7 +350,7 @@ impl ReplayState {
             || self.unrecorded_case_ids.contains(case)
             || self.mysql.events.dirty_case_ids.contains(case)
             || self.redis.case_has_runtime_failure(case)
-            || self.http_events.dirty_case_ids.contains(case)
+            || self.http_events.case_has_runtime_failure(case)
             || !tail
                 .selected
                 .iter()
@@ -447,8 +488,8 @@ fn resolve(
         .collect()
 }
 
-/// Only real consumption satisfies these obligations. Available entries keep
-/// the case open for later Target work; failures keep the case isolated.
+/// Normal completion requires real consumption. Failed requests preserve
+/// unstarted entries as unused and drain only their actual accepted I/O.
 pub(super) async fn drain(state: &Arc<Mutex<ReplayState>>, case_id: &str) -> Result<()> {
     drain_selected(state, case_id, false).await
 }
@@ -467,6 +508,7 @@ async fn drain_selected(
     case_id: &str,
     before_target_stop: bool,
 ) -> Result<()> {
+    let shared = state;
     let tail = state
         .lock()
         .await
@@ -485,7 +527,7 @@ async fn drain_selected(
     let request_deadline = tail
         .deadline
         .context("dependency-tail case budget was not activated")?;
-    let deadline = if before_target_stop {
+    let mut deadline = if before_target_stop {
         request_deadline
     } else {
         tail.stop_prepared_at
@@ -500,6 +542,8 @@ async fn drain_selected(
                 .checked_sub(tail.budget)?
                 .checked_add(offset)
         });
+    let mut progress =
+        progress::NoProgress::new(shared.lock().await.dependency_tails.no_progress_timeout);
     loop {
         let mut state = state.lock().await;
         ensure!(
@@ -510,13 +554,21 @@ async fn drain_selected(
             state.finalized_at.is_none(),
             "Replay finalized while dependency-tail dependencies were pending"
         );
-        ensure!(
-            !state.unrecorded_case_ids.contains(case_id)
-                && !state.mysql.events.dirty_case_ids.contains(case_id)
-                && !state.redis.case_has_runtime_failure(case_id)
-                && !state.http_events.dirty_case_ids.contains(case_id),
-            "dependency-tail case has failed dependency evidence; ownership was retained"
-        );
+        if state.unrecorded_case_ids.contains(case_id)
+            || state.mysql.events.dirty_case_ids.contains(case_id)
+            || state.redis.case_has_runtime_failure(case_id)
+            || state.http_events.case_has_runtime_failure(case_id)
+        {
+            super::case_cleanup::mark_failed(&mut state, case_id)?;
+        }
+        let failure_cleanup = state.case_cleanup.deadline(case_id).is_some();
+        if let Some(cleanup) = state.case_cleanup.deadline(case_id) {
+            deadline = cleanup;
+        }
+        if failure_cleanup && !before_target_stop {
+            drop(state);
+            return super::case_cleanup::drain_started(shared, case_id, Some(deadline)).await;
+        }
         let now = Instant::now();
         if !before_target_stop {
             ensure!(
@@ -545,6 +597,12 @@ async fn drain_selected(
                         && selected.lifecycle_cleanup
                         && status == ReplayExchangeStatus::AwaitingClientTermination)
                     && !(selected.process_owned && status == ReplayExchangeStatus::Available)
+                    && !permits_unstarted_omission(&state, selected.exchange)
+                    && !(failure_cleanup
+                        && matches!(
+                            status,
+                            ReplayExchangeStatus::Available | ReplayExchangeStatus::Failed
+                        ))
             });
             remaining += usize::from(waits);
             // Keep unused process entries observable while other obligations
@@ -556,13 +614,15 @@ async fn drain_selected(
             !missing,
             "dependency-tail selected dependency disappeared from its replay inventory"
         );
-        ensure!(
-            !failed,
-            "dependency-tail selected dependency failed; case ownership was retained"
-        );
+        if failed && !failure_cleanup {
+            super::case_cleanup::mark_failed(&mut state, case_id)?;
+            drop(state);
+            continue;
+        }
         if remaining == 0 {
             if before_target_stop {
-                if let Some(stop_at) = stop_at
+                if !failure_cleanup
+                    && let Some(stop_at) = stop_at
                     && now < stop_at
                 {
                     drop(state);
@@ -583,6 +643,27 @@ async fn drain_selected(
             }
             return Ok(());
         }
+        let in_flight = super::case_cleanup::has_started(&state);
+        let expired = progress.observe(now, in_flight, progress::counts(&state, case_id));
+        let waiting = progress::waiting(&tail, &state, &progress, now, remaining, in_flight);
+        state
+            .dependency_tails
+            .waits
+            .insert(case_id.into(), waiting.clone());
+        if expired && !failure_cleanup {
+            let failure = serde_json::json!({
+                "kind":"case_no_progress", "case_id":case_id,
+                "reason":"no Case dependency progress and no in-flight I/O within the Replay idle budget",
+                "waiting":waiting
+            });
+            state
+                .dependency_tails
+                .failures
+                .insert(case_id.into(), failure);
+            super::case_cleanup::mark_failed(&mut state, case_id)?;
+            drop(state);
+            continue;
+        }
         ensure!(
             now < deadline,
             "dependency-tail absolute request budget expired; case ownership was retained"
@@ -593,10 +674,13 @@ async fn drain_selected(
 }
 
 pub(super) fn end(state: &mut ReplayState, case_id: &str) {
+    state.dependency_tails.waits.remove(case_id);
     state.dependency_tails.cases.remove(case_id);
 }
 
 #[cfg(test)]
 mod async_tests;
+#[cfg(test)]
+mod no_progress_tests;
 #[cfg(test)]
 mod tests;

@@ -354,6 +354,12 @@ required. Successful Source cleanup after the actual end is independently
 optional; it cannot replace a required business end. Source explicit BEGIN
 transactions retain their existing boundary requirements.
 
+Finite asynchronous tails honor these same native omission proofs. An unstarted
+control already permitted to be omitted does not keep a Case waiting or appear
+as a pending business call. It remains unconsumed in the allowed-unused report.
+If Target starts that control, its real I/O must finish before Case release;
+failed delivery and unproven transaction ends retain their obligations.
+
 Replay requires complete Source connection identity, sequence and transaction
 status evidence. It supports complete ordinary reads and INSERT/UPDATE/DELETE/
 REPLACE writes with successful plain transaction ends. PING/PREPARE can prove
@@ -449,6 +455,22 @@ and passing responses alone grant no exemption or engine-gap attribution.
 Historical reports can receive guidance, but only a fresh Replay can establish
 transaction coverage.
 
+When a completed Target transaction fails member/end validation, its focused
+Source group includes a bounded `member_comparison`. `first_difference` gives
+the zero-based member position and the expected and actual matched Source
+references (recorded index, Source connection, query sequence). The two member
+lists contain at most 32 entries each with explicit omitted counts; the first
+difference remains visible even when it is beyond that prefix. These are
+matched Source references in actual Target delivery order, not Target event
+indexes. No SQL or parameter values are included.
+
+Consuming every operation is insufficient when the write/read order differs.
+An earlier reordered write can prevent selection of the correct COMMIT and
+leave only that end in `missing_required_query_sequences`. Inspect
+`member_comparison.first_difference` before treating this as an absent COMMIT.
+Older reports without the comparison retain their original evidence; only a
+fresh Replay captures it.
+
 Run the actual-client and focused protocol tests with:
 
 ```sh
@@ -539,6 +561,39 @@ their complete projection, FROM/JOIN/ON clauses, sorting and pagination are
 otherwise exact. This is built in and requires neither a rule nor a new
 recording. Source can interpolate literal values into text SQL while target
 retains its normal `?` binding:
+
+Global value formats retain this native compatibility when no SQL field is
+selected. Result delivery and protected response-witness validation use the same
+predicate proof as request matching. Selected value contracts remain enforced;
+changed values and exhausted exchanges remain rejected.
+
+Ordinary SQL strings that happen to parse as JSON scalars, such as `'801'`,
+remain native strings when no global JSON field selects that scalar. They do
+not force positional JSON comparison of an otherwise equivalent string `IN`
+list. Structured JSON payloads retain their automatic codec, and explicitly
+selected scalar formats retain their contracts. Protected request-witness
+validation uses the same native predicate proof in the unselected case.
+
+Global format preflight treats SQL-less session commands such as `COM_PING` as
+exact protocol controls, with no positive format-rule witness. Missing SQL in a
+business query or prepared statement remains invalid evidence.
+
+Protected `backend-rewrite evidence --api PATH --witness ID --pointer POINTER`
+queries can select a SQL literal or bound parameter without reading the whole
+statement. Use `/sql_values/<token-index>/value`, or
+`/sql_values/<token-index>/json/<JSON-pointer>` for JSON encoded in that value.
+Response witnesses use `/request/sql_values/...`. The `physical_fields` entries
+in `unified-rule-candidates` expose the same SQL token positions; the selected
+cell's `/field` view reports a physical column only when the normal resolver
+can prove it. `/kind` distinguishes strings, exact SQL number text, NULL and
+binary bytes (`/base64`). Ordinary native-envelope pointers remain available.
+
+The engine authenticates the current assignment, finalized attempt and original
+Source bytes before decoding. Each statement is materialized independently;
+equal token indexes alone do not prove Source/Target correspondence or grant a
+value rule. Queries return at most 4096 bytes of the selected value. Narrow JSON
+pointers can therefore inspect a small field inside a larger SQL string;
+unsupported statements and incomplete bindings remain explicitly unavailable.
 
 ```sql
 -- Recorded source text

@@ -42,6 +42,39 @@ fn handoff(root: &Path, report: &RewriteReviewReport) -> RewriteWorkerReportOpti
 }
 
 #[test]
+fn external_test_file_scope_is_honored_and_bound_to_the_review() {
+    let (target, scope) = setup();
+    rust_project(
+        target.path(),
+        "#[cfg(test)]\n#[path = \"src/engine_tests.rs\"]\nmod tests;\n",
+    );
+    fs::create_dir_all(target.path().join("src")).unwrap();
+    let file = target.path().join("src/engine_tests.rs");
+    let helper = "fn peer() { tokio::spawn(async {}); }\n";
+    fs::write(&file, format!("#![cfg(test)]\n{helper}")).unwrap();
+    let reviewed = check(options(target.path(), scope.clone())).unwrap();
+    assert_eq!(reviewed.status, ReviewStatus::Passed);
+    assert!(
+        reviewed
+            .files
+            .contains_key(Path::new("src/engine_tests.rs"))
+    );
+
+    // Removing the compiler-enforced file guard changes its reviewed hash.
+    // Neither the filename nor an unproved parent edge can grant an exemption.
+    fs::write(file, helper).unwrap();
+    let runtime = check(options(target.path(), scope)).unwrap();
+    assert_eq!(runtime.status, ReviewStatus::EvidenceRequired);
+    assert!(
+        runtime
+            .findings
+            .iter()
+            .any(|finding| finding.rule == ReviewRule::SpawnOwnership)
+    );
+    assert_ne!(runtime.files, reviewed.files);
+}
+
+#[test]
 fn ordinary_worker_and_integration_review_do_not_run_repository_commands() {
     // These valid-syntax crates deliberately contain formatting, test or lint
     // problems. Ordinary delivery review must leave Cargo checks to the final

@@ -1,4 +1,4 @@
-//! A Target may visit several Source rows with the same statement structure.
+//! A Target may visit several Source calls with the same physical operation.
 //! Failed search edges remain protected, but only an unpaired Target is an error.
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,7 +23,7 @@ impl Candidates {
                 .target_observation_id
                 .as_ref()
                 .or(witness.target_sha256.as_ref())
-                .context("MySQL candidate has no protected Target observation identity")?
+                .context("dependency candidate has no protected Target observation identity")?
                 .clone(),
         );
         match result {
@@ -35,7 +35,20 @@ impl Candidates {
             Ok(_) => Ok(0),
             Err(error) => {
                 if !self.validated.contains(&observation) {
-                    self.rejected.entry(observation).or_insert(error);
+                    self.rejected.entry(observation).or_insert_with(|| {
+                        error.context(format!(
+                            "Source candidate case={}, connection={}, sequence={:?}, operation={}",
+                            witness.metadata.source.case_id,
+                            witness
+                                .metadata
+                                .source
+                                .connection_id
+                                .as_deref()
+                                .unwrap_or("<none>"),
+                            witness.metadata.source.sequence,
+                            witness.metadata.operation,
+                        ))
+                    });
                 }
                 Ok(0)
             }
@@ -45,7 +58,7 @@ impl Candidates {
     pub(super) fn finish(self) -> Result<()> {
         match self.rejected.into_values().next() {
             Some(error) => Err(error).context(
-                "a related MySQL Target observation has no valid pair in the complete Source scope",
+                "a related Target dependency observation has no valid pair in the complete Source scope",
             ),
             None => Ok(()),
         }

@@ -64,7 +64,15 @@ pub(super) fn merge_with_replacements(
     if let Some(redis) = &proposed.redis {
         if replace.contains("redis") {
             candidate.redis = Some(redis.clone());
-        } else if !redis.keys.is_empty() {
+        } else if !redis.keys.is_empty()
+            || proposed
+                .rules
+                .iter()
+                .any(|rule| rule.id().starts_with("redis.key."))
+        {
+            // Key-local behavior declarations compact back into redis.keys.
+            // Preserve that container even when it has no scalar formats, so
+            // rendering cannot introduce a previously absent format section.
             fields(
                 &mut candidate.redis.get_or_insert_default().keys,
                 &redis.keys,

@@ -48,6 +48,7 @@ pub(super) fn validate_proposal(input: &str) -> Result<()> {
             if ![
                 "append_stream",
                 "read_commutation",
+                "read_observation",
                 "expiry_refresh",
                 "read_back",
                 "commands",

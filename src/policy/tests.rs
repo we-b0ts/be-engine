@@ -1,6 +1,27 @@
 use super::*;
 mod literal_paths;
 
+#[test]
+fn finite_process_get_changes_only_classification_fingerprint() {
+    let header = "format: traffic-policy/v2\nsource_revision: sha256:0000000000000000000000000000000000000000000000000000000000000000\n";
+    let empty = parse_and_compile_policy(header).unwrap();
+    let raw = format!(
+        "{header}process_dependencies:\n  tasks:\n    monitor:\n      requests:\n        - redis:\n            ports: [6379]\n            operation: GET\n            keys: [{{kind: exact, value: heartbeat}}]\n"
+    );
+    let finite = parse_and_compile_policy(&raw).unwrap();
+    assert_eq!(empty.fingerprints.capture, finite.fingerprints.capture);
+    assert_eq!(empty.fingerprints.runtime, finite.fingerprints.runtime);
+    assert_ne!(
+        empty.fingerprints.classification,
+        finite.fingerprints.classification
+    );
+    let snapshot =
+        parse_and_compile_policy(&format!("{raw}            initial_load_timeout_ms: 1000\n"))
+            .unwrap();
+    assert_ne!(snapshot.fingerprints.capture, finite.fingerprints.capture);
+    assert_ne!(snapshot.fingerprints.runtime, finite.fingerprints.runtime);
+}
+
 fn native_policy(api: &str) -> TrafficPolicy {
     parse_policy(
         &serde_json::json!({"format":POLICY_FORMAT,"rules":[{

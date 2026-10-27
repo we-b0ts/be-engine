@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+mod member_comparison;
 
 pub(crate) fn records() -> Vec<Value> {
     let control = |seq, sql, before, after| {

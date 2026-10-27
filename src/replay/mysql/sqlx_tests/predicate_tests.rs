@@ -1,4 +1,72 @@
 use super::*;
+
+#[tokio::test]
+async fn global_formats_preserve_numeric_string_in_permutations() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let source = "SELECT resource_members.resource_id AS resource_members_resource_id FROM resource_members WHERE resource_members.resource_type IN ('Namespace') AND resource_members.entity_type='namespace' AND resource_members.entity_id IN ('801','388','693','535','539','699') AND resource_members.status='approved'";
+        let target = "SELECT resource_members.resource_id AS resource_members_resource_id FROM resource_members WHERE resource_members.resource_type IN (?) AND resource_members.entity_type='namespace' AND resource_members.entity_id IN (?,?,?,?,?,?) AND resource_members.status='approved'";
+        let response = result(json!([{"name":"resource_members_resource_id","family":"integer","sql_type":"BIGINT"}]), json!([[{"kind":"integer","value":7}]]));
+        let policy = "format: traffic-policy/v2\njson:\n  fields:\n    /now: {kind: time, formats: [unix_seconds]}\nmysql: {}\n";
+        let (temp, addr, runtime, task) = fixture_with_policy(&[exchange(source, response)], Some(policy)).await;
+        let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
+        let original = std::fs::read(&path).unwrap();
+        let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
+        for (last, passes) in [("802", false), ("801", true), ("801", false)] {
+            let result = sqlx::query(target).bind("Namespace").bind("388").bind("535").bind("539").bind("693").bind("699").bind(last).fetch_one(&mut client).await;
+            if passes { assert_eq!(result.unwrap().get::<i64,_>("resource_members_resource_id"), 7); }
+            else { assert!(result.is_err(), "changed values and exhausted evidence must fail"); }
+        }
+        let state = runtime.state.lock().await;
+        assert_eq!(state.mysql.events.matched_query_count, 1);
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        task.abort();
+    }).await.unwrap();
+}
+
+#[tokio::test]
+async fn global_formats_preserve_unordered_predicates_without_selected_sql_fields() {
+    for policy in [
+        None,
+        Some(
+            "format: traffic-policy/v2\njson:\n  fields:\n    /now: {kind: time, formats: [unix_seconds]}\n",
+        ),
+    ] {
+        let response = result(
+            json!([{"name":"users_id","family":"integer","sql_type":"BIGINT"}]),
+            json!([[{"kind":"integer","value":1}]]),
+        );
+        let source = "SELECT users.id AS users_id FROM users WHERE users.id IN (3,1,2) AND users.is_active IS true";
+        let (temp, addr, runtime, task) =
+            fixture_with_policy(&[exchange(source, response)], policy).await;
+        let mut client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
+        assert!(sqlx::query("SELECT users.id AS users_id FROM users WHERE users.id IN (1,2,4) AND users.is_active IS true")
+            .fetch_one(&mut client)
+            .await
+            .is_err());
+        let row = sqlx::query("SELECT users.id AS users_id FROM users WHERE users.id IN (1,2,3) AND users.is_active IS true")
+            .fetch_one(&mut client)
+            .await
+            .unwrap_or_else(|error| panic!("global_formats={}: {error}", policy.is_some()));
+        assert_eq!(row.get::<i64, _>("users_id"), 1);
+        assert!(sqlx::query("SELECT users.id AS users_id FROM users WHERE users.id IN (1,2,3) AND users.is_active IS true")
+            .fetch_one(&mut client)
+            .await
+            .is_err());
+        client.close().await.unwrap();
+        assert_eq!(
+            runtime.state.lock().await.mysql.events.matched_query_count,
+            1
+        );
+        task.abort();
+    }
+}
 use sqlx::{Column, Executor};
 
 fn rows(value: i64) -> Value {

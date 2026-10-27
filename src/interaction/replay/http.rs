@@ -17,12 +17,13 @@ use crate::interaction::{
     stream::{StreamDecoder, StreamMessage},
 };
 
-pub(super) async fn execute(
+pub(super) async fn execute_with_feedback(
     _client: &HttpClient,
     request: Request<Full<Bytes>>,
     transcript: &InputTranscript,
     header_timeout: Duration,
     body_limit: usize,
+    mut dependency_failure: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<ReplayResponse> {
     transcript.validate()?;
     let subscription = transcript.http_stream_mode == HttpStreamMode::Subscription;
@@ -52,10 +53,11 @@ pub(super) async fn execute(
         .min(Duration::from_millis(transcript.policy.max_duration_ms));
     let head_deadline = started + head_budget;
     let head_deadline = client_close.map_or(head_deadline, |close| close.min(head_deadline));
-    let (response, transport) = tokio::time::timeout_at(head_deadline, transport::request(request))
-        .await
-        .context("recorded stream response headers timed out")?
-        .context("recorded stream request failed")?;
+    let (response, transport) = tokio::select! {
+        biased;
+        _=crate::dependency::execution::rejected(&mut dependency_failure)=>return Err(crate::dependency::execution::UnmatchedDependency {observed_status:None}.into()),
+        response=tokio::time::timeout_at(head_deadline,transport::request(request))=>response.context("recorded stream response headers timed out")?.context("recorded stream request failed")?,
+    };
     ensure!(
         client_close.is_none_or(|close| Instant::now() < close),
         "recorded HTTP client closed before Target response headers"
@@ -82,6 +84,12 @@ pub(super) async fn execute(
     let mut events = Vec::new();
     let mut decoder = StreamDecoder::new(transcript.protocol, transcript.policy.max_message_bytes)?;
     let (reason, transport_clean) = loop {
+        if dependency_failure
+            .as_ref()
+            .is_some_and(|failure| *failure.borrow())
+        {
+            break (EndReason::DependencyFailure, false);
+        }
         let now = elapsed_ms(started);
         let lifecycle_deadline = started + Duration::from_millis(lifecycle.next_deadline_ms());
         if client_close.is_some_and(|close| close <= lifecycle_deadline && Instant::now() >= close)
@@ -97,6 +105,14 @@ pub(super) async fn execute(
             client_close.map_or(lifecycle_deadline, |close| close.min(lifecycle_deadline));
         let frame = tokio::select! {
             biased;
+            _ = async { match dependency_failure.as_mut() {
+                Some(failure) => {let _=failure.changed().await;},
+                None => std::future::pending::<()>().await,
+            } } => {
+                if dependency_failure.as_ref().is_some_and(|failure|*failure.borrow()) {break (EndReason::DependencyFailure,false);}
+                dependency_failure=None;
+                continue;
+            }
             _ = sleep_until(deadline) => continue,
             frame = body.frame() => frame,
         };
@@ -144,7 +160,10 @@ pub(super) async fn execute(
             }
         }
     };
-    let partial_message = if reason == EndReason::ClientClose {
+    let partial_message = if matches!(
+        reason,
+        EndReason::ClientClose | EndReason::DependencyFailure
+    ) {
         decoder.partial_message()
     } else {
         decoder.validate_boundary()?;
@@ -153,7 +172,10 @@ pub(super) async fn execute(
     if let Some(partial) = &partial_message {
         lifecycle.record_message(partial.decode()?.len())?;
     }
-    if reason == EndReason::ClientClose {
+    if matches!(
+        reason,
+        EndReason::ClientClose | EndReason::DependencyFailure
+    ) {
         // HTTP/1 FIN permits the server to finish its response. This semantic
         // cancellation needs a connection end on its own dedicated transport.
         transport.cancel()?;
@@ -180,6 +202,25 @@ pub(super) async fn execute(
     })
 }
 
+#[cfg(test)]
+async fn execute(
+    client: &HttpClient,
+    request: Request<Full<Bytes>>,
+    transcript: &InputTranscript,
+    header_timeout: Duration,
+    body_limit: usize,
+) -> Result<ReplayResponse> {
+    execute_with_feedback(
+        client,
+        request,
+        transcript,
+        header_timeout,
+        body_limit,
+        None,
+    )
+    .await
+}
+
 #[derive(Clone, Copy)]
 enum ClientCloseTiming {
     Absolute(u64),
@@ -200,7 +241,11 @@ fn client_close_timing(transcript: &InputTranscript) -> Result<Option<ClientClos
             let timing = match (action.after.as_slice(), action.gap_start_ms) {
                 ([], None) => ClientCloseTiming::Absolute(action.offset_ms),
                 ([0], Some(start)) if start <= action.offset_ms => {
-                    ClientCloseTiming::AfterCompletion(action.offset_ms - start)
+                    ClientCloseTiming::AfterCompletion(if transcript.policy.preserve_input_timing {
+                        action.offset_ms - start
+                    } else {
+                        0
+                    })
                 }
                 _ => anyhow::bail!("HTTP client close has an invalid completion barrier"),
             };

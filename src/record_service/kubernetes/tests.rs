@@ -141,10 +141,12 @@ async fn timeout_terminates_starting_child_and_runtime_exit_is_reported() {
         .await
         .unwrap();
     std::fs::write(fixture.temp.path().join("exit"), "").unwrap();
-    let error = tokio::time::timeout(Duration::from_secs(3), forwards.failure())
+    let error = tokio::time::timeout(Duration::from_secs(5), forwards.failure())
         .await
         .unwrap();
     assert!(error.to_string().contains("exited"));
+    // One timed-out startup and one later ready child, with no replacement.
+    assert_eq!(runtime_failure::forwarding_calls(&fixture).len(), 2);
     forwards.shutdown().await.unwrap();
 }
 
@@ -246,7 +248,8 @@ with (root / 'calls.jsonl').open('a') as log:
 if 'get' in sys.argv:
     print(json.dumps({'kind':'Service','metadata':{'name':'api','namespace':'team'},'spec':{'selector':{'app':'api'},'ports':[{'port':p,'targetPort':p+1,'protocol':'TCP'} for p in settings['ports']]}}))
     sys.exit(0)
-port = int(sys.argv[-1][1:])
+local_port, remote_port = sys.argv[-1].split(':')
+port = int(remote_port)
 if settings.get('fail_port') == port:
     print('private-token: must not appear in public diagnostics', file=sys.stderr)
     sys.exit(3)
@@ -262,7 +265,8 @@ time.sleep(60)
     subprocess.Popen([sys.executable, '-c', helper, str(root / 'helper.json')])
     while not (root / 'helper.json').exists(): time.sleep(0.01)
 listener = socket.socket()
-listener.bind(('127.0.0.1',0))
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(('127.0.0.1',int(local_port or '0')))
 listener.listen()
 listener.settimeout(0.05)
 address = listener.getsockname()
@@ -276,5 +280,13 @@ while not (root / 'exit').exists():
             connection.sendall(data)
     except socket.timeout:
         pass
-sys.exit(7)
+for line in settings.get('runtime_stdout', []):
+    print(line, flush=True)
+for line in settings.get('runtime_stderr', []):
+    print(line, file=sys.stderr, flush=True)
+sys.exit(settings.get('exit_code', 7))
 "#;
+
+mod runtime_failure;
+
+mod exit_diagnostics;

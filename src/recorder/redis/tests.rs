@@ -10,6 +10,7 @@ use crate::{AppConfig, BackgroundDependencyRuleConfig, RecordingAccessPolicy};
 
 use super::*;
 
+mod finite_get;
 mod termination;
 
 #[test]
@@ -694,6 +695,10 @@ async fn test_state(access_policy: RecordingAccessPolicy) -> (AppState, TempDir)
 }
 
 async fn snapshot_test_state() -> (AppState, TempDir) {
+    redis_process_test_state(Some(1_000)).await
+}
+
+async fn redis_process_test_state(initial_load_timeout_ms: Option<u64>) -> (AppState, TempDir) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();
     let mut config = AppConfig::default();
@@ -715,7 +720,7 @@ async fn snapshot_test_state() -> (AppState, TempDir) {
             key_patterns: Vec::new(),
             key_prefix: String::new(),
             key_suffix: String::new(),
-            initial_load_timeout_ms: Some(1_000),
+            initial_load_timeout_ms,
             fields: Vec::new(),
             source_revision: "abcdef1".to_string(),
             source_evidence: "Cache.java:42".to_string(),

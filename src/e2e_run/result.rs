@@ -165,6 +165,7 @@ pub struct E2eRepresentativeDifference {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum E2eResponseUnavailableReason {
+    DependencyUnmatched,
     TargetConnectionClosed,
     TargetConnectionFailed,
     TargetRequestTimedOut,
@@ -194,6 +195,8 @@ pub struct E2eValueObservation {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct E2eDiagnosis {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub execution_failures: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress_rejections: Option<Value>,
     pub counts: E2eDiagnosisCounts,
@@ -247,9 +250,11 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
         )
         .collect::<Vec<_>>();
     failure_clusters.sort_by(|left, right| {
-        right
-            .affected_cases
-            .cmp(&left.affected_cases)
+        // A different primary status explains why its expected body and
+        // asynchronous work may be absent; show it before derivative fields.
+        (left.difference_kind != ResponseDifferenceKind::StatusMismatch)
+            .cmp(&(right.difference_kind != ResponseDifferenceKind::StatusMismatch))
+            .then_with(|| right.affected_cases.cmp(&left.affected_cases))
             .then_with(|| right.occurrences.cmp(&left.occurrences))
             .then_with(|| left.pointer_pattern.cmp(&right.pointer_pattern))
             .then_with(|| left.difference_kind.cmp(&right.difference_kind))
@@ -342,6 +347,7 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
         .filter(|case| case.assertion_passed == Some(false))
         .count();
     E2eDiagnosis {
+        execution_failures: super::execution_failure::diagnosis(state),
         egress_rejections: egress::diagnosis(layout, state),
         counts: E2eDiagnosisCounts {
             selected: state.cases.len(),
@@ -361,7 +367,9 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
         lifecycle_errors: state
             .errors
             .iter()
+            .rev()
             .take(3)
+            .rev()
             .map(|error| bounded_error(error))
             .collect(),
     }
@@ -418,7 +426,7 @@ pub(crate) fn response_pointer_pattern(pointer: &str) -> String {
         .join("/")
 }
 
-fn bounded_error(error: &str) -> String {
+pub(super) fn bounded_error(error: &str) -> String {
     const LIMIT: usize = 512;
     let one_line = error.replace(['\r', '\n'], " ");
     let mut chars = one_line.chars();

@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use super::{FileStamp, PageManifest, PageWriter, Paged, RecordLocation, RecordStream, store};
 
 pub(crate) const GLOBAL_FRAGMENT: &str = ".global-replay-index.json";
-const VERSION: u32 = 1;
+const VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GlobalEntry {
@@ -29,6 +29,8 @@ pub(crate) struct NotificationEntry {
     pub(crate) location: RecordLocation,
     pub(crate) duration_ms: u64,
     pub(crate) ordinal: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) adapter_echo: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,6 +230,7 @@ impl GlobalBuilder {
             location: location.clone(),
             duration_ms,
             ordinal: self.notification_count,
+            adapter_echo: crate::redis::socketio_rpc::echo_digest(&frame.channel, &frame.payload),
         })?;
         self.notification_count += 1;
         Ok(true)
@@ -330,7 +333,7 @@ pub(crate) fn load_global_index_cancellable(
     if let Some(index) = load_sealed_index(path, parent, &stamp, cancelled)? {
         return Ok((index, parent.to_owned()));
     }
-    let root = store::cache_directory(path).join("global-v1");
+    let root = store::cache_directory(path).join("global-v3");
     store::private_directory(&root)?;
     let _lock = store::Lock::acquire(&root.join("build.lock"), cancelled)?;
     let fragment = root.join("index.json");

@@ -98,6 +98,18 @@ fn ready_handoff_integration_resumes_after_first_pass_discovery() {
         action["commands"]["export_batch"]["required_env_names"],
         serde_json::json!(["BACKEND_REWRITE_REVIEW_WORKTREE"])
     );
+    let mut expected = action["commands"]["report_worker"].clone();
+    let argv = expected["argv"].as_array_mut().unwrap();
+    assert_eq!(argv.last().unwrap(), "integrated");
+    *argv.last_mut().unwrap() = serde_json::json!("rework_required");
+    assert_eq!(action["commands"]["report_rework"], expected);
+    assert_eq!(action["details"]["handoff_id"], "ready-handoff");
+    assert!(
+        action["summary"]
+            .as_str()
+            .unwrap()
+            .contains("without rewriting the accepted delivery or requiring a failed Replay")
+    );
 }
 
 #[test]

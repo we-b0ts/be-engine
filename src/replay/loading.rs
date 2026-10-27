@@ -24,6 +24,10 @@ impl ReplayRuntime {
         lifecycle: ReplayLifecycleConfig,
     ) -> Result<Self> {
         lifecycle.dependency_loading.validate()?;
+        ensure!(
+            !lifecycle.case_no_progress_timeout.is_zero(),
+            "Replay case no-progress timeout must be positive"
+        );
         let lazy = lifecycle.dependency_loading.lazy_cases;
         clear_report_artifacts(config.report_path.as_deref()).await?;
         let root_dir = config.case_dir;
@@ -261,6 +265,7 @@ impl ReplayRuntime {
             )?;
             // Eager and lazy loading have registered all selected Redis lanes.
             // Apply ownership proof before any target request can be admitted.
+            redis.apply_finite_process_order(&redis_process_rules);
             redis.apply_api_origin_order(&redis_root, &redis_process_rules)?;
             redis::load_cross_case(
                 &mut redis,
@@ -299,6 +304,9 @@ impl ReplayRuntime {
             .map(|path| ReplayPolicyRuntime::load_with_sources(path, &cases, !lazy))
             .transpose()?;
         if let Some(policy) = &mut replay_policy {
+            policy
+                .request_contracts
+                .configure_pre_match(lifecycle.pre_match);
             let witnesses = crate::policy_evidence::WitnessStore::new_bound(
                 &replay_artifact_dir,
                 &session_id.to_string(),
@@ -360,6 +368,8 @@ impl ReplayRuntime {
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
         let mut state = ReplayState {
+            http_stream_timing: lifecycle.http_stream_timing,
+            case_cleanup: Default::default(),
             target_stop_prepared: BTreeSet::new(),
             target_session_stopped: false,
             deferred,
@@ -385,7 +395,8 @@ impl ReplayRuntime {
                     .map(|compiled| compiled.async_api.clone())
                     .unwrap_or_default(),
                 lifecycle.request_timeout,
-            ),
+            )
+            .with_no_progress_timeout(lifecycle.case_no_progress_timeout),
             connect_failures,
             case_dependency_post_response_window: lifecycle.case_dependency_post_response_window,
             global_path,

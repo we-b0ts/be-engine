@@ -82,8 +82,95 @@ pub(super) fn report(
         .iter()
         .filter(|query| discovery_ids.contains(&query.query_id))
         .collect::<Vec<_>>();
-    let facts = json!({ "work_scope": scope, "issue": issue, "method_apis": methods,
+    let mut facts = json!({ "work_scope": scope, "issue": issue, "method_apis": methods,
         "method_issues": method_issues,"rule_discovery":rule_discovery });
+    if matches!(
+        issue.kind,
+        crate::rewrite::RewriteIssueKind::Response
+            | crate::rewrite::RewriteIssueKind::Dependency
+            | crate::rewrite::RewriteIssueKind::Replay
+    ) {
+        facts["dependency_witness_query"] = json!(super::super::action::command(
+            target_root,
+            vec![
+                "evidence".into(),
+                "--api".into(),
+                super::super::api_selector::public_api(&state.api).to_owned(),
+                "--witness".into(),
+                "<witness-id>".into(),
+                "--pointer".into(),
+                "<json-pointer>".into()
+            ],
+            vec![]
+        ));
+        facts["mysql_sql_value_pointers"] = json!({
+            "request":"/sql_values/<sql-token-index>/value",
+            "decoded_json":"/sql_values/<sql-token-index>/json/<field-path>",
+            "response_request":"/request/sql_values/<sql-token-index>/value",
+            "token_indexes":"physical_fields.fields[].observed_positions in unified-rule-candidates; a candidate is not proof of a successful match"
+        });
+        facts["redis_target_argument_query"] = json!(super::super::action::command(
+            target_root,
+            vec![
+                "evidence".into(),
+                "--api".into(),
+                super::super::api_selector::public_api(&state.api).to_owned(),
+                "--redis-target-event".into(),
+                "<case-id>:<target-event-index>".into(),
+                "--argument-index".into(),
+                "<zero-based-index>".into()
+            ],
+            vec![]
+        ));
+    }
+    // Retained issues may predate dependency-first attribution. Expose the
+    // original execution cause without changing their persisted identity.
+    let execution_context = super::e2e_context(target_root, state)
+        .and_then(|context| {
+            crate::e2e_run::query_execution_context(context, super::group_id(state)?, issue.attempt)
+        })
+        .ok()
+        .filter(|_| {
+            matches!(
+                issue.kind,
+                crate::rewrite::RewriteIssueKind::Response
+                    | crate::rewrite::RewriteIssueKind::Dependency
+                    | crate::rewrite::RewriteIssueKind::Replay
+            )
+        });
+    if let Some(execution) = &execution_context {
+        super::execution::attach(target_root, state, issue, execution, &mut facts);
+    }
+    let runtime_interrupted = execution_context.as_ref().is_some_and(|context| {
+        context["status"] == "interrupted"
+            && context["replay_finalized"] == false
+            && context["executed_cases"].as_u64().unwrap_or(0) > 0
+    });
+    let execution_failures = execution_context
+        .as_ref()
+        .map(|context| &context["execution_failures"])
+        .filter(|failures| failures.as_array().is_some_and(|items| !items.is_empty()));
+    if let Some(failures) = execution_failures.as_ref() {
+        facts["execution_failures"] = (*failures).clone();
+        facts["primary_failure"] = json!({
+            "kind": if failures.as_array().is_some_and(|rows| rows.iter().any(|row| row["kind"] == "case_no_progress")) {
+                "case_execution_incomplete"
+            } else { "dependency_unmatched" },
+            "request_completed": false,
+            "response_differences_in_interrupted_cases_are_downstream": true,
+        });
+        queries.sort_by_key(|query| !query.query_id.ends_with("-dirty-clusters"));
+        facts["dependency_diagnosis"] = json!(queries.iter().find(|query| {
+            query.query_id == super::query_id(state, issue, super::QUERY_DIRTY_CLUSTERS)
+        }));
+    }
+    if runtime_interrupted {
+        facts["execution_context"] = json!(execution_context);
+        facts["primary_failure"] = json!({"kind":"replay_interrupted","scope":"api_attempt"});
+        queries.sort_by_key(|query| !query.query_id.ends_with("-target-runtime-diagnostics"));
+        facts["runtime_diagnosis"] = json!(queries.iter().find(|query| query.query_id
+            == super::query_id(state, issue, super::QUERY_TARGET_RUNTIME_DIAGNOSTICS)));
+    }
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
@@ -110,7 +197,11 @@ pub(super) fn report(
             "Issue ownership and possible causes are investigation guidance, not a proven root cause."
                 .to_string(),
         ],
-        next_step: if issue.kind == crate::rewrite::RewriteIssueKind::TargetQuality {
+        next_step: if runtime_interrupted {
+            "Replay was interrupted before final publication. Execute runtime_diagnosis.command, then use that diagnostic report's evidence_id for a proven replay-capability-gap route. The overview ID is not a route diagnostic. Earlier case dependency/response failures remain observations; rule planning needs a complete finalized attempt.".into()
+        } else if execution_failures.is_some() {
+            "Replay ended incomplete Case execution: inspect each execution_failures.kind. dependency_unmatched means a Target call was rejected; case_no_progress means the Case exceeded its Replay idle budget with no resource I/O in flight. For case_no_progress, inspect waiting.references and pending_source_dependencies, then trace the missing Target continuation; an observed primary HTTP 200 does not prove asynchronous completion. Follow execution_failures_query for every omitted case and dependency_diagnosis.command for protected request differences and unused Source calls. Missing response events and later unused dependencies can be downstream observations. Other cases may have independent response failures.".into()
+        } else if issue.kind == crate::rewrite::RewriteIssueKind::TargetQuality {
             "Read context.review.integrated_findings, fix the assigned quality finding, then run context.review.check for this dispatch before handoff.".to_string()
         } else { match scope {
             RewriteWorkScope::Api { .. } =>

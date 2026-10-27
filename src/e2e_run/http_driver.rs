@@ -141,8 +141,15 @@ pub(super) async fn capture_case(
     input_registration: (&Path, &str),
 ) -> Result<Vec<u8>> {
     let kind: RequestKind = serde_json::from_slice(request_bytes)?;
+    let monitor =
+        super::request_feedback::Monitor::start(input_registration.0, input_registration.1);
     if kind.protocol_version.is_some() {
-        return capture_motan_case(config, kind, actual_response_path).await;
+        let mut failure = Some(monitor.receiver());
+        return tokio::select! {
+            biased;
+            _=crate::dependency::execution::rejected(&mut failure)=>Err(crate::dependency::execution::UnmatchedDependency {observed_status:None}.into()),
+            response=capture_motan_case(config,kind,actual_response_path)=>response,
+        };
     }
     let request_timeout = if kind.interaction.is_some() {
         config.target_request_timeout
@@ -159,6 +166,7 @@ pub(super) async fn capture_case(
         request_timeout,
         config.target_max_response_bytes,
     )
+    .with_execution_failure(Some(monitor.receiver()))
     .with_request_rule_runtime(request_rules)
     .with_input_registration(input_registration.0, input_registration.1)
     .send_bytes(request_bytes, &request_path.display().to_string())
@@ -187,6 +195,9 @@ pub(super) async fn capture_case(
 }
 
 pub(super) fn response_unavailable_reason(error: &anyhow::Error) -> E2eResponseUnavailableReason {
+    if error.is::<crate::dependency::execution::UnmatchedDependency>() {
+        return E2eResponseUnavailableReason::DependencyUnmatched;
+    }
     if error.chain().any(|cause| {
         cause
             .downcast_ref::<hyper::Error>()
@@ -373,6 +384,9 @@ mod tests {
             stream.write_all(&response).await.unwrap();
         });
         let config = ResolvedProjectConfig {
+            replay_case_no_progress_timeout: Duration::from_secs(5),
+            replay_pre_match: true,
+            replay_http_stream_timing: Default::default(),
             target_dockerfile: PathBuf::from("Dockerfile.target"),
             target_build_contexts: Vec::new(),
             target_startup: crate::startup::StartupConfig::default(),

@@ -66,12 +66,44 @@ MySQL and other supported dependency protocols retain their existing capture
 semantics. The controller and kubectl run outside Source UID 998's interception
 scope, so Kubernetes control traffic is not captured as business dependencies.
 
-Port-forward process exit closes recording admission and fails the run, including
-during Source readiness. No automatic reconnect or request retry can hide a
-broken exchange. Normal shutdown retains forwards until Source stops and accepted
-requests drain, then terminates and reaps the scoped process groups before
-Recorder finalization. Infrastructure failure is passed to Recorder so the
-published run manifest is failed rather than completed.
+HTTP recording through these declared routes uses a separate upstream client
+that does not retain idle connections. Every HTTP exchange opens a new business
+connection through the existing kubectl tunnel. An active response, including
+SSE, keeps its connection until the complete response or actual termination.
+Ordinary HTTP upstreams retain their existing connection pooling. HTTPS routes
+already establish a fresh TLS connection for each exchange and keep strict SNI
+and certificate verification.
+
+This avoids reusing an upstream socket during port-forward's delayed propagation
+of a server's idle close. It does not depend on the business service's keep-alive
+timeout, change Source configuration, or replay a failed business request.
+
+Any unexpected port-forward exit, including exit code zero after readiness,
+immediately fails the recording and stops Source through ordinary supervised
+shutdown. The controller never restarts the forward. Actual interrupted exchanges
+remain in their semantic evidence; Recorder never resends dependency requests
+to hide a failed connection. Initial discovery, permission and readiness errors
+retain their ordinary startup failure behavior.
+
+Normal shutdown retains forwards until Source stops and accepted requests drain,
+then terminates and reaps scoped process groups before Recorder finalization.
+
+Each forward logs its process ID, Service identity, local listener, lifetime,
+handled-connection count and exit code/signal when it exits. Requested shutdown
+is logged separately from an unexpected exit; an unexpected exit with code zero
+is still a forwarding failure. Stderr is reduced to static operation and cause categories,
+including lost connections, refused/reset connections, timeouts, authentication,
+TLS and stream errors. The exit log and returned error retain the last eight
+categories, total stderr lines and unknown-line count. Raw stderr, authentication
+plugin output, URLs and credential values are never logged or saved in artifacts.
+Unknown lines retain only their category and count.
+
+After child exit, the controller drains buffered output for at most 100 ms so an
+immediate exit cannot hide its final diagnostic or connection notification.
+`stderr_drained=false` indicates
+that the pipe did not reach EOF within that bound or failed its existing bounded
+line validation; diagnostic collection does not replace the original exit status.
+The same summary appears in ordinary recording-container logs and the final error.
 
 ## Supported scope
 

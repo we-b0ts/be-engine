@@ -109,7 +109,7 @@ pub(in crate::rewrite) fn scope_action(
         },
         Coverage::IntegrationRequired => RewriteAction::IntegrationRequired {
             summary: format!(
-                "ready handoffs await integration; the current action entry is {}. Select batch members from inventory and use commands.export_batch to export their exact delivery metadata and check command for the code integrator. This action names one entry, not the complete in-flight integration batch. Keep prior integrated code as the base and review the complete candidate before reporting integrated. A batch may include current integrated handoffs plus ready handoffs; report integrated only for those still handoff_ready",
+                "ready handoffs await integration; the current action entry is {}. Select batch members from inventory and use commands.export_batch to export their exact delivery metadata and check command for the code integrator. This action names one entry, not the complete in-flight integration batch. Keep prior integrated code as the base and review the complete candidate before reporting integrated. A batch may include current integrated handoffs plus ready handoffs; report integrated only for those still handoff_ready. For a confirmed defect before Replay, use commands.report_rework with this original handoff ID and review report after the active operation releases the resource; it resumes the same worker on a new dispatch without rewriting the accepted delivery or requiring a failed Replay",
                 scope.label()
             ),
             handoff_id: runtime::observation(state, scope)
@@ -126,6 +126,7 @@ pub(in crate::rewrite) fn scope_action(
                 vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()],
             ),
             report_worker: runtime::report_command_for_scope(target_root, state, scope, true),
+            report_rework: runtime::rework_command_for_scope(target_root, state, scope),
             worker,
         },
         Coverage::VerificationRequired => action::replay_advance(

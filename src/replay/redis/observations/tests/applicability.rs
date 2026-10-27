@@ -103,7 +103,7 @@ fn historical_prefix_must_deliver_before_a_pooled_set_establishes_virtual_reads(
 }
 
 #[test]
-fn prefix_support_preserves_expiry_writer_capture_and_cross_case_failures() {
+fn prefix_support_preserves_expiry_writer_capture_and_foreign_witness_boundaries() {
     for change in [
         "writer",
         "prefix_writer",
@@ -152,10 +152,18 @@ fn prefix_support_preserves_expiry_writer_capture_and_cross_case_failures() {
         if change == "overlap" {
             state.exchanges[0].record.timestamp = Some("2020-01-01T00:00:10Z".parse().unwrap());
         }
-        assert!(
-            state.prepare_observations("case").is_err(),
-            "accepted {change}"
-        );
+        if change == "cross_case" {
+            state.prepare_observations("case").unwrap();
+            assert!(
+                state.observations.profiles.is_empty(),
+                "a foreign GET cannot supply the owner's missing positive read witness"
+            );
+        } else {
+            assert!(
+                state.prepare_observations("case").is_err(),
+                "accepted {change}"
+            );
+        }
         assert!(
             state
                 .exchanges

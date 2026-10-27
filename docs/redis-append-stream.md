@@ -21,6 +21,10 @@ The declaration grants no process ownership, shared inventory, snapshot renewal
 or additional non-APPEND calls. Existing proven identity formats may translate
 a generated key; they never transform stream text. Use `localcache.requests`
 or `process_dependencies.tasks` only for separately proven dependency lifetimes.
+The stream selector consumes complete key identities already accepted from
+typed metadata, such as a JSON `_content_key`; it cannot infer a new key pair.
+An APPEND owned by a stream cannot fall back to ordinary matching and consume
+its Source exchange without advancing the stream's byte cursor.
 
 For Source writes `ab`, `cd`, a Target may write `a`, `bcd`; its responses are
 `:1` and `:4`, rather than Source's `:2` and `:4`. Matching compares the next

@@ -72,6 +72,7 @@ fn case(case_id: String, status: CaseStatus) -> CaseExecution {
         replay_clean: Some(true),
         response_assertion: None,
         response_unavailable_reason: None,
+        execution_failure: None,
     }
 }
 

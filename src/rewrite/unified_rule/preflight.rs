@@ -22,10 +22,10 @@ use crate::{
 
 mod api;
 mod async_api;
+mod candidate_pairs;
 pub(super) mod dependency;
 mod global_values;
 mod identities;
-mod mysql_candidates;
 mod payload;
 mod resource;
 mod session;

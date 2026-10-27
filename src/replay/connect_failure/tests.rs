@@ -244,7 +244,7 @@ async fn http_predecessors_use_their_physical_authority_and_cannot_be_skipped() 
 
 #[tokio::test]
 async fn real_target_connection_consumes_the_recorded_reset_once_and_releases_async_tail() {
-    let fixture = fixture(40).await;
+    let fixture = fixture(200).await;
     let state = fixture.runtime.state.clone();
     assert_eq!(
         begin_case(&command("begin"), state.clone()).await["ok"],
@@ -262,10 +262,33 @@ async fn real_target_connection_consumes_the_recorded_reset_once_and_releases_as
     let started = tokio::time::Instant::now();
     let delivery = tokio::spawn(async move { deliver(&mut server, &target(), &delivering).await });
     client.write_all(b"*1\r\n$4\r\nPING\r\n").await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if state.lock().await.connect_failures.has_in_flight() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(crate::replay::control::case_cleanup::has_started(
+        &*state.lock().await
+    ));
+    let (reply, stop) = crate::replay::control::handle_control_request(
+        command("finalize"),
+        state.clone(),
+        None,
+        None,
+    )
+    .await;
+    assert!(!stop);
+    assert!(reply["error"].as_str().unwrap().contains("in flight"));
     let error = client.read(&mut [0; 1]).await.unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
-    assert!(started.elapsed() >= std::time::Duration::from_millis(40));
+    assert!(started.elapsed() >= std::time::Duration::from_millis(180));
     assert!(delivery.await.unwrap().unwrap());
+    assert!(!state.lock().await.connect_failures.has_in_flight());
     let prepared = ending.await.unwrap();
     assert_eq!(prepared["ok"], true, "{prepared}");
     assert_eq!(prepared["target_stop_required"], true);

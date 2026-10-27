@@ -181,6 +181,31 @@ pub(super) fn api_for_evidence_id(
     })
 }
 
+pub(super) fn api_for_rule_evidence_id(
+    target_root: &std::path::Path,
+    state: &RewriteState,
+    evidence_id: &str,
+) -> Result<String> {
+    if let Some(slice) = slices(state)
+        .find(|slice| super::evidence::current_overview_matches(target_root, slice, evidence_id))
+    {
+        if let Some(detail) = super::evidence::commands(target_root, &slice)
+            .into_iter()
+            .find(|command| command.query_id.ends_with("unified-rule-candidates"))
+        {
+            anyhow::bail!(
+                "current issue overview is not planning evidence; execute the returned detail command {}, then use that response's applicable planner and evidence_id. No new Replay or dispatch is required for this evidence-type correction",
+                serde_json::to_string(&detail.command)?
+            );
+        }
+        anyhow::bail!(
+            "current issue overview is not planning evidence; follow its returned issue queries and actions before proposing a traffic rule"
+        );
+    }
+    api_for_evidence_id(target_root, state, evidence_id)
+        .context("rule evidence is stale or belongs to no concurrent API work item")
+}
+
 pub(super) fn api_for_rule_plan(state: &RewriteState, plan_id: &str) -> Option<String> {
     slices(state).find_map(|slice| {
         slice

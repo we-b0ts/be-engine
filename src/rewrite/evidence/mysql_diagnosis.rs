@@ -120,6 +120,7 @@ pub(super) fn attach(facts: &mut Value) {
                 "For exactly one ordinary Source write ending in successful COMMIT, that COMMIT may be omitted after successful delivery on a Target socket with AUTOCOMMIT=1 and no active transaction. For exactly one ordinary UPDATE ending in successful ROLLBACK, the same Target condition permits omission only when Source UPDATE returned an SQL error or succeeded with affected_rows=0, and the corresponding result was delivered. A successful UPDATE with affected_rows>0 followed by ROLLBACK requires a real transaction to undo the write. An UPDATE error is distinct from ROLLBACK itself failing; failed end controls remain strict.",
                 "Inspect target_status_before/after: (status & 0x0003) must equal 0x0002. An explicit Target BEGIN disables the single-write exception even while autocommit is enabled. UPDATE executions with affected_rows=0 still count as writes in multi-write transactions. The bounded single-UPDATE exception is a compatibility rule, not proof that arbitrary triggers or stored routines have no effects, and SQL observations do not identify which Source business branch ran. Independent no-op cleanup requires Source proof of an inactive connection or a complete ordinary read-only transaction. No regression.yaml switch or literal SET is required.",
                 "Check transaction_evidence.reason, required_operation_count, covered_transaction_count, target_connection_id and target_transaction_id. Compare ordered Source members with Target matched-query references. Missing BEGIN, split/merged transactions, another socket's end, early commit and missing suffix reads do not satisfy a multi-write transaction. A later COMMIT through a pool does not prove coverage.",
+                "When member_comparison is present, inspect first_difference before concluding that a remaining COMMIT was omitted. expected and actual are matched Source references in actual Target delivery order, identified by recorded_index, source_connection_id and source_query_sequence; member_position is not a Target event index. A reordered earlier write can prevent selection of the expected end even after every business statement was consumed. The two member prefixes are bounded with omitted counts, while first_difference can identify a later position. Historical reports without this comparison do not establish the delivered order.",
                 "If complete independent Target transaction evidence is unavailable, retain an unresolved diagnosis. If a complete supported pair still remains dirty, investigate Replay coverage and report publication with the exact transaction references."
             ],
             "required_behavior":"Repair the evidenced transaction interval without wrapping prefix reads solely for Replay. Do not disable autocommit on a shared pool, drop business SELECTs, skip the API or use a generated-value rule to hide transaction membership failures. A positive-row UPDATE followed by business ROLLBACK, multiple writes and failed transaction-control observations remain strict. Passing HTTP responses alone do not prove coverage."
@@ -150,7 +151,7 @@ pub(super) fn limitations(facts: &Value) -> Vec<String> {
 pub(super) fn next_step(facts: &Value) -> String {
     let mut step = "Start with the largest endpoint cluster. Execute representative_dependencies_command when present to summarize that case's dependency targets, then select a returned detail_command before proving request or process ownership and response causality in source code.".to_string();
     if facts.get("mysql_autocommit_diagnosis").is_some() {
-        step.push_str(" For MySQL transaction evidence, follow mysql_autocommit_diagnosis: resolve an incomplete Source proof using its rejected query references first; otherwise inspect Source write count and first-write-through-end members, then the actual Target socket's transaction status and missing members before changing code or alleging an engine gap.");
+        step.push_str(" For MySQL transaction evidence, follow mysql_autocommit_diagnosis: resolve an incomplete Source proof using its rejected query references first; otherwise inspect Source write count and first-write-through-end members, then the actual Target socket's transaction status, missing members and member_comparison.first_difference before changing code or alleging an engine gap.");
     } else if unused_clusters(facts).next().is_some() {
         step.push_str(" For unused MySQL calls, follow mysql_unused_diagnosis.source_checks before choosing a rule or reporting an engine gap; include implicit ORM refreshes in the source trace.");
     }
@@ -383,7 +384,9 @@ mod tests {
                     "reason":"target_transaction_members_or_end_differ",
                     "source_transactions":[{"write_count":2,"source_connection_id":"source-connection","first_write_query_sequence":5,
                         "last_query_sequence":9,"required_operation_count":4,"end":"commit",
-                        "target_status_before":2,"target_status_after":2}]}
+                        "target_status_before":2,"target_status_after":2,
+                        "member_comparison":{"first_difference":{"member_position":1,
+                            "expected":{"source_query_sequence":6},"actual":{"source_query_sequence":8}}}}]}
             }}}}
         });
         let mut facts = json!({"clusters":[cluster.clone()]});
@@ -407,6 +410,7 @@ mod tests {
             "Prefix",
             "0x0002",
             "with_transaction",
+            "first_difference",
         ] {
             assert!(checks.contains(text), "missing {text}");
         }
@@ -428,6 +432,11 @@ mod tests {
         );
         assert!(!limitations(&facts).is_empty());
         assert!(next_step(&facts).contains("first-write-through-end"));
+        assert_eq!(
+            diagnosis["clusters"][0]["transaction_evidence"]["source_transactions"][0]["member_comparison"]
+                ["first_difference"]["actual"]["source_query_sequence"],
+            8
+        );
         let planners = rule_guidance::applicable_rule_planners(
             Path::new("/target"),
             RewriteIssueKind::Replay,

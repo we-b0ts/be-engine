@@ -15,10 +15,11 @@ mod mysql;
 
 pub use model::{
     RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
-    RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
-    RewriteCaseDependencyTargetSummary, RewriteMemcachedExchangeDetail,
-    RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail, RewriteMysqlOperationDetail,
-    RewriteMysqlParameterDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
+    RewriteCaseDependencyProtocolDetail, RewriteCaseDependencySourceReference,
+    RewriteCaseDependencyTarget, RewriteCaseDependencyTargetSummary,
+    RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail,
+    RewriteMysqlOperationDetail, RewriteMysqlParameterDetail, RewriteRedisExchangeDetail,
+    RewriteRedisOperationDetail,
 };
 
 const MAX_DEPENDENCIES_BYTES: u64 = 1024 * 1024 * 1024;
@@ -168,6 +169,31 @@ impl RepresentativeMemcachedExchanges {
 }
 
 pub fn query(options: RewriteCaseDependenciesOptions) -> Result<RewriteCaseDependenciesReport> {
+    query_selected(options, None)
+}
+
+pub fn query_exchange(
+    options: RewriteCaseDependenciesOptions,
+    connection_id: uuid::Uuid,
+    sequence: u64,
+) -> Result<RewriteCaseDependenciesReport> {
+    ensure!(
+        options.target_id.is_some(),
+        "an exact Source exchange requires a dependency target id"
+    );
+    query_selected(
+        options,
+        Some(RewriteCaseDependencySourceReference {
+            connection_id,
+            sequence,
+        }),
+    )
+}
+
+fn query_selected(
+    options: RewriteCaseDependenciesOptions,
+    source_reference: Option<RewriteCaseDependencySourceReference>,
+) -> Result<RewriteCaseDependenciesReport> {
     let target_root = std::fs::canonicalize(&options.target_root).with_context(|| {
         format!(
             "failed to resolve target root {}",
@@ -177,7 +203,13 @@ pub fn query(options: RewriteCaseDependenciesOptions) -> Result<RewriteCaseDepen
     let case_dir = resolve_case_dir(&target_root, &options.case_dir)?;
     let dependencies = resolve_dependencies(&case_dir)?;
     match options.target_id {
-        Some(target_id) => detail(&target_root, &case_dir, &dependencies, &target_id),
+        Some(target_id) => detail(
+            &target_root,
+            &case_dir,
+            &dependencies,
+            &target_id,
+            source_reference,
+        ),
         None => summary(&target_root, &case_dir, &dependencies),
     }
 }
@@ -245,6 +277,7 @@ fn detail(
     case_dir: &Path,
     dependencies: &Path,
     requested_target_id: &str,
+    source_reference: Option<RewriteCaseDependencySourceReference>,
 ) -> Result<RewriteCaseDependenciesReport> {
     ensure!(
         !requested_target_id.trim().is_empty(),
@@ -267,11 +300,48 @@ fn detail(
         } else {
             selected_identity = Some(identity.clone());
         }
+        if let Some(reference) = &source_reference {
+            ensure!(
+                matches!(identity.protocol.as_str(), "mysql" | "redis"),
+                "exact Source references support MySQL and Redis dependency targets"
+            );
+            let sequence_field = if identity.protocol == "mysql" {
+                "query_sequence"
+            } else {
+                "sequence"
+            };
+            let connection =
+                json_str(event, "connection_id").and_then(|id| id.parse::<uuid::Uuid>().ok());
+            if connection != Some(reference.connection_id)
+                || event.get(sequence_field).and_then(Value::as_u64) != Some(reference.sequence)
+            {
+                return Ok(());
+            }
+        }
         builder.record(event, &identity.protocol)
     })?;
     let identity = selected_identity.with_context(|| {
         format!("case has no dependency target with id {requested_target_id:?}")
     })?;
+    if let Some(reference) = &source_reference {
+        ensure!(
+            builder.event_count == 1,
+            "Source reference {}:{} resolved to {} exchanges in dependency target {requested_target_id:?}; expected exactly one",
+            reference.connection_id,
+            reference.sequence,
+            builder.event_count
+        );
+    }
+    let exchange_query = matches!(identity.protocol.as_str(), "mysql" | "redis").then(|| {
+        let mut command = detail_command(target_root, case_dir, requested_target_id);
+        command.argv.extend([
+            "--connection-id".into(),
+            "<connection-id>".into(),
+            "--sequence".into(),
+            "<sequence>".into(),
+        ]);
+        Box::new(command)
+    });
     let protocol_detail = match identity.protocol.as_str() {
         "http" => {
             let request: Value =
@@ -314,6 +384,8 @@ fn detail(
     let target = identity.target();
     Ok(RewriteCaseDependenciesReport::Detail {
         case_dir: case_dir.to_path_buf(),
+        source_reference,
+        exchange_query,
         target: RewriteCaseDependencyTarget {
             target_id: identity.id(),
             protocol: identity.protocol,

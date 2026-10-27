@@ -8,7 +8,9 @@ mod delivery;
 pub(in crate::replay) mod fields;
 mod preflight_identity;
 pub(in crate::replay) mod time_copies;
+mod value_view;
 pub(crate) use preflight_identity::{IdentityPreflight, normalize_identity_witnesses};
+pub(crate) use value_view::mysql_witness_sql_value;
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::replay) struct ObservedRequest<'a> {
@@ -371,18 +373,7 @@ fn validate_contract_candidate_inner(
 ) -> Result<Option<Comparison>> {
     let source: RequestEnvelope = serde_json::from_slice(source)?;
     let target: RequestEnvelope = serde_json::from_slice(target)?;
-    validate_request_clocks(&source, &target, clocks)?;
-    ensure!(
-        matches!(
-            (source.command.as_str(), target.command.as_str()),
-            (
-                "COM_QUERY" | "COM_STMT_EXECUTE",
-                "COM_QUERY" | "COM_STMT_EXECUTE"
-            )
-        ),
-        "native SQL time values require the query adapter"
-    );
-    if !structurally_related(&source, &target)? {
+    if !related_sql_requests(&source, &target, clocks)? {
         return Ok(None);
     }
     policy::compare_mysql_contracts_with_time_copies(
@@ -397,6 +388,39 @@ fn validate_contract_candidate_inner(
         copies,
     )
     .map(Some)
+}
+
+/// Candidate selection shares native request clocks and bounded SQL shape;
+/// exclusion is missing Target validation, never permission to match at runtime.
+pub(crate) fn request_candidates_related(
+    source: &[u8],
+    target: &[u8],
+    clocks: AnchorClocks,
+) -> Result<bool> {
+    related_sql_requests(
+        &serde_json::from_slice(source)?,
+        &serde_json::from_slice(target)?,
+        clocks,
+    )
+}
+
+fn related_sql_requests(
+    source: &RequestEnvelope,
+    target: &RequestEnvelope,
+    clocks: AnchorClocks,
+) -> Result<bool> {
+    validate_request_clocks(source, target, clocks)?;
+    ensure!(
+        matches!(
+            (source.command.as_str(), target.command.as_str()),
+            (
+                "COM_QUERY" | "COM_STMT_EXECUTE",
+                "COM_QUERY" | "COM_STMT_EXECUTE"
+            )
+        ),
+        "native SQL time values require the query adapter"
+    );
+    structurally_related(source, target)
 }
 
 fn structurally_related(source: &RequestEnvelope, target: &RequestEnvelope) -> Result<bool> {
@@ -468,13 +492,19 @@ fn projected_response(
     {
         return Ok(record.response.clone());
     }
-    projection::query_response(
-        record,
-        command,
-        sql.context("SQL response projection has no target statement")?,
-        params,
-    )
-    .context("SQL statement changes require a complete native projection proof")
+    let sql = sql.context("SQL response projection has no target statement")?;
+    projection::query_response(record, command, sql, params)
+        .or_else(|| {
+            // Delivery and offline witnesses must retain the same native predicate
+            // proof used by request matching, independently of global value rules.
+            let mut cache = sql_match::cache::SqlCache::default();
+            let source = cache
+                .get(record.sql.as_deref()?)
+                .bind(&record.command, record.params.as_deref())?;
+            let target = cache.get(sql).bind(command, params)?;
+            projection::semantic_response(record, &source, &target)
+        })
+        .context("SQL statement changes require a complete native projection proof")
 }
 fn value_bytes(value: &RecordedMysqlValue) -> Result<Option<Vec<u8>>> {
     if value.kind == "null" {

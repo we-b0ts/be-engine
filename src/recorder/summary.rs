@@ -16,6 +16,7 @@ mod memcached;
 mod motan;
 mod pre_readiness;
 mod redis;
+pub(super) use redis::is_client_library_info_exchange;
 mod source_process;
 mod termination;
 mod udp;

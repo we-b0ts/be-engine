@@ -63,7 +63,19 @@ impl ReplayState {
         let mut body_comparisons = Vec::new();
         let mut omitted_body_comparisons = 0;
         let mut target_fingerprint = None;
-        'sources: for source in [ReplaySource::Case, ReplaySource::Global] {
+        'sources: for (allow_pre_match, source) in [
+            (false, ReplaySource::Case),
+            (false, ReplaySource::Global),
+            (true, ReplaySource::Case),
+        ] {
+            if allow_pre_match
+                && !self
+                    .replay_policy
+                    .as_ref()
+                    .is_some_and(|p| p.request_contracts.pre_match_enabled())
+            {
+                break;
+            }
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
                 if !exchange.status.is_available() && !exchange.is_repeatable_preflight_probe()
                     || exchange.source != source
@@ -270,6 +282,7 @@ impl ReplayState {
                         },
                         &policy_decision.dynamic_query_params,
                         &mut body_comparison,
+                        allow_pre_match,
                     )
                 {
                     match result {

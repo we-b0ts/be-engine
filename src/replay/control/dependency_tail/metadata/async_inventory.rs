@@ -2,9 +2,12 @@
 use super::*;
 use serde_json::Value;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) async fn from_complete_source(
     case_dir: &Path,
-    rules: &BTreeMap<String, crate::policy::AsyncApiRule>,
+    rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
     request_timeout: Duration,
 ) -> Result<Option<Metadata>> {
     if rules.is_empty() {
@@ -31,10 +34,15 @@ pub(super) async fn from_complete_source(
     else {
         return Ok(None);
     };
-    ensure!(
-        case_dir.join("expected-response.json").is_file(),
-        "async API fallback requires a complete published Source response"
-    );
+    let raw_response = read(&case_dir.join("expected-response.json"))
+        .await?
+        .context("async API fallback requires a complete published Source response")?;
+    let response: Value =
+        serde_json::from_slice(&raw_response).context("invalid async Source response")?;
+    let response_body = crate::replay::native_source_request_body(&response);
+    if !scope.select_response(response_body.as_ref()).0 {
+        return Ok(None);
+    }
     let raw = read(&case_dir.join("dependencies.jsonl"))
         .await?
         .context("async API replay requires a complete Source dependency inventory")?;

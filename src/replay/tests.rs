@@ -242,7 +242,7 @@ mod tests {
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         tokio::fs::write(
             case_dir.join("dependencies.jsonl"),
-            r#"{"event_type":"mysql_exchange","target_host":"mysql.internal","target_port":3306,"target_addr":"mysql.internal:3306","database":"appdb","username":"root","command":"COM_QUERY","sql":"SET NAMES utf8","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}"#,
+            r#"{"event_type":"mysql_exchange","connection_id":"119bd6fb-ea83-41fe-9b59-c52d78daa8a2","query_sequence":2509,"target_host":"mysql.internal","target_port":3306,"target_addr":"mysql.internal:3306","database":"appdb","username":"root","command":"COM_QUERY","sql":"SET NAMES utf8","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}"#,
         )
         .await
         .unwrap();
@@ -268,6 +268,11 @@ mod tests {
         assert_eq!(report["matched_queries"][0]["sql"], "SET NAMES utf8");
         assert_eq!(report["matched_queries"][0]["source"], "case");
         assert_eq!(report["matched_queries"][0]["index"], 0);
+        assert_eq!(
+            report["matched_queries"][0]["source_connection_id"],
+            "119bd6fb-ea83-41fe-9b59-c52d78daa8a2"
+        );
+        assert_eq!(report["matched_queries"][0]["source_query_sequence"], 2509);
         assert!(
             report["unused_case_exchanges"]
                 .as_array()

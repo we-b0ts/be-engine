@@ -80,6 +80,46 @@ fn final_route_response_retry_preserves_revalidation_and_failure_across_restart(
 }
 
 #[test]
+fn admitted_source_receipt_keeps_changed_engine_retry_guidance_visible() {
+    use crate::rewrite::review::{self, RewriteReviewOptions};
+
+    let target = worker::tests::configured_target();
+    let root = target.path();
+    rewrite::source_diff::git_text(root, &["switch", "-qc", "coordinator"]).unwrap();
+    let state = response_state();
+    let store = RewriteStore::new(root).unwrap();
+    store.save(&state).unwrap();
+    let report = review::check(RewriteReviewOptions {
+        target_root: root.into(),
+        worktree: None,
+        scope: None,
+        evidence: None,
+        integration: false,
+        quality_check: None,
+        handoff_id: None,
+        hardcode_ai_verified: Vec::new(),
+    })
+    .unwrap();
+    review::accept(root.into(), report.report_path).unwrap();
+    let before = serde_json::to_value(store.load().unwrap()).unwrap();
+
+    let status = rewrite::status_rewrite(crate::RewriteContext {
+        target_root: root.into(),
+    })
+    .unwrap();
+    match status.action {
+        RewriteAction::AdvanceRequired { summary, kind, .. } => {
+            assert_eq!(kind, crate::rewrite::model::RewriteAdvanceKind::Replay);
+            assert!(summary.contains("engine build changed"), "{summary}");
+        }
+        action => panic!("expected changed-engine Replay guidance, got {action:?}"),
+    }
+    assert!(!status.terminal_allowed);
+    assert_eq!(serde_json::to_value(store.load().unwrap()).unwrap(), before);
+    assert!(worker::runtime::scopes(&store.load().unwrap().unwrap()).is_empty());
+}
+
+#[test]
 fn another_unfinished_route_blocks_only_the_fallback() {
     for status in [
         RewriteApiStatus::Pending,

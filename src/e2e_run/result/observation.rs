@@ -50,10 +50,10 @@ pub(in crate::e2e_run) fn response_observation_with_status(
                     },
                 );
         }
-        if let Some((index, _)) = suffix
-            .strip_prefix("/events/")
-            .and_then(|s| s.split_once("/sse/"))
-        {
+        if let Some((index, _)) = suffix.strip_prefix("/events/").and_then(|s| {
+            s.split_once("/sse/")
+                .or_else(|| s.split_once("/data/socketio/"))
+        }) {
             let event = index.parse::<usize>().ok().and_then(|index| {
                 interaction["events"]
                     .as_array()

@@ -17,6 +17,12 @@ use super::signal::shutdown_signal;
 
 #[derive(Debug, Args)]
 pub(super) struct ReplayArgs {
+    /// Continue through supported tentative value rules while retaining dirty evidence.
+    #[arg(long)]
+    pre_match: bool,
+    /// Deliver complete successful streams without their recorded idle gaps.
+    #[arg(long, value_enum)]
+    http_stream_timing: Option<traffic_e2e::ReplayHttpStreamTiming>,
     /// Published case or case-collection directory.
     #[arg(value_name = "CASE_OR_COLLECTION_DIR")]
     case: Option<PathBuf>,
@@ -64,6 +70,9 @@ pub(super) struct ReplayArgs {
     /// Keep the active case open for dependencies started just after the primary response.
     #[arg(long)]
     case_dependency_post_response_window_ms: Option<u64>,
+    /// Fail only this Case after this much idle dependency-tail time; active I/O keeps its own budget.
+    #[arg(long)]
+    case_no_progress_timeout_ms: Option<u64>,
     #[arg(long)]
     lazy_case_dependencies: bool,
     #[arg(long)]
@@ -81,6 +90,9 @@ struct ReplayFile {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ReplayFileValues {
+    pre_match: Option<bool>,
+    http_stream_timing: Option<traffic_e2e::ReplayHttpStreamTiming>,
+    case_no_progress_timeout_ms: Option<u64>,
     case: Option<PathBuf>,
     dns_listen: Option<SocketAddr>,
     tcp_listen: Option<SocketAddr>,
@@ -99,6 +111,9 @@ struct ReplayFileValues {
 }
 
 struct ResolvedReplay {
+    pre_match: bool,
+    http_stream_timing: traffic_e2e::ReplayHttpStreamTiming,
+    case_no_progress_timeout_ms: u64,
     request_timeout_ms: u64,
     dependency_loading: traffic_e2e::ReplayDependencyLoading,
     case: PathBuf,
@@ -142,6 +157,11 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
         None
     };
     let lifecycle = ReplayLifecycleConfig {
+        pre_match: resolved.pre_match,
+        http_stream_timing: resolved.http_stream_timing,
+        case_no_progress_timeout: std::time::Duration::from_millis(
+            resolved.case_no_progress_timeout_ms,
+        ),
         request_timeout: std::time::Duration::from_millis(resolved.request_timeout_ms),
         dependency_loading: resolved.dependency_loading,
         case_dependency_post_response_window: std::time::Duration::from_millis(
@@ -343,7 +363,21 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
     if let Some(seconds) = args.case_prepare_timeout_seconds {
         dependency_loading.case_timeout_seconds = seconds;
     }
+    let case_no_progress_timeout_ms = args
+        .case_no_progress_timeout_ms
+        .or(file.replay.case_no_progress_timeout_ms)
+        .unwrap_or(traffic_e2e::DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS);
+    ensure!(
+        case_no_progress_timeout_ms > 0,
+        "case_no_progress_timeout_ms must be positive"
+    );
     Ok(ResolvedReplay {
+        pre_match: args.pre_match || file.replay.pre_match.unwrap_or(false),
+        http_stream_timing: args
+            .http_stream_timing
+            .or(file.replay.http_stream_timing)
+            .unwrap_or(traffic_e2e::ReplayHttpStreamTiming::Recorded),
+        case_no_progress_timeout_ms,
         request_timeout_ms: recorder_defaults.as_ref().map_or_else(
             || AppConfig::default().http_gateway.request_timeout_ms,
             |config| config.http_gateway.request_timeout_ms,
@@ -507,6 +541,38 @@ mod tests {
     }
 
     #[test]
+    fn replay_idle_budget_defaults_and_cli_override_remain_independent_of_loading() {
+        let directory = tempfile::tempdir().unwrap();
+        let case = directory.path().join("cases");
+        std::fs::create_dir_all(&case).unwrap();
+        let resolved = resolve(replay_args(Some(case.clone()), None)).unwrap();
+        assert_eq!(resolved.case_no_progress_timeout_ms, 5000);
+        let config = directory.path().join("replay.yaml");
+        std::fs::write(&config, "replay:\n  case_no_progress_timeout_ms: 12000\n").unwrap();
+        assert_eq!(
+            resolve(replay_args(Some(case.clone()), Some(config.clone())))
+                .unwrap()
+                .case_no_progress_timeout_ms,
+            12000
+        );
+        let mut args = replay_args(Some(case.clone()), Some(config));
+        args.case_prepare_timeout_seconds = Some(180);
+        args.case_no_progress_timeout_ms = Some(750);
+        let resolved = resolve(args).unwrap();
+        assert_eq!(resolved.case_no_progress_timeout_ms, 750);
+        assert_eq!(resolved.dependency_loading.case_timeout_seconds, 180);
+        let mut args = replay_args(Some(case), None);
+        args.case_no_progress_timeout_ms = Some(0);
+        assert!(
+            resolve(args)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("must be positive")
+        );
+    }
+
+    #[test]
     fn api_selection_resolves_cases_across_recording_members() {
         let directory = tempfile::tempdir().unwrap();
         write_case(
@@ -616,6 +682,9 @@ mod tests {
 
     fn replay_args(case: Option<PathBuf>, config: Option<PathBuf>) -> ReplayArgs {
         ReplayArgs {
+            pre_match: false,
+            http_stream_timing: None,
+            case_no_progress_timeout_ms: None,
             case,
             config,
             intercept: false,

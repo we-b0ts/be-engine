@@ -97,11 +97,64 @@ Runtime inspection is read-only and diagnostic: do not infer the active run by
 recency, edit state, or use ad-hoc scripts to recreate an engine query.
 Never patch multiple speculative categories in one iteration.
 
+For a dependency witness ID returned in an error or discovery result, use the
+overview's `facts.dependency_witness_query` with that ID and one JSON pointer.
+It returns bounded Source/Target values from the authenticated current attempt;
+`--value-index` selects among multiple carried documents. Follow the returned
+`representation`: MySQL pointers address its native witness JSON envelope.
+Only `independent_target_observation` proves Target generation. Preserve the
+explicit present/missing/unavailable states, including a present JSON null.
+The result's `recorded_request_context.header_names` comes from the real input.
+Protected interaction recordings replace public headers with an empty map; that
+placeholder does not prove that X-Forwarded-For or another header was absent.
+
+An unmatched Redis request may have no Source witness or logical JSON carrier.
+Use `facts.redis_target_argument_query` with its case ID, Target event index and
+one zero-based native argument index (excluding the command). Add `--pointer`
+to select a JSON member such as `/method` within a PUBLISH payload. The bounded
+result authenticates independent Target bytes by the exact request fingerprint;
+it does not invent a Source pair or prove task origin. Multiple identical
+observations remain explicit. Use these bytes to trace the actual code path;
+do not infer that an extra call is tolerated from a passing primary response.
+`target_observations` includes bounded authenticated Case/dependency clocks.
+Correlate them with actual interaction close evidence when investigating delayed
+work; the case in which a call was admitted does not prove its business origin.
+
 For an API work item, evaluate gates in this order:
 
 ```text
 responses -> replay completeness -> dependency cleanliness
 ```
+
+When `facts.primary_failure.kind` is `dependency_unmatched` or the overview
+contains `execution_failures`, investigate those actual dependency rejections
+first using `dependency_diagnosis`. They interrupted the affected requests, so
+their missing stream events and later unused dependencies are downstream facts.
+Other cases retain their independent causes. Unused inventory alone preserves
+the ordinary gate order; every gate still requires verification.
+
+The overview's execution failures contain at most eight cases. Read
+`execution_failures_summary.total/returned/omitted`, then follow
+`execution_failures_query` and each `pagination.next_page` for the remaining
+cases. A case missing from the overview has no absence proof. Each page retains
+its own case ID, rejection protocol/command and Target event index from the
+same issue attempt; do not transfer another case's cause to it.
+
+For Socket.IO response differences, the case-response-differences query expands
+private output only on demand, like SSE. Its `interaction_diagnosis` identifies
+the namespace, event and `socketio_arguments` representation; raw JSON difference
+pointers begin with the zero-based business argument index. Values retain the
+4096-byte bound and explicit truncation/availability. These raw differences are
+before contracts, not proof that every differing generated value is a defect.
+
+If `primary_failure.kind` is `replay_interrupted`, follow
+`runtime_diagnosis.command` before interpreting prior case failures. Runtime
+queries also appear in `queries` for response/dependency issues. A system route
+uses that diagnostic report's `evidence_id`, rather than the overview ID. Record
+the returned repair identity before the engine changes, then use its verification
+command after repair to rerun the same cases. `operation retry` requires a failed
+coordinator operation; an operation that returned normally with an interrupted
+E2E result has no retry entitlement from that fact alone.
 
 Select the active issue's largest bounded cluster and representative. Preserve
 the distinction between a present JSON `null`, a missing Pointer, unavailable

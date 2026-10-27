@@ -89,11 +89,12 @@ pub(super) fn apply_reclassified_case_outcomes(
             .remaining_dirty_case_ids
             .contains(&case.case_id);
         case.replay_clean = Some(!dirty);
-        case.status = if case.assertion_passed == Some(true) && !dirty {
-            CaseStatus::Passed
-        } else {
-            CaseStatus::Failed
-        };
+        case.status =
+            if case.assertion_passed == Some(true) && !dirty && case.execution_failure.is_none() {
+                CaseStatus::Passed
+            } else {
+                CaseStatus::Failed
+            };
     }
 }
 

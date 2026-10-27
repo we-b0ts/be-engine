@@ -4,6 +4,7 @@ use super::*;
 use crate::policy::{Database, NativeEffect, Protocol};
 use crate::replay::report::command::CommandMatchDiagnostic;
 use sha2::{Digest, Sha256};
+mod absence;
 #[cfg(test)]
 mod recorded_tests;
 mod source;
@@ -18,7 +19,32 @@ const MAX_CALLS: usize = 4096;
 #[serde(rename_all = "snake_case")]
 enum Kind {
     Read,
+    AbsentRead,
     Expiry,
+}
+
+impl Kind {
+    fn is_read(self) -> bool {
+        matches!(self, Self::Read | Self::AbsentRead)
+    }
+}
+
+fn finite_other_case_get(
+    owner: &str,
+    source: ReplaySource,
+    case: Option<&str>,
+    record: &RecordedExchange,
+    args: &[Vec<u8>],
+) -> bool {
+    source == ReplaySource::Case
+        && case.is_some_and(|case| case != owner)
+        && record.command == "GET"
+        && args.len() == 1
+        && record.outcome == DependencyExchangeOutcome::Response
+        && !record.session_setup
+        && !record.cache_snapshot_hit
+        && record.cache_snapshot_rule.is_none()
+        && record.global_dependency_reason.is_none()
 }
 
 #[derive(Debug)]
@@ -79,6 +105,17 @@ pub(super) struct Observations {
 }
 
 impl Observations {
+    pub(super) fn in_flight_diagnostic(&self) -> serde_json::Value {
+        let cases = self
+            .in_flight
+            .values()
+            .take(4)
+            .map(|&profile| self.profiles[profile].case.as_str())
+            .collect::<Vec<_>>();
+        serde_json::json!({"count":self.in_flight.len(), "cases":cases,
+            "omitted":self.in_flight.len().saturating_sub(4)})
+    }
+
     pub(super) fn has_in_flight(&self) -> bool {
         !self.in_flight.is_empty()
     }
@@ -88,10 +125,11 @@ impl Observations {
     pub(super) fn omitted(&self) -> usize {
         self.omitted
     }
-    pub(super) fn is_refresh(&self, index: usize) -> bool {
-        self.owners
-            .get(&index)
-            .is_some_and(|&(p, _)| self.profiles[p].kind == Kind::Expiry)
+    pub(super) fn native_rule(&self, index: usize) -> Option<&str> {
+        self.owners.get(&index).and_then(|&(p, _)| {
+            let profile = &self.profiles[p];
+            matches!(profile.kind, Kind::Expiry | Kind::AbsentRead).then_some(profile.rule.as_str())
+        })
     }
     pub(super) fn check_case_addition(
         &self,
@@ -108,11 +146,17 @@ impl Observations {
         &self,
         record: &RecordedExchange,
         args: &[Vec<u8>],
+        source: ReplaySource,
+        case: Option<&str>,
+        reusable_snapshot: bool,
     ) -> Result<()> {
         ensure!(
             !self.profiles.iter().any(|p| record.database == p.database
                 && target_matches(&p.target, &record.target_host, record.target_port)
-                && super::key_access::touches(&record.command, args, &p.key)),
+                && super::key_access::touches(&record.command, args, &p.key)
+                && !(p.kind.is_read()
+                    && !reusable_snapshot
+                    && finite_other_case_get(&p.case, source, case, record, args))),
             "cannot add overlapping state-observation inventory after Source preparation"
         );
         Ok(())
@@ -120,11 +164,13 @@ impl Observations {
 }
 
 fn selected(effect: &NativeEffect) -> bool {
-    matches!(effect, NativeEffect::RedisExpiryRefresh(_))
-        || effect
-            .redis_read_back()
-            .iter()
-            .any(|r| r.contract.state_epochs)
+    matches!(
+        effect,
+        NativeEffect::RedisExpiryRefresh(_) | NativeEffect::RedisReadObservation
+    ) || effect
+        .redis_read_back()
+        .iter()
+        .any(|r| r.contract.state_epochs)
 }
 
 impl RedisReplayState {
@@ -150,6 +196,10 @@ impl RedisReplayState {
                     && seed.record.command == "EXPIRE"
                 {
                     Kind::Expiry
+                } else if seed.record.command == "GET"
+                    && matches!(rule.effect, NativeEffect::RedisReadObservation)
+                {
+                    Kind::AbsentRead
                 } else if seed.record.command == "GET"
                     && rule
                         .effect
@@ -252,7 +302,7 @@ impl RedisReplayState {
                 || normalize_optional(profile.username.as_deref()) != normalize_optional(username)
                 || !target_matches(target, &profile.target.host, profile.target.port)
                 || command
-                    != if profile.kind == Kind::Read {
+                    != if profile.kind.is_read() {
                         "GET"
                     } else {
                         "EXPIRE"
@@ -295,6 +345,13 @@ impl RedisReplayState {
                 })
                 .expect("every Source profile has an initial epoch");
             let reject = |reason: &str| self.observation_mismatch(profile, epoch, reason);
+            if profile.kind == Kind::AbsentRead
+                && epoch
+                    .mutation
+                    .is_some_and(|index| !self.exchanges[index].status.is_consumed())
+            {
+                return Err(reject("absent-state deletion has not completed delivery"));
+            }
             if epoch.mutation.is_none() && !profile.finite_prefix.is_empty() {
                 let prefix = profile
                     .finite_prefix
@@ -328,7 +385,7 @@ impl RedisReplayState {
                     }
                     crate::replay::command_matching::PreferredMatch::NotFound => {
                         return Err(reject(
-                            "unknown initial state has no remaining finite Source read; a proven SET must establish the next epoch",
+                            "unknown initial state has no remaining finite Source read; a proven mutation must establish the next epoch",
                         ));
                     }
                 };
@@ -441,7 +498,7 @@ impl RedisReplayState {
                 return Err(self.observation_mismatch(
                     profile,
                     &profile.epochs[position],
-                    "finite Source reads of unknown initial state must finish before the first SET",
+                    "finite Source reads of unknown initial state must finish before the first mutation",
                 ));
             }
             if let Some(blocker) = profile.epochs[..position].iter().find(|e| {

@@ -60,10 +60,14 @@ rules: []
 #         - http: {host: auth.example.com, method: GET, path: /keys/}
 # async_api:
 #   POST /jobs:
-#     when: {/background: true}
-#     end:
-#       - mysql: {sql: "UPDATE jobs SET status = 'completed' WHERE id = ?"}
-#       - redis: {operation: DEL, key: 'job:finished:*'}
+#     - when_response: {/status: queued}
+#       end:
+#         - http: {method: POST, endpoint: 'executor.example.com:80', path: /submit}
+#     - when: {/background: true}
+#       when_response: {/status: in_progress}
+#       end:
+#         - mysql: {sql: "UPDATE jobs SET status = 'completed' WHERE id = ?"}
+#         - redis: {operation: DEL, key: 'job:finished:*'}
 # rules: []
 #
 # JSON payloads are inferred across carriers. SQL temporal types use recorded

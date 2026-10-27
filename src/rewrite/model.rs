@@ -701,6 +701,7 @@ pub enum RewriteAction {
         handoff_id: String,
         export_batch: RewriteCommandSpec,
         report_worker: RewriteCommandSpec,
+        report_rework: RewriteCommandSpec,
     },
     ExecutionFailed {
         summary: String,

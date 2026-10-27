@@ -2,6 +2,7 @@ use super::super::append::tests::{event, request, rule as append_rule, state};
 use super::*;
 use serde_json::{Value, json};
 mod applicability;
+mod foreign_reads;
 
 fn read_rule(epochs: bool) -> Value {
     let mut r = json!({"id":"current-state","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"operation":"SET","key":{"kind":"affix","prefix":"current:"}},
@@ -148,8 +149,14 @@ fn delivery_failure_and_concurrent_requests_retain_real_in_flight_and_dirty_stat
     let b = request(&mut s, "GET", &[b"current:1"]).unwrap();
     s.complete_exchange(&a);
     assert!(s.has_case_in_flight());
+    let pending = s.case_in_flight_diagnostic();
+    assert_eq!(pending["observations"]["count"], 1);
+    assert_eq!(pending["observations"]["cases"][0], "case");
+    assert!(!pending.to_string().contains("current:1"));
+    assert!(!pending.to_string().contains("new"));
     s.fail_exchange(&b, "transport failed".into());
     assert!(!s.has_case_in_flight());
+    assert_eq!(s.case_in_flight_diagnostic()["observations"]["count"], 0);
     assert!(s.case_is_dirty("case"));
     assert!(request(&mut s, "GET", &[b"current:1"]).is_err());
 }

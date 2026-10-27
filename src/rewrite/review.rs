@@ -316,7 +316,8 @@ fn check_candidate(
     } else {
         super::quality::gate_names()
     };
-    let report = RewriteReviewReport {
+    let inherited_scope = validation.scan_base_revision != base;
+    let mut report = RewriteReviewReport {
         schema_version: if batch.is_some() { 3 } else { 2 },
         rules_version: RULE_VERSION.into(), workflow_id: state.workflow_id.clone(),
         dispatch_id: dispatch, scope: options.scope, worktree: root, base_revision: base,
@@ -335,6 +336,9 @@ fn check_candidate(
             ReviewStatus::EvidenceRequired => "Trace each spawn's startup entry and callers; supply --evidence with source locations and ownership, then rerun review check. Unknown/request ownership cannot pass.",
         }.into(),
     };
+    if inherited_scope && report.status != ReviewStatus::Passed {
+        report.next_step.push_str(" Review covers the whole PR from validation.scan_base_revision, including code inherited before dispatch; base_revision is the delivery base. Keep that scope. Supply truthful current evidence for inherited findings; valid integrated evidence is reused automatically. A finding in another API's inherited code does not by itself require rewriting that code.");
+    }
     write_json(&report_path, &report)?;
     Ok(report)
 }

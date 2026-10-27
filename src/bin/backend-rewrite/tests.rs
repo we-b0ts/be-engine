@@ -2,6 +2,29 @@ use super::*;
 use clap::CommandFactory;
 
 #[test]
+fn source_exchange_selectors_require_a_target_and_both_reference_parts() {
+    let prefix = ["test", "case", "dependencies", "/case"];
+    let connection = "123e4567-e89b-42d3-a456-426614174000";
+    for tail in [
+        vec!["--connection-id", connection],
+        vec!["target", "--sequence", "0"],
+        vec!["--connection-id", connection, "--sequence", "0"],
+    ] {
+        assert!(Cli::try_parse_from(prefix.into_iter().chain(tail)).is_err());
+    }
+    assert!(
+        Cli::try_parse_from(prefix.into_iter().chain([
+            "target",
+            "--connection-id",
+            connection,
+            "--sequence",
+            "0"
+        ]))
+        .is_ok()
+    );
+}
+
+#[test]
 fn http_coordinator_commands_accept_routes_and_reject_method_selectors() {
     let prefixes = [
         vec!["test", "next", "--api"],

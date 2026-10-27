@@ -62,6 +62,119 @@ fn singleton_batch_reviews_publishes_and_admits_one_api_handoff() {
     );
 }
 
+#[test]
+fn skipping_a_peer_keeps_an_accepted_delivery_ahead_of_an_engine_retry() {
+    use crate::rewrite::{engine_retry, model::RewriteIssueKind};
+
+    let target = target();
+    let root = target.path();
+    let store = RewriteStore::new(root).unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Response;
+    let attempt = state.active_issue.as_ref().unwrap().attempt;
+    state.attempts.push(
+        serde_json::from_value(serde_json::json!({
+            "engine_fingerprint": "engine-revision-v1:older",
+            "attempt": attempt,
+            "passed": false,
+            "gates": {"responses": "nonpassing", "replay": "complete", "dependencies": "dirty"},
+            "counts": {"selected": 1, "executed": 1, "response_passed": 0,
+                "response_nonpassing": 1, "response_incomplete": 0}
+        }))
+        .unwrap(),
+    );
+    let mut peer = state.api_inventory[0].clone();
+    peer.api = "GET /peer".into();
+    peer.source_route = Some("/peer".into());
+    peer.status = crate::rewrite::model::RewriteApiStatus::ImplementationRequired;
+    let mut peer_slice = state.active_slice.clone();
+    peer_slice.api = peer.api.clone();
+    peer_slice.source_route = "/peer".into();
+    state.parked_slices.insert(peer.api.clone(), peer_slice);
+    state.api_inventory.push(peer);
+    store.save(&state).unwrap();
+
+    let scope = crate::rewrite::api_selector::work_scope(&state, &state.api);
+    let directory = tempfile::tempdir().unwrap();
+    let (selection, mut delivery) = prepare_delivery(root, directory.path(), &scope, 0);
+    let candidate_tree = worktree(root, directory.path(), "engine-refresh-candidate");
+    git(
+        &candidate_tree,
+        &["merge", "--ff-only", &selection.handoff_id],
+    );
+    let mut active_peer = store.load().unwrap().unwrap();
+    crate::rewrite::inventory::activate_requested(
+        &mut active_peer,
+        Some(&"GET /peer".parse().unwrap()),
+    )
+    .unwrap();
+    store.save(&active_peer).unwrap();
+
+    // This is the production sequence: a ready delivery exists, then skipping
+    // the other unfinished route makes a changed-engine refresh available.
+    fs::write(
+        root.join(crate::config::regression::PATH),
+        "skip: [/peer]\n",
+    )
+    .unwrap();
+    let mut ready = store.load().unwrap().unwrap();
+    let issue = serde_json::to_value(&ready.active_issue).unwrap();
+    assert!(worker::runtime::scopes(&ready).contains(&scope));
+    assert!(!engine_retry::pending(&ready, &ready.active_slice));
+    assert!(!engine_retry::reserve(&mut ready, None));
+    let mut route = crate::rewrite::api_batch::PreparedRoute {
+        apis: vec![ready.api.clone()],
+        slices: std::iter::once((ready.api.clone(), ready.active_slice.clone())).collect(),
+    };
+    assert!(!engine_retry::reserve(&mut ready, Some(&mut route)));
+    assert!(ready.engine_retry_fingerprints.is_empty());
+
+    let mut single = options(root, &candidate_tree, Some(scope.clone()));
+    single.integration = true;
+    single.handoff_id = Some(selection.handoff_id.clone());
+    assert_eq!(check(single).unwrap().status, ReviewStatus::Passed);
+    let report = check_batch(options(root, &candidate_tree, None), vec![selection]).unwrap();
+    assert_eq!(report.status, ReviewStatus::Passed);
+    git(root, &["merge", "--ff-only", &report.head_revision]);
+    delivery.activity = RewriteWorkerActivity::Integrated;
+    delivery.review_report = Some(report.report_path);
+    worker::runtime::report(delivery).unwrap();
+
+    let mut integrated = store.load().unwrap().unwrap();
+    assert!(worker::runtime::scopes(&integrated).contains(&scope));
+    assert!(!engine_retry::pending(
+        &integrated,
+        &integrated.active_slice
+    ));
+    assert!(!engine_retry::reserve(&mut integrated, None));
+    assert_eq!(
+        serde_json::to_value(&integrated.active_issue).unwrap(),
+        issue
+    );
+
+    let mut skipped = integrated.clone();
+    skipped.api_inventory[0].status = crate::rewrite::model::RewriteApiStatus::Skipped;
+    skipped.active_issue.as_mut().unwrap().kind = RewriteIssueKind::TargetRuntime;
+    assert!(!engine_retry::pending(&skipped, &skipped.active_slice));
+    assert!(!engine_retry::reserve(&mut skipped, None));
+    assert!(candidate::current_handoff_scope(&skipped, &scope).is_err());
+
+    // Only a current, confirmed delivery outranks the optional permit. A
+    // historical dispatch or recording must not permanently suppress retries.
+    for mode in 0..3 {
+        let mut stale = integrated.clone();
+        let binding = stale.worker_bindings.get_mut(&scope.binding_key()).unwrap();
+        match mode {
+            0 => binding.observation.as_mut().unwrap().recording_run_id = "old-recording".into(),
+            1 => binding.observation.as_mut().unwrap().dispatch_id = "old-dispatch".into(),
+            2 => binding.confirmed_dispatch_id = "unconfirmed".into(),
+            _ => unreachable!(),
+        }
+        assert!(engine_retry::pending(&stale, &stale.active_slice));
+        assert!(engine_retry::reserve(&mut stale, None));
+    }
+}
+
 pub(super) fn prepare_delivery(
     root: &Path,
     directory: &Path,

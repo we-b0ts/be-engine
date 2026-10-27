@@ -1,0 +1,90 @@
+//! Recorded client responses are anchored only to actual Target PING packets.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use anyhow::{Context, Result};
+use tokio::time::{Duration, Instant};
+
+use crate::interaction::{
+    model::{InputAction, InputTranscript, MessageKind, WireMessage},
+    socketio::{EngineIoPacket, decode_engine_io_text},
+};
+
+pub(super) struct Heartbeats {
+    recorded: bool,
+    bound_inputs: BTreeSet<u64>,
+    responses: BTreeMap<u64, (u64, u64)>,
+    pending: BTreeMap<(Instant, u64), (u64, String)>,
+    next_ping: u64,
+}
+
+impl Heartbeats {
+    pub(super) fn new(input: &InputTranscript) -> Self {
+        Self {
+            recorded: input.socket_io_heartbeat.is_some(),
+            bound_inputs: input
+                .socket_io_heartbeat
+                .iter()
+                .flat_map(|program| &program.responses)
+                .map(|response| response.input_sequence)
+                .collect(),
+            responses: input
+                .socket_io_heartbeat
+                .iter()
+                .flat_map(|program| &program.responses)
+                .map(|response| {
+                    (
+                        response.ping_ordinal,
+                        (response.input_sequence, response.delay_ms),
+                    )
+                })
+                .collect(),
+            pending: BTreeMap::new(),
+            next_ping: 0,
+        }
+    }
+
+    pub(super) fn recorded_pong(&self, message: &WireMessage, limit: usize) -> Result<bool> {
+        Ok(self.recorded
+            && message.kind == MessageKind::Text
+            && matches!(
+                decode_engine_io_text(&message.data, limit)?,
+                EngineIoPacket::Pong(_)
+            ))
+    }
+
+    pub(super) fn literal_pong(
+        &self,
+        action: &InputAction,
+        message: &WireMessage,
+        limit: usize,
+    ) -> Result<bool> {
+        Ok(self.recorded_pong(message, limit)? && !self.bound_inputs.contains(&action.sequence))
+    }
+
+    /// Returns true only for historical programs that authorize automatic PONG.
+    pub(super) fn ping(&mut self, payload: String, now: Instant) -> Result<bool> {
+        self.next_ping += 1;
+        if let Some((sequence, delay)) = self.responses.remove(&self.next_ping) {
+            let due = now
+                .checked_add(Duration::from_millis(delay))
+                .context("recorded heartbeat delay exceeds the Target clock range")?;
+            self.pending
+                .insert((due, self.next_ping), (sequence, payload));
+        }
+        Ok(!self.recorded)
+    }
+
+    pub(super) fn next_due(&self) -> Option<Instant> {
+        self.pending.first_key_value().map(|((due, _), _)| *due)
+    }
+
+    pub(super) fn take_due(&mut self) -> WireMessage {
+        let (_, (_, payload)) = self.pending.pop_first().unwrap();
+        WireMessage::text(format!("3{payload}"))
+    }
+
+    pub(super) fn complete(&self, allow_unseen: bool) -> bool {
+        (allow_unseen || self.responses.is_empty()) && self.pending.is_empty()
+    }
+}

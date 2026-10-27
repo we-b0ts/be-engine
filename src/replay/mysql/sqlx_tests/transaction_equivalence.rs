@@ -16,6 +16,54 @@ fn multi_write_records() -> Vec<Value> {
     values
 }
 
+#[tokio::test]
+async fn reordered_transaction_reports_source_references_through_real_sqlx_delivery() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let mut values = records();
+        values.truncate(4);
+        values[1]["sql"] = json!("SELECT id FROM users WHERE id=1 FOR UPDATE");
+        let (temp, addr, runtime, task) = fixture(&values, false).await;
+        let ca = temp
+            .path()
+            .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem");
+        let mut client = connect(addr, &ca).await;
+        let mut tx = client.begin().await.unwrap();
+        sqlx::query("UPDATE users SET active=? WHERE id=?")
+            .bind(1_i32)
+            .bind(1_i32)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("SELECT id FROM users WHERE id=? FOR UPDATE")
+            .bind(1_i32)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        let _ = tx.commit().await;
+        let state = runtime.state.lock().await;
+        let diagnostic = state
+            .mysql
+            .events
+            .unmatched_queries
+            .iter()
+            .find_map(|query| query.diagnostic.as_ref())
+            .expect("transaction failure evidence");
+        let comparison = &diagnostic["source_transactions"][0]["member_comparison"];
+        assert_eq!(
+            comparison["first_difference"]["expected"]["source_query_sequence"],
+            5
+        );
+        assert_eq!(
+            comparison["first_difference"]["actual"]["source_query_sequence"],
+            6
+        );
+        assert_eq!(diagnostic["covered_transaction_count"], 0);
+        task.abort();
+    })
+    .await
+    .unwrap();
+}
+
 async fn body(tx: &mut sqlx::Transaction<'_, sqlx::MySql>, value: i32) {
     let row = sqlx::query("SELECT id FROM users WHERE id=?")
         .bind(1_i32)

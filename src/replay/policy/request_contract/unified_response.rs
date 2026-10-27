@@ -2,6 +2,7 @@
 use super::*;
 use crate::policy::Surface;
 use crate::replay::contract_value::Delivery;
+mod contextual;
 
 #[derive(Debug, Clone)]
 struct PreparedValue {
@@ -71,6 +72,7 @@ impl PreparedRedisDelivery {
         let mut response = Vec::with_capacity(self.original.len());
         let mut previous = 0;
         let mut identities = None::<crate::value_contract::identities::IdentityDecision>;
+        let mut contextual = contextual::Consistency::new(native);
         for value in &self.values {
             ensure!(
                 value.range.start >= previous,
@@ -91,6 +93,11 @@ impl PreparedRedisDelivery {
             } else {
                 value.delivery.render(now)?
             };
+            contextual.value(
+                &self.original[previous..value.range.start],
+                &body,
+                &value.delivery,
+            )?;
             if body.len() == value.range.len() - value.header_len - 2 {
                 response.extend_from_slice(
                     &self.original[value.range.start..value.range.start + value.header_len],
@@ -103,19 +110,14 @@ impl PreparedRedisDelivery {
             previous = value.range.end;
         }
         response.extend_from_slice(&self.original[previous..]);
-        if let Some(native) = native {
-            ensure!(
-                response == native,
-                "Redis contextual read-back disagrees with global value formats"
-            );
-        }
+        contextual.finish(&self.original[previous..])?;
         if let Some(identities) = identities {
             // Reserve the complete response atomically before any ID reaches
             // another Target connection. A failed wire write keeps this
             // conservative anchor until the case ends.
             self.owner.commit_identity(identities)?;
         }
-        Ok(response)
+        Ok(native.map_or(response, <[u8]>::to_vec))
     }
 }
 

@@ -12,6 +12,26 @@ const CONNECTION_ID: &str = "connection-a";
 const KEY: &str = "106.2020tagid_020_007.itagv3";
 
 #[test]
+fn idle_execution_failure_remains_dirty_after_unused_calls_are_reclassified() {
+    let fixture = Fixture::new();
+    fixture.write_config(true);
+    let mut report = fixture.report();
+    let failure = json!({"kind":"case_no_progress", "case_id":CASE_ID,
+        "waiting":{"no_progress_timeout_ms":5000,"pending_source_dependencies":1}});
+    report["case_execution_failures"] = json!([failure]);
+    fs::write(&fixture.report, serde_json::to_vec(&report).unwrap()).unwrap();
+    let classified = fixture.reclassify();
+    assert_eq!(classified.matched_unused_case, 1);
+    assert_eq!(
+        classified.remaining_dirty_case_ids,
+        BTreeSet::from([CASE_ID.into()])
+    );
+    let retained: Value = serde_json::from_slice(&fs::read(&fixture.report).unwrap()).unwrap();
+    assert_eq!(retained["case_execution_failures"], json!([failure]));
+    assert!(crate::replay::report_has_case_dirty_events(&retained));
+}
+
+#[test]
 fn background_reclassification_preserves_case_header_mismatches() {
     let fixture = Fixture::new();
     fixture.write_config(true);

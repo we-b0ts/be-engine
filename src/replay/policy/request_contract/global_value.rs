@@ -14,22 +14,91 @@ mod tests;
 
 impl RequestContracts {
     pub(in crate::replay) fn global_json(&self) -> Option<&CompiledJsonPolicy> {
-        self.compiled.as_ref()?.global_json.as_ref()
+        self.compiled.as_ref()?.global_json.as_ref().or_else(|| {
+            static EMPTY: std::sync::OnceLock<CompiledJsonPolicy> = std::sync::OnceLock::new();
+            self.pre_match_enabled.then(|| {
+                EMPTY.get_or_init(|| CompiledJsonPolicy {
+                    signatures: Default::default(),
+                    fields: Default::default(),
+                    fingerprint: String::new(),
+                })
+            })
+        })
     }
 
     pub(in crate::replay) fn compare_global_case_value(
         &self,
-        _case: &str,
+        case: &str,
         source: &[u8],
         target: &[u8],
         rules: &[&CompiledRule],
         clocks: AnchorClocks,
     ) -> Result<Comparison> {
         if let Some(global) = self.global_json() {
-            crate::value_contract::global::compare(source, target, global, rules, clocks)
+            let comparison =
+                crate::value_contract::global::compare(source, target, global, rules, clocks)?;
+            Ok(self.pre_match_value(
+                case,
+                source,
+                target,
+                global,
+                clocks,
+                comparison,
+                rules.is_empty(),
+            ))
         } else {
             crate::value_contract::encoded::compare(source, target, rules, clocks)
         }
+    }
+
+    pub(in crate::replay) fn configure_pre_match(&mut self, enabled: bool) {
+        self.pre_match_enabled = enabled;
+    }
+
+    pub(in crate::replay) fn pre_match_enabled(&self) -> bool {
+        self.pre_match_enabled
+    }
+
+    pub(in crate::replay) fn pre_match_reports(
+        &self,
+    ) -> Vec<crate::value_contract::pre_match::Candidate> {
+        self.state
+            .lock()
+            .expect("request contracts")
+            .pre_matches
+            .clone()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn pre_match_value(
+        &self,
+        case: &str,
+        source: &[u8],
+        target: &[u8],
+        global: &CompiledJsonPolicy,
+        clocks: AnchorClocks,
+        comparison: Comparison,
+        eligible: bool,
+    ) -> Comparison {
+        if eligible
+            && self.pre_match_enabled
+            && !comparison.passed()
+            && {
+                let state = self.state.lock().expect("request contracts");
+                state.pre_matches.len() < 4096
+                    && state
+                        .pre_matches
+                        .iter()
+                        .filter(|c| c.case_id == case)
+                        .count()
+                        < 256
+            }
+            && let Some(candidate) =
+                crate::value_contract::pre_match::preview(case, source, target, global, clocks)
+        {
+            return candidate;
+        }
+        comparison
     }
 
     #[cfg(test)]

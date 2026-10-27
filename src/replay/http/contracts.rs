@@ -115,8 +115,13 @@ pub(super) fn preview_request(
     actual: &RequestView<'_>,
     validated_query_params: &[String],
     diagnostic: &mut Option<Value>,
+    allow_pre_match: bool,
 ) -> Option<Result<crate::replay::policy::request_contract::Decision>> {
     let ordinary = exchange.source == ReplaySource::Case && exchange.shared_origin.is_none();
+    let mut owner = policy.request_contracts.clone();
+    if !allow_pre_match || !ordinary {
+        owner.configure_pre_match(false);
+    }
     if !ordinary
         && policy.request_contracts.global_json().is_none()
         && policy
@@ -131,7 +136,7 @@ pub(super) fn preview_request(
     } else {
         active_case
     }?;
-    policy.request_contracts.global_json()?;
+    owner.global_json()?;
     Some((|| {
         anyhow::ensure!(
             uri_mismatch_reason(
@@ -150,13 +155,8 @@ pub(super) fn preview_request(
             None,
             None,
         );
-        let comparison = policy.request_contracts.compare_global_case_value(
-            case,
-            &source,
-            actual.body,
-            &[],
-            clocks,
-        )?;
+        let comparison =
+            owner.compare_global_case_value(case, &source, actual.body, &[], clocks)?;
         *diagnostic = Some(serde_json::json!({
             "source_exchange_id":exchange.record.id,
             "selected_rule_ids":comparison.evaluated,

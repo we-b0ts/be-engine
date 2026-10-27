@@ -102,3 +102,36 @@ fn redis_failure_after_later_claim_does_not_make_api_pass() {
     assert_eq!(report.unused_case.len(), 1);
     assert_eq!(report.unsafe_events.len(), 1);
 }
+
+#[test]
+fn finite_process_get_unblocks_case_lane_and_keeps_consumption_and_session_boundaries() {
+    let rule: crate::BackgroundDependencyRuleConfig = serde_json::from_value(json!({
+        "protocol":"redis","name":"monitor","ports":[6379],"command":"GET",
+        "keys":["session"],"source_revision":"abcdef1","source_evidence":"monitor.py:loop"
+    }))
+    .unwrap();
+    crate::config::process_owned_dependencies::validate(std::slice::from_ref(&rule)).unwrap();
+    for stateful in [false, true] {
+        let mut state = fixture(DependencyExchangeOutcome::Response);
+        if stateful {
+            let mut setup = state.exchanges[0].record.clone();
+            setup.session_setup = true;
+            state.connection_scopes.register(&setup, &[]);
+        }
+        state.apply_finite_process_order(std::slice::from_ref(&rule));
+        if stateful {
+            assert!(request(&mut state, "case", "DEL").is_err());
+            continue;
+        }
+        assert!(request(&mut state, "other", "GET").is_err());
+        let del = request(&mut state, "case", "DEL").unwrap();
+        state.complete_exchange(&del);
+        let get = request(&mut state, "case", "GET").unwrap();
+        state.complete_exchange(&get);
+        assert!(request(&mut state, "case", "GET").is_err());
+        assert_eq!(state.snapshot().matched_count, 2);
+    }
+    let mut state = fixture(DependencyExchangeOutcome::ClientTerminated);
+    state.apply_finite_process_order(&[rule]);
+    assert!(request(&mut state, "case", "DEL").is_err());
+}

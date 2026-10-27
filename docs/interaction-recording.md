@@ -20,13 +20,24 @@ The external gateway forwards that entire endpoint to Recorder. It does not
 inspect business events or select events for routing. `brz-http-router` and Wegent
 business services require no changes for capture.
 
+For WebSocket upgrades, Recorder removes HTTP body framing headers on the
+Source hop only after fully reading and confirming an empty request body. This
+supports older gateways that add `Content-Length: 0`, which strict WebSocket
+servers reject. The original request evidence is retained. Nonempty bodies and
+ordinary HTTP requests keep their existing forwarding behavior.
+
+Interaction phase and progress logs identify the case, protocol, pending count,
+initial-response wait and next deadline without logging request headers or
+message contents. They distinguish an upstream handshake wait from transport
+cleanup, dependency drain and case publication.
+
 ## One connection, one case
 
 Authentication, namespace connection and multiple business exchanges share a case
 and its exclusive Source slot. HTTP keep-alive does not group independent HTTP
 requests into one case. Pending requests may overlap and complete out of order.
-An ACK or configured terminal event completes its matching exchange, then the
-connection remains available for another exchange.
+An explicitly configured ACK or terminal event completes its matching exchange,
+then the connection remains available for another exchange.
 
 The shared defaults under `recorder.http_gateway.interaction` are:
 
@@ -55,11 +66,24 @@ Engine.IO ping/pong, upgrade controls, WebSocket ping/pong and SSE comments do n
 extend business idle. A business event named `heartbeat` receives ordinary
 business handling. Pending work suppresses the idle-success condition; timeout,
 transport errors, partial binary attachments and budget exhaustion cannot pass.
+An explicitly observed, valid WebSocket Close from Source ends the captured
+session even when business exchanges remain pending. The recording retains those
+identities and the peer's close code/reason; it does not manufacture ACKs or
+business completion. A bare EOF with pending work is not equivalent to this
+observed Close, and incomplete frames or transport/capture errors still fail.
+Engine.IO polling also ends at an explicitly received protocol CLOSE packet
+(`1`). That packet remains output evidence, with pending exchanges intact and no
+invented WebSocket close code or reason. Replay stops polling after the Target's
+own CLOSE packet instead of issuing another GET on the terminated session.
+For WebSocket transport, an Engine.IO CLOSE packet does not hide a later physical
+transport failure or replace the existing physical close-frame observation.
 
 ## Completion profiles
 
-Socket.IO requests carrying ACK IDs can use their matching ACK. Requests without
-ACKs need an explicit terminal event profile, for example:
+Socket.IO requests carrying ACK IDs can declare `completion: {kind: ack}` to use
+their matching ACK. Without a completion profile, an ACK alone does not prove
+business completion. Requests without ACKs need an explicit terminal event
+profile, for example:
 
 ```yaml
 recorder:
@@ -115,6 +139,21 @@ New GET SSE subscription inputs carry `http_stream_mode: subscription`; replay
 uses this recorded mode and independently observes Target business silence.
 Inputs without this field retain response-completion semantics, and replay does
 not infer a subscription from expected outputs or reinterpret older recordings.
+Socket.IO sessions ending in an explicitly observed Source protocol CLOSE or
+WebSocket Close carry an optional `socket_io_heartbeat` input program. Its
+`responses` bind each
+observed client PONG input sequence to the Source PING ordinal and response delay.
+Replay waits for the corresponding actual Target PING, preserves the client
+response delay and replies using that live PING's payload. An empty response
+table deliberately sends no PONGs; missing client replies remain missing, so a
+Target can independently reach the same heartbeat timeout. Replay never reads
+expected output or its end time to choose or synthesize a Target close.
+
+The input transcript remains version 1. Historical programs and other bounded
+sessions without `socket_io_heartbeat` retain the previous automatic Engine.IO
+PONG behavior. Older engines reject the new explicit field rather than silently
+changing its meaning. WebSocket protocol-level ping/pong and upgrade probes keep
+their existing transport handling; this program controls Engine.IO text PONGs.
 `expected-response.json.interaction` contains Source output events and closure.
 The runner independently writes `actual-response-*.json.interaction`. HTTP method
 and route identity preserve existing grouping, `prepare`, `run-api`, `run` and
@@ -170,6 +209,11 @@ evidence persistence, finalizes the recording and exits with an error when cases
 failed. Closed admission cannot leave the recording service indefinitely running
 and sending every later request to fallback. Normal EOF and fully observed client
 cancellation do not stop the recording service.
+An observed Source WebSocket Close likewise ends only its session. Pending
+business identities remain assertion evidence while the ordinary dependency
+drain and publication complete. A dependency attribution, drain, lease or
+persistence failure still requests Source isolation; peer closure does not
+override those safeguards.
 
 A diagnosed, fully drained HTTP dependency capture failure after a clean primary
 close is local to its case. Recorder preserves that failed evidence and releases

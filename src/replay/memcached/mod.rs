@@ -24,6 +24,7 @@ use crate::memcached::{
 };
 
 mod builtins;
+mod case_status;
 pub(in crate::replay) mod contracts;
 mod delivery;
 mod evidence;
@@ -149,7 +150,7 @@ pub(super) struct MemcachedReplayEvents {
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
-    matched_details: SuccessDetailBudget,
+    pub(in crate::replay) matched_details: SuccessDetailBudget,
     pub(super) unmatched: Vec<CommandRequestReport>,
     pub(super) unsupported: Vec<CommandRequestReport>,
     pub(super) unsafe_events: Vec<CommandRequestReport>,
@@ -488,15 +489,6 @@ impl MemcachedReplayState {
             unused_global: unused(&self.exchanges, ReplaySource::Global),
             ..Default::default()
         }
-    }
-
-    pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
-        self.events.dirty_case_ids.contains(case_id)
-            || self.case_exchange_index.any(case_id, |index| {
-                self.exchanges
-                    .get(index)
-                    .is_some_and(|exchange| !exchange.status.is_consumed())
-            })
     }
 }
 

@@ -1,5 +1,7 @@
 use super::*;
 
+mod source_reference;
+
 #[test]
 fn http_targets_include_source_metadata_and_route_to_current_request_evidence() {
     let temp = tempfile::tempdir().unwrap();

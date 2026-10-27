@@ -617,6 +617,7 @@ mod tests {
             replay_clean: Some(true),
             response_assertion: assertions.cases[0].response.clone(),
             response_unavailable_reason: None,
+            execution_failure: None,
         });
 
         let api_report_dir = active.join("apis/api-0001");

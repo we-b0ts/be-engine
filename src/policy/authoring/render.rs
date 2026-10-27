@@ -45,6 +45,7 @@ fn inline(value: &Value) -> Result<Option<String>> {
             || [
                 "append_stream",
                 "read_commutation",
+                "read_observation",
                 "expiry_refresh",
                 "read_back",
                 "key_format",

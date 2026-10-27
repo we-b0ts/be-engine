@@ -114,7 +114,7 @@ pub(crate) fn callback(payload: &[u8]) -> Result<Option<(Identity, Value)>> {
 
 impl Request {
     /// Application contracts select data only. Every other envelope member
-    /// remains exact except the two identities verified by the RPC adapter.
+    /// remains exact except the identities verified by the RPC adapter.
     pub fn envelope_matches(&self, actual: &Self) -> bool {
         let (Some(source), Some(target)) = (self.value.as_object(), actual.value.as_object())
         else {
@@ -122,19 +122,91 @@ impl Request {
         };
         source.len() == target.len()
             && source.iter().all(|(name, value)| {
-                matches!(name.as_str(), "data" | "host_id" | "callback")
+                matches!(name.as_str(), "data" | "host_id" | "callback" | "room")
                     || target.get(name) == Some(value)
             })
-    }
-
-    pub fn matches(&self, actual: &Self) -> bool {
-        self.comparison_value(actual) == actual.value
     }
 
     pub fn comparison_value(&self, actual: &Self) -> Value {
         let mut expected = self.value.clone();
         expected["host_id"] = actual.value["host_id"].clone();
+        expected["room"] = actual.value["room"].clone();
+        expected["callback"][0] = actual.value["callback"][0].clone();
         expected["callback"][2] = actual.value["callback"][2].clone();
+        expected
+    }
+}
+
+/// Exact Redis self-echo identity; protocol IDs and application bytes are included.
+pub(crate) fn echo_digest(channel: &[u8], payload: &[u8]) -> Option<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    if payload.len() > MAX_RPC_BYTES || channel.is_empty() || channel.len() > 1024 {
+        return None;
+    }
+    let args = [channel.to_vec(), payload.to_vec()];
+    if request("PUBLISH", &args).ok().flatten().is_none()
+        && broadcast("PUBLISH", &args).ok().flatten().is_none()
+    {
+        return None;
+    }
+    let mut hash = Sha256::new();
+    hash.update((channel.len() as u64).to_be_bytes());
+    hash.update(channel);
+    hash.update(payload);
+    Some(hash.finalize().into())
+}
+
+/// A non-RPC Socket.IO broadcast still carries the manager's process identity.
+#[derive(Debug, Clone)]
+pub(crate) struct Broadcast {
+    pub host: String,
+    pub value: Value,
+}
+
+pub(crate) fn broadcast(command: &str, args: &[Vec<u8>]) -> Result<Option<Broadcast>> {
+    if command != "PUBLISH" || args.len() != 2 {
+        return Ok(None);
+    }
+    let Some(value) = document(&args[1]) else {
+        return Ok(None);
+    };
+    if value["method"] != "emit" || value.get("callback") != Some(&Value::Null) {
+        return Ok(None);
+    }
+    ensure!(
+        !args[0].is_empty() && args[0].len() <= 1024,
+        "invalid adapter channel"
+    );
+    ensure!(
+        value["binary"] == false && value["data"].is_array(),
+        "adapter requires non-binary JSON arguments"
+    );
+    text(&value["event"])?;
+    text(&value["namespace"])?;
+    ensure!(
+        value["room"].is_null() || value["room"].is_string(),
+        "invalid adapter room"
+    );
+    Ok(Some(Broadcast {
+        host: host(&value["host_id"])?,
+        value,
+    }))
+}
+
+impl Broadcast {
+    pub fn envelope_matches(&self, actual: &Self) -> bool {
+        let (Some(source), Some(target)) = (self.value.as_object(), actual.value.as_object())
+        else {
+            return false;
+        };
+        source.len() == target.len()
+            && source.iter().all(|(name, value)| {
+                matches!(name.as_str(), "data" | "host_id") || target.get(name) == Some(value)
+            })
+    }
+    pub fn comparison_value(&self, actual: &Self) -> Value {
+        let mut expected = self.value.clone();
+        expected["host_id"] = actual.value["host_id"].clone();
         expected
     }
 }

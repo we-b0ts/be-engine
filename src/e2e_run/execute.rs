@@ -455,6 +455,13 @@ async fn run_active(
     let outcome =
         run_active_with_replay(config, layout, inventory, state, &target_image, &mut replay).await;
     if outcome.is_err() {
+        if let Err(error) =
+            super::interrupted_evidence::preserve(config, layout, inventory, state).await
+        {
+            state.push_error(format!(
+                "interrupted Replay diagnostics could not be preserved: {error:#}"
+            ));
+        }
         stop_replay_process(state, &mut replay).await;
     }
     outcome
@@ -640,6 +647,13 @@ async fn execute_case(
             "failed to prepare replay request for case {case_id}: {error:#}"
         )),
     };
+    let execution_status =
+        control(state, "case_execution_status", Some(case_id), false, false).await?;
+    super::execution_failure::record(
+        &mut state.cases[case_index],
+        execution_status,
+        &assertion_command,
+    );
     let mut response_assertion = if let Some(response_assertions) = &runtime.response_assertions {
         if let (Ok(actual_bytes), Ok(case_view)) = (&assertion_command, &case_view) {
             let expected_response = super::source_response::path(case_dir);
@@ -698,6 +712,25 @@ async fn execute_case(
         .as_ref()
         .err()
         .map(super::http_driver::response_unavailable_reason);
+    // A different primary status (or no usable response) ends the normal
+    // business path. Body-only differences retain the recorded async contract.
+    let dependency_failed = assertion_command
+        .as_ref()
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+        .is_some_and(|response| {
+            response
+                .pointer("/interaction/end/reason")
+                .is_some_and(|reason| reason == "dependency_failure")
+        });
+    let primary_failed = assertion_command.is_err()
+        || dependency_failed
+        || state.cases[case_index].execution_failure.is_some()
+        || response_assertion.as_ref().is_ok_and(|report| {
+            report.differences.iter().any(|difference| {
+                difference.kind == crate::replay::ResponseDifferenceKind::StatusMismatch
+            })
+        });
     let mut assertion_passed = if config.runner_owned_response_assertions {
         response_assertion
             .as_ref()
@@ -751,18 +784,35 @@ async fn execute_case(
         Err(_) => {}
     }
     state.cases[case_index].assertion_passed = Some(assertion_passed);
-    if let Err(error) = assertion_command {
+    if let Err(error) = &assertion_command {
         state.push_error(format!("case {case_id} HTTP execution failed: {error:#}"));
     }
 
+    if primary_failed {
+        control(state, "case_failed", Some(case_id), false, false).await?;
+    }
     let ended = if target_stop_required {
         super::target_stop::finish(layout, state, case_index, case_id).await
     } else {
         control(state, "end", Some(case_id), true, false).await
     };
     let replay_clean = ended.is_ok();
+    if !replay_clean
+        && let Ok(execution_status) =
+            control(state, "case_execution_status", Some(case_id), false, false).await
+        && execution_status["kind"] == "case_no_progress"
+    {
+        super::execution_failure::record(
+            &mut state.cases[case_index],
+            execution_status,
+            &assertion_command,
+        );
+    }
     state.cases[case_index].replay_clean = Some(replay_clean);
-    state.cases[case_index].status = if assertion_passed && replay_clean {
+    state.cases[case_index].status = if assertion_passed
+        && replay_clean
+        && state.cases[case_index].execution_failure.is_none()
+    {
         CaseStatus::Passed
     } else {
         CaseStatus::Failed

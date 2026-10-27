@@ -93,8 +93,8 @@ pub(crate) fn inspect_case_source_snapshot_overlay(
         .find(|rule| rule.name() == rule_name)
         .with_context(|| format!("process-owned dependency rule {rule_name:?} is absent"))?;
     ensure!(
-        matches!(rule, BackgroundDependencyRuleConfig::Redis { .. }),
-        "process-owned dependency rule {rule_name:?} is not Redis"
+        rule.uses_redis_snapshot(),
+        "process-owned dependency rule {rule_name:?} does not authorize Redis snapshots"
     );
     let global = find_upward(&case_source, "global-dependencies.jsonl").with_context(|| {
         format!(
@@ -119,7 +119,7 @@ impl RedisReplayState {
     ) {
         let binding = case_source.to_string_lossy();
         for rule in rules {
-            if !matches!(rule, BackgroundDependencyRuleConfig::Redis { .. }) {
+            if !rule.uses_redis_snapshot() {
                 continue;
             }
             let evidence = loading::replay_evidence(&self.exchanges, rule);
@@ -226,7 +226,7 @@ fn analyze_snapshot_evidence(
         ) {
             continue;
         }
-        ensure_safe_snapshot_exchange(rule.name(), exchange)?;
+        ensure_safe_snapshot_exchange(rule, exchange)?;
         matching_bytes = matching_bytes
             .checked_add(exchange.response.len())
             .and_then(|total| {
@@ -278,7 +278,10 @@ fn analyze_snapshot_evidence(
         let explicit = entries.iter().copied().find(|entry| {
             entry.source == ReplaySource::Global
                 && entry.global_dependency_reason.as_deref() == Some("background_rule")
-                && entry.cache_snapshot_rule.as_deref() == Some(rule.name())
+                && entry
+                    .cache_snapshot_rule
+                    .as_deref()
+                    .is_some_and(|name| super::snapshot_seed::owner_name_matches(name, rule.name()))
         });
         let bootstrap = entries.iter().copied().find(|entry| {
             entry.source == ReplaySource::Global
@@ -312,7 +315,11 @@ fn analyze_snapshot_evidence(
     })
 }
 
-fn ensure_safe_snapshot_exchange(rule_name: &str, exchange: &SnapshotEvidence) -> Result<()> {
+fn ensure_safe_snapshot_exchange(
+    rule: &BackgroundDependencyRuleConfig,
+    exchange: &SnapshotEvidence,
+) -> Result<()> {
+    let rule_name = rule.name();
     ensure!(
         exchange.replay_safe,
         "Redis snapshot rule {rule_name:?} matches replay-unsafe evidence"
@@ -348,7 +355,9 @@ fn ensure_safe_snapshot_exchange(rule_name: &str, exchange: &SnapshotEvidence) -
         );
         if exchange.global_dependency_reason.as_deref() == Some("background_rule") {
             ensure!(
-                exchange.cache_snapshot_rule.as_deref() == Some(rule_name),
+                exchange.cache_snapshot_rule.as_deref().is_some_and(|name| {
+                    super::snapshot_seed::owner_name_matches(name, rule_name)
+                }),
                 "Redis snapshot rule {rule_name:?} matches a Global seed owned by another rule"
             );
         }

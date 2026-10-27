@@ -5,6 +5,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::{AppConfig, AppState, BackgroundDependencyRuleConfig, HttpGatewayRuleConfig};
 
+mod http_limits;
+mod queued_http;
+
 async fn pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (client, accepted) = tokio::join!(

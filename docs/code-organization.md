@@ -43,6 +43,11 @@ is unclear.
   execution budgets; `lifecycle`, `socketio`, `stream` and `observation` own pure
   framing, completion correlation and monotonic case decisions. They do not read
   expected evidence, persist recordings or own dependency cleanup.
+  `heartbeat` records and validates the input program's causal PING/PONG bindings;
+  `interaction/replay/socketio/heartbeat` schedules those responses from actual
+  Target PING packets, separately from business completion barriers. Explicit
+  peer Close observations retain pending business identities without inventing
+  completion or accepting unobserved transport truncation.
   `gateway/http/interaction` owns primary transport forwarding, session admission,
   recording and close orchestration. Its `ordinary` child forwards finite HTTP
   frames independently of case-owned capture, drain and publication.
@@ -57,8 +62,11 @@ is unclear.
   Source before draining those owned requests and their evidence.
   `recorder/api_origin_observation` owns online origin,
   selector and captured-identity matching without changing dependency ownership.
-  `policy/async_api` owns Source request conditions and terminal-resource syntax.
-  `recorder/async_api` matches complete observed SQL or Redis operations;
+  `policy/async_api` owns ordered Source request/response scenarios and
+  terminal-resource syntax, including legacy single-scenario input.
+  `recorder/async_api/selection` owns first-matching scenario selection and
+  independent early signals; `recorder/async_api` matches complete observed
+  SQL, Redis operations or successful HTTP exchanges;
   its `recorded` adapter reads immutable semantic JSONL through the same
   completion and occurrence checks. `redis/key_slots` owns physical key
   positions shared by recording completion and replay identity translation.
@@ -80,12 +88,56 @@ is unclear.
   external admission lease scheduling and transparent ingress transport; the
   gateway SDK owns atomic Redis reservation operations. `interaction/replay`
   drives only recorded inputs against fresh Target connections; response assertion
-  compares independent output observations. Replay control retains case identity
-  and asynchronous dependency delivery ownership through the existing case-end
-  lifecycle. Its `control/dependency_tail` child resolves finite immutable
+  compares independent output observations.
+  `interaction/replay/socketio/transport` retains its reader through normal
+  peer-close completion, so flushing a client close cannot release the Case
+  while the peer is processing an earlier namespace disconnect. The scheduler
+  bounds that close I/O and interrupts it on an actual dependency rejection;
+  it does not wait for unused dependency inventory.
+  `gateway/http/interaction/websocket` applies the same transport-lifetime
+  barrier while recording: Source resource calls begun during close remain
+  inside the Case until actual Source peer termination. `interaction/finish`
+  retains its existing cleanup deadline and marks unfinished cleanup incomplete.
+  `gateway/http/interaction/websocket/closing` confirms application close for
+  recognized Python ASGI peers through the live upgraded Engine.IO SID's native
+  NOOP/disconnected status. It never turns an automatic WS close echo or an
+  unknown SID into proof of application completion. Transport failures remain
+  visible to `finish` even when the primary close was already observed.
+  Replay control retains case identity and asynchronous dependency delivery
+  ownership through the existing case-end lifecycle. Its `control/dependency_tail` child resolves finite immutable
   exchange references, adapts legacy API-origin observation metadata, and waits
   for real Target consumption within the absolute case budget. Protocol modules
   retain their own exchange identities and termination validation.
+  `control/dependency_tail/progress` owns the Replay-only no-progress clock and
+  bounded pending-reference observations. It excludes real resource I/O and
+  unrelated process activity, and records only the stalling Case as incomplete.
+  `control/server` owns bounded control connections; mutations stay serialized
+  while read-only observations remain available during dependency waits.
+  `control/case_execution` exposes actual dependency rejection separately from unused inventory;
+  `e2e_run/request_feedback` interrupts one primary request across HTTP, streams and Motan.
+  `dependency/execution` owns the protocol-independent rejection signal and typed error.
+  `e2e_run/execution_failure` retains the incomplete execution cause and independent
+  primary status observations for public diagnosis and evidence queries.
+  `rewrite/evidence/witness` owns bounded, assignment-bound access to authenticated
+  dependency witness values and recorded input header names. It reuses native
+  carrier extraction without applying rules or changing match outcomes.
+  Its MySQL selector reads one authenticated materialized SQL cell; the pure
+  `replay/mysql/contracts/value_view` adapter reuses bounded native parameter
+  decoding and physical field resolution. It does not pair statements or
+  authorize formats, and preserves exact decimal text and native NULL/bytes.
+  `rewrite/evidence/redis_argument` owns bounded native argument selection for
+  unmatched independent Redis observations, bound to the current assignment,
+  finalized session and exact request fingerprint without inventing a Source pair.
+  Selected independent observation clocks stay authenticated and bounded with
+  their IDs; they describe actual admission, not inferred business task origin.
+  `control/case_cleanup` owns failure-phase deadlines and the shared actual-I/O
+  barrier. Its final empty-I/O observation stays locked through Case ownership
+  release, preventing a new delivery from entering between the check and release.
+  Its `pending` child assembles bounded timeout evidence from protocol-owned
+  delivery references and observation claims while holding that same lock.
+  A failed primary status ends normal async business waiting while
+  retaining unused/dirty evidence; protocol owners expose delivery state, and
+  runner response assertions retain the primary failure independently of cleanup.
   Normal interaction closure keeps Source and Target running;
   process shutdown remains with the ordinary recording and run supervisors.
   `e2e_run/evidence/interaction` owns on-demand authenticated SSE response
@@ -130,6 +182,11 @@ is unclear.
   `policy/compiler` owns typed capability validation, field ownership and
   semantic effect fingerprints, prepared endpoint indices, table matchers and codec
   plans; these modules neither read evidence nor change runtime state.
+  `value_contract/pre_match` owns bounded pure hypotheses for unowned JSON leaves;
+  request-contract decisions commit their candidate evidence alongside selected
+  identity mappings. Replay reports retain dirty candidates without publishing
+  policy or granting final verification. Stream delivery owns its explicit fast
+  versus recorded schedule, separately from immutable timing evidence.
   `policy/condition` owns Source self/sibling predicate validation, selection,
   Target discriminator equality and conservative disjointness shared by value
   fields and native Redis identity captures. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
@@ -268,6 +325,10 @@ is unclear.
   bindings, with side-effect-free candidate previews and post-delivery commits.
   `transaction_equivalence/source` retains complete Source interval proof;
   `transaction_equivalence` retains the outer transaction delivery witness and
+  its `member_comparison` child captures bounded Source-reference order evidence
+  at an actual failed Target end, including the first difference beyond a
+  truncated prefix. It neither changes matching nor reconstructs historical
+  Target order from an unordered consumption set. The transaction owner
   includes savepoint controls in its required interval. Neither name aliasing nor
   inner rollback/release supplies an outer commit or consumes another socket's
   control. `transaction_ownership` reuses the Source name lifetime proof for
@@ -283,7 +344,12 @@ is unclear.
   resets and observation fences; `source` reuses that preparation for native
   rule preflight. Ordinary Redis adapters retain all non-APPEND matching and
   finite consumption. Partial byte delivery is separate from active transport.
-  `redis/read_commutation` owns explicit finite nil-observation ordering
+  Stream key selection reuses the request-contract owner's projection of
+  already accepted complete identities; stream bytes remain with the APPEND owner.
+  `redis/observations/absence` proves absent-state read lifetimes between owned
+  deletion boundaries; the existing observation runtime owns bounded repeats,
+  delivery and audit. Native policy compilation and normal plan/apply retain
+  permission ownership. `redis/read_commutation` owns explicit finite nil-observation ordering
   permission; its `source` child rejects mutations and overlapping ownership
   before installing any permission. `redis/key_access` supplies conservative
   key-access exclusion to both Source proofs, and `redis/native_source` loads
@@ -292,8 +358,11 @@ is unclear.
   `redis/observations` owns explicit SET/DEL state observations and positive TTL
   refresh equivalence. Its `source` child validates complete, isolated key
   lifetimes before installing observation permissions; request contracts retain
-  write-to-read identity rendering. Mutation matching, APPEND bytes and transport
-  completion remain with their existing owners.
+  write-to-read identity rendering. Read-back preparation excludes another
+  Case's ordinary finite GET from the owner's proof and observation slots;
+  foreign mutations and Global/shared inventory remain ownership fences.
+  Mutation matching, APPEND bytes and transport completion remain with their
+  existing owners.
 
 - `recording_api/methods` owns the optional per-route method metadata codec and
   lookup. Recorder run finalization projects its existing observed API set into
@@ -308,6 +377,12 @@ is unclear.
   after an engine Git revision change, including an inventory-only final-route
   fallback that treats Complete/RevalidationPending/Skipped siblings as
   nonblocking without changing their verification status.
+  A confirmed current ready/integrated delivery retains its integration and
+  verification path ahead of this optional retry; retry eligibility and durable
+  reservation cannot hide that delivery when a sibling becomes skipped.
+  A known changed engine can also refresh an interrupted partial run whose
+  older issue still names a response mismatch; completed failures and unrelated
+  worker slices retain their existing admissions.
   `rewrite/replay_admission` combines exact
   method permits without releasing unaccepted route siblings; `rule_replay` owns
   rule-application requests. `rewrite/verification` owns reservation, Replay and
@@ -415,7 +490,11 @@ is unclear.
   exact publisher references in Global evidence. `recorder/redis/events`
   projects connection/exchange records. `replay/redis/pubsub` owns finite push
   evidence, subscription routing and delivery; its `adapter` child owns
-  Socket.IO Redis-adapter identity correlation, while `subscription_evidence`
+  Socket.IO Redis-adapter identity correlation. Its `echo` child associates exact
+  finite Source PUBLISH payloads with recorded self-echo notifications and delivers
+  admitted Target payloads to confirmed subscribers without subscription-age delays.
+  Notification pages retain payload digests; their sparse lookup is built only
+  when a Target adapter PUBLISH needs it. The `subscription_evidence` child
   resolves exact recording-level anchors and canonical single-use aliases.
   The adapter retains subscription anchors required by linked RPC callbacks;
   command matching applies their preference within the existing ownership scope
@@ -480,6 +559,9 @@ is unclear.
   details, summary references and their fingerprints for both ordinary terminal
   publication and focused method projections. Store owns atomic directory
   replacement; published consumers never need the transient active directory.
+  `evidence_admission` distinguishes an unfinished foreign execution from a
+  malformed complete execution; resource preflight freezes the former's state
+  while retaining complete Source proof and a fresh-Replay obligation.
   `e2e_run/replay_publication` stages the original Replay report and dependency
   sidecar into that same snapshot and retargets aggregate report references.
   `replay/report/aggregate/runner` validates runner-selected report locations,
@@ -553,10 +635,18 @@ is unclear.
   Its `kubernetes` child owns recording-startup Service discovery, ready barriers
   and supervised port-forward shutdown. `discovery` interprets bounded Service
   metadata; `process` owns scoped kubectl process groups and bounded pipe reads.
+  `diagnostics` reduces forwarding stderr to bounded static categories and emits
+  process-exit context without retaining credential-bearing child output.
+  `supervision` publishes one child's readiness and propagates every unexpected
+  exit without restarting the forward. Healthy upstreams remain available for
+  the existing normal case drain before Source and the forwards stop.
   `config/upstream_routes` owns only the strict route/cluster configuration.
-  `recording_upstream` owns immutable recording-only dial bindings; DNS and native
-  gateways preserve original host/port identity and protocol capture. Replay does
-  not load tunnel bindings or start kubectl.
+  `recording_upstream` owns immutable recording-only dial bindings and selects
+  the dedicated HTTP client for declared routes. `http/client` owns connection
+  pooling: forwarded HTTP retains active responses but never reuses an idle
+  socket, while ordinary HTTP keeps its existing pool. DNS and native gateways
+  preserve original host/port identity and protocol capture. Replay does not
+  load tunnel bindings or start kubectl.
 - `local_interception` owns reusable fixed-identity firewall setup/cleanup and
   diagnostics; CLI entry points delegate to it. `command_output` owns shared
   broken-pipe-safe diagnostic output for those library and CLI callers.
@@ -617,6 +707,10 @@ is unclear.
   `rewrite/rule/generated_values` owns coordinator plan/apply adaptation,
   `rewrite/evidence/rule_guidance/generated_values` owns diagnostic hints, and
   `bin/backend-rewrite/rule_args` owns the corresponding CLI inputs.
+- `replay/redis/snapshot_seed` owns marked Global seed admission against current
+  process-owned request selectors, including historical revision-bound names.
+  `snapshot_overlay` reuses that name compatibility with complete immutable
+  coverage and response-consistency validation; recorded provenance is unchanged.
 - `replay/redis/matching` owns command selection and source-lane order
   diagnostics. `replay/redis/connection_scope` distinguishes ordinary pool
   reuse (including server-side script execution and cache operations) from
@@ -625,6 +719,8 @@ is unclear.
   `replay/redis/cross_case` owns finite sharing of source-proven Redis reads
   across cases in one completed recording; policy feedback owns promotion of
   the corresponding time-shift rule.
+  `replay/redis/request_identity` owns the native request fingerprint shared by
+  Replay admission and authenticated unmatched-request diagnostics.
 - `http/rewrite/json_urls` owns JSON Pointer URL substitution and discovered
   HTTP routes. Recorder configuration owns concise rule validation and the
   typed Source-policy overlay; no application-specific sandbox plugin is
@@ -734,6 +830,8 @@ is unclear.
   observes external publication without owning its process or allocating IDs.
   `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
+  Operations bind their selected recording; validated batch replacement retires
+  finished older operations while retaining current failures and running ownership.
   `next.rs` owns invocation intent, structured selection of the existing action,
   and optional continuation after fresh passing Replay or terminal results within
   an unfinished revalidation round. It reuses global
@@ -845,8 +943,11 @@ is unclear.
   Git again.
   `rewrite/review` owns the complete worker/integrator review
   pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
-  child owns Rust syntax findings and complete-file line limits; `evidence`
-  validates AI-provided locations and lifecycle explanations without claiming
+  child owns Rust syntax findings and complete-file line limits.
+  Its spawn scan recognizes compiler-enforced file/item test configuration and
+  Tokio test functions; extracted test files declare their own inner cfg rather
+  than relying on inferred filenames or an unproved cross-file caller graph.
+  `evidence` validates AI-provided locations and lifecycle explanations without claiming
   call-graph proof. `candidate` owns cross-worktree candidate identity, frozen
   canonical check context, and publication receipt admission without check
   execution. `integrated` owns ordinary freshness, action projection and
@@ -1172,6 +1273,22 @@ explicit repository-wide audit.
   `redis_fields/time_writes` publishes temporal write provenance after successful
   wire delivery; JSON reads reuse those values only at the same physical origin
   with independent Source and Target ordering evidence.
+  `request_contract/unified_response/contextual` reconciles complete global JSON
+  delivery with native read-back values while retaining the native stored bytes;
+  `redis_fields/response` owns bulk boundaries and exact surrounding RESP bytes.
+
+- `e2e_run/execution_failure` owns bounded per-Case rejection summaries and pages;
+  `rewrite/evidence/execution` binds their continuation commands to the same API,
+  issue, immutable inventory and attempt. Omitted overview rows cannot establish
+  absence of a failure or borrow another Case's rejection.
+
+- `replay/assertion/interaction/socketio` adapts each Socket.IO business argument
+  to the existing global JSON kernel at its own root. It keeps packet metadata,
+  event names, argument order and binary attachment declarations strict. Source
+  preflight, independent Target proof and final assertions share this adapter.
+  `e2e_run/evidence/interaction/socketio` projects authenticated argument values
+  for on-demand diagnosis within the existing private interaction evidence
+  bounds; persisted reports retain no decrypted message bodies.
 
 - Redis PUBLISH payloads use the common global JSON policy and internal
   correspondence store. Unknown binary payloads retain exact byte comparison.
@@ -1184,6 +1301,11 @@ explicit repository-wide audit.
   failed and client-termination exchanges remain blockers; final success and
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
+
+- `rewrite/unified_rule/preflight/global_values/redis/script_times` composes
+  existing native script ARGV time contracts with global JSON preflight, while
+  the parent keeps script/key/envelope and unselected argument checks. It does
+  not execute Lua or grant new native permissions.
 
 - `replay/policy/request_contract/global_value` adapts global JSON comparison
   and typed identity delivery to protocol callers. Its `identity` child creates
@@ -1312,9 +1434,11 @@ explicit repository-wide audit.
   MySQL's `contracts` adapter filters structurally unrelated request candidates
   before scalar contract comparison. Preflight counts only validated pairs;
   an unpaired Source exchange retains its fresh-Replay obligation.
-  `preflight/mysql_candidates` correlates each protected Target observation over
-  the complete selected Source scope, rejecting related Targets without a valid
-  pair while retaining failed cross-row search edges as evidence.
+  `preflight/candidate_pairs` correlates each protected MySQL or Redis Target
+  request observation over the complete selected Source scope, rejecting related
+  Targets without a valid pair while retaining failed search edges as evidence.
+  It does not claim Replay consumption or relax native ordering; accepted plans
+  retain genuine Replay obligations.
 - Historical feedback DTOs may remain as domain data or journal recovery inputs.
   Their old authoring entrypoints reject and production loaders accept only
   `traffic-policy/v2`. Test-only explicit fixture migration is not a reader

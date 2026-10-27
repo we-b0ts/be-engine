@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::super::model::RewriteState;
 use crate::{
-    policy::{Codec, CompiledPolicy, FieldContract, Protocol},
+    policy::{Codec, CompiledPolicy, FieldContract, Protocol, Surface},
     policy_evidence::{TargetRole, WitnessManifest},
     value_contract::json::{AnchorClocks, Field},
 };
@@ -210,11 +210,22 @@ impl Drafts {
         let base = json!({"surface":witness.metadata.surface,"match":{
             "resource":witness.metadata.resource}});
         let physical = sql_fields::observed(event, witness.metadata.surface);
+        let prefix = if witness.metadata.surface == Surface::DependencyRequest {
+            "/sql_values"
+        } else {
+            "/request/sql_values"
+        };
         let unavailable = physical["fields"].as_array().is_none_or(Vec::is_empty);
         let identity = serde_json::to_string(&(&base, &physical, &event["response"]["status"]))?;
         self.add_entry(identity,json!({"location":base,"witness_id":witness.id,
             "source_response_kind":event["response"]["status"],"physical_fields":physical,
             "needs_sql_template":false,"needs_physical_location":unavailable,"needs_schema":false,
+            "protected_sql_value_pointers":{
+                "value":format!("{prefix}/<sql-token-index>/value"),
+                "decoded_json":format!("{prefix}/<sql-token-index>/json/<field-path>"),
+                "field":format!("{prefix}/<sql-token-index>/field"),
+                "instruction":"Use this witness_id with dependency_witness_query and a token index from physical_fields.fields[].observed_positions. Select a nested JSON field when the SQL value is large. Each statement retains its own physical positions; the candidate is not proof of a match."
+            },
             "source_intent_required":true,
             "instruction":"MySQL JSON payloads use root json.fields automatically. Native DATE/DATETIME/TIMESTAMP metadata is inferred when mysql is enabled; historical and invalid scalar inputs stay exact unless a valid differing value is proved. mysql.tables declares remaining scalar formats across databases; recorded and Target physical connection identities must still match. Table patterns contain table names, without a database prefix. No JSON column codec or SQL statement template is needed. Unknown physical origins grant no scalar permission."}));
         Ok(())

@@ -63,7 +63,7 @@ struct AsyncObservation {
 
 pub(super) async fn load(
     case_dir: &Path,
-    async_rules: &BTreeMap<String, crate::policy::AsyncApiRule>,
+    async_rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
     request_timeout: Duration,
 ) -> Result<Option<Metadata>> {
     let mut metadata = if let Some(raw) = read(&case_dir.join("async-api-observation.json")).await?

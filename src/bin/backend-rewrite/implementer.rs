@@ -1,7 +1,7 @@
 //! CLI adapter for reusable implementation slots; workflow decisions stay in the engine.
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use traffic_e2e::{
     ImplementerConfirmOptions, ImplementerDelivery, ImplementerHandoffOptions,
@@ -63,8 +63,8 @@ enum ImplementerCommand {
         slot: usize,
         #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
         agent_handle: String,
-        /// JSON array of {api, dispatch_id, lease_generation, handoff_id, review_report}.
-        #[arg(long)]
+        /// Path to a JSON file containing an array of {api, dispatch_id, lease_generation, handoff_id, review_report}.
+        #[arg(long, value_name = "JSON_FILE")]
         deliveries: PathBuf,
     },
     /// Explicitly move a group without changing any active assignment.
@@ -134,8 +134,11 @@ impl ImplementerArgs {
                 agent_handle,
                 deliveries,
             } => {
-                let deliveries: Vec<ImplementerDelivery> =
-                    serde_json::from_slice(&std::fs::read(deliveries)?)?;
+                let bytes = std::fs::read(deliveries).context(
+                    "read handoff deliveries: --deliveries requires a JSON file path, not inline JSON",
+                )?;
+                let deliveries: Vec<ImplementerDelivery> = serde_json::from_slice(&bytes)
+                    .context("parse handoff deliveries JSON file as an array of API deliveries")?;
                 traffic_e2e::handoff_rewrite_implementer(ImplementerHandoffOptions {
                     target_root,
                     slot_id: slot,

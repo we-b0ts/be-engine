@@ -111,6 +111,7 @@ fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
     for behavior in [
         "append_stream",
         "read_commutation",
+        "read_observation",
         "expiry_refresh",
         "read_back",
         "commands",

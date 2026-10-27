@@ -67,6 +67,92 @@ fn record(reason: Option<&str>, response: &str) -> RecordedExchange {
 }
 
 #[test]
+fn finite_process_get_preserves_each_response_and_never_derives_reuse() {
+    let mut rule = rule();
+    let BackgroundDependencyRuleConfig::Redis {
+        command, fields, ..
+    } = &mut rule
+    else {
+        unreachable!()
+    };
+    *command = "GET".into();
+    fields.clear();
+    let mut state = RedisReplayState::default();
+    for response in ["$2\r\nv1\r\n", "$-1\r\n"] {
+        let mut record = record(Some("background_rule"), response);
+        record.command = "GET".into();
+        record.args.truncate(1);
+        state
+            .register_exchange(
+                record,
+                ReplaySource::Global,
+                None,
+                &mut BTreeMap::new(),
+                std::slice::from_ref(&rule),
+            )
+            .unwrap();
+    }
+    state.apply_snapshot_overlays(Path::new("/recording"), std::slice::from_ref(&rule));
+    assert!(state.snapshot_overlays.is_empty());
+    assert!(state.snapshot_overlay_warnings.is_empty());
+    assert!(
+        state
+            .exchanges
+            .iter()
+            .all(|exchange| exchange.connection_independent && !exchange.reusable_snapshot)
+    );
+    let target = TargetKey {
+        host: "redis.example".into(),
+        port: 50_600,
+    };
+    for response in [b"$2\r\nv1\r\n".as_slice(), b"$-1\r\n".as_slice()] {
+        let matched = state
+            .match_redis(
+                None,
+                &target,
+                super::super::TargetConnection::default(),
+                2,
+                0,
+                None,
+                "GET",
+                &[b"big-list".to_vec()],
+            )
+            .unwrap();
+        assert_eq!(matched.response, response);
+        state.complete_exchange(&matched);
+    }
+    assert!(
+        state
+            .match_redis(
+                None,
+                &target,
+                super::super::TargetConnection::default(),
+                2,
+                0,
+                None,
+                "GET",
+                &[b"big-list".to_vec()]
+            )
+            .is_err()
+    );
+    let mut seed = record(Some("background_rule"), "$2\r\nv1\r\n");
+    seed.command = "GET".into();
+    seed.args.truncate(1);
+    seed.cache_snapshot_rule = Some(rule.name().into());
+    assert!(
+        state
+            .register_exchange(
+                seed,
+                ReplaySource::Global,
+                None,
+                &mut BTreeMap::new(),
+                &[rule]
+            )
+            .is_err()
+    );
+}
+
+#[test]
 fn derives_one_reusable_seed_from_consistent_old_global_and_case_evidence() {
     let mut state = RedisReplayState::default();
     let mut targets = BTreeMap::new();

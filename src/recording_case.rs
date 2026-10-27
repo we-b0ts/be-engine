@@ -12,6 +12,32 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 impl AppState {
+    pub(crate) fn select_case_response_observation(
+        &self,
+        case_id: Uuid,
+        body: Option<&crate::recorder::CaseBodyCapture>,
+    ) {
+        use base64::Engine as _;
+        if self.config().async_api.is_empty() {
+            return;
+        }
+        let bytes = body
+            .filter(|body| !body.truncated)
+            .and_then(|body| match body.encoding {
+                "utf8" => Some(body.data.as_bytes().to_vec()),
+                "base64" => base64::engine::general_purpose::STANDARD
+                    .decode(body.data.as_bytes())
+                    .ok(),
+                _ => None,
+            });
+        let json = bytes
+            .as_deref()
+            .and_then(|bytes| crate::json_value::parse_with_limit(bytes, bytes.len()));
+        self.inner
+            .active_cases
+            .select_async_response(case_id, json.as_ref());
+    }
+
     pub(crate) fn configure_case_observation(
         &self,
         case_id: Uuid,

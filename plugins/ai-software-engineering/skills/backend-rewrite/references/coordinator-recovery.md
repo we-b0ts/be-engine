@@ -17,6 +17,13 @@ this phase.
 The responsible implementation/system worker or external owner applies the
 required repair. The coordinator does not repair code while idle. Read global
 status again after installing the repair.
+Record the repair route and its acceptance identity before installing the new
+engine. If the engine was already upgraded and the current issue is outside the
+automatic changed-engine retry categories, use the current worker dispatch's
+ordinary review/handoff/integration path. An unchanged candidate is valid after
+real review; when candidate equals the current assignment base, verify its
+identity and retain canonical HEAD as described in the integration guide. Do
+not manufacture a code commit or reuse an already consumed repair identity.
 Until the relevant revision changes, it is counted in `waiting.system_repair`
 and `action.details.acceptance_ready` is false. Other ready worker work continues. The engine can park this API with its exact
 issue, evidence, route, and repair identity while verifying other APIs. After

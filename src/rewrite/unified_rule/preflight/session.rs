@@ -8,6 +8,7 @@ fn stateful(rule: &CompiledNativeRule) -> bool {
         | NativeEffect::RedisSequence(_)
         | NativeEffect::RedisAppendStream
         | NativeEffect::RedisReadCommutation(_)
+        | NativeEffect::RedisReadObservation
         | NativeEffect::RedisExpiryRefresh(_)
         | NativeEffect::HttpRequest(_)
         | NativeEffect::InputJwt(_)

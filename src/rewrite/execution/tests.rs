@@ -16,6 +16,7 @@ fn marker(target: &Path, pid: u32, finished: bool, error: Option<String>) {
                 api: Some("GET /api".into()),
                 source_route: None,
             },
+            recording_run_id: None,
             finished,
             error,
         },

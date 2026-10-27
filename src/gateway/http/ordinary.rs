@@ -345,6 +345,8 @@ impl CaptureContext {
             sse_observation: None,
             interaction: None,
         };
+        self.state
+            .select_case_response_observation(case.id, response.body.as_ref());
         let drain = self.state.drain_active_case_dependencies(case.id).await;
         if let Some(recovery) = recovery {
             recovery.dependencies_drained(drain.as_ref()).await;

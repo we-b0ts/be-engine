@@ -84,6 +84,10 @@ pub struct InputTranscript {
     pub policy: InteractionPolicy,
     #[serde(default, skip_serializing_if = "HttpStreamMode::is_response")]
     pub http_stream_mode: HttpStreamMode,
+    /// Explicit client Engine.IO heartbeat responses. Absence retains legacy
+    /// automatic PONG behavior; an empty program deliberately sends no replies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_io_heartbeat: Option<SocketIoHeartbeats>,
     #[serde(default)]
     pub actions: Vec<InputAction>,
 }
@@ -95,6 +99,7 @@ impl InputTranscript {
             protocol,
             policy,
             http_stream_mode: HttpStreamMode::Response,
+            socket_io_heartbeat: None,
             actions: Vec::new(),
         }
     }
@@ -166,8 +171,23 @@ impl InputTranscript {
             seen.insert(action.sequence);
             offset = action.offset_ms;
         }
+        super::heartbeat::validate(self)?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SocketIoHeartbeats {
+    pub responses: Vec<HeartbeatResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HeartbeatResponse {
+    pub input_sequence: u64,
+    pub ping_ordinal: u64,
+    pub delay_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -244,7 +264,7 @@ pub struct EndObservation {
     #[serde(default)]
     pub pending: Vec<u64>,
     /// The observed lifecycle ended without capture/transport corruption.
-    /// An observed client cancellation may retain pending business identities.
+    /// An observed peer close may retain pending business identities.
     pub clean: bool,
     /// Exact unfinished framed-message bytes observed at an explicit client close.
     /// This suffix is not a completed business message or a successful EOF.
@@ -268,6 +288,7 @@ pub enum EndReason {
     ClientClose,
     BusinessIdle,
     RequestTimeout,
+    DependencyFailure,
     MaxDuration,
     TransportError,
     ProtocolError,

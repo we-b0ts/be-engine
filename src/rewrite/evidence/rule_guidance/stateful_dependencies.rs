@@ -51,7 +51,9 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
             }
             if operation(cluster, "GET") {
                 capabilities.extend([
+                    "redis_finite_process_get",
                     "redis_read_commutation",
+                    "redis_read_observation",
                     "redis_read_back",
                     "redis_state_observations",
                 ]);
@@ -87,7 +89,9 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
                     }
                     Some("GET") => {
                         capabilities.extend([
+                            "redis_finite_process_get",
                             "redis_read_commutation",
+                            "redis_read_observation",
                             "redis_read_back",
                             "redis_state_observations",
                         ]);
@@ -119,11 +123,17 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
 
 fn instruction(capability: &str) -> &'static str {
     match capability {
+        "redis_finite_process_get" => {
+            "For independently proven process work, declare process_dependencies.tasks.<actual-task>.requests with redis operation: GET, bounded ports and exact keys, omitting initial_load_timeout_ms. Every original response stays single-use, changing values stay distinct, and exhaustion fails. A task name is a grouping label, not captured issuer provenance: prove every selected Source occurrence independently of request paths, including sibling APIs using the same key. Existing snapshot seeds/hits cannot supply finite evidence. This classification grants no default response, wildcard, stateful-session relaxation or reuse; adding a positive initial_load_timeout_ms instead retains initialization snapshot acquisition and its fresh-recording obligation. See docs/process-owned-redis.md."
+        }
         "redis_append_stream" => {
             "Declare redis.keys.<bounded-pattern>.append_stream: true for Source-proven ordered APPEND buffering. Prove complete writers, initial length, causal order and read/reset fences. Resource/database selectors are not authored; preparation and runtime partition actual endpoint, database and authentication identities. Every byte remains exact; other calls and finite TTL counts need their own proof. redis_append_stream_mismatch and redis_append_stream_boundary_mismatch identify a rejected byte prefix or early fence: inspect the cursor and required offset. See docs/redis-append-stream.md."
         }
         "redis_read_commutation" => {
             "Declare redis.keys.<bounded-pattern>.read_commutation: true for finite nil GETs commuting with unrelated commands. Prove complete nil reads, only no-op DEL cleanup, independent Source scheduling and no shared, mutated or stateful ownership. Every recorded read remains required and extra reads fail. GET presence or lane_blocked alone does not prove nil values or independence. Actual resource/database/authentication partitions remain strict. See docs/redis-read-commutation.md."
+        }
+        "redis_read_observation" => {
+            "Declare redis.keys.<bounded-pattern>.read_observation: true only for Source-proven absent-state polling between owned single-key DEL/UNLINK boundaries. Prove the independent poll loop, complete nil responses, closing deletion and absence of writers, expiry observers, foreign ownership or transactions. Repeats/coalescing require a delivered initial deletion and a Source witness in the current epoch; historical reads stay finite and the closing deletion ends permission. Both mutations remain required. This does not authorize non-nil or always-false cancellation handling. See docs/redis-absent-read-observations.md."
         }
         "redis_expiry_refresh" => {
             "Declare redis.keys.<bounded-pattern>.expiry_refresh: true for count-equivalent EXPIRE calls inside one proven key lifetime. Prove successful ordinary Case creation, one exact positive TTL, no expiry observers or external ownership, and complete causal Source traces shorter than the TTL. One delivered refresh must cover each observed lifetime; creation/deletion and ordinary writes remain finite. EXPIRE presence alone does not prove these prerequisites. See docs/redis-state-observations.md."

@@ -10,6 +10,8 @@ mod source;
 mod trace;
 pub(in crate::replay) use source::validate_source;
 #[cfg(test)]
+mod identity_key_tests;
+#[cfg(test)]
 mod key_scope_tests;
 #[cfg(test)]
 mod recorded_tests;
@@ -263,6 +265,15 @@ impl RedisReplayState {
                 source = normalized.source;
                 actual = normalized.actual;
             }
+            // JSON metadata can establish the complete content-key identity
+            // before the write. Consume the same accepted relation as ordinary
+            // Redis matching; this projection cannot create a new identity.
+            if let Some(projected) = self
+                .request_contracts
+                .project_known_redis_keys(case, "APPEND", &source, &actual)?
+            {
+                actual = projected;
+            }
             if source[0] != actual[0] {
                 continue;
             }
@@ -442,6 +453,7 @@ impl RedisReplayState {
             unified_delivery: None,
             rpc_push: None,
             rpc_response: None,
+            adapter_echo: None,
             publish_duration_ms: 0,
             index,
             connection_id: exchange.record.connection_id,
@@ -464,6 +476,10 @@ impl RedisReplayState {
     }
 
     pub(super) fn check_append_barrier(&self, index: usize, args: &[Vec<u8>]) -> Result<()> {
+        ensure!(
+            !self.append_streams.owners.contains_key(&index),
+            "APPEND must use its validated Source byte stream; ordinary matching cannot claim it"
+        );
         for profile in &self.append_streams.profiles {
             if let Some((_, offset)) = profile.barriers.iter().find(|(i, _)| *i == index) {
                 ensure!(

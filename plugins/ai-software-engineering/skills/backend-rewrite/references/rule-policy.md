@@ -21,6 +21,11 @@ plans/applies it and follows the engine's verification actions. Their respective
 role references retain those authorities; a successful worker report is not
 engine acceptance.
 
+An overview is not planning evidence. If the planner identifies a current
+overview, execute its returned detail-query command and use that response's
+planner/evidence identity. This evidence-type correction does not require a new
+Replay, redispatch, or a different implementation window.
+
 Check policy freshness before planning. Discovery is bounded; the plan validates
 the complete selected immutable Source inventory and independent Target evidence.
 Source self-validation, derived dependency delivery and actual Target output are

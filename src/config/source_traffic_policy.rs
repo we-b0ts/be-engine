@@ -29,7 +29,7 @@ pub struct SourceTrafficPolicyConfig {
     #[serde(default)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub async_api: BTreeMap<String, crate::policy::AsyncApiRule>,
+    pub async_api: BTreeMap<String, crate::policy::AsyncApiRules>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

@@ -4,6 +4,7 @@ use crate::redis::{RedisSubscriptionKind, parse_pubsub_push, socketio_rpc as rpc
 use std::path::Path;
 use tokio::sync::mpsc;
 mod adapter;
+pub(super) mod echo;
 pub(super) struct RpcComparison {
     pub source: Vec<Vec<u8>>,
     pub actual: Vec<Vec<u8>>,
@@ -90,6 +91,7 @@ pub(in crate::replay) struct PubSubState {
     pushes: Vec<Push>,
     subscriptions: Vec<Subscription>,
     bindings: adapter::Bindings,
+    echoes: echo::Echoes,
     notifications: std::collections::HashMap<(Uuid, u64), Arc<Vec<usize>>>,
     delivered: usize,
     failed: usize,

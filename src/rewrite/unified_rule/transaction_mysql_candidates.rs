@@ -117,6 +117,123 @@ fn target(sql: &str) -> Value {
     json!({"request_started_at":"2026-10-16T00:01:00Z","command":"COM_QUERY","sql":sql,"params":null})
 }
 
+fn global_mysql_proposal() -> Value {
+    json!({"format":"traffic-policy/v2","mysql":{"tables":{"events":{
+        "pattern":"events","fields":{"updated_at":{
+            "kind":"time","formats":[{"format":"sql_datetime","utc_offset":"+00:00"}]
+        }}
+    }}}})
+}
+
+#[test]
+fn interrupted_diagnostics_cannot_authorize_a_primary_rule_plan() {
+    for finalized in [false, true] {
+        let fixture = Fixture::new();
+        let mut replay: Value =
+            serde_json::from_slice(&fs::read(&fixture.paths.replay).unwrap()).unwrap();
+        replay["interrupted"] = true.into();
+        replay["finalized"] = finalized.into();
+        replay["complete"] = false.into();
+        write(&fixture.paths.replay, replay);
+        let mut aggregate: Value =
+            serde_json::from_slice(&fs::read(&fixture.paths.aggregate).unwrap()).unwrap();
+        aggregate["complete"] = false.into();
+        write(&fixture.paths.aggregate, aggregate);
+        fixture.confirm();
+        if !finalized {
+            let evidence = fixture.evidence();
+            assert_eq!(
+                evidence.facts["policy_freshness"]["requires_fresh_replay"],
+                true
+            );
+            assert!(evidence.applicable_rule_planners.is_empty());
+        }
+        let error = fixture.plan().unwrap_err();
+        assert!(
+            format!("{error:#}").contains(if finalized {
+                "complete finalized Replay"
+            } else {
+                "evidence=unavailable"
+            }),
+            "{error:#}"
+        );
+        assert!(fixture.state().rule_plan.is_none());
+    }
+}
+
+#[test]
+fn global_mysql_unpaired_branch_keeps_source_proof_and_requires_fresh_replay() {
+    let fixture = Fixture::new();
+    write(&fixture.proposal, global_mysql_proposal());
+    install(
+        &fixture,
+        &[target(
+            "UPDATE events SET fencing=1, updated_at='2026-10-16 00:01:00' WHERE id=7",
+        )],
+    );
+    fixture.confirm();
+    let plan = fixture.plan().unwrap();
+    assert_eq!(plan.traffic_e2e_report["status"], "planned_needs_replay");
+    assert_eq!(
+        plan.traffic_e2e_report["preflight"]["source_validations"],
+        1
+    );
+    assert_eq!(
+        plan.traffic_e2e_report["preflight"]["independent_target_validations"],
+        0
+    );
+    assert_eq!(
+        plan.traffic_e2e_report["preflight"]["missing_target_witnesses"],
+        1
+    );
+    apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+    assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+}
+
+#[test]
+fn global_mysql_candidates_preserve_valid_prepared_pairs_and_reject_bad_related_values() {
+    for bad in [None, Some("id"), Some("time")] {
+        let fixture = Fixture::new();
+        write(&fixture.proposal, global_mysql_proposal());
+        let mut prepared = target("UPDATE events SET updated_at=? WHERE id=?");
+        prepared["command"] = "COM_STMT_EXECUTE".into();
+        prepared["params"] = json!([
+            {"kind":"string","value":"2026-10-16 00:01:00"},
+            {"kind":"integer","value":7}
+        ]);
+        let mut targets = vec![
+            target("UPDATE events SET fencing=1, updated_at='2026-10-16 00:01:00' WHERE id=7"),
+            prepared,
+        ];
+        if let Some(bad) = bad {
+            targets.push(target(if bad == "id" {
+                "UPDATE events SET updated_at='2026-10-16 00:01:00' WHERE id=8"
+            } else {
+                "UPDATE events SET updated_at='2026-10-16 00:01:10' WHERE id=7"
+            }));
+        }
+        install(&fixture, &targets);
+        fixture.confirm();
+        let plan = fixture.plan();
+        if bad.is_some() {
+            assert!(plan.is_err());
+            assert!(fixture.state().rule_plan.is_none());
+        } else {
+            let plan = plan.unwrap();
+            assert_eq!(
+                plan.traffic_e2e_report["preflight"]["independent_target_validations"],
+                1
+            );
+            assert_eq!(
+                plan.traffic_e2e_report["preflight"]["missing_target_witnesses"],
+                0
+            );
+            apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+            assert!(fixture.state().rule_replay_pending);
+        }
+    }
+}
+
 #[test]
 fn unrelated_mysql_candidates_preserve_missing_target_and_allow_plan_apply() {
     for unrelated in [false, true] {
