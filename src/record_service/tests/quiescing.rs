@@ -182,6 +182,7 @@ async fn exercise(tail_timeout: bool, async_api: bool) {
     assert_eq!(runs.len(), 1);
     let report = read_json(&runs[0].join("recording-run.json"));
     assert_ne!(report["status"], "running");
+    assert_eq!(report["completion_reason"], "source_isolation_required");
     if async_api {
         assert_eq!(report["status"], "completed");
         assert_eq!(report["published_cases"], 1);

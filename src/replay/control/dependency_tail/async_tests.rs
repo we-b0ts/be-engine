@@ -21,6 +21,66 @@ async fn source_request(root: &std::path::Path) {
 }
 
 #[tokio::test]
+async fn primary_failure_skips_success_work_but_preserves_the_target_stop_receipt() {
+    let fixture = fixture(Some(900_000), 1).await;
+    let path = fixture.root.join("case-a/api-origin-observation.json");
+    let legacy: serde_json::Value =
+        serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+    tokio::fs::remove_file(path).await.unwrap();
+    tokio::fs::write(
+        fixture.root.join("case-a/async-api-observation.json"),
+        json!({
+            "version":1,"complete":true,"inventory_complete":true,
+            "end_reason":"timeout","request_timeout_ms":900_000,
+            "source_stop_required":true,"source_stop_after_ms":800_000,"cleanup_refs":[],
+            "completed_refs":legacy["selected_completed_refs"]
+        })
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let state = fixture.runtime.state.clone();
+    assert_eq!(
+        begin_case(&command("begin"), state.clone()).await["ok"],
+        true
+    );
+    let mark = crate::replay::control::handle_control_request(
+        command("case_failed"),
+        state.clone(),
+        None,
+        None,
+    )
+    .await
+    .0;
+    assert_eq!(mark["ok"], true);
+    assert_eq!(end_case(&command("end"), state.clone()).await["ok"], false);
+    assert_eq!(
+        end_case(&command("end_stopped"), state.clone()).await["ok"],
+        false
+    );
+    let prepared = tokio::time::timeout(
+        Duration::from_secs(1),
+        crate::replay::control::handle_control_request(
+            command("prepare_end"),
+            state.clone(),
+            None,
+            None,
+        ),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(prepared["ok"], true, "{prepared}");
+    assert_eq!(
+        end_case(&command("end_stopped"), state.clone()).await["ok"],
+        true
+    );
+    assert!(state.lock().await.target_session_stopped);
+    assert!(state.lock().await.active_case_id.is_none());
+    assert_eq!(state.lock().await.redis.snapshot().unused_case.len(), 1);
+}
+
+#[tokio::test]
 async fn async_observation_retains_case_until_real_target_consumes_its_finite_tail() {
     for reason in ["resource", "dependency_failure", "timeout"] {
         let expected: &[u8] = if reason == "dependency_failure" {

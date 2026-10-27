@@ -85,10 +85,34 @@ subscription stays unused; Replay does not merge generations or redirect a
 callback to a different confirmed anchor.
 
 The target must issue its genuine PUBLISH and subscribe calls. Matching retains
-the endpoint/session, channel, event, room, namespace, complete command data and
-every non-identity field. Only protocol-generated UUID-v4 hex publisher IDs and
-positive callback counters are translated, with session-wide bijective bindings.
-The recorded callback result stays unchanged. A Case-owned callback keeps its
+the endpoint/session, channel, event, namespace, complete command data and
+every non-identity field. Protocol-generated UUID-v4 hex publisher IDs, namespace
+session IDs and positive callback counters use bijective bindings. A session
+translation applies only to the validated room/callback SID pair in that RPC
+envelope; it does not authorize arbitrary room or application-field changes.
+The recorded callback result stays unchanged.
+
+Ordinary callback-null adapter broadcasts share the same process host identity
+with RPC calls. Their room, namespace, event and business data remain strict;
+only a valid UUID-v4 manager host identity is translated.
+
+A recorded `message` containing the exact bytes of a finite Source adapter PUBLISH
+is its Redis self-echo. After strict Target PUBLISH admission and delivery of its
+Redis response, Replay delivers that admitted Target payload through the exact
+confirmed subscription and the original finite notification slot. This preserves
+fresh protocol identities and explicitly authorized generated data without waiting
+for the recording's pre-request subscription idle time. The slot becomes consumed
+only after actual TCP delivery. Its ordinary notification timer cannot duplicate
+that delivery. Unmatched application data, missing Source echoes, different
+endpoint/channel identities, and duplicate ambiguous echoes
+do not authorize new notifications. Each subscription retains its recorded
+database and authenticated identity; Redis PUBLISH fan-out remains independent
+of the publisher’s logical database. Other Global messages keep their recorded
+timing and bytes. Notification indexes retain only digests and locations; the
+sparse digest lookup is built from metadata on first admitted adapter use, with
+payloads loaded only for selected echoes.
+
+ A Case-owned callback keeps its
 publisher pending until it reaches the confirmed subscriber. A late Global
 callback has its own finite delivery obligation; its PUBLISH completes when the
 recorded Redis response is delivered and is never consumed twice. Subscriber routing is checked at

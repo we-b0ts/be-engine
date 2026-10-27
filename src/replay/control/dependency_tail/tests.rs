@@ -1,6 +1,8 @@
 use super::*;
 use crate::replay::control::{ReplayControlRequest, begin_case, end_case};
-use crate::replay::{MysqlReplayConfig, ReplayProtocol, ReplayRuntime, ReplayTarget};
+use crate::replay::{
+    MysqlReplayConfig, ReplayCaseStatus, ReplayProtocol, ReplayRuntime, ReplayTarget,
+};
 use serde_json::{Value, json};
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -389,7 +391,7 @@ async fn absent_duplicate_and_foreign_case_references_reject_begin_explicitly() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn explicit_dependency_failure_fails_the_tail_without_waiting_for_its_budget() {
+async fn explicit_dependency_failure_finishes_dirty_after_actual_cleanup() {
     let fixture = fixture(Some(60_000), 1).await;
     let state = fixture.runtime.state.clone();
     assert_eq!(
@@ -404,8 +406,39 @@ async fn explicit_dependency_failure_fails_the_tail_without_waiting_for_its_budg
         .dirty_case_ids
         .insert("case-a".into());
     let started = Instant::now();
-    let ended = end_case(&command("end"), state.clone()).await;
+    let mut end = command("end");
+    end.fail_on_dirty = true;
+    let ended = end_case(&end, state.clone()).await;
     assert_eq!(ended["ok"], false);
     assert_eq!(started.elapsed(), Duration::from_millis(10));
-    assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
+    assert_eq!(state.lock().await.active_case_id, None);
+    assert_eq!(
+        state.lock().await.cases["case-a"].status,
+        ReplayCaseStatus::Ended
+    );
+}
+
+#[tokio::test]
+async fn primary_failure_with_no_dependencies_needs_no_success_tail() {
+    let fixture = fixture_empty().await;
+    let state = fixture.runtime.state.clone();
+    assert_eq!(
+        begin_case(&command("begin"), state.clone()).await["ok"],
+        true
+    );
+    let mut invalid = command("case_failed");
+    invalid.case_id = Some("case-b".into());
+    let (reply, _) =
+        crate::replay::control::handle_control_request(invalid, state.clone(), None, None).await;
+    assert_eq!(reply["ok"], false);
+    let (reply, _) = crate::replay::control::handle_control_request(
+        command("case_failed"),
+        state.clone(),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(reply["ok"], true);
+    assert_eq!(end_case(&command("end"), state.clone()).await["ok"], true);
+    assert!(state.lock().await.active_case_id.is_none());
 }

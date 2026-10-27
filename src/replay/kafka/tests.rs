@@ -208,16 +208,47 @@ async fn server_terminated_fetch_closes_at_the_recorded_time() {
             "event_type":"kafka_fetch", "connection_id":"00000000-0000-0000-0000-000000000005",
             "sequence":1, "target_host":"kafka.internal", "target_port":9092, "topics":["payments"],
             "outcome":{"terminated":{"side":"server", "kind":"eof", "scope":"write_half"}},
-            "duration_ms":50, "replay_safe":true
+            "duration_ms":150, "replay_safe":true
         }),
     )
     .await;
     let report_path = temp.path().join("report.json");
-    let (addr, task) = spawn_replay(&case_dir, report_path.clone()).await;
+    let (addr, task, state) = spawn_replay_observed(&case_dir, report_path.clone()).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
     let payload = encode_request(ApiKey::Fetch, 11, fetch_request("payments"));
     let started = tokio::time::Instant::now();
     write_frame(&mut client, &payload).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if state.lock().await.kafka.has_in_flight() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(super::super::control::case_cleanup::has_started(
+        &*state.lock().await
+    ));
+    let request = super::super::control::ReplayControlRequest {
+        command: "finalize".into(),
+        case_id: None,
+        fail_on_dirty: false,
+        fail_on_incomplete: false,
+        identity_pairs: Vec::new(),
+        derived_input: None,
+    };
+    let (reply, stop) = super::super::control::handle_control_request(
+        request,
+        state.clone(),
+        Some(report_path.clone()),
+        None,
+    )
+    .await;
+    assert!(!stop);
+    assert_eq!(reply["ok"], false);
+    assert!(reply["error"].as_str().unwrap().contains("in flight"));
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -228,9 +259,10 @@ async fn server_terminated_fetch_closes_at_the_recorded_time() {
         .unwrap()
         .is_none()
     );
-    assert!(started.elapsed() >= std::time::Duration::from_millis(45));
+    assert!(started.elapsed() >= std::time::Duration::from_millis(140));
     let report = wait_for_kafka_matches(&report_path, 1).await;
     assert_eq!(report["kafka"]["matched"][0]["operation"], "fetch");
+    assert!(!state.lock().await.kafka.has_in_flight());
     drop(client);
     task.abort();
 }
@@ -499,6 +531,18 @@ async fn spawn_replay(
     case_dir: &Path,
     report_path: PathBuf,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let (addr, task, _) = spawn_replay_observed(case_dir, report_path).await;
+    (addr, task)
+}
+
+async fn spawn_replay_observed(
+    case_dir: &Path,
+    report_path: PathBuf,
+) -> (
+    SocketAddr,
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<tokio::sync::Mutex<super::super::ReplayState>>,
+) {
     super::super::write_test_recording_network_manifest(case_dir);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -525,13 +569,14 @@ async fn spawn_replay(
     .await
     .unwrap();
     runtime.write_report().await.unwrap();
+    let state = runtime.state.clone();
     let task = tokio::spawn(async move {
         tokio::select! {
             _ = runtime.run_tcp(listener) => {},
             _ = runtime.run_report_writer() => {},
         }
     });
-    (addr, task)
+    (addr, task, state)
 }
 
 async fn wait_for_kafka_matches(path: &Path, expected: usize) -> Value {

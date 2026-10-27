@@ -339,6 +339,7 @@ fn reclassification_fixture() -> (
             },
             representative: None,
             lifecycle_errors: Vec::new(),
+            execution_failures: Vec::new(),
         },
         progress: PathBuf::from("replay-progress.yaml"),
         runtime_outputs: Vec::new(),

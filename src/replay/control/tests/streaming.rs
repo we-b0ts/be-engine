@@ -9,6 +9,7 @@ use crate::recorded_request::RecordedHttpClient;
 use tokio::io::AsyncReadExt as _;
 use tokio::net::{TcpListener, TcpStream};
 
+mod failure;
 mod tail;
 
 async fn runtime(root: &Path, cleanup_ms: u64) -> Arc<ReplayRuntime> {

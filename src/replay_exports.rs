@@ -1,12 +1,13 @@
 //! Public Replay, assertion and verification-policy surface.
 pub use crate::replay::{CaseCondition, JsonCondition};
 pub use crate::replay::{
-    DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS, DocxBodyDifference,
-    DocxBodyDifferenceKind, DocxTimestampRule, DynamicValueCapture, DynamicValueFormat,
-    DynamicValueRule, DynamicValueTarget, DynamicValueType, Hessian2BodyDifference,
-    Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate, Hessian2JoinedStringPath,
-    Hessian2UnorderedPath, Hessian2ValuePath, Hessian2ValuePathCandidate, HttpCrossCaseFeedback,
-    HttpCrossCasePlan, HttpCrossCaseReport, HttpCrossCaseSelector, JsonJoinedStringCandidate,
+    DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS,
+    DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS, DocxBodyDifference, DocxBodyDifferenceKind,
+    DocxTimestampRule, DynamicValueCapture, DynamicValueFormat, DynamicValueRule,
+    DynamicValueTarget, DynamicValueType, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
+    Hessian2JoinedStringCandidate, Hessian2JoinedStringPath, Hessian2UnorderedPath,
+    Hessian2ValuePath, Hessian2ValuePathCandidate, HttpCrossCaseFeedback, HttpCrossCasePlan,
+    HttpCrossCaseReport, HttpCrossCaseSelector, JsonJoinedStringCandidate,
     MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
     MysqlReplayConfig, MysqlReplayControlConfig, MysqlTimeRuleFeedback, MysqlTimeRulePlan,
     MysqlTimeRuleReport, MysqlTimeSelector, MysqlTimeValueSelector, PathSegmentCapture,
@@ -17,7 +18,7 @@ pub use crate::replay::{
     RedisDerivedIdentity, ReplayAggregateOptions, ReplayAggregateReport,
     ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayDependencyLoading,
     ReplayEgressCounterReader, ReplayEgressCounterSnapshot, ReplayEgressRejections,
-    ReplayLifecycleConfig, ReplayPolicyInitOptions, ReplayPolicyInitResult,
+    ReplayHttpStreamTiming, ReplayLifecycleConfig, ReplayPolicyInitOptions, ReplayPolicyInitResult,
     ReplayPolicyValidationReport, ResponseAssertionOptions, ResponseBodyAssertionReport,
     ResponseBodyCodec, ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
     ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind,

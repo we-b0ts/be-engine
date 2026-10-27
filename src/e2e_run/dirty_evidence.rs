@@ -70,6 +70,10 @@ pub struct E2eDependencyTargetMatch {
     pub recorded_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recorded_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_query_sequence: Option<u64>,
     pub result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sql_fingerprint: Option<String>,
@@ -262,6 +266,8 @@ fn target_match_from_replay(value: ReplayDependencyTargetMatch) -> E2eDependency
         operation: value.operation,
         recorded_source: value.recorded_source,
         recorded_index: value.recorded_index,
+        source_connection_id: value.source_connection_id,
+        source_query_sequence: value.source_query_sequence,
         result: value.result,
         sql_fingerprint: value.sql_fingerprint,
     }

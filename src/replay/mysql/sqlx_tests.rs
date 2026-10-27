@@ -39,6 +39,7 @@ mod select_time_tests;
 mod source_read_bridge;
 mod sql_values_tests;
 mod subquery_tests;
+mod tail_omission;
 mod time_copy_reads;
 mod time_shift_tests;
 mod transaction_equivalence;

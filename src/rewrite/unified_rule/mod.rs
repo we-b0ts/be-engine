@@ -23,6 +23,9 @@ mod declarations;
 pub(super) mod discovery;
 mod manifest;
 mod preflight;
+pub(super) use preflight::dependency::{
+    source_witness as dependency_source_witness, values as dependency_witness_values,
+};
 mod proposal;
 mod proposal_context;
 mod source_proof;
@@ -96,8 +99,7 @@ pub fn plan_rewrite_unified_rule(
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
-    let api = inventory::api_for_evidence_id(&root, &state, &options.evidence_id)
-        .context("rule evidence is stale or belongs to no concurrent API work item")?;
+    let api = inventory::api_for_rule_evidence_id(&root, &state, &options.evidence_id)?;
     let _scope = super::rule_plans::events::lock_api(&root, &api)?;
     super::rule_plans::events::ensure_not_replaying(&root, &api)?;
     // Planning publishes an independent event, never a replacement of the

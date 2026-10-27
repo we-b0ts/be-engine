@@ -48,17 +48,7 @@ pub(super) async fn drain(
         // Policy-owned Global work can span cases. Keep all Case-source
         // deliveries here, including source aliases claimed by another case;
         // only whole-session finalization waits for both scopes.
-        let in_flight = state.mysql.exchanges.iter().any(|exchange| {
-            exchange.source == ReplaySource::Case
-                && matches!(
-                    exchange.status,
-                    ReplayExchangeStatus::Responding
-                        | ReplayExchangeStatus::AwaitingClientTermination
-                )
-        }) || state.redis.has_case_in_flight()
-            || state.memcached.has_case_in_flight()
-            || state.motan.has_case_in_flight()
-            || state.http_has_case_in_flight();
+        let in_flight = super::case_cleanup::has_started(&state);
         drop(state);
         if !in_flight {
             return Ok(true);

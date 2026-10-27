@@ -20,11 +20,13 @@ use tokio::{
 
 mod coordination;
 mod direct;
+mod kubernetes_failure;
 mod policy;
 mod project;
 mod quiescing;
 mod readiness;
 mod shutdown;
+mod socketio;
 mod sse;
 
 #[test]

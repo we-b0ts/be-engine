@@ -5,6 +5,62 @@ const A: &str = "00000000-0000-4000-8000-000000000001";
 const X: &str = "00000000-0000-4000-8000-000000000002";
 const Y: &str = "00000000-0000-4000-8000-000000000003";
 
+#[test]
+fn unselected_json_scalars_are_ordinary_sql_strings_but_objects_keep_their_codec() {
+    let policy = policy();
+    let identity = identity();
+    let record = record("SELECT id FROM users");
+    let context = RequestContext::new(&policy, Metadata::default(), &identity, &record);
+    for value in ["801", "true", "null", "\"a\""] {
+        let token = crate::mysql::sql::Token::Bytes(value.as_bytes().to_vec());
+        assert!(
+            context
+                .select(&token, &token, None, 0, clocks())
+                .unwrap()
+                .is_none()
+        );
+    }
+    let source = crate::mysql::sql::Token::Bytes(br#"{"stable":7}"#.to_vec());
+    let target = crate::mysql::sql::Token::Bytes(br#"{ "stable" : 7 }"#.to_vec());
+    let selected = context
+        .select(&source, &target, None, 0, clocks())
+        .unwrap()
+        .unwrap();
+    assert!(compare_selection(&selected, clocks()).unwrap().passed());
+}
+
+#[test]
+fn protected_unselected_numeric_string_predicates_keep_native_permutation_proof() {
+    let policy = policy();
+    let clocks = clocks();
+    let source = serde_json::to_vec(
+        &json!({"command":"COM_QUERY","request_started_at":clocks.dependency.source,
+        "sql":"SELECT id FROM users WHERE code IN ('801','388')","params":null}),
+    )
+    .unwrap();
+    let resource = serde_json::from_value(
+        json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app"}),
+    )
+    .unwrap();
+    for (value, passes) in [("801", true), ("802", false)] {
+        let target = serde_json::to_vec(&json!({"command":"COM_STMT_EXECUTE","request_started_at":clocks.dependency.target,
+            "sql":"SELECT id FROM users WHERE code IN (?,?)","params":[{"kind":"string","value":"388"},{"kind":"string","value":value}]})).unwrap();
+        let result = validate_witness_with_time_copies(
+            Some("app"),
+            &source,
+            &target,
+            Surface::DependencyRequest,
+            &policy,
+            clocks,
+            &resource,
+            &crate::value_contract::time_copies::TimeCopyStore::default(),
+            "case",
+            &Metadata::default(),
+        );
+        assert_eq!(result.is_ok_and(|result| result.passed()), passes);
+    }
+}
+
 fn policy() -> CompiledPolicy {
     crate::policy::parse_and_compile_policy(&json!({
         "format":"traffic-policy/v2",
@@ -322,4 +378,161 @@ fn equal_native_times_need_no_clock_and_historical_delivery_retains_original_val
     )
     .unwrap();
     assert!(!compare_selection(&different, clocks()).unwrap().passed());
+}
+
+#[test]
+fn text_insert_matches_prepared_generated_fields() {
+    let document = json!({
+        "format":"traffic-policy/v2",
+        "json":{"fields":{"/created_at":{"kind":"time","formats":["sql_datetime"]}}},
+        "mysql":{"tables":{"tasks":{"pattern":"tasks_*","fields":{"name":{"kind":"identity","formats":[{"prefix":"task-pending-","hex":32}]}}}}}
+    });
+    let mut metadata = Metadata::default();
+    for name in ["created_at", "updated_at"] {
+        let mut read = temporal_record("DATETIME", "datetime", "2020-01-01 08:00:01.123456");
+        read.sql = Some(format!("SELECT {name} FROM tasks_0438"));
+        read.response.columns[0].name = name.into();
+        read.response.columns[0].column = Some(name.into());
+        read.response.columns[0].table = Some("tasks_0438".into());
+        metadata.observe(&identity(), &read);
+    }
+    let source = record(
+        "INSERT INTO tasks_0438 (id, user_id, kind, name, namespace, json, is_active, created_at, updated_at, project_id, client_origin, is_group_chat) VALUES (123, 6582, 'Task', 'task-pending-1348ab66fd8a4c7caf24849d5a31f63e', 'default', '{\"kind\": \"Task\"}', 1, '2020-01-01 08:00:01.123456', '2020-01-01 08:00:01.123462', 2571, 'frontend', 0)",
+    );
+    let params: Vec<RecordedMysqlValue> = serde_json::from_value(json!([
+        {"kind":"integer","value":123}, {"kind":"integer","value":6582},
+        {"kind":"string","value":"Task"},
+        {"kind":"string","value":"task-pending-62a63f0725a07ec23778aac6a11b9962"},
+        {"kind":"string","value":"default"}, {"kind":"string","value":"{\"kind\": \"Task\"}"},
+        {"kind":"integer","value":1},
+        {"kind":"string","value":"2026-01-01 08:00:01.234567"},
+        {"kind":"string","value":"2026-01-01 08:00:01.234567"},
+        {"kind":"integer","value":2571}, {"kind":"string","value":"frontend"},
+        {"kind":"integer","value":0}
+    ]))
+    .unwrap();
+    let identity = identity();
+    for declared in [false, true] {
+        let mut document = document.clone();
+        if declared {
+            for name in ["created_at", "updated_at"] {
+                document["mysql"]["tables"]["tasks"]["fields"][name] =
+                    json!({"kind":"time","formats":["sql_datetime"]});
+            }
+        }
+        let policy = crate::policy::parse_and_compile_policy(&document.to_string()).unwrap();
+        let context = RequestContext::new(&policy, metadata.clone(), &identity, &source);
+        let compare = |params: &[RecordedMysqlValue]| {
+            policy::compare_mysql_with_automatic(
+                Some("app"),
+                source.sql.as_deref(),
+                None,
+                Some(
+                    "INSERT INTO `tasks_0438` (id, user_id, kind, name, namespace, json, is_active, created_at, updated_at, project_id, client_origin, is_group_chat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ),
+                Some(params),
+                &[],
+                &[],
+                clocks(),
+                None,
+                &context,
+            )
+        };
+        let result = compare(&params).unwrap();
+        assert!(
+            result.passed(),
+            "declared={declared}: {:?}",
+            result.differences
+        );
+        for (index, value) in [
+            (3, json!("task-pending-invalid")),
+            (7, json!("2026-01-01 08:01:01.234567")),
+            (9, json!(9999)),
+        ] {
+            let mut invalid = params.clone();
+            invalid[index].value = Some(value);
+            assert!(!compare(&invalid).is_ok_and(|comparison| comparison.passed()));
+        }
+    }
+}
+
+#[test]
+fn native_result_times_do_not_relate_distinct_columns_or_rows() {
+    let policy = policy();
+    let mut source = temporal_record("DATETIME", "datetime", "2020-01-01 08:00:01.123456");
+    let mut column = source.response.columns[0].clone();
+    column.name = "updated_at".into();
+    column.column = Some("updated_at".into());
+    source.response.columns.push(column);
+    source.response.rows[0].push(
+        serde_json::from_value(json!({"kind":"datetime","value":"2020-01-01 08:00:01.123462"}))
+            .unwrap(),
+    );
+    source.response.rows.push(source.response.rows[0].clone());
+    source.response.rows[1][0].value = Some(json!("2020-01-01 08:00:01.123480"));
+    let mut target = source.response.clone();
+    for row in &mut target.rows {
+        for value in row {
+            value.value = Some(json!("2026-01-01 08:00:01.234567"));
+        }
+    }
+    let result = compare_response(
+        &policy,
+        &source.response,
+        &target,
+        None,
+        Some("app"),
+        clocks(),
+    )
+    .unwrap();
+    assert!(result.passed(), "{:?}", result.differences);
+    target.rows[1][0].value = Some(json!("2026-01-01 08:01:01.234567"));
+    assert!(
+        !compare_response(
+            &policy,
+            &source.response,
+            &target,
+            None,
+            Some("app"),
+            clocks()
+        )
+        .unwrap()
+        .passed()
+    );
+}
+
+#[test]
+fn explicit_sql_clock_group_still_checks_the_column_relationship() {
+    let document = json!({"format":"traffic-policy/v2","rules":[{
+        "id":"linked-times",
+        "match":{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":"INSERT INTO tasks(created_at,updated_at) VALUES(?,?)"},
+        "effect":{"kind":"mysql_values","values":{
+            "0":{"relative_time":"sql_datetime","utc_offset":"+00:00","clock_group":"task-create"},
+            "1":{"relative_time":"sql_datetime","utc_offset":"+00:00","clock_group":"task-create"}
+        }},
+        "proof":{"source":"tasks.py:create","fact":"Both fields retain the same clock shift"}
+    }]});
+    let policy = crate::policy::parse_and_compile_policy(&document.to_string()).unwrap();
+    let identity = identity();
+    let source = record(
+        "INSERT INTO tasks(created_at,updated_at) VALUES('2020-01-01 08:00:01.123456','2020-01-01 08:00:01.123462')",
+    );
+    let context = RequestContext::new(&policy, Metadata::default(), &identity, &source);
+    let check = |sql: &str| {
+        policy::compare_mysql_with_automatic(
+            Some("app"),
+            source.sql.as_deref(),
+            None,
+            Some(sql),
+            None,
+            &[],
+            &policy.native.iter().collect::<Vec<_>>(),
+            clocks(),
+            None,
+            &context,
+        )
+        .unwrap()
+    };
+    assert!(check("INSERT INTO tasks(created_at,updated_at) VALUES('2026-01-01 08:00:01.234567','2026-01-01 08:00:01.234573')").passed());
+    assert!(!check("INSERT INTO tasks(created_at,updated_at) VALUES('2026-01-01 08:00:01.234567','2026-01-01 08:00:01.234567')").passed());
 }

@@ -27,6 +27,8 @@ use super::{
 
 mod builtins;
 mod connection_scope;
+mod request_identity;
+pub(crate) use request_identity::request_fingerprint;
 pub(in crate::replay) mod cross_case;
 use crate::replay::json_order as json;
 pub(in crate::replay) use cross_case::load as load_cross_case;
@@ -42,6 +44,7 @@ mod lane_tests;
 mod matching;
 mod native_source;
 pub(in crate::replay) mod observations;
+mod process_owned;
 pub(in crate::replay) mod pubsub;
 #[cfg(test)]
 mod read_back_tests;
@@ -49,6 +52,7 @@ pub(in crate::replay) mod read_commutation;
 mod report_inventory;
 mod request_order;
 pub(crate) mod shared_read;
+mod snapshot_seed;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
 use matching::redis_authentication_hint;
@@ -58,6 +62,7 @@ use super::report::command::{
     CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
 };
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
+mod cleanup;
 mod delivery;
 mod evidence;
 mod lifecycle;
@@ -172,6 +177,7 @@ struct MatchedRedisExchange {
     rpc_push: Option<usize>,
     rpc_response: Option<Vec<u8>>,
     publish_duration_ms: u64,
+    adapter_echo: Option<pubsub::echo::Prepared>,
     index: usize,
     connection_id: Uuid,
     response: Vec<u8>,
@@ -209,7 +215,7 @@ pub(super) struct RedisReplayEvents {
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
-    matched_details: SuccessDetailBudget,
+    pub(in crate::replay) matched_details: SuccessDetailBudget,
     pub(super) unmatched: Vec<CommandRequestReport>,
     pub(super) unsupported: Vec<CommandRequestReport>,
     pub(super) unsafe_events: Vec<CommandRequestReport>,
@@ -346,7 +352,6 @@ impl RedisReplayState {
             .check_inventory_addition(&record, &args)?;
         self.read_commutation
             .check_inventory_addition(&record, &args)?;
-        self.observations.check_inventory_addition(&record, &args)?;
         let response = record.response.decode()?;
         ensure!(
             record
@@ -358,33 +363,15 @@ impl RedisReplayState {
         );
         validate_subscription_exchange(&record, &args, &response)?;
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
-        ensure!(
-            !record.cache_snapshot_hit,
-            "Redis cache snapshot hits are diagnostic events and must not be replay dependencies"
-        );
-        let reusable_snapshot = match record.cache_snapshot_rule.as_deref() {
-            Some(rule_name) => {
-                ensure!(
-                    source == ReplaySource::Global
-                        && record.global_dependency_reason.as_deref() == Some("background_rule"),
-                    "Redis cache snapshot seed must be a background Global dependency"
-                );
-                ensure!(
-                    record.outcome == DependencyExchangeOutcome::Response
-                        && record.response_kind != "error",
-                    "Redis cache snapshot seed must contain a successful response"
-                );
-                ensure!(
-                    process_owned_dependencies.iter().any(|rule| {
-                        rule.name() == rule_name
-                            && redis_rule_matches(rule, record.target_port, &record.command, &args)
-                    }),
-                    "Redis cache snapshot seed rule is absent or no longer matches the recording"
-                );
-                true
-            }
-            None => false,
-        };
+        let reusable_snapshot =
+            snapshot_seed::validate(&record, source, process_owned_dependencies, &args)?;
+        self.observations.check_inventory_addition(
+            &record,
+            &args,
+            source,
+            case_id,
+            reusable_snapshot,
+        )?;
         let connection_independent = is_connection_independent_background(
             source,
             record.global_dependency_reason.as_deref(),

@@ -351,7 +351,12 @@ fn lower(
         proof: entry.proof.clone(),
         when: None,
     };
-    let semantic = without_proofs(rule.clone());
+    let mut semantic = without_proofs(rule.clone());
+    // Source provenance still participates in policy validation/fingerprints,
+    // but changing the snapshot does not change this request's identity.
+    if let NativeEffect::ProcessOwned(effect) = &mut semantic.effect {
+        effect.source_revision.clear();
+    }
     let hash = Sha256::digest(serde_json::to_vec(&(
         scope.name(),
         semantic.selector,

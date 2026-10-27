@@ -54,7 +54,8 @@ Runtime policy contains no `proof` metadata. Annotated plan proposals carry
 independent Source evidence; facts are bounded to 200 UTF-8 bytes and sources to
 three file references. Root `source_revision` is an immutable Source identity.
 Unknown fields, duplicate declarations, unsupported combinations and conflicting
-ownership reject before execution. The policy is not first-match-wins.
+ownership reject before execution. Content rules are not first-match-wins;
+`async_api` explicitly selects the first matching lifecycle scenario per API.
 
 See [unified rule contracts](unified-rule-contracts.md) for all three surfaces,
 JSON/PB reuse, native examples, module boundaries, precision, evidence and plan

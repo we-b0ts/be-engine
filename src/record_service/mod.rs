@@ -11,6 +11,7 @@ mod tests;
 pub use options::{CoordinationBackend, RecordOptions};
 
 use self::source as process;
+use crate::recording_completion::RecordingCompletionReason;
 use crate::{
     AppState, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
 };
@@ -102,10 +103,15 @@ async fn run_prepared(
         )?)
     };
     let control = runtime.path.join("recorder.sock");
-    let (stop_recorder, stopped_recorder) = oneshot::channel::<Result<()>>();
-    let mut recorder = tokio::spawn(state.clone().run_until(Some(control.clone()), async {
-        stopped_recorder.await.unwrap_or(Ok(()))
-    }));
+    let (stop_recorder, stopped_recorder) = oneshot::channel::<Result<RecordingCompletionReason>>();
+    let mut recorder = tokio::spawn(state.clone().run_until_completion(
+        Some(control.clone()),
+        async {
+            stopped_recorder
+                .await
+                .unwrap_or(Ok(RecordingCompletionReason::SourceIsolationRequired))
+        },
+    ));
     let relay = proxy::Relay::new(
         coordination.reservations.clone(),
         format!("http://{}", options.recorder_listen).parse()?,
@@ -217,9 +223,14 @@ async fn run_prepared(
     {
         result = Err(error);
     }
+    let completion_reason = if normal_shutdown {
+        RecordingCompletionReason::ShutdownSignal
+    } else {
+        RecordingCompletionReason::SourceIsolationRequired
+    };
     let recorder_shutdown = result
         .as_ref()
-        .copied()
+        .map(|()| completion_reason)
         .map_err(|error| anyhow::anyhow!("recording service failed: {error}"));
     let _ = stop_recorder.send(recorder_shutdown);
     let recorder_cleanup = if recorder_finished {

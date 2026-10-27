@@ -74,7 +74,7 @@ struct Redis {
     outcome: DependencyExchangeOutcome,
 }
 
-impl AsyncScope {
+impl ResourceScope {
     pub(crate) fn observe_recorded(&self, event: &Value) -> Result<Option<AsyncSignal>> {
         let (index, kind) = match event["event_type"].as_str() {
             Some("dependency_connect_failure") => {
@@ -199,8 +199,31 @@ impl AsyncScope {
                     || event["response_status"]
                         .as_u64()
                         .is_some_and(|status| status >= 400);
-                return Ok(failed
-                    .then(|| signal(AsyncEndReason::DependencyFailure, None, "http_exchange")));
+                if failed {
+                    return Ok(Some(signal(
+                        AsyncEndReason::DependencyFailure,
+                        None,
+                        "http_exchange",
+                    )));
+                }
+                let index = self.rule.end.iter().position(|end| match end {
+                    AsyncEnd::Http(end) => {
+                        outcome == DependencyExchangeOutcome::Response
+                            && http_terminal(
+                                end,
+                                event["method"].as_str().unwrap_or_default(),
+                                event["uri"].as_str().unwrap_or_default(),
+                                event["authority"].as_str(),
+                                event["scheme"].as_str().unwrap_or_default(),
+                                event["response_status"]
+                                    .as_u64()
+                                    .and_then(|value| value.try_into().ok()),
+                            )
+                    }
+                    _ => false,
+                });
+                return Ok(index
+                    .map(|index| signal(AsyncEndReason::Resource, Some(index), "http_exchange")));
             }
             _ => return Ok(None),
         };

@@ -129,3 +129,49 @@ fn diagnostic_limits_preserve_utf8_and_json_pointer_escaping() {
     assert_eq!(value["truncated"], true);
     assert!(value["preview"].as_str().unwrap().len() <= MAX_VALUE_BYTES);
 }
+
+#[test]
+fn private_socketio_page_decodes_argument_roots_without_exposing_ciphertext_lengths_as_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".traffic-e2e/local/artifacts");
+    std::fs::create_dir_all(&root).unwrap();
+    crate::platform::encryption_key::load_or_create(temp.path()).unwrap();
+    let source = root.join("expected-response.json");
+    let target = root.join("actual-response.json");
+    let write = |path: &Path, url: &str, target: bool| {
+        let data = format!(
+            "42/ns,1{}",
+            json!(["capabilities",{"plugins":[{"url":url}],"optional":null}])
+        );
+        let mut value = json!({"interaction":{"protocol":"socket_io","events":[
+            {"sequence":2,"heartbeat":false,"message":WireMessage::text(data)}
+        ]}});
+        if target {
+            value["version"] = json!(1);
+        }
+        crate::interaction::private::protect_output(&mut value, path).unwrap();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        std::fs::write(path, &bytes).unwrap();
+        bytes
+    };
+    let before_source = write(&source, "source-private-url", false);
+    let before_target = write(&target, "target-private-url", true);
+    assert!(!String::from_utf8_lossy(&before_source).contains("source-private-url"));
+    let mut rows = vec![difference(
+        "$interaction/events/0/data/socketio/arguments/0/plugins/0/url",
+    )];
+    diagnose_page(&mut rows, &source, &target);
+    let facts = rows[0].interaction_diagnosis.as_ref().unwrap();
+    assert_eq!(facts["expected"]["event"], "capabilities");
+    assert_eq!(facts["expected"]["representation"], "socketio_arguments");
+    assert_eq!(
+        facts["raw_json_differences"][0]["pointer"],
+        "/0/plugins/0/url"
+    );
+    assert_eq!(
+        facts["raw_json_differences"][0]["actual"]["value"],
+        "target-private-url"
+    );
+    assert_eq!(std::fs::read(source).unwrap(), before_source);
+    assert_eq!(std::fs::read(target).unwrap(), before_target);
+}

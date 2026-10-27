@@ -770,6 +770,11 @@ fn response_issues_can_query_dirty_clusters_for_protocol_rule_discovery() {
             .iter()
             .any(|(query, _)| *query == QUERY_DIRTY_CLUSTERS)
     );
+    assert!(
+        query_kinds(&state, state.active_issue.as_ref().unwrap())
+            .iter()
+            .any(|(query, _)| *query == QUERY_TARGET_RUNTIME_DIAGNOSTICS)
+    );
 }
 
 #[test]

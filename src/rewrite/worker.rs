@@ -181,7 +181,7 @@ pub(super) fn ensure_scope_confirmed(
     let scope = super::api_selector::canonical_scope(state, scope);
     ensure!(
         is_confirmed(state, &scope),
-        "{} requires a confirmed dedicated subagent dispatch before {operation}; ask the workflow coordinator to inspect scoped status and execute action.commands.confirm_worker, then retry this operation",
+        "{} requires a confirmed dedicated subagent dispatch before {operation}; ask the workflow coordinator to inspect scoped status and follow its returned action. When offered, execute action.commands.confirm_worker or the pooled implementer confirmation, then retry this operation. If status requests a changed-engine Replay, finish that refresh first; the existing failed attempt is retained and a fresh failure issues a new dispatch",
         scope.label()
     );
     Ok(())

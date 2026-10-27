@@ -401,17 +401,41 @@ pub(in crate::rewrite) fn report_command(
     agent_handle: Option<&str>,
     integrated: bool,
 ) -> super::super::model::RewriteCommandSpec {
+    report_command_with_activity(
+        target_root,
+        agent_handle,
+        integrated.then_some("integrated"),
+    )
+}
+
+fn report_command_with_activity(
+    target_root: &Path,
+    agent_handle: Option<&str>,
+    activity: Option<&str>,
+) -> super::super::model::RewriteCommandSpec {
     let mut argv = vec!["worker".to_string(), "report".to_string()];
     let mut env = Vec::new();
     super::identity::command_handle(&mut argv, &mut env, agent_handle);
-    if integrated {
-        argv.extend(["--activity".to_string(), "integrated".to_string()]);
+    if let Some(activity) = activity {
+        argv.extend(["--activity".to_string(), activity.to_string()]);
         env.push(HANDOFF_ENV.to_string());
         env.push("BACKEND_REWRITE_WORKER_REVIEW_REPORT".to_string());
     } else {
         env.push(ACTIVITY_ENV.to_string());
     }
     action::command(target_root, argv, env)
+}
+
+pub(in crate::rewrite) fn rework_command_for_scope(
+    root: &Path,
+    state: &RewriteState,
+    scope: &RewriteWorkScope,
+) -> super::super::model::RewriteCommandSpec {
+    let handle = state
+        .worker_bindings
+        .get(&scope.binding_key())
+        .and_then(|binding| binding.agent_handle.as_deref());
+    report_command_with_activity(root, handle, Some("rework_required"))
 }
 
 pub(in crate::rewrite) fn report_command_for_scope(

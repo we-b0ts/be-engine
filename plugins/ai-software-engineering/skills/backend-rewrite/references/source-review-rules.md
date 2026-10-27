@@ -15,6 +15,17 @@ success through `review check --pre-revalidation --quality-check TOOL
 agent's successful check to the candidate; it never executes repository quality
 commands. An ordinary integration report cannot replace that final receipt.
 
+All modes scan the whole PR, including code inherited before worker dispatch.
+`validation.scan_base_revision` is the merge base with the configured PR base;
+`base_revision` identifies the delivery base and does not narrow the scan.
+Keep the scan scope and supply current truthful evidence for inherited spawn
+findings; still-valid integrated evidence is reused automatically. Inherited
+findings do not by themselves require one API worker to rewrite another API.
+For extracted test helpers, put `#![cfg(test)]` in the child file so the compiler
+enforces its test-only scope. The scanner does not infer external module cfg
+from a filename or parent declaration. `#[tokio::test]` functions are also
+excluded; runtime siblings still require ordinary ownership evidence.
+
 - Changed production Rust files must have at most 1000 complete physical lines,
   including comments, blank lines and a final line without a trailing newline.
 - Each added `tokio::spawn` or ordinary imported spelling requires AI review of

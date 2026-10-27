@@ -37,6 +37,10 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
     )?;
     project.replay.dependency_loading.validate()?;
     ensure!(
+        project.replay.case_no_progress_timeout_ms > 0,
+        "replay.case_no_progress_timeout_ms must be positive"
+    );
+    ensure!(
         project.replay.startup_timeout_seconds > 0,
         "replay.startup_timeout_seconds must be positive"
     );

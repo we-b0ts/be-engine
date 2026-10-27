@@ -176,6 +176,15 @@ pub(super) struct HttpReplayEvents {
     pub(super) header_observation_count: usize,
 }
 
+impl HttpReplayEvents {
+    pub(super) fn case_has_runtime_failure(&self, case: &str) -> bool {
+        self.unmatched
+            .iter()
+            .chain(&self.unsupported)
+            .any(|event| event.case_id.as_deref() == Some(case))
+    }
+}
+
 pub(super) fn case_exchange_index(exchanges: &[ReplayHttpExchange]) -> CaseExchangeIndex {
     let mut index = CaseExchangeIndex::default();
     for (position, exchange) in exchanges.iter().enumerate() {
@@ -849,6 +858,27 @@ pub(super) fn release_consumed_payloads(
 }
 
 impl ReplayState {
+    pub(in crate::replay) fn http_case_in_flight_diagnostic(&self) -> serde_json::Value {
+        let pending = self.http_exchanges.iter().enumerate().filter(|(_, e)| {
+            e.source == ReplaySource::Case
+                && matches!(
+                    e.status,
+                    super::ReplayExchangeStatus::Responding
+                        | super::ReplayExchangeStatus::AwaitingClientTermination
+                )
+        });
+        let count = pending.clone().count();
+        let references = pending
+            .take(4)
+            .map(|(index, e)| {
+                serde_json::json!({"index":index, "case_id":e.case_id,
+                "exchange_id":e.record.id, "status":format!("{:?}", e.status)})
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({"count":count, "references":references,
+            "omitted":count.saturating_sub(4)})
+    }
+
     pub(in crate::replay) fn http_has_case_in_flight(&self) -> bool {
         self.http_exchanges.iter().any(|e| {
             e.source == ReplaySource::Case

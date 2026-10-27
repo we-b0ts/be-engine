@@ -28,13 +28,32 @@ pub(crate) async fn execute(
     transcript: &InputTranscript,
     header_timeout: Duration,
     body_limit: usize,
+    dependency_failure: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<ReplayResponse> {
     transcript.validate()?;
     match transcript.protocol {
         Protocol::SocketIo | Protocol::WebSocket => {
-            socketio::execute(client, origin, request, transcript, header_timeout).await
+            socketio::execute_with_feedback(
+                client,
+                origin,
+                request,
+                transcript,
+                header_timeout,
+                dependency_failure,
+            )
+            .await
         }
-        _ => http::execute(client, request, transcript, header_timeout, body_limit).await,
+        _ => {
+            http::execute_with_feedback(
+                client,
+                request,
+                transcript,
+                header_timeout,
+                body_limit,
+                dependency_failure,
+            )
+            .await
+        }
     }
 }
 

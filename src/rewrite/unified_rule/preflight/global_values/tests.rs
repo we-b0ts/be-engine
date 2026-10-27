@@ -2,6 +2,27 @@ use super::*;
 use serde_json::json;
 mod multipart;
 mod provenance;
+mod script_times;
+
+#[test]
+fn global_format_trace_failure_identifies_original_record_without_payloads() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("dependencies.jsonl");
+    let event = json!({"event_type":"mysql_exchange","connection_id":"source-connection","query_sequence":7,"payload":"private-payload"});
+    fs::write(&path, format!("\n{event}\n")).unwrap();
+    let error = visit(&path, |_| anyhow::bail!("global format contract failed")).unwrap_err();
+    let error = format!("{error:#}");
+    for expected in [
+        "record=2",
+        "event_type=mysql_exchange",
+        "connection_id=source-connection",
+        "sequence=7",
+        "global format contract failed",
+    ] {
+        assert!(error.contains(expected), "{error}");
+    }
+    assert!(!error.contains("private-payload"), "{error}");
+}
 
 fn policy() -> CompiledPolicy {
     crate::policy::parse_and_compile_policy(
@@ -35,6 +56,58 @@ fn global_scope_selects_every_api_and_mysql_without_api_rules() {
     let ids = BTreeSet::from([GLOBAL_JSON_ID.into()]);
     assert_eq!(resource::selected(&policy, &ids), ids);
     assert!(policy.rules.is_empty());
+}
+
+#[test]
+fn mysql_control_requests_are_exact_noncarriers_and_missing_business_sql_is_rejected() {
+    let policy = policy();
+    let event = json!({
+        "event_type":"mysql_exchange", "command":"COM_PING",
+        "target_host":"db.test", "target_port":3306, "database":"app",
+        "response":{"status":"ok"}
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let selected = BTreeSet::from([GLOBAL_JSON_ID.into()]);
+    for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
+        let raw = dependency::source_witness(surface, &event, directory.path()).unwrap();
+        let checked = compare(&event, surface, &raw, &raw, &policy, Default::default()).unwrap();
+        assert!(checked.passed());
+        assert!(!record_source(&checked, &selected, &mut Preflight::default()).unwrap());
+    }
+    let raw =
+        dependency::source_witness(Surface::DependencyRequest, &event, directory.path()).unwrap();
+    for command in ["COM_QUIT", "COM_QUERY"] {
+        let mut target: Value = serde_json::from_slice(&raw).unwrap();
+        target["command"] = command.into();
+        assert!(
+            compare(
+                &event,
+                Surface::DependencyRequest,
+                &raw,
+                &serde_json::to_vec(&target).unwrap(),
+                &policy,
+                Default::default()
+            )
+            .is_err()
+        );
+    }
+    for command in ["COM_QUERY", "COM_STMT_EXECUTE", "COM_STMT_PREPARE"] {
+        let mut query = event.clone();
+        query["command"] = command.into();
+        let raw = dependency::source_witness(Surface::DependencyRequest, &query, directory.path())
+            .unwrap();
+        assert!(
+            compare(
+                &query,
+                Surface::DependencyRequest,
+                &raw,
+                &raw,
+                &policy,
+                Default::default()
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

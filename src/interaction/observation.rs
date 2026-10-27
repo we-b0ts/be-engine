@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use anyhow::{Result, ensure};
 
 use super::{
+    heartbeat::RecordedHeartbeats,
     lifecycle::{InteractionLifecycle, LifecycleDecision},
     model::{
         AckReference, CloseObservation, EndReason, HttpStreamMode, InputAction, InputActionKind,
@@ -22,6 +23,8 @@ use super::{
 const CLIENT_BINARY_PENDING: u64 = u64::MAX - 1;
 const SERVER_BINARY_PENDING: u64 = u64::MAX - 2;
 
+#[cfg(test)]
+mod peer_close_tests;
 #[cfg(test)]
 mod subscription_tests;
 
@@ -42,6 +45,8 @@ pub struct Observation {
     safe_barrier: Option<(Vec<u64>, u64)>,
     pending_upgrade: Option<u64>,
     close: Option<CloseObservation>,
+    server_end_observed: bool,
+    heartbeats: RecordedHeartbeats,
     next_input: u64,
     next_output: u64,
 }
@@ -119,6 +124,8 @@ impl Observation {
             safe_barrier: None,
             pending_upgrade: None,
             close: None,
+            server_end_observed: false,
+            heartbeats: RecordedHeartbeats::default(),
             next_input: 1,
             next_output: 1,
         })
@@ -185,6 +192,9 @@ impl Observation {
                             self.lifecycle.complete(upgrade, now_ms)?;
                             self.note_completion(upgrade, now_ms);
                         }
+                    }
+                    EngineIoPacket::Pong(payload) => {
+                        self.heartbeats.pong(&payload, sequence, now_ms)
                     }
                     _ => {}
                 }
@@ -263,6 +273,8 @@ impl Observation {
                         let update = self.tracker.observe_server(&packet, now_ms)?;
                         self.apply_update(update, now_ms)?;
                     }
+                    EngineIoPacket::Ping(payload) => self.heartbeats.ping(payload, now_ms),
+                    EngineIoPacket::Close => self.server_end_observed = true,
                     _ => {}
                 }
             }
@@ -377,6 +389,7 @@ impl Observation {
     }
 
     pub fn server_close(&mut self, code: Option<u16>, reason: String) {
+        self.server_end_observed = true;
         self.close = Some(CloseObservation { code, reason });
     }
 
@@ -434,16 +447,28 @@ impl Observation {
                 "cancelled stream prefix exceeds observation budget"
             );
         }
-        self.input.validate()?;
+        // An explicit peer WebSocket Close or Engine.IO CLOSE ends the captured
+        // session even with pending RPCs. A bare EOF is not this evidence.
+        let server_close = reason == EndReason::ServerEof
+            && self.server_end_observed
+            && matches!(self.protocol, Protocol::SocketIo | Protocol::WebSocket);
+        let mut input = self.input.clone();
+        if server_close && self.protocol == Protocol::SocketIo {
+            input.socket_io_heartbeat = Some(self.heartbeats.program());
+        }
+        input.validate()?;
         let mut end = self
             .lifecycle
             .end_observation(reason, now_ms, transport_clean);
+        if server_close && transport_clean {
+            end.clean = true;
+        }
         end.partial_message = partial_message;
         if reason != EndReason::BusinessIdle {
             end.close = self.close.clone();
         }
         Ok((
-            self.input.clone(),
+            input,
             OutputObservation {
                 version: TRANSCRIPT_VERSION,
                 protocol: self.protocol,

@@ -76,6 +76,43 @@ fn drain(
 }
 
 #[tokio::test]
+async fn unmatched_source_response_restores_ordinary_drain_after_an_early_signal() {
+    let (registry, _guard, id) = active(Duration::from_secs(2));
+    let rules = std::collections::BTreeMap::from([(
+        "POST /api/v1/responses".into(),
+        serde_json::from_value(serde_json::json!([{
+            "when_response":{"/status":"queued"},
+            "end":[{"redis":{"operation":"DEL","key":"done:*"}}]
+        }]))
+        .unwrap(),
+    )]);
+    let scope = AsyncScope::for_primary(
+        &rules,
+        &hyper::Method::POST,
+        &"/api/v1/responses".parse().unwrap(),
+        b"{}",
+    )
+    .unwrap();
+    registry.configure_async_api(id, scope, Instant::now(), Duration::from_secs(2));
+    let targets = registry.current_targets_for_http_request(true);
+    registry.observe_async_dependency_event(&event(true), &targets, true);
+    registry.select_async_response(id, Some(&serde_json::json!({"status":"completed"})));
+    drop(targets);
+    assert!(registry.async_api_report(id).is_none());
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            drain(&registry, id, Duration::from_secs(1))
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        DependencyDrainResult::Drained
+    );
+    assert!(!registry.is_quiescing());
+}
+
+#[tokio::test]
 async fn early_terminal_is_retained_without_cutting_off_primary_or_dependency_capture() {
     let (registry, _guard, id) = active(Duration::from_secs(2));
     let targets = registry.current_targets_for_http_request(true);

@@ -1,9 +1,10 @@
-//! On-demand private SSE evidence; decrypted payloads never enter saved reports.
+//! On-demand private interaction evidence; decrypted payloads never enter saved reports.
 use std::path::Path;
 
 use serde_json::{Value, json};
 
 use super::E2eCaseResponseDifference;
+mod socketio;
 
 const MAX_FRAMES: usize = 128;
 const MAX_DIFFERENCES: usize = 20;
@@ -63,7 +64,7 @@ impl OutputEvidence {
 
     fn events(&self) -> Option<impl Iterator<Item = &Value>> {
         let interaction = self.0.as_ref()?.get("interaction")?;
-        if interaction["protocol"] != "sse" {
+        if interaction["protocol"] != "sse" && interaction["protocol"] != "socket_io" {
             return None;
         }
         Some(
@@ -107,7 +108,7 @@ impl OutputEvidence {
 
 fn unavailable() -> Value {
     // Never treat unreadable evidence as missing data.
-    json!({"presence":"unavailable", "reason":"private_sse_evidence_unavailable"})
+    json!({"presence":"unavailable", "reason":"private_interaction_evidence_unavailable"})
 }
 
 fn summarize_event(event: &Value) -> (Value, Option<Value>) {
@@ -116,7 +117,7 @@ fn summarize_event(event: &Value) -> (Value, Option<Value>) {
         crate::replay::decode_sse(&message).ok()
     })();
     let Some(sse) = decoded else {
-        return (unavailable(), None);
+        return socketio::summarize(event);
     };
     let data = crate::json_value::parse(sse.data.as_bytes());
     let summary = json!({

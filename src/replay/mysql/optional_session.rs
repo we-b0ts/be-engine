@@ -1,5 +1,5 @@
 //! Classify optional setup and cleanup from immutable session evidence.
-//! Keep every exchange; only the final unused-dependency requirement changes.
+//! Keep every exchange; omission proof never invents native consumption.
 use super::*;
 use crate::replay::dependencies::DependencyRecord;
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,6 +9,16 @@ mod control;
 pub(in crate::replay::mysql) mod read;
 pub(in crate::replay::mysql) use control::successful_begin;
 pub(in crate::replay::mysql) use control::{successful_control, successful_end};
+
+impl MysqlReplayState {
+    /// Reuse the native Source/Target proof without claiming consumption.
+    /// A control Target has started must still finish its real delivery.
+    pub(in crate::replay) fn permits_unstarted_omission(&self, index: usize) -> bool {
+        self.exchanges.get(index).is_some_and(|exchange| {
+            exchange.status.is_available() && exchange.optional_session.is_some()
+        })
+    }
+}
 
 /// Only the ends of proven read-compatible Global spans are retained, including
 /// empty explicit starts. Cases never contribute prefixes, so lazy case loading

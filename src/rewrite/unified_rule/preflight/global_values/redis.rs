@@ -4,6 +4,7 @@ use super::*;
 use crate::policy::native::{NativeKeyContract, NativeKeySelector};
 use crate::value_codec::{CodecPlan, DecodedValue};
 use crate::value_contract::time_copies::{TimeCopyLookup, TimeCopyPosition};
+mod script_times;
 
 pub(super) fn compare(
     event: &Value,
@@ -65,8 +66,11 @@ pub(super) fn compare(
         before.len() == after.len(),
         "global JSON Redis storage inventory changed"
     );
-    let mut comparison = Comparison::default();
-    let mut allowed = BTreeSet::new();
+    let (mut allowed, mut comparison) = if surface == Surface::DependencyRequest {
+        script_times::compare(event, &source_args, &target_args, context)?
+    } else {
+        (BTreeSet::new(), Comparison::default())
+    };
     let mut key_obligations = BTreeSet::new();
     for (index, (before, after)) in before.iter().zip(&after).enumerate() {
         ensure!(

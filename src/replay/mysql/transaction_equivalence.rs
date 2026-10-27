@@ -2,6 +2,7 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod member_comparison;
 mod source;
 mod source_evidence;
 #[cfg(test)]
@@ -48,6 +49,7 @@ struct Transaction {
     end: String,
     witness: Option<Coverage>,
     target: Option<(Uuid, u16, u16)>,
+    member_comparison: Option<member_comparison::MemberComparison>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -277,6 +279,7 @@ impl Registry {
                     observed: BTreeMap::new(),
                     witness,
                     target: None,
+                    member_comparison: None,
                 });
             }
             if requirement.blocked {
@@ -447,6 +450,7 @@ impl Registry {
             || sql != group.end
             || group.witness.is_some()
         {
+            self.retain_member_comparison(loc, &trace, &sql);
             return self.reject(loc, "target_transaction_members_or_end_differ");
         }
         self.cover(
@@ -615,6 +619,7 @@ impl Registry {
                 "target_transaction_id": group.witness.and_then(|w| w.transaction),
                 "target_status_before": group.target.map(|(_, before, _)| before),
                 "target_status_after": group.target.map(|(_, _, after)| after),
+                "member_comparison": group.member_comparison,
             })).collect::<Vec<_>>(),
             "omitted_transactions": requirement.transactions.len().saturating_sub(8),
             "transaction_count": requirement.transactions.len(),

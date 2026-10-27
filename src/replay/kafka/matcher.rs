@@ -161,17 +161,17 @@ pub(in crate::replay) struct KafkaReplayState {
     fetch_case_index: CaseExchangeIndex,
     deliveries: Vec<ReplayKafkaDelivery>,
     delivery_case_index: CaseExchangeIndex,
-    pub(super) events: KafkaReplayEvents,
+    pub(in crate::replay) events: KafkaReplayEvents,
 }
 
 #[derive(Debug, Default)]
-pub(super) struct KafkaReplayEvents {
+pub(in crate::replay) struct KafkaReplayEvents {
     global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
     matched_count: usize,
     matched: Vec<KafkaMatchedReport>,
-    matched_details: SuccessDetailBudget,
+    pub(in crate::replay) matched_details: SuccessDetailBudget,
     unmatched: Vec<KafkaRequestReport>,
     unsupported: Vec<KafkaRequestReport>,
     unsafe_events: Vec<KafkaRequestReport>,
@@ -613,6 +613,10 @@ impl KafkaReplayState {
         }
     }
 
+    pub(in crate::replay) fn case_has_runtime_failure(&self, case: &str) -> bool {
+        self.events.dirty_case_ids.contains(case)
+    }
+
     pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.events.dirty_case_ids.contains(case_id)
             || self.produce_case_index.any(case_id, |index| {
@@ -630,6 +634,36 @@ impl KafkaReplayState {
                     .get(index)
                     .is_some_and(|exchange| !exchange.status.is_consumed())
             })
+    }
+
+    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+        self.in_flight(None)
+    }
+
+    pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
+        self.in_flight(Some(ReplaySource::Case))
+    }
+
+    fn in_flight(&self, scope: Option<ReplaySource>) -> bool {
+        let pending = |source, status| {
+            scope.is_none_or(|scope| source == scope)
+                && matches!(
+                    status,
+                    ReplayExchangeStatus::Responding
+                        | ReplayExchangeStatus::AwaitingClientTermination
+                )
+        };
+        self.produces
+            .iter()
+            .any(|entry| pending(entry.source, entry.status))
+            || self
+                .fetches
+                .iter()
+                .any(|entry| pending(entry.source, entry.status))
+            || self
+                .deliveries
+                .iter()
+                .any(|entry| pending(entry.source, entry.status))
     }
 
     fn record_unsafe(&mut self, target: &TargetKey, operation: &str, reason: String) {

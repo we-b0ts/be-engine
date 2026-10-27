@@ -52,3 +52,21 @@ fn compile(rules: Vec<Value>) -> anyhow::Result<crate::policy::CompiledPolicy> {
     crate::policy::parse_policy(&json!({"format":"traffic-policy/v2","rules":rules}).to_string())
         .and_then(|p| crate::policy::compile_policy(&p))
 }
+
+#[test]
+fn absent_read_observation_has_an_exclusive_bounded_get_owner() {
+    let mut observation = rule();
+    observation["id"] = json!("absent-poll");
+    observation["effect"] = json!({"kind":"redis_read_observation"});
+    let compiled = compile(vec![observation.clone()]).unwrap();
+    assert_eq!(
+        compiled.native[0].rule.effect.capability_name(),
+        "key_lifetime_absent_read"
+    );
+    assert!(compile(vec![observation.clone(), rule()]).is_err());
+    observation["match"]["operation"] = json!("SET");
+    assert!(compile(vec![observation.clone()]).is_err());
+    observation["match"]["operation"] = json!("GET");
+    observation["match"].as_object_mut().unwrap().remove("key");
+    assert!(compile(vec![observation]).is_err());
+}

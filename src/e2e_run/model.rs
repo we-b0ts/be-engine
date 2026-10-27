@@ -42,6 +42,10 @@ fn default_replay_case_dependency_post_response_window_ms() -> u64 {
     crate::replay::DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS
 }
 
+fn default_replay_case_no_progress_timeout_ms() -> u64 {
+    crate::replay::DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ProjectConfig {
@@ -83,6 +87,12 @@ pub(super) struct TargetProjectConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayProjectConfig {
+    #[serde(default = "pre_match_default")]
+    pub pre_match: bool,
+    #[serde(default)]
+    pub http_stream_timing: crate::replay::ReplayHttpStreamTiming,
+    #[serde(default = "default_replay_case_no_progress_timeout_ms")]
+    pub case_no_progress_timeout_ms: u64,
     #[serde(default = "default_replay_startup_timeout_seconds")]
     pub startup_timeout_seconds: u64,
     /// Additional wall time beyond the recorded Source response duration.
@@ -180,6 +190,9 @@ fn default_runtime_root() -> PathBuf {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedProjectConfig {
+    pub(crate) replay_pre_match: bool,
+    pub(crate) replay_http_stream_timing: crate::replay::ReplayHttpStreamTiming,
+    pub(crate) replay_case_no_progress_timeout: Duration,
     pub(crate) replay_loading: crate::replay::ReplayDependencyLoading,
     pub(crate) target_dockerfile: PathBuf,
     pub(crate) target_build_contexts: Vec<TargetBuildContext>,
@@ -207,6 +220,10 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) recorder_config: PathBuf,
     pub(crate) source_traffic_policy: PathBuf,
     pub(crate) runner_owned_response_assertions: bool,
+}
+
+fn pre_match_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +282,8 @@ pub(super) struct CaseExecution {
     pub response_assertion: Option<ResponseAssertionSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_unavailable_reason: Option<E2eResponseUnavailableReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_failure: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +388,7 @@ impl ActiveRunState {
                             replay_clean: None,
                             response_assertion: None,
                             response_unavailable_reason: None,
+                            execution_failure: None,
                         },
                     )
                 })

@@ -35,6 +35,7 @@ mod dependency_tail;
 mod polling;
 mod recovery;
 mod reuse;
+mod server_close;
 mod subscription;
 use crate::{
     AppConfig, AppState, HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig,
@@ -154,6 +155,7 @@ async fn replay_case(case: &Path, target: SocketAddr) -> OutputObservation {
             &transcript,
             Duration::from_secs(1),
             1024 * 1024,
+            None,
         ),
     )
     .await

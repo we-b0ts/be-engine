@@ -27,6 +27,8 @@ mod declaration_changes_transaction;
 mod definition_context_transaction;
 #[path = "transaction_dependency.rs"]
 mod dependency_transaction;
+#[path = "transaction_execution_failure.rs"]
+mod execution_failure_transaction;
 #[path = "transaction_global_formats.rs"]
 mod global_formats_transaction;
 #[path = "transaction_header.rs"]
@@ -49,18 +51,26 @@ mod native_transaction;
 mod read_back_transaction;
 #[path = "transaction_read_commutation.rs"]
 mod read_commutation_transaction;
+#[path = "transaction_read_observation.rs"]
+mod read_observation_transaction;
 #[path = "transaction_recovery.rs"]
 mod recovery_transaction;
 #[path = "transaction_redis_candidates.rs"]
 mod redis_candidates_transaction;
+#[path = "transaction_redis_pairs.rs"]
+mod redis_pairs_transaction;
 #[path = "transaction_resource_scope.rs"]
 mod resource_scope_transaction;
+#[path = "transaction_rule_evidence.rs"]
+mod rule_evidence_transaction;
 #[path = "transaction_scope.rs"]
 mod scope_transaction;
 #[path = "transaction_signed_input.rs"]
 mod signed_input_transaction;
 #[path = "transaction_sse.rs"]
 mod sse_transaction;
+#[path = "transaction_witness_query.rs"]
+mod witness_query_transaction;
 
 #[test]
 fn global_format_proposals_preserve_source_revision_and_policy_stale_guards() {

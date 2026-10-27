@@ -16,6 +16,9 @@ MySQL replay driver compatibility and process-owned read rules are documented in
 Redis Pub/Sub notifications and correlated RPC callbacks are documented in
 [redis-pubsub.md](redis-pubsub.md).
 
+Finite process-owned Redis GETs and initialization snapshots have separate
+consumption contracts; see [process-owned Redis](process-owned-redis.md).
+
 Cross-case HTTP initialization dependencies use explicit Replay scope rules; see
 [HTTP cross-case replay](http-cross-case-replay.md) for discovery, plan/apply,
 strict matching and fresh verification.
@@ -64,6 +67,10 @@ encryption/header positions and default multipart comparison.
 
 ## Rust Tooling
 
+[Rule candidate pre-matching](replay-pre-matching.md) collects supported value
+differences without certifying them; managed streaming Replay can also skip
+recorded idle gaps while preserving framing and termination.
+
 Use the standard Cargo workflow:
 
 ```bash
@@ -90,6 +97,17 @@ quality review failures are not Replay failures. RevalidationPending routes
 still require their ordinary verification and do not become completed through
 this eligibility check. The permit is persisted before execution and survives
 restarts; failure retains the issue and cannot retry again on the same build.
+A coordinator-confirmed, reviewed `rework_required` retains its pending resume
+before an optional engine-change retry, including the unconfirmed new dispatch
+generation. It does not consume the retry permit or waive fresh acceptance.
+A current confirmed `running` or `queued` implementation keeps its dispatch
+ahead of this optional refresh. An expired activity observation requests a fresh
+runtime query rather than dropping the dispatch or starting Replay. A confirmed
+`handoff_ready` or `integrated` delivery keeps its ordinary integration/verification
+path ahead of the optional refresh. Skipping another
+route cannot turn the accepted delivery into an ineligible historical scope;
+no engine retry permit is consumed for it. Stale dispatch/recording observations
+do not acquire that priority, and skipped/completed scopes remain excluded.
 A changed process-owned policy first reclassifies the finalized report. If only
 dependencies remain dirty, successful apply also requests one real Replay for
 the affected route methods; unchanged reapplication does not renew it. Recomputing
@@ -107,6 +125,47 @@ An interrupted focused attempt that failed before Replay readiness has no
 session to reclassify. Status retains its failure state without requesting
 session reclassification; actual evidence revision still requires session identity.
 
+The runner persists a primary response status mismatch (for example Source 200
+and Target 500), or an unavailable response, before notifying Replay with
+`case_failed`. This ends the normal asynchronous business wait. Unstarted Source
+calls remain unused/dirty; error cleanup can contain any actual dependency or no
+dependency. `replay/control/case_cleanup` owns the monotonic failure cleanup
+budget and shared actual-I/O barrier, including Kafka and failed connections.
+Only real delivery or termination must drain before releasing Case ownership.
+An actual-I/O cleanup timeout includes a bounded `pending` snapshot taken under
+the ownership lock: protocol counts, retained Source exchange references and
+Redis observation claims. It contains no SQL, Redis keys, headers or payloads.
+Use this timeout-time evidence to identify the blocker; a later interrupted
+snapshot is captured after Target shutdown and can already show that I/O ended.
+The recorded Target-stop receipt remains mandatory where Source requires it.
+Body-only differences with the same primary status retain normal async waits.
+A finished failed Case can continue to the next input and publish a complete,
+dirty Replay; primary status mismatches take diagnosis priority over derivative
+body fields. Nothing in this path marks the response or unused dependencies as
+passed, and rule planning retains its complete-evidence checks.
+
+Execution failure overviews contain at most eight Cases and expose explicit
+total, returned and omitted counts. Follow `execution_failures_query` and each
+`pagination.next_page` for remaining Cases from the same issue attempt. Missing
+rows in the overview do not prove a Case had no rejected dependency.
+
+Socket.IO interactions apply global `json.fields` at each event/ACK business
+argument root, just as other logical JSON carriers do. Protocol kind, namespace,
+normalized server event ACK identity, event name, argument order/count and binary
+attachment declarations remain exact. Known business packets do not fall back
+to opaque byte comparison; control packets retain their transport contracts.
+
+If actual execution cleanup fails after Replay readiness, the runner stops Target and asks
+Replay to publish an interrupted diagnostic snapshot before stopping its process.
+`replay/control/interruption` seals captured payload observations and writes the
+report plus dependency index; `e2e_run/interrupted_evidence` builds runner-owned
+aggregate and executed-case assertion projections. Active ownership, in-flight
+exchanges and pending cases remain visible; `finalized` and aggregate `complete`
+remain false. These artifacts support dirty-cluster, HTTP request, response and
+rule-candidate diagnosis, but cannot anchor rule planning or count as passing
+verification. Missing or failed snapshots remain explicit errors. Response and
+dependency issues also expose bounded target runtime logs for attribution.
+
 `traffic-e2e record` is built normally and supports optional Redis coordination.
 See [standalone recording](recording.md) for its container contract, direct
 standby, generated run IDs and handoff to rewrite.
@@ -116,6 +175,9 @@ target-runtime image from `--version`. Git checkouts derive the revision
 automatically and append `-dirty` for uncommitted content. Builds without Git
 metadata should set `TRAFFIC_E2E_BUILD_REVISION` to a 1-64 character release
 revision containing only ASCII letters, digits, `.`, `_`, `+`, or `-`.
+The build script resolves the invoking checkout from Cargo's runtime
+`CARGO_MANIFEST_DIR`, so reusing a build-script executable across worktrees does
+not retain another checkout's revision or Git watch paths.
 
 ## Shared Container Images
 
@@ -347,6 +409,11 @@ All review stages enforce complete changed production Rust files <=1000 lines.
 Added Tokio spawn paths require structured startup ownership evidence via `--evidence`; request-owned
 and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
 source spans; it does not expand macros, infer types or prove call graphs.
+Inline `#[cfg(test)]` modules/functions, `#[tokio::test]` functions, and files
+with inner `#![cfg(test)]` are excluded from spawn ownership findings. For an
+extracted test module, put `#![cfg(test)]` in the child file as well as guarding
+its parent declaration. The scanner does not infer cross-file module ownership
+or exempt files based on their names; ordinary runtime siblings remain checked.
 It also performs the mandatory Replay-isolation and source-sensitive public
 domain checks, including `demo.test` occurrences in test fixtures. API workers
 build/debug and run relevant tests as needed; they do not need to run Clippy.
@@ -1378,7 +1445,10 @@ pagination. Query identities follow the owning item across concurrent scheduling
 and reject replaced evidence. Current context metadata is excluded from evidence
 hashing so unrelated workflow revisions do not invalidate diagnostic evidence.
 The overview does not authorize rule planning; use the applicable planner
-returned by a specific evidence query.
+returned by a specific evidence query. A current overview supplied to `rule plan`
+returns its exact supported detail-query command, without calling it stale or
+requiring another Replay or dispatch. Use the detail response's evidence ID;
+replaced issue evidence still rejects as stale.
 Schema v24 added top-level `pending`, counting only coordinator actions executable
 now. Inventory summaries rename their old `pending` count to `unverified`.
 Persisted state remains version 1, with optional worker observations and a
@@ -1647,6 +1717,8 @@ one API, multiple APIs, or a completed subset spanning assigned groups:
 backend-rewrite implementer handoff --slot <N> --agent-handle <actual-handle> --deliveries /absolute/deliveries.json
 ```
 
+`--deliveries` accepts the path to that JSON file, not an inline JSON array.
+
 Validation admits every selected member before publishing updates. Accepted
 commits and reports are frozen independently of the reusable checkout; those
 API leases are released, and unlisted tasks remain assigned. Distinct API
@@ -1770,6 +1842,12 @@ one compatibility retry. Each attempt records the executing engine's Git revisio
 embedded at build time; rebuilding the same commit or changing only target code
 does not renew this permit. Status compares persisted strings without running Git
 for engine identity, hashing executables, or scanning recording cases.
+An older interrupted attempt can retain a response, dependency or replay issue.
+With a known different engine revision, an incomplete replay that executed some
+but fewer than all selected cases receives the same single-method retry permit.
+The issue and parked workers are preserved; ordinary completed failures, unknown
+engine identities for these retained issues, and quality work do not gain this
+permit. A fresh attempt must still satisfy every response and dependency gate.
 Next still requires current configuration and delivery review and acquires the
 ordinary traffic lease. It durably consumes each method's revision permit before
 starting Replay, preserving the prior issue and attempt history. A running retry
@@ -2456,6 +2534,24 @@ slower hosts. It changes the execution budget, not response or dependency assert
 The target's native HTTP port is the port in
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback.
 
+`project.replay.case_no_progress_timeout_ms` defaults to `5000` and must be
+positive. It bounds Replay-only idle waiting for unfinished dependency tails
+after the recorded primary inputs have completed. Real resource delivery,
+including an upstream SSE response, keeps its existing I/O budget; successful
+Case dependency completions renew the idle clock. Unrelated process activity
+does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
+CLI exposes the same setting as `--case-no-progress-timeout-ms`.
+
+On expiry, only the current Case records `case_no_progress` and ends incomplete.
+The next Case still runs. Native reports retain `case_execution_failures`,
+matched/Target-unmatched/Source-unused evidence and bounded pending Source
+references; runner execution-failure queries retain an independently observed
+primary HTTP status. HTTP 200 does not certify async completion. `status` remains
+readable while `end` waits and includes `session.waiting` (idle time, actual I/O,
+and pending references). Rule reclassification cannot waive an execution failure.
+This setting does not change Recorder/Source runtime timing or the separate
+`dependency_loading.case_timeout_seconds` preparation budget.
+
 `review check` owns the Source/Replay-isolation standard and never executes
 repository quality commands in any stage. Configure the final tool identifier
 in `project.delivery.quality_check` (default `cargo-clippy`). At the existing
@@ -3008,6 +3104,16 @@ process-owned-rule matches. Replay discovers them by walking upward from a case
 directory and prefers Case before Global. Ordinary exchanges are consumed
 once. Marked Redis process-owned snapshot seeds are reusable for identical
 logical reads.
+Automatically generated `dependency.process_dependencies.*` names depend on the
+Source task and request selectors, independently of the Source revision. The
+revision remains part of Source proof validation and policy fingerprints.
+Historical names included the revision. Replay admits an older marked Redis
+seed under a current generated process rule only when its port, command, key and
+argument selectors still match. The original rule name remains recorded
+provenance; it does not authorize reuse without a matching current policy.
+Explicitly authored rule names retain exact-name matching. Snapshot overlays use
+the same admission and retain their complete coverage and response-consistency
+checks.
 `pre-readiness-traffic-summary.json` is a bounded projection of only source
 `bootstrap` data interactions grouped by `host:port`. It excludes connection
 lifecycle events and known ping, heartbeat, and setup exchanges. The rewrite
@@ -3430,3 +3536,108 @@ cargo test motan
 
 Network or root-requiring behavior should be covered with isolated unit tests
 where possible. Do not require host iptables changes for automated tests.
+
+## Replay execution failures and idle time
+
+Control clients may cancel observation requests or close before reading a reply.
+Their EOF/reset/broken pipe is isolated to that connection; Replay keeps serving
+the active case. A committed finalize still publishes and stops if its reply has
+no reader. Incomplete runtime publication takes precedence over earlier case
+failures in rewrite routing, while preserving their response observations and
+the most recent bounded lifecycle errors for diagnosis.
+
+An actual unmatched dependency or failed Replay delivery interrupts only the
+current primary request. Ordinary HTTP, streaming HTTP, WebSocket, Socket.IO
+and Motan use the same execution feedback; a business HTTP 5xx is not required.
+The case records `execution_failure.kind: dependency_unmatched` and
+`request_completed: false`, with bounded protocol/event diagnostics. An already
+observed primary status remains a separate fact. Complete stream observations
+and interrupted framed prefixes remain protected evidence. Already started
+case I/O retains its normal drain barrier; unused Source calls remain unused.
+After cleanup, the runner continues the remaining cases under its existing
+failure limit and publishes their independent causes. Public `diagnosis.execution_failures`
+and the dirty-cluster evidence query expose these causes before downstream
+missing responses, stream events or unused calls. No expected output drives
+request execution and no response or ACK is synthesized.
+
+Backend rewrite issue selection prioritizes these actual execution failures over
+response assertions and opens dependency investigation. The evidence overview
+also exposes same-attempt execution failures for retained response issues, with
+the dependency diagnosis command first. It preserves issue identity and does not
+borrow failures from newer attempts. Other cases retain their independent
+response differences; unused inventory alone does not change issue priority.
+Global-format plan failures identify Source self-validation versus independent
+Target validation, the response/dependency surface and original case or trace
+record. Dependency comparisons retain witness and slot references; differences
+retain their logical JSON pointers. These locations expose no payload values.
+
+The overview's `dependency_witness_query` supplies the protected detail entrypoint:
+`backend-rewrite evidence --api <API> --witness <id> --pointer /client_ip`.
+It requires the confirmed current assignment and finalized attempt, authenticates
+the original Source exchange and private witness, and returns only the requested
+JSON value (up to 4096 bytes). `--value-index` selects a document in multi-value
+operations. Redis/HTTP/Memcached use logical JSON; MySQL uses the explicitly named
+native witness JSON envelope. Derived delivery is never labeled an independent
+Target observation. Null, missing and unavailable remain distinct.
+`recorded_request_context.header_names` includes encrypted interaction headers'
+actual names without their values; an empty public `headers` placeholder is not
+evidence that a forwarding or authentication header was absent. No plaintext
+artifacts are written by this query.
+
+For an unmatched Redis call without a paired Source witness, use the overview's
+`redis_target_argument_query`: `backend-rewrite evidence --api <API>
+--redis-target-event <case-id>:<target-event-index> --argument-index <index>`.
+The zero-based argument index excludes the command name. An optional `--pointer`
+selects one JSON member inside that argument. The query authenticates independent
+Target observations and correlates the exact native request fingerprint within
+the confirmed assignment's finalized attempt. It returns at most 4096 bytes of
+the selected value, with separate missing, null and unavailable states. Identical
+requests can retain multiple observation IDs; the result does not assert a unique
+occurrence, Source counterpart or asynchronous task origin. It writes no plaintext
+artifact and changes no matching or acceptance result.
+`target_observations` retains up to sixteen authenticated observation IDs and
+their Case/dependency clocks, so admission time can be correlated with transport
+evidence without reading the private witness graph. A clock does not prove which
+application task initiated the call.
+
+With Socket.IO `preserve_input_timing: false`, recorded client idle offsets are
+not slept. Explicit completion and actual server-event ACK bindings still gate
+inputs; native requested receipts drain before namespace disconnect without
+serializing overlapping business events. Dependency response durations continue
+to use the recorded resource timing. `preserve_input_timing: true` retains
+intentional client timing. HTTP closes bound to an actual terminal message also
+omit their post-completion idle gap in fast mode; an absolute timed client
+cancellation remains an explicit input contract.
+
+Normal WebSocket close retains the Case until the peer actually closes or
+terminates the connection. Merely flushing the client's close can leave a prior
+Socket.IO namespace disconnect running, so its later dependencies must not enter
+the next Case. This is bounded close I/O, not a replay of recorded idle offsets
+or a wait for missing recorded calls. Cleanup timeout is reported explicitly;
+an actual dependency rejection interrupts a pending close and preserves its
+original incomplete-execution cause.
+
+Recording retains Source's WebSocket transport through the same real close
+operation. Calls that begin during Source namespace cleanup remain in the
+recorded Case even when no dependency was in flight at the initial client close.
+The finalizer bounds this by its existing cleanup deadline and records incomplete
+cleanup on expiry. This cannot restore cleanup exchanges missing from an older
+recording; missing Source effects still require fresh recording evidence.
+
+For recognized Python ASGI Source peers, a WS close echo can precede application
+disconnect cleanup, and logical Engine.IO CLOSE need not initiate WS close.
+The recorder therefore confirms a live SID's native upgraded-session NOOP first,
+then observes its application-disconnected status before completing the WS
+handshake. These bounded read-only control requests use the live SID, never a
+recorded identity; a missing/invalid SID alone is insufficient. The existing
+cleanup deadline bounds this observation. A failed confirmation or transport
+operation marks capture incomplete instead of certifying a truncated contract.
+
+
+Global JSON rule preflight composes already declared Redis script scalar times
+with payload formats. EVAL/EVALSHA permissions retain the exact script identity,
+key selector, KEYS/ARGV boundary, argument count and independent dependency
+clocks. Only declared ARGV clocks use their native time contract; every other
+argument and JSON remainder stays strict. Adding a JSON field cannot turn an
+existing native script clock into an undeclared byte difference, or authorize
+an unrelated argument change.

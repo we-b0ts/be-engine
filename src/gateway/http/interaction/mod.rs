@@ -25,6 +25,7 @@ use crate::recorder::{CaseContext, PrimaryCaseDescriptor};
 use crate::{ActiveCaseGuard, AppState, config::HttpGatewayConfig};
 
 mod body;
+mod diagnostics;
 mod finish;
 mod polling;
 mod recovery;
@@ -68,6 +69,7 @@ pub(super) struct Session {
     transports: Mutex<Vec<tokio::task::AbortHandle>>,
     upgraded: std::sync::atomic::AtomicBool,
     eio_closed: std::sync::atomic::AtomicBool,
+    transport_failed: std::sync::atomic::AtomicBool,
 }
 
 pub(super) type SessionRef = Arc<Session>;
@@ -242,6 +244,7 @@ pub(crate) async fn handle(
     else {
         return passthrough(req, &state, &config).await;
     };
+    diagnostics::phase(case.id, protocol, "initial_request_admitted");
     let request_headers = match state.recorder().capture_request_headers(req.headers()) {
         Ok(headers) => headers,
         Err(_) => {
@@ -257,6 +260,7 @@ pub(crate) async fn handle(
         None
     };
     let (parts, body) = req.into_parts();
+    diagnostics::phase(case.id, protocol, "initial_body_read_started");
     let body = match tokio::time::timeout(
         std::time::Duration::from_millis(
             policy.request_timeout_ms.min(
@@ -282,6 +286,7 @@ pub(crate) async fn handle(
             return simple_response(StatusCode::BAD_REQUEST, "interaction input incomplete");
         }
     };
+    diagnostics::phase(case.id, protocol, "initial_body_read_completed");
     state.configure_case_observation(
         case.id,
         &method,
@@ -308,6 +313,7 @@ pub(crate) async fn handle(
         transports: Mutex::new(Vec::new()),
         upgraded: std::sync::atomic::AtomicBool::new(false),
         eio_closed: std::sync::atomic::AtomicBool::new(false),
+        transport_failed: std::sync::atomic::AtomicBool::new(false),
     });
     let meta = finish::RequestMeta {
         timestamp: Utc::now(),
@@ -328,9 +334,11 @@ pub(crate) async fn handle(
             )))));
     }
     finish::spawn(session.clone(), guard, meta);
+    diagnostics::phase(session.case.id, protocol, "upstream_dispatch_started");
     let result = dispatch_full(request, session.clone(), true).await;
     match result {
         Ok(mut response) => {
+            diagnostics::phase(session.case.id, protocol, "upstream_response_received");
             response.headers_mut().insert(
                 "x-traffic-e2e-case-id",
                 session.case.id.to_string().parse().expect("UUID header"),
@@ -399,6 +407,7 @@ pub(super) async fn adopt_response(
         transports: Mutex::new(Vec::new()),
         upgraded: std::sync::atomic::AtomicBool::new(false),
         eio_closed: std::sync::atomic::AtomicBool::new(false),
+        transport_failed: std::sync::atomic::AtomicBool::new(false),
     });
     if !state.config().http_gateway.record_streaming {
         state.invalidate_active_case(session.case.id, crate::recorder::CaseInvalidation::new("streaming_disabled", "response declared a stream after admission; enable http_gateway.record_streaming and record again"));
@@ -496,6 +505,7 @@ async fn passthrough(
             .await
             .map_err(anyhow::Error::from_boxed)?
             .to_bytes();
+        let body_is_empty = body.is_empty();
         let uri = transport::build_upstream_uri(&config.fallback_upstream, &parts.uri)?;
         let mut request = transport::build_upstream_request(
             &parts.method,
@@ -505,7 +515,7 @@ async fn passthrough(
             config.preserve_host,
         )?;
         if upgraded {
-            websocket::restore_upgrade(&parts.headers, request.headers_mut());
+            websocket::restore_upgrade(&parts.headers, request.headers_mut(), body_is_empty);
         }
         let mut response = state.client().request(request).await?;
         if let Some(downstream) =

@@ -19,6 +19,7 @@ impl Decision {
         comparison: crate::value_contract::json::Comparison,
     ) -> Self {
         Self {
+            pre_matches: comparison.pre_matches,
             ids: comparison.evaluated.into_iter().collect(),
             unified_time_validations: comparison.time_validations,
             ..Default::default()

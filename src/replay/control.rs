@@ -3,13 +3,20 @@ use std::time::{Duration, Instant};
 use super::*;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) mod case_cleanup;
+mod case_execution;
 pub(super) mod dependency_tail;
 mod derived_input;
 mod identity;
 pub(crate) use derived_input::register as register_derived_input;
 mod interaction;
+mod interruption;
+mod server;
 mod target_stop;
 pub(crate) use identity::check_response_identities;
+#[cfg(test)]
+pub(super) use server::handle_control_stream;
+pub(super) use server::run_control_socket;
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READY_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -146,137 +153,12 @@ fn control_failure_message(response: &Value, session: &Value) -> String {
     message
 }
 
-pub(super) async fn run_control_socket(
-    state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
-    session_path: Option<PathBuf>,
-    control_socket_path: Option<PathBuf>,
-) -> Result<()> {
-    let Some(control_socket_path) = control_socket_path else {
-        return pending::<Result<()>>().await;
-    };
-    if let Some(parent) = control_socket_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("failed to create replay control dir {}", parent.display()))?;
-    }
-    if tokio::fs::try_exists(&control_socket_path)
-        .await
-        .unwrap_or(false)
-    {
-        tokio::fs::remove_file(&control_socket_path)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to remove stale replay control socket {}",
-                    control_socket_path.display()
-                )
-            })?;
-    }
-    let listener = UnixListener::bind(&control_socket_path).with_context(|| {
-        format!(
-            "failed to bind replay control socket {}",
-            control_socket_path.display()
-        )
-    })?;
-    write_session_snapshot(
-        state.clone(),
-        session_path.clone(),
-        Some(control_socket_path.clone()),
-        report_path.clone(),
-        true,
-    )
-    .await?;
-    info!(
-        control_socket = %control_socket_path.display(),
-        "MySQL dependency replay control listening"
-    );
-
-    loop {
-        let (stream, _) = listener
-            .accept()
-            .await
-            .context("failed to accept replay control client")?;
-        if handle_control_stream(
-            stream,
-            state.clone(),
-            report_path.clone(),
-            Some(control_socket_path.clone()),
-        )
-        .await?
-        {
-            break;
-        }
-    }
-    write_session_snapshot(
-        state,
-        session_path,
-        Some(control_socket_path.clone()),
-        report_path,
-        false,
-    )
-    .await?;
-    let _ = tokio::fs::remove_file(control_socket_path).await;
-    Ok(())
-}
-
 pub(super) fn process_exists(pid: u64) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
     let result = unsafe { libc::kill(pid, 0) };
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-pub(super) async fn handle_control_stream(
-    stream: UnixStream,
-    state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
-    control_socket_path: Option<PathBuf>,
-) -> Result<bool> {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    use tokio::io::AsyncReadExt;
-    (&mut reader)
-        .take(identity::MAX_CONTROL_BYTES as u64 + 1)
-        .read_line(&mut line)
-        .await
-        .context("failed to read replay control request")?;
-    let mut stream = reader.into_inner();
-    if line.len() > identity::MAX_CONTROL_BYTES {
-        write_control_response(
-            &mut stream,
-            serde_json::json!({
-                "ok": false, "error": "replay control request exceeds the supported bound"
-            }),
-        )
-        .await?;
-        return Ok(false);
-    }
-    let request: ReplayControlRequest = match serde_json::from_str(line.trim()) {
-        Ok(request) => request,
-        Err(err) => {
-            write_control_response(
-                &mut stream,
-                serde_json::json!({
-                    "ok": false,
-                    "error": format!("invalid replay control request: {err}")
-                }),
-            )
-            .await?;
-            return Ok(false);
-        }
-    };
-
-    let (response, should_stop) = handle_control_request(
-        request,
-        state.clone(),
-        report_path.clone(),
-        control_socket_path.clone(),
-    )
-    .await;
-    write_control_response(&mut stream, response).await?;
-    Ok(should_stop)
 }
 
 pub(super) async fn handle_control_request(
@@ -336,6 +218,22 @@ pub(super) async fn handle_control_request(
             }
         }
         "begin" => begin_case(&request, state.clone()).await,
+        "case_execution_status" => {
+            let state = state.lock().await;
+            case_execution::status(&state, request.case_id.as_deref())
+        }
+        "case_failed" => {
+            let mut state = state.lock().await;
+            let result = request
+                .case_id
+                .as_deref()
+                .context("case_failed requires case_id")
+                .and_then(|case| case_cleanup::mark_failed(&mut state, case));
+            match result {
+                Ok(()) => serde_json::json!({"ok":true}),
+                Err(error) => serde_json::json!({"ok":false,"error":format!("{error:#}")}),
+            }
+        }
         "response_identities" => identity::accept(&request, &state).await,
         "derived_input" => derived_input::accept(&request, &state).await,
         "prepare_end" => target_stop::prepare(&request, &state).await,
@@ -374,6 +272,7 @@ pub(super) async fn handle_control_request(
             final_report = report;
             response
         }
+        "interrupt" => interruption::publish(state.clone(), report_path.as_deref()).await,
         "stop" => {
             let state = state.lock().await;
             serde_json::json!({
@@ -393,7 +292,8 @@ pub(super) async fn handle_control_request(
         }),
     };
     let should_stop = command == "stop"
-        || (command == "finalize" && response.get("ok").and_then(Value::as_bool).unwrap_or(false));
+        || (matches!(command, "finalize" | "interrupt")
+            && response.get("ok").and_then(Value::as_bool).unwrap_or(false));
     if command == "finalize" && should_stop && report_path.is_none() {
         state.lock().await.finalized_at = None;
         return (
@@ -439,6 +339,8 @@ async fn finalize_replay(
             ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
         )
     }) || state.redis.has_in_flight()
+        || state.kafka.has_in_flight()
+        || state.connect_failures.has_in_flight()
         || state.memcached.has_in_flight()
         || state.motan.has_in_flight()
         || state.http_has_in_flight()
@@ -647,7 +549,10 @@ pub(super) async fn end_case(
         if !interaction && !attribution_window.is_zero() {
             tokio::time::sleep(attribution_window).await;
         }
-        dependency_tail::drain(&state, case_id).await
+        dependency_tail::drain(&state, case_id).await?;
+        // Ordinary HTTP and failed asynchronous requests have the same actual
+        // delivery barrier, including protocols absent from tail selectors.
+        case_cleanup::drain_started(&state, case_id, deadline).await
     };
     let cleanup = match deadline {
         Some(deadline) => tokio::time::timeout_at(deadline, cleanup)
@@ -657,7 +562,8 @@ pub(super) async fn end_case(
         None => cleanup.await,
     };
     if let Err(error) = cleanup {
-        let mut response = serde_json::json!({"ok": false, "error": format!("{error:#}")});
+        let error = case_cleanup::failure_description(&state, &error).await;
+        let mut response = serde_json::json!({"ok": false, "error": error});
         if deadline.is_some() {
             response["dirty"] = true.into();
         }
@@ -665,13 +571,13 @@ pub(super) async fn end_case(
     }
 
     let counter_sample = {
-        let mut state = state.lock().await;
-        if state.active_case_id.as_deref() != Some(case_id) {
-            return serde_json::json!({
-                "ok": false,
-                "error": format!("replay case {case_id} is no longer active")
-            });
-        }
+        let mut state = match case_cleanup::lock_drained(&state, case_id, deadline).await {
+            Ok(state) => state,
+            Err(error) => {
+                let error = case_cleanup::failure_description(&state, &error).await;
+                return serde_json::json!({"ok":false,"dirty":true,"error":error});
+            }
+        };
         let sample = state
             .egress_counter_starts
             .remove(case_id)
@@ -679,6 +585,7 @@ pub(super) async fn end_case(
         state.active_case_id = None;
         state.target_stop_prepared.remove(case_id);
         dependency_tail::end(&mut state, case_id);
+        state.case_cleanup.end(case_id);
         if let Some(case) = state.cases.get_mut(case_id) {
             case.status = ReplayCaseStatus::Ended;
         }
@@ -712,14 +619,32 @@ pub(super) async fn end_case(
     }
 }
 
-pub(super) async fn write_control_response(stream: &mut UnixStream, response: Value) -> Result<()> {
+fn control_peer_disconnected(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::UnexpectedEof
+    )
+}
+
+async fn write_control_response(
+    stream: &mut UnixStream,
+    command: &str,
+    response: Value,
+) -> Result<()> {
     let mut payload =
         serde_json::to_vec(&response).context("failed to serialize replay control response")?;
     payload.push(b'\n');
-    stream
-        .write_all(&payload)
-        .await
-        .context("failed to write replay control response")
+    match stream.write_all(&payload).await {
+        Err(error) if control_peer_disconnected(&error) => {
+            tracing::debug!(command, %error, "replay control client disconnected before reading its response");
+            Ok(())
+        }
+        result => result.context("failed to write replay control response"),
+    }
 }
 
 pub(super) async fn write_session_snapshot(
@@ -795,6 +720,7 @@ pub(super) fn session_snapshot(
         "active_case_id": state.active_case_id.clone(),
         "cases": state.case_reports(),
         "selected_case_ids": state.cases.keys().cloned().collect::<Vec<_>>(),
+        "waiting": state.active_case_id.as_deref().and_then(|case| state.dependency_tails.waiting(case)),
     })
 }
 
@@ -808,6 +734,9 @@ pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
 
 impl ReplayState {
     fn case_is_dirty(&self, case_id: &str) -> bool {
+        if self.dependency_tails.failure(case_id).is_some() {
+            return true;
+        }
         if self.connect_failures.case_is_dirty(case_id) {
             return true;
         }

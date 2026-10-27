@@ -406,6 +406,7 @@ fn response_difference_page(
 
 pub fn query_e2e_dirty_counts(context: E2eRunContext, api: &str) -> Result<E2eDirtyCounts> {
     let state = finalized_focused_state(context, api)?;
+    super::evidence_admission::require_aggregate_report(&state)?;
     let payload = std::fs::read(&state.aggregate_report).with_context(|| {
         format!(
             "failed to read runner-owned aggregate evidence {}",
@@ -434,6 +435,48 @@ pub(crate) fn query_redis_unordered_candidates(context: E2eRunContext, api: &str
     let state = finalized_focused_state(context, api)?;
     Ok(crate::replay::redis_value::evidence::discover(&state.replay_report)
         .unwrap_or_else(|_| serde_json::json!({"candidates": [], "omitted_candidates": 0, "requires_fresh_replay": true, "unavailable": "Redis unordered evidence is unavailable; rerun Replay"})))
+}
+
+pub(crate) fn query_execution_context(
+    context: E2eRunContext,
+    api: &str,
+    attempt: u64,
+) -> Result<Value> {
+    let state = finalized_focused_state(context, api)?;
+    ensure!(
+        state.sequence == attempt,
+        "execution failures belong to attempt {}, not active issue attempt {attempt}",
+        state.sequence
+    );
+    Ok(serde_json::json!({
+        "attempt":state.sequence,"status":state.status,"replay_finalized":state.replay_finalized,
+        "session_id":state.session_id,
+        "executed_cases":state.cases.iter().filter(|case|case.assertion_passed.is_some()).count(),
+        "selected_cases":state.cases.len(),
+        "lifecycle_errors":state.errors.iter().rev().take(3).rev().map(|error|super::result::bounded_error(error)).collect::<Vec<_>>(),
+        "execution_failures":super::execution_failure::diagnosis(&state),
+        "execution_failures_summary":super::execution_failure::summary(&state)
+    }))
+}
+
+pub(crate) fn query_execution_failure_page(
+    context: E2eRunContext,
+    api: &str,
+    attempt: u64,
+    offset: usize,
+) -> Result<Value> {
+    let state = finalized_focused_state(context, api)?;
+    ensure!(
+        state.sequence == attempt,
+        "execution failures belong to attempt {}, not active issue attempt {attempt}",
+        state.sequence
+    );
+    let mut page = super::execution_failure::page(&state, offset)?;
+    page["attempt"] = attempt.into();
+    page["status"] = serde_json::to_value(state.status)?;
+    page["replay_finalized"] = state.replay_finalized.into();
+    page["selected_cases"] = state.cases.len().into();
+    Ok(page)
 }
 
 pub(crate) fn query_dependency_request_candidates(

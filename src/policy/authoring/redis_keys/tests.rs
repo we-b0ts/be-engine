@@ -12,12 +12,13 @@ fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_binding
     let raw = policy(json!({
         "chat:streaming:*":{"append_stream":true,"expiry_refresh":true},
         "chat:cancel:*":{"read_commutation":true},
+        "task:cancel:*":{"read_observation":true},
         "chat:streaming:text_block:*":{"kind":"identity",
             "formats":[{"prefix":"text-","format":"decimal"}],"read_back":true}
     }));
     let document = parse_policy(&raw.to_string()).unwrap();
     let compiled = compile_policy(&document).unwrap();
-    assert_eq!(compiled.native.len(), 4);
+    assert_eq!(compiled.native.len(), 5);
     assert_eq!(compiled.redis.as_ref().unwrap().keys.len(), 1);
     for rule in &compiled.native {
         assert!(rule.rule.selector.api.is_none());
@@ -26,6 +27,10 @@ fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_binding
     let rendered = render_policy(&document).unwrap();
     let authored: Value = serde_yaml::from_str(&rendered).unwrap();
     assert!(authored["redis"].get("rules").is_none());
+    assert_eq!(
+        authored["redis"]["keys"]["task:cancel:*"]["read_observation"],
+        true
+    );
     assert_eq!(
         authored["redis"]["keys"]["chat:streaming:*"]["append_stream"],
         true
@@ -75,6 +80,7 @@ fn malformed_and_duplicate_key_permissions_are_rejected() {
         json!({"content:*":{"resource":"missing","append_stream":true}}),
         json!({"content:*":{"database":0,"append_stream":true}}),
         json!({"content:*":{"append_stream":false}}),
+        json!({"content:*":{"read_observation":false}}),
         json!({"content:*":{"append_stream":"true"}}),
         json!({"content:*":{"append_stream":true,"api":"POST /items"}}),
         json!({"*":{"append_stream":true}}),

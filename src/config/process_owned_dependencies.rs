@@ -128,6 +128,13 @@ impl BackgroundDependencyRuleConfig {
     pub(crate) fn matches(&self, event: &RecorderEvent) -> bool {
         matching::matches(self, event)
     }
+
+    /// GET without an initial-load contract is finite process work. Other
+    /// authorized Redis reads retain their existing run-local snapshot mode.
+    pub(crate) fn uses_redis_snapshot(&self) -> bool {
+        matches!(self, Self::Redis { command, initial_load_timeout_ms, trigger_source: None, .. }
+            if command != "GET" || initial_load_timeout_ms.is_some())
+    }
 }
 
 pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
@@ -272,7 +279,9 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                             );
                         }
                         validate_exact_redis_keys(name, command, keys)?;
-                        if initial_load_timeout_ms.is_none_or(|timeout| timeout == 0) {
+                        if *initial_load_timeout_ms == Some(0)
+                            || (command != "GET" && initial_load_timeout_ms.is_none())
+                        {
                             bail!(
                                 "Redis {command} process-owned dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
                             );

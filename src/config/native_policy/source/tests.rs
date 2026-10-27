@@ -51,6 +51,88 @@ fn rule() -> CompiledNativeRule {
 }
 
 #[test]
+fn finite_process_get_reclassifies_original_evidence_without_acquiring_a_snapshot() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("run-one");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(
+        root.join("recording-run.json"),
+        json!({"run_id":"run-one","status":"completed"}).to_string(),
+    )
+    .unwrap();
+    let mut original = event();
+    original["command"] = json!("GET");
+    let first = case(&root, "case-a", &original);
+    let prepared = BTreeMap::from([("case-a".into(), first.clone())]);
+    let mut get_rule = rule().rule;
+    let n::NativeEffect::ProcessOwned(effect) = &mut get_rule.effect else {
+        unreachable!()
+    };
+    let n::ProcessSelector::Redis {
+        operation,
+        initial_load_timeout_ms,
+        ..
+    } = &mut effect.selector
+    else {
+        unreachable!()
+    };
+    *operation = "GET".into();
+    *initial_load_timeout_ms = None;
+    let finite = compile_native(&get_rule).unwrap();
+    let validate = |rule: &CompiledNativeRule| {
+        validate_source(
+            NativeSourceScope {
+                target_root: temp.path(),
+                case_source: &root,
+                source_revision: "data-fact",
+                recording_run_id: "run-one",
+                prepared_cases: &prepared,
+                replay_report: &root.join("report.json"),
+                policy_rules: std::slice::from_ref(rule),
+            },
+            std::slice::from_ref(rule),
+        )
+    };
+    assert_eq!(
+        validate(&finite).unwrap().obligations,
+        BTreeSet::from([SourceObligation::Reclassify])
+    );
+    let n::NativeEffect::ProcessOwned(effect) = &mut get_rule.effect else {
+        unreachable!()
+    };
+    let n::ProcessSelector::Redis {
+        initial_load_timeout_ms,
+        ..
+    } = &mut effect.selector
+    else {
+        unreachable!()
+    };
+    *initial_load_timeout_ms = Some(1000);
+    let snapshot = compile_native(&get_rule).unwrap();
+    assert!(
+        validate(&snapshot)
+            .unwrap()
+            .obligations
+            .contains(&SourceObligation::FreshRecording)
+    );
+    for marker in ["cache_snapshot_rule", "cache_snapshot_hit"] {
+        let mut seed = original.clone();
+        seed[marker] = if marker == "cache_snapshot_rule" {
+            json!("old-snapshot")
+        } else {
+            json!(true)
+        };
+        std::fs::write(first.join("dependencies.jsonl"), seed.to_string()).unwrap();
+        assert!(
+            validate(&finite)
+                .unwrap_err()
+                .to_string()
+                .contains("original single-use evidence")
+        );
+    }
+}
+
+#[test]
 fn source_scope_reenumerates_foreign_cases_and_global_members_and_binds_the_run_identity() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("run-one");

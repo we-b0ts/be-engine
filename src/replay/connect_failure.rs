@@ -161,6 +161,15 @@ impl Inventory {
         self.entries.get(index).map(|entry| entry.status)
     }
 
+    pub(super) fn has_in_flight(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            matches!(
+                entry.status,
+                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
+            )
+        })
+    }
+
     pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.dirty_cases.contains(case_id)
             || self

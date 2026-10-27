@@ -30,6 +30,13 @@ supported successful SET keep their finite slots and fence the first mutation;
 a profile without an owned SET gains no reusable reads. Within an owned state,
 GET must equal the latest SET value or nil after DEL.
 
+Another Case's ordinary finite single-key GET may touch the same concrete key.
+It supplies no state proof or observation slots to the writing Case, and keeps
+its own recorded response and finite consumption. A Case with only historical
+reads cannot borrow another Case's SET or Target value. Foreign mutations,
+expiry observers, shared/reusable reads and Global inventory still reject the
+owned state proof; this permission does not simulate state across Cases.
+
 Only unconditional SET, GET, successful DEL/UNLINK and positive TTL refreshes
 are supported in the owned state. Implicit expiry, unknown writers or mutations,
 ambiguous script key access, transactional lanes, overlapping ownership and
@@ -76,7 +83,8 @@ and 4096 Target observations per Case. Each profile has at most 1024 states.
 Responses and raw SET values are bounded to 1 MiB. Every actual delivery remains
 tracked even when concurrent reads share a Source witness. Transport failure
 keeps the Case dirty; it cannot be hidden by another successful observation.
-Prepared inventory cannot acquire later overlapping records.
+Prepared inventory cannot acquire later overlapping records, except another
+Case's ordinary finite GET under the read-back partition described above.
 
 `redis.state_observations` contains at most 1000 audits with rule, Case, key
 fingerprints, Target admission index, original Source witness, state-changing

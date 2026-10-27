@@ -605,6 +605,8 @@ impl ReplayState {
                                         self.mysql.transaction_wires.contains(&wire)
                                     }));
                         let matched = MatchedQueryReport {
+                            source_connection_id: exchange.record.connection_id,
+                            source_query_sequence: exchange.record.query_sequence,
                             case_id: if owned_global {
                                 None
                             } else {

@@ -42,6 +42,7 @@ impl RequestContracts {
             );
         }
         Ok(Self {
+            pre_match_enabled: false,
             compiled: None,
             witnesses: None,
             input_origin: Some(derived_inputs::InputOrigin::Root(target_root.to_owned())),

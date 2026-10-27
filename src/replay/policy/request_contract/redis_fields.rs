@@ -7,6 +7,7 @@ mod keys;
 mod native;
 mod projection;
 mod response;
+pub(super) use response::bulk_prefix;
 mod runtime;
 mod scalar;
 pub(super) use scalar::ScalarDelivery;

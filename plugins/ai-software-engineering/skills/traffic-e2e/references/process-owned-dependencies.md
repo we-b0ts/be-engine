@@ -71,8 +71,10 @@ The current narrow rule types are:
   Vintage alias, or payload persisted in the rule;
 - Redis `ZCOUNT` with one stable service port set and exact key prefix and
   suffix, with no hostname persisted in the rule;
-- Redis `GET` with one stable service port set, an exact bounded key list, and
-  an initial-load observation timeout;
+- Redis `GET` with one stable service port set and an exact bounded key list.
+  Without `initial_load_timeout_ms`, each original exchange remains single-use;
+  this supports proven periodic process reads whose values can change. A positive
+  `initial_load_timeout_ms` retains initialization observation and snapshot reuse;
 - Redis bootstrap `HGET`/`HMGET` with a stable service port set, optional exact
   keys, bounded numeric-middle key patterns, and the exact field sequence;
 - Redis process-owned `HSCAN` with a stable service port set and exact keys or
@@ -90,9 +92,35 @@ progress every 10 seconds and warns but continues case admission when the load
 remains incomplete. Replay does not wait for target-local initialization;
 repair target startup or readiness when that causes a response difference.
 
+For example, a proven independent monitor can declare a finite read:
+
+```yaml
+process_dependencies:
+  tasks:
+    actual_source_monitor:
+      requests:
+        - redis:
+            ports: [6379]
+            operation: GET
+            keys: [{kind: exact, value: monitor_state}]
+```
+
+The document still requires its root `source_revision` and complete Source proof
+for the entire selector. This declaration grants no key wildcard, default value,
+or response reuse. Each actual Target call must consume its own recorded response;
+exhaustion remains unmatched. Existing complete single-use recordings may be
+reclassified without recapture. Snapshot seeds and diagnostic snapshot hits cannot
+be converted into finite evidence.
+
+The task name is not captured caller identity. If request handlers and a monitor
+can issue the same GET/key, prove every selected occurrence's ownership using
+independent evidence or leave attribution unresolved. See
+[process-owned Redis](../../../../../docs/process-owned-redis.md) for finite
+Case ordering and snapshot compatibility.
+
 Global exchanges explicitly emitted by any process-owned rule use
 connection-independent replay. Ordinary process-owned exchanges remain
-single-use. For a configured Redis rule, Recorder instead holds the first
+single-use. Except for finite GET rules, a configured Redis rule makes Recorder hold the first
 successful response for each logical rule/session/command/argument tuple for
 the rest of that run. Only that first exchange is semantic Global evidence;
 later snapshot hits remain diagnostic traffic. Replay reuses the marked seed

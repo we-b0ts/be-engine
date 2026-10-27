@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+mod pre_match;
+
 fn capture(bytes: &[u8]) -> Value {
     json!({"encoding":"base64","truncated":false,"data":STANDARD.encode(bytes)})
 }

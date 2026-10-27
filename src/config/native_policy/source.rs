@@ -71,10 +71,9 @@ pub(crate) fn validate_source(
             }
             n::NativeEffect::ProcessOwned(effect) => {
                 obligations.insert(SourceObligation::Reclassify);
-                // A process-owned GET changes the bootstrap snapshot available
-                // to replay. Reclassifying an old recording cannot prove that
-                // its acquisition used this newly authorized selector.
-                if matches!(&effect.selector, n::ProcessSelector::Redis { operation, .. } if operation == "GET")
+                // Initial-load GET changes bootstrap acquisition. A finite GET
+                // only reclassifies complete original single-use exchanges.
+                if matches!(&effect.selector, n::ProcessSelector::Redis { operation, initial_load_timeout_ms: Some(_), .. } if operation == "GET")
                 {
                     obligations.insert(SourceObligation::FreshRecording);
                 }

@@ -144,6 +144,11 @@ observed base. An unrelated workflow revision alone does not invalidate it.
   and isolation/domain failures use the accepted handoff's `rework_required`
   path with precise logs/locations; they need not have a source finding ID.
   Do not invent an integration-owner selector.
+  `integration_required` exposes `commands.report_rework` with the original
+  worker handle and required handoff/review inputs. A newly confirmed behavior
+  defect can use this path before Replay; a consumed implementer lease does not
+  require first producing another failed attempt. The engine creates the new
+  dispatch and rejects callbacks from the superseded delivery.
 - `stale`: preserve useful work, refresh global status, and reassign only current
   work on the current base.
 - `needs_input`: return the specific request to its source owner.

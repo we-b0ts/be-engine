@@ -2,6 +2,10 @@ use super::super::*;
 
 #[derive(Debug, Serialize)]
 pub(in crate::replay) struct ReplayReport {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) dependency_pre_matches: Vec<crate::value_contract::pre_match::Candidate>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) case_execution_failures: Vec<Value>,
     pub(in crate::replay) connect_failures: connect_failure::Report,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) policy_witnesses: Option<crate::policy_evidence::WitnessManifest>,
@@ -89,7 +93,9 @@ impl ReplayReport {
     }
 
     pub(in crate::replay) fn is_dirty(&self) -> bool {
-        self.connect_failures.is_dirty()
+        !self.dependency_pre_matches.is_empty()
+            || !self.case_execution_failures.is_empty()
+            || self.connect_failures.is_dirty()
             || !self.unrecorded_targets.is_empty()
             || self
                 .unmatched_queries
@@ -185,6 +191,10 @@ pub(in crate::replay) struct QueryReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct MatchedQueryReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) source_connection_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) source_query_sequence: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) case_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

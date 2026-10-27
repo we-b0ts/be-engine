@@ -11,6 +11,26 @@ pub(super) fn from_e2e(
     target_fingerprint: String,
 ) -> RewriteIssue {
     let (kind, owner, summary, pointer, possible_causes) = match result.gates.responses {
+        _ if result.gates.replay == E2eReplayGate::Incomplete
+            && result.diagnosis.counts.executed > 0 => (
+            RewriteIssueKind::Replay,
+            RewriteIssueOwner::TrafficE2eSystem,
+            format!("Replay did not finalize after {} of {} cases executed; repair the runtime before planning from this incomplete attempt",result.diagnosis.counts.executed,result.diagnosis.counts.selected),
+            None,
+            vec!["replay_lifecycle_or_control_failure".into(),"incomplete_replay_publication".into()],
+        ),
+        _ if !result.diagnosis.execution_failures.is_empty() => (
+            RewriteIssueKind::Dependency,
+            RewriteIssueOwner::SourceInvestigation,
+            "Replay interrupted requests because dependencies did not match; inspect execution_failures before downstream response differences".to_string(),
+            None,
+            vec![
+                "dependency_unmatched".to_string(),
+                "request_owned_target_call_mismatch".to_string(),
+                "source_proven_value_contract_missing".to_string(),
+                "replay_capability_gap".to_string(),
+            ],
+        ),
         E2eResponseGate::Nonpassing => {
             let representative = result.diagnosis.representative.as_ref();
             let response_rule_candidate = representative.is_some_and(|value| {
@@ -261,6 +281,38 @@ fn kind_name(kind: RewriteIssueKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dependency_interruption_takes_priority_over_ordinary_and_stream_response_failures() {
+        for pointer in ["$response", "$interaction/end/clean"] {
+            let mut result: E2eApiRunResult = serde_json::from_value(serde_json::json!({
+                "run_key":"run","api":"GET /api","attempt":1,"status":"failed","passed":false,"progress":"progress.yaml",
+                "gates":{"responses":"nonpassing","replay":"complete","dependencies":"dirty"},
+                "diagnosis":{"counts":{"selected":2,"executed":2,"response_passed":0,"response_nonpassing":2,"response_incomplete":0},
+                    "execution_failures":[{"case_id":"interrupted","kind":"dependency_unmatched","request_completed":false,"failures":[{"protocol":"redis","target_event_index":1}]}],
+                    "response_differences":{"total_differences":2,"indexed_differences":2,"omitted_differences":0,"failure_clusters":[],"omitted_failure_clusters":0},
+                    "representative":{"case_id":"interrupted","pointer":pointer,"difference_kind":"value_mismatch","expected":{"presence":"present","value":true},"actual":{"presence":"present","value":false}}}
+            })).unwrap();
+            let issue = from_e2e("GET /api", &result, "target".into());
+            assert_eq!(issue.kind, RewriteIssueKind::Dependency);
+            assert_eq!(issue.owner, RewriteIssueOwner::SourceInvestigation);
+            assert!(issue.pointer_pattern.is_none());
+            assert!(issue.summary.contains("execution_failures"));
+            assert_eq!(issue.representative, result.diagnosis.representative);
+            result.gates.replay = E2eReplayGate::Incomplete;
+            let interrupted = from_e2e("GET /api", &result, "target".into());
+            assert_eq!(interrupted.kind, RewriteIssueKind::Replay);
+            assert_eq!(interrupted.owner, RewriteIssueOwner::TrafficE2eSystem);
+            assert_eq!(interrupted.representative, result.diagnosis.representative);
+            result.gates.replay = E2eReplayGate::Complete;
+            result.diagnosis.execution_failures.clear();
+            assert_eq!(
+                from_e2e("GET /api", &result, "target".into()).kind,
+                RewriteIssueKind::Response,
+                "dirty inventory alone must not override independent response failures"
+            );
+        }
+    }
 
     #[test]
     fn failures_before_any_request_keep_the_actual_engine_or_target_owner() {

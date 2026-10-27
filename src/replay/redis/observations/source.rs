@@ -94,6 +94,15 @@ pub(super) fn prepare(
         if !super::super::key_access::touches(&e.record.command, &e.args, &profile.key) {
             continue;
         }
+        if kind.is_read()
+            && e.shared_rule_id.is_none()
+            && !e.reusable_snapshot
+            && finite_other_case_get(case, e.source, e.case_id.as_deref(), &e.record, &e.args)
+        {
+            // A different Case's finite read neither mutates this key nor
+            // supplies this Case's write/read proof or observation slots.
+            continue;
+        }
         ensure!(
             e.source == ReplaySource::Case && e.case_id.as_deref() == Some(case),
             "state observation key overlaps another Case or Global inventory"
@@ -116,6 +125,9 @@ pub(super) fn prepare(
     }
     timeline.sort_by_key(|(index, e)| (e.record.started_at(), *index));
     validate_causal_order(&timeline)?;
+    if kind == Kind::AbsentRead {
+        super::absence::prepare(&mut profile, &mut timeline)?;
+    }
     if kind == Kind::Read {
         let mut first_set = None;
         for (position, (_, exchange)) in timeline.iter().enumerate() {
@@ -173,6 +185,10 @@ pub(super) fn prepare(
         match e.record.command.as_str() {
             "SET" => {
                 ensure!(
+                    kind != Kind::AbsentRead,
+                    "absent read observations do not permit SET mutations"
+                );
+                ensure!(
                     e.args.first() == Some(&profile.key)
                         && matches!(e.args.len(), 2 | 4)
                         && response == b"+OK\r\n",
@@ -191,17 +207,18 @@ pub(super) fn prepare(
             }
             "DEL" | "UNLINK" => {
                 let removed = integer(&response)?;
+                let initial_absence = kind == Kind::AbsentRead && profile.epochs.len() == 1;
                 ensure!(
                     removed >= i64::from(alive)
                         && usize::try_from(removed).is_ok_and(|n| n <= e.args.len())
-                        && (e.args.len() != 1 || removed == i64::from(alive)),
+                        && (initial_absence || e.args.len() != 1 || removed == i64::from(alive)),
                     "state observation deletion has an invalid response"
                 );
                 value = None;
                 alive = false;
                 new_epoch(&mut profile, index)?;
             }
-            "GET" if kind == Kind::Read => {
+            "GET" if kind.is_read() => {
                 ensure!(
                     e.args == [profile.key.clone()],
                     "state observations require a single-key GET"

@@ -116,6 +116,18 @@ async fn run(
     meta: RequestMeta,
     publication: &crate::active_case::CasePublication,
 ) -> anyhow::Result<()> {
+    let protocol = session
+        .observation
+        .lock()
+        .expect("interaction observation poisoned")
+        .protocol();
+    super::diagnostics::phase(session.case.id, protocol, "observing");
+    super::diagnostics::waiting(session);
+    let mut progress = tokio::time::interval_at(
+        Instant::now() + Duration::from_secs(10),
+        Duration::from_secs(10),
+    );
+    progress.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let reason = loop {
         if let Some(reason) = session.closing() {
             break reason;
@@ -138,9 +150,14 @@ async fn run(
             _ => {}
         }
         let wake = Instant::from_std(session.started) + Duration::from_millis(deadline);
-        tokio::select! { _ = sleep_until(wake) => {}, _ = session.changed.notified() => {} }
+        tokio::select! {
+            _ = sleep_until(wake) => {},
+            _ = session.changed.notified() => {},
+            _ = progress.tick() => super::diagnostics::waiting(session),
+        }
     };
     session.request_close(reason);
+    super::diagnostics::phase(session.case.id, protocol, "transport_cleanup_started");
     let (protocol, policy) = {
         let observation = session
             .observation
@@ -164,7 +181,8 @@ async fn run(
     let transport_clean = matches!(
         tokio::time::timeout_at(cleanup_deadline, transport).await,
         Ok(Ok(()))
-    );
+    ) && !session.transport_failed.load(Ordering::SeqCst);
+    super::diagnostics::phase(session.case.id, protocol, "transport_cleanup_completed");
     if !transport_clean {
         for transport in session
             .transports
@@ -196,6 +214,10 @@ async fn run(
         // alive until disconnect dependencies and failed evidence are written.
         stop_failed_recording(session);
     }
+    // A streamed primary body is not a JSON response-condition document.
+    session
+        .state
+        .select_case_response_observation(session.case.id, None);
     let stream_tail_deadline = session
         .state
         .inner
@@ -210,6 +232,7 @@ async fn run(
     });
     // Transport cleanup keeps its own short budget. Dependency observation has
     // the primary request's absolute deadline and the same bounded writer drain.
+    super::diagnostics::phase(session.case.id, protocol, "dependency_drain_started");
     let drain = if observation_deadline.is_some() {
         // This operation owns both its absolute observation limit and the
         // bounded drain measured from actual admission closure. An outer timer
@@ -234,6 +257,7 @@ async fn run(
             )),
         }
     };
+    super::diagnostics::phase(session.case.id, protocol, "dependency_drain_completed");
     let dependencies_drained = drain.is_none();
     let invalidation = session
         .state
@@ -303,6 +327,7 @@ async fn run(
     let headers = response
         .as_ref()
         .map(|(_, headers)| redact_headers(headers, &config.recording.redact_headers));
+    super::diagnostics::phase(session.case.id, protocol, "publication_started");
     finalize_owned_http_case(
         session.state.recorder(),
         publication,
@@ -350,6 +375,7 @@ async fn run(
         invalidation.clone(),
     )
     .await?;
+    super::diagnostics::phase(session.case.id, protocol, "publication_completed");
     if continue_after_failure {
         // Publication owns the final lease-loss ordering. A loss observed before
         // its commit still requires Source isolation, even after a quiet drain.

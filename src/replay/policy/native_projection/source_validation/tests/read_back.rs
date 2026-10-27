@@ -27,7 +27,14 @@ fn source_read_back_preflight_requires_a_complete_causal_positive_read_witness()
     assert!(check(&policy, &missing).is_err());
     let mut wrong = trace.clone();
     wrong[1]["response"]["data"] = json!("$5\r\nother\r\n");
-    assert!(check(&policy, &wrong).is_err());
+    let error = format!("{:#}", check(&policy, &wrong).err().unwrap());
+    assert!(error.contains("Source dependency proof failed:"), "{error}");
+    assert!(error.contains("event_type=redis_exchange"), "{error}");
+    assert!(error.contains("sequence=2"), "{error}");
+    assert!(
+        error.contains("preceding successfully matched write"),
+        "{error}"
+    );
     let mut failed = trace.clone();
     failed[0]["response_kind"] = json!("error");
     failed[0]["response"]["data"] = json!("-ERR write rejected\r\n");
@@ -158,4 +165,66 @@ fn key_only_read_back_source_preflight_requires_each_physical_endpoints_own_caus
     own_write["connection_id"] = foreign["connection_id"].clone();
     missing_write.insert(1, own_write);
     assert!(check(&policy, &missing_write).is_ok());
+}
+
+#[test]
+fn compact_read_back_source_preflight_partitions_foreign_finite_reads_in_either_case_order() {
+    let policy = crate::policy::compile_policy(
+        &crate::policy::parse_policy(
+            &json!({"format":"traffic-policy/v2","redis":{"keys":{"current:*":{
+                "kind":"identity","formats":["string"],"read_back":true,"proof":proof()
+            }}}})
+            .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let request = request();
+    let owner_dir = temp.path().join("owner");
+    let reader_dir = temp.path().join("reader");
+    for dir in [&owner_dir, &reader_dir] {
+        std::fs::create_dir(dir).unwrap();
+        std::fs::write(dir.join("request.json"), request.to_string()).unwrap();
+    }
+    let owned = events()[..2].to_vec();
+    let mut foreign = owned[1].clone();
+    foreign["connection_id"] = json!("11234567-89ab-4def-8123-456789abcdef");
+    let selected = policy.native.iter().map(|r| r.rule.id.clone()).collect();
+    for mutation in [false, true] {
+        let mut foreign = foreign.clone();
+        if mutation {
+            foreign["command"] = json!("SET");
+            foreign["args"].as_array_mut().unwrap().push(json!({
+                "encoding":"utf8","data":"old","truncated":false
+            }));
+            foreign["response_kind"] = json!("simple_string");
+            foreign["response"]["data"] = json!("+OK\r\n");
+        }
+        let read_only = [foreign];
+        let mut cases = [
+            NativeSourceCase {
+                id: "owner",
+                dir: &owner_dir,
+                request: &request,
+                events: &owned,
+            },
+            NativeSourceCase {
+                id: "reader",
+                dir: &reader_dir,
+                request: &request,
+                events: &read_only,
+            },
+        ];
+        for _ in 0..2 {
+            let result =
+                validate_native_source_dependencies(&policy, &selected, temp.path(), &cases);
+            if mutation {
+                assert!(result.is_err(), "foreign writers remain a proof conflict");
+            } else {
+                result.unwrap_or_else(|error| panic!("foreign finite read: {error:#}"));
+            }
+            cases.reverse();
+        }
+    }
 }

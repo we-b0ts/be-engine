@@ -67,6 +67,8 @@ pub(crate) struct Difference {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct Comparison {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) pre_matches: Vec<super::pre_match::Candidate>,
     pub(crate) evaluated: BTreeSet<String>,
     pub(crate) time_validations: BTreeMap<String, usize>,
     pub(crate) differences: Vec<Difference>,
@@ -90,6 +92,7 @@ impl Comparison {
         self.differences.is_empty()
     }
     pub(crate) fn merge_and_validate(&mut self, other: Comparison) {
+        self.pre_matches.extend(other.pre_matches);
         if let Err(reason) = self.identities.merge(other.identities) {
             self.differences.push(difference("", reason));
         }
@@ -290,6 +293,7 @@ fn compare_all(
             validate_relationships(&decisions).map_err(|e| difference("", &e.to_string()))
         });
     Comparison {
+        pre_matches: Vec::new(),
         evaluated: decisions.evaluated,
         time_validations: decisions.time_validations,
         differences: result.err().into_iter().collect(),

@@ -210,14 +210,19 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
             identity_pairs: Vec::new(),
             derived_input: None,
         };
-        let (ended, _) = crate::replay::control::handle_control_request(
-            request("end", Some("case-id".into())),
-            runtime.state.clone(),
-            Some(temp.path().join("finished-replay.json")),
-            None,
-        )
-        .await;
-        assert_eq!(ended["ok"], true);
+        let end_request = request("end", Some("case-id".into()));
+        let end_state = runtime.state.clone();
+        let end_path = temp.path().join("finished-replay.json");
+        let ending = tokio::spawn(async move {
+            crate::replay::control::handle_control_request(
+                end_request,
+                end_state,
+                Some(end_path),
+                None,
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
         let (pending, _) = crate::replay::control::handle_control_request(
             request("finalize", None),
             runtime.state.clone(),
@@ -228,6 +233,8 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
         assert_eq!(pending["ok"], false);
         assert!(runtime.state.lock().await.finalized_at.is_none());
         query.await.unwrap();
+        let (ended, _) = ending.await.unwrap();
+        assert_eq!(ended["ok"], true);
         let (finished, _) = crate::replay::control::handle_control_request(
             request("finalize", None),
             runtime.state.clone(),

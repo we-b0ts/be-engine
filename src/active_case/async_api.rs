@@ -81,6 +81,22 @@ impl AsyncObservation {
 }
 
 impl ActiveCaseRegistry {
+    pub(crate) fn select_async_response(&self, case_id: Uuid, body: Option<&serde_json::Value>) {
+        let mut state = self.state.lock().expect("active case registry poisoned");
+        let Some(case) = state.active.iter_mut().find(|case| case.case.id == case_id) else {
+            return;
+        };
+        let Some(observation) = case.async_api.as_ref() else {
+            return;
+        };
+        let (selected, signal) = observation.scope.select_response(body);
+        if !selected {
+            case.async_api = None;
+        } else if let Some(signal) = signal {
+            observation.finish(signal);
+        }
+    }
+
     pub(crate) fn async_source_stop_requested(&self, case_id: Uuid) -> bool {
         self.state
             .lock()
@@ -213,7 +229,7 @@ impl ActiveCaseRegistry {
         Some((
             case.case.clone(),
             serde_json::json!({
-                "version":1,"api":observation.scope.api,"end_reason":signal.end_reason,
+                "version":1,"api":observation.scope.api,"scenario_index":observation.scope.scenario_index(),"end_reason":signal.end_reason,
                 "resource_index":signal.resource_index,"event_type":signal.event_type,
                 "elapsed_ms":observation.started.elapsed().as_millis(),
                 "request_timeout_ms":observation.deadline.saturating_duration_since(observation.started).as_millis(),

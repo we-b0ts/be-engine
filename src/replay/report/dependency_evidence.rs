@@ -68,6 +68,10 @@ pub(crate) struct ReplayDependencyTargetMatch {
     pub(crate) recorded_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) recorded_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_query_sequence: Option<u64>,
     pub(crate) result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) sql_fingerprint: Option<String>,
@@ -105,6 +109,7 @@ struct ClusterBuilder {
 
 #[derive(Debug, Clone, Copy)]
 enum DifferenceDirection {
+    Provisional,
     UnusedRecorded,
     TargetOnly,
     HeaderMismatch,
@@ -140,6 +145,12 @@ const MYSQL_EVENTS: &[EventArray] = &[
 ];
 
 const HTTP_EVENTS: &[EventArray] = &[
+    EventArray {
+        protocol: "rule",
+        field: "dependency_pre_matches",
+        reason: "rule_candidate_requires_source_proof",
+        direction: DifferenceDirection::Provisional,
+    },
     EventArray {
         protocol: "http",
         field: "http_request_header_mismatches",
@@ -319,9 +330,13 @@ pub(crate) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
 
 pub(in crate::replay) fn report_has_case_dirty_events(report: &Value) -> bool {
     report
-        .get("unrecorded_targets")
+        .get("case_execution_failures")
         .and_then(Value::as_array)
-        .is_some_and(|targets| !targets.is_empty())
+        .is_some_and(|failures| !failures.is_empty())
+        || report
+            .get("unrecorded_targets")
+            .and_then(Value::as_array)
+            .is_some_and(|targets| !targets.is_empty())
         || arrays_have_case_event(report, MYSQL_EVENTS)
         || arrays_have_case_event(report, HTTP_EVENTS)
         || report
@@ -487,6 +502,11 @@ fn target_matches(
                     .get("index")
                     .and_then(Value::as_u64)
                     .and_then(|value| usize::try_from(value).ok()),
+                source_connection_id: event
+                    .get("source_connection_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                source_query_sequence: event.get("source_query_sequence").and_then(Value::as_u64),
                 result: event
                     .get("status")
                     .and_then(Value::as_str)
@@ -601,6 +621,19 @@ fn bounded(value: &str) -> String {
 }
 
 fn event_difference(direction: DifferenceDirection, event: &Value) -> ReplayDependencyDifference {
+    if matches!(direction, DifferenceDirection::Provisional) {
+        let observation = |side: &str| ReplayDependencyObservation {
+            presence: "present".into(),
+            signature: Some(bounded_value(
+                &serde_json::json!({"candidate_id":event["candidate_id"],"pointer":event["pointer"],"value":event[side],"draft_policy":event["draft_policy"],"source_proof_required":true}),
+            )),
+        };
+        return ReplayDependencyDifference {
+            kind: "provisional_rule_match".into(),
+            expected: observation("expected"),
+            actual: observation("actual"),
+        };
+    }
     if matches!(direction, DifferenceDirection::HeaderMismatch) {
         let observation = |side: &str| {
             let value = &event[side];
@@ -656,7 +689,7 @@ fn difference(direction: DifferenceDirection, signature: Value) -> ReplayDepende
             expected: missing,
             actual: present,
         },
-        DifferenceDirection::HeaderMismatch => {
+        DifferenceDirection::HeaderMismatch | DifferenceDirection::Provisional => {
             unreachable!("header differences carry two observations")
         }
     }
@@ -757,6 +790,8 @@ mod tests {
                     "target":{"host":"mysql.internal","port":3306},
                     "source":"case",
                     "index":7,
+                    "source_connection_id":"119bd6fb-ea83-41fe-9b59-c52d78daa8a2",
+                    "source_query_sequence":2511,
                     "command":"COM_QUERY",
                     "sql":"SELECT secret FROM memberships WHERE user_id = 42",
                     "params":[{"kind":"string","value":"must-not-leak"}],
@@ -791,6 +826,27 @@ mod tests {
         assert_eq!(representative.target_matches.len(), 2);
         assert_eq!(representative.target_matches[0].target_event_index, 0);
         assert_eq!(representative.target_matches[0].recorded_index, Some(7));
+        assert_eq!(
+            representative.target_matches[0]
+                .source_connection_id
+                .as_deref(),
+            Some("119bd6fb-ea83-41fe-9b59-c52d78daa8a2")
+        );
+        assert_eq!(
+            representative.target_matches[0].source_query_sequence,
+            Some(2511)
+        );
+        // Legacy reports without wire references cannot infer a sequence from index 8.
+        assert!(
+            representative.target_matches[1]
+                .source_query_sequence
+                .is_none()
+        );
+        assert!(
+            representative.target_matches[1]
+                .source_connection_id
+                .is_none()
+        );
         assert!(
             representative.target_matches[0]
                 .sql_fingerprint

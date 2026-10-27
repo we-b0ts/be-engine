@@ -37,7 +37,10 @@ pub use worker::runtime::{RewriteWorkerReportOptions, report as report_rewrite_w
 mod dependency_rule;
 mod evidence;
 mod evidence_model;
-pub use evidence::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
+pub use evidence::{
+    query_rewrite_evidence, query_rewrite_evidence_for_scope,
+    query_rewrite_redis_argument_for_scope, query_rewrite_witness_for_scope,
+};
 mod fingerprint;
 mod inventory;
 mod ip_capture;
@@ -124,11 +127,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 pub use case_dependencies::{
     RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
-    RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
-    RewriteCaseDependencyTargetSummary, RewriteMemcachedExchangeDetail,
-    RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail, RewriteMysqlOperationDetail,
-    RewriteMysqlParameterDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
-    query as query_rewrite_case_dependencies,
+    RewriteCaseDependencyProtocolDetail, RewriteCaseDependencySourceReference,
+    RewriteCaseDependencyTarget, RewriteCaseDependencyTargetSummary,
+    RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail,
+    RewriteMysqlOperationDetail, RewriteMysqlParameterDetail, RewriteRedisExchangeDetail,
+    RewriteRedisOperationDetail, query as query_rewrite_case_dependencies,
+    query_exchange as query_rewrite_case_dependency_exchange,
 };
 pub use case_group_rebuild::{
     RewriteCaseGroupRebuildOptions, RewriteCaseGroupRebuildReport, rebuild_rewrite_case_groups,
@@ -231,8 +235,7 @@ pub fn plan_rewrite_rule(
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
-    let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
-        .context("rule evidence is stale or belongs to no concurrent API work item")?;
+    let api = inventory::api_for_rule_evidence_id(&target_root, &state, &options.evidence_id)?;
     worker::ensure_api_confirmed(&state, &api, "planning a verification rule")?;
     crate::policy::retired_authoring()?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {

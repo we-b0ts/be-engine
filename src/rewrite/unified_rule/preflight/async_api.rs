@@ -34,8 +34,17 @@ pub(super) fn verify(
         let body = capture(&request["body"])
             .ok()
             .and_then(|bytes| crate::json_value::parse(&bytes));
-        for (api, rule) in &policy.async_api {
-            if crate::policy::async_api_matches(api, rule, method, uri, body.as_ref()) {
+        let response_path = directory.join("expected-response.json");
+        bundle.freeze(&response_path)?;
+        let response: Value = serde_json::from_slice(&fs::read(&response_path)?)?;
+        let response_body = capture(&response["body"])
+            .ok()
+            .and_then(|bytes| crate::json_value::parse(&bytes));
+        for (api, rules) in &policy.async_api {
+            if rules.iter().any(|rule| {
+                crate::policy::async_api_matches(api, rule, method, uri, body.as_ref())
+                    && crate::policy::async_response_matches(rule, response_body.as_ref())
+            }) {
                 *observed.entry(api.clone()).or_default() += 1;
             }
         }
@@ -43,7 +52,7 @@ pub(super) fn verify(
     for api in policy.async_api.keys() {
         ensure!(
             observed.get(api).is_some_and(|count| *count > 0),
-            "async API {api:?} has no complete Source request satisfying its condition"
+            "async API {api:?} has no complete Source request/response satisfying its scenario conditions"
         );
     }
     let count = observed.values().sum::<usize>();

@@ -269,9 +269,13 @@ async fn reclamation_keeps_inflight_rows_and_stable_report_positions() {
         true
     );
     runtime.state.lock().await.mysql.exchanges[0].status = ReplayExchangeStatus::Responding;
+    let end_state = runtime.state.clone();
+    let ending = tokio::spawn(async move { end_case(&request("end", "a"), end_state).await });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(!ending.is_finished());
     assert_eq!(
-        end_case(&request("end", "a"), runtime.state.clone()).await["dirty"],
-        true
+        begin_case(&request("begin", "b"), runtime.state.clone()).await["ok"],
+        false
     );
     {
         let mut state = runtime.state.lock().await;
@@ -279,6 +283,8 @@ async fn reclamation_keeps_inflight_rows_and_stable_report_positions() {
         assert_eq!(state.unused_exchanges(ReplaySource::Case)[0].index, 0);
         state.mysql.exchanges[0].status = ReplayExchangeStatus::Consumed;
     }
+    let ended = ending.await.unwrap();
+    assert_eq!(ended["ok"], true);
     assert_eq!(
         begin_case(&request("begin", "b"), runtime.state.clone()).await["ok"],
         true

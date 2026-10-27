@@ -266,6 +266,7 @@ fn finalized_replay_consumes_the_request_for_passed_and_dirty_results() {
                 },
                 representative: None,
                 lifecycle_errors: vec![],
+                execution_failures: Vec::new(),
             },
             progress: target.path().join("progress.yaml"),
             runtime_outputs: vec![],

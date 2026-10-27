@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn multi_case_sized_inventory_keeps_late_targets_authenticated_past_the_legacy_row_bound() {
+    let (_temp, artifacts, store, metadata) = setup();
+    let requests = 16_384 / 2 + 1;
+    for sequence in 0..requests {
+        let mut metadata = metadata.clone();
+        metadata.source.sequence = Some(sequence as u64);
+        store
+            .record_observation(
+                metadata,
+                &artifacts,
+                b"source",
+                Some(b"target"),
+                Some(&format!("request-{sequence}")),
+            )
+            .unwrap()
+            .expect("an ordinary session must retain its late Target observations");
+    }
+    let manifest = store.sealed_manifest().unwrap();
+    assert!(manifest.complete && manifest.sealed);
+    assert_eq!(
+        (manifest.observed, manifest.recorded, manifest.omitted),
+        (requests * 2, requests * 2, 0)
+    );
+    let path = verify(&artifacts.join("replay.json"), &manifest).unwrap();
+    let last = manifest
+        .source_index()
+        .unwrap()
+        .for_source(
+            Surface::DependencyRequest,
+            &SourceIdentity {
+                sequence: Some((requests - 1) as u64),
+                ..metadata.source
+            },
+        )
+        .next()
+        .unwrap()
+        .expand()
+        .unwrap();
+    let (source, target) = read(&path, &last, &artifacts).unwrap();
+    assert_eq!(source, b"source");
+    assert_eq!(target.as_deref(), Some(b"target".as_slice()));
+}
+
+#[test]
 fn compact_witness_iteration_borrows_metadata_and_expands_only_requested_entries() {
     let (_temp, artifacts, store, metadata) = setup();
     store

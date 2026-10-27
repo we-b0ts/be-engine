@@ -42,8 +42,12 @@ kubectl/kubeconfig/context settings. The controller discovers Service TCP ports
 and waits for supervised forwards before starting Source; no port fields are
 required. Copy kubectl from its independent distribution image. Supply
 controller-private credentials through runtime mounts or an explicitly reviewed
-project recording image build. Forward exit fails the recording; Replay never
-starts these forwards.
+project recording image build. HTTP exchanges through declared Kubernetes routes
+use fresh upstream business connections while retaining the existing kubectl
+tunnel; active SSE responses keep their connection until completion. Any
+unexpected forward exit fails the recording and stops Source without restarting
+the forward. Initial startup failures also fail the recording. Existing business
+requests are never retried by the engine. Replay never starts these forwards.
 See the repository's `docs/kubernetes-recording.md` for the full contract.
 For a host bind mount, set `TRAFFIC_E2E_ARTIFACT_OWNER` to the host user's numeric
 UID:GID so completed evidence remains privately readable by that user.

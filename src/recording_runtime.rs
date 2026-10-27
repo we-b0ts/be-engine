@@ -44,6 +44,23 @@ impl AppState {
     where
         F: std::future::Future<Output = Result<()>>,
     {
+        self.run_until_completion(control_socket, async {
+            shutdown
+                .await
+                .map(|()| RecordingCompletionReason::ShutdownSignal)
+        })
+        .await
+    }
+
+    /// Retains the supervisor's stop cause through the same drain/finalization path.
+    pub(crate) async fn run_until_completion<F>(
+        self,
+        control_socket: Option<PathBuf>,
+        shutdown: F,
+    ) -> Result<()>
+    where
+        F: std::future::Future<Output = Result<RecordingCompletionReason>>,
+    {
         anyhow::ensure!(
             self.config().upstream_routes.is_empty()
                 || self.inner.recording_upstreams.get().is_some(),
@@ -118,13 +135,12 @@ impl AppState {
         let run_result = loop {
             tokio::select! {
                 result = &mut shutdown => {
-                    if let Err(error) = result {
-                        break Err(error);
-                    }
-                    self.recorder()
-                        .set_completion_reason(RecordingCompletionReason::ShutdownSignal)
-                        .await;
-                    self.quiesce_recording("shutdown_signal").await;
+                    let reason = match result {
+                        Ok(reason) => reason,
+                        Err(error) => break Err(error),
+                    };
+                    self.recorder().set_completion_reason(reason).await;
+                    self.quiesce_recording(reason.as_str()).await;
                     break Ok(());
                 }
                 _ = &mut case_limit_completion, if case_limit_grace.is_none() => {
@@ -260,6 +276,97 @@ async fn shutdown_signal() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn runtime_fixture(explicit_case_limit: bool) -> (tempfile::TempDir, AppState) {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = crate::AppConfig::default();
+        config.recording.output_dir = temp.path().join("recordings");
+        config.recording.encrypt_request_headers.clear();
+        config.dns_mock.registry_path = temp.path().join("fake-dns.json");
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+        config.http_gateway.rules = vec![crate::HttpGatewayRuleConfig {
+            path_prefixes: vec!["/".into()],
+            ..Default::default()
+        }];
+        let apis = if explicit_case_limit {
+            config.http_gateway.per_api_case_limits.default = 0;
+            vec!["GET /disabled".parse().unwrap()]
+        } else {
+            Vec::new()
+        };
+        let state = AppState::new_with_recording_apis(config, None, apis)
+            .await
+            .unwrap();
+        (temp, state)
+    }
+
+    #[tokio::test]
+    async fn shutdown_causes_remain_distinct_in_finalized_manifest() {
+        for (reason, expected) in [
+            (RecordingCompletionReason::ShutdownSignal, "shutdown_signal"),
+            (
+                RecordingCompletionReason::SourceIsolationRequired,
+                "source_isolation_required",
+            ),
+            (
+                RecordingCompletionReason::PerApiCaseLimitReached,
+                "per_api_case_limit_reached",
+            ),
+        ] {
+            let (_temp, state) =
+                runtime_fixture(reason == RecordingCompletionReason::PerApiCaseLimitReached).await;
+            let run = match reason {
+                RecordingCompletionReason::ShutdownSignal => {
+                    // Preserve the public unit-valued shutdown API.
+                    state
+                        .clone()
+                        .run_until(None, std::future::ready(Ok(())))
+                        .await
+                }
+                RecordingCompletionReason::SourceIsolationRequired => {
+                    state
+                        .clone()
+                        .run_until_completion(None, std::future::ready(Ok(reason)))
+                        .await
+                }
+                RecordingCompletionReason::PerApiCaseLimitReached => {
+                    state
+                        .clone()
+                        .run_until_completion(None, std::future::pending())
+                        .await
+                }
+            };
+            run.unwrap();
+            let report: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(state.recorder().run_dir.join("recording-run.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(report["status"], "completed");
+            assert_eq!(report["completion_reason"], expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_failure_remains_a_failed_manifest_without_a_success_reason() {
+        let (_temp, state) = runtime_fixture(false).await;
+        let error = state
+            .clone()
+            .run_until_completion(
+                None,
+                std::future::ready(Err(anyhow::anyhow!("supervisor failed"))),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "supervisor failed");
+        let report: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(state.recorder().run_dir.join("recording-run.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["status"], "failed");
+        assert!(report["completion_reason"].is_null());
+    }
 
     #[test]
     fn preflight_probe_adds_a_fixed_case_limit_shutdown_grace() {

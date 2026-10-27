@@ -91,7 +91,23 @@ pub(super) fn spawn_replay(
                 .replay_case_dependency_post_response_window
                 .as_millis()
                 .to_string(),
+        )
+        .arg("--case-no-progress-timeout-ms")
+        .arg(
+            config
+                .replay_case_no_progress_timeout
+                .as_millis()
+                .to_string(),
         );
+    if config.replay_pre_match {
+        command.arg("--pre-match");
+    }
+    command
+        .arg("--http-stream-timing")
+        .arg(match config.replay_http_stream_timing {
+            crate::replay::ReplayHttpStreamTiming::Fast => "fast",
+            crate::replay::ReplayHttpStreamTiming::Recorded => "recorded",
+        });
     if config.replay_loading.lazy_cases {
         command.arg("--lazy-case-dependencies");
     }
@@ -630,6 +646,9 @@ mod tests {
 
     fn resolved_project(target_dockerfile: PathBuf) -> ResolvedProjectConfig {
         ResolvedProjectConfig {
+            replay_case_no_progress_timeout: Duration::from_secs(5),
+            replay_pre_match: true,
+            replay_http_stream_timing: Default::default(),
             target_dockerfile,
             target_build_contexts: Vec::new(),
             target_startup: crate::startup::StartupConfig::default(),

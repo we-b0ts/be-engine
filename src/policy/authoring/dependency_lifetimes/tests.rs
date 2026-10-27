@@ -172,7 +172,7 @@ fn process_http_simple_form_roundtrips_without_authorities_or_a_default_port() {
 }
 
 #[test]
-fn ids_exclude_evidence_but_include_actual_task_revision_and_resolved_resource() {
+fn ids_exclude_evidence_and_revision_but_include_actual_task_and_resolved_resource() {
     let raw = "tasks:\n  refresh:\n    requests:\n    - mysql:\n        selector: {resource: task_mysql, sql: 'SELECT 1'}\n        transaction_members: [{resource: task_mysql, sql: 'SELECT 2'}]\n      proof: {source: 'startup.py:42', fact: 'Source refreshes its process state'}\n";
     let names = named();
     let first = native(expand(None, Some(processes(raw)), Some("source-v1"), &names).unwrap());
@@ -214,7 +214,21 @@ fn ids_exclude_evidence_but_include_actual_task_revision_and_resolved_resource()
     );
     let revision = native(expand(None, Some(processes(raw)), Some("source-v2"), &names).unwrap());
     assert_ne!(first[0].id(), task[0].id());
-    assert_ne!(first[0].id(), revision[0].id());
+    assert_eq!(first[0].id(), revision[0].id());
+    let NativeEffect::ProcessOwned(revision_effect) = &revision[0].as_native().unwrap().effect
+    else {
+        panic!("process")
+    };
+    assert_eq!(revision_effect.source_revision, "source-v2");
+    let fingerprints = |revision: &str| {
+        let revision = format!("sha256:{:x}", Sha256::digest(revision.as_bytes()));
+        crate::policy::parse_and_compile_policy(&format!(
+            "format: traffic-policy/v2\nsource_revision: {revision}\nprocess_dependencies:\n  tasks:\n    refresh:\n      requests:\n        - http: {{host: api.example.com, method: GET, path: /keys}}\n"
+        ))
+        .unwrap()
+        .fingerprints
+    };
+    assert_ne!(fingerprints("source-v1"), fingerprints("source-v2"));
     let renamed: BTreeMap<_, _> = [("renamed".to_owned(), names["task_mysql"].clone())].into();
     let alias = native(
         expand(

@@ -21,6 +21,14 @@ impl RecordingUpstreams {
 }
 
 impl AppState {
+    pub(crate) fn recording_http_client(&self, host: &str) -> &crate::ProxyClient {
+        if self.has_recording_upstream(host) {
+            &self.inner.forwarded_http_client
+        } else {
+            self.client()
+        }
+    }
+
     pub(crate) fn install_recording_upstreams(&self, routes: RecordingUpstreams) -> Result<()> {
         for route in &self.config().upstream_routes {
             ensure!(

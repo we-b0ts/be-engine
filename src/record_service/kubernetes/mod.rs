@@ -1,7 +1,9 @@
 //! Startup-owned Service discovery and scoped port-forward process supervision.
 
+mod diagnostics;
 mod discovery;
 mod process;
+mod supervision;
 #[cfg(test)]
 mod tests;
 
@@ -89,10 +91,12 @@ impl PortForwards {
                         let (ready, ready_rx) = oneshot::channel();
                         // Owned by recording startup, retained through dependency drain,
                         // and joined on shutdown; no request can create these tasks.
-                        self.tasks.spawn(child.forward(
+                        self.tasks.spawn(supervision::forward(
+                            child,
                             identity.clone(),
                             ready,
                             self.stop.subscribe(),
+                            timeout,
                         ));
                         let address = tokio::select! {
                             result = tokio::time::timeout_at(deadline, ready_rx) => result

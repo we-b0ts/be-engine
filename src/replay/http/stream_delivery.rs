@@ -1,4 +1,4 @@
-//! Preserve recorded header, chunk and EOF delays for dependency streams.
+//! Deliver dependency streams with recorded timing or compressed successful gaps.
 
 use super::*;
 use crate::http::stream::ResponseStream;
@@ -25,7 +25,7 @@ pub(super) async fn response(
     server_close: Option<termination::ServerClose>,
 ) -> Result<Response<DeliveryBody>> {
     let completion = DeliveryCompletion {
-        state,
+        state: state.clone(),
         detail: record.stream_delivery.take(),
     };
     let Some(stream) = &record.response_stream else {
@@ -46,9 +46,23 @@ pub(super) async fn response(
         .response_status
         .and_then(|s| StatusCode::from_u16(s).ok())
         .context("stream response status missing")?;
+    let mut stream = stream.clone();
+    if state.lock().await.http_stream_timing == crate::replay::ReplayHttpStreamTiming::Fast
+        && stream.complete
+        && status.is_success()
+        && record.lifecycle_stop.is_none()
+        && client_prefix.is_none()
+        && server_close.is_none()
+    {
+        stream.headers_ms = 0;
+        stream.end_ms = 0;
+        for chunk in &mut stream.chunks {
+            chunk.at_ms = 0;
+        }
+    }
     tokio::time::sleep_until(started + std::time::Duration::from_millis(stream.headers_ms)).await;
     let payload_len = payload.len();
-    let mut body = TimedBody::new(payload, stream.clone(), started);
+    let mut body = TimedBody::new(payload, stream, started);
     body.completion = Some(completion);
     body.client_prefix = client_prefix;
     body.server_close = server_close;

@@ -367,3 +367,29 @@ fn redis_get_requires_exact_keys_timeout_and_ready_probe() {
             .contains("initial_load_timeout_ms")
     );
 }
+
+#[test]
+fn finite_process_get_requires_exact_keys_without_a_ready_probe() {
+    let mut rule = get_rule();
+    let BackgroundDependencyRuleConfig::Redis {
+        initial_load_timeout_ms,
+        ..
+    } = &mut rule
+    else {
+        unreachable!()
+    };
+    *initial_load_timeout_ms = None;
+    let mut config = AppConfig {
+        process_owned_dependencies: vec![rule],
+        ..Default::default()
+    };
+    config.validate().unwrap();
+    assert!(!config.process_owned_dependencies[0].uses_redis_snapshot());
+    let BackgroundDependencyRuleConfig::Redis { keys, .. } =
+        &mut config.process_owned_dependencies[0]
+    else {
+        unreachable!()
+    };
+    keys.clear();
+    assert!(config.validate().is_err());
+}

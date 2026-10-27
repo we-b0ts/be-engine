@@ -25,6 +25,22 @@ pub(crate) fn validate_witness_with_time_copies(
         let source: RequestEnvelope = serde_json::from_slice(source)?;
         let target: RequestEnvelope = serde_json::from_slice(target)?;
         super::validate_request_clocks(&source, &target, clocks)?;
+        // Session/control commands such as COM_PING have no SQL value carrier.
+        // Keep their native request exact, without inventing a format witness.
+        if source.sql.is_none()
+            && !matches!(
+                source.command.as_str(),
+                "COM_QUERY" | "COM_STMT_EXECUTE" | "COM_STMT_PREPARE"
+            )
+        {
+            ensure!(
+                source.command == target.command
+                    && target.sql.is_none()
+                    && source.params == target.params,
+                "MySQL non-SQL request changed"
+            );
+            return Ok(Comparison::default());
+        }
         let record: RecordedMysqlExchange = serde_json::from_value(
             serde_json::json!({"command":source.command,"sql":source.sql,"params":source.params,"response":{"status":"ok"}}),
         )?;
@@ -40,6 +56,36 @@ pub(crate) fn validate_witness_with_time_copies(
             "MySQL command changed outside native text/prepared adapter"
         );
         let context = RequestContext::new(policy, metadata.clone(), &identity, &record);
+        let tokens = record
+            .sql
+            .as_deref()
+            .and_then(crate::mysql::sql::bounds::statement)
+            .and_then(|tokens| {
+                super::super::super::sql_match::materialize_tokens(
+                    tokens,
+                    record.params.as_deref().unwrap_or_default(),
+                )
+            })
+            .context("SQL request witness requires a bounded statement and complete bindings")?;
+        if !context.selects_values(&tokens, database, clocks)? {
+            let mut cache = super::super::super::sql_match::cache::SqlCache::default();
+            let baseline = record.sql.as_deref().and_then(|sql| {
+                cache
+                    .get(sql)
+                    .bind(&record.command, record.params.as_deref())
+            });
+            let actual = target.sql.as_deref().and_then(|sql| {
+                cache
+                    .get(sql)
+                    .bind(&target.command, target.params.as_deref())
+            });
+            if baseline
+                .zip(actual)
+                .is_some_and(|(source, target)| target.matches(&source, false))
+            {
+                return Ok(Comparison::default());
+            }
+        }
         return policy::compare_mysql_with_automatic(
             database,
             record.sql.as_deref(),

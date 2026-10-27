@@ -50,6 +50,11 @@ fn scan_source(file: &Path, source: &str, added: BTreeSet<usize>) -> Vec<ReviewF
             )];
         }
     };
+    // An inner cfg applies to the entire module, including unannotated test
+    // helpers extracted into another file. Filenames alone prove no ownership.
+    if test_only(&syntax.attrs) {
+        return Vec::new();
+    }
     let mut imports = Imports::default();
     imports.visit_file(&syntax);
     let mut scanner = Scanner {
@@ -126,7 +131,7 @@ impl Scanner<'_> {
         }
         let message = match rule {
             ReviewRule::SpawnOwnership => {
-                "trace the actual startup entry and every caller; request-triggered tasks are rejected, including callbacks registered during startup"
+                "trace the actual startup entry and every caller; request-triggered tasks are rejected, including callbacks registered during startup. For an extracted test-only module, put #![cfg(test)] in its file; the scanner does not infer external module configuration from its parent or filename"
             }
             _ => unreachable!(),
         };
@@ -179,6 +184,9 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 fn test_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         attr.path().is_ident("test")
+            || (attr.path().segments.len() == 2
+                && attr.path().segments[0].ident == "tokio"
+                && attr.path().segments[1].ident == "test")
             || (attr.path().is_ident("cfg")
                 && attr
                     .parse_args::<syn::Path>()
@@ -219,6 +227,35 @@ pub(super) fn file_hash(root: &Path, file: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracted_test_module_needs_compiler_enforced_file_scope() {
+        let body = "fn serve_peer() { tokio::spawn(async {}); }\n";
+        let file = Path::new("src/socketio/engine_tests.rs");
+        assert!(scan_source(file, &format!("#![cfg(test)]\n{body}"), (1..=5).collect()).is_empty());
+        // The same filename/helper can be linked into production. Parent or
+        // filename guesses must not hide its runtime ownership requirement.
+        assert_eq!(scan_source(file, body, (1..=5).collect()).len(), 1);
+        assert_eq!(
+            scan_source(
+                file,
+                &format!("#![cfg(any(test, feature = \"runtime\"))]\n{body}"),
+                (1..=5).collect(),
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn tokio_test_attribute_does_not_exempt_runtime_siblings() {
+        let source = "#[tokio::test]\nasync fn harness() { tokio::spawn(async {}); }\nfn run() { tokio::spawn(async {}); }\n";
+        let findings = scan_source(Path::new("src/engine.rs"), source, (1..=5).collect());
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule, ReviewRule::SpawnOwnership);
+        assert_eq!(findings[0].line, 3);
+        assert!(findings[0].message.contains("#![cfg(test)]"));
+    }
 
     #[test]
     fn explicit_json_values_imports_aliases_and_maps_are_allowed() {

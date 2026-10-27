@@ -38,7 +38,7 @@ impl RedisReplayState {
         }
         let mut rpc_exchange;
         let rpc_comparison;
-        let (exchange, args) = if self.pubsub.is_rpc_source(exchange) {
+        let (exchange, args) = if self.pubsub.is_adapter_source(exchange) {
             let Some(comparison) = self.pubsub.comparison_args(exchange, args) else {
                 return false;
             };
@@ -122,9 +122,9 @@ impl RedisReplayState {
             Err(_) => return false,
         };
         let args = normalized.as_deref().unwrap_or(args);
-        self.pubsub
-            .matches(exchange, args)
-            .unwrap_or_else(|| value::arguments_match(exchange, args))
+        // Protocol identities were checked and translated by comparison_args
+        // before this private comparison copy was built. Do not bind them twice.
+        value::arguments_match(exchange, args)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -235,8 +235,18 @@ impl RedisReplayState {
             command,
             args,
         )?;
-        let matched = observation.map(PreferredMatch::Matched).unwrap_or_else(|| {
-            preferred_match_with_priority(
+        let pre_match_enabled = self.request_contracts.pre_match_enabled();
+        let mut matched = observation
+            .map(PreferredMatch::Matched)
+            .unwrap_or(PreferredMatch::NotFound);
+        for allow_pre_match in [false, true] {
+            if !matches!(matched, PreferredMatch::NotFound) || allow_pre_match && !pre_match_enabled
+            {
+                break;
+            }
+            self.request_contracts
+                .configure_pre_match(allow_pre_match && pre_match_enabled);
+            matched = preferred_match_with_priority(
                 &self.exchanges,
                 active_case_id,
                 |exchange| {
@@ -262,8 +272,10 @@ impl RedisReplayState {
                     !matches!(command, "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE")
                         || self.pubsub.is_callback_subscription(exchange)
                 },
-            )
-        });
+            );
+        }
+        self.request_contracts
+            .configure_pre_match(pre_match_enabled);
         let index = match matched {
             PreferredMatch::Matched(index) => index,
             PreferredMatch::LaneBlocked { candidate, blocker } => {
@@ -482,7 +494,7 @@ impl RedisReplayState {
         }
         let mut rpc_exchange;
         let rpc_comparison;
-        let (comparison_exchange, comparison_args) = if self.pubsub.is_rpc_source(exchange) {
+        let (comparison_exchange, comparison_args) = if self.pubsub.is_adapter_source(exchange) {
             rpc_comparison = self
                 .pubsub
                 .comparison_args(exchange, args)
@@ -583,9 +595,7 @@ impl RedisReplayState {
             })?;
         let mut rule_ids = Vec::new();
         rule_ids.extend(exchange.read_commutation_rule.clone());
-        if self.observations.is_refresh(index) {
-            rule_ids.extend(exchange.observation_rule.clone());
-        }
+        rule_ids.extend(self.observations.native_rule(index).map(str::to_owned));
         if let (Some(case), Some(normalized)) = (exchange.case_id.as_deref(), normalized) {
             self.dynamic_values
                 .commit_after_identities(case, normalized.decision);
@@ -598,6 +608,7 @@ impl RedisReplayState {
             })?;
         }
         let rpc_response = self.pubsub.claim(&self.exchanges[index], args);
+        let adapter_echo = self.pubsub.prepare_echo(&self.exchanges[index], args);
         let requires_binding =
             self.connection_scopes
                 .claim(&self.exchanges[index], active_case_id, connection);
@@ -628,6 +639,7 @@ impl RedisReplayState {
             unified_delivery,
             rpc_push: exchange.rpc_push,
             rpc_response,
+            adapter_echo,
             publish_duration_ms: exchange.record.duration_ms,
             rule_ids,
             index,
@@ -719,6 +731,7 @@ impl RedisReplayState {
             time_write: None,
             rpc_push: None,
             rpc_response: None,
+            adapter_echo: None,
             publish_duration_ms: exchange.record.duration_ms,
             rule_ids: Vec::new(),
             index,

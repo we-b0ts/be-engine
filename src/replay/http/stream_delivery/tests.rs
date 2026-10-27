@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -45,6 +46,41 @@ async fn dependency_stream_target_cancellation_is_dirty_and_not_consumed() {
     tokio::time::timeout(Duration::from_secs(4), exercise(true))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn fast_delivery_removes_long_recorded_gaps_and_preserves_chunks_and_eof() {
+    let temp = tempfile::tempdir().unwrap();
+    let case = temp.path().join("fast-stream");
+    tokio::fs::create_dir_all(&case).await.unwrap();
+    let mut event = dependency();
+    event["response_stream"]["headers_ms"] = json!(60_000);
+    event["response_stream"]["chunks"][0]["at_ms"] = json!(120_000);
+    event["response_stream"]["chunks"][1]["at_ms"] = json!(600_000);
+    event["response_stream"]["end_ms"] = json!(900_000);
+    let source = event.to_string();
+    tokio::fs::write(case.join("dependencies.jsonl"), &source)
+        .await
+        .unwrap();
+    let (address, runtime, task) =
+        crate::replay::http::tests::spawn_http_replay(&case, vec![]).await;
+    runtime.state.lock().await.http_stream_timing = crate::replay::ReplayHttpStreamTiming::Fast;
+    tokio::time::timeout(Duration::from_secs(1),async {
+        let mut client=TcpStream::connect(address).await.unwrap();
+        client.write_all(b"POST /stream HTTP/1.1\r\nHost: stream.test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut head=Vec::new();
+        while !head.ends_with(b"\r\n\r\n") { head.push(client.read_u8().await.unwrap()); }
+        assert_eq!(chunk(&mut client).await,b"one");
+        assert_eq!(chunk(&mut client).await,b"two");
+        assert!(chunk(&mut client).await.is_empty());
+    }).await.unwrap();
+    assert_eq!(
+        tokio::fs::read_to_string(case.join("dependencies.jsonl"))
+            .await
+            .unwrap(),
+        source
+    );
+    task.abort();
 }
 
 async fn exercise(cancel: bool) {

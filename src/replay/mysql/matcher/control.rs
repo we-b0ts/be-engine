@@ -41,6 +41,8 @@ impl ReplayState {
                 record: exchange.record.clone(),
                 timing: exchange.timing,
                 report: MatchedQueryReport {
+                    source_connection_id: exchange.record.connection_id,
+                    source_query_sequence: exchange.record.query_sequence,
                     case_id: case.map(ToOwned::to_owned),
                     target: Some(exchange.identity.target.clone()),
                     database: exchange.identity.database.clone(),

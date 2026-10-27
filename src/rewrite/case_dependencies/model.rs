@@ -14,6 +14,12 @@ pub struct RewriteCaseDependenciesOptions {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RewriteCaseDependencySourceReference {
+    pub connection_id: uuid::Uuid,
+    pub sequence: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RewriteCaseDependenciesReport {
     Summary {
@@ -28,6 +34,10 @@ pub enum RewriteCaseDependenciesReport {
     Detail {
         case_dir: PathBuf,
         target: RewriteCaseDependencyTarget,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_reference: Option<RewriteCaseDependencySourceReference>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exchange_query: Option<Box<RewriteCommandSpec>>,
         event_count: usize,
         event_types: BTreeMap<String, usize>,
         commands: BTreeMap<String, usize>,

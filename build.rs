@@ -7,6 +7,7 @@ const TARGET_RUNTIME_IMAGE: &str = "registry.api.demo.test/weibo_rd_if/traffic-e
 
 fn main() {
     println!("cargo:rerun-if-env-changed={BUILD_REVISION_ENV}");
+    println!("cargo:rerun-if-env-changed=CARGO_MANIFEST_DIR");
     for path in ["build.rs", "Cargo.toml", "Cargo.lock", "src"] {
         println!("cargo:rerun-if-changed={path}");
     }
@@ -73,7 +74,7 @@ fn emit_rerun_path(path: &str) {
     let path = if path.is_absolute() {
         path
     } else {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
+        manifest_dir().join(path)
     };
     println!("cargo:rerun-if-changed={}", path.display());
 }
@@ -81,11 +82,17 @@ fn emit_rerun_path(path: &str) {
 fn git_output(args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .args(args)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .current_dir(manifest_dir())
         .output()
         .ok()?;
     output
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn manifest_dir() -> PathBuf {
+    env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .expect("Cargo must provide the current manifest directory when running its build script")
 }

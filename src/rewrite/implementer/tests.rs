@@ -12,6 +12,7 @@ use crate::rewrite::{
     worker,
 };
 use worker::model::RewriteWorkerActivity as Activity;
+mod engine_refresh;
 
 fn pool_state() -> RewriteState {
     let mut state = worker::tests::implementation_state_with_inventory(false);

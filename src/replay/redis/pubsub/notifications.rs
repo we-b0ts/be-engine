@@ -59,6 +59,7 @@ pub(in crate::replay::redis) fn schedule_notifications(
                         &mut job,
                         id,
                         entry.duration_ms,
+                        entry.adapter_echo,
                         Some(source.reference(entry.location)),
                         started,
                     )
@@ -77,7 +78,25 @@ pub(in crate::replay::redis) fn schedule_notifications(
                 let delay = state.lock().await.redis.pubsub.pushes[index]
                     .record
                     .duration_ms;
-                if !deliver(&weak, &mut job, PushId::Inline(index), delay, None, started).await {
+                let digest = {
+                    let replay = state.lock().await;
+                    replay.redis.pubsub.pushes[index]
+                        .bytes()
+                        .ok()
+                        .and_then(|raw| parse_pubsub_push(&raw).ok().flatten())
+                        .and_then(|push| rpc::echo_digest(&push.channel, &push.payload))
+                };
+                if !deliver(
+                    &weak,
+                    &mut job,
+                    PushId::Inline(index),
+                    delay,
+                    digest,
+                    None,
+                    started,
+                )
+                .await
+                {
                     return;
                 }
             }
@@ -85,14 +104,26 @@ pub(in crate::replay::redis) fn schedule_notifications(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn deliver(
     weak: &Weak<Mutex<ReplayState>>,
     job: &mut NotificationJob,
     id: PushId,
     delay: u64,
+    adapter_echo: Option<[u8; 32]>,
     reference: Option<RecordRef>,
     started: Instant,
 ) -> bool {
+    if let Some(state) = weak.upgrade()
+        && state
+            .lock()
+            .await
+            .redis
+            .pubsub
+            .timer_controls_echo(id, adapter_echo)
+    {
+        return true;
+    }
     tokio::select! {
         _ = sleep_until(started + Duration::from_millis(delay)) => {}
         _ = job.cancelled.changed() => { return false; }
@@ -105,6 +136,9 @@ async fn deliver(
         let mut replay = state.lock().await;
         if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
             return false;
+        }
+        if replay.redis.pubsub.timer_controls_echo(id, adapter_echo) {
+            return true;
         }
         match id {
             PushId::Inline(index) => {

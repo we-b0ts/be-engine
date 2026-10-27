@@ -211,6 +211,16 @@ pub(super) async fn deliver_redis_exchange(
             return Err(error);
         }
     }
+    drop(state);
+    if let Err(error) = pubsub::echo::deliver(state_ref, matched).await {
+        state_ref
+            .lock()
+            .await
+            .redis
+            .fail_exchange(matched, format!("adapter self-echo failed: {error:#}"));
+        return Err(error);
+    }
+    let mut state = state_ref.lock().await;
     if let Some(push) = matched.rpc_push {
         let detached = state.redis.pubsub.rpc_is_detached(matched);
         let delivery = state.redis.pubsub.rpc_delivery(matched);

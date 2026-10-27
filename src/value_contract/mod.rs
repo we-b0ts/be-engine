@@ -7,6 +7,7 @@ pub(crate) mod global_protocol;
 pub(crate) mod http_headers;
 pub(crate) mod identities;
 pub(crate) mod json;
+pub(crate) mod pre_match;
 pub(crate) mod redis_scalar;
 pub(crate) mod time;
 pub(crate) mod time_copies;

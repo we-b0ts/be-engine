@@ -30,6 +30,7 @@ pub(super) struct Entry {
 enum Behavior {
     Append,
     ReadCommutation,
+    ReadObservation,
     ExpiryRefresh,
     ReadBack,
     Commands {
@@ -43,6 +44,7 @@ impl Behavior {
         match self {
             Self::Append => "append_stream",
             Self::ReadCommutation => "read_commutation",
+            Self::ReadObservation => "read_observation",
             Self::ExpiryRefresh => "expiry_refresh",
             Self::ReadBack => "read_back",
             Self::Commands { .. } => "commands",
@@ -51,7 +53,7 @@ impl Behavior {
     fn operation(&self) -> Option<&str> {
         match self {
             Self::Append => Some("APPEND"),
-            Self::ReadCommutation => Some("GET"),
+            Self::ReadCommutation | Self::ReadObservation => Some("GET"),
             Self::ExpiryRefresh => Some("EXPIRE"),
             Self::ReadBack => Some("SET"),
             Self::Commands { .. } => None,
@@ -68,6 +70,7 @@ impl Behavior {
             Self::ReadCommutation => {
                 NativeEffect::RedisReadCommutation(RedisReadCommutationEffect {})
             }
+            Self::ReadObservation => NativeEffect::RedisReadObservation,
             Self::ExpiryRefresh => NativeEffect::RedisExpiryRefresh(RedisExpiryRefreshEffect {}),
             Self::ReadBack => stateful::lower_read_back(resource, proof),
             Self::Commands {
@@ -106,6 +109,7 @@ impl<'de> Deserialize<'de> for Entry {
             for behavior in [
                 Behavior::Append,
                 Behavior::ReadCommutation,
+                Behavior::ReadObservation,
                 Behavior::ExpiryRefresh,
                 Behavior::ReadBack,
             ] {
@@ -267,6 +271,7 @@ pub(super) fn compact(rule: &PolicyRule, root: &mut Mapping) -> Result<bool> {
     let behavior = match &native.effect {
         NativeEffect::RedisAppendStream => Behavior::Append,
         NativeEffect::RedisReadCommutation(_) => Behavior::ReadCommutation,
+        NativeEffect::RedisReadObservation => Behavior::ReadObservation,
         NativeEffect::RedisExpiryRefresh(_) => Behavior::ExpiryRefresh,
         effect if stateful::is_read_back(effect, None) => Behavior::ReadBack,
         NativeEffect::RedisSequence(effect) if effect.read_back.is_empty() => {

@@ -185,6 +185,7 @@ impl Serialize for RewriteAction {
                 handoff_id,
                 export_batch,
                 report_worker,
+                report_rework,
             } => RewriteActionView {
                 kind: "integration_required",
                 summary,
@@ -193,7 +194,7 @@ impl Serialize for RewriteAction {
                     worker,
                     handoff_id: Some(handoff_id),
                 },
-                commands: serde_json::json!({"export_batch": export_batch, "report_worker": report_worker}),
+                commands: serde_json::json!({"export_batch": export_batch, "report_worker": report_worker, "report_rework": report_rework}),
             }
             .serialize(serializer),
             Self::ExecutionFailed {

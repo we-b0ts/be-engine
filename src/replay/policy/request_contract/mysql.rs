@@ -24,8 +24,6 @@ impl RequestContracts {
         ) else {
             return false;
         };
-        let analysis =
-            crate::mysql::sql::field_bindings::analyze(&tokens, record.database.as_deref());
         let context = crate::replay::mysql::contracts::automatic::RequestContext::new(
             policy,
             self.mysql_automatic
@@ -42,21 +40,10 @@ impl RequestContracts {
             None,
             None,
         );
-        tokens.iter().enumerate().any(|(position, token)| {
-            match context.select(
-                token,
-                token,
-                analysis
-                    .as_ref()
-                    .and_then(|analysis| analysis.at_token(position)),
-                position,
-                clocks,
-            ) {
-                Ok(None) => false,
-                // A malformed declared field must reach normal validation.
-                Ok(Some(_)) | Err(_) => true,
-            }
-        })
+        // A malformed declared field must still reach normal validation.
+        context
+            .selects_values(&tokens, record.database.as_deref(), clocks)
+            .unwrap_or(true)
     }
     /// PREPARE can prove SQL shape; runtime execution retains all value checks.
     pub(in crate::replay) fn mysql_fields_metadata_matches(
@@ -142,7 +129,13 @@ impl RequestContracts {
         let automatic = self
             .compiled_rules()
             .filter(|policy| policy.global_json.is_some() || policy.mysql.is_some());
-        if rules.is_empty() && native.is_empty() && automatic.is_none() {
+        // A global format map is not a positional SQL contract. If it selects
+        // no Source value, retain ordinary predicate/projection compatibility
+        // instead of rejecting an otherwise equivalent IN-list permutation.
+        if rules.is_empty()
+            && native.is_empty()
+            && (automatic.is_none() || !self.has_mysql_formats(identity, record))
+        {
             return None;
         }
         Some(

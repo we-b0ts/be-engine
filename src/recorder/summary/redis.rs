@@ -8,7 +8,7 @@ use serde_json::Value;
 #[cfg(test)]
 mod tests;
 
-pub(super) fn is_client_library_info_exchange(
+pub(crate) fn is_client_library_info_exchange(
     exchange: &crate::recorder::RedisExchangeEvent,
 ) -> bool {
     if !exchange.command.eq_ignore_ascii_case("CLIENT")

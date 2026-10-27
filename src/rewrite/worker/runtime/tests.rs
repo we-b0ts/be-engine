@@ -507,6 +507,53 @@ fn integration_conflict_resumes_same_worker_and_rejects_old_handoff() {
 }
 
 #[test]
+fn reviewed_rework_resumes_its_worker_before_an_optional_changed_engine_retry() {
+    let (target, state, scope) = setup();
+    confirm(target.path(), &state, &scope);
+    let handoff = options(
+        target.path(),
+        &state,
+        &scope,
+        RewriteWorkerActivity::HandoffReady,
+    );
+    report(handoff.clone()).unwrap();
+    let store = RewriteStore::new(target.path()).unwrap();
+    let mut current = store.load().unwrap().unwrap();
+    current.active_issue.as_mut().unwrap().kind =
+        crate::rewrite::model::RewriteIssueKind::TargetRuntime;
+    current.attempts.push(serde_json::from_value(serde_json::json!({
+        "engine_fingerprint":"engine-revision-v1:older", "attempt":1,"passed":false,
+        "gates":{"responses":"incomplete","replay":"incomplete","dependencies":"unknown"},
+        "counts":{"selected":1,"executed":0,"response_passed":0,"response_nonpassing":0,"response_incomplete":1}
+    })).unwrap());
+    store.save(&current).unwrap();
+    let mut rework = handoff.clone();
+    rework.activity = RewriteWorkerActivity::ReworkRequired;
+    let response = report(rework).unwrap();
+    let RewriteAction::ImplementationRequired {
+        worker: dispatch, ..
+    } = response.action
+    else {
+        panic!(
+            "reviewed rework must resume instead of spending a known-failing Replay: {:?}",
+            response.action
+        )
+    };
+    assert_eq!(
+        dispatch.state,
+        crate::rewrite::RewriteWorkerDispatchState::ResumeRequired
+    );
+    let mut latest = store.load().unwrap().unwrap();
+    assert_eq!(latest.attempts.len(), 1);
+    assert!(latest.engine_retry_fingerprints.is_empty());
+    assert!(!crate::rewrite::engine_retry::reserve(&mut latest, None));
+    assert!(
+        report(handoff).is_err(),
+        "the old accepted handoff stays immutable"
+    );
+}
+
+#[test]
 fn resumed_review_preserves_original_report_and_rejects_late_deliveries() {
     let (target, state, scope) = setup();
     confirm(target.path(), &state, &scope);

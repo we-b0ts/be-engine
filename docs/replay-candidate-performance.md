@@ -48,6 +48,9 @@ references and assertion validation. A derived delivery remains explicitly
 distinct from independent Target observation.
 
 The observation and candidate-count bounds still protect session memory.
+One session retains at most 65,536 Source and Target observations combined,
+and 262,144 candidate associations. The observation budget covers every Case
+in a focused API; it is not renewed or consumed separately for each Case.
 Exhausting such a bound or failing persistence leaves explicit incomplete
 coverage; it cannot authorize plan/apply. Disk use for genuine new Target data
 is proportional to that data. A compact status is not a promise that arbitrary

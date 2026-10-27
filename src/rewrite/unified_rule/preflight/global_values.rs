@@ -56,7 +56,7 @@ pub(super) fn verify(
         .filter(|_| private.is_some())
         .map(WitnessManifest::source_index)
         .transpose()?;
-    let mut candidates = mysql_candidates::Candidates::default();
+    let mut candidates = candidate_pairs::Candidates::default();
     for (case, directory) in bundle.cases.clone() {
         let request = bundle.request(&directory.join("request.json"))?;
         if selected.contains(crate::policy::GLOBAL_HTTP_ID)
@@ -65,7 +65,9 @@ pub(super) fn verify(
             headers::primary(bundle, &case, &directory, &request, http, result)?;
         }
         if selected.contains(GLOBAL_JSON_ID) && policy.global_json.is_some() {
-            primary(root, bundle, &case, &directory, &request, policy, result)?;
+            primary(root, bundle, &case, &directory, &request, policy, result).with_context(
+                || format!("global format primary validation: case={case}, surface=api.response"),
+            )?;
         }
         let trace = directory.join("dependencies.jsonl");
         bundle.freeze(&trace)?;
@@ -93,8 +95,9 @@ pub(super) fn verify(
                         request: Some(&request),
                         native_obligations: &mut result.stateful_target_obligations,
                     },
-                )?;
-                let relevant = record_source(&checked, selected, result)?;
+                ).with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
+                let relevant = record_source(&checked, selected, result)
+                    .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
                 if !relevant {
                     continue;
                 }
@@ -141,6 +144,14 @@ pub(super) fn verify(
                         {
                             continue;
                         }
+                        if dependency::protocol(event) == Some(Protocol::Mysql)
+                            && surface == Surface::DependencyRequest
+                            && !crate::replay::mysql_request_candidates_related(
+                                &raw, &target, observed,
+                            )?
+                        {
+                            continue;
+                        }
                         copies.set_lookup_clocks(observed.dependency);
                         let checked = compare_prepared(
                             event,
@@ -156,8 +167,15 @@ pub(super) fn verify(
                                 native_obligations: &mut result.stateful_target_obligations,
                             },
                         )
-                        .and_then(|comparison| valid_count(&comparison, selected));
-                        let count = if dependency::protocol(event) == Some(Protocol::Mysql)
+                        .and_then(|comparison| valid_count(&comparison, selected))
+                        .with_context(|| format!(
+                            "phase=independent_target_validation, surface={surface:?}, witness_id={}, slot={:?}",
+                            witness.id, witness.metadata.slot
+                        ));
+                        let count = if matches!(
+                            dependency::protocol(event),
+                            Some(Protocol::Mysql | Protocol::Redis)
+                        )
                             && surface == Surface::DependencyRequest
                         {
                             candidates.observe(witness, checked)?
@@ -200,7 +218,7 @@ pub(super) fn verify(
                 }
             }
             Ok(())
-        })?;
+        }).with_context(|| format!("global format dependency validation: case={case}"))?;
     }
     candidates.finish()
 }
@@ -249,8 +267,11 @@ pub(super) fn global_trace(
                     request: None,
                     native_obligations: &mut result.stateful_target_obligations,
                 },
-            )?;
-            if record_source(&comparison, selected, result)? {
+            )
+            .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
+            if record_source(&comparison, selected, result)
+                .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?
+            {
                 // Background Source input is evidence of format only. It has no
                 // independent Target publication in the current API attempt.
                 result.missing_target_witnesses += 1;
@@ -265,14 +286,22 @@ fn visit(path: &Path, mut visitor: impl FnMut(&Value) -> Result<()>) -> Result<(
         fs::metadata(path)?.len() <= 1024 * 1024 * 1024,
         "global format trace exceeds evidence bounds"
     );
-    for line in BufReader::new(fs::File::open(path)?).lines() {
+    for (index, line) in BufReader::new(fs::File::open(path)?).lines().enumerate() {
         let line = line?;
         ensure!(
             line.len() <= crate::dependency::http_limits::MAX_RECORD_BYTES,
             "global format record exceeds evidence bounds"
         );
         if !line.trim().is_empty() {
-            visitor(&serde_json::from_str(&line)?)?;
+            let event: Value = serde_json::from_str(&line)?;
+            visitor(&event).with_context(|| format!(
+                "global format trace={}, record={}, event_type={}, connection_id={}, sequence={}",
+                path.display(), index + 1,
+                event["event_type"].as_str().unwrap_or("unknown"),
+                event["connection_id"].as_str().unwrap_or("unknown"),
+                event["sequence"].as_u64().or_else(|| event["query_sequence"].as_u64())
+                    .map_or_else(|| "unknown".into(), |sequence| sequence.to_string()),
+            ))?;
         }
     }
     Ok(())
@@ -406,7 +435,9 @@ fn primary(
         clocks.case,
     )?);
     let selected = BTreeSet::from([GLOBAL_JSON_ID.into()]);
-    if !record_source(&comparison, &selected, result)? {
+    if !record_source(&comparison, &selected, result)
+        .context("phase=source_self_validation, document=body_or_interaction")?
+    {
         return Ok(());
     }
     let Some(target) = target else {
@@ -432,7 +463,8 @@ fn primary(
         Some(plan),
         pair.times,
     )?);
-    valid_count(&checked, &selected)?;
+    valid_count(&checked, &selected)
+        .context("phase=independent_target_validation, document=body_or_interaction")?;
     result.independent_target_validations += 1;
     Ok(())
 }

@@ -1,5 +1,6 @@
 use super::*;
 
+mod peer_disconnect;
 mod streaming;
 
 #[tokio::test(start_paused = true)]

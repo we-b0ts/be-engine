@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use hyper::{Method, Uri};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -12,10 +11,11 @@ use crate::mysql::sql::{self, Token};
 use crate::policy::{AsyncApiRule, AsyncEnd, Endpoint};
 use crate::recorder::{BodyCapture, MysqlValue, RecorderEvent};
 mod recorded;
+mod selection;
+pub(crate) use selection::AsyncScope;
 
 #[derive(Debug, Clone)]
-pub(crate) struct AsyncScope {
-    pub(crate) api: String,
+struct ResourceScope {
     rule: AsyncApiRule,
     progress: Arc<Mutex<RedisProgress>>,
 }
@@ -54,29 +54,15 @@ pub(crate) struct AsyncSignal {
     pub(crate) event_type: Option<&'static str>,
 }
 
-impl AsyncScope {
-    pub(crate) fn for_primary(
-        rules: &BTreeMap<String, AsyncApiRule>,
-        method: &Method,
-        uri: &Uri,
-        body: &[u8],
-    ) -> Option<Self> {
-        let json = crate::json_value::parse_with_limit(body, body.len());
-        rules.iter().find_map(|(api, rule)| {
-            let api_selector = api.parse::<crate::RecordingApi>().ok()?;
-            (api_selector.matches(method, uri)
-                && rule.when.iter().all(|(pointer, expected)| {
-                    json.as_ref().and_then(|body| body.pointer(pointer)) == Some(expected)
-                }))
-            .then(|| Self {
-                api: api.clone(),
-                rule: rule.clone(),
-                progress: Default::default(),
-            })
-        })
-    }
-
+impl ResourceScope {
     pub(crate) fn observe(&self, event: &RecorderEvent) -> Option<AsyncSignal> {
+        // Reuse the exact metadata exemption applied to the semantic inventory.
+        // Optional CLIENT SETINFO errors cannot end the business observation.
+        if matches!(event, RecorderEvent::RedisExchange(exchange)
+            if super::summary::is_client_library_info_exchange(exchange))
+        {
+            return None;
+        }
         if failed(event) {
             return Some(AsyncSignal {
                 end_reason: AsyncEndReason::DependencyFailure,
@@ -210,8 +196,59 @@ fn terminal(end: &AsyncEnd, event: &RecorderEvent) -> bool {
                     .iter()
                     .any(|key| key_matches(&end.key, key))
         }
+        (AsyncEnd::Http(end), RecorderEvent::HttpExchange(event)) => {
+            event.outcome == DependencyExchangeOutcome::Response
+                && event.error.is_none()
+                && http_terminal(
+                    end,
+                    &event.method,
+                    &event.uri,
+                    event.authority.as_deref(),
+                    &event.scheme,
+                    event.response_status,
+                )
+        }
         _ => false,
     }
+}
+
+fn http_terminal(
+    end: &crate::policy::AsyncHttpEnd,
+    method: &str,
+    uri: &str,
+    authority: Option<&str>,
+    scheme: &str,
+    status: Option<u16>,
+) -> bool {
+    let Some(status) = status.filter(|status| (200..=299).contains(status)) else {
+        return false;
+    };
+    let Ok(uri) = uri.parse::<hyper::Uri>() else {
+        return false;
+    };
+    let Some(authority) = authority.or_else(|| uri.authority().map(|value| value.as_str())) else {
+        return false;
+    };
+    let Ok(authority) = authority.parse::<hyper::http::uri::Authority>() else {
+        return false;
+    };
+    let port = authority.port_u16().unwrap_or(
+        if scheme.contains("https") || uri.scheme_str() == Some("https") {
+            443
+        } else {
+            80
+        },
+    );
+    method == end.method
+        && uri.path() == end.path
+        && end.endpoint.host.eq_ignore_ascii_case(
+            authority
+                .host()
+                .trim_start_matches('[')
+                .trim_end_matches(']'),
+        )
+        && end.endpoint.port == port
+        && (end.status_codes.is_empty() || end.status_codes.contains(&status))
 }
 
 fn redis_keys(event: &crate::recorder::RedisExchangeEvent) -> Vec<Vec<u8>> {
@@ -349,3 +386,6 @@ fn failed_outcome(outcome: DependencyExchangeOutcome) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod http_tests;

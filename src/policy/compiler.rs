@@ -16,7 +16,7 @@ pub struct CompiledPolicy {
     pub mysql: Option<MysqlPolicy>,
     pub redis: Option<RedisPolicy>,
     pub http: Option<HttpPolicy>,
-    pub async_api: BTreeMap<String, AsyncApiRule>,
+    pub async_api: BTreeMap<String, AsyncApiRules>,
     pub signatures: BTreeMap<String, SignatureDefinition>,
     pub rules: Vec<CompiledRule>,
     pub native: Vec<CompiledNativeRule>,
@@ -257,11 +257,11 @@ struct RuntimeIdentity<'a> {
     capabilities: &'a [CapabilityId],
 }
 
-/// Redis process GET selectors also govern validated bootstrap seed admission.
-/// Their delivery and acquisition identity cannot be treated as unused-only.
+/// Initial-load Redis GET selectors also govern bootstrap seed admission.
+/// Finite GET ownership changes classification without acquiring a snapshot.
 fn affects_snapshot(rule: &CompiledNativeRule) -> bool {
     matches!(&rule.rule.effect, NativeEffect::ProcessOwned(effect)
-        if matches!(&effect.selector, super::native::ProcessSelector::Redis {operation,..} if operation == "GET"))
+        if matches!(&effect.selector, super::native::ProcessSelector::Redis {operation,initial_load_timeout_ms:Some(_),..} if operation == "GET"))
 }
 
 pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {

@@ -14,10 +14,10 @@ use traffic_e2e::{
     RewriteNextOptions, RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
     RewriteTargetQualityOptions, RewriteWorkerConfirmOptions, RewriteWorkerReportOptions,
     RewriteWorkerTransferOptions, apply_rewrite_case_patterns, confirm_rewrite_worker,
-    inventory_rewrite, query_rewrite_case_dependencies, recover_rewrite, report_rewrite_worker,
-    request_rewrite_revalidation, resume_rewrite_replay_planning, retry_rewrite_operation,
-    route_rewrite, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
-    transfer_rewrite_worker, verify_rewrite_repair,
+    inventory_rewrite, query_rewrite_case_dependencies, query_rewrite_case_dependency_exchange,
+    recover_rewrite, report_rewrite_worker, request_rewrite_revalidation,
+    resume_rewrite_replay_planning, retry_rewrite_operation, route_rewrite, start_rewrite_next,
+    start_rewrite_target_quality, status_rewrite, transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -214,6 +214,12 @@ struct CaseDependenciesArgs {
     case_dir: PathBuf,
     /// Opaque target id returned by the dependency summary.
     target_id: Option<String>,
+    /// Exact Source connection from a dependency diagnostic; requires --sequence.
+    #[arg(long, requires_all = ["target_id", "sequence"])]
+    connection_id: Option<uuid::Uuid>,
+    /// Redis sequence or MySQL query_sequence on the selected Source connection.
+    #[arg(long, requires = "connection_id")]
+    sequence: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -507,14 +513,21 @@ async fn run(cli: Cli) -> Result<()> {
             print_json(&inventory_rewrite(RewriteContext { target_root })?, pretty)
         }
         RewriteCommand::Case(args) => match args.command {
-            CaseCommand::Dependencies(args) => print_json(
-                &query_rewrite_case_dependencies(RewriteCaseDependenciesOptions {
+            CaseCommand::Dependencies(args) => {
+                let options = RewriteCaseDependenciesOptions {
                     target_root,
                     case_dir: args.case_dir,
                     target_id: args.target_id,
-                })?,
-                pretty,
-            ),
+                };
+                let report = match (args.connection_id, args.sequence) {
+                    (Some(connection), Some(sequence)) => {
+                        query_rewrite_case_dependency_exchange(options, connection, sequence)?
+                    }
+                    (None, None) => query_rewrite_case_dependencies(options)?,
+                    _ => bail!("--connection-id and --sequence must be provided together"),
+                };
+                print_json(&report, pretty)
+            }
         },
         RewriteCommand::CasePattern(args) => match args.command {
             CasePatternCommand::Apply(args) => {

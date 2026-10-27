@@ -100,6 +100,15 @@ pub(super) fn validate(
                         event["replay_safe"] == true && event["outcome"] == "response",
                         "Source-owned exchange is unsafe or incomplete"
                     );
+                    if matches!(rule, BackgroundDependencyRuleConfig::Redis { command, .. }
+                        if command == "GET" && !rule.uses_redis_snapshot())
+                    {
+                        ensure!(
+                            event["cache_snapshot_rule"].is_null()
+                                && event["cache_snapshot_hit"] != true,
+                            "finite process-owned GET requires original single-use evidence, not snapshot seeds or hits"
+                        );
+                    }
                     complete_captures(event)?;
                     validate_native_frames(event)?;
                 }

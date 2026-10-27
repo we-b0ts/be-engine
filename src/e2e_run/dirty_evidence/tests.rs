@@ -87,6 +87,56 @@ fn method_projection_resolves_shared_session_dirty_representative() {
 }
 
 #[test]
+fn source_wire_references_survive_sidecar_and_public_dirty_projection() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = shared_session(temp.path(), "get-case");
+    let evidence = build_dependency_evidence(&json!({
+        "matched_queries":[{
+            "case_id":"get-case", "target_event_index":0, "index":7,
+            "source":"case", "command":"COM_QUERY", "status":"resultset",
+            "source_connection_id":"00000000-0000-0000-0000-000000000001",
+            "source_query_sequence":2511
+        }],
+        "unused_case_exchanges":[{
+            "case_id":"get-case", "command":"COM_QUERY", "index":8
+        }]
+    }));
+    std::fs::write(
+        dependency_evidence_path(&state.replay_report),
+        serde_json::to_vec(&evidence).unwrap(),
+    )
+    .unwrap();
+    let counts = build(&state, true, true).unwrap();
+    let mut public = serde_json::to_value(&counts).unwrap();
+    let matched = &mut public["clusters"][0]["representative"]["target_matches"][0];
+    assert_eq!(matched["recorded_index"], 7);
+    assert_eq!(matched["source_query_sequence"], 2511);
+    assert_eq!(
+        matched["source_connection_id"],
+        "00000000-0000-0000-0000-000000000001"
+    );
+    // Old public reports retain their index without inventing a wire reference.
+    matched
+        .as_object_mut()
+        .unwrap()
+        .remove("source_query_sequence");
+    matched
+        .as_object_mut()
+        .unwrap()
+        .remove("source_connection_id");
+    let legacy: E2eDirtyCounts = serde_json::from_value(public).unwrap();
+    let matched = &legacy.clusters[0]
+        .representative
+        .as_ref()
+        .unwrap()
+        .target_matches[0];
+    assert_eq!(matched.recorded_index, Some(7));
+    assert!(matched.source_query_sequence.is_none());
+    assert!(matched.source_connection_id.is_none());
+    assert!(!state.replay_report.exists());
+}
+
+#[test]
 fn dirty_representative_outside_recording_is_rejected() {
     let temp = tempfile::tempdir().unwrap();
     let state = shared_session(temp.path(), "foreign-case");

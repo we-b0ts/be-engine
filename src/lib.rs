@@ -211,9 +211,10 @@ pub use rewrite::{
     RewriteApiInventoryView, RewriteApiProgress, RewriteApiSelector, RewriteApiStatus,
     RewriteApplicableRulePlanner, RewriteCapturePreview, RewriteCaseDependenciesOptions,
     RewriteCaseDependenciesReport, RewriteCaseDependencyProtocolDetail,
-    RewriteCaseDependencyTarget, RewriteCaseDependencyTargetSummary,
-    RewriteCaseGroupRebuildOptions, RewriteCaseGroupRebuildReport, RewriteCasePatternApplyOptions,
-    RewriteCommandSpec, RewriteContext, RewriteCoordinationDetails, RewriteDependencyOwnership,
+    RewriteCaseDependencySourceReference, RewriteCaseDependencyTarget,
+    RewriteCaseDependencyTargetSummary, RewriteCaseGroupRebuildOptions,
+    RewriteCaseGroupRebuildReport, RewriteCasePatternApplyOptions, RewriteCommandSpec,
+    RewriteContext, RewriteCoordinationDetails, RewriteDependencyOwnership,
     RewriteDependencyPayloadRulePlanOptions, RewriteDependencyPayloadRulePlanReport,
     RewriteDependencyRulePlanOptions, RewriteDependencyRulePlanReport, RewriteDependencyRuleReport,
     RewriteDependencyRuleSelector, RewriteEvidenceCommand, RewriteEvidenceContext,
@@ -254,12 +255,13 @@ pub use rewrite::{
     plan_rewrite_dependency_payload_rule, plan_rewrite_dependency_rule,
     plan_rewrite_http_response_capture, plan_rewrite_recorder_capture, plan_rewrite_rule,
     plan_rewrite_unified_rule, prepare_rewrite_expert, query_rewrite_case_dependencies,
-    query_rewrite_evidence, query_rewrite_evidence_for_scope, reassign_rewrite_implementer,
-    rebuild_rewrite_case_groups, recover_rewrite, recover_rewrite_rule_plan,
-    replace_rewrite_implementer_runtime, report_rewrite_expert_delivery,
-    report_rewrite_implementer, report_rewrite_worker, repository_analysis_context,
-    request_rewrite_revalidation, resume_rewrite_replay_planning, retry_rewrite_operation,
-    retry_rewrite_replay_after_out_of_band_run, rework_rewrite_review,
+    query_rewrite_case_dependency_exchange, query_rewrite_evidence,
+    query_rewrite_evidence_for_scope, query_rewrite_redis_argument_for_scope,
+    query_rewrite_witness_for_scope, reassign_rewrite_implementer, rebuild_rewrite_case_groups,
+    recover_rewrite, recover_rewrite_rule_plan, replace_rewrite_implementer_runtime,
+    report_rewrite_expert_delivery, report_rewrite_implementer, report_rewrite_worker,
+    repository_analysis_context, request_rewrite_revalidation, resume_rewrite_replay_planning,
+    retry_rewrite_operation, retry_rewrite_replay_after_out_of_band_run, rework_rewrite_review,
     rework_rewrite_review_with_report, route_rewrite, run_rewrite_target_quality,
     show_rewrite_review, start_rewrite_next, start_rewrite_target_quality, status_rewrite,
     status_rewrite_for_api, status_rewrite_for_selector, transfer_rewrite_worker,
@@ -305,6 +307,7 @@ struct AppStateInner {
     recording_upstreams: std::sync::OnceLock<recording_upstream::RecordingUpstreams>,
     ca: MitmCa,
     client: ProxyClient,
+    forwarded_http_client: ProxyClient,
     upstream_tls_config: Arc<ClientConfig>,
     active_cases: ActiveCaseRegistry,
     interactions: gateway::http::interaction::Sessions,
@@ -409,6 +412,7 @@ impl AppState {
             .context("failed to initialize MITM CA")?;
         let upstream_tls_config = build_upstream_tls_config(&ca)?;
         let client = http::client::new_proxy_client();
+        let forwarded_http_client = http::client::new_unpooled_proxy_client();
 
         let case_matching_ready = !(config.http_gateway.enabled
             && config.http_gateway.ready.enabled
@@ -424,6 +428,7 @@ impl AppState {
                 recording_upstreams: std::sync::OnceLock::new(),
                 ca,
                 client,
+                forwarded_http_client,
                 upstream_tls_config,
                 active_cases: ActiveCaseRegistry::new(case_matching_ready),
                 interactions: gateway::http::interaction::Sessions::default(),

@@ -9,7 +9,7 @@ pub(super) fn verify(
     selected: &BTreeSet<String>,
     result: &mut Preflight,
 ) -> Result<()> {
-    let mut mysql_candidates = mysql_candidates::Candidates::default();
+    let mut candidates = candidate_pairs::Candidates::default();
     let manifest = bundle
         .replay
         .get("policy_witnesses")
@@ -308,7 +308,7 @@ pub(super) fn verify(
                     let evaluated = if surface == Surface::DependencyRequest
                         && dependency::protocol(&event) == Some(Protocol::Mysql)
                     {
-                        mysql_candidates.observe(witness, comparison)?
+                        candidates.observe(witness, comparison)?
                     } else {
                         comparison?
                     };
@@ -355,6 +355,6 @@ pub(super) fn verify(
             }
         }
     }
-    mysql_candidates.finish()?;
+    candidates.finish()?;
     Ok(())
 }

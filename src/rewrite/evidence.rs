@@ -5,7 +5,9 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use super::evidence_model::RewriteEvidenceReport;
-use super::model::{RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewriteState};
+use super::model::{
+    RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewritePhase, RewriteState,
+};
 use super::work_scope::RewriteWorkScope;
 use super::{fingerprint, source_process_traffic};
 use crate::case_group::resolve_published_case_dir;
@@ -18,6 +20,9 @@ use crate::{
 };
 
 mod access;
+mod execution;
+mod redis_argument;
+pub use redis_argument::query_rewrite_redis_argument_for_scope;
 mod http_requests;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod mysql_diagnosis;
@@ -26,8 +31,10 @@ pub(super) mod policy_freshness;
 mod response_body;
 mod rule_guidance;
 mod unified_discovery;
+mod witness;
 pub(super) use rule_guidance::supports_response_body_codec;
 use rule_guidance::{applicable_rule_planners, rule_hints};
+pub use witness::query_rewrite_witness_for_scope;
 
 const QUERY_JWT_TIME_VALIDITY: &str = "jwt_time_validity";
 const QUERY_CASE_RESPONSE_DIFFERENCES: &str = "case_response_differences";
@@ -90,6 +97,9 @@ fn requested_query(
         .or_else(|| {
             case_response_difference_offset(state, issue, requested_id)
                 .map(|offset| (QUERY_CASE_RESPONSE_DIFFERENCES, offset))
+        })
+        .or_else(|| {
+            execution::parse(state, issue, requested_id).map(|offset| (execution::KIND, offset))
         })
 }
 
@@ -204,6 +214,21 @@ pub(super) fn report_for_id(
     })
 }
 
+/// Recognize a current overview without promoting it to planning authority.
+pub(super) fn current_overview_matches(root: &Path, state: &RewriteState, id: &str) -> bool {
+    // Excluded/externally repaired slices retain their issue for later recovery,
+    // but have no current implementation dispatch to put in an overview.
+    if state.phase != RewritePhase::ImplementationRequired
+        || super::regression_scope::is_skipped(state, &state.api)
+    {
+        return false;
+    }
+    state.active_issue.as_ref().is_some_and(|issue| {
+        query(root, state, &overview::api_query_id(state, issue))
+            .is_ok_and(|report| report.evidence_id == id)
+    })
+}
+
 fn has_redis_bootstrap_traffic(facts: &Value) -> bool {
     facts
         .pointer("/bootstrap/protocols")
@@ -247,6 +272,9 @@ fn facts(
         QUERY_CASE_RESPONSE_DIFFERENCES => {
             case_response_difference_facts(target_root, state, issue, offset)
         }
+        execution::KIND => Ok((execution::facts(target_root,state,issue,offset)?,
+            vec!["A bounded page or omitted case does not prove absence of an execution failure. Follow pagination.next_page through every page.".into()],
+            "Follow pagination.next_page for the remaining failed cases. Inspect each case's own failures and target_event_index; do not attribute another case's failure to it. Unused Source dependencies alone remain dirty inventory, not an execution interruption.".into())),
         QUERY_REPRESENTATIVES => {
             let (pointer_scope, representative) =
                 representative_facts(target_root, state, issue)?;
@@ -333,6 +361,8 @@ fn facts(
         QUERY_DIRTY_CLUSTERS => {
             let counts = query_e2e_dirty_counts(e2e_context(target_root, state)?, group_id(state)?)?;
             let mut facts = dirty_cluster_facts(target_root, counts);
+            let execution = crate::e2e_run::query_execution_context(e2e_context(target_root,state)?,group_id(state)?,issue.attempt)?;
+            execution::attach(target_root,state,issue,&execution,&mut facts);
             facts["dependency_request_candidates"] = crate::e2e_run::query_dependency_request_candidates(e2e_context(target_root, state)?, group_id(state)?)?;
             if facts["dependency_request_candidates"].as_array().is_some_and(|items| items.iter().any(|item| item["capability"] == "redis_json_request")) {
                 facts["signing_key_discovery"] = super::jwt_rule::signing_key_discovery(target_root);
@@ -348,7 +378,9 @@ fn facts(
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }
             mysql_diagnosis::attach(&mut facts);
             let limitations = dirty_cluster_limitations(&facts);
-            let next_step = mysql_diagnosis::next_step(&facts);
+            let next_step = if facts["execution_failures"].as_array().is_some_and(|failures|!failures.is_empty()) {
+                format!("This request was interrupted by Replay because a dependency did not match. Inspect execution_failures[].failures and its target_event_index first. A service HTTP 5xx, absent stream events and unused later calls are downstream observations. {}",mysql_diagnosis::next_step(&facts))
+            } else {mysql_diagnosis::next_step(&facts)};
             Ok((
                 facts,
                 limitations,
@@ -594,7 +626,10 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         .representative
         .as_ref()
         .is_some_and(|representative| representative.body_diagnosis.is_some());
-    if issue.kind == RewriteIssueKind::TargetRuntime {
+    if matches!(
+        issue.kind,
+        RewriteIssueKind::TargetRuntime | RewriteIssueKind::Replay
+    ) {
         queries.push((
             QUERY_TARGET_RUNTIME_DIAGNOSTICS,
             "Inspect bounded target stdout, stderr, and container state from the failed attempt",
@@ -681,6 +716,10 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         issue.kind,
         RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
     ) {
+        queries.push((execution::KIND,"Page through every case interrupted by an unmatched dependency, including cases omitted from the overview"));
+        if issue.kind != RewriteIssueKind::Replay {
+            queries.push((QUERY_TARGET_RUNTIME_DIAGNOSTICS, "Inspect bounded target stdout, stderr, and container state alongside failed response or dependency evidence"));
+        }
         queries.push((QUERY_HTTP_REQUESTS, "Inspect failed HTTP dependency requests, exact Source/Target body differences, and complete protected body pages"));
         queries.push((QUERY_UNIFIED_RULE_CANDIDATES,"Inspect physical field bindings and bounded strategy drafts; inventory Source-owned time, duration, unordered and identity locations together"));
     }
@@ -767,7 +806,9 @@ fn query_identifier(
     kind: &str,
     offset: usize,
 ) -> String {
-    if kind == QUERY_CASE_RESPONSE_DIFFERENCES {
+    if kind == execution::KIND {
+        execution::id(state, issue, offset)
+    } else if kind == QUERY_CASE_RESPONSE_DIFFERENCES {
         case_response_difference_query_id(state, issue, offset)
     } else {
         query_id(state, issue, kind)

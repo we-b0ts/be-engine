@@ -1,6 +1,8 @@
 use super::*;
 use crate::recording_upstream::RecordingUpstreams;
 
+mod pooling;
+
 const HOSTNAME: &str = "api.team.svc.cluster.local";
 
 #[tokio::test]

@@ -151,10 +151,10 @@ impl RequestContext<'_> {
         {
             let source = native_scalar(source)?;
             let target = native_scalar(target)?;
-            let contract = field.select_contract_with_clock(
+            let contract = independent_scalar_contract(field.select_contract_with_clock(
                 &source,
                 clocks.dependency.source.or(clocks.case.source),
-            )?;
+            )?)?;
             return Ok(Some(Selection {
                 source,
                 target,
@@ -193,13 +193,20 @@ impl RequestContext<'_> {
         let Some(logical) = crate::json_value::parse(source) else {
             return Ok(None);
         };
+        let fields = json.fields_with_clocks(&logical, clocks)?;
+        // A VARCHAR identifier such as '801' happens to parse as a JSON
+        // number. With no selected content field it is an ordinary SQL scalar,
+        // so the native predicate matcher may still permute an IN list.
+        if !logical.is_object() && !logical.is_array() && fields.is_empty() {
+            return Ok(None);
+        }
         let Token::Bytes(target) = target else {
             anyhow::bail!("SQL JSON changed its native string representation")
         };
         let actual =
             crate::json_value::parse(target).context("Target SQL JSON cannot be decoded")?;
         Ok(Some(Selection {
-            fields: json.fields_with_clocks(&logical, clocks)?,
+            fields,
             source: logical,
             target: actual,
             id: crate::policy::GLOBAL_JSON_ID,
@@ -210,6 +217,30 @@ impl RequestContext<'_> {
 }
 
 impl<'a> RequestContext<'a> {
+    pub(in crate::replay) fn selects_values(
+        &self,
+        tokens: &[crate::mysql::sql::Token],
+        database: Option<&str>,
+        clocks: AnchorClocks,
+    ) -> Result<bool> {
+        let analysis = crate::mysql::sql::field_bindings::analyze(tokens, database);
+        for (position, token) in tokens.iter().enumerate() {
+            if self
+                .select(
+                    token,
+                    token,
+                    analysis.as_ref().and_then(|a| a.at_token(position)),
+                    position,
+                    clocks,
+                )?
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(in crate::replay) fn new(
         policy: &'a CompiledPolicy,
         metadata: Metadata,
@@ -261,6 +292,16 @@ fn native_scalar(token: &crate::mysql::sql::Token) -> Result<Value> {
     }
 }
 
+/// Native types and global scalar formats describe one physical value. They
+/// cannot invent a clock relationship with another column or result row.
+fn independent_scalar_contract(mut contract: FieldContract) -> Result<FieldContract> {
+    if let FieldContract::Time { clock_group, .. } = &mut contract {
+        let digest = crate::policy::digest("traffic-policy/mysql-scalar-clock/v1", &())?;
+        *clock_group = Some(format!("schema.{}", &digest[7..39]));
+    }
+    Ok(contract)
+}
+
 fn temporal_selection(source: Value, target: Value, temporal: Temporal) -> Result<Selection> {
     // SQL NULL is an exact native value; it is never an absent JSON leaf.
     if source.is_null() || target.is_null() {
@@ -291,7 +332,7 @@ fn temporal_selection(source: Value, target: Value, temporal: Temporal) -> Resul
             inferred: false,
         });
     }
-    let contract = FieldContract::Time {
+    let contract = independent_scalar_contract(FieldContract::Time {
         format: crate::policy::TimestampFormat::SqlDatetime,
         relation: crate::policy::TimeRelation::PreserveOffset,
         anchor: crate::policy::TimeAnchor::DependencyRequestStart,
@@ -300,7 +341,7 @@ fn temporal_selection(source: Value, target: Value, temporal: Temporal) -> Resul
         utc_offset: Some("+00:00".into()),
         clock_group: None,
         clock_scope: crate::policy::ClockScope::Shared,
-    };
+    })?;
     Ok(Selection {
         source,
         target,
@@ -522,8 +563,10 @@ pub(super) fn response_selection(
         && let Some(field) = mysql.field(&origin.table, &origin.column)?
     {
         let source = scalar_value(source)?;
-        let contract = field
-            .select_contract_with_clock(&source, clocks.dependency.source.or(clocks.case.source))?;
+        let contract = independent_scalar_contract(field.select_contract_with_clock(
+            &source,
+            clocks.dependency.source.or(clocks.case.source),
+        )?)?;
         return Ok(Some(Selection {
             source,
             target: scalar_value(target)?,
@@ -616,11 +659,13 @@ fn compare_response_inner(
             if let Some(selected) = response_selection(
                 policy, &remainder, index, source, target, sql, database, clocks,
             )? {
-                result.merge_and_validate(if formats_only {
+                let mut comparison = if formats_only {
                     compare_input_selection(&selected)?
                 } else {
                     compare_selection_with_context(&selected, clocks, &[], policy)?
-                });
+                };
+                comparison.scope_schema_clocks_in(&format!("mysql-result:{row_index}:{index}"));
+                result.merge_and_validate(comparison);
                 remainder.rows[row_index][index] = target.clone();
             }
         }

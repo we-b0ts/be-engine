@@ -28,6 +28,27 @@ foreign execution replacement or newly available Target evidence invalidate the
 plan. Apply and recovery recheck these identities. Applying a changed policy
 invalidates earlier API verification fingerprints so they require revalidation.
 
+A published foreign attempt interrupted before Replay finalization, or retaining
+incomplete aggregate coverage, supplies no Target validation to a resource plan.
+Its complete immutable Source cases are still validated and retain a fresh-Replay
+obligation. The plan freezes that attempt's state, so replacing even an
+unfinished attempt invalidates it. Active attempts and missing artifacts from a
+claimed complete execution remain errors. The primary planning attempt must
+still contain complete, finalized Replay and runner-owned assertions; use a
+completed focused attempt as the anchor for a resource/global rule.
+
+Interrupted diagnostic snapshots may contain sealed payload observations,
+aggregate counts and assertions for executed cases. Sealed payload coverage is
+not execution completion: an unfinalized or incomplete primary attempt still
+cannot anchor a rule plan. Diagnose that attempt and run fresh Replay, or use a
+completed focused anchor for a resource/global rule.
+
+MySQL global formats reuse native request-clock and SQL-shape candidate
+selection. A different UPDATE column set is an unpaired search edge, leaving
+Source proof and a fresh-Replay obligation; it is not a passed Target witness.
+Same-shape requests still validate all selected formats and exact unselected
+values, and a valid pair cannot hide another invalid Target observation.
+
 Each API has a planning/application lock. Different APIs can plan concurrently.
 Plans publish through a separate atomic event file instead of replacing the
 coordinator's in-memory workflow snapshot. Workflow loads and snapshot saves

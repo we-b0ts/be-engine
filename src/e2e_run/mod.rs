@@ -11,16 +11,19 @@ mod dirty_evidence;
 mod evidence;
 mod evidence_admission;
 mod execute;
+mod execution_failure;
 mod failure_limit;
 mod final_evidence;
 mod focused_batch;
 mod http_driver;
+mod interrupted_evidence;
 pub(crate) mod jwt_evidence;
 mod model;
 mod progress;
 mod project_validation;
 mod reclassify;
 mod replay_publication;
+mod request_feedback;
 mod request_view;
 mod result;
 mod runtime;
@@ -63,6 +66,7 @@ pub use evidence::{
     query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
     query_e2e_source_variation, query_e2e_target_runtime_diagnostics,
 };
+pub(crate) use evidence::{query_execution_context, query_execution_failure_page};
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 pub(crate) use execute::{recover_focused_e2e_api, run_e2e_apis};
 pub(crate) use http_driver::wait_until_ready;
@@ -177,6 +181,12 @@ pub struct E2eResponseRuleEvidence {
     pub replay: PathBuf,
     pub assertions: PathBuf,
     pub aggregate: PathBuf,
+}
+
+pub(crate) enum OptionalResponseRuleEvidence {
+    Absent,
+    Unavailable(PathBuf),
+    Available(E2eResponseRuleEvidence, PathBuf),
 }
 
 pub fn initialize_e2e_run(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
@@ -382,12 +392,13 @@ pub(crate) fn focused_active_progress(
     }))
 }
 
-/// Resource rules may include APIs that have never executed. Absence is an
-/// explicit Replay obligation; malformed or active published evidence is not.
+/// Foreign APIs without a complete attempt retain an explicit Replay obligation.
+/// Known unfinished attempts retain their state identity; malformed complete or
+/// active published evidence never becomes absence.
 pub(crate) fn optional_response_rule_evidence(
     context: E2eRunContext,
     api: &str,
-) -> Result<Option<(E2eResponseRuleEvidence, PathBuf)>> {
+) -> Result<OptionalResponseRuleEvidence> {
     let (_, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
@@ -397,17 +408,33 @@ pub(crate) fn optional_response_rule_evidence(
     let full = layout.latest_dir.join("state.yaml");
     let state_path = if !focused.is_file() {
         if !full.is_file() {
-            return Ok(None);
+            return Ok(OptionalResponseRuleEvidence::Absent);
         }
         let state: model::ActiveRunState = store::read_yaml(&full)?;
         if !state.apis.iter().any(|candidate| candidate.group_id == api) {
-            return Ok(None);
+            return Ok(OptionalResponseRuleEvidence::Absent);
         }
         full
     } else {
         focused
     };
-    resolve_e2e_response_rule_evidence(context, api).map(|evidence| Some((evidence, state_path)))
+    let state: model::ActiveRunState = store::read_yaml(&state_path)?;
+    ensure!(
+        state.status.is_terminal(),
+        "foreign Replay evidence is not terminal"
+    );
+    ensure!(
+        state.case_source == layout.case_source
+            && state.apis.iter().any(|candidate| candidate.group_id == api),
+        "foreign Replay evidence belongs to another recording or API"
+    );
+    if state.status == RunStatus::Interrupted && !state.replay_finalized
+        || state.replay_finalized && !state.aggregate_complete
+    {
+        return Ok(OptionalResponseRuleEvidence::Unavailable(state_path));
+    }
+    resolve_e2e_response_rule_evidence(context, api)
+        .map(|evidence| OptionalResponseRuleEvidence::Available(evidence, state_path))
 }
 
 pub fn resolve_e2e_response_rule_evidence(
@@ -452,14 +479,7 @@ pub fn resolve_e2e_response_rule_evidence(
     // Response planners consume the published assertion and aggregate reports.
     // Consumers of the replay report validate it when reading it; do not require
     // that additional artifact for response-only planning.
-    ensure!(
-        state.assertions_report.is_file(),
-        "runner-owned assertion evidence is missing"
-    );
-    ensure!(
-        state.aggregate_report.is_file(),
-        "runner-owned aggregate evidence is missing"
-    );
+    evidence_admission::require_response_reports(&state)?;
     Ok(E2eResponseRuleEvidence {
         replay: state.replay_report,
         assertions: state.assertions_report,

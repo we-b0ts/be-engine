@@ -167,7 +167,7 @@ pub(super) struct MotanReplayEvents {
     connections: usize,
     matched_count: usize,
     matched: Vec<CommandMatchedReport>,
-    matched_details: SuccessDetailBudget,
+    pub(in crate::replay) matched_details: SuccessDetailBudget,
     unmatched: Vec<CommandRequestReport>,
     unsupported: Vec<CommandRequestReport>,
     unsafe_events: Vec<CommandRequestReport>,
@@ -484,6 +484,10 @@ impl MotanReplayState {
             unused_global: unused(&self.exchanges, ReplaySource::Global),
             ..Default::default()
         }
+    }
+
+    pub(in crate::replay) fn case_has_runtime_failure(&self, case: &str) -> bool {
+        self.events.dirty_case_ids.contains(case)
     }
 
     pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {

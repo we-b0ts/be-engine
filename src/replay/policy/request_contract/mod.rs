@@ -105,6 +105,7 @@ struct SequenceKey {
 
 #[derive(Default)]
 struct State {
+    pre_matches: Vec<crate::value_contract::pre_match::Candidate>,
     read_back: read_back::ReadBackState,
     key_bindings: BTreeMap<key::BindingScope, BTreeMap<String, String>>,
     key_binding_proofs: BTreeSet<KeyBindingReport>,
@@ -129,6 +130,7 @@ struct Sequence {
 }
 #[derive(Clone, Default)]
 pub(in crate::replay) struct RequestContracts {
+    pre_match_enabled: bool,
     compiled: Option<Arc<crate::policy::CompiledPolicy>>,
     input_origin: Option<derived_inputs::InputOrigin>,
     witnesses: Option<crate::policy_evidence::WitnessStore>,
@@ -150,6 +152,7 @@ impl std::fmt::Debug for RequestContracts {
 }
 #[derive(Debug, Clone, Default)]
 pub(in crate::replay) struct Decision {
+    pre_matches: Vec<crate::value_contract::pre_match::Candidate>,
     pub(in crate::replay) identity: Option<crate::value_contract::identities::IdentityDecision>,
     key_bindings: Vec<key::PendingBinding>,
     identity_references: usize,
@@ -196,6 +199,7 @@ impl RequestContracts {
             );
         }
         Ok(Self {
+            pre_match_enabled: false,
             compiled: None,
             witnesses: None,
             input_origin: Some(derived_inputs::InputOrigin::Policy(policy.to_owned())),
@@ -314,6 +318,11 @@ impl RequestContracts {
             self.commit_identity(identity)?;
         }
         let mut state = self.state.lock().expect("request contracts");
+        for candidate in decision.pre_matches {
+            if !state.pre_matches.contains(&candidate) {
+                state.pre_matches.push(candidate);
+            }
+        }
         for id in decision.ids {
             *state.key_binds.entry(id.clone()).or_default() += decision.key_bindings.len();
             *state.identity_references.entry(id.clone()).or_default() +=

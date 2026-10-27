@@ -192,6 +192,8 @@ fn worker_review_includes_pr_violations_inherited_before_dispatch() {
         report.base_revision
     );
     assert_eq!(report.status, ReviewStatus::ChangesRequired);
+    assert!(report.next_step.contains("whole PR"));
+    assert!(report.next_step.contains("delivery base"));
     let isolation = serde_json::to_value(report.quality.unwrap().replay_isolation).unwrap();
     assert_eq!(isolation["violations"][0]["file"], "src/inherited.rs");
 }

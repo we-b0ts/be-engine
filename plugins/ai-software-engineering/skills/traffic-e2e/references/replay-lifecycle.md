@@ -147,3 +147,13 @@ protocol ownership from bounded output before reading a low-level artifact.
 Return the exact engine defect or missing capability and its acceptance
 command. Do not infer target business causality, blocker status, or migration
 completion from repeated attempts.
+
+
+Replay dependency-tail idle waits use `project.replay.case_no_progress_timeout_ms`
+(default `5000`, positive), or direct `replay --case-no-progress-timeout-ms`.
+In-flight resource delivery retains its own I/O budget; no progress between
+calls ends only the current Case as `case_no_progress`. Inspect the execution
+failure query and bounded pending references, independently of the primary
+HTTP status. The next Case continues. Read-only Replay `status` remains
+available during `end` and exposes `session.waiting`. This does not change
+recording or make missing dependencies pass.
