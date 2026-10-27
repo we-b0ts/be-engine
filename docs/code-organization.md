@@ -391,6 +391,9 @@ is unclear.
   matched TTL-bearing SET makes refreshes redundant until a successful finite
   deletion. It owns monotonic lifetime bounds, delivery-complete coverage and
   explicit closure audits; it grants no content or lifecycle mutation omission.
+  Its `refresh` child admits extra exact-TTL refreshes from that same proven
+  closed scalar lifetime when Source had none, using the delivered Target SET
+  key and retaining a dirty Case until finite deletion and delivery settle.
   `redis/activity` owns independently declared JSON metadata refresh lifetimes.
   Its `source` child proves complete isolated read/SET histories and TTL bounds;
   `value` reuses global timestamp formats and the shared time kernel while

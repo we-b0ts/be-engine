@@ -4,6 +4,7 @@ use super::*;
 use crate::replay::report::command::CommandExchangeRefReport;
 use std::time::Duration;
 use tokio::time::Instant;
+mod refresh;
 
 #[cfg(test)]
 mod recorded_tests;
@@ -14,7 +15,7 @@ mod tests;
 
 #[derive(Debug)]
 pub(super) struct Lifetime {
-    epoch: usize,
+    pub(super) epoch: usize,
     creation: usize,
     deletion: usize,
     required: Vec<usize>,
@@ -26,12 +27,18 @@ pub(super) struct Lifetime {
     deletion_event: Option<usize>,
     failed: bool,
     settled: bool,
+    used_refresh: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Coverage {
     InitialExpiryUntilDelete {
+        source_deletion: CommandExchangeRefReport,
+        ttl_seconds: u64,
+        target_lifetime_ms: u128,
+    },
+    InitialExpiryRefresh {
         source_deletion: CommandExchangeRefReport,
         ttl_seconds: u64,
         target_lifetime_ms: u128,
@@ -52,9 +59,6 @@ pub(super) fn prove(state: &RedisReplayState, profile: &Profile, trace: &[usize]
         .windows(2)
         .enumerate()
         .filter_map(|(epoch, pair)| {
-            if pair[0].observations.is_empty() {
-                return None;
-            }
             let (creation, deletion) = pair[0].mutation.zip(pair[1].mutation)?;
             let first = &state.exchanges[creation];
             let last = &state.exchanges[deletion];
@@ -117,6 +121,7 @@ pub(super) fn prove(state: &RedisReplayState, profile: &Profile, trace: &[usize]
                 deletion_event: None,
                 failed: false,
                 settled: false,
+                used_refresh: false,
             })
         })
         .collect()
@@ -250,6 +255,10 @@ impl RedisReplayState {
             return;
         }
         let epoch = &p.epochs[l.epoch];
+        if epoch.observations.is_empty() {
+            self.observations.profiles[owner].closed_expiry[lifetime].settled = true;
+            return;
+        }
         // A failed actual refresh must never turn into successful omission coverage.
         if epoch.observations.iter().any(|&i| {
             !matches!(

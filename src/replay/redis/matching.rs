@@ -217,6 +217,18 @@ impl RedisReplayState {
                     reason: format!("activity refresh Source proof failed: {error:#}"),
                 }
             })?;
+            if let Some(matched) = self.match_initial_expiry(
+                case,
+                target,
+                connection,
+                resp_version,
+                database,
+                username,
+                command,
+                args,
+            )? {
+                return Ok(matched);
+            }
             if let Some(matched) = self.match_activity(
                 case,
                 target,

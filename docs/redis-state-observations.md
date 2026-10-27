@@ -94,6 +94,17 @@ lifetime or expired deadline retains the ordinary refresh obligation. A later
 SET or another lifetime cannot supply this proof. Content and list work remain
 independent and retain every ordinary consumption requirement.
 
+The same closed scalar proof also supports the opposite buffering change:
+Source needs no explicit EXPIRE, while Target flushes twice and refreshes the
+existing pointer. The delivered TTL-bearing SET proves the positive response;
+no Source EXPIRE record is manufactured. Target must refresh the exact key
+established by that SET with the exact whole-second TTL and no extra options.
+Creation must finish delivery first. Every finite Source read and the single-key
+deletion still must complete, and Target must close before the original TTL.
+A pending or failed actual refresh, a missing finite dependency, or late closure
+keeps the Case dirty. No future creation or already deleted state can supply it.
+Keys without that complete proof retain ordinary finite matching.
+
 Source proof excludes TTL/PTTL/expiry observations, unsupported key mutations,
 implicit expiration, mixed TTLs, stateful lanes and conflicting ownership within
 the selected Case. Global/shared inventory remains separate. The
@@ -118,6 +129,9 @@ Source command and covered Source count. Omitted rows are counted separately.
 Initial-TTL coverage adds `coverage.kind: initial_expiry_until_delete`, the
 Source deletion, TTL and measured Target lifetime. Its Target admission index
 identifies the actual deletion; it does not claim an EXPIRE was executed.
+An actual extra refresh uses `coverage.kind: initial_expiry_refresh`, references
+the real Source SET as its witness and the proven Source deletion, and covers
+zero Source observations. Its admission index identifies the Target EXPIRE.
 No identity values or stream bytes appear in these audits. Admission failures
 use `redis_state_observation_mismatch` with the state-changing Source command;
 they are distinct from missing or invalid Source evidence.

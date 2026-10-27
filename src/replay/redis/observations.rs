@@ -64,6 +64,7 @@ pub(super) struct Prepared {
     token: Uuid,
     target_event_index: Option<usize>,
     target_key_fingerprint: String,
+    initial_expiry: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -183,7 +184,8 @@ impl RedisReplayState {
             {
                 let rule = &compiled.rule;
                 let kind = if matches!(rule.effect, NativeEffect::RedisExpiryRefresh(_))
-                    && seed.record.command == "EXPIRE"
+                    && (seed.record.command == "EXPIRE"
+                        || seed.record.command == "SET" && seed.args.len() == 4)
                 {
                     Kind::Expiry
                 } else if seed.record.command == "GET"
@@ -219,32 +221,40 @@ impl RedisReplayState {
                 }) {
                     continue;
                 }
-                if !seen.insert((
+                let partition = (
                     target,
                     seed.record.database,
                     normalize_optional(seed.record.username.as_deref()),
                     seed.record.resp_version,
                     seed.args[0].clone(),
                     kind as u8,
-                )) {
+                );
+                if !seen.insert(partition.clone()) {
                     continue;
                 }
                 if kind == Kind::Read && !source::has_owned_set(self, case, seed)? {
                     continue;
                 }
-                ensure!(
-                    profiles.len() < MAX_KEYS,
-                    "state observations exceed Case key limit"
-                );
-                profiles.extend(
-                    source::prepare(self, case, &rule.id, kind, seed).with_context(|| {
-                        format!(
-                            "state observation rule={} key_fingerprint={} case={case}",
-                            rule.id,
-                            fingerprint(&seed.args[0]),
-                        )
-                    })?,
-                );
+                let prepared = source::prepare(self, case, &rule.id, kind, seed);
+                // A SET without a complete closed-scalar proof grants nothing.
+                // Any actual Source EXPIRE still requires its existing full proof.
+                if seed.record.command == "SET" && kind == Kind::Expiry && prepared.is_err() {
+                    seen.remove(&partition);
+                    continue;
+                }
+                if let Some(profile) = prepared.with_context(|| {
+                    format!(
+                        "state observation rule={} key_fingerprint={} case={case}",
+                        rule.id,
+                        fingerprint(&seed.args[0]),
+                    )
+                })? {
+                    ensure!(
+                        profiles.len() < MAX_KEYS,
+                        "state observations exceed Case key limit"
+                    );
+                    profiles.push(profile);
+                }
             }
         }
         ensure!(
@@ -600,6 +610,7 @@ impl RedisReplayState {
             token: Uuid::new_v4(),
             target_event_index: self.events.request_order.latest(Some(case)),
             target_key_fingerprint: fingerprint(args.first()?),
+            initial_expiry: None,
         };
         *self.observations.calls.entry(case.clone()).or_default() += 1;
         self.observations.in_flight.insert(prepared.token, profile);
@@ -642,7 +653,9 @@ impl RedisReplayState {
             source_witness: reference(witness),
             source_epoch_mutation: epoch.mutation.map(reference),
             covered_source_observations: covered,
-            coverage: None,
+            coverage: prepared
+                .initial_expiry
+                .map(|lifetime| profile.closed_expiry[lifetime].refresh_coverage(self)),
         };
         for &index in &epoch.observations {
             let exchange = &mut self.exchanges[index];
@@ -676,7 +689,12 @@ pub(in crate::replay) fn validate_source(
             .epochs
             .iter()
             .map(|e| e.observations.len())
-            .sum::<usize>();
+            .sum::<usize>()
+            + profile
+                .closed_expiry
+                .iter()
+                .filter(|l| profile.epochs[l.epoch].observations.is_empty())
+                .count();
     }
     Ok(counts)
 }

@@ -8,6 +8,15 @@ use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn merged_append_over_tcp_closes_initial_marker_ttl_without_any_refresh() {
+    exercise_buffering(true).await;
+}
+
+#[tokio::test]
+async fn split_append_over_tcp_refreshes_marker_when_source_needed_no_refresh() {
+    exercise_buffering(false).await;
+}
+
+async fn exercise_buffering(source_refresh: bool) {
     let root = tempfile::tempdir().unwrap();
     let case = root
         .path()
@@ -37,7 +46,11 @@ async fn merged_append_over_tcp_closes_initial_marker_ttl_without_any_refresh() 
         event(9, "DEL", &[b"current:1"], b":1\r\n"),
         event(10, "DEL", &[b"content:source"], b":1\r\n"),
     ];
-    let original = events.iter().map(|e| format!("{e}\n")).collect::<String>();
+    let original = events
+        .iter()
+        .filter(|e| source_refresh || e["command"] != "EXPIRE")
+        .map(|e| format!("{e}\n"))
+        .collect::<String>();
     std::fs::write(case.join("dependencies.jsonl"), &original).unwrap();
     let mut expiry = refresh_rule();
     expiry["match"]["key"]["prefix"] = json!("current:");
@@ -90,15 +103,28 @@ async fn merged_append_over_tcp_closes_initial_marker_ttl_without_any_refresh() 
         runtime.state.clone(),
     ));
     let mut client = RedisBufferedReader::new(stream, 1024 * 1024);
-    let commands: &[(&[&[u8]], &[u8])] = &[
+    let mut commands: Vec<(&[&[u8]], &[u8])> = vec![
         (&[b"GET", b"current:1"], b"$-1\r\n"),
         (&[b"SET", b"current:1", b"target", b"EX", b"60"], b"+OK\r\n"),
-        (&[b"APPEND", b"content:target", b"abcd"], b":4\r\n"),
+    ];
+    if source_refresh {
+        commands.push((&[b"APPEND", b"content:target", b"abcd"], b":4\r\n"));
+    } else {
+        let split: Vec<(&[&[u8]], &[u8])> = vec![
+            (&[b"APPEND", b"content:target", b"ab"], b":2\r\n"),
+            (&[b"GET", b"current:1"], b"$6\r\ntarget\r\n"),
+            (&[b"EXPIRE", b"current:1", b"60"], b":1\r\n"),
+            (&[b"APPEND", b"content:target", b"cd"], b":4\r\n"),
+        ];
+        commands.extend(split);
+    }
+    let finish: Vec<(&[&[u8]], &[u8])> = vec![
         (&[b"GET", b"current:1"], b"$6\r\ntarget\r\n"),
         (&[b"GET", b"content:target"], b"$4\r\nabcd\r\n"),
         (&[b"DEL", b"current:1"], b":1\r\n"),
         (&[b"DEL", b"content:target"], b":1\r\n"),
     ];
+    commands.extend(finish);
     for (command, expected) in commands {
         client
             .inner
@@ -110,7 +136,7 @@ async fn merged_append_over_tcp_closes_initial_marker_ttl_without_any_refresh() 
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(frame.raw.as_ref(), *expected);
+        assert_eq!(frame.raw.as_ref(), expected);
     }
     drop(client);
     tokio::time::timeout(Duration::from_secs(5), task)
@@ -121,16 +147,32 @@ async fn merged_append_over_tcp_closes_initial_marker_ttl_without_any_refresh() 
     let report = runtime.state.lock().await.redis.snapshot();
     assert!(!report.is_dirty(), "{report:?}");
     assert!(report.unused_case.is_empty());
-    assert_eq!(report.append_streams.len(), 1);
+    assert_eq!(
+        report.append_streams.len(),
+        if source_refresh { 1 } else { 2 }
+    );
     let report = serde_json::to_value(report).unwrap();
     let covered = report["state_observations"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|a| a["coverage"]["kind"] == "initial_expiry_until_delete")
+        .find(|a| {
+            a["coverage"]["kind"]
+                == if source_refresh {
+                    "initial_expiry_until_delete"
+                } else {
+                    "initial_expiry_refresh"
+                }
+        })
         .unwrap();
-    assert_eq!(covered["covered_source_observations"], 1);
-    assert_eq!(covered["target_event_index"], 5);
+    assert_eq!(
+        covered["covered_source_observations"],
+        usize::from(source_refresh)
+    );
+    assert_eq!(
+        covered["target_event_index"],
+        if source_refresh { 5 } else { 4 }
+    );
     assert_eq!(
         std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
         original

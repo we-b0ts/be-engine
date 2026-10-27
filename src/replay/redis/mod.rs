@@ -499,7 +499,13 @@ impl RedisReplayState {
             matched: self.events.matched.clone(),
             unmatched: self.events.unmatched.clone(),
             unsupported: self.events.unsupported.clone(),
-            unsafe_events: self.events.unsafe_events.clone(),
+            unsafe_events: self
+                .events
+                .unsafe_events
+                .iter()
+                .cloned()
+                .chain(self.initial_expiry_violations())
+                .collect(),
             unused_case: unused(&self.exchanges, ReplaySource::Case)
                 .into_iter()
                 .chain(self.pubsub.unused(ReplaySource::Case))
@@ -517,6 +523,7 @@ impl RedisReplayState {
 
     pub(super) fn case_is_dirty(&self, case_id: &str) -> bool {
         self.pubsub.case_is_dirty(case_id)
+            || self.unsettled_initial_expiry(case_id)
             || self.events.dirty_case_ids.contains(case_id)
             || self.case_exchange_index.any(case_id, |index| {
                 self.exchanges.get(index).is_some_and(|exchange| {
