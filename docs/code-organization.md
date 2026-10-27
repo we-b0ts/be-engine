@@ -1431,7 +1431,10 @@ explicit repository-wide audit.
   changing matching, ownership or consumption.
   `preflight/{api,dependency,session,source}` delegates primary response, native
   envelope, stateful Source trace and whole-recording proof to their existing
-  owners. `preflight/resource` enumerates complete recording scope for API-free
+  owners. `preflight/response` records available primary responses with different
+  statuses as unvalidated Target witnesses, keeping rule publication separate
+  from Replay status acceptance without weakening artifact integrity or Source
+  validation. `preflight/resource` enumerates complete recording scope for API-free
   resource rules and freezes relevant API memberships and foreign execution
   identities, including missing Target evidence. `preflight/payload` validates
   each execution with its own protected Target witnesses and clocks. Primary

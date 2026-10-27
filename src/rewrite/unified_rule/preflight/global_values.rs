@@ -444,7 +444,9 @@ fn primary(
         result.missing_target_witnesses += 1;
         return Ok(());
     };
-    let pair = crate::replay::response_payload_pair(request, &source, Some(&target))?;
+    let Some(pair) = super::response::target_pair(request, &source, &target, case, result)? else {
+        return Ok(());
+    };
     let clocks = AnchorClocks {
         case: pair.times,
         dependency: pair.times,

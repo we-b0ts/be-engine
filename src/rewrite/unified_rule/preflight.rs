@@ -28,6 +28,7 @@ mod global_values;
 mod identities;
 mod payload;
 mod resource;
+mod response;
 mod session;
 mod source;
 mod time_copies;
@@ -38,6 +39,8 @@ pub struct Preflight {
     pub independent_target_validations: usize,
     pub derived_delivery_validations: usize,
     pub missing_target_witnesses: usize,
+    #[serde(default)]
+    pub unvalidated_target_witnesses: BTreeSet<response::UnvalidatedTargetWitness>,
     #[serde(default)]
     pub unavailable_source_values: usize,
     pub rules: BTreeMap<String, usize>,
@@ -57,7 +60,9 @@ impl Preflight {
     pub(super) fn status(&self) -> &'static str {
         if self.needs_recording() {
             "planned_needs_recording"
-        } else if self.missing_target_witnesses > 0 || !self.stateful_target_obligations.is_empty()
+        } else if self.missing_target_witnesses > 0
+            || !self.unvalidated_target_witnesses.is_empty()
+            || !self.stateful_target_obligations.is_empty()
         {
             "planned_needs_replay"
         } else {

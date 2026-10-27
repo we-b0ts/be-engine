@@ -18,7 +18,7 @@ pub(in crate::replay) use time::RequestTimes;
 mod motan;
 mod payload;
 pub(crate) use interaction::{compare_outputs_global as compare_interaction_global, decode_sse};
-pub(crate) use payload::{ResponsePayloadPair, response_payload_pair};
+pub(crate) use payload::{ResponsePayloadPair, response_payload_pair, response_rule_payload_pair};
 pub(in crate::replay) mod protobuf;
 mod sse;
 

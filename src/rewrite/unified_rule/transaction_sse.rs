@@ -425,6 +425,52 @@ fn sse_source_self_validation_without_target_requires_fresh_replay() {
 }
 
 #[test]
+fn sse_identity_rule_plan_apply_does_not_require_target_response_status_success() {
+    for bad_source in [false, true] {
+        let fixture = fixture();
+        let mut before = stream(false);
+        if bad_source {
+            change_data(&mut before, 2, |value| {
+                value["item"]["id"] = json!({"invalid":"container"})
+            });
+        }
+        install(
+            &fixture,
+            before,
+            json!({"version":1,"status":500,
+            "body":raw_body(b"private-error-body"),"request_sent_at":"2026-10-16T00:01:00Z"}),
+        );
+        let planned = fixture.plan();
+        if bad_source {
+            assert!(planned.is_err());
+            continue;
+        }
+        let plan = planned.unwrap();
+        let report = &plan.traffic_e2e_report;
+        assert_eq!(report["status"], "planned_needs_replay");
+        assert_eq!(report["preflight"]["source_validations"], 1);
+        assert_eq!(report["preflight"]["independent_target_validations"], 0);
+        assert_eq!(report["preflight"]["missing_target_witnesses"], 0);
+        assert_eq!(
+            report["preflight"]["unvalidated_target_witnesses"][0]["target_status"],
+            500
+        );
+        assert!(!report.to_string().contains(PRIVATE));
+        assert!(!report.to_string().contains("private-error-body"));
+        apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+        let assertion = crate::assert_recorded_response(options(&fixture)).unwrap();
+        assert!(!assertion.passed);
+        assert!(
+            assertion
+                .differences
+                .iter()
+                .any(|diff| diff.pointer == "$status")
+        );
+        assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+    }
+}
+
+#[test]
 fn global_sse_fields_do_not_require_business_event_discriminators() {
     let fixture = fixture();
     let remove_types = |mut value: Value| {

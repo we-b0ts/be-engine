@@ -725,6 +725,7 @@ pub(crate) use assertion::native::{
 };
 pub(crate) use assertion::{
     ResponsePayloadPair, compare_interaction_global, decode_sse, response_payload_pair,
+    response_rule_payload_pair,
 };
 pub(crate) use mysql::contracts::{
     request_candidates_related as mysql_request_candidates_related,

@@ -61,6 +61,8 @@ mod redis_candidates_transaction;
 mod redis_pairs_transaction;
 #[path = "transaction_resource_scope.rs"]
 mod resource_scope_transaction;
+#[path = "transaction_response_status.rs"]
+mod response_status_transaction;
 #[path = "transaction_rule_evidence.rs"]
 mod rule_evidence_transaction;
 #[path = "transaction_scope.rs"]
