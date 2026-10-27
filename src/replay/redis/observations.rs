@@ -5,6 +5,7 @@ use crate::policy::{Database, NativeEffect, Protocol};
 use crate::replay::report::command::CommandMatchDiagnostic;
 use sha2::{Digest, Sha256};
 mod absence;
+mod closed_expiry;
 #[cfg(test)]
 mod recorded_tests;
 mod source;
@@ -69,6 +70,7 @@ struct Profile {
     valid_for_seconds: Option<u64>,
     prepared_at: chrono::DateTime<chrono::Utc>,
     failed: bool,
+    closed_expiry: Vec<closed_expiry::Lifetime>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +93,8 @@ pub(in crate::replay) struct ObservationAudit {
     source_witness: super::super::report::command::CommandExchangeRefReport,
     source_epoch_mutation: Option<super::super::report::command::CommandExchangeRefReport>,
     covered_source_observations: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage: Option<closed_expiry::Coverage>,
 }
 
 #[derive(Debug, Default)]
@@ -101,6 +105,7 @@ pub(super) struct Observations {
     calls: BTreeMap<String, usize>,
     in_flight: BTreeMap<Uuid, usize>,
     mutations_at: BTreeMap<usize, chrono::DateTime<chrono::Utc>>,
+    expiry_by_exchange: BTreeMap<usize, Vec<(usize, usize)>>,
     audits: Vec<ObservationAudit>,
     omitted: usize,
 }
@@ -279,6 +284,7 @@ impl RedisReplayState {
         // All Source proofs must succeed before any lane permission is installed.
         for profile in profiles {
             let owner = self.observations.profiles.len();
+            self.observations.index_closed_expiry(owner, &profile);
             for (epoch, entry) in profile.epochs.iter().enumerate() {
                 for &index in &entry.observations {
                     self.exchanges[index].observation_rule = Some(profile.rule.clone());
@@ -528,7 +534,8 @@ impl RedisReplayState {
         Ok(())
     }
 
-    pub(super) fn record_observation_mutation(&mut self, index: usize) {
+    pub(super) fn record_observation_mutation(&mut self, index: usize, args: &[Vec<u8>]) {
+        self.reserve_closed_expiry(index, args);
         if self
             .observations
             .profiles
@@ -597,6 +604,7 @@ impl RedisReplayState {
             source_witness: reference(witness),
             source_epoch_mutation: epoch.mutation.map(reference),
             covered_source_observations: covered,
+            coverage: None,
         };
         for &index in &epoch.observations {
             let exchange = &mut self.exchanges[index];

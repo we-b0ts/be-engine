@@ -639,7 +639,7 @@ impl RedisReplayState {
             .map_err(|error| CommandMatchDiagnostic::EvidenceUnavailable {
                 reason: format!("activity lifecycle failed: {error:#}"),
             })?;
-        self.record_observation_mutation(index);
+        self.record_observation_mutation(index, args);
         let exchange = &mut self.exchanges[index];
         let timing =
             if (exchange.reusable_snapshot || observation.is_some()) && exchange.matched_once {

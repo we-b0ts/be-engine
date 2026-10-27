@@ -67,8 +67,22 @@ successful ordinary Case SET, APPEND or list creation. The TTL and complete
 arguments stay exact. A Target cannot refresh before creation or after DEL,
 change seconds, add NX/XX options or borrow a refresh from a future lifetime.
 One successfully delivered refresh covers equivalent Source EXPIREs of that
-lifetime; additional refreshes use the same proven response. A lifetime with
-no Target refresh retains its unused Source refreshes.
+lifetime; additional refreshes use the same proven response.
+
+A matched unconditional `SET key value EX seconds` (or whole-second `PX`)
+can also establish that same TTL for a closed, unchanged scalar lifetime. If
+Source only GETs and refreshes that value until a successful single-key
+DEL/UNLINK, and both Source and Target delete before the initial TTL, omitting
+every refresh preserves the observable state. This covers a buffered text block
+created and finalized in one Target flush where Source needed two flushes.
+The creation, ordinary reads and deletion must actually complete; pending or
+failed deliveries do not earn coverage. Target timing uses a monotonic clock
+from creation admission through deletion delivery. Coverage is installed only
+after successful closure and completion of all required key reads. A bare SET,
+different TTL, compound read/delete, intervening value mutation, unclosed
+lifetime or expired deadline retains the ordinary refresh obligation. A later
+SET or another lifetime cannot supply this proof. Content and list work remain
+independent and retain every ordinary consumption requirement.
 
 Source proof excludes TTL/PTTL/expiry observations, unsupported key mutations,
 implicit expiration, mixed TTLs, stateful lanes and overlapping ownership. The
@@ -89,6 +103,9 @@ Case's ordinary finite GET under the read-back partition described above.
 `redis.state_observations` contains at most 1000 audits with rule, Case, key
 fingerprints, Target admission index, original Source witness, state-changing
 Source command and covered Source count. Omitted rows are counted separately.
+Initial-TTL coverage adds `coverage.kind: initial_expiry_until_delete`, the
+Source deletion, TTL and measured Target lifetime. Its Target admission index
+identifies the actual deletion; it does not claim an EXPIRE was executed.
 No identity values or stream bytes appear in these audits. Admission failures
 use `redis_state_observation_mismatch` with the state-changing Source command;
 they are distinct from missing or invalid Source evidence.

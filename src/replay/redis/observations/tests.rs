@@ -17,7 +17,7 @@ fn concurrent_identity_reads_retain_their_state_transition_causal_fence() {
     assert!(state.observations.profiles.is_empty());
 }
 
-fn read_rule(epochs: bool) -> Value {
+pub(super) fn read_rule(epochs: bool) -> Value {
     let mut r = json!({"id":"current-state","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"operation":"SET","key":{"kind":"affix","prefix":"current:"}},
         "effect":{"kind":"identity","value_type":"string","capture":{"kind":"redis_argument","index":1},
           "references":[{"resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0}}],

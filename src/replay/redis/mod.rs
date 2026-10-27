@@ -440,6 +440,7 @@ impl RedisReplayState {
                 exchange.status = ReplayExchangeStatus::Consumed;
             }
         }
+        self.complete_closed_expiry(matched);
         self.refresh_global_report(matched.index);
         let case_id = matched.report.case_id.clone();
         push_success_detail(
@@ -452,6 +453,7 @@ impl RedisReplayState {
     }
 
     fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
+        self.fail_closed_expiry(matched.index);
         if let Some(refresh) = &matched.refresh {
             self.fail_activity(refresh);
         }

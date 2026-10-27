@@ -372,6 +372,10 @@ is unclear.
   foreign mutations and Global/shared inventory remain ownership fences.
   Mutation matching, APPEND bytes and transport completion remain with their
   existing owners.
+  `redis/observations/closed_expiry` proves unchanged scalar lifetimes whose
+  matched TTL-bearing SET makes refreshes redundant until a successful finite
+  deletion. It owns monotonic lifetime bounds, delivery-complete coverage and
+  explicit closure audits; it grants no content or lifecycle mutation omission.
   `redis/activity` owns independently declared JSON metadata refresh lifetimes.
   Its `source` child proves complete isolated read/SET histories and TTL bounds;
   `value` reuses global timestamp formats and the shared time kernel while

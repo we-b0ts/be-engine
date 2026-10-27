@@ -76,6 +76,7 @@ pub(super) fn prepare(
         valid_for_seconds: None,
         prepared_at: chrono::Utc::now(),
         failed: false,
+        closed_expiry: vec![],
     };
     let mut timeline = Vec::new();
     for (index, e) in state.exchanges.iter().enumerate().filter(|(_, e)| {
@@ -176,6 +177,7 @@ pub(super) fn prepare(
     let mut value: Option<Vec<u8>> = None;
     let mut alive = false;
     let mut refresh: Option<Vec<Vec<u8>>> = None;
+    let key_trace = timeline.iter().map(|(index, _)| *index).collect::<Vec<_>>();
     let first = timeline
         .first()
         .and_then(|(_, e)| e.record.earliest_start());
@@ -327,6 +329,9 @@ pub(super) fn prepare(
         return Ok(None);
     }
     ensure!(observed, "state observations lack Source witnesses");
+    if kind == Kind::Expiry {
+        profile.closed_expiry = closed_expiry::prove(state, &profile, &key_trace);
+    }
     Ok(Some(profile))
 }
 

@@ -420,7 +420,7 @@ impl RedisReplayState {
         let rule_id = profile.rule.clone();
         let indices = pieces.iter().map(|p| p.index).collect::<Vec<_>>();
         for &index in &indices {
-            self.record_observation_mutation(index);
+            self.record_observation_mutation(index, args);
         }
         let profile = &mut self.append_streams.profiles[profile_index];
         profile.reserved = to;
