@@ -20,7 +20,7 @@ use crate::{
 };
 
 mod access;
-mod execution;
+pub(super) mod execution;
 mod redis_argument;
 pub use redis_argument::query_rewrite_redis_argument_for_scope;
 mod http_requests;
@@ -379,8 +379,8 @@ fn facts(
             if let Some(rejections) = &issue.egress_rejections { facts["egress_rejections"] = rejections.clone(); }
             mysql_diagnosis::attach(&mut facts);
             let limitations = dirty_cluster_limitations(&facts);
-            let next_step = if facts["execution_failures"].as_array().is_some_and(|failures|!failures.is_empty()) {
-                format!("This request was interrupted by Replay because a dependency did not match. Inspect execution_failures[].failures and its target_event_index first. A service HTTP 5xx, absent stream events and unused later calls are downstream observations. {}",mysql_diagnosis::next_step(&facts))
+            let next_step = if let Some(failures) = facts["execution_failures"].as_array().filter(|failures| !failures.is_empty()) {
+                format!("{} {}",execution::guidance(failures),mysql_diagnosis::next_step(&facts))
             } else {mysql_diagnosis::next_step(&facts)};
             Ok((
                 facts,

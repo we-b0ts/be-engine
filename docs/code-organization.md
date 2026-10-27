@@ -115,6 +115,10 @@ is unclear.
   `control/dependency_tail/progress` owns the Replay-only no-progress clock and
   bounded pending-reference observations. It excludes real resource I/O and
   unrelated process activity, and records only the stalling Case as incomplete.
+  Its diagnostic leads with unconsumed recorded dependencies and Target-call
+  guidance, retaining idle timing as the stop condition rather than attribution.
+  `rewrite/evidence/execution` shares that distinction with issue summaries and
+  evidence guidance while preserving actual Target-request rejection diagnoses.
   `control/server` owns bounded control connections; mutations stay serialized
   while read-only observations remain available during dependency waits.
   `control/case_execution` exposes actual dependency rejection separately from unused inventory;

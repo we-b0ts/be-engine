@@ -153,7 +153,7 @@ pub(super) fn report(
     if let Some(failures) = execution_failures.as_ref() {
         facts["execution_failures"] = (*failures).clone();
         facts["primary_failure"] = json!({
-            "kind": if failures.as_array().is_some_and(|rows| rows.iter().any(|row| row["kind"] == "case_no_progress")) {
+            "kind": if failures.as_array().is_some_and(|rows| super::execution::has_unconsumed_dependencies(rows)) {
                 "case_execution_incomplete"
             } else { "dependency_unmatched" },
             "request_completed": false,
@@ -199,8 +199,8 @@ pub(super) fn report(
         ],
         next_step: if runtime_interrupted {
             "Replay was interrupted before final publication. Execute runtime_diagnosis.command, then use that diagnostic report's evidence_id for a proven replay-capability-gap route. The overview ID is not a route diagnostic. Earlier case dependency/response failures remain observations; rule planning needs a complete finalized attempt.".into()
-        } else if execution_failures.is_some() {
-            "Replay ended incomplete Case execution: inspect each execution_failures.kind. dependency_unmatched means a Target call was rejected; case_no_progress means the Case exceeded its Replay idle budget with no resource I/O in flight. For case_no_progress, inspect waiting.references and pending_source_dependencies, then trace the missing Target continuation; an observed primary HTTP 200 does not prove asynchronous completion. Follow execution_failures_query for every omitted case and dependency_diagnosis.command for protected request differences and unused Source calls. Missing response events and later unused dependencies can be downstream observations. Other cases may have independent response failures.".into()
+        } else if let Some(failures) = execution_failures {
+            super::execution::guidance(failures.as_array().expect("nonempty execution failures"))
         } else if issue.kind == crate::rewrite::RewriteIssueKind::TargetQuality {
             "Read context.review.integrated_findings, fix the assigned quality finding, then run context.review.check for this dispatch before handoff.".to_string()
         } else { match scope {

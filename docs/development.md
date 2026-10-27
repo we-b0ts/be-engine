@@ -2541,7 +2541,7 @@ slower hosts. It changes the execution budget, not response or dependency assert
 The target's native HTTP port is the port in
 `recorder.http_gateway.matched_upstream`; Replay uses it on loopback.
 
-`project.replay.case_no_progress_timeout_ms` defaults to `5000` and must be
+`project.replay.case_no_progress_timeout_ms` defaults to `2000` and must be
 positive. It bounds Replay-only idle waiting for unfinished dependency tails
 after the recorded primary inputs have completed. Real resource delivery,
 including an upstream SSE response, keeps its existing I/O budget; successful
@@ -2550,6 +2550,10 @@ does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
 CLI exposes the same setting as `--case-no-progress-timeout-ms`.
 
 On expiry, only the current Case records `case_no_progress` and ends incomplete.
+Its message leads with the number of recorded dependencies left unconsumed and
+asks Target implementers to check the corresponding calls. The idle wait and
+absence of in-flight dependency I/O are secondary stop details, rather than a
+claim that a Target call was rejected or that the primary HTTP request timed out.
 The next Case still runs. Native reports retain `case_execution_failures`,
 matched/Target-unmatched/Source-unused evidence and bounded pending Source
 references; runner execution-failure queries retain an independently observed

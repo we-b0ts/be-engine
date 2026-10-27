@@ -27,6 +27,13 @@ impl NoProgress {
         let since = *self.idle_since.get_or_insert(now);
         now.saturating_duration_since(since) >= self.timeout
     }
+
+    pub(super) fn failure_reason(&self, remaining: usize) -> String {
+        format!(
+            "recorded dependencies remain unconsumed (pending: {remaining}); check whether Target executes the recorded calls. Replay stopped waiting after {} ms without Case dependency progress and with no resource I/O in flight",
+            self.timeout.as_millis()
+        )
+    }
 }
 
 pub(super) fn counts(state: &ReplayState, case: &str) -> [usize; 6] {

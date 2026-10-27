@@ -653,7 +653,7 @@ async fn drain_selected(
         if expired && !failure_cleanup {
             let failure = serde_json::json!({
                 "kind":"case_no_progress", "case_id":case_id,
-                "reason":"no Case dependency progress and no in-flight I/O within the Replay idle budget",
+                "reason":progress.failure_reason(remaining),
                 "waiting":waiting
             });
             state
