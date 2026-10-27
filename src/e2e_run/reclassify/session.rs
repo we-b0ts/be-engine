@@ -1,10 +1,11 @@
 //! Select exact session projections and retain the baseline for interrupted revisions.
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::super::{
+    case_selection,
     model::{ActiveRunState, RunIndex, RunLayout},
     progress, store, support,
 };
@@ -60,7 +61,13 @@ pub(super) fn members(
         if state.session_id != primary.session_id {
             continue;
         }
-        super::super::case_selection::validate_group(&state, group)?;
+        validate_projection(
+            &primary,
+            &state,
+            &group.group_id,
+            group.cases.iter().map(|case| case.case_id.as_str()),
+            &group.case_inventory_id,
+        )?;
         let mut selected_group = group.clone();
         selected_group.cases.retain(|case| {
             state
@@ -68,15 +75,6 @@ pub(super) fn members(
                 .iter()
                 .any(|selected| selected.case_id == case.case_id)
         });
-        validate_projection(
-            &primary,
-            &state,
-            &group.group_id,
-            selected_group
-                .cases
-                .iter()
-                .map(|case| case.case_id.as_str()),
-        )?;
         selected.push(Member {
             group: selected_group,
             layout,
@@ -111,6 +109,7 @@ pub(super) fn validate_projection<'a>(
     state: &ActiveRunState,
     group_id: &str,
     prepared_case_ids: impl Iterator<Item = &'a str>,
+    inventory_id: &str,
 ) -> Result<()> {
     ensure!(
         state.run_key == primary.run_key
@@ -124,16 +123,12 @@ pub(super) fn validate_projection<'a>(
         state.status.is_terminal(),
         "shared Replay projection is not terminal"
     );
-    let case_ids = state
-        .cases
-        .iter()
-        .map(|case| case.case_id.as_str())
-        .collect::<BTreeSet<_>>();
     ensure!(
-        state.cases.iter().all(|case| case.group_id == group_id)
-            && case_ids == prepared_case_ids.collect(),
+        state.cases.iter().all(|case| case.group_id == group_id),
         "shared Replay projection does not match its prepared method inventory"
     );
+    case_selection::validate_membership(state, group_id, inventory_id, prepared_case_ids)
+        .context("shared Replay projection does not match its prepared method inventory")?;
     Ok(())
 }
 

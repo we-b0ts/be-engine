@@ -137,22 +137,32 @@ pub(super) fn prepare(
 }
 
 pub(super) fn validate_group(state: &ActiveRunState, group: &CanonicalCaseGroup) -> Result<()> {
-    let expected: BTreeSet<_> = group
-        .cases
-        .iter()
-        .map(|case| case.case_id.as_str())
-        .collect();
+    validate_membership(
+        state,
+        &group.group_id,
+        &group.case_inventory_id,
+        group.cases.iter().map(|case| case.case_id.as_str()),
+    )
+}
+
+pub(super) fn validate_membership<'a>(
+    state: &ActiveRunState,
+    group_id: &str,
+    inventory_id: &str,
+    prepared_case_ids: impl Iterator<Item = &'a str>,
+) -> Result<()> {
+    let expected: BTreeSet<_> = prepared_case_ids.collect();
     let selected: BTreeSet<_> = state
         .cases
         .iter()
-        .filter(|case| case.group_id == group.group_id)
+        .filter(|case| case.group_id == group_id)
         .map(|case| case.case_id.as_str())
         .collect();
     let skipped = if let Some(selection) = &state.case_selection {
-        let declared = selection.groups.get(&group.group_id);
+        let declared = selection.groups.get(group_id);
         ensure!(
             declared.is_some_and(|declared| {
-                declared.inventory_id == group.case_inventory_id
+                declared.inventory_id == inventory_id
                     && declared
                         .case_ids
                         .iter()
@@ -194,7 +204,7 @@ pub(super) fn validate_group(state: &ActiveRunState, group: &CanonicalCaseGroup)
             && state
                 .cases
                 .iter()
-                .filter(|case| case.group_id == group.group_id)
+                .filter(|case| case.group_id == group_id)
                 .count()
                 == selected.len(),
         "focused attempt does not match the canonical API case inventory"

@@ -9,12 +9,18 @@ use anyhow::{Result, ensure};
 
 use super::index::{IndexPathStorage, read_index, validate_index_origin};
 
-/// Read published group membership without discovering or opening recording cases.
+/// Published case identities and fingerprint for one prepared API group.
+pub(crate) struct PreparedGroupMembership {
+    pub(crate) case_inventory_id: String,
+    pub(crate) case_ids: BTreeSet<String>,
+}
+
+/// Read published membership without discovering or opening recording cases.
 /// This snapshot cannot authorize Replay or an evidence revision.
-pub(crate) fn load_prepared_case_ids(
+pub(crate) fn load_prepared_membership(
     output: &Path,
     case_source: &Path,
-) -> Result<BTreeMap<String, BTreeSet<String>>> {
+) -> Result<BTreeMap<String, PreparedGroupMembership>> {
     let output = fs::canonicalize(output)?;
     let case_source = fs::canonicalize(case_source)?;
     let index = read_index(&output)?;
@@ -32,7 +38,15 @@ pub(crate) fn load_prepared_case_ids(
             ids.insert(id);
         }
         ensure!(
-            groups.insert(group.group_id.clone(), ids).is_none(),
+            groups
+                .insert(
+                    group.group_id.clone(),
+                    PreparedGroupMembership {
+                        case_inventory_id: group.case_inventory_id,
+                        case_ids: ids,
+                    }
+                )
+                .is_none(),
             "duplicate group id {}",
             group.group_id
         );

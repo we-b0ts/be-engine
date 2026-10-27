@@ -2927,6 +2927,9 @@ action projections reuse one snapshot per query; the next query reloads changed
 rules, sessions, and reports. Report checks deserialize only classification
 metadata and skip unrelated JSON values. Actual evidence revision still loads
 and validates the recording inventory and progress before writing anything.
+Both paths validate a repair subset using the same prepared API fingerprint and
+complete partition of selected and skipped passed cases. Missing, overlapping,
+unknown or duplicate case identities remain invalid; final Replay cannot skip.
 While case pattern identification waits, a pinned recording reuses the pending
 batch's persisted API observations even before installing the API inventory.
 Status still checks the completed recording manifest and current selectors;

@@ -457,11 +457,12 @@ is unclear.
   retain exact trailing/repeated separators without aliasing; wildcard matching
   and dynamic source-route grammar stay strict. Unrelated valid noncanonical
   requests cannot block inventory discovery or finalized recording adoption.
-  `case_group/snapshot` reads prepared membership for read-only projections
+  `case_group/snapshot` reads prepared membership and fingerprints for read-only projections
   without discovering recording cases. `e2e_run/reclassify/status` owns the
   query-scoped shared-session snapshot and compact report classification codec;
   `reclassify/session` retains the common identity/membership checks and full
-  execution preflight. Coordinator status scopes snapshots to one query.
+  execution preflight. Both paths reuse `e2e_run/case_selection` to validate
+  selected/skipped case partitions. Coordinator status scopes snapshots to one query.
   `rewrite/case_patterns` canonicalizes persisted recording observations while
   pattern identification waits; `rewrite/regression_scope/recording` validates
   the pin and selectors against that adopted snapshot without rediscovery.
