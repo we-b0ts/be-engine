@@ -98,10 +98,10 @@ impl RedisReplayState {
             return;
         }
         let p = &mut self.activity_refresh.profiles[prepared.profile];
-        if matches!(prepared.kind, Completion::Read) {
-            if let Some(current) = &mut p.current {
-                current.reads += 1;
-            }
+        if matches!(prepared.kind, Completion::Read)
+            && let Some(current) = &mut p.current
+        {
+            current.reads += 1;
         }
         let l = &p.lifetimes[prepared.lifetime];
         let indices = match prepared.kind {

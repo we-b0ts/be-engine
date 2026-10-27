@@ -521,8 +521,10 @@ is unclear.
   Socket.IO Redis-adapter identity correlation. Its `echo` child associates exact
   finite Source PUBLISH payloads with recorded self-echo notifications and delivers
   admitted Target payloads to confirmed subscribers without subscription-age delays.
-  Notification pages retain payload digests; their sparse lookup is built only
-  when a Target adapter PUBLISH needs it. The `subscription_evidence` child
+  Notification pages retain payload digests; `echo` prepares sparse lookups for
+  loaded adapter publishers before Replay readiness and shares them across Cases.
+  Command delivery only reads prepared lookups; inventory construction stays
+  outside Target connection handling. The `subscription_evidence` child
   resolves exact recording-level anchors and canonical single-use aliases.
   The adapter retains subscription anchors required by linked RPC callbacks;
   command matching applies their preference within the existing ownership scope

@@ -168,7 +168,7 @@ fn key_only_read_back_source_preflight_requires_each_physical_endpoints_own_caus
 }
 
 #[test]
-fn compact_read_back_source_preflight_partitions_foreign_finite_reads_in_either_case_order() {
+fn compact_read_back_source_preflight_isolates_ordinary_cases_but_rejects_shared_writers() {
     let policy = crate::policy::compile_policy(
         &crate::policy::parse_policy(
             &json!({"format":"traffic-policy/v2","redis":{"keys":{"current:*":{
@@ -182,8 +182,8 @@ fn compact_read_back_source_preflight_partitions_foreign_finite_reads_in_either_
     let temp = tempfile::tempdir().unwrap();
     let request = request();
     let owner_dir = temp.path().join("owner");
-    let reader_dir = temp.path().join("reader");
-    for dir in [&owner_dir, &reader_dir] {
+    let foreign_dir = temp.path().join("foreign");
+    for dir in [&owner_dir, &foreign_dir] {
         std::fs::create_dir(dir).unwrap();
         std::fs::write(dir.join("request.json"), request.to_string()).unwrap();
     }
@@ -191,9 +191,9 @@ fn compact_read_back_source_preflight_partitions_foreign_finite_reads_in_either_
     let mut foreign = owned[1].clone();
     foreign["connection_id"] = json!("11234567-89ab-4def-8123-456789abcdef");
     let selected = policy.native.iter().map(|r| r.rule.id.clone()).collect();
-    for mutation in [false, true] {
+    for (command, shared) in [("GET", false), ("SET", false), ("SET", true)] {
         let mut foreign = foreign.clone();
-        if mutation {
+        if command == "SET" {
             foreign["command"] = json!("SET");
             foreign["args"].as_array_mut().unwrap().push(json!({
                 "encoding":"utf8","data":"old","truncated":false
@@ -201,7 +201,11 @@ fn compact_read_back_source_preflight_partitions_foreign_finite_reads_in_either_
             foreign["response_kind"] = json!("simple_string");
             foreign["response"]["data"] = json!("+OK\r\n");
         }
-        let read_only = [foreign];
+        if shared {
+            // Explicit Global ownership must remain visible to every Case's proof.
+            foreign["global_dependency_reason"] = json!("background_rule");
+        }
+        let foreign_events = [foreign];
         let mut cases = [
             NativeSourceCase {
                 id: "owner",
@@ -210,19 +214,27 @@ fn compact_read_back_source_preflight_partitions_foreign_finite_reads_in_either_
                 events: &owned,
             },
             NativeSourceCase {
-                id: "reader",
-                dir: &reader_dir,
+                id: "foreign",
+                dir: &foreign_dir,
                 request: &request,
-                events: &read_only,
+                events: &foreign_events,
             },
         ];
         for _ in 0..2 {
             let result =
                 validate_native_source_dependencies(&policy, &selected, temp.path(), &cases);
-            if mutation {
-                assert!(result.is_err(), "foreign writers remain a proof conflict");
+            if shared {
+                let error = result
+                    .err()
+                    .expect("explicitly shared writers remain a proof conflict");
+                assert!(
+                    format!("{error:#}").contains(
+                        "state observation key overlaps Global or explicitly shared inventory"
+                    ),
+                    "{error:#}"
+                );
             } else {
-                result.unwrap_or_else(|error| panic!("foreign finite read: {error:#}"));
+                result.unwrap_or_else(|error| panic!("ordinary foreign {command}: {error:#}"));
             }
             cases.reverse();
         }

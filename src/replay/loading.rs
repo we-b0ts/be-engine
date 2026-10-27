@@ -275,6 +275,12 @@ impl ReplayRuntime {
                 &mut targets,
                 &redis_process_rules,
             )?;
+            // Complete immutable adapter lookups before listeners admit Target
+            // startup traffic or any Case request, including implicit Cases.
+            redis
+                .pubsub
+                .prepare_echo_indices()
+                .context("Redis adapter self-echo index preparation failed")?;
             Ok((redis, targets))
         })
         .await
