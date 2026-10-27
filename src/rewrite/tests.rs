@@ -179,6 +179,30 @@ fn reclassification_after_code_change_requests_replay_without_stamping_new_code(
 }
 
 #[test]
+fn changed_retry_case_count_does_not_report_a_response_regression() {
+    let (target, mut state, mut result) = reclassification_fixture();
+    state.attempts.clear();
+    for (selected, response_passed, response_nonpassing) in [(5, 2, 3), (3, 3, 0), (3, 1, 2)] {
+        result.attempt += 1;
+        result.diagnosis.counts.selected = selected;
+        result.diagnosis.counts.executed = selected;
+        result.diagnosis.counts.response_passed = response_passed;
+        result.diagnosis.counts.response_nonpassing = response_nonpassing;
+        transition::from_e2e_result(
+            target.path(),
+            &mut state,
+            &result,
+            transition::AttemptTransition::Append,
+        )
+        .unwrap();
+        if state.attempts.len() <= 2 {
+            assert!(state.attempt_delta.is_none());
+        }
+    }
+    assert!(state.attempt_delta.as_ref().unwrap().regressed);
+}
+
+#[test]
 fn reclassification_reuses_only_classification_changes_and_never_upgrades_legacy_evidence() {
     for change in [
         "classification",
@@ -328,6 +352,7 @@ fn reclassification_fixture() -> (
             dependencies: crate::E2eDependencyGate::Clean,
         },
         diagnosis: crate::E2eDiagnosis {
+            case_selection: None,
             replay_finalized: None,
             egress_rejections: None,
             counts,

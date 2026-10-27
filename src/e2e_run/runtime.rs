@@ -118,7 +118,7 @@ pub(super) fn spawn_replay(
         .arg("--case-prepare-timeout-seconds")
         .arg(config.replay_loading.case_timeout_seconds.to_string());
     command.args(recorder_config_args(config));
-    command.args(replay_api_args(inventory));
+    command.args(replay_case_args(inventory, state));
     command
         .arg(&layout.case_source)
         .stdout(Stdio::from(stdout))
@@ -147,6 +147,25 @@ fn replay_api_args(inventory: &CaseGroupInventory) -> Vec<OsString> {
         .iter()
         .flat_map(|group| [OsString::from("--api"), OsString::from(&group.group_id)])
         .collect()
+}
+
+pub(super) fn replay_case_args(
+    inventory: &CaseGroupInventory,
+    state: &ActiveRunState,
+) -> Vec<OsString> {
+    if state
+        .case_selection
+        .as_ref()
+        .is_some_and(|selection| !selection.skipped_passed_case_ids.is_empty())
+    {
+        state
+            .cases
+            .iter()
+            .flat_map(|case| [OsString::from("--case-id"), OsString::from(&case.case_id)])
+            .collect()
+    } else {
+        replay_api_args(inventory)
+    }
 }
 
 pub(super) async fn build_target_image(

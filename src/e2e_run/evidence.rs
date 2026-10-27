@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
@@ -42,20 +42,9 @@ pub(crate) fn finalized_focused_attempt_summary(
         .iter()
         .find(|group| group.group_id == api)
         .with_context(|| format!("canonical case inventory has no API {api:?}"))?;
-    let expected_cases = group
-        .cases
-        .iter()
-        .map(|case| case.case_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let actual_cases = state
-        .cases
-        .iter()
-        .filter(|case| case.group_id == api)
-        .map(|case| case.case_id.as_str())
-        .collect::<BTreeSet<_>>();
+    super::case_selection::validate_group(&state, group)?;
     ensure!(
-        expected_cases == actual_cases
-            && state.cases.len() == group.cases.len()
+        state.cases.iter().all(|case| case.group_id == api)
             && state.case_source == inventory.case_source
             && state.source_revision == inventory.source_revision,
         "focused attempt does not match the canonical API case inventory"
@@ -65,6 +54,11 @@ pub(crate) fn finalized_focused_attempt_summary(
         passed: state.status == model::RunStatus::Successful,
         case_source: state.case_source,
         case_inventory_id: group.case_inventory_id.clone(),
+        selected_case_ids: state
+            .cases
+            .iter()
+            .map(|case| case.case_id.clone())
+            .collect(),
     })
 }
 

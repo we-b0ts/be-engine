@@ -1893,6 +1893,8 @@ all recorded APIs.
 max_implementers: 16
 # Optional: continue passing Replay beyond a completed group when selected.
 auto_next: false
+# Skip previously passed cases during repair Replay; final revalidation stays full.
+retry_failed_only: false
 # Omitted or empty only selects every API in the recorded inventory.
 only:
   - "/api/users/*"
@@ -1900,6 +1902,26 @@ only:
 skip:
   - "/api/users"
 ```
+
+Set `retry_failed_only: true` to skip previously passed cases during repair Replay.
+The caller continues using `next`; the engine selects APIs as usual and filters
+their cases internally. The first attempt runs every case. Later attempts retain
+failed, incomplete and unexecuted cases, including cases left by the per-API
+failure limit, and accumulate passed-case skips within the same workflow and
+unchanged Source/API inventory. Final revalidation and standalone `run`/`run-api`
+always execute the full selected API inventory. Missing or legacy selection state
+starts a new full baseline. The setting defaults to false and can be changed
+between attempts without changing target fingerprints.
+
+Skipped passes are scheduling history, never fresh response or dependency
+evidence. `diagnosis.case_selection` reports available, selected and skipped
+counts; other attempt counts describe only selected cases. Existing explicit
+localcache and cross-case dependency rules still load from the complete recording.
+Logical progress keeps the recorded case totals and cannot mark a partially
+selected API fully verified, even when that repair attempt passes.
+Skipping requests can nevertheless change application-local cache warmup or other
+state established by earlier requests. Use full Replay when cases depend on those
+side effects; the engine does not infer or synthesize cache contents.
 
 Set `auto_next: true` to let an unscoped `next` continue after fresh passing
 Replay when the next globally scheduled action is also Replay. During an active

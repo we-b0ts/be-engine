@@ -809,6 +809,13 @@ is unclear.
   and exposes only its recorded elapsed time for the HTTP execution budget.
   The driver adds its ordinary execution allowance to that duration; response
   status, headers and body remain with assertions and never become Target inputs.
+- `e2e_run/case_selection` owns repair-attempt case selection, workflow and
+  immutable API-inventory boundaries, and historical passed-case skips. It reads
+  the opt-in local regression setting, preserves failed and unexecuted inputs,
+  and always selects every case for final revalidation. Protocol loading and
+  target cache behavior remain with their existing owners. Published reports
+  contain only actual session membership; Source rule validation retains the
+  complete canonical API scope, including skipped cases.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state

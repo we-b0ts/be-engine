@@ -13,6 +13,7 @@ fn state(api_passed: u32, api_failed: u32, sequence: u64) -> ActiveRunState {
         .collect::<Vec<_>>();
     ActiveRunState {
         engine_fingerprint: None,
+        case_selection: None,
         version: STATE_VERSION,
         run_key: "run".to_string(),
         sequence,

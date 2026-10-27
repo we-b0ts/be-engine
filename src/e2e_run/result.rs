@@ -195,6 +195,8 @@ pub struct E2eValueObservation {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct E2eDiagnosis {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_selection: Option<Value>,
     /// Session finalization is independent of selected-case coverage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay_finalized: Option<bool>,
@@ -350,6 +352,7 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
         .filter(|case| case.assertion_passed == Some(false))
         .count();
     E2eDiagnosis {
+        case_selection: super::case_selection::diagnosis(state),
         replay_finalized: Some(state.replay_finalized),
         execution_failures: super::execution_failure::diagnosis(state),
         egress_rejections: egress::diagnosis(layout, state),

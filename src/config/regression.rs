@@ -14,6 +14,8 @@ pub(crate) struct RegressionScope {
     pub(crate) max_implementers: usize,
     #[serde(default)]
     pub(crate) auto_next: bool,
+    #[serde(default)]
+    pub(crate) retry_failed_only: bool,
     pub(crate) recording_run_id: Option<String>,
     only: Option<Vec<String>>,
     skip: Option<Vec<String>>,
@@ -28,6 +30,7 @@ impl Default for RegressionScope {
         Self {
             max_implementers: default_max_implementers(),
             auto_next: false,
+            retry_failed_only: false,
             recording_run_id: None,
             only: None,
             skip: None,
@@ -93,7 +96,7 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Exact paths preserve trailing/repeated slashes; wildcard patterns stay canonical.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\n# Fixed implementation slots; a running workflow retains its original capacity.\nmax_implementers: 16\nonly: []\nskip: []\n";
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Exact paths preserve trailing/repeated slashes; wildcard patterns stay canonical.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\n# Skip previously passed cases during repair Replay; final revalidation always runs all cases.\nretry_failed_only: false\n# Fixed implementation slots; a running workflow retains its original capacity.\nmax_implementers: 16\nonly: []\nskip: []\n";
 
 /// Low-level project initialization also installs the local policy without
 /// replacing user choices. Full repository initialization creates it atomically
@@ -129,6 +132,43 @@ pub(crate) fn initialize(target_root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_case_retry_is_opt_in_and_requires_a_boolean() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            !RegressionScope::load(root.path())
+                .unwrap()
+                .retry_failed_only
+        );
+        initialize(root.path()).unwrap();
+        assert!(
+            !RegressionScope::load(root.path())
+                .unwrap()
+                .retry_failed_only
+        );
+        for (document, expected) in [
+            ("only: []\n", false),
+            ("retry_failed_only: true\n", true),
+            ("retry_failed_only: false\n", false),
+        ] {
+            std::fs::write(root.path().join(PATH), document).unwrap();
+            assert_eq!(
+                RegressionScope::load(root.path())
+                    .unwrap()
+                    .retry_failed_only,
+                expected
+            );
+        }
+        for value in ["null", "1", "sometimes", "[]"] {
+            std::fs::write(
+                root.path().join(PATH),
+                format!("retry_failed_only: {value}\n"),
+            )
+            .unwrap();
+            assert!(RegressionScope::load(root.path()).is_err());
+        }
+    }
 
     #[test]
     fn auto_next_defaults_to_false_and_requires_a_boolean() {

@@ -114,13 +114,16 @@ pub(super) fn update_focused_index(
         })
         .collect::<BTreeMap<_, _>>();
     reconcile_api_scope(index, current_apis.keys().cloned().collect());
-    for (api_key, cases) in &current_apis {
-        index.apis.entry(api_key.clone()).or_default().cases = *cases;
-    }
     let global_evidence_clean =
         state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
     for api in &state.apis {
-        update_api_progress(index, api, global_evidence_clean);
+        let full_api_coverage = current_apis.get(&api.api_key) == Some(&api.total);
+        update_api_progress(index, api, global_evidence_clean && full_api_coverage);
+    }
+    // Logical progress is recording-owned. Repair subsets never shrink that
+    // inventory or certify skipped cases as fresh passes.
+    for (api_key, cases) in &current_apis {
+        index.apis.entry(api_key.clone()).or_default().cases = *cases;
     }
     update_current_run_totals(index, state);
 }

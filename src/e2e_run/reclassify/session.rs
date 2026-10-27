@@ -60,14 +60,25 @@ pub(super) fn members(
         if state.session_id != primary.session_id {
             continue;
         }
+        super::super::case_selection::validate_group(&state, group)?;
+        let mut selected_group = group.clone();
+        selected_group.cases.retain(|case| {
+            state
+                .cases
+                .iter()
+                .any(|selected| selected.case_id == case.case_id)
+        });
         validate_projection(
             &primary,
             &state,
             &group.group_id,
-            group.cases.iter().map(|case| case.case_id.as_str()),
+            selected_group
+                .cases
+                .iter()
+                .map(|case| case.case_id.as_str()),
         )?;
         selected.push(Member {
-            group: group.clone(),
+            group: selected_group,
             layout,
             state,
         });
