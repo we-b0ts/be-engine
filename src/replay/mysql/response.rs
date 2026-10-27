@@ -4,6 +4,12 @@ pub(in crate::replay) async fn write_response(
     row_encoding: ResultRowEncoding,
     status_flags: u16,
 ) -> Result<()> {
+    let kind = match response.status.as_str() {
+        "resultset" => "resultset",
+        "ok" => "ok",
+        _ => "error",
+    };
+    super::wire_diagnostics::response_kind(kind, Some(status_flags));
     match response.status.as_str() {
         "resultset" => {
             write_resultset(
@@ -67,6 +73,7 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
     metadata: &StatementMetadata,
     status_flags: u16,
 ) -> Result<()> {
+    super::wire_diagnostics::response_kind("prepare_ok_and_metadata", Some(status_flags));
     let mut sequence_id = 1_u8;
     sequence_id = write_packet(
         stream,
@@ -136,10 +143,7 @@ pub(in crate::replay) async fn write_stmt_prepare_ok(
     }
     // TLS may accept writes into its buffer without sending every packet.
     // Deliver the complete metadata response before waiting for EXECUTE.
-    stream
-        .flush()
-        .await
-        .context("failed to flush MySQL prepare metadata")
+    flush_response(stream, "failed to flush MySQL prepare metadata").await
 }
 
 pub(in crate::replay) async fn write_resultset(
@@ -218,19 +222,16 @@ pub(in crate::replay) async fn write_resultset(
     // for the response until its request timeout. Small resultsets sometimes
     // slipped through because a single TLS record auto-flushed, but any
     // multi-record resultset reliably deadlocks.
-    stream
-        .flush()
-        .await
-        .context("failed to flush MySQL resultset")
+    flush_response(stream, "failed to flush MySQL resultset").await
 }
 
 pub(in crate::replay) async fn write_packet(
     stream: &mut (impl MysqlReplayIo + ?Sized),
     packet: MysqlPacket,
 ) -> Result<u8> {
-    crate::mysql::wire::continuation::write_message(stream, &packet)
-        .await
-        .context("failed to write MySQL replay message")
+    let result = crate::mysql::wire::continuation::write_message(stream, &packet).await;
+    super::wire_diagnostics::response(&packet, result.as_ref().ok().copied());
+    result.context("failed to write MySQL replay message")
 }
 
 pub(in crate::replay) async fn write_packet_and_flush(
@@ -238,10 +239,16 @@ pub(in crate::replay) async fn write_packet_and_flush(
     packet: MysqlPacket,
 ) -> Result<()> {
     write_packet(stream, packet).await?;
-    stream
-        .flush()
-        .await
-        .context("failed to flush MySQL replay packet")
+    flush_response(stream, "failed to flush MySQL replay packet").await
+}
+
+async fn flush_response(
+    stream: &mut (impl MysqlReplayIo + ?Sized),
+    context: &'static str,
+) -> Result<()> {
+    let result = stream.flush().await;
+    super::wire_diagnostics::flushed(result.is_ok());
+    result.context(context)
 }
 
 pub(in crate::replay) fn handshake_packet(connection_id: u32) -> MysqlPacket {

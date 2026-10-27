@@ -149,6 +149,23 @@ fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages(
     assert!(commands[0].query_id.ends_with("-page-0"));
     assert_eq!(commands[0].command.argv[3], "evidence");
     assert_eq!(commands[0].command.argv[4], commands[0].query_id);
+    // A dependency-primary attempt can also contain independent HTTP failures.
+    // Keep their bounded response query available without demoting the cause.
+    for kind in [RewriteIssueKind::Dependency, RewriteIssueKind::Replay] {
+        state.active_issue.as_mut().unwrap().kind = kind;
+        let mixed_commands = super::commands(target.path(), &state);
+        let dirty = mixed_commands
+            .iter()
+            .position(|command| command.query_id.ends_with("dirty-clusters"))
+            .unwrap();
+        let response = mixed_commands
+            .iter()
+            .position(|command| {
+                command.query_id == commands[0].query_id && accepts_query(&state, &command.query_id)
+            })
+            .expect("dependency-primary attempts must retain response details");
+        assert!(dirty < response);
+    }
     let next_page =
         case_response_difference_query_id(&state, state.active_issue.as_ref().unwrap(), 20);
     assert_eq!(

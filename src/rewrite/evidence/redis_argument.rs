@@ -135,7 +135,7 @@ pub fn query_rewrite_redis_argument_for_scope(
     }
     let args = observed.context("exact independent Target request payload is unavailable")?;
     let value = select_argument(args.get(argument_index).map(Vec::as_slice), pointer);
-    let facts = json!({"attempt":issue.attempt,"recording_run_id":state.recording_run_id,"case_id":case_id,
+    let mut facts = json!({"attempt":issue.attempt,"recording_run_id":state.recording_run_id,"case_id":case_id,
         "target_event_index":event_index,"command":selected["command"],"request_fingerprint":fingerprint,
         "report_sha256":crate::policy_evidence::digest(&bytes),"target_role":"independent_target_observation",
         "argument_index":argument_index,"argument_count":args.len(),"argument_bytes":args.get(argument_index).map(Vec::len),
@@ -145,6 +145,7 @@ pub fn query_rewrite_redis_argument_for_scope(
         "omitted_observation_ids":observation_ids.len().saturating_sub(16),
         "association":"exact_native_request_fingerprint; identical requests may have multiple observations",
         "source_counterpart":"not_assumed"});
+    facts["append_stream_progress"] = super::redis_stream_progress::facts(&replay, case_id);
     let id = overview::query_id(&state, &scope, issue);
     let mut report = overview::report(&root, &state, scope, issue, &id)?;
     report.query = "redis_target_argument".into();

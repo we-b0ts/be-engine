@@ -3600,6 +3600,31 @@ their Case/dependency clocks, so admission time can be correlated with transport
 evidence without reading the private witness graph. A clock does not prove which
 application task initiated the call.
 
+`append_stream_progress` summarizes up to sixteen Source key fingerprint groups
+for that same Case, with each group's last retained APPEND admission cursor and
+up to eight original Source connection/sequence fragments. Grouping does not
+infer physical resource or state epoch ownership. Omitted groups, fragments and
+report-wide audit omissions remain explicit. These audits contain fingerprints and byte
+offsets, never stream contents. Admission does not prove transport delivery or
+Source consumption, and an omitted audit can advance a cursor beyond the last
+retained row. The selected unmatched call gains no inferred Source counterpart.
+
+Dependency-primary and Replay issues with a response representative also expose
+the existing bounded `case-response-differences` query. Dirty dependencies remain
+the first diagnosis; status, header and body differences remain independently
+queryable even when another Case was interrupted by a dependency rejection.
+
+For a suspected MySQL response-stream alignment defect, set
+`RUST_LOG=info,traffic_e2e::replay::mysql::wire_diagnostics=debug` on the normal
+engine workflow command. The existing replay log then includes a diagnostic
+connection ID, peer and connection-local command counter, receive/send packet
+sequence, payload length and response leading byte. The encoder's response kind
+and generated connection status flags distinguish PrepareOK metadata from an
+ordinary OK, which both start with zero. It records transport flush
+success and client EOF separately. A buffered message is not proof of a flush
+or client parsing. This trace is disabled by default and contains no SQL,
+parameters, column names or row values; no matching or protocol behavior changes.
+
 With Socket.IO `preserve_input_timing: false`, recorded client idle offsets are
 not slept. Explicit completion and actual server-event ACK bindings still gate
 inputs; native requested receipts drain before namespace disconnect without

@@ -24,6 +24,7 @@ mod execution;
 mod redis_argument;
 pub use redis_argument::query_rewrite_redis_argument_for_scope;
 mod http_requests;
+mod redis_stream_progress;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod mysql_diagnosis;
 mod overview;
@@ -642,12 +643,6 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         .representative
         .as_ref()
         .is_some_and(|representative| representative.pointer.starts_with("$headers/"));
-    if issue.kind == RewriteIssueKind::Response && issue.representative.is_some() {
-        queries.push((
-            QUERY_CASE_RESPONSE_DIFFERENCES,
-            "Inspect all response differences in the representative case before implementation",
-        ));
-    }
     let dependency_evidence_first = matches!(
         issue.kind,
         RewriteIssueKind::Dependency | RewriteIssueKind::Replay
@@ -660,6 +655,16 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         queries.push((
             QUERY_SOURCE_PROCESS_TRAFFIC,
             source_process_evidence_purpose(issue.kind),
+        ));
+    }
+    if matches!(
+        issue.kind,
+        RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+    ) && issue.representative.is_some()
+    {
+        queries.push((
+            QUERY_CASE_RESPONSE_DIFFERENCES,
+            "Inspect all response differences in the representative case before implementation",
         ));
     }
     queries.push((

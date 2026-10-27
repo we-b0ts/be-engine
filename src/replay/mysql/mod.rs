@@ -25,6 +25,7 @@ pub(in crate::replay) mod transaction_ownership;
 pub(in crate::replay) mod transaction_projection;
 mod transaction_scope;
 mod values;
+mod wire_diagnostics;
 
 pub(super) use broker::handle_connection;
 pub(super) use matcher::MysqlReplayState;

@@ -37,6 +37,10 @@ is unclear.
   materialization. `replay/exchange` owns shared termination timing and validation;
   protocol delivery owns claims, consumption and dirty reporting. See
   [dependency termination](dependency-termination.md).
+  `replay/mysql/wire_diagnostics` owns opt-in connection-local protocol envelopes
+  and request counters. It exposes packet lengths, sequence numbers and leading
+  tags separately from transport flush results, without SQL or response values.
+  Protocol encoding and delivery remain in their existing owners.
 
 - `interaction/model` owns versioned input programs and independent output
   observations. `policy` validates protocol completion profiles and bounded
@@ -130,6 +134,10 @@ is unclear.
   finalized session and exact request fingerprint without inventing a Source pair.
   Selected independent observation clocks stay authenticated and bounded with
   their IDs; they describe actual admission, not inferred business task origin.
+  `rewrite/evidence/redis_stream_progress` projects bounded Case-local APPEND
+  admission cursors and original Source fragments from retained audits. It owns
+  omission reporting, exposes no payload and does not infer delivery, pair a
+  rejected request or change protocol matching.
   `control/case_cleanup` owns failure-phase deadlines and the shared actual-I/O
   barrier. Its final empty-I/O observation stays locked through Case ownership
   release, preventing a new delivery from entering between the check and release.
