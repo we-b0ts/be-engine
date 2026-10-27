@@ -230,6 +230,8 @@ is unclear.
   the borrowed witness index selects original identities before proof expansion.
   `policy_evidence/catalog` publishes the sealed directory separately from the
   version-4 manifest and verifies its authenticated reference before expansion.
+  `policy_evidence/limits` keeps whole-session observation, candidate membership
+  and private directory capacity aligned across capture and publication.
   `replay/assertion/native/header_jwt` owns unique header carrier selection;
   `assertion/jwt/url` owns strict URL remainder and signed nonce echoes. Body and
   header adapters reuse the same private key snapshots and JWT verifier. Header

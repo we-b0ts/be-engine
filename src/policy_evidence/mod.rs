@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::policy::{Resource, Slot, Surface};
 
 mod catalog;
+mod limits;
 mod source;
 mod storage;
 mod store;

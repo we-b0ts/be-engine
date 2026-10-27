@@ -2,14 +2,27 @@ use super::*;
 
 #[test]
 fn multi_case_sized_inventory_keeps_late_targets_authenticated_past_the_legacy_row_bound() {
-    let (_temp, artifacts, store, metadata) = setup();
-    let requests = 16_384 / 2 + 1;
+    let (_temp, artifacts, _unused, metadata) = setup();
+    let cases = 70;
+    let requests = 65_536 / 2 + 1;
+    let candidates = 8;
+    let report = artifacts.join("replay.json");
+    std::fs::write(
+        &report,
+        serde_json::json!({"session_id":"replay", "replay_policy":{"fingerprint":"policy"},
+            "cases":(0..cases).map(|case| serde_json::json!({"case_id":format!("case-{case}"),
+                "case_dir":artifacts,"target_request_started_at":null})).collect::<Vec<_>>()})
+        .to_string(),
+    )
+    .unwrap();
+    let store = WitnessStore::new_bound(&artifacts, "replay", "policy").unwrap();
     for sequence in 0..requests {
         let mut metadata = metadata.clone();
+        metadata.source.case_id = format!("case-{}", sequence % cases);
         metadata.source.sequence = Some(sequence as u64);
         store
             .record_observation(
-                metadata,
+                metadata.clone(),
                 &artifacts,
                 b"source",
                 Some(b"target"),
@@ -17,20 +30,51 @@ fn multi_case_sized_inventory_keeps_late_targets_authenticated_past_the_legacy_r
             )
             .unwrap()
             .expect("an ordinary session must retain its late Target observations");
+        // Repeated candidates share their bytes and immutable Source identity,
+        // while each genuine Target keeps all of its own candidate memberships.
+        for candidate in 1..candidates {
+            metadata.source.sequence = Some((requests + candidate) as u64);
+            store
+                .record_observation(
+                    metadata.clone(),
+                    &artifacts,
+                    b"other-source",
+                    Some(b"target"),
+                    Some(&format!("request-{sequence}")),
+                )
+                .unwrap()
+                .expect("candidate coverage must survive the old association bound");
+        }
     }
     let manifest = store.sealed_manifest().unwrap();
     assert!(manifest.complete && manifest.sealed);
     assert_eq!(
         (manifest.observed, manifest.recorded, manifest.omitted),
-        (requests * 2, requests * 2, 0)
+        (
+            requests * 2 + cases * (candidates - 1),
+            requests * 2 + cases * (candidates - 1),
+            0
+        )
     );
-    let path = verify(&artifacts.join("replay.json"), &manifest).unwrap();
+    let graph = manifest.graph().unwrap();
+    assert_eq!(graph.groups.len(), requests);
+    assert_eq!(
+        graph
+            .groups
+            .iter()
+            .map(|group| group.sources.len())
+            .sum::<usize>(),
+        requests * candidates
+    );
+    assert!(requests * candidates > 262_144);
+    let path = verify(&report, &manifest).unwrap();
     let last = manifest
         .source_index()
         .unwrap()
         .for_source(
             Surface::DependencyRequest,
             &SourceIdentity {
+                case_id: format!("case-{}", (requests - 1) % cases),
                 sequence: Some((requests - 1) as u64),
                 ..metadata.source
             },
