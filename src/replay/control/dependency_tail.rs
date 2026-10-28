@@ -114,6 +114,7 @@ struct SelectedExchange {
     reference: RecordedReference,
     exchange: ResolvedExchange,
     process_owned: bool,
+    shared_initialization: bool,
     lifecycle_cleanup: bool,
     lifecycle_gate: Option<Arc<AtomicBool>>,
 }
@@ -161,9 +162,13 @@ fn exchange_status(
     }
 }
 
-fn permits_unstarted_omission(state: &ReplayState, exchange: ResolvedExchange) -> bool {
-    match exchange {
+fn permits_unstarted_omission(state: &ReplayState, selected: &SelectedExchange) -> bool {
+    match selected.exchange {
         ResolvedExchange::Mysql(index) => state.mysql.permits_unstarted_omission(index),
+        ResolvedExchange::Http(index) => {
+            selected.shared_initialization
+                && state.http_exchange_status(index) == Some(ReplayExchangeStatus::Available)
+        }
         _ => false,
     }
 }
@@ -192,6 +197,7 @@ pub(in crate::replay) async fn prepare(
         )
     };
     let metadata = metadata::load(&case_dir, &async_rules, request_timeout).await?;
+    let http_completion = metadata::http_completion_rules(&case_dir, &async_rules).await?;
     let process_owned = match &metadata {
         Some(metadata) if metadata.process_owned_exemptions => {
             let mut owned =
@@ -216,6 +222,12 @@ pub(in crate::replay) async fn prepare(
             }
             let mut selected = resolve(&state, case_id, &metadata.references, &process_owned)?;
             for (selected, reference) in selected.iter_mut().zip(&metadata.references) {
+                selected.shared_initialization = match selected.exchange {
+                    ResolvedExchange::Http(index) => {
+                        state.http_shared_initialization(index, &http_completion)
+                    }
+                    _ => false,
+                };
                 selected.lifecycle_cleanup = metadata.cleanup_refs.contains(reference);
                 selected.lifecycle_gate = selected
                     .lifecycle_cleanup
@@ -360,6 +372,9 @@ impl ReplayState {
         }
         let mut pending = false;
         for selected in &tail.selected {
+            if selected.shared_initialization && permits_unstarted_omission(self, selected) {
+                continue;
+            }
             match exchange_status(self, selected.exchange)? {
                 ReplayExchangeStatus::Consumed => (),
                 ReplayExchangeStatus::AwaitingClientTermination if selected.lifecycle_cleanup => (),
@@ -481,6 +496,7 @@ fn resolve(
                 reference: *reference,
                 exchange,
                 process_owned: process_owned.contains(reference),
+                shared_initialization: false,
                 lifecycle_cleanup: false,
                 lifecycle_gate: None,
             })
@@ -597,7 +613,7 @@ async fn drain_selected(
                         && selected.lifecycle_cleanup
                         && status == ReplayExchangeStatus::AwaitingClientTermination)
                     && !(selected.process_owned && status == ReplayExchangeStatus::Available)
-                    && !permits_unstarted_omission(&state, selected.exchange)
+                    && !permits_unstarted_omission(&state, selected)
                     && !(failure_cleanup
                         && matches!(
                             status,

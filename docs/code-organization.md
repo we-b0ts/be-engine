@@ -120,6 +120,10 @@ is unclear.
   exchange references, adapts legacy API-origin observation metadata, and waits
   for real Target consumption within the absolute case budget. Protocol modules
   retain their own exchange identities and termination validation.
+  HTTP's `tail` adapter identifies explicitly shared initialization without
+  changing its physical Source identity. Tail drain permits only unstarted
+  initialization to remain unused; the captured scenario's HTTP completion
+  selectors and all started delivery/termination obligations stay required.
   `control/dependency_tail/progress` owns the Replay-only no-progress clock and
   bounded pending-reference observations. It excludes real resource I/O and
   unrelated process activity, and records only the stalling Case as incomplete.
