@@ -16,9 +16,12 @@ pub(crate) struct Document {
 
 impl Document {
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        ensure!(bytes.len() <= 1024 * 1024, "SSE payload exceeds 1 MiB");
+        ensure!(
+            bytes.len() <= crate::value_limits::MAX_VALUE_BYTES,
+            "SSE payload exceeds 64 MiB"
+        );
         std::str::from_utf8(bytes).context("SSE payload is not UTF-8")?;
-        let mut decoder = StreamDecoder::new(Protocol::Sse, 1024 * 1024)?;
+        let mut decoder = StreamDecoder::new(Protocol::Sse, crate::value_limits::MAX_VALUE_BYTES)?;
         let messages = decoder.feed(bytes)?;
         decoder.finish()?;
         let events = messages

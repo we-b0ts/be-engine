@@ -56,9 +56,9 @@ an earlier successful SET, RPUSH or LSET; every selected JSON pointer must
 already belong to that native capture or contract. It does not replace ordinary
 global field formats or authorize extra reads by itself.
 
-Response and write values remain bounded to 1 MiB; native LRANGE is limited to
+Response and write values remain bounded to 64 MiB; native LRANGE is limited to
 1024 elements, RPUSH to 128 elements, declarations to 16 per rule and selected
-JSON pointers to 32. Runtime correspondence is bounded to 4096 entries / 16 MiB.
+JSON pointers to 32. Runtime correspondence is bounded to 4096 entries / 128 MiB.
 Public audits contain fingerprints and original write/read identities rather
 than values. Immutable recording files are never modified. Complete Source
 self-validation grants a fresh genuine Replay obligation, not a Target pass.

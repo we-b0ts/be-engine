@@ -22,10 +22,16 @@ pub(super) async fn wait_for_unrecorded_payload(
     Ok(stream.peek(&mut first_byte).await? > 0)
 }
 
-pub(super) fn apply_recorded_endpoint_allowlist(
+#[derive(Debug)]
+pub(super) struct RecordedNetworkContract {
+    pub(super) path: PathBuf,
+    pub(super) dns_only_domains: BTreeSet<String>,
+}
+
+pub(super) fn apply_recorded_network_contract(
     root_dir: &Path,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
-) -> Result<PathBuf> {
+) -> Result<RecordedNetworkContract> {
     let path = find_upward(root_dir, RECORDING_NETWORK_FILENAME).ok_or_else(|| {
         anyhow!(
             "recording network manifest {RECORDING_NETWORK_FILENAME} was not found for {}; \
@@ -42,24 +48,46 @@ pub(super) fn apply_recorded_endpoint_allowlist(
             port: endpoint.port,
         })
         .collect::<BTreeSet<_>>();
+    // A DNS observation is recorded before answering the question. It does not
+    // prove that Source obtained an address or opened a transport. Preserve the
+    // closed recording's DNS-only availability instead of inventing a reachable
+    // fake address for a host that never had any accessed endpoint.
+    let accessed_domains = allowed
+        .iter()
+        .map(|target| target.host.as_str())
+        .collect::<BTreeSet<_>>();
+    let dns_only_domains = manifest
+        .resolved_domains
+        .into_iter()
+        .filter(|domain| !accessed_domains.contains(domain.as_str()))
+        .collect();
     targets.retain(|target, _| allowed.contains(target));
     for target in allowed {
         register_replay_target(targets, &target, ReplayProtocol::Auto)?;
     }
-    Ok(path)
+    Ok(RecordedNetworkContract {
+        path,
+        dns_only_domains,
+    })
 }
 
+#[cfg(test)]
+mod dns_tests;
+
 impl ReplayState {
-    pub(super) fn fake_ip_for_dns(&mut self, domain: &str) -> Result<Ipv4Addr> {
+    pub(super) fn fake_ip_for_dns(&mut self, domain: &str) -> Result<Option<Ipv4Addr>> {
+        if self.recorded_dns_only_domains.contains(domain) {
+            return Ok(None);
+        }
         if let Some(target) = self
             .targets
             .iter()
             .find(|target| normalize_host(&target.host) == domain)
         {
-            return Ok(target.fake_ip);
+            return Ok(Some(target.fake_ip));
         }
         if let Some(fake_ip) = self.unrecorded_domain_ips.get(domain) {
-            return Ok(*fake_ip);
+            return Ok(Some(*fake_ip));
         }
 
         let fake_ip = loop {
@@ -81,7 +109,7 @@ impl ReplayState {
             .insert(domain.to_string(), fake_ip);
         self.unrecorded_ip_domains
             .insert(fake_ip, domain.to_string());
-        Ok(fake_ip)
+        Ok(Some(fake_ip))
     }
 
     pub(super) fn unrecorded_target_for(&self, fake_ip: Ipv4Addr, port: u16) -> Option<TargetKey> {
@@ -144,8 +172,8 @@ mod tests {
             .unwrap();
         }
 
-        let path = apply_recorded_endpoint_allowlist(temp.path(), &mut targets).unwrap();
-        assert_eq!(path, temp.path().join(RECORDING_NETWORK_FILENAME));
+        let contract = apply_recorded_network_contract(temp.path(), &mut targets).unwrap();
+        assert_eq!(contract.path, temp.path().join(RECORDING_NETWORK_FILENAME));
         assert!(targets.contains_key(&TargetKey {
             host: "allowed.test".to_string(),
             port: 6379,
@@ -159,7 +187,7 @@ mod tests {
     #[test]
     fn rejects_recordings_without_a_network_manifest() {
         let temp = tempfile::tempdir().unwrap();
-        let error = apply_recorded_endpoint_allowlist(temp.path(), &mut BTreeMap::new())
+        let error = apply_recorded_network_contract(temp.path(), &mut BTreeMap::new())
             .unwrap_err()
             .to_string();
 
@@ -204,7 +232,7 @@ mod tests {
         .await
         .unwrap();
         let mut state = runtime.state.lock().await;
-        let fake_ip = state.fake_ip_for_dns("new.example.test").unwrap();
+        let fake_ip = state.fake_ip_for_dns("new.example.test").unwrap().unwrap();
         let target = state.unrecorded_target_for(fake_ip, 9301).unwrap();
         assert_eq!(target.host, "new.example.test");
         assert_eq!(target.port, 9301);
@@ -251,7 +279,7 @@ mod tests {
         .await
         .unwrap();
         let mut state = runtime.state.lock().await;
-        let fake_ip = state.fake_ip_for_dns("breeze.recording").unwrap();
+        let fake_ip = state.fake_ip_for_dns("breeze.recording").unwrap().unwrap();
         let target = state.unrecorded_target_for(fake_ip, 9302).unwrap();
         assert_eq!(target.host, "breeze.recording");
         assert_eq!(target.port, 9302);

@@ -48,8 +48,12 @@ references and assertion validation. A derived delivery remains explicitly
 distinct from independent Target observation.
 
 The observation and candidate-count bounds still protect session memory.
-One session retains at most 65,536 Source and Target observations combined,
-and 262,144 candidate associations. The observation budget covers every Case
+One session retains at most 262,144 Source and Target observations combined,
+and 1,048,576 candidate associations. Its authenticated private directory has
+a 512 MiB metadata budget shared by publication and readers. These limits
+cover ordinary 70-100 Case API batches, including late unmatched requests;
+they do not change payload encryption, identity or completeness validation.
+The observation budget covers every Case
 in a focused API; it is not renewed or consumed separately for each Case.
 Exhausting such a bound or failing persistence leaves explicit incomplete
 coverage; it cannot authorize plan/apply. Disk use for genuine new Target data

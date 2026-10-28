@@ -64,6 +64,7 @@ fn recorded_marker_closes_initial_expiry_without_source_refresh_calls() {
     let database = profile.database;
     let username = profile.username.clone();
     let version = profile.resp_version;
+    let ttl = profile.closed_expiry[0].ttl.as_secs().to_string();
     let trace = state
         .exchanges
         .iter()
@@ -96,6 +97,22 @@ fn recorded_marker_closes_initial_expiry_without_source_refresh_calls() {
             )
             .unwrap();
         state.complete_exchange(&matched);
+        if i == creation && refreshes.is_empty() {
+            let refresh = state
+                .match_redis(
+                    Some("case"),
+                    &target,
+                    TargetConnection::default(),
+                    version,
+                    database,
+                    username.as_deref(),
+                    "EXPIRE",
+                    &[key.as_bytes().to_vec(), ttl.as_bytes().to_vec()],
+                )
+                .unwrap();
+            assert_eq!(refresh.response, b":1\r\n");
+            state.complete_exchange(&refresh);
+        }
     }
     assert!(
         refreshes
@@ -109,6 +126,14 @@ fn recorded_marker_closes_initial_expiry_without_source_refresh_calls() {
         .find(|a| a.coverage.is_some())
         .unwrap();
     assert_eq!(audit.covered_source_observations, refreshes.len());
+    assert_eq!(
+        audit.source_witness.command,
+        if refreshes.is_empty() {
+            "SET"
+        } else {
+            "EXPIRE"
+        }
+    );
     eprintln!(
         "Recorded scalar lifetime: {} Source refreshes covered by delivered initial TTL and deletion; other Case dependencies remain outside this targeted exercise",
         refreshes.len()

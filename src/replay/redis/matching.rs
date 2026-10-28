@@ -145,34 +145,7 @@ impl RedisReplayState {
         // Allocate before selection under the replay mutex. Delivery completion
         // and success-detail retention must never determine request ordering.
         let index = self.events.request_order.reserve(active_case_id);
-        self.select_redis(
-            active_case_id,
-            target,
-            connection,
-            resp_version,
-            database,
-            username,
-            command,
-            args,
-        )
-        .map(|mut matched| {
-            matched.report.target_event_index = Some(index);
-            matched
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn select_redis(
-        &mut self,
-        active_case_id: Option<&str>,
-        target: &TargetKey,
-        connection: TargetConnection,
-        resp_version: u8,
-        database: i64,
-        username: Option<&str>,
-        command: &str,
-        args: &[Vec<u8>],
-    ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
+        self.request_event_index = self.events.request_order.latest(active_case_id);
         self.request_observed_at = Some(chrono::Utc::now());
         self.request_observation_id = Some(uuid::Uuid::new_v4());
         if let Some(case) = active_case_id {
@@ -200,6 +173,34 @@ impl RedisReplayState {
                 }
             }
         }
+        self.select_redis(
+            active_case_id,
+            target,
+            connection,
+            resp_version,
+            database,
+            username,
+            command,
+            args,
+        )
+        .map(|mut matched| {
+            matched.report.target_event_index = Some(index);
+            matched
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_redis(
+        &mut self,
+        active_case_id: Option<&str>,
+        target: &TargetKey,
+        connection: TargetConnection,
+        resp_version: u8,
+        database: i64,
+        username: Option<&str>,
+        command: &str,
+        args: &[Vec<u8>],
+    ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         if let Some(case) = active_case_id {
             self.prepare_observations(case).map_err(|error| {
                 CommandMatchDiagnostic::EvidenceUnavailable {
@@ -217,6 +218,18 @@ impl RedisReplayState {
                     reason: format!("activity refresh Source proof failed: {error:#}"),
                 }
             })?;
+            if let Some(matched) = self.match_initial_expiry(
+                case,
+                target,
+                connection,
+                resp_version,
+                database,
+                username,
+                command,
+                args,
+            )? {
+                return Ok(matched);
+            }
             if let Some(matched) = self.match_activity(
                 case,
                 target,

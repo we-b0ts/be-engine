@@ -145,6 +145,21 @@ pub(super) fn from_e2e(
                 target_runtime_possible_causes(lifecycle_error),
             )
         }
+        _ if failure_limited_dirty_dependencies(result) => (
+            RewriteIssueKind::Dependency,
+            RewriteIssueOwner::SourceInvestigation,
+            format!(
+                "Replay stopped at the configured failure limit after {} of {} selected cases executed; completed cases have dirty dependency evidence. Inspect lifecycle_errors and dependency evidence before evaluating unexecuted cases",
+                result.diagnosis.counts.executed, result.diagnosis.counts.selected
+            ),
+            None,
+            vec![
+                "request_owned_target_call_mismatch".into(),
+                "source_proven_value_contract_missing".into(),
+                "case_failure_limit_reached".into(),
+                "replay_capability_gap".into(),
+            ],
+        ),
         _ if result.gates.replay == E2eReplayGate::Incomplete => (
             RewriteIssueKind::Replay,
             RewriteIssueOwner::TrafficE2eSystem,
@@ -200,6 +215,27 @@ fn is_replay_startup_failure(error: &str) -> bool {
         || error.starts_with("Replay dependency index preparation failed")
         || error.starts_with("replay process exited before becoming ready")
         || error.starts_with("replay server did not become ready")
+}
+
+fn failure_limited_dirty_dependencies(result: &E2eApiRunResult) -> bool {
+    let diagnosis = &result.diagnosis;
+    result.gates.replay == E2eReplayGate::Incomplete
+        && diagnosis.replay_finalized == Some(true)
+        && diagnosis.counts.executed > 0
+        && diagnosis.counts.executed < diagnosis.counts.selected
+        && diagnosis.lifecycle_errors.iter().any(|error| {
+            error.starts_with("API ")
+                && error.contains(" stopped after reaching the configured failure limit of ")
+                && error.ends_with(" case(s)")
+        })
+        && diagnosis.lifecycle_errors.iter().any(|error| {
+            // Header mismatches can dirty a successfully completed request
+            // without interrupting it or populating execution_failures. Require
+            // the native dependency verdict, not just a failed end/control call.
+            error.starts_with("case ")
+                && error.contains(" replay evidence is dirty: ")
+                && error.contains(" has dirty dependency evidence; dirty=true;")
+        })
 }
 
 pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> Vec<String> {
@@ -486,6 +522,81 @@ mod tests {
             from_e2e("POST /api/callback", &result, "target".into()).kind,
             RewriteIssueKind::Response
         );
+    }
+
+    fn response_passing_dependency_limit_result() -> E2eApiRunResult {
+        let mut result = partial_run_result();
+        result.gates.responses = E2eResponseGate::Incomplete;
+        result.diagnosis.counts.selected = 31;
+        result.diagnosis.counts.executed = 10;
+        result.diagnosis.counts.response_passed = 10;
+        result.diagnosis.counts.response_nonpassing = 0;
+        result.diagnosis.counts.response_incomplete = 21;
+        result.diagnosis.execution_failures.clear();
+        result.diagnosis.lifecycle_errors = vec![
+            "case a replay evidence is dirty: replay case a has dirty dependency evidence; dirty=true; inspect replay report".into(),
+            "API \"POST /api/callback\" stopped after reaching the configured failure limit of 10 case(s)".into(),
+        ];
+        result
+    }
+
+    #[test]
+    fn response_passing_failure_limit_keeps_observed_dependency_cause_and_incomplete_gates() {
+        let result = response_passing_dependency_limit_result();
+        let before = serde_json::to_value(&result).unwrap();
+        let issue = from_e2e("POST /api/callback", &result, "target".into());
+        assert_eq!(issue.kind, RewriteIssueKind::Dependency);
+        assert_eq!(issue.owner, RewriteIssueOwner::SourceInvestigation);
+        assert!(issue.summary.contains("configured failure limit"));
+        assert!(issue.summary.contains("10 of 31"));
+        assert!(issue.summary.contains("dirty dependency evidence"));
+        assert!(
+            issue
+                .possible_causes
+                .iter()
+                .any(|cause| cause == "case_failure_limit_reached")
+        );
+        assert_eq!(serde_json::to_value(&result).unwrap(), before);
+        assert!(!result.passed);
+        assert_eq!(result.gates.replay, E2eReplayGate::Incomplete);
+        assert_eq!(result.gates.dependencies, E2eDependencyGate::Unknown);
+    }
+
+    #[test]
+    fn failure_limit_without_proven_dirty_dependencies_keeps_lifecycle_owner() {
+        let original = response_passing_dependency_limit_result();
+        for errors in [
+            vec![original.diagnosis.lifecycle_errors[0].clone()],
+            vec![original.diagnosis.lifecycle_errors[1].clone()],
+            vec![
+                "case a replay evidence is dirty: control connection refused".into(),
+                original.diagnosis.lifecycle_errors[1].clone(),
+            ],
+        ] {
+            let mut result = original.clone();
+            result.diagnosis.lifecycle_errors = errors;
+            let issue = from_e2e("POST /api/callback", &result, "target".into());
+            assert_eq!(issue.kind, RewriteIssueKind::Replay);
+            assert_eq!(issue.owner, RewriteIssueOwner::TrafficE2eSystem);
+        }
+        for finalized in [None, Some(false)] {
+            let mut result = original.clone();
+            result.diagnosis.replay_finalized = finalized;
+            let issue = from_e2e("POST /api/callback", &result, "target".into());
+            assert_eq!(issue.kind, RewriteIssueKind::Replay);
+            assert_eq!(issue.owner, RewriteIssueOwner::TrafficE2eSystem);
+        }
+    }
+
+    #[test]
+    fn independent_response_failure_keeps_priority_over_failure_limit_header_dirt() {
+        let mut result = response_passing_dependency_limit_result();
+        result.gates.responses = E2eResponseGate::Nonpassing;
+        result.diagnosis.counts.response_passed = 9;
+        result.diagnosis.counts.response_nonpassing = 1;
+        let issue = from_e2e("POST /api/callback", &result, "target".into());
+        assert_eq!(issue.kind, RewriteIssueKind::Response);
+        assert_eq!(issue.owner, RewriteIssueOwner::TargetCode);
     }
 
     #[test]

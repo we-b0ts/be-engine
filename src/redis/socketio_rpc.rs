@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
-pub(crate) const MAX_RPC_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_RPC_BYTES: usize = crate::value_limits::MAX_VALUE_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Identity {

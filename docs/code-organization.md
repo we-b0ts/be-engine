@@ -30,6 +30,11 @@ is unclear.
 
 ## Current Boundaries
 
+- `value_limits` owns the shared 64 MiB value ceiling used by Redis carriers,
+  JSON/Protobuf codecs and derived-value rendering; business code owns actual
+  payload sizes. Protocol validation and aggregate evidence budgets stay with
+  their existing owners.
+
 - `dependency/termination` owns protocol-independent peer observations, monotonic
   termination time and explicit transport FIN/RST control. Recorder connection
   registration marks engine-owned cleanup before socket shutdown. Protocol
@@ -78,6 +83,9 @@ is unclear.
   explicit client reset delivered by Recorder. `replay/connect_failure` owns
   finite case/endpoint matching and faithful timed transport delivery; neither
   owner treats protocol parsing or capture corruption as a dependency failure.
+  `replay/network_access` loads the finalized network contract and owns strict
+  endpoint admission and DNS-only availability; `replay/dns` retains DNS wire
+  parsing and response delivery without inventing reachable DNS-only endpoints.
   `active_case/async_api` retains early completion signals, the common request
   deadline and normal Source-stop/drain behavior. Asynchronous completion keeps
   ordinary dependency ownership and never authorizes process-owned exclusions.
@@ -230,6 +238,8 @@ is unclear.
   the borrowed witness index selects original identities before proof expansion.
   `policy_evidence/catalog` publishes the sealed directory separately from the
   version-4 manifest and verifies its authenticated reference before expansion.
+  `policy_evidence/limits` keeps whole-session observation, candidate membership
+  and private directory capacity aligned across capture and publication.
   `replay/assertion/native/header_jwt` owns unique header carrier selection;
   `assertion/jwt/url` owns strict URL remainder and signed nonce echoes. Body and
   header adapters reuse the same private key snapshots and JWT verifier. Header
@@ -389,6 +399,9 @@ is unclear.
   matched TTL-bearing SET makes refreshes redundant until a successful finite
   deletion. It owns monotonic lifetime bounds, delivery-complete coverage and
   explicit closure audits; it grants no content or lifecycle mutation omission.
+  Its `refresh` child admits extra exact-TTL refreshes from that same proven
+  closed scalar lifetime when Source had none, using the delivered Target SET
+  key and retaining a dirty Case until finite deletion and delivery settle.
   `redis/activity` owns independently declared JSON metadata refresh lifetimes.
   Its `source` child proves complete isolated read/SET histories and TTL bounds;
   `value` reuses global timestamp formats and the shared time kernel while
@@ -1220,8 +1233,12 @@ explicit repository-wide audit.
 - `json_value` owns bounded strict JSON decoding with duplicate-member
   rejection. Replay JSON normalization and signed-token validation share it;
   selector expansion and collection normalization stay in Replay.
+  Its `render` child replaces derived scalar tokens in the original JSON byte
+  carrier, preserving member order and all unchanged lexical data. Shared JSON
+  codecs and MySQL JSON-cell delivery reuse it; policy authorization remains
+  with their existing logical contract owners.
   Original semantic record readers may supply their envelope budget explicitly;
-  ordinary value decoding retains its 1 MiB bound. `dependency/http_limits` owns
+  ordinary value decoding uses the shared 64 MiB bound. `dependency/http_limits` owns
   the 64 MiB raw-body and derived HTTP witness/record byte budgets, shared by
   recording defaults, Replay, Source proof and dependency diagnostics.
 - `replay/policy/response/jwt` owns explicit JWT response selectors, response-only
@@ -1343,6 +1360,12 @@ explicit repository-wide audit.
   failed and client-termination exchanges remain blockers; final success and
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
+  `replay/redis/admission` owns bounded waits for initial expiry-refresh
+  predecessors that have all been claimed but have not finished delivery.
+  `observations/refresh_barrier` identifies this narrow fence; observation
+  selection retains its completed-delivery requirement. Admission releases the
+  replay mutex while waiting, preserves the original Target observation and
+  event index, and rechecks the case and strict selection after delivery.
 
 - `rewrite/unified_rule/preflight/global_values/redis/script_times` composes
   existing native script ARGV time contracts with global JSON preflight, while

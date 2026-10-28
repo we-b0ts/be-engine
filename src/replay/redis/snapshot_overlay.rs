@@ -17,7 +17,7 @@ use crate::replay::model::{ReplaySource, find_upward};
 use crate::replay::report::command::CommandSnapshotOverlayReport;
 
 const MAX_MATCHING_EXCHANGES: usize = 16_384;
-const MAX_MATCHING_BYTES: usize = 32 * 1024 * 1024;
+const MAX_MATCHING_BYTES: usize = 2 * crate::value_limits::MAX_VALUE_BYTES;
 mod loading;
 
 #[derive(Debug, Clone)]

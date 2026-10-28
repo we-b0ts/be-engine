@@ -6,7 +6,7 @@ use super::json;
 mod selector;
 pub use selector::{RedisUnorderedField, RedisUnorderedSelector, RedisValueKeySelector};
 
-const MAX_VALUE_BYTES: usize = 1024 * 1024;
+use crate::value_limits::MAX_VALUE_BYTES;
 /// Only whole string writes: substring writes and collection-member bytes keep exact identity.
 pub(super) fn value_index(command: &str, args: &[Vec<u8>]) -> Option<usize> {
     match command.to_ascii_uppercase().as_str() {

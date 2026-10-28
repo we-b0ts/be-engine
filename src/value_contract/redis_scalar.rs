@@ -13,8 +13,8 @@ pub(crate) struct Scalar {
 
 pub(crate) fn decode(source: &[u8]) -> Result<Option<Scalar>> {
     ensure!(
-        source.len() <= 1024 * 1024,
-        "Redis scalar exceeds the 1 MiB value limit"
+        source.len() <= crate::value_limits::MAX_VALUE_BYTES,
+        "Redis scalar exceeds the 64 MiB value limit"
     );
     if let Some(logical) = crate::json_value::parse(source) {
         if logical.is_array() || logical.is_object() {
@@ -65,8 +65,8 @@ pub(crate) fn decode_field(source: &[u8], field: &GlobalField) -> Result<Option<
 impl Scalar {
     pub(crate) fn target(&self, bytes: &[u8]) -> Result<Value> {
         ensure!(
-            bytes.len() <= 1024 * 1024,
-            "Redis scalar exceeds the 1 MiB value limit"
+            bytes.len() <= crate::value_limits::MAX_VALUE_BYTES,
+            "Redis scalar exceeds the 64 MiB value limit"
         );
         if self.json {
             let value = crate::json_value::parse(bytes)

@@ -1,13 +1,12 @@
 //! A sealed private observation directory, separate from the bounded public
 //! manifest. Its content digest is authenticated by the session signing key.
+use super::limits::MAX_CATALOG_BYTES;
 use super::*;
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
     sync::Arc,
 };
-
-const MAX_CATALOG_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct GraphArtifact {

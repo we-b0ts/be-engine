@@ -141,7 +141,7 @@ instant. Results outside RFC3339's four-digit year range fail explicitly.
 
 Only selected JSON scalar values change semantically; credentials, arrays and
 other fields retain their values. RESP bulk lengths are rebuilt. JSON duplicate
-members are rejected; frames are bounded to 1 MiB and overflow fails explicitly.
+members are rejected; frames are bounded to 64 MiB and overflow fails explicitly.
 Recorded files, request identity, lane ordering, target cache implementation and
 finite consumption are unchanged. Reusable/background snapshots cannot be
 combined with this rule. Successful delivery records bounded rule IDs and

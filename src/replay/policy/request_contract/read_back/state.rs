@@ -66,7 +66,7 @@ impl ReadBackState {
             }
         }
         ensure!(
-            count <= 4096 && bytes <= 16 * 1024 * 1024,
+            count <= 4096 && bytes <= 2 * crate::value_limits::MAX_VALUE_BYTES,
             "read_back binding budget exceeded"
         );
         Ok(())

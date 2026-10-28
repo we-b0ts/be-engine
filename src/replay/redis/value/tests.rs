@@ -120,3 +120,14 @@ fn numeric_key_selectors_share_process_owned_semantics() {
     assert!(!selector.matches(b"cache:user:members"));
     assert!(!selector.matches(b"cache::members"));
 }
+
+#[test]
+fn multi_megabyte_json_string_writes_keep_semantic_comparison() {
+    let padding = "x".repeat(2 * 1024 * 1024);
+    let source = format!(r#"{{"padding":"{padding}","stable":true}}"#);
+    let target = format!(r#"{{"stable":true,"padding":"{padding}"}}"#);
+    let mut replay = state(source.as_bytes());
+    let matched = match_value(&mut replay, target.as_bytes()).unwrap();
+    replay.complete_exchange(&matched);
+    assert!(replay.snapshot().unused_case.is_empty());
+}

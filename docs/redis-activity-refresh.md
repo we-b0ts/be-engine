@@ -60,7 +60,7 @@ pass. Regression tests retain an ordinary finite trace and verify unchanged,
 merged and split refresh rounds over real RESP TCP delivery.
 
 Bounds are 128 keys, 4096 Source observations and 4096 Target calls per Case,
-1024 lifetimes per key, 16 timestamp pointers and 1 MiB per value/response.
+1024 lifetimes per key, 16 timestamp pointers and 64 MiB per value/response.
 `redis.activity_refreshes` exposes at most 1000 transport-complete audits with
 Source creation/witness references, covered counts, Target admission/observation
 IDs and key/value fingerprints; omission counts are explicit. No JSON values or

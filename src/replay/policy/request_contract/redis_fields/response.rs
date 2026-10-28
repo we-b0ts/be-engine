@@ -20,8 +20,8 @@ pub(in crate::replay::policy::request_contract) fn bulk_prefix(
     raw: &[u8],
 ) -> Result<(&[u8], usize)> {
     ensure!(
-        raw.len() <= 1024 * 1024,
-        "Redis response value exceeds 1 MiB"
+        raw.len() <= crate::value_limits::MAX_VALUE_BYTES,
+        "Redis response value exceeds 64 MiB"
     );
     let mut position = 0;
     let mut remaining = 16384;
@@ -42,8 +42,8 @@ pub(super) fn values<'a>(
         return Ok(Vec::new());
     }
     ensure!(
-        raw.len() <= 1024 * 1024,
-        "Redis response value exceeds 1 MiB"
+        raw.len() <= crate::value_limits::MAX_VALUE_BYTES,
+        "Redis response value exceeds 64 MiB"
     );
     let mut position = 0;
     let mut remaining = 16384;

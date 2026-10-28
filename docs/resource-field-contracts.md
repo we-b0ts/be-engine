@@ -48,6 +48,12 @@ SSE data reuse the same JSON field policy. Native protocol envelopes, keys,
 headers, SQL tokens, options, ordering and finite consumption remain checked by
 their existing owners.
 
+When delivery rebases a JSON time or identity, only the changed scalar tokens
+are replaced. Object member order, whitespace, escaping and unchanged number
+spelling retain their original bytes, including inside MySQL JSON-valued cells.
+This preserves consumers that iterate a JSON object to construct an ordered
+list. Comparison permissions and array ordering are unchanged.
+
 An unknown encoding compares exact bytes. A recognized Source JSON payload
 fixes the encoding: malformed Target JSON or a field contract failure cannot
 fall back to byte comparison. Typed Protobuf still requires a known numeric

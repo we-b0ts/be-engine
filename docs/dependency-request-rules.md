@@ -64,7 +64,7 @@ operator per pointer. Conditions are ANDed. Expected values must be non-null
 strings, numbers or booleans; strings are limited to 1024 bytes. Operators retain
 JSON scalar types, with no string/number/boolean coercion. A missing pointer,
 null, object, array, type mismatch, invalid capture encoding, decoding error,
-duplicate JSON member, truncated body or JSON body larger than 1 MiB matches
+duplicate JSON member, truncated body or JSON body larger than 64 MiB matches
 neither operator. In particular, `not_equals` does not turn missing evidence
 into permission to normalize. Omitting `when` retains the existing API scope.
 
@@ -447,7 +447,7 @@ prevent later target commands; every configured command must nevertheless be
 present for the same key in the source recording. Runtime verifies the complete
 target sequence after apply.
 
-Target witnesses are bounded to 64 candidates and 1 MiB each, authenticated and
+Target witnesses are bounded to 64 candidates and 64 MiB each, authenticated and
 encrypted with the existing managed recording key. Discovery removes encrypted
 payloads and exposes metadata only. Multipart witnesses use SHA-256 digests of
 complete part bytes, so larger file content does not inflate the protected report.

@@ -319,8 +319,8 @@ impl RequestContracts {
 
 pub(crate) fn redis_bulk_payload(raw: &[u8]) -> Result<Option<Vec<u8>>> {
     ensure!(
-        raw.len() <= 1024 * 1024,
-        "Redis response value exceeds 1 MiB"
+        raw.len() <= crate::value_limits::MAX_VALUE_BYTES,
+        "Redis response value exceeds 64 MiB"
     );
     // RESP3 null has no value, and must retain its own protocol representation.
     if raw == b"_\r\n" {

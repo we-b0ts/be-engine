@@ -324,7 +324,12 @@ fn missing_presence_duplicate_singulars_wire_mismatches_and_limits_are_explicit(
         assert!(CodecView::decode(&scalar, &bytes).is_err(), "{bytes:?}");
     }
     assert!(CodecView::decode(&scalar, &[8, 0].repeat(65_537)).is_err());
-    assert!(CodecView::decode(&scalar, &vec![0; 1024 * 1024 + 1]).is_err());
+    assert!(
+        CodecView::decode(&scalar, &vec![0; crate::value_limits::MAX_VALUE_BYTES + 1])
+            .unwrap_err()
+            .to_string()
+            .contains("64 MiB")
+    );
     let string = codec(&[("/text", &[1], Type::String, false)]);
     assert!(CodecView::decode(&string, &bytes(1, &[255])).is_err());
     let implicit = codec(&[("/value", &[1, 2], Type::Uint32, false)]);
@@ -348,6 +353,7 @@ fn json_uses_duplicate_rejecting_decode_and_the_same_authorized_delivery_api() {
     let mut edited = decoded.logical.clone();
     edited["time"] = json!(2);
     let output = decoded.encode(&edited, &["/time".into()]).unwrap();
+    assert_eq!(output, br#"{ "time": 2, "stable": 7 }"#);
     assert_eq!(
         serde_json::from_slice::<Value>(&output).unwrap(),
         json!({"time":2,"stable":7})

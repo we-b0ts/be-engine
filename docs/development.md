@@ -3113,11 +3113,17 @@ the summary has `total_events: 0`. This distinguishes a confirmed empty
 dependency contract from missing capture evidence.
 
 Every finalized run also contains `recording-network.json`. It stores the
-deduplicated DNS names resolved by the source and the exact `host:port`
+deduplicated DNS names queried by the source and the exact `host:port`
 endpoints actually reached through the TCP or UDP gateway. Replay requires
 this run-level manifest and does not derive a compatibility allowlist from
 semantic dependency files. A recording without the manifest must be recorded
-again. During Replay, an endpoint outside the manifest may resolve and accept a
+again. A queried domain with no accessed endpoint receives an empty DNS answer
+during Replay: a DNS observation alone does not prove Source obtained a usable
+address, and Replay must not invent a reachable address for DNS-only activity.
+This retains the recorded absence of transport, without claiming the original
+DNS response code. Domains with accessed endpoints keep fake-IP routing and
+strict port checks; entirely new domains keep quarantine routing. During
+Replay, an endpoint outside the manifest may resolve and accept a
 TCP connection. If the target sends payload on that connection, Replay closes
 it before protocol handling and reports `访问了录制时没有访问过的域名:port` in
 the Replay report and bounded dependency evidence.

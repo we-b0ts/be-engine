@@ -1,4 +1,5 @@
 //! Bounded session-local observation inventory and encrypted content storage.
+use super::limits::{MAX_ASSOCIATIONS, MAX_OBSERVATIONS};
 use super::v2::{
     BlobEnvelope, BlobRef, CandidateAssociation, SourceObservation, TargetObservation,
 };
@@ -12,10 +13,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-// This is a whole-session budget shared by all Cases and both evidence roles.
-// Ordinary multi-Case APIs exceed 16K rows before their final Target requests.
-const MAX_OBSERVATIONS: usize = 65_536;
-const MAX_ASSOCIATIONS: usize = 262_144;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PAYLOAD: usize = 1024 * 1024;
 
