@@ -3602,8 +3602,13 @@ The case records `execution_failure.kind: dependency_unmatched` and
 observed primary status remains a separate fact. Complete stream observations
 and interrupted framed prefixes remain protected evidence. Already started
 case I/O retains its normal drain barrier; unused Source calls remain unused.
-After cleanup, the runner continues the remaining cases under its existing
-failure limit and publishes their independent causes. Public `diagnosis.execution_failures`
+After cleanup, finite requests continue under the existing failure limit.
+A WebSocket or Socket.IO session without a clean closure stops the attempt
+before another input is admitted: a sleeping disconnect hook may issue future
+I/O even after all started deliveries drain. Normal Target shutdown and aggregate
+finalization retain the failed Case and leave later Cases unexecuted, without
+inventing another startup or treating partial coverage as a pass. Clean sessions
+continue to reuse the running Target. Public `diagnosis.execution_failures`
 and the dirty-cluster evidence query expose these causes before downstream
 missing responses, stream events or unused calls. No expected output drives
 request execution and no response or ACK is synthesized.

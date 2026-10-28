@@ -7,7 +7,6 @@ use tokio::process::Child;
 
 use super::E2eRunContext;
 use super::active_progress::{self, ActiveProgressPhase};
-use super::case_progress;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{
     ActiveRunState, CaseStatus, MAX_RESPONSE_DIFFERENCE_INDEX, ResolvedProjectConfig,
@@ -29,9 +28,9 @@ use crate::case_group::{
 };
 use crate::replay::{ResponseAssertionOptions, ResponseAssertionRuntime, validate_replay_policy};
 
-struct CaseExecutionRuntime {
-    request_rules: Arc<crate::request_rules::RequestRuleRuntime>,
-    response_assertions: Option<ResponseAssertionRuntime>,
+pub(super) struct CaseExecutionRuntime {
+    pub(super) request_rules: Arc<crate::request_rules::RequestRuleRuntime>,
+    pub(super) response_assertions: Option<ResponseAssertionRuntime>,
 }
 
 pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
@@ -526,32 +525,7 @@ async fn run_active_with_replay(
             .transpose()?,
     };
 
-    let total_cases = state.cases.len();
-    let mut failure_limit =
-        super::failure_limit::ApiFailureLimit::new(config.max_failed_cases_per_api);
-    case_progress::log_start(total_cases);
-    for (position, case) in state.cases.clone().into_iter().enumerate() {
-        if !failure_limit.should_execute(&case.group_id) {
-            continue;
-        }
-        execute_case(
-            config,
-            layout,
-            state,
-            position,
-            &case.case_id,
-            &case.case_dir,
-            &case_runtime,
-        )
-        .await?;
-        case_progress::log_completion(position + 1, total_cases);
-        if failure_limit.observe(&case.group_id, state.cases[position].status) {
-            state.push_error(format!(
-                "API {:?} stopped after reaching the configured failure limit of {} case(s)",
-                case.group_id, config.max_failed_cases_per_api
-            ));
-        }
-    }
+    super::case_sequence::execute(config, layout, state, &case_runtime).await?;
 
     let intentionally_incomplete = state
         .cases
@@ -590,7 +564,7 @@ async fn run_active_with_replay(
     Ok(())
 }
 
-async fn execute_case(
+pub(super) async fn execute_case(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
     state: &mut ActiveRunState,
@@ -598,7 +572,7 @@ async fn execute_case(
     case_id: &str,
     case_dir: &Path,
     runtime: &CaseExecutionRuntime,
-) -> Result<()> {
+) -> Result<super::case_sequence::Continuation> {
     let case_index = position;
     if state
         .cases
@@ -608,7 +582,7 @@ async fn execute_case(
         state.push_error(format!(
             "case {case_id} no longer matches run position {position}"
         ));
-        return Ok(());
+        return Ok(super::case_sequence::Continuation::ReuseTarget);
     }
     state.cases[case_index].status = CaseStatus::Running;
 
@@ -621,7 +595,7 @@ async fn execute_case(
         state.cases[case_index].status = CaseStatus::Incomplete;
         state.push_error(format!("case {case_id} begin failed: {error:#}"));
         let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
-        return Ok(());
+        return Ok(super::case_sequence::Continuation::ReuseTarget);
     }
 
     if config.replay_loading.lazy_cases
@@ -654,6 +628,15 @@ async fn execute_case(
             "failed to prepare replay request for case {case_id}: {error:#}"
         )),
     };
+    let continuation =
+        case_view
+            .as_ref()
+            .map_or(super::case_sequence::Continuation::ReuseTarget, |view| {
+                super::case_sequence::Continuation::after_response(
+                    view.request(),
+                    &assertion_command,
+                )
+            });
     let execution_status =
         control(state, "case_execution_status", Some(case_id), false, false).await?;
     let response_times: crate::value_contract::time_copies::DeliveredTimeCopies = if runtime
@@ -853,7 +836,7 @@ async fn execute_case(
         );
     }
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
-    Ok(())
+    Ok(continuation)
 }
 
 fn mark_unfinished_cases(state: &mut ActiveRunState) {

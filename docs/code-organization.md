@@ -153,6 +153,10 @@ is unclear.
   while read-only observations remain available during dependency waits.
   `control/case_execution` exposes actual dependency rejection separately from unused inventory;
   `e2e_run/request_feedback` interrupts one primary request across HTTP, streams and Motan.
+  `e2e_run/case_sequence` owns chronological input admission on that same Target.
+  An unclean Socket.IO/WebSocket session stops the attempt before another input;
+  ordinary shutdown/finalization preserves the failed Case and pending inventory.
+  Started-I/O drain alone cannot prove that sleeping disconnect hooks have ended.
   `dependency/execution` owns the protocol-independent rejection signal and typed error.
   `e2e_run/execution_failure` retains the incomplete execution cause and independent
   primary status observations for public diagnosis and evidence queries.
