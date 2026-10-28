@@ -11,6 +11,7 @@ mod echo_preparation;
 mod repeated_echo;
 mod request_contracts;
 mod rpc_coverage;
+mod rpc_identity_formats;
 mod scale;
 mod subscriber_generations;
 mod subscription_evidence;
