@@ -57,7 +57,7 @@ pub(super) fn compare(
     actual: Option<&OutputObservation>,
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
-    copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+    copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
     let checked = compare_outputs_global_with_time_copies(expected, actual, global, times, copies)?;
@@ -87,7 +87,7 @@ fn compare_outputs_global_with_time_copies(
     actual: Option<&OutputObservation>,
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
-    copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+    copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
 ) -> Result<Comparison> {
     let mut report = Comparison::default();
     let (expected, actual) = match (expected, actual) {

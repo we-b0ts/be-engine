@@ -99,7 +99,7 @@ json:
             ],
         )
         .unwrap();
-    let copies = store.response_copies("case");
+    let copies = store.delivered_copies("case");
     let observation = |created, stamp, block_offset| OutputObservation {
         version: TRANSCRIPT_VERSION,
         protocol: Protocol::Sse,
@@ -149,7 +149,7 @@ json:
     let compare =
         |source: &OutputObservation,
          target: &OutputObservation,
-         copies: &crate::value_contract::time_copies::ResponseTimeCopies| {
+         copies: &crate::value_contract::time_copies::DeliveredTimeCopies| {
             super::super::compare_outputs_global_with_time_copies(
                 Some(source),
                 Some(target),

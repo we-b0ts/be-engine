@@ -220,8 +220,11 @@ is unclear.
   known PB logical values, chooses numeric epoch units from independent Source
   clocks, and keeps unknown encodings or ambiguous numeric units exact.
   Protocol carriers own extraction, same-position pairing and actual delivery.
-  `value_contract/time_copies/response` projects delivered Case-local typed
-  timestamp fingerprints and paired delivery clocks into primary SSE checks.
+  `value_contract/time_copies/delivered` projects delivered Case-local typed
+  timestamp fingerprints and paired delivery clocks into primary SSE checks
+  and later MySQL global JSON requests. The MySQL copy adapter checks both
+  deliveries precede the independent SQL request; physical-column contracts
+  retain their own position-bound provenance.
   `replay/http/contracts/time_copies` stages HTTP JSON/SSE time provenance and
   publishes it only on successful delivery; MySQL/Redis reuse their read hooks.
   The private response control snapshot carries no payloads. The SSE adapter

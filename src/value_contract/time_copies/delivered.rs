@@ -1,10 +1,10 @@
-//! Primary responses may retain the exact typed times actually delivered by dependencies.
+//! Later carriers may retain the exact typed times actually delivered by dependencies.
 //! These private fingerprints do not grant a new time format or a clock fallback.
 use super::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct ResponseTimeCopies {
+pub(crate) struct DeliveredTimeCopies {
     pairs: Vec<ResponseTimeCopy>,
 }
 
@@ -16,7 +16,7 @@ struct ResponseTimeCopy {
 }
 
 impl TimeCopyStore {
-    pub(crate) fn response_copies(&self, case: &str) -> ResponseTimeCopies {
+    pub(crate) fn delivered_copies(&self, case: &str) -> DeliveredTimeCopies {
         let pairs = self
             .cases
             .get(case)
@@ -31,11 +31,11 @@ impl TimeCopyStore {
                 })
             })
             .collect();
-        ResponseTimeCopies { pairs }
+        DeliveredTimeCopies { pairs }
     }
 }
 
-impl ResponseTimeCopies {
+impl DeliveredTimeCopies {
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
             self.pairs
@@ -43,7 +43,7 @@ impl ResponseTimeCopies {
                 .map(|pair| pair.deliveries.len().max(1))
                 .sum::<usize>()
                 <= MAX_CASE_COPIES,
-            "response time provenance exceeds its bound"
+            "delivered time provenance exceeds its bound"
         );
         Ok(())
     }
@@ -82,7 +82,7 @@ impl ResponseTimeCopies {
                 });
                 ensure!(
                     proofs.len() <= MAX_CASE_COPIES,
-                    "response time proof expansion exceeds its bound"
+                    "delivered time proof expansion exceeds its bound"
                 );
             }
         }
@@ -153,7 +153,7 @@ json:
     ) -> bool {
         let plan = plan.global_json.as_ref().unwrap();
         let proofs = store
-            .response_copies(case)
+            .delivered_copies(case)
             .proofs(
                 source,
                 plan,
@@ -241,7 +241,7 @@ json:
             };
             assert!(
                 store
-                    .response_copies("case")
+                    .delivered_copies("case")
                     .proofs(&source, plan, clocks, observed)
                     .unwrap()
                     .is_empty()
@@ -249,7 +249,7 @@ json:
         }
         assert!(
             store
-                .response_copies("case")
+                .delivered_copies("case")
                 .proofs(&source, plan, clocks, ClockPair::default())
                 .unwrap()
                 .is_empty()

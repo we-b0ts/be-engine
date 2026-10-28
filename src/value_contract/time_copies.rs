@@ -10,8 +10,8 @@ use crate::policy::{RedisContainer, TimeContract};
 
 const MAX_CASE_COPIES: usize = 4096;
 const MAX_TOTAL_COPIES: usize = 32768;
-mod response;
-pub(crate) use response::ResponseTimeCopies;
+mod delivered;
+pub(crate) use delivered::DeliveredTimeCopies;
 
 #[derive(Clone, Copy)]
 pub(crate) enum TimeCopyPosition<'a> {

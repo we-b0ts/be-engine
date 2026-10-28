@@ -300,13 +300,15 @@ fn compare_inner(
                     clocks,
                 )?
             {
-                let verified = if let (Some(copies), Some(origin)) = (
-                    copies,
-                    automatic_origins
-                        .as_ref()
-                        .and_then(|analysis| analysis.at_token(position)),
-                ) {
-                    copies.resolve(copies.prepare_global(automatic, &selected, origin, clocks)?)
+                let verified = if let Some(copies) = copies {
+                    copies.resolve_global(
+                        automatic,
+                        &selected,
+                        automatic_origins
+                            .as_ref()
+                            .and_then(|analysis| analysis.at_token(position)),
+                        clocks,
+                    )?
                 } else {
                     vec![]
                 };

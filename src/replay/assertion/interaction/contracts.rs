@@ -21,7 +21,7 @@ pub(super) fn compare_message(
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::super::RequestTimes,
     pointer: &str,
-    copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+    copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     observed: super::super::RequestTimes,
 ) -> Comparison {
     let mut result = Comparison::default();
@@ -82,7 +82,7 @@ fn compare_data(
     plan: &crate::policy::CompiledJsonPolicy,
     rules: &[&crate::policy::CompiledRule],
     clocks: crate::value_contract::json::AnchorClocks,
-    copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+    copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     observed: super::super::RequestTimes,
 ) -> Result<Comparison> {
     use crate::value_codec::CodecView;

@@ -77,7 +77,7 @@ async fn http_time_provenance_is_not_published_before_stream_eof() {
         .as_ref()
         .unwrap()
         .request_contracts
-        .response_time_copies("case");
+        .delivered_time_copies("case");
     assert!(
         before
             .proofs(&source, plan, clocks, observed)
@@ -105,7 +105,7 @@ async fn http_time_provenance_is_not_published_before_stream_eof() {
         .as_ref()
         .unwrap()
         .request_contracts
-        .response_time_copies("case");
+        .delivered_time_copies("case");
     let observed = crate::value_contract::time::ClockPair {
         target: Some(Utc::now()),
         ..observed

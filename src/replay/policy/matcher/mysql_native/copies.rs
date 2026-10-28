@@ -40,6 +40,34 @@ impl<'a> CopyProofs<'a> {
             clocks: Default::default(),
         }
     }
+    /// Global JSON describes content independently of its carrier. An exact
+    /// typed pair already delivered in this case keeps that provenance when
+    /// copied into SQL, provided both deliveries precede this request.
+    pub(super) fn resolve_global(
+        &self,
+        context: &crate::replay::mysql::contracts::automatic::RequestContext<'_>,
+        selected: &crate::replay::mysql::contracts::automatic::Selection,
+        origin: Option<&FieldIdentity>,
+        clocks: AnchorClocks,
+    ) -> Result<Vec<VerifiedTimeCopy>> {
+        let mut verified = if let Some(origin) = origin {
+            self.resolve(self.prepare_global(context, selected, origin, clocks)?)
+        } else {
+            vec![]
+        };
+        if !self.available || selected.id != crate::policy::GLOBAL_JSON_ID {
+            return Ok(verified);
+        }
+        if let Some(plan) = &context.policy.global_json {
+            let (delivered, observed) = match self.source {
+                Source::Runtime(owner) => (owner.delivered_time_copies(self.case), self.clocks),
+                Source::Stored(store) => (store.delivered_copies(self.case), clocks.dependency),
+            };
+            verified.extend(delivered.proofs(&selected.source, plan, clocks, observed)?);
+        }
+        Ok(verified)
+    }
+
     pub(super) fn prepare_global(
         &self,
         context: &crate::replay::mysql::contracts::automatic::RequestContext<'_>,

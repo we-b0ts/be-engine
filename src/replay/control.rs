@@ -245,7 +245,7 @@ pub(super) async fn handle_control_request(
                 let copies = state
                     .replay_policy
                     .as_ref()
-                    .map(|policy| policy.request_contracts.response_time_copies(case))
+                    .map(|policy| policy.request_contracts.delivered_time_copies(case))
                     .unwrap_or_default();
                 serde_json::json!({"ok":true, "time_copies":copies})
             } else {
