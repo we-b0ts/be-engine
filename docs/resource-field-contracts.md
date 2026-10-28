@@ -109,6 +109,12 @@ Relative naive timestamps do not require an offset because the shared civil
 offset cancels in the comparison. Consistent Source/Target timezone behavior
 is still required. Native SQL dates use the protocol adapter's date arithmetic.
 
+Integer Unix timestamps compare independent anchors at the declared seconds,
+milliseconds or microseconds precision. The five-second tolerance is unchanged:
+an offset of five representable seconds passes and six seconds fails. Floating
+timestamps and textual formats retain their existing precision; duration
+contracts do not acquire timestamp rounding.
+
 Fixed scalar values need no policy entry. Equal Source/Target sentinels compare
 exactly without a clock. An unrecognized differing scalar fails; the engine does
 not infer a business meaning from its spelling. Source-only delivery keeps

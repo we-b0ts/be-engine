@@ -82,6 +82,31 @@ pub(crate) fn date_nanos(time: DateTime<Utc>) -> i128 {
     i128::from(time.timestamp()) * NANOS_PER_SECOND + i128::from(time.timestamp_subsec_nanos())
 }
 
+/// Integer Unix timestamps discard fractions smaller than their declared unit.
+/// Project each independent clock to that same unit before applying the fixed
+/// tolerance. Fractional values and textual formats retain full clock precision.
+pub(crate) fn timestamp_clocks(
+    source: &Value,
+    target: &Value,
+    format: TimestampFormat,
+    clocks: ClockPair,
+) -> ClockPair {
+    if !(source.is_i64() || source.is_u64()) || validate_numeric_category(source, target).is_err() {
+        return clocks;
+    }
+    let unit = match format {
+        TimestampFormat::UnixSeconds => 1_000_000_000,
+        TimestampFormat::UnixMilliseconds => 1_000_000,
+        TimestampFormat::UnixMicroseconds => 1_000,
+        _ => return clocks,
+    };
+    let project = |clock: DateTime<Utc>| clock.with_nanosecond(clock.nanosecond() / unit * unit);
+    ClockPair {
+        source: clocks.source.and_then(project),
+        target: clocks.target.and_then(project),
+    }
+}
+
 pub(crate) fn validate_request_window(value: i128, anchor: DateTime<Utc>) -> Result<(), TimeError> {
     if value.abs_diff(date_nanos(anchor)) > TOLERANCE_NANOS {
         return Err(TimeError::OutsideWindow);

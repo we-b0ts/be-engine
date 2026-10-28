@@ -13,6 +13,51 @@ fn clocks() -> AnchorClocks {
 }
 
 #[test]
+fn integer_epoch_fields_compare_second_resolution_without_rounding_duration_contracts() {
+    let contract = FieldContract::Time {
+        format: TimestampFormat::UnixSeconds,
+        relation: TimeRelation::PreserveOffset,
+        anchor: crate::policy::TimeAnchor::DependencyRequestStart,
+        utc_offset: None,
+        clock_group: None,
+        clock_scope: Default::default(),
+    };
+    let fields = [Field {
+        rule_id: "clock",
+        pointer: "/at",
+        contract: &contract,
+    }];
+    let clocks = AnchorClocks {
+        dependency: ClockPair {
+            source: chrono::DateTime::from_timestamp(1000, 510_000_000),
+            target: chrono::DateTime::from_timestamp(2005, 268_957_972),
+        },
+        ..Default::default()
+    };
+    assert!(compare(&json!({"at":1000}), &json!({"at":2010}), &fields, clocks).passed());
+    assert!(!compare(&json!({"at":1000}), &json!({"at":2011}), &fields, clocks).passed());
+    assert!(
+        !compare(
+            &json!({"at":1000.0}),
+            &json!({"at":2010.0}),
+            &fields,
+            clocks
+        )
+        .passed()
+    );
+    let duration = FieldContract::Duration {
+        unit: crate::policy::DurationUnit::Seconds,
+        anchor: crate::policy::TimeAnchor::DependencyRequestStart,
+    };
+    let fields = [Field {
+        rule_id: "duration",
+        pointer: "/at",
+        contract: &duration,
+    }];
+    assert!(!compare(&json!({"at":1000}), &json!({"at":2010}), &fields, clocks).passed());
+}
+
+#[test]
 fn time_contract_uses_only_independent_dependency_start_and_never_falls_back() {
     let contract = FieldContract::Time {
         format: TimestampFormat::UnixSeconds,

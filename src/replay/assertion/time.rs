@@ -26,7 +26,7 @@ pub(in crate::replay) fn compare(
                 ResponseTimestampMode::RequestWindow => TimeMode::RequestWindow,
                 ResponseTimestampMode::PreserveRelative => TimeMode::PreserveRelative,
             },
-            times,
+            time::timestamp_clocks(expected, actual, timestamp_format(format), times),
         ),
         ResponseTimeRule::Duration { unit } => time::compare_duration_nanos(
             numeric_nanos(expected, unit).ok_or(ResponseDifferenceKind::TimeFieldInvalid)?,
@@ -48,7 +48,7 @@ pub(super) fn compare_preserved_timestamp(
         timestamp_nanos(expected, format)?,
         timestamp_nanos(actual, format)?,
         TimeMode::PreserveRelative,
-        times,
+        time::timestamp_clocks(expected, actual, timestamp_format(format), times),
     )
     .map_err(difference)
 }
@@ -77,13 +77,16 @@ fn timestamp_nanos(
     value: &Value,
     format: ResponseTimestampFormat,
 ) -> Result<i128, ResponseDifferenceKind> {
-    let format = match format {
+    time::parse_timestamp(value, timestamp_format(format), None).map_err(difference)
+}
+
+fn timestamp_format(format: ResponseTimestampFormat) -> TimestampFormat {
+    match format {
         ResponseTimestampFormat::UnixSeconds => TimestampFormat::UnixSeconds,
         ResponseTimestampFormat::UnixMilliseconds => TimestampFormat::UnixMilliseconds,
         ResponseTimestampFormat::Rfc3339 => TimestampFormat::Rfc3339,
         ResponseTimestampFormat::AmzDate => TimestampFormat::AmzDate,
-    };
-    time::parse_timestamp(value, format, None).map_err(difference)
+    }
 }
 
 fn numeric_nanos(value: &Value, unit: ResponseDurationUnit) -> Option<i128> {
