@@ -402,8 +402,10 @@ is unclear.
   retaining per-connection order and initial-reset causal fences. The existing observation runtime owns bounded repeats,
   delivery and audit. Native policy compilation and normal plan/apply retain
   permission ownership. `redis/read_commutation` owns explicit finite nil-observation ordering
-  permission; its `source` child rejects mutations and overlapping ownership
-  before installing any permission. `redis/key_access` supplies conservative
+  permission; its `source` child rejects mutations and validates absent-key
+  participation in causally later multi-key cleanup before installing any
+  permission. Cleanup itself retains ordinary finite command ownership.
+  `redis/key_access` supplies conservative
   key-access exclusion to both Source proofs, and `redis/native_source` loads
   their complete scoped Source inventories. `redis/case_scope` identifies other
   ordinary Case records consistently for preparation and later inventory
@@ -1448,6 +1450,9 @@ explicit repository-wide audit.
 - `policy/{schema,native,native_compile,strict_map,capability}` owns closed typed
   contracts, Source scope and pure validation. Unknown combinations reject before
   replay; adapter admission and runtime construction share typed projections.
+  `native_compile/ownership/read_commutation` composes finite nil GET ordering
+  with existing read-back owners whose wire transformation preserves nil;
+  Source absence validation and all other response ownership remain separate.
 - `policy/authoring` owns document revision context, rule-local proof inheritance,
   named contract abbreviations and readable YAML rendering. Its closed traversal
   expands only typed contract locations, preserving business literals. Optional

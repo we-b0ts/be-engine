@@ -18,8 +18,8 @@ fn event(sequence: usize, command: &str, args: &[&str], response: &[u8]) -> Valu
 
 #[test]
 fn read_commutation_public_plan_apply_validates_complete_source_and_preserves_stale_guards() {
-    for scenario in ["valid", "changed", "absent", "stale"] {
-        let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |_, source| {
+    for scenario in ["valid", "changed", "absent", "stale", "read-back-cleanup"] {
+        let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, source| {
             let mut events = vec![
                 event(1, "GET", &["cancel:1"], b"$-1\r\n"),
                 event(2, "APPEND", &["content:1", "cd"], b":4\r\n"),
@@ -30,6 +30,17 @@ fn read_commutation_public_plan_apply_validates_complete_source_and_preserves_st
             }
             if scenario == "absent" {
                 events.clear();
+            }
+            if scenario == "read-back-cleanup" {
+                write(
+                    &root.join(".traffic-e2e/policy.yaml"),
+                    json!({
+                        "format":"traffic-policy/v2","redis":{"keys":{
+                            "cancel:*":{"kind":"identity","formats":["string"],"read_back":true}
+                        }}
+                    }),
+                );
+                events.push(event(4, "DEL", &["content:1", "cancel:1"], b":1\r\n"));
             }
             fs::write(
                 source.join("apis/api/case-1/dependencies.jsonl"),
@@ -47,6 +58,10 @@ fn read_commutation_public_plan_apply_validates_complete_source_and_preserves_st
             .unwrap()
             .join("apis/api/case-1/dependencies.jsonl");
         let original = fs::read(&dependencies).unwrap();
+        let prior = crate::policy::compile_policy(
+            &crate::policy::parse_policy(&fs::read_to_string(fixture.policy()).unwrap()).unwrap(),
+        )
+        .unwrap();
         let plan = fixture.plan();
         if matches!(scenario, "changed" | "absent") {
             assert!(plan.is_err(), "{scenario}");
@@ -71,6 +86,19 @@ fn read_commutation_public_plan_apply_validates_complete_source_and_preserves_st
             assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
             assert_eq!(fs::read(&dependencies).unwrap(), original);
             assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+            let current = crate::policy::compile_policy(
+                &crate::policy::parse_policy(&fs::read_to_string(fixture.policy()).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            for old in &prior.native {
+                let unchanged = current
+                    .native
+                    .iter()
+                    .find(|r| r.rule.id == old.rule.id)
+                    .unwrap();
+                assert_eq!(unchanged.fingerprint, old.fingerprint);
+            }
         }
     }
 }

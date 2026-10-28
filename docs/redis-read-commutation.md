@@ -20,9 +20,13 @@ Source/Target endpoint, database, authentication and protocol remain exact.
 
 The native planner and Replay share complete Source validation for each
 selected Case/key. All selected GET responses must be RESP nil bulk values.
-Same-key `DEL` is allowed only with its original zero response and stays an
-ordinary finite, ordered command. Mutations, non-nil responses, multi-key
-observations, ambiguous script key access, Global/shared overlap and
+Single-key `DEL` is allowed only with its original zero response. A subsequent
+multi-key `DEL` may remove other keys if every selected nil GET provably precedes
+it and its original nonnegative removal count fits the distinct other keys.
+Same-connection sequence proves that order; different connections require
+complete, non-overlapping observation clocks. Every cleanup keeps its full
+arguments, original response and ordinary finite connection order. Mutations,
+non-nil responses, multi-key observations, ambiguous script key access, Global/shared overlap and
 stateful or transactional read connections reject the proof. Another ordinary
 Case's reads or writes do not participate in this Case's proof or consumption,
 whether loaded before or after preparation. The prepared Case's own inventory
@@ -33,8 +37,12 @@ Only proven GET exchanges leave the ordinary connection-order barrier. Their
 endpoint, database, user, Case, key/arguments, recorded response, connection
 eligibility, single claim and successful delivery remain checked. Other
 commands keep their original lane order, APPEND byte fences and TTL checks.
-Rules own the unchanged read response and cannot overlap another response
-delivery owner.
+Rules own the unchanged read response. They can compose with an existing GET
+`read_back` declaration: read-back transforms bulk payloads and leaves RESP nil
+unchanged, while commutation Source proof still rejects writers and non-nil
+observations for the selected Case/key. The existing read-back identity, scope
+and fingerprint remain unchanged when adding commutation. Duplicate commutation
+or read-back owners and other response delivery owners remain conflicts.
 
 This effect does not make polling optional or reusable. Extra Target reads
 still fail; missing reads remain unused Source dependencies; failed delivery
