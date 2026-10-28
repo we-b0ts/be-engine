@@ -1515,6 +1515,10 @@ explicit repository-wide audit.
   resolves the sole Target-root-relative `project.policy` path.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
+  `manifest/eligibility` owns narrow finalized-partial format changes: Redis
+  scalar identities and existing JSON identity representations retain every
+  other compiled permission and pass the same complete preflight and stale
+  checks. Eligibility never certifies an incomplete Replay.
   Its `change` child admits explicit replacement sets, preserving unselected
   rules and API ownership. Replacements reuse complete preflight, whole-policy
   compare-and-swap, durable publication intent and recovery; they are not an

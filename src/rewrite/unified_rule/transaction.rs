@@ -49,6 +49,8 @@ mod mysql_composite_transaction;
 mod mysql_table_values_transaction;
 #[path = "transaction_native.rs"]
 mod native_transaction;
+#[path = "transaction_partial_redis.rs"]
+mod partial_redis_transaction;
 #[path = "transaction_read_back.rs"]
 mod read_back_transaction;
 #[path = "transaction_read_commutation.rs"]
