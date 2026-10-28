@@ -590,6 +590,16 @@ the ordinary additive behavior. For example, clearing JSON requires an explicit
 may omit `replace_rules`. The plan exposes additions and removals before apply;
 neither mode bypasses Source proof, complete preflight or genuine verification.
 
+A finalized attempt with unexecuted Cases may revoke existing bounded key-local
+Redis `read_back` permissions through explicit `replace_rules`. The compiled
+result must remove only those permissions and preserve every other rule, field,
+format, owner and signature. It cannot add a format or broaden a selector. The
+planner still freezes the full Source inventory, validates the current policy
+and executes ordinary preflight; apply requires fresh genuine Replay. Other
+changes continue to require a complete finalized attempt. Use the native rule
+ID from the failure diagnostic; do not replace the entire Redis section merely
+to remove one key's read-back permission.
+
 Distinguish candidate, needs-proof/schema/evidence, stale, unsupported,
 planned, applied-pending-verification, verified, residual-failure and
 not-observed. `apply` only records a policy change. Offline preflight is not

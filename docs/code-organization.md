@@ -1196,6 +1196,12 @@ explicit repository-wide audit.
   parent reads immutable case dependencies once for all protocol projections.
   `config/mysql_tables.rs` owns physical table selector
   validation, matching, and intersection independently of SQL template expansion.
+- `rewrite/unified_rule/manifest/eligibility` permits a finalized partial attempt
+  to revoke only existing bounded key-local Redis read-back permissions. Every
+  other compiled owner, format and signature must remain identical; additions
+  and modifications retain complete-attempt requirements. Full Source freezing,
+  preflight, policy CAS and fresh genuine Replay remain with the normal planner.
+
 - `rewrite/case_dependencies` owns bounded, read-only per-target dependency
   projections. Its `mysql` child owns query, parameter, connection, and response
   facts, including captured before/after server-status flags, for diagnosis;
