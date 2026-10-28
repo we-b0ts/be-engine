@@ -656,7 +656,7 @@ async fn execute_case(
     };
     let execution_status =
         control(state, "case_execution_status", Some(case_id), false, false).await?;
-    let response_times: crate::value_contract::time_copies::ResponseTimeCopies = if runtime
+    let response_times: crate::value_contract::time_copies::DeliveredTimeCopies = if runtime
         .response_assertions
         .as_ref()
         .is_some_and(|runtime| runtime.needs_time_copies())

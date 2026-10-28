@@ -78,7 +78,7 @@ impl ResponseAssertionRuntime {
         request_bytes: &[u8],
         expected_bytes: &[u8],
         actual_bytes: &[u8],
-        time_copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+        time_copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     ) -> Result<ResponseAssertionCaseReport> {
         assert_recorded_response_with_policy_and_time_copies(
             options,
@@ -248,7 +248,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
     expected_bytes: &[u8],
     actual_bytes: &[u8],
     policy: &LoadedReplayPolicy,
-    time_copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+    time_copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
 ) -> Result<ResponseAssertionCaseReport> {
     policy.prepare_signatures()?;
     let decrypted_request =
