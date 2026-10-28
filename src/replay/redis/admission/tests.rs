@@ -2,9 +2,12 @@ use super::*;
 use crate::replay::redis::append::tests::{event, request};
 use crate::replay::redis::observations::tests::refresh_rule;
 use crate::replay::{ReplayConfig, ReplayRuntime};
-use serde_json::json;
+use serde_json::{Value, json};
 
-async fn runtime() -> (tempfile::TempDir, ReplayRuntime) {
+pub(super) async fn runtime_with_source(
+    events: &[Value],
+    document: Value,
+) -> (tempfile::TempDir, ReplayRuntime) {
     let root = tempfile::tempdir().unwrap();
     let case = root
         .path()
@@ -20,31 +23,13 @@ async fn runtime() -> (tempfile::TempDir, ReplayRuntime) {
     )
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let mut events = [
-        event(
-            1,
-            "LRANGE",
-            &[b"content:1", b"0", b"-1"],
-            b"*1\r\n$3\r\nold\r\n",
-        ),
-        event(2, "LSET", &[b"content:1", b"0", b"new"], b"+OK\r\n"),
-        event(3, "EXPIRE", &[b"content:1", b"60"], b":1\r\n"),
-        event(4, "GET", &[b"other"], b"$-1\r\n"),
-    ];
-    events[0]["response_kind"] = json!("array");
-    events[1]["response_kind"] = json!("simple_string");
-    events[3]["connection_id"] = json!(Uuid::from_u128(2));
     std::fs::write(
         case.join("dependencies.jsonl"),
         events.iter().map(|e| format!("{e}\n")).collect::<String>(),
     )
     .unwrap();
     let policy = root.path().join("policy.yaml");
-    std::fs::write(
-        &policy,
-        json!({"format":"traffic-policy/v2", "rules":[refresh_rule()]}).to_string(),
-    )
-    .unwrap();
+    std::fs::write(&policy, document.to_string()).unwrap();
     crate::replay::write_test_recording_network_manifest(root.path());
     let addr = "127.0.0.1:0".parse().unwrap();
     let runtime = ReplayRuntime::load_with_lifecycle(
@@ -71,6 +56,28 @@ async fn runtime() -> (tempfile::TempDir, ReplayRuntime) {
     .await
     .unwrap();
     (root, runtime)
+}
+
+async fn runtime() -> (tempfile::TempDir, ReplayRuntime) {
+    let mut events = [
+        event(
+            1,
+            "LRANGE",
+            &[b"content:1", b"0", b"-1"],
+            b"*1\r\n$3\r\nold\r\n",
+        ),
+        event(2, "LSET", &[b"content:1", b"0", b"new"], b"+OK\r\n"),
+        event(3, "EXPIRE", &[b"content:1", b"60"], b":1\r\n"),
+        event(4, "GET", &[b"other"], b"$-1\r\n"),
+    ];
+    events[0]["response_kind"] = json!("array");
+    events[1]["response_kind"] = json!("simple_string");
+    events[3]["connection_id"] = json!(Uuid::from_u128(2));
+    runtime_with_source(
+        &events,
+        json!({"format":"traffic-policy/v2", "rules":[refresh_rule()]}),
+    )
+    .await
 }
 
 fn target() -> TargetKey {

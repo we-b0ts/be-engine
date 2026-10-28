@@ -4,22 +4,24 @@ use crate::policy::{Database, NativeEffect, Protocol, TimeContract};
 use serde_json::Value;
 
 mod lifecycle;
+mod read_barrier;
 mod runtime;
 mod source;
 #[cfg(test)]
-mod tests;
+pub(in crate::replay::redis) mod tests;
 mod value;
 
 const MAX_KEYS: usize = 128;
 const MAX_CALLS: usize = 4096;
 const MAX_BYTES: usize = crate::value_limits::MAX_VALUE_BYTES;
+const READ_REQUIRED: &str = "activity SET requires a successfully delivered current-value GET";
 
 #[derive(Debug, Default)]
 pub(super) struct ActivityRefreshes {
     prepared: BTreeSet<String>,
     profiles: Vec<Profile>,
     owned: BTreeMap<String, BTreeSet<(Uuid, u64)>>,
-    pending: BTreeMap<Uuid, usize>,
+    pending: BTreeMap<Uuid, Pending>,
     calls: BTreeMap<String, usize>,
     charged: BTreeSet<usize>,
     audits: Vec<ActivityAudit>,
@@ -90,6 +92,14 @@ enum Completion {
     Refresh,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    profile: usize,
+    lifetime: usize,
+    kind: Completion,
+    event_index: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct ActivityAudit {
     rule_id: String,
@@ -119,7 +129,7 @@ impl ActivityRefreshes {
     }
     pub(super) fn in_flight_diagnostic(&self) -> serde_json::Value {
         serde_json::json!({"count":self.pending.len(), "cases":self.pending.values().take(4)
-            .map(|&i| self.profiles[i].case.as_str()).collect::<Vec<_>>(),
+            .map(|p| self.profiles[p.profile].case.as_str()).collect::<Vec<_>>(),
             "omitted":self.pending.len().saturating_sub(4)})
     }
     pub(super) fn reports(&self) -> Vec<ActivityAudit> {

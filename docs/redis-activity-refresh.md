@@ -53,6 +53,13 @@ delivery poisons the lifetime and keeps the Case dirty. A deletion cannot cross
 pending activity I/O. Reads before creation and after deletion stay finite.
 No infinite nil polling or retry-until-present behavior is introduced.
 
+A SET arriving while an earlier GET in that same Case and lifetime is still
+finishing delivery waits for its completion bookkeeping instead of reporting a
+missing read. The wait preserves the SET's original observation, request clock
+and admission index, and ends within 30 seconds or when the Case stops. Failed
+GETs still poison the lifetime. An unclaimed or later GET cannot supply this
+predecessor; another connection cannot extend the wait with future reads.
+
 The permission is opt-in: absent declarations leave historical behavior unchanged.
 Enabling it adds complete Source proof and explicit Target state checks; it is
 not an unconditional promise that arbitrary historical policies/traces still

@@ -12,7 +12,7 @@ mod source_tests;
 #[path = "tcp_tests.rs"]
 mod tcp_tests;
 
-fn document(enabled: bool) -> Value {
+pub(in crate::replay::redis) fn document(enabled: bool) -> Value {
     let mut value = json!({"format":"traffic-policy/v2","json":{"fields":{
         "/last_activity_at":{"kind":"time","formats":["rfc3339"]},
         "/started_at":{"kind":"time","formats":["rfc3339"]}
@@ -32,7 +32,7 @@ fn object(start: &str, last: &str) -> Vec<u8> {
     .unwrap()
 }
 
-fn events() -> Vec<Value> {
+pub(in crate::replay::redis) fn events() -> Vec<Value> {
     let first = object("2020-01-01T00:00:01Z", "2020-01-01T00:00:01Z");
     let second = object("2020-01-01T00:00:01Z", "2020-01-01T00:00:04Z");
     let third = object("2020-01-01T00:00:01Z", "2020-01-01T00:00:07Z");
@@ -75,7 +75,7 @@ fn perform(state: &mut RedisReplayState, command: &str, args: &[&[u8]]) -> Vec<u
     response
 }
 
-fn create(state: &mut RedisReplayState) -> Vec<u8> {
+pub(in crate::replay::redis) fn create(state: &mut RedisReplayState) -> Vec<u8> {
     let now = chrono::Utc::now().to_rfc3339();
     let value = object(&now, &now);
     assert_eq!(

@@ -1,8 +1,10 @@
-//! Await initial-refresh delivery fences without consuming or re-observing requests.
+//! Await claimed Redis predecessor deliveries without re-observing requests.
 use super::*;
 use crate::replay::report::command::CommandMatchDiagnostic;
 use std::time::Duration;
 
+#[cfg(test)]
+mod activity_tests;
 #[cfg(test)]
 mod tests;
 
@@ -42,11 +44,13 @@ pub(super) async fn match_command(
     let observation = state.redis.request_observation_id;
     let deadline = tokio::time::Instant::now() + REFRESH_WAIT;
     while let Err(diagnostic) = &result {
-        if command.name != "EXPIRE"
-            || !state
-                .redis
-                .pending_initial_refresh(case.as_deref(), diagnostic)
-        {
+        if !pending_delivery(
+            &state.redis,
+            case.as_deref(),
+            &command.name,
+            event,
+            diagnostic,
+        ) {
             break;
         }
         let changed = state.redis.delivery_changed.clone().notified_owned();
@@ -67,9 +71,9 @@ pub(super) async fn match_command(
                 .as_ref()
                 .is_some_and(|c| state.target_stop_prepared.contains(c))
         {
-            Some("Redis case stopped while awaiting initial refresh predecessors")
+            Some("Redis case stopped while awaiting predecessor delivery")
         } else if tokio::time::Instant::now() >= deadline {
-            Some("Redis initial refresh predecessor delivery wait timed out")
+            Some("Redis predecessor delivery wait timed out")
         } else {
             None
         };
@@ -79,10 +83,13 @@ pub(super) async fn match_command(
             });
             break;
         }
-        if state
-            .redis
-            .pending_initial_refresh(case.as_deref(), diagnostic)
-        {
+        if pending_delivery(
+            &state.redis,
+            case.as_deref(),
+            &command.name,
+            event,
+            diagnostic,
+        ) {
             continue;
         }
         state.redis.request_event_index = event;
@@ -137,5 +144,19 @@ pub(super) async fn match_command(
             });
             Err(hint.unwrap_or("no recorded Redis dependency matched"))
         }
+    }
+}
+
+fn pending_delivery(
+    redis: &RedisReplayState,
+    case: Option<&str>,
+    command: &str,
+    event: Option<usize>,
+    diagnostic: &CommandMatchDiagnostic,
+) -> bool {
+    match command {
+        "EXPIRE" => redis.pending_initial_refresh(case, diagnostic),
+        "SET" => redis.pending_activity_read(case, event, diagnostic),
+        _ => false,
     }
 }

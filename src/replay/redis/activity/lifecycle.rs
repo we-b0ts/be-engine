@@ -25,7 +25,7 @@ impl RedisReplayState {
                                 .activity_refresh
                                 .pending
                                 .values()
-                                .any(|&other| other == profile)));
+                                .any(|pending| pending.profile == profile)));
                 if invalid {
                     return Err(CommandMatchDiagnostic::RedisStateObservationMismatch {
                         rule_id: p.rule.clone(), source_key_fingerprint: fingerprint(&p.key),
