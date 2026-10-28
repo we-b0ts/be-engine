@@ -76,6 +76,18 @@ pub(super) fn compare(
     time::validate_numeric_category(source, actual)?;
     let pair = (timestamp(source, rule)?, timestamp(actual, rule)?);
     config::tolerance(&rule.tolerance)?;
+    let anchor = match rule.format {
+        Format::UnixSeconds => {
+            time::timestamp_clocks(source, actual, TimestampFormat::UnixSeconds, anchor)
+        }
+        Format::UnixMilliseconds => {
+            time::timestamp_clocks(source, actual, TimestampFormat::UnixMilliseconds, anchor)
+        }
+        Format::UnixMicroseconds => {
+            time::timestamp_clocks(source, actual, TimestampFormat::UnixMicroseconds, anchor)
+        }
+        _ => anchor,
+    };
     time::compare_timestamp_nanos(pair.0, pair.1, TimeMode::PreserveRelative, anchor)
         .map_err(|_| anyhow::anyhow!("request timestamp differs from its recorded relative time or is missing its request anchor"))?;
     Ok(compared_pair(pair.0, pair.1, rule))

@@ -21,6 +21,8 @@ pub(super) fn compare_message(
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::super::RequestTimes,
     pointer: &str,
+    copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+    observed: super::super::RequestTimes,
 ) -> Comparison {
     let mut result = Comparison::default();
     let Ok(source_event) = decode_sse(source) else {
@@ -46,7 +48,7 @@ pub(super) fn compare_message(
             mismatch(&mut result, &format!("{pointer}/sse/{field}"));
         }
     }
-    let checked = crate::value_contract::global::compare(
+    let checked = compare_data(
         source_event.data.as_bytes(),
         target_event.data.as_bytes(),
         global.expect("global JSON field strategy checked"),
@@ -56,6 +58,8 @@ pub(super) fn compare_message(
             dependency: times,
             ..Default::default()
         },
+        copies,
+        observed,
     );
     match checked {
         Ok(mut checked) => {
@@ -70,4 +74,25 @@ pub(super) fn compare_message(
         }),
     }
     result
+}
+
+fn compare_data(
+    source: &[u8],
+    target: &[u8],
+    plan: &crate::policy::CompiledJsonPolicy,
+    rules: &[&crate::policy::CompiledRule],
+    clocks: crate::value_contract::json::AnchorClocks,
+    copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+    observed: super::super::RequestTimes,
+) -> Result<Comparison> {
+    use crate::value_codec::CodecView;
+    if crate::json_value::parse(source).is_none() {
+        return crate::value_contract::global::compare(source, target, plan, rules, clocks);
+    }
+    let source = CodecView::decode(&crate::policy::Codec::Json, source)?;
+    let target = CodecView::decode(&crate::policy::Codec::Json, target)?;
+    let proofs = copies.proofs(&source.logical, plan, clocks, observed)?;
+    crate::value_contract::global::compare_decoded_with_time_copies(
+        &source, &target, plan, rules, clocks, &proofs,
+    )
 }

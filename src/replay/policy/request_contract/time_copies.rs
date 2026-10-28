@@ -6,6 +6,15 @@ use crate::value_contract::{
 };
 
 impl RequestContracts {
+    pub(in crate::replay) fn response_time_copies(
+        &self,
+        case: &str,
+    ) -> crate::value_contract::time_copies::ResponseTimeCopies {
+        self.time_copies
+            .lock()
+            .expect("time copies")
+            .response_copies(case)
+    }
     pub(in crate::replay) fn has_time_copies(&self, case: &str) -> bool {
         self.time_copies.lock().expect("time copies").has_case(case)
     }

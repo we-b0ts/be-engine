@@ -33,6 +33,7 @@ pub(super) async fn execute_with_feedback(
     );
     let close_timing = client_close_timing(transcript)?;
     let started = Instant::now();
+    let started_at = chrono::Utc::now();
     let mut client_close = close_timing
         .and_then(|timing| match timing {
             ClientCloseTiming::Absolute(offset) => Some(offset),
@@ -190,6 +191,7 @@ pub(super) async fn execute_with_feedback(
         });
     }
     Ok(ReplayResponse {
+        started_at,
         status,
         headers,
         body: Bytes::from(bytes),

@@ -603,6 +603,7 @@ impl ReplayState {
             }
         }
         self.audit_http_request_headers(&exchange, index, &audited_headers, request_started_at);
+        self.http_exchanges[index].time_copy_delivery = exchange.time_copy_delivery.take();
         let detail = MatchedHttpExchangeReport {
             case_id: active_case_id.clone(),
             shared_origin: exchange.shared_origin.clone(),
@@ -666,6 +667,13 @@ impl ReplayState {
             exchange.record.stream_delivery = Some(detail);
             return Ok(exchange.record);
         }
+        contracts::time_copies::commit(
+            self.replay_policy.as_ref(),
+            &mut self.http_exchanges[index],
+        )
+        .map_err(|error| {
+            HttpReplayMatchError::BadGateway(format!("HTTP time-copy provenance: {error:#}"))
+        })?;
         self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
         self.refresh_http_global_report(index);
         self.complete_http_exchange(detail);

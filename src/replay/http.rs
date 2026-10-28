@@ -135,6 +135,7 @@ pub(super) struct ReplayHttpExchange {
     status: super::ReplayExchangeStatus,
     shared_origin: Option<cross_case::SharedOrigin>,
     lifecycle_prefix: Option<Arc<crate::http::termination::PrefixDelivery>>,
+    time_copy_delivery: Option<contracts::time_copies::PreparedRead>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -359,6 +360,7 @@ pub(super) fn register_http_exchange(
         status: super::ReplayExchangeStatus::Available,
         shared_origin: None,
         lifecycle_prefix: None,
+        time_copy_delivery: None,
     });
     Ok(())
 }

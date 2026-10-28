@@ -9,6 +9,76 @@ fn clocks() -> ClockPair {
 }
 
 #[test]
+fn integer_epoch_anchors_use_declared_precision_and_keep_the_five_second_limit() {
+    let clocks = ClockPair {
+        source: DateTime::from_timestamp(1000, 510_000_000),
+        target: DateTime::from_timestamp(2005, 268_957_972),
+    };
+    for (format, scale) in [
+        (TimestampFormat::UnixSeconds, 1_i64),
+        (TimestampFormat::UnixMilliseconds, 1000),
+        (TimestampFormat::UnixMicroseconds, 1_000_000),
+    ] {
+        let source = json!(1000 * scale);
+        let projected = timestamp_clocks(&source, &json!(2005 * scale), format, clocks);
+        assert_eq!(
+            projected.source.unwrap().timestamp_subsec_nanos(),
+            clocks.source.unwrap().timestamp_subsec_nanos() / (1_000_000_000 / scale as u32)
+                * (1_000_000_000 / scale as u32)
+        );
+        let a = date_nanos(projected.source.unwrap());
+        let b = date_nanos(projected.target.unwrap());
+        assert!(
+            compare_timestamp_nanos(
+                a,
+                b + 5 * NANOS_PER_SECOND,
+                TimeMode::PreserveRelative,
+                projected
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            compare_timestamp_nanos(
+                a,
+                b + 6 * NANOS_PER_SECOND,
+                TimeMode::PreserveRelative,
+                projected
+            ),
+            Err(TimeError::DeltaMismatch)
+        );
+    }
+    let source = json!(1000);
+    let target = json!(2010);
+    let projected = timestamp_clocks(&source, &target, TimestampFormat::UnixSeconds, clocks);
+    assert!(
+        compare_timestamp_nanos(
+            parse_timestamp(&source, TimestampFormat::UnixSeconds, None).unwrap(),
+            parse_timestamp(&target, TimestampFormat::UnixSeconds, None).unwrap(),
+            TimeMode::PreserveRelative,
+            projected
+        )
+        .is_ok()
+    );
+    let exact = timestamp_clocks(
+        &json!(1000.0),
+        &json!(2010.0),
+        TimestampFormat::UnixSeconds,
+        clocks,
+    );
+    assert_eq!(exact.source, clocks.source);
+    assert_eq!(exact.target, clocks.target);
+    assert_eq!(
+        compare_timestamp_nanos(
+            1000 * NANOS_PER_SECOND,
+            2010 * NANOS_PER_SECOND,
+            TimeMode::PreserveRelative,
+            exact
+        ),
+        Err(TimeError::DeltaMismatch)
+    );
+}
+
+#[test]
 fn exact_scaling_preserves_sub_float_precision_and_rejects_overflow() {
     let large = 100_000_000_000_000_001_i64;
     for (format, multiplier) in [

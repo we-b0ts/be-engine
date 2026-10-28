@@ -818,6 +818,7 @@ fn compare_time(
             clocks,
         );
     }
+    let clocks = time::timestamp_clocks(source, target, core_format(config.format)?, clocks);
     time::compare_timestamp_nanos(pair.0, pair.1, mode, clocks)?;
     Ok(pair)
 }

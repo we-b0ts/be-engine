@@ -220,6 +220,13 @@ is unclear.
   known PB logical values, chooses numeric epoch units from independent Source
   clocks, and keeps unknown encodings or ambiguous numeric units exact.
   Protocol carriers own extraction, same-position pairing and actual delivery.
+  `value_contract/time_copies/response` projects delivered Case-local typed
+  timestamp fingerprints and paired delivery clocks into primary SSE checks.
+  `replay/http/contracts/time_copies` stages HTTP JSON/SSE time provenance and
+  publishes it only on successful delivery; MySQL/Redis reuse their read hooks.
+  The private response control snapshot carries no payloads. The SSE adapter
+  checks delivery-before-frame causality against the independent stream starts;
+  it cannot choose an arbitrary dependency clock or change local time tolerance.
 - `policy_evidence` owns authenticated private payload witnesses, complete
   coverage accounting, sealing and publication of their relative artifacts.
   Public reports retain role/identity/digest metadata without payload bodies.

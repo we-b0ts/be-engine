@@ -10,9 +10,16 @@ use crate::policy::{RedisContainer, TimeContract};
 
 const MAX_CASE_COPIES: usize = 4096;
 const MAX_TOTAL_COPIES: usize = 32768;
+mod response;
+pub(crate) use response::ResponseTimeCopies;
 
 #[derive(Clone, Copy)]
 pub(crate) enum TimeCopyPosition<'a> {
+    Http {
+        host: &'a str,
+        port: u16,
+        exchange: &'a str,
+    },
     Mysql {
         host: &'a str,
         port: u16,
@@ -39,6 +46,16 @@ impl TimeCopyPosition<'_> {
         let mut hash = Sha256::new();
         hash.update(b"traffic/time-copy-position/v1\0");
         match self {
+            Self::Http {
+                host,
+                port,
+                exchange,
+            } => {
+                part(&mut hash, b"http");
+                part(&mut hash, host.to_ascii_lowercase().as_bytes());
+                part(&mut hash, &port.to_be_bytes());
+                part(&mut hash, exchange.as_bytes());
+            }
             Self::Mysql {
                 host,
                 port,

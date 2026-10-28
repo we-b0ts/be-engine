@@ -143,7 +143,7 @@ async fn serve(
     let command = request.command.clone();
     let _mutation = if matches!(
         command.as_str(),
-        "status" | "wait_ready" | "cases" | "case_execution_status"
+        "status" | "wait_ready" | "cases" | "case_execution_status" | "response_time_copies"
     ) {
         None
     } else {

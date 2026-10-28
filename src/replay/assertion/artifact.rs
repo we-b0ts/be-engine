@@ -7,6 +7,8 @@ use crate::http::sse::SseObservation;
 use crate::recorder::HeaderMapSnapshot;
 
 use super::model::ResponseGatewayProtocol;
+#[cfg(test)]
+mod clock_tests;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RecordedRequest {
@@ -42,6 +44,8 @@ impl RecordedRequest {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ExpectedResponse {
+    pub(super) timestamp: Option<serde_json::Value>,
+    pub(super) duration_ms: Option<serde_json::Value>,
     #[serde(default)]
     pub(super) interaction: Option<crate::interaction::model::OutputObservation>,
     #[serde(default)]
@@ -52,6 +56,26 @@ pub(super) struct ExpectedResponse {
     pub(super) body: Option<ResponseBody>,
     pub(super) frame: Option<ResponseBody>,
     pub(super) response_expected: Option<bool>,
+}
+
+impl ExpectedResponse {
+    /// Duration and event offsets share the capture's monotonic start. Legacy
+    /// request.json timestamps were captured after admission and body reads.
+    pub(super) fn clock_start(
+        &self,
+        fallback: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.interaction
+            .as_ref()
+            .and_then(|_| {
+                let elapsed = i64::try_from(self.duration_ms.as_ref()?.as_u64()?).ok()?;
+                chrono::DateTime::parse_from_rfc3339(self.timestamp.as_ref()?.as_str()?)
+                    .ok()?
+                    .with_timezone(&chrono::Utc)
+                    .checked_sub_signed(chrono::TimeDelta::try_milliseconds(elapsed)?)
+            })
+            .or(fallback)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +104,8 @@ impl RecordedStatus {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ActualResponse {
+    #[serde(default)]
+    pub(super) interaction_started_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     pub(super) interaction: Option<crate::interaction::model::OutputObservation>,
     #[serde(default)]

@@ -57,9 +57,10 @@ pub(super) fn compare(
     actual: Option<&OutputObservation>,
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
+    copies: &crate::value_contract::time_copies::ResponseTimeCopies,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
-    let checked = compare_outputs_global(expected, actual, global, times)?;
+    let checked = compare_outputs_global_with_time_copies(expected, actual, global, times, copies)?;
     report.identity_pairs.extend(checked.identity_pairs());
     report.applied_body_rule_ids.extend(checked.evaluated);
     report.differences.extend(
@@ -77,6 +78,16 @@ pub(crate) fn compare_outputs_global(
     actual: Option<&OutputObservation>,
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
+) -> Result<Comparison> {
+    compare_outputs_global_with_time_copies(expected, actual, global, times, &Default::default())
+}
+
+fn compare_outputs_global_with_time_copies(
+    expected: Option<&OutputObservation>,
+    actual: Option<&OutputObservation>,
+    global: Option<&crate::policy::CompiledJsonPolicy>,
+    times: super::RequestTimes,
+    copies: &crate::value_contract::time_copies::ResponseTimeCopies,
 ) -> Result<Comparison> {
     let mut report = Comparison::default();
     let (expected, actual) = match (expected, actual) {
@@ -114,6 +125,18 @@ pub(crate) fn compare_outputs_global(
     let actual_events = comparable(actual)?;
     let sse = expected.protocol == Protocol::Sse && actual.protocol == Protocol::Sse;
     let socketio = expected.protocol == Protocol::SocketIo && actual.protocol == Protocol::SocketIo;
+    let source_offsets = expected
+        .events
+        .iter()
+        .filter(|event| !event.heartbeat)
+        .map(|event| event.offset_ms)
+        .collect::<Vec<_>>();
+    let target_offsets = actual
+        .events
+        .iter()
+        .filter(|event| !event.heartbeat)
+        .map(|event| event.offset_ms)
+        .collect::<Vec<_>>();
     if expected_events.len() != actual_events.len() {
         mismatch(&mut report, "$interaction/events/length");
     }
@@ -121,8 +144,13 @@ pub(crate) fn compare_outputs_global(
         let pointer = format!("$interaction/events/{index}");
         if sse && global.is_some() {
             let first_difference = report.differences.len();
-            let mut comparison =
-                contracts::compare_message(expected, actual, global, times, &pointer);
+            let observed = super::RequestTimes {
+                source: event_clock(times.source, source_offsets[index]),
+                target: event_clock(times.target, target_offsets[index]),
+            };
+            let mut comparison = contracts::compare_message(
+                expected, actual, global, times, &pointer, copies, observed,
+            );
             comparison.scope_schema_clocks(index);
             report.merge_and_validate(comparison);
             for diff in &mut report.differences[first_difference..] {
@@ -165,6 +193,15 @@ pub(crate) fn compare_outputs_global(
         }
     }
     Ok(report)
+}
+
+fn event_clock(
+    started: Option<chrono::DateTime<chrono::Utc>>,
+    offset: u64,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    started?.checked_add_signed(chrono::TimeDelta::try_milliseconds(
+        i64::try_from(offset).ok()?,
+    )?)
 }
 
 fn partial_message(observation: &OutputObservation) -> Result<Option<Vec<u8>>> {
