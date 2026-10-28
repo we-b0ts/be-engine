@@ -57,6 +57,7 @@ pub(crate) fn response_rule_payload_pair(
         None => anyhow::bail!("Source response body is absent"),
     };
     let source_body = business_body(&request, bytes, oneway, "Source response")?;
+    let source_clock = source.clock_start(request.timestamp);
     let mut output = ResponsePayloadPair {
         status_difference: None,
         source_interaction: source.interaction,
@@ -65,7 +66,7 @@ pub(crate) fn response_rule_payload_pair(
         source: source_body.body().into(),
         target: None,
         times: RequestTimes {
-            source: request.timestamp,
+            source: source_clock,
             target: None,
         },
         source_headers: source.headers,
@@ -104,7 +105,7 @@ pub(crate) fn response_rule_payload_pair(
         output.status_difference = (before != after).then_some((before, after));
         output.target = Some(target_body.body().into());
         output.target_interaction = target.interaction;
-        output.times.target = target.request_sent_at;
+        output.times.target = target.interaction_started_at.or(target.request_sent_at);
         output.target_headers = target.headers;
     }
     Ok(output)

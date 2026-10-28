@@ -235,6 +235,23 @@ pub(super) async fn handle_control_request(
             }
         }
         "response_identities" => identity::accept(&request, &state).await,
+        "response_time_copies" => {
+            let state = state.lock().await;
+            if let Some(case) = request
+                .case_id
+                .as_deref()
+                .filter(|case| state.active_case_id.as_deref() == Some(*case))
+            {
+                let copies = state
+                    .replay_policy
+                    .as_ref()
+                    .map(|policy| policy.request_contracts.response_time_copies(case))
+                    .unwrap_or_default();
+                serde_json::json!({"ok":true, "time_copies":copies})
+            } else {
+                serde_json::json!({"ok":false, "error":"response time provenance requires the active case"})
+            }
+        }
         "derived_input" => derived_input::accept(&request, &state).await,
         "prepare_end" => target_stop::prepare(&request, &state).await,
         "end" => end_case(&request, state.clone()).await,

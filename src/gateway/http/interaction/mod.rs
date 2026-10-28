@@ -228,6 +228,7 @@ pub(crate) async fn handle(
         uri_group: Some(group.directory),
     };
     let started = Instant::now();
+    let recording_started_at = Utc::now();
     let api = state
         .recording_api_pattern(&method, &uri)
         .map(|pattern| format!("{method} {pattern}"));
@@ -316,7 +317,7 @@ pub(crate) async fn handle(
         transport_failed: std::sync::atomic::AtomicBool::new(false),
     });
     let meta = finish::RequestMeta {
-        timestamp: Utc::now(),
+        timestamp: recording_started_at,
         method: method.to_string(),
         uri: uri.to_string(),
         api_pattern: group.pattern,

@@ -656,6 +656,18 @@ async fn execute_case(
     };
     let execution_status =
         control(state, "case_execution_status", Some(case_id), false, false).await?;
+    let response_times: crate::value_contract::time_copies::ResponseTimeCopies = if runtime
+        .response_assertions
+        .as_ref()
+        .is_some_and(|runtime| runtime.needs_time_copies())
+    {
+        let snapshot = control(state, "response_time_copies", Some(case_id), false, false).await?;
+        serde_json::from_value(snapshot["time_copies"].clone())
+            .context("Replay did not publish bounded response time provenance")?
+    } else {
+        Default::default()
+    };
+    response_times.validate()?;
     super::execution_failure::record(
         &mut state.cases[case_index],
         execution_status,
@@ -683,6 +695,7 @@ async fn execute_case(
                         case_view.request(),
                         &expected_bytes,
                         actual_bytes,
+                        &response_times,
                     )
                 })
                 .map_err(|error| {

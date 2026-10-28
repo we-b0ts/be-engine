@@ -27,6 +27,8 @@ type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
 #[derive(Debug, Serialize)]
 struct ActualResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interaction_started_at: Option<chrono::DateTime<chrono::Utc>>,
     version: u8,
     request_sent_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -176,6 +178,7 @@ pub(super) async fn capture_case(
         Err(_) => ("base64", STANDARD.encode(&response.body)),
     };
     let mut actual = serde_json::to_value(ActualResponse {
+        interaction_started_at: response.interaction_started_at,
         version: 1,
         request_sent_at: response.request_sent_at,
         request_rules: response.request_rules,
@@ -318,6 +321,7 @@ async fn capture_motan_case(
     active_artifact::write_json(
         actual_response_path,
         &ActualResponse {
+            interaction_started_at: None,
             version: 1,
             request_sent_at,
             request_rules: Vec::new(),

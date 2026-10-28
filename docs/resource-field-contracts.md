@@ -6,6 +6,16 @@ column or cache key that carries the payload. Protocol adapters still pair the
 same requests, resources, rows and response positions before comparing values.
 The global JSON policy controls decoded content; it does not relax that pairing.
 
+Primary SSE responses retain the typed timestamp pairs actually delivered by
+matched HTTP, MySQL and Redis dependencies. A copied field must match that exact
+pair, and the successful delivery must precede the output frame in both
+executions. A later dependency cannot authorize an earlier frame. This reuses
+the dependency's time validation instead of rebasing a stored value again
+against the API request start. Locally generated response times retain their
+independent capture clock and the fixed five-second tolerance. Stream offsets
+use the capture start; legacy recordings recover that start from the recorded
+completion timestamp and duration without changing their original files.
+
 ```yaml
 format: traffic-policy/v2
 json:

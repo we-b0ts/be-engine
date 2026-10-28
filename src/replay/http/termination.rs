@@ -302,6 +302,12 @@ impl ReplayState {
         detail: MatchedHttpExchangeReport,
         result: Result<()>,
     ) {
+        let result = result.and_then(|()| {
+            contracts::time_copies::commit(
+                self.replay_policy.as_ref(),
+                &mut self.http_exchanges[detail.index],
+            )
+        });
         match result {
             Ok(()) => {
                 self.http_exchanges[detail.index].status = ReplayExchangeStatus::Consumed;
@@ -309,6 +315,7 @@ impl ReplayState {
                 self.complete_http_exchange(detail);
             }
             Err(error) => {
+                self.http_exchanges[detail.index].time_copy_delivery = None;
                 self.http_exchanges[detail.index].status = ReplayExchangeStatus::Failed;
                 self.refresh_http_global_report(detail.index);
                 if let Some(case_id) = &detail.case_id {

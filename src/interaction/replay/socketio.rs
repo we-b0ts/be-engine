@@ -28,6 +28,7 @@ pub(super) async fn execute_with_feedback(
 ) -> Result<ReplayResponse> {
     transcript.validate()?;
     let started = Instant::now();
+    let started_at = chrono::Utc::now();
     let mut observed = Observation::new(transcript.protocol, transcript.policy.clone())?;
     let budget = header_timeout
         .min(Duration::from_millis(transcript.policy.request_timeout_ms))
@@ -272,6 +273,7 @@ pub(super) async fn execute_with_feedback(
             ),
     )?;
     Ok(ReplayResponse {
+        started_at,
         status: transport.status,
         headers: transport.headers.clone(),
         body: Bytes::new(),

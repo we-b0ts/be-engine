@@ -55,6 +55,17 @@ pub(crate) struct ResponseAssertionRuntime {
 }
 
 impl ResponseAssertionRuntime {
+    pub(crate) fn needs_time_copies(&self) -> bool {
+        self.policy
+            .compiled
+            .as_ref()
+            .and_then(|policy| policy.global_json.as_ref())
+            .is_some_and(|json| {
+                json.fields
+                    .values()
+                    .any(|field| matches!(field, crate::policy::GlobalField::Time { .. }))
+            })
+    }
     pub(crate) fn load(policy: &Path) -> Result<Self> {
         let policy = load_replay_policy(policy)?;
         policy.prepare_signatures()?;
@@ -67,13 +78,15 @@ impl ResponseAssertionRuntime {
         request_bytes: &[u8],
         expected_bytes: &[u8],
         actual_bytes: &[u8],
+        time_copies: &crate::value_contract::time_copies::ResponseTimeCopies,
     ) -> Result<ResponseAssertionCaseReport> {
-        assert_recorded_response_with_policy(
+        assert_recorded_response_with_policy_and_time_copies(
             options,
             request_bytes,
             expected_bytes,
             actual_bytes,
             &self.policy,
+            time_copies,
         )
     }
 }
@@ -219,6 +232,24 @@ fn assert_recorded_response_with_policy(
     actual_bytes: &[u8],
     policy: &LoadedReplayPolicy,
 ) -> Result<ResponseAssertionCaseReport> {
+    assert_recorded_response_with_policy_and_time_copies(
+        options,
+        request_bytes,
+        expected_bytes,
+        actual_bytes,
+        policy,
+        &Default::default(),
+    )
+}
+
+fn assert_recorded_response_with_policy_and_time_copies(
+    options: ResponseAssertionOptions,
+    request_bytes: &[u8],
+    expected_bytes: &[u8],
+    actual_bytes: &[u8],
+    policy: &LoadedReplayPolicy,
+    time_copies: &crate::value_contract::time_copies::ResponseTimeCopies,
+) -> Result<ResponseAssertionCaseReport> {
     policy.prepare_signatures()?;
     let decrypted_request =
         crate::request_headers::decrypt_request_bytes(request_bytes, &options.request)?;
@@ -275,8 +306,8 @@ fn assert_recorded_response_with_policy(
     };
     let actual_status = actual.status;
     let times = RequestTimes {
-        source: request.timestamp,
-        target: actual.request_sent_at,
+        source: expected.clock_start(request.timestamp),
+        target: actual.interaction_started_at.or(actual.request_sent_at),
     };
     let expected_request_headers = request.headers.clone();
     let expected_body =
@@ -316,6 +347,7 @@ fn assert_recorded_response_with_policy(
             .as_ref()
             .and_then(|p| p.global_json.as_ref()),
         times,
+        time_copies,
         &mut report,
     )?;
     if !report.identity_pairs.is_empty() {

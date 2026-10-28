@@ -8,6 +8,7 @@ mod attachment_tests;
 mod headers;
 mod prefix;
 mod stream;
+pub(in crate::replay::http) mod time_copies;
 mod witness;
 pub(crate) use witness::{
     multipart_witness_matches, source_witness, validate_witness, witness_metadata_matches,
@@ -270,6 +271,11 @@ pub(super) fn materialize_response(
         clocks,
     )?;
     if ordinary {
+        if let Some(plan) = owner.global_json() {
+            exchange.time_copy_delivery = Some(time_copies::prepare(
+                exchange, &payload, &value, plan, clocks,
+            )?);
+        }
         owner.record_value_witness(
             metadata(
                 &exchange.record,
