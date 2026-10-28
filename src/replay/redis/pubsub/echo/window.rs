@@ -44,8 +44,13 @@ impl Bounds {
                 pair[0].2 < pair[1].1,
                 "overlapping Source publications cannot disambiguate adapter echoes"
             );
+        }
+        let mut last_sequence = BTreeMap::new();
+        for ((connection, sequence), _, _) in &clocks {
             ensure!(
-                pair[0].0.0 != pair[1].0.0 || pair[0].0.1 < pair[1].0.1,
+                last_sequence
+                    .insert(*connection, *sequence)
+                    .is_none_or(|previous| previous < *sequence),
                 "Source publication clocks disagree with wire order"
             );
         }
@@ -66,5 +71,36 @@ impl Bounds {
 
     pub(super) fn contains(&self, timestamp: DateTime<Utc>) -> bool {
         timestamp >= self.start && self.next.is_none_or(|next| timestamp < next)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn another_publisher_cannot_hide_a_source_wire_clock_inversion() {
+        let first = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let span = |second: u32| {
+            let start = format!("2026-10-28T00:00:{second:02}Z")
+                .parse::<DateTime<Utc>>()
+                .unwrap();
+            Publication {
+                start: Some(start),
+                end: Some(start),
+            }
+        };
+        let publications = BTreeMap::from([
+            ((first, 2), span(1)),
+            ((other, 1), span(2)),
+            ((first, 1), span(3)),
+        ]);
+        assert!(
+            Bounds::all(&publications)
+                .unwrap_err()
+                .to_string()
+                .contains("wire order")
+        );
     }
 }
