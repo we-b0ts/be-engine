@@ -106,6 +106,11 @@ is unclear.
   while the peer is processing an earlier namespace disconnect. The scheduler
   bounds that close I/O and interrupts it on an actual dependency rejection;
   it does not wait for unused dependency inventory.
+  Its `namespace` sibling retains each live namespace CONNECT barrier before
+  sending new business events, including when recorded idle offsets are compressed.
+  Only the actual Target CONNECT response releases that namespace's barrier;
+  replies to actual Target server events and explicit transport cancellation
+  remain available during admission.
   `gateway/http/interaction/websocket` applies the same transport-lifetime
   barrier while recording: Source resource calls begun during close remain
   inside the Case until actual Source peer termination. `interaction/finish`

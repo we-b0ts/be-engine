@@ -11,6 +11,7 @@ use tokio_tungstenite::tungstenite::Message;
 mod close_completion;
 mod fast_execution;
 mod heartbeat_behavior;
+mod namespace_admission;
 
 fn policy() -> InteractionPolicy {
     InteractionPolicy {

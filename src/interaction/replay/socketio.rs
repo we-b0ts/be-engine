@@ -1,5 +1,6 @@
 //! Fresh sessions share one scheduler; completion uses only actual Target traffic.
 mod heartbeat;
+mod namespace;
 mod transport;
 
 use anyhow::{Context, Result, ensure};
@@ -57,6 +58,7 @@ pub(super) async fn execute_with_feedback(
     let mut server_acks = BTreeMap::new();
     let mut pending_receipts = std::collections::BTreeSet::new();
     let mut heartbeats = heartbeat::Heartbeats::new(transcript);
+    let mut namespaces = namespace::Admission::default();
     let (mut reason, mut transport_clean) = 'session: loop {
         if dependency_failure
             .as_ref()
@@ -96,7 +98,12 @@ pub(super) async fn execute_with_feedback(
             _ => {}
         }
         let action = transcript.actions.get(next);
+        let namespace_ready = transcript.protocol != Protocol::SocketIo
+            || action.is_none_or(|action| {
+                namespaces.permits(action, transcript.policy.max_message_bytes)
+            });
         let due = action
+            .filter(|_| namespace_ready)
             .filter(|action| {
                 transcript.policy.preserve_input_timing
                     || pending_receipts.is_empty()
@@ -143,6 +150,9 @@ pub(super) async fn execute_with_feedback(
                             for packet in server_decoder.push(&message)? {
                                 match packet {
                                     EngineIoPacket::Open(open) => transport.set_sid(open.sid)?,
+                                    EngineIoPacket::Message(packet) if packet.kind == SocketIoKind::Connect => {
+                                        namespaces.accept(&packet.namespace);
+                                    }
                                     EngineIoPacket::Ping(payload) => {
                                         if heartbeats.ping(payload.clone(), Instant::now())? {
                                             tokio::time::timeout_at(lifecycle_deadline,
@@ -193,6 +203,9 @@ pub(super) async fn execute_with_feedback(
                         }
                         let actual_action = observed.input(message.clone(), elapsed_ms(started))?;
                         ensure!(actual_action.sequence == action.sequence, "recorded session input identity is inconsistent; re-record this case");
+                        if transcript.protocol == Protocol::SocketIo {
+                            namespaces.sent(&message, transcript.policy.max_message_bytes)?;
+                        }
                         // Source heartbeats never drive the Target heartbeat clock.
                         let control = transcript.protocol == Protocol::SocketIo
                             && message.kind == crate::interaction::model::MessageKind::Text
