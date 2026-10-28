@@ -463,6 +463,7 @@ struct ReplayState {
     http_ignore_query_params: Vec<String>,
     allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
     recording_network_path: Option<PathBuf>,
+    recorded_dns_only_domains: BTreeSet<String>,
     fake_cidr: Ipv4Cidr,
     unrecorded_domain_ips: BTreeMap<String, Ipv4Addr>,
     unrecorded_ip_domains: BTreeMap<Ipv4Addr, String>,

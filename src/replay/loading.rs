@@ -288,8 +288,8 @@ impl ReplayRuntime {
         redis.apply_snapshot_overlays(&root_dir, process_owned_dependencies);
 
         let known_targets = targets.clone();
-        let recording_network_path =
-            network_access::apply_recorded_endpoint_allowlist(&root_dir, &mut targets)?;
+        let recording_network =
+            network_access::apply_recorded_network_contract(&root_dir, &mut targets)?;
         let targets = assign_fake_ips(targets, fake_cidr)?;
         let occupied_fake_ips = targets.iter().map(|target| target.fake_ip).collect();
         if let Some(case_id) = &active_case_id
@@ -421,7 +421,8 @@ impl ReplayRuntime {
             replay_policy,
             http_ignore_query_params,
             allowed_unused_http: config.allowed_unused_http,
-            recording_network_path: Some(recording_network_path),
+            recording_network_path: Some(recording_network.path),
+            recorded_dns_only_domains: recording_network.dns_only_domains,
             fake_cidr,
             unrecorded_domain_ips: BTreeMap::new(),
             unrecorded_ip_domains: BTreeMap::new(),

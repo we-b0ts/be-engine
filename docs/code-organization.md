@@ -78,6 +78,9 @@ is unclear.
   explicit client reset delivered by Recorder. `replay/connect_failure` owns
   finite case/endpoint matching and faithful timed transport delivery; neither
   owner treats protocol parsing or capture corruption as a dependency failure.
+  `replay/network_access` loads the finalized network contract and owns strict
+  endpoint admission and DNS-only availability; `replay/dns` retains DNS wire
+  parsing and response delivery without inventing reachable DNS-only endpoints.
   `active_case/async_api` retains early completion signals, the common request
   deadline and normal Source-stop/drain behavior. Asynchronous completion keeps
   ordinary dependency ownership and never authorizes process-owned exclusions.
