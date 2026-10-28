@@ -14,6 +14,7 @@ impl Echoes {
 
 impl PubSubState {
     pub(in crate::replay) fn prepare_echo_indices(&self) -> Result<()> {
+        self.echoes.prepare_windows();
         let lanes = self
             .indexed
             .lanes

@@ -22,6 +22,8 @@ mod tests;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedPush {
+    #[serde(default)]
+    pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) target_host: String,
     pub(super) target_port: u16,
     pub(super) database: i64,

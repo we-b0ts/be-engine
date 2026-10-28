@@ -1196,6 +1196,12 @@ explicit repository-wide audit.
   parent reads immutable case dependencies once for all protocol projections.
   `config/mysql_tables.rs` owns physical table selector
   validation, matching, and intersection independently of SQL template expansion.
+- `replay/redis/pubsub/echo/window` proves disjoint finite Source publication
+  intervals for repeated identical adapter broadcasts. Echo preparation caches
+  these intervals before Target admission; protocol matching and actual delivery
+  retain finite ownership. `dependency_index/global` and the Pub/Sub inventory
+  keep notification clocks in metadata, independently of private payload bytes.
+
 - `rewrite/unified_rule/manifest/eligibility` permits a finalized partial attempt
   to revoke only existing bounded key-local Redis read-back permissions. Every
   other compiled owner, format and signature must remain identical; additions

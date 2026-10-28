@@ -105,7 +105,15 @@ for the recording's pre-request subscription idle time. The slot becomes consume
 only after actual TCP delivery. Its ordinary notification timer cannot duplicate
 that delivery. Unmatched application data, missing Source echoes, different
 endpoint/channel identities, and duplicate ambiguous echoes
-do not authorize new notifications. Each subscription retains its recorded
+do not authorize new notifications. Repeated identical broadcasts can use distinct
+finite notification slots only when complete Source PUBLISH clocks establish
+disjoint intervals in wire order. Each interval starts at that original PUBLISH
+and ends before the next identical Source PUBLISH; it must contain at most one
+matching notification. Missing clocks, overlapping calls, contradictory wire
+order or multiple candidates in one interval remain unsafe. Publication intervals
+are prepared once before Target admission; they neither delay Target calls by
+Source wall time nor change notification counts. Global notification indexes
+retain these Source clocks without storing response payloads. Each subscription retains its recorded
 database and authenticated identity; Redis PUBLISH fan-out remains independent
 of the publisher’s logical database. Other Global messages keep their recorded
 timing and bytes. Notification indexes retain only digests and locations; the

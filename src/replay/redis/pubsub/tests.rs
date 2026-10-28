@@ -8,6 +8,7 @@ mod adapter_echo;
 mod broadcast;
 mod compact_evidence;
 mod echo_preparation;
+mod repeated_echo;
 mod request_contracts;
 mod rpc_coverage;
 mod scale;

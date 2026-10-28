@@ -109,6 +109,7 @@ impl IndexedNotifications {
             record.username.clone(),
         );
         let duration_ms = record.duration_ms;
+        let timestamp = record.timestamp;
         let lane = match self.by_anchor.get(&key) {
             Some(index) => *index,
             None => {
@@ -149,6 +150,7 @@ impl IndexedNotifications {
             .push(NotificationEntry {
                 location: reference.location,
                 duration_ms,
+                timestamp,
                 ordinal: self.total,
                 adapter_echo: rpc::echo_digest(&frame.channel, &frame.payload),
             })?;
