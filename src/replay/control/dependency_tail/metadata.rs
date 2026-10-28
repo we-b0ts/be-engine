@@ -276,6 +276,49 @@ fn validate(metadata: &Metadata) -> Result<()> {
     Ok(())
 }
 
+/// Cache permissions never remove a declared HTTP completion requirement.
+/// Captured scenario identity narrows the guard to this Source scenario; older
+/// captures without that identity conservatively retain every possible end.
+pub(super) async fn http_completion_rules(
+    case_dir: &Path,
+    rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
+) -> Result<Vec<crate::policy::AsyncHttpEnd>> {
+    if rules.is_empty() {
+        return Ok(vec![]);
+    }
+    #[derive(Deserialize)]
+    struct CapturedScenario {
+        api: Option<String>,
+        scenario_index: Option<usize>,
+    }
+    let captured = read(&case_dir.join("async-api-observation.json"))
+        .await?
+        .map(|raw| serde_json::from_slice::<CapturedScenario>(&raw))
+        .transpose()?;
+    let selected = captured.as_ref().and_then(|capture| {
+        rules
+            .get(capture.api.as_deref()?)?
+            .get(capture.scenario_index?)
+    });
+    let scenarios = selected.map_or_else(
+        || {
+            rules
+                .values()
+                .flat_map(|rules| rules.iter())
+                .collect::<Vec<_>>()
+        },
+        |selected| vec![selected],
+    );
+    Ok(scenarios
+        .into_iter()
+        .flat_map(|rule| &rule.end)
+        .filter_map(|end| match end {
+            crate::policy::AsyncEnd::Http(end) => Some(end.clone()),
+            _ => None,
+        })
+        .collect())
+}
+
 async fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     let metadata = match tokio::fs::metadata(path).await {
         Ok(metadata) => metadata,

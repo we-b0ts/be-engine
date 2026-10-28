@@ -33,6 +33,27 @@ impl ReplayState {
         Ok(indices)
     }
 
+    /// Only explicitly shared initialization can remain unstarted at case end.
+    /// Its immutable Source identity stays visible, and an actual async HTTP
+    /// completion selector always keeps its ordinary finite obligation.
+    pub(in crate::replay) fn http_shared_initialization(
+        &self,
+        index: usize,
+        completion: &[crate::policy::AsyncHttpEnd],
+    ) -> bool {
+        self.http_exchanges.get(index).is_some_and(|exchange| {
+            exchange.source == ReplaySource::Global
+                && exchange.shared_origin.is_some()
+                && !completion.iter().any(|end| {
+                    exchange.record.method.eq_ignore_ascii_case(&end.method)
+                        && exchange.identity.target.host
+                            == super::super::normalize_host(&end.endpoint.host)
+                        && exchange.identity.target.port == end.endpoint.port
+                        && uri_path_only(&exchange.record.uri) == end.path
+                })
+        })
+    }
+
     pub(in crate::replay) fn http_exchange_status(
         &self,
         index: usize,
@@ -51,3 +72,6 @@ impl ReplayState {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;
