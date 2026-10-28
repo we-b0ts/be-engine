@@ -9,6 +9,7 @@ mod absence;
 mod closed_expiry;
 #[cfg(test)]
 mod recorded_tests;
+mod refresh_barrier;
 mod source;
 pub(super) use source::validate_causal_order;
 #[cfg(test)]
@@ -608,7 +609,7 @@ impl RedisReplayState {
             profile,
             epoch,
             token: Uuid::new_v4(),
-            target_event_index: self.events.request_order.latest(Some(case)),
+            target_event_index: self.request_event_index,
             target_key_fingerprint: fingerprint(args.first()?),
             initial_expiry: None,
         };

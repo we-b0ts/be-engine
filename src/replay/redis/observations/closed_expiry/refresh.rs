@@ -94,7 +94,7 @@ impl RedisReplayState {
             profile: owner,
             epoch: l.epoch,
             token: Uuid::new_v4(),
-            target_event_index: self.events.request_order.latest(Some(case)),
+            target_event_index: self.request_event_index,
             target_key_fingerprint: key,
             initial_expiry: Some(lifetime),
         };

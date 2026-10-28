@@ -64,6 +64,7 @@ use super::report::command::{
     CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
 };
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
+mod admission;
 mod cleanup;
 mod delivery;
 mod evidence;
@@ -197,6 +198,8 @@ pub(super) struct RedisReplayState {
     observations: observations::Observations,
     read_commutation: read_commutation::ReadCommutation,
     append_streams: append::AppendStreams,
+    request_event_index: Option<usize>,
+    delivery_changed: Arc<tokio::sync::Notify>,
     request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
     request_observation_id: Option<uuid::Uuid>,
     pub(in crate::replay) pubsub: pubsub::PubSubState,
@@ -430,6 +433,7 @@ impl RedisReplayState {
     }
 
     fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
+        self.delivery_changed.notify_waiters();
         if let Some(refresh) = &matched.refresh {
             self.complete_activity(refresh);
         } else if let Some(append) = &matched.append {
@@ -455,6 +459,7 @@ impl RedisReplayState {
     }
 
     fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
+        self.delivery_changed.notify_waiters();
         self.fail_closed_expiry(matched.index);
         if let Some(refresh) = &matched.refresh {
             self.fail_activity(refresh);
@@ -710,67 +715,17 @@ pub(super) async fn handle_connection(
             }
             continue;
         }
-        let response = {
-            let mut state = state.lock().await;
-            let active_case_id = state.active_case_id.clone();
-            let bound_connection = connection_binding.connection(active_case_id.as_deref());
-            match state.redis.match_redis(
-                active_case_id.as_deref(),
-                &target_key,
-                TargetConnection {
-                    id: client_id,
-                    bound: bound_connection,
-                },
-                resp_version,
-                database,
-                username.as_deref(),
-                &command.name,
-                &command.args,
-            ) {
-                Ok(matched) => {
-                    if let Some(policy) = &mut state.replay_policy {
-                        policy
-                            .commit_redis_rule_usage(active_case_id.as_deref(), &matched.rule_ids);
-                    }
-                    if matched.requires_binding {
-                        connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
-                    }
-                    Ok(matched)
-                }
-                Err(diagnostic) => {
-                    let authentication_hint = redis_authentication_hint(&diagnostic);
-                    let target_event_index = state
-                        .redis
-                        .events
-                        .request_order
-                        .latest(active_case_id.as_deref());
-                    if let Some(case_id) = &active_case_id {
-                        state.redis.events.dirty_case_ids.insert(case_id.clone());
-                    }
-                    state.redis.events.unmatched.push(CommandRequestReport {
-                        target_event_index,
-                        case_id: active_case_id,
-                        target: target_key.clone(),
-                        command: command.name.clone(),
-                        request_fingerprint: Some(cross_case::target_fingerprint(
-                            &target_key,
-                            resp_version,
-                            database,
-                            username.as_deref(),
-                            &command.name,
-                            &command.args,
-                        )),
-                        reason: authentication_hint
-                            .unwrap_or(
-                                "no recorded Redis exchange matched target/session/arguments",
-                            )
-                            .to_string(),
-                        diagnostic: Some(diagnostic),
-                    });
-                    Err(authentication_hint.unwrap_or("no recorded Redis dependency matched"))
-                }
-            }
-        };
+        let response = admission::match_command(
+            &state,
+            &target_key,
+            client_id,
+            &mut connection_binding,
+            resp_version,
+            database,
+            username.as_deref(),
+            &command,
+        )
+        .await;
         match response {
             Ok(matched) => {
                 let deliveries = state.lock().await.redis.pubsub.subscription(

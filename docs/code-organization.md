@@ -1360,6 +1360,12 @@ explicit repository-wide audit.
   failed and client-termination exchanges remain blockers; final success and
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
+  `replay/redis/admission` owns bounded waits for initial expiry-refresh
+  predecessors that have all been claimed but have not finished delivery.
+  `observations/refresh_barrier` identifies this narrow fence; observation
+  selection retains its completed-delivery requirement. Admission releases the
+  replay mutex while waiting, preserves the original Target observation and
+  event index, and rechecks the case and strict selection after delivery.
 
 - `rewrite/unified_rule/preflight/global_values/redis/script_times` composes
   existing native script ARGV time contracts with global JSON preflight, while

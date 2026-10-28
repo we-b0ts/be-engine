@@ -190,10 +190,7 @@ impl RedisReplayState {
                 sequence: e.record.sequence,
                 command: command.into(),
                 shared_origin: None,
-                target_event_index: self
-                    .events
-                    .request_order
-                    .latest(Some(&self.activity_refresh.profiles[profile].case)),
+                target_event_index: self.request_event_index,
             },
         })
     }
@@ -216,7 +213,7 @@ impl RedisReplayState {
             token: Uuid::new_v4(),
             command: command.into(),
             observation: self.request_observation_id,
-            event_index: self.events.request_order.latest(Some(case)),
+            event_index: self.request_event_index,
             target_key_fingerprint: fingerprint(&args[0]),
             target_value_fingerprint: fingerprint(
                 args.get(1)
