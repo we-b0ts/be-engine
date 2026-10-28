@@ -1368,7 +1368,10 @@ explicit repository-wide audit.
   policy usage are still committed only after delivery. Other protocols keep
   their existing consumption-based admission.
   `replay/redis/admission` owns bounded waits for initial expiry-refresh
-  predecessors that have all been claimed but have not finished delivery.
+  predecessors and earlier activity GETs that have been claimed but have not
+  finished delivery. `redis/activity/read_barrier` owns the same-lifetime,
+  rule-bound activity predecessor check; admission preserves the original SET
+  observation and excludes later reads.
   `observations/refresh_barrier` identifies this narrow fence; observation
   selection retains its completed-delivery requirement. Admission releases the
   replay mutex while waiting, preserves the original Target observation and

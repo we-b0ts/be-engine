@@ -100,10 +100,7 @@ impl RedisReplayState {
                 args.len() == 4 && args[2..] == l.ttl_args,
                 "activity SET changed TTL, options or argument count"
             );
-            ensure!(
-                current.reads > 0,
-                "activity SET requires a successfully delivered current-value GET"
-            );
+            ensure!(current.reads > 0, READ_REQUIRED);
             let witness = *l
                 .writes
                 .first()
@@ -228,9 +225,15 @@ impl RedisReplayState {
             ),
         };
         *self.activity_refresh.calls.entry(case.clone()).or_default() += 1;
-        self.activity_refresh
-            .pending
-            .insert(prepared.token, profile);
+        self.activity_refresh.pending.insert(
+            prepared.token,
+            Pending {
+                profile,
+                lifetime,
+                kind,
+                event_index: prepared.event_index,
+            },
+        );
         prepared
     }
 
