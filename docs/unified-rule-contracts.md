@@ -596,9 +596,20 @@ result must remove only those permissions and preserve every other rule, field,
 format, owner and signature. It cannot add a format or broaden a selector. The
 planner still freezes the full Source inventory, validates the current policy
 and executes ordinary preflight; apply requires fresh genuine Replay. Other
-changes continue to require a complete finalized attempt. Use the native rule
-ID from the failure diagnostic; do not replace the entire Redis section merely
-to remove one key's read-back permission.
+changes continue to require a complete finalized attempt, except the identity
+representation revision below. Use the native rule ID from the failure
+diagnostic; do not replace the entire Redis section merely to remove one key's
+read-back permission.
+
+A finalized partial attempt can also revise the formats of existing global JSON
+identity fields through explicit `replace_sections: [json]`. The complete field
+set, identity kind and literal prefixes must remain unchanged, as must all other
+compiled permissions, signatures and owners. This explicitly permits another
+representation; it does not establish compatibility by itself. Source-wide and
+independent Target preflight still reject changed business fields, types or
+identity relationships, and application still requires fresh genuine Replay.
+Adding fields, changing kinds or prefixes, or mixing in native effects retains
+the complete-attempt requirement.
 
 Distinguish candidate, needs-proof/schema/evidence, stale, unsupported,
 planned, applied-pending-verification, verified, residual-failure and

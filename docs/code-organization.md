@@ -1203,9 +1203,11 @@ explicit repository-wide audit.
   keep notification clocks in metadata, independently of private payload bytes.
 
 - `rewrite/unified_rule/manifest/eligibility` permits a finalized partial attempt
-  to revoke only existing bounded key-local Redis read-back permissions. Every
-  other compiled owner, format and signature must remain identical; additions
-  and modifications retain complete-attempt requirements. Full Source freezing,
+  to revoke existing bounded key-local Redis read-back permissions or revise
+  formats on existing JSON identity fields. Identity revisions preserve the
+  exact field set, kind and literal prefixes; every other compiled owner and
+  signature remains identical. Other additions and modifications retain the
+  complete-attempt requirement. Full Source freezing, independent Target
   preflight, policy CAS and fresh genuine Replay remain with the normal planner.
 
 - `rewrite/case_dependencies` owns bounded, read-only per-target dependency

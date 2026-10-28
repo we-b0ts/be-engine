@@ -197,8 +197,7 @@ impl Bundle {
         let aggregate = output.json(&evidence.aggregate)?;
         ensure!(
             output.replay["finalized"] == true
-                && (aggregate["complete"] == true
-                    || eligibility::removes_only_read_back(before, after)),
+                && (aggregate["complete"] == true || eligibility::allows_partial(before, after)),
             "unified rule requires a complete finalized Replay attempt"
         );
         ensure!(

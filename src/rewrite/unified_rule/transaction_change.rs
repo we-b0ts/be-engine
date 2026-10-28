@@ -264,3 +264,80 @@ fn finalized_partial_replay_can_remove_read_back_without_granting_new_permission
         assert_eq!(updated.json, current.json);
     }
 }
+
+#[test]
+fn finalized_partial_identity_format_revision_keeps_source_target_and_remainder_validation() {
+    for scenario in [
+        "valid",
+        "stable-change",
+        "new-field",
+        "prefix-change",
+        "new-native",
+    ] {
+        let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
+            write(
+                &root.join(".traffic-e2e/policy.yaml"),
+                json!({"format":"traffic-policy/v2",
+                "json":{"fields":{"/socket_id":{"kind":"identity","formats":[{"base64url":20}]}}}}),
+            );
+            vec![]
+        });
+        // Exactly twenty Source characters and sixteen Target characters.
+        let source = json!({"socket_id":"abCD12_-abCD12_-abcd","stable":"fixed"});
+        assert_eq!(source["socket_id"].as_str().unwrap().len(), 20);
+        let target = json!({"socket_id":"zyXW98_-zyXW98_-","stable":if scenario=="stable-change" {"changed"} else {"fixed"}});
+        fixture.replace_response_bodies(
+            &serde_json::to_vec(&source).unwrap(),
+            &serde_json::to_vec(&target).unwrap(),
+        );
+        let mut proposal = json!({"format":"traffic-policy-change/v1","replace_sections":["json"],
+            "policy":{"format":"traffic-policy/v2","json":{"fields":{"/socket_id":{"kind":"identity","formats":["string"]}}}}});
+        match scenario {
+            "new-field" => {
+                proposal["policy"]["json"]["fields"]["/new"] =
+                    json!({"kind":"identity","formats":["string"]})
+            }
+            "prefix-change" => {
+                proposal["policy"]["json"]["fields"]["/socket_id"]["formats"] =
+                    json!([{"prefix":"app-","format":"string"}])
+            }
+            "new-native" => {
+                proposal["policy"]["rules"] = json!([generated("new-effect", "GET /api")])
+            }
+            _ => {}
+        }
+        write(&fixture.proposal, proposal);
+        let mut replay: Value =
+            serde_json::from_slice(&fs::read(&fixture.paths.replay).unwrap()).unwrap();
+        replay["complete"] = false.into();
+        write(&fixture.paths.replay, replay);
+        let mut aggregate: Value =
+            serde_json::from_slice(&fs::read(&fixture.paths.aggregate).unwrap()).unwrap();
+        aggregate["complete"] = false.into();
+        write(&fixture.paths.aggregate, aggregate);
+        fixture.confirm();
+        let plan = fixture.plan();
+        if scenario != "valid" {
+            let error = plan.unwrap_err();
+            let message = format!("{error:#}");
+            if scenario == "stable-change" {
+                assert!(
+                    !message.contains("complete finalized Replay"),
+                    "format-only change should reach strict Target preflight: {message}"
+                );
+            } else {
+                assert!(
+                    message.contains("complete finalized Replay"),
+                    "{scenario}: {message}"
+                );
+            }
+            assert!(fixture.state().rule_plan.is_none());
+            continue;
+        }
+        let plan = plan.unwrap();
+        assert_eq!(plan.traffic_e2e_report["verified"], false);
+        let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+        assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
+        assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+    }
+}
