@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 
 #[path = "case_scope_tests.rs"]
 mod case_scope_tests;
+#[path = "composition_tests.rs"]
+mod composition_tests;
 
 pub(in crate::replay::redis) fn rule() -> Value {
     json!({"id":"poll","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},

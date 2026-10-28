@@ -77,6 +77,9 @@ pub fn validate_field_claims(value: &[CompiledRule], native: &[CompiledNativeRul
             {
                 continue;
             }
+            if super::read_commutation::compatible_read_back(native, claim, other) {
+                continue;
+            }
             if observations.contains(claim.rule_id.as_str())
                 && redis_read_back.contains(other.rule_id.as_str())
                 || observations.contains(other.rule_id.as_str())

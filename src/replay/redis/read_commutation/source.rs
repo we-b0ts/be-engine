@@ -23,6 +23,7 @@ pub(super) fn prepare(
         rule: rule.into(),
         reads: Vec::new(),
     };
+    let mut cleanups = Vec::new();
     for (index, exchange) in state.exchanges.iter().enumerate().filter(|(_, e)| {
         e.record.database == profile.database
             && target_matches(&profile.target, &e.record.target_host, e.record.target_port)
@@ -49,12 +50,12 @@ pub(super) fn prepare(
             "read commutation requires ordinary successful Case exchanges with one protocol/user"
         );
         let response = exchange.response_bytes()?;
-        ensure!(
-            exchange.args.len() == 1 && exchange.args[0] == profile.key,
-            "read commutation requires single-key observations or cleanup"
-        );
         match exchange.record.command.as_str() {
             "GET" => {
+                ensure!(
+                    exchange.args == [profile.key.clone()],
+                    "read commutation requires single-key observations"
+                );
                 ensure!(
                     !state.connection_scopes.is_stateful(exchange),
                     "read commutation cannot relax stateful or transactional Source lanes"
@@ -65,12 +66,7 @@ pub(super) fn prepare(
                 );
                 profile.reads.push(index);
             }
-            // DEL 0 cannot change the observed absent value. It remains finite
-            // and ordered against every other ordinary dependency.
-            "DEL" => ensure!(
-                response == b":0\r\n",
-                "read commutation cleanup changed the key"
-            ),
+            "DEL" => cleanups.push((exchange, response)),
             _ => anyhow::bail!("read commutation key has a mutation or unsupported observation"),
         }
     }
@@ -78,7 +74,58 @@ pub(super) fn prepare(
         !profile.reads.is_empty(),
         "read commutation lacks a Source observation"
     );
+    for (cleanup, response) in cleanups {
+        validate_cleanup(state, &profile, cleanup, &response)?;
+    }
     Ok(profile)
+}
+
+fn validate_cleanup(
+    state: &RedisReplayState,
+    profile: &Profile,
+    cleanup: &ReplayExchange,
+    response: &[u8],
+) -> Result<()> {
+    if cleanup.args == [profile.key.clone()] {
+        ensure!(
+            response == b":0\r\n",
+            "read commutation cleanup changed the key"
+        );
+        return Ok(());
+    }
+    // A final multi-key DEL may remove other keys. The selected key must
+    // already have been observed absent before cleanup, with no writer in the
+    // complete scoped inventory. Keep the DEL itself finite and lane-ordered.
+    ensure!(
+        profile.reads.iter().all(|&index| {
+            let read = &state.exchanges[index];
+            if read.record.connection_id == cleanup.record.connection_id {
+                read.record.sequence < cleanup.record.sequence
+            } else {
+                read.record
+                    .timestamp
+                    .zip(cleanup.record.earliest_start())
+                    .is_some_and(|(end, start)| end <= start)
+            }
+        }),
+        "read commutation multi-key cleanup must follow every nil observation"
+    );
+    let other_keys = cleanup
+        .args
+        .iter()
+        .filter(|key| **key != profile.key)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let removed = response
+        .strip_prefix(b":")
+        .and_then(|value| value.strip_suffix(b"\r\n"))
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    ensure!(
+        other_keys > 0 && removed.is_some_and(|removed| removed <= other_keys),
+        "read commutation multi-key cleanup count cannot include the absent key"
+    );
+    Ok(())
 }
 
 pub(in crate::replay) fn validate_source(

@@ -75,6 +75,30 @@ fn global_key_permissions_do_not_depend_on_resource_aliases() {
 }
 
 #[test]
+fn nil_commutation_addition_preserves_the_existing_read_back_rule() {
+    let base = policy(json!({"thinking:*":{"kind":"identity",
+        "formats":[{"prefix":"thinking-","hex":12}],"read_back":true}}));
+    let original = compile_policy(&parse_policy(&base.to_string()).unwrap()).unwrap();
+    let mut added = base;
+    added["redis"]["keys"]["thinking:*"]["read_commutation"] = json!(true);
+    let document = parse_policy(&added.to_string()).unwrap();
+    let compiled = compile_policy(&document).unwrap();
+    assert_eq!(compiled.native.len(), 2);
+    let unchanged = compiled
+        .native
+        .iter()
+        .find(|r| r.rule.id == original.native[0].rule.id)
+        .unwrap();
+    assert_eq!(unchanged.fingerprint, original.native[0].fingerprint);
+    let rendered: Value = serde_yaml::from_str(&render_policy(&document).unwrap()).unwrap();
+    assert_eq!(rendered["redis"]["keys"]["thinking:*"]["read_back"], true);
+    assert_eq!(
+        rendered["redis"]["keys"]["thinking:*"]["read_commutation"],
+        true
+    );
+}
+
+#[test]
 fn malformed_and_duplicate_key_permissions_are_rejected() {
     for keys in [
         json!({"content:*":{"resource":"missing","append_stream":true}}),

@@ -98,6 +98,7 @@ pub enum OwnedElement {
 }
 
 mod contracts;
+mod read_commutation;
 mod validation;
 pub use validation::validate_field_claims;
 pub(crate) use validation::value_sql_scopes_overlap;
