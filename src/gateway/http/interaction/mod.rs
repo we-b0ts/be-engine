@@ -70,6 +70,7 @@ pub(super) struct Session {
     upgraded: std::sync::atomic::AtomicBool,
     eio_closed: std::sync::atomic::AtomicBool,
     transport_failed: std::sync::atomic::AtomicBool,
+    client_disconnect_confirmed: std::sync::atomic::AtomicBool,
 }
 
 pub(super) type SessionRef = Arc<Session>;
@@ -315,6 +316,7 @@ pub(crate) async fn handle(
         upgraded: std::sync::atomic::AtomicBool::new(false),
         eio_closed: std::sync::atomic::AtomicBool::new(false),
         transport_failed: std::sync::atomic::AtomicBool::new(false),
+        client_disconnect_confirmed: std::sync::atomic::AtomicBool::new(false),
     });
     let meta = finish::RequestMeta {
         timestamp: recording_started_at,
@@ -409,6 +411,7 @@ pub(super) async fn adopt_response(
         upgraded: std::sync::atomic::AtomicBool::new(false),
         eio_closed: std::sync::atomic::AtomicBool::new(false),
         transport_failed: std::sync::atomic::AtomicBool::new(false),
+        client_disconnect_confirmed: std::sync::atomic::AtomicBool::new(false),
     });
     if !state.config().http_gateway.record_streaming {
         state.invalidate_active_case(session.case.id, crate::recorder::CaseInvalidation::new("streaming_disabled", "response declared a stream after admission; enable http_gateway.record_streaming and record again"));

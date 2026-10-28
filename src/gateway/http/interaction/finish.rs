@@ -206,9 +206,17 @@ async fn run(
             observation.pending(),
         )
     };
+    let client_disconnect_closed = reason == crate::interaction::model::EndReason::TransportError
+        && super::recovery::client_disconnect_closed(
+            session,
+            session
+                .state
+                .active_case_invalidation(session.case.id)
+                .as_ref(),
+        );
     if !finished_observation
         .as_ref()
-        .is_ok_and(|(_, output)| output.end.clean)
+        .is_ok_and(|(_, output)| output.end.clean || client_disconnect_closed)
     {
         // The supervisor stops Source, then keeps Recorder and this case guard
         // alive until disconnect dependencies and failed evidence are written.
@@ -308,7 +316,7 @@ async fn run(
             return result.map_err(|error| error.context(context));
         }
     };
-    let continue_after_failure = output.end.clean
+    let continue_after_failure = (output.end.clean || client_disconnect_closed)
         && dependencies_drained
         && super::recovery::can_continue(session, invalidation.as_ref());
     if invalidation.is_some() {
@@ -384,7 +392,7 @@ async fn run(
             && super::recovery::can_continue(session, invalidation.as_ref())
         {
             tracing::warn!(case_id = %session.case.id,
-                reason = "http_stream_capture_incomplete",
+                reason = invalidation.as_ref().map(|failure| failure.reason.as_str()),
                 "failed streaming case finalized; continuing recording after dependency drain");
         } else {
             stop_failed_recording(session);

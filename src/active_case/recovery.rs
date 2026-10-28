@@ -1,4 +1,4 @@
-//! Keep a timed-out case isolated until Source completion and dependency quiet.
+//! Failed-case recovery barriers for Source completion and dependency ownership.
 
 use std::time::{Duration, Instant};
 
@@ -8,6 +8,19 @@ use super::{ActiveCaseRegistry, DependencyDrainResult};
 use crate::recorder::CaseInvalidation;
 
 impl ActiveCaseRegistry {
+    /// The caller separately proves primary application teardown. This checks
+    /// the shared attribution and writer barrier under the reservation lock.
+    pub(crate) fn failed_case_dependencies_drained(&self, case_id: Uuid) -> bool {
+        let state = self.state.lock().expect("active case registry poisoned");
+        !state.quiescing
+            && state.active.iter().any(|case| {
+                case.case.id == case_id
+                    && !case.recovering
+                    && !case.accepting_dependencies
+                    && case.dependencies.snapshot().0 == 0
+            })
+    }
+
     pub(crate) fn begin_timeout_recovery(&self, case_id: Uuid, message: String) -> bool {
         let mut state = self.state.lock().expect("active case registry poisoned");
         let Some(case) = state.active.iter_mut().find(|case| case.case.id == case_id) else {
@@ -90,6 +103,30 @@ mod tests {
             id: Uuid::new_v4(),
             rule_name: "test".into(),
             uri_group: Some("test".into()),
+        }
+    }
+
+    #[test]
+    fn later_dependency_failure_revokes_recovery_without_replacing_primary_cause() {
+        for by_id in [false, true] {
+            let registry = ActiveCaseRegistry::default();
+            let case = case();
+            let guard = registry.try_reserve(case.clone()).unwrap();
+            guard.activate_dependencies().unwrap();
+            registry.invalidate_case(
+                case.id,
+                CaseInvalidation::new("interaction_client_transport_lost", "client lost")
+                    .allow_drained_case_recovery(),
+            );
+            let failure = CaseInvalidation::new("dependency_capture_failed", "late failure");
+            if by_id {
+                registry.invalidate_case(case.id, failure);
+            } else {
+                registry.invalidate_current_case(failure);
+            }
+            let primary = registry.invalidation_for(case.id).unwrap();
+            assert_eq!(primary.reason, "interaction_client_transport_lost");
+            assert!(!primary.can_recover_after_drain());
         }
     }
 

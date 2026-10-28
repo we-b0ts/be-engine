@@ -1,5 +1,7 @@
 //! WebSocket upgrade and a bidirectional, message-preserving recording pump.
 mod closing;
+mod disconnect;
+mod failure;
 
 use super::{
     SessionRef,
@@ -149,6 +151,8 @@ pub(super) async fn dispatch(
     let case_id = session.case.id;
     let task = tokio::spawn(async move {
         let _lifetime = lifetime;
+        let mut phase = "upgrade";
+        let mut client_close_code = None;
         let result = async {
             let (downstream, upstream) = tokio::try_join!(downstream, upstream)?;
             let limit = session.state.config().http_gateway.interaction.max_message_bytes;
@@ -158,41 +162,65 @@ pub(super) async fn dispatch(
             loop {
                 tokio::select! {
                     message = downstream.next() => {
-                        let Some(message) = message else { session.request_close(EndReason::ClientClose); break; };
-                        let message = message?;
+                        phase = "client_read";
+                        let message = match message {
+                            Some(Ok(message)) => message,
+                            Some(Err(error)) if failure::client_lost(&error) => {
+                                phase = "client_disconnect_cleanup";
+                                disconnect::cleanup(&session, &mut upstream, &error.into()).await?;
+                                break;
+                            }
+                            Some(Err(error)) => return Err(error.into()),
+                            None => anyhow::bail!("client WebSocket ended without an observed CLOSE"),
+                        };
+                        if let Message::Close(frame) = &message {
+                            client_close_code = frame.as_ref().map(|frame| u16::from(frame.code));
+                        }
+                        phase = "client_observe";
                         observe(&session, &message, true)?;
                         let close = matches!(message, Message::Close(_));
                         let logical_close = matches!(&message, Message::Text(text) if text.as_str() == "1") && session.observation.lock().expect("interaction observation poisoned").protocol() == crate::interaction::model::Protocol::SocketIo;
                         let completion = if logical_close || close {
                             session.request_close(EndReason::ClientClose);
+                            phase = "close_prepare";
                             closing::ApplicationClose::prepare(&session).await?
                         } else { None };
+                        phase = "upstream_send";
                         upstream.send(message).await?;
                         if logical_close && !close {
                             session.request_close(EndReason::ClientClose);
                             let _ = downstream.close(None).await;
-                            if let Some(completion) = completion { completion.wait(&session).await?; }
+                            phase = "close_confirmation";
+                            if let Some(completion) = completion { completion.wait_after_close(&session).await?; }
                             let _ = upstream.close(None).await;
                             wait_peer_close(&mut upstream).await;
                             break;
                         }
                         if close {
                             session.request_close(EndReason::ClientClose);
-                            if let Some(completion) = completion { completion.wait(&session).await?; }
+                            // Flush Tungstenite's queued echo while the case
+                            // still retains Source application disconnect work.
+                            let _ = downstream.flush().await;
+                            phase = "close_confirmation";
+                            if let Some(completion) = completion { completion.wait_after_close(&session).await?; }
                             wait_peer_close(&mut upstream).await;
                             break;
                         }
                     }
                     message = upstream.next() => {
+                        phase = "source_read";
                         let Some(message) = message else { session.request_close(EndReason::ServerEof); break; };
                         let message = message?;
+                        phase = "source_observe";
                         observe(&session, &message, false)?;
                         let close = matches!(message, Message::Close(_));
+                        phase = "downstream_send";
                         downstream.send(message).await?;
                         if close { session.request_close(EndReason::ServerEof); break; }
                     }
                     _ = closing.changed() => {
                         let frame = Some(CloseFrame { code: CloseCode::Normal, reason: "recording case complete".into() });
+                        phase = "close_prepare";
                         let completion = closing::ApplicationClose::prepare(&session).await?;
                         // Engine.IO CLOSE releases the Source session before TCP shutdown.
                         let socket_io = session.observation.lock().expect("interaction observation poisoned").protocol() == crate::interaction::model::Protocol::SocketIo;
@@ -200,7 +228,8 @@ pub(super) async fn dispatch(
                             if !session.eio_closed.load(std::sync::atomic::Ordering::SeqCst) { let _ = upstream.send(Message::Text("1".into())).await; }
                         } else { let _ = upstream.close(frame.clone()).await; }
                         let _ = downstream.close(frame).await;
-                        if let Some(completion) = completion { completion.wait(&session).await?; }
+                        phase = "close_confirmation";
+                        if let Some(completion) = completion { completion.wait_after_close(&session).await?; }
                         let _ = upstream.close(None).await;
                         wait_peer_close(&mut upstream).await;
                         break;
@@ -217,10 +246,17 @@ pub(super) async fn dispatch(
                 session.case.id,
                 crate::recorder::CaseInvalidation::new(
                     "interaction_transport_failed",
-                    "WebSocket transport or application-close confirmation failed; capture is incomplete; inspect recorder diagnostics and record again",
+                    format!("WebSocket failed: phase={phase}, error_kind={}; capture is incomplete; inspect recorder diagnostics and record again", failure::kind(&error)),
                 ),
             );
-            tracing::debug!(%error, "recorded WebSocket ended");
+            tracing::warn!(
+                case_id = %session.case.id,
+                phase,
+                client_close_code,
+                error_kind = failure::kind(&error),
+                confirmation = ?error.downcast_ref::<closing::ConfirmationFailure>(),
+                "recorded WebSocket transport or application-close confirmation failed"
+            );
             session.request_close(EndReason::TransportError);
         }
     });

@@ -289,7 +289,11 @@ impl ActiveCaseRegistry {
         if !registration.accepting_dependencies {
             return None;
         }
-        if registration.invalidation.is_none() {
+        if let Some(earlier) = &mut registration.invalidation {
+            if !invalidation.can_recover_after_drain() {
+                earlier.prevent_drained_case_recovery();
+            }
+        } else {
             registration.invalidation = Some(invalidation);
         }
         Some(registration.case.clone())
@@ -314,7 +318,11 @@ impl ActiveCaseRegistry {
         {
             return None;
         }
-        if registration.invalidation.is_none() {
+        if let Some(earlier) = &mut registration.invalidation {
+            if !invalidation.can_recover_after_drain() {
+                earlier.prevent_drained_case_recovery();
+            }
+        } else {
             registration.invalidation = Some(invalidation);
         }
         Some(registration.case.clone())
