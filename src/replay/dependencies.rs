@@ -204,6 +204,7 @@ pub(super) fn register_dependency_records(
     let (lines, records): (Vec<_>, Vec<_>) = records.into_iter().unzip();
     let optional_sessions =
         mysql::optional_session::classify(&records, source, &mut mysql.read_prefixes);
+    let isolation_plans = mysql.isolation.prepare(&records, source, case_id);
     let transaction_plans =
         mysql
             .transaction_equivalence
@@ -331,6 +332,9 @@ pub(super) fn register_dependency_records(
             mysql.exchanges[index].optional_session = Some(kind);
         }
     }
+    mysql
+        .isolation
+        .install(isolation_plans, &mysql_record_indices);
     redis.pubsub.validate_links(source, case_id)?;
     Ok(())
 }

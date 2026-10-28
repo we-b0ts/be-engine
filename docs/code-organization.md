@@ -400,6 +400,15 @@ is unclear.
   control. `transaction_ownership` reuses the Source name lifetime proof for
   Global-started intervals and versions its disposable proof cache separately.
 
+- `mysql/isolation` owns closed isolation-setting/probe syntax without expanding
+  the generic session-setup whitelist. `replay/mysql/isolation/source` proves
+  original baseline probes and complete override/transaction/restoration scopes
+  during preparation. Its parent binds NEXT settings to actual Target sockets,
+  observes successful deliveries through the existing transaction owner and
+  grants only proven Source restoration omission. Candidate fencing stays in
+  the MySQL matcher; values, business transaction parity, wire completion and
+  original consumption retain their existing owners.
+
 - `engine_binary` resolves companion executables and Linux reexec paths for a
   replaced running engine. Replay, coordinator workers and local interception
   share that resolver; process lifecycle remains with each caller.

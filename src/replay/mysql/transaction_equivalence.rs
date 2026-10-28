@@ -101,6 +101,12 @@ impl Default for Witness {
     }
 }
 
+impl Witness {
+    pub(super) fn connection(&self) -> Uuid {
+        self.connection
+    }
+}
+
 #[derive(Debug)]
 struct Trace {
     id: Uuid,
@@ -108,6 +114,7 @@ struct Trace {
     valid: bool,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct Delivery<'a> {
     pub(super) command: &'a str,
     pub(super) params: Option<&'a [RecordedMysqlValue]>,
@@ -125,6 +132,17 @@ pub(super) struct Observation {
 }
 
 impl Registry {
+    pub(super) fn covered_by(&self, end: usize, connection: Uuid) -> bool {
+        self.ends.get(&end).is_some_and(|&(r, t)| {
+            let requirement = &self.requirements[r];
+            let group = &requirement.transactions[t];
+            !requirement.blocked
+                && group.witness.is_some_and(|coverage| {
+                    coverage.connection == Some(connection) && coverage.transaction.is_some()
+                        || coverage.connection.is_none() && group.write_count == 0 && !group.strict
+                })
+        })
+    }
     pub(super) fn requires_witness(&self, index: usize) -> bool {
         self.ends.get(&index).is_some_and(|&(r, t)| {
             let group = &self.requirements[r].transactions[t];
@@ -679,6 +697,18 @@ impl ReplayState {
                 event.recorded_index = Some(index);
                 event.diagnostic = diagnostic;
             }
+        }
+        let mysql = &mut self.mysql;
+        if let Some(index) = mysql.isolation.observe(
+            witness.connection(),
+            case,
+            delivery,
+            &mysql.transaction_equivalence,
+        ) && mysql.exchanges[index].status.is_available()
+        {
+            mysql.exchanges[index].optional_session =
+                Some(OptionalSessionExchange::TransactionIsolation);
+            self.refresh_mysql_global_report(index);
         }
     }
 }

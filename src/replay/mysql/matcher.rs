@@ -15,6 +15,7 @@ pub(in crate::replay) struct MysqlReplayState {
     cleanup_selection: cleanup_selection::Index,
     pub(in crate::replay) read_prefixes: optional_session::ReadPrefixes,
     pub(in crate::replay) transaction_equivalence: transaction_equivalence::Registry,
+    pub(in crate::replay) isolation: isolation::Registry,
     pub(super) origins: ownership::Origins,
     pub(super) foreign: ownership::Foreign,
     pub(super) transaction_wires: std::collections::HashSet<(Uuid, u64)>,

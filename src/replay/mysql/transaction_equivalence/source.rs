@@ -235,6 +235,9 @@ fn collect_transactions(
                 {
                     return Err("source_autocommit_setup_unsafe");
                 }
+            } else if super::super::isolation::source_session_control(record) {
+                // This does not grant an omission or a Target builtin response.
+                // The isolation owner separately proves scope and restoration.
             } else if optional_session::successful_prepare(record)
                 || optional_session::successful_ping(record)
             {

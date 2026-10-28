@@ -3,6 +3,7 @@ mod candidates;
 mod cleanup_selection;
 pub(in crate::replay) mod contracts;
 mod evidence;
+pub(in crate::replay) mod isolation;
 mod lifecycle;
 mod matcher;
 mod model;
