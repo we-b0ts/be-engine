@@ -39,7 +39,7 @@ impl CaseInvalidation {
     }
 
     /// A capture owner may permit local archival; the lifecycle must still prove
-    /// a clean primary, complete dependency drain and successful publication.
+    /// protocol-proven primary teardown, complete dependency drain and publication.
     pub(crate) fn allow_drained_case_recovery(mut self) -> Self {
         self.recovery = CaseFailureRecovery::AfterDependencyDrain;
         self
@@ -47,6 +47,10 @@ impl CaseInvalidation {
 
     pub(crate) fn can_recover_after_drain(&self) -> bool {
         self.recovery == CaseFailureRecovery::AfterDependencyDrain
+    }
+
+    pub(crate) fn prevent_drained_case_recovery(&mut self) {
+        self.recovery = CaseFailureRecovery::StopSource;
     }
 }
 

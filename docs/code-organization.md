@@ -112,9 +112,22 @@ is unclear.
   retains its existing cleanup deadline and marks unfinished cleanup incomplete.
   `gateway/http/interaction/websocket/closing` confirms application close for
   recognized Python ASGI peers through the live upgraded Engine.IO SID's native
-  NOOP/disconnected status. It never turns an automatic WS close echo or an
-  unknown SID into proof of application completion. Transport failures remain
-  visible to `finish` even when the primary close was already observed.
+  NOOP/disconnected status. After proving that exact SID live before forwarding
+  CLOSE, it also accepts its native removal after Python Engine.IO's awaited
+  disconnect handler. Initial unknown SIDs, mismatched SIDs, arbitrary HTTP 400
+  responses and automatic WS close echoes cannot prove completion. Native
+  statuses require complete JSON-string and SID matches. Transport failures
+  remain visible to `finish` even when the primary close was already observed;
+  Its `disconnect` child retains lost-client failures through native application
+  disconnect confirmation; it never creates a client CLOSE input or clean
+  transcript. `failure` classifies transport errors without formatting private
+  frames or I/O context. `interaction/recovery` permits Source reuse only after
+  this protocol proof, complete dependency/writer drain and failure publication;
+  `active_case/recovery` owns the shared closed-attribution check. Protocol errors,
+  unconfirmed teardown, lease loss and persistence failure still stop Source.
+  WARN diagnostics expose only case identity, transport phase, close code,
+  bounded error categories and typed confirmation outcomes, never private probe
+  URLs, SIDs or body text.
   Replay control retains case identity and asynchronous dependency delivery
   ownership through the existing case-end lifecycle. Its `control/dependency_tail` child resolves finite immutable
   exchange references, adapts legacy API-origin observation metadata, and waits

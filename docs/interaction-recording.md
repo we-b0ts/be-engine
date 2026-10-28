@@ -31,6 +31,17 @@ initial-response wait and next deadline without logging request headers or
 message contents. They distinguish an upstream handshake wait from transport
 cleanup, dependency drain and case publication.
 
+For Python Uvicorn/Hypercorn Socket.IO peers, Recorder verifies the captured
+Engine.IO SID is live before forwarding CLOSE and retains the case until the
+native session reports disconnect completion or removal of that same proven
+SID. Python Engine.IO deletes the SID after a client WS CLOSE, including 1001,
+only after its awaited disconnect handler completes. An initial unknown SID,
+another SID, an unrelated HTTP 400 or an automatic WS close echo is insufficient.
+Close-confirmation failures report a safe typed outcome at WARN level, without
+logging probe URLs, tokens or response bodies. The opt-in
+[real Python ASGI regression](../tests/manual/asgi_close/README.md) verifies
+client and Engine.IO closes, delayed dependency capture and consecutive cases.
+
 ## One connection, one case
 
 Authentication, namespace connection and multiple business exchanges share a case
@@ -345,3 +356,14 @@ and consumes the callback once. Newly recorded RPC PUBLISH exchanges carry
 only the recorded PUBLISH response and emits no fabricated callback. The marker
 is a bounded capture contract, not proof that a callback can never arrive. Legacy
 RPC recordings without callback evidence still require fresh recording.
+
+For recognized Python ASGI Socket.IO peers, observed client TCP EOF/reset is
+retained as a failed `interaction_client_transport_lost` case. The recorder
+keeps the Source connection alive long enough to prove its exact SID live,
+initiate cleanup and confirm application disconnect, then drains case-owned
+dependencies and evidence writers before allowing the next case. This cleanup
+does not add a client CLOSE input or mark the interrupted capture clean.
+Protocol/observation errors, unsupported peers, unconfirmed disconnect, cleanup
+timeout, lease loss and failed persistence retain Source isolation. Diagnostics
+separate client reads from input observation and record bounded transport error
+categories without frame contents, URLs, SIDs or private error text.
