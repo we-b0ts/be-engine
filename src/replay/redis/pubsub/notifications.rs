@@ -120,7 +120,7 @@ async fn deliver(
             .await
             .redis
             .pubsub
-            .timer_controls_echo(id, adapter_echo)
+            .timer_is_correlated(id, adapter_echo)
     {
         return true;
     }
@@ -137,7 +137,7 @@ async fn deliver(
         if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
             return false;
         }
-        if replay.redis.pubsub.timer_controls_echo(id, adapter_echo) {
+        if replay.redis.pubsub.timer_is_correlated(id, adapter_echo) {
             return true;
         }
         match id {
@@ -182,6 +182,7 @@ async fn deliver(
     if job
         .sender
         .try_send(Delivery {
+            case_id: None,
             push: id,
             bytes,
             matched: None,

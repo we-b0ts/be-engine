@@ -153,6 +153,8 @@ impl IndexedNotifications {
                 timestamp,
                 ordinal: self.total,
                 adapter_echo: rpc::echo_digest(&frame.channel, &frame.payload),
+                adapter_request: rpc::notification_request(&frame.channel, &frame.payload)
+                    .map(|identity| (frame.channel, identity)),
             })?;
         lane.count += 1;
         self.total += 1;

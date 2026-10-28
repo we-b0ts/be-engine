@@ -9,6 +9,7 @@ pub(super) struct RpcComparison {
     pub source: Vec<Vec<u8>>,
     pub actual: Vec<Vec<u8>>,
 }
+pub(in crate::replay) mod ingress;
 mod inventory;
 pub(in crate::replay) use inventory::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
@@ -63,9 +64,22 @@ pub(super) struct Delivery {
     pub(super) push: PushId,
     pub(super) bytes: Vec<u8>,
     pub(super) matched: Option<MatchedRedisExchange>,
+    pub(super) case_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+impl Delivery {
+    pub(super) fn case_is_current(&self, active: Option<&str>, stopped: bool) -> bool {
+        self.matched
+            .as_ref()
+            .is_none_or(|matched| matched.report.case_id.as_deref() == active)
+            && self
+                .case_id
+                .as_deref()
+                .is_none_or(|case| !stopped && Some(case) == active)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum PushId {
     Inline(usize),
     Indexed { lane: usize, index: usize },
@@ -94,6 +108,7 @@ pub(in crate::replay) struct PubSubState {
     subscriptions: Vec<Subscription>,
     bindings: adapter::Bindings,
     echoes: echo::Echoes,
+    ingress: ingress::Ingress,
     notifications: std::collections::HashMap<(Uuid, u64), Arc<Vec<usize>>>,
     delivered: usize,
     failed: usize,
@@ -291,6 +306,7 @@ impl PubSubState {
     }
 
     pub(super) fn complete(&mut self, id: PushId) {
+        self.complete_ingress(id);
         let index = match id {
             PushId::Inline(index) => index,
             PushId::Indexed { lane, index } => {
@@ -310,6 +326,7 @@ impl PubSubState {
         self.refresh_global_report(index);
     }
     pub(super) fn fail(&mut self, id: PushId) {
+        self.fail_ingress(id);
         let index = match id {
             PushId::Inline(index) => index,
             PushId::Indexed { lane, index } => {

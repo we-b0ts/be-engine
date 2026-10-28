@@ -96,6 +96,22 @@ Ordinary callback-null adapter broadcasts share the same process host identity
 with RPC calls. Their room, namespace, event and business data remain strict;
 only a valid UUID-v4 manager host identity is translated.
 
+For an inbound remote call, a selected Socket.IO Case's original callback
+PUBLISH can prove exactly one Global request notification with the same complete
+host/SID/namespace/counter, endpoint and channel. Both request and reply need
+Source clocks: the notification must fall between the Case request start and
+its callback. Ambiguous, missing or contradictory evidence fails preparation.
+The notification retains its original Global slot and exact subscription anchor.
+Replay delivers it at the Case request clock plus its original Source offset,
+after that Case independently observes the live Target SID through an accepted
+identity contract. An unbound historical SID cannot create a Target session.
+Only the validated room/callback SID pair changes; external host/counter,
+business data and other notifications' timers remain intact. The ordinary
+subscription timer cannot deliver that slot again, and only actual TCP delivery
+consumes it. A queued request cannot escape into another Case. Target must
+produce the real callback PUBLISH with that external identity, observed SID and
+complete result; premature, altered or extra replies remain unmatched.
+
 A recorded `message` containing the exact bytes of a finite Source adapter PUBLISH
 is its Redis self-echo. After strict Target PUBLISH admission and delivery of its
 Redis response, Replay delivers that admitted Target payload through the exact
@@ -116,7 +132,7 @@ Source wall time nor change notification counts. Global notification indexes
 retain these Source clocks without storing response payloads. Each subscription retains its recorded
 database and authenticated identity; Redis PUBLISH fan-out remains independent
 of the publisher’s logical database. Other Global messages keep their recorded
-timing and bytes. Notification indexes retain only digests and locations; the
+timing and bytes. Notification indexes retain protocol identities, digests and locations; the
 sparse digest lookups needed by the loaded adapter publishers are prepared from
 metadata before Replay publishes readiness. APIs without those publishers skip
 this preparation. Each subscription's lookup is shared across the session's

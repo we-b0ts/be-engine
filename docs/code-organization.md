@@ -35,6 +35,14 @@ is unclear.
   payload sizes. Protocol validation and aggregate evidence budgets stay with
   their existing owners.
 
+- `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
+  a Global Socket.IO request notification and its original Case callback.
+  `preparation` proves immutable identity, clocks and subscription slots;
+  `driver` waits for Case admission and an independently observed live SID,
+  then queues the original notification without changing Global ownership.
+  RESP delivery retains wire consumption and Case cancellation checks; the
+  adapter and request contracts retain strict callback result comparison.
+
 - `dependency/termination` owns protocol-independent peer observations, monotonic
   termination time and explicit transport FIN/RST control. Recorder connection
   registration marks engine-owned cleanup before socket shutdown. Protocol

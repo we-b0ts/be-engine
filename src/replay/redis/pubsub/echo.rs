@@ -350,6 +350,7 @@ pub(in crate::replay::redis) async fn deliver(
             }
             if sender
                 .try_send(Delivery {
+                    case_id: None,
                     push: id,
                     bytes,
                     matched: None,

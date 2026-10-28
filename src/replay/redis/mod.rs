@@ -568,7 +568,7 @@ pub(super) async fn handle_connection(
             frame = read_redis_frame(&mut reader) => frame,
             Some(delivery) = push_rx.recv() => {
                 let mut replay = state.lock().await;
-                if delivery.matched.as_ref().is_some_and(|m| m.report.case_id != replay.active_case_id) || replay.finalized_at.is_some()
+                if !delivery.case_is_current(replay.active_case_id.as_deref(), replay.target_session_stopped) || replay.finalized_at.is_some()
                     || !replay.redis.pubsub.is_subscribed(client_id, delivery.push) {
                     replay.redis.pubsub.fail(delivery.push);
                     if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, "callback case already ended".into()); }
@@ -580,12 +580,13 @@ pub(super) async fn handle_connection(
                 let sent = sent.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "Pub/Sub push delivery timed out")).and_then(|r| r);
                 match sent {
                     Ok(()) => {
-                        if delivery.matched.as_ref().is_some_and(|m| m.report.case_id != replay.active_case_id) {
+                        if !delivery.case_is_current(replay.active_case_id.as_deref(), replay.target_session_stopped) {
                             replay.redis.pubsub.fail(delivery.push);
                             if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, "callback case changed during delivery".into()); }
                             continue;
                         }
                         replay.redis.pubsub.complete(delivery.push);
+                        replay.redis.delivery_changed.notify_waiters();
                         if let Some(m) = &delivery.matched { replay.redis.complete_exchange(m); }
                     }
                     Err(error) => {

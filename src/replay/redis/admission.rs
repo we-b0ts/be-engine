@@ -50,6 +50,11 @@ pub(super) async fn match_command(
             &command.name,
             event,
             diagnostic,
+        ) && !state.redis.pubsub.pending_ingress_reply(
+            case.as_deref(),
+            target,
+            &command.name,
+            &command.args,
         ) {
             break;
         }
@@ -89,6 +94,11 @@ pub(super) async fn match_command(
             &command.name,
             event,
             diagnostic,
+        ) || state.redis.pubsub.pending_ingress_reply(
+            case.as_deref(),
+            target,
+            &command.name,
+            &command.args,
         ) {
             continue;
         }

@@ -154,6 +154,7 @@ impl PubSubState {
         self.bindings
             .callback_subscriptions
             .contains(&(exchange.record.connection_id, exchange.record.sequence))
+            || self.ingress.requires_subscription(exchange)
     }
 
     pub(in crate::replay) fn validate_links(
@@ -170,7 +171,8 @@ impl PubSubState {
     }
 
     pub(in crate::replay::redis) fn is_adapter_source(&self, exchange: &ReplayExchange) -> bool {
-        exchange.rpc_push.is_some()
+        self.ingress.owns_callback(exchange)
+            || exchange.rpc_push.is_some()
             || exchange.record.rpc_callback_capture.as_deref() == Some("bounded_window")
             || rpc::broadcast(&exchange.record.command, &exchange.args)
                 .ok()
@@ -197,6 +199,9 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<RpcComparison> {
+        if self.ingress.owns_callback(exchange) {
+            return self.ingress.comparison(exchange, args);
+        }
         if let Some((source, actual)) = self.compatible_broadcast(exchange, args) {
             return Some(RpcComparison {
                 source: vec![
@@ -429,6 +434,7 @@ impl PubSubState {
                 .duration_ms
                 .saturating_sub(matched.publish_duration_ms),
             Delivery {
+                case_id: None,
                 push: PushId::Inline(index),
                 bytes,
                 matched: Some(matched.clone()),

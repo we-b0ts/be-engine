@@ -12,6 +12,7 @@ mod repeated_echo;
 mod request_contracts;
 mod rpc_coverage;
 mod rpc_identity_formats;
+mod rpc_ingress;
 mod scale;
 mod subscriber_generations;
 mod subscription_evidence;

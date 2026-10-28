@@ -96,6 +96,28 @@ impl RequestContracts {
         )
     }
 
+    /// Native ingress may reuse an accepted observation, but cannot invent a
+    /// live Target session from an unknown historical token.
+    pub(in crate::replay) fn observed_identity_string(
+        &self,
+        case: &str,
+        source: &str,
+    ) -> Result<Option<String>> {
+        let source = Value::String(source.into());
+        let (values, _) = self.identity_deliveries(
+            case,
+            &[IdentityDelivery {
+                prefix: "",
+                format: crate::policy::IdentityFormat::String,
+                value: &source,
+            }],
+        )?;
+        let value = &values[0];
+        Ok(self
+            .knows_identity_value(case, &source, value)?
+            .then(|| value.as_str().expect("string identity").to_owned()))
+    }
+
     pub(in crate::replay) fn commit_identity(&self, decision: IdentityDecision) -> Result<()> {
         if decision.is_empty() {
             return Ok(());
