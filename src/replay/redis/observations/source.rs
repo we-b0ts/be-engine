@@ -144,7 +144,7 @@ pub(super) fn prepare(
             if exchange.record.command == "GET" {
                 let response = exchange.response_bytes()?;
                 ensure!(
-                    response.len() <= 1024 * 1024,
+                    response.len() <= crate::value_limits::MAX_VALUE_BYTES,
                     "state observation response exceeds bounds"
                 );
                 ensure!(
@@ -183,7 +183,7 @@ pub(super) fn prepare(
     for (index, e) in timeline {
         let response = e.response_bytes()?;
         ensure!(
-            response.len() <= 1024 * 1024,
+            response.len() <= crate::value_limits::MAX_VALUE_BYTES,
             "state observation response exceeds bounds"
         );
         match e.record.command.as_str() {
@@ -199,7 +199,7 @@ pub(super) fn prepare(
                     "state observation requires a successful unconditional SET"
                 );
                 ensure!(
-                    e.args[1].len() <= 1024 * 1024,
+                    e.args[1].len() <= crate::value_limits::MAX_VALUE_BYTES,
                     "state observation SET exceeds bounds"
                 );
                 if e.args.len() == 4 {

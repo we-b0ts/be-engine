@@ -152,7 +152,7 @@ impl RequestContracts {
         actual: &[u8],
         actual_started_at: Option<DateTime<Utc>>,
     ) {
-        if actual.len() > 1024 * 1024 {
+        if actual.len() > crate::value_limits::MAX_VALUE_BYTES {
             return;
         }
         let Ok(anchor) = self.anchor(case) else {

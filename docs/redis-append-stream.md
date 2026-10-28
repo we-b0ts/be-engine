@@ -72,7 +72,7 @@ Source self-validation does not prove independent Target behavior: Apply always
 requires a fresh genuine Replay with existing recordings. Use the coordinator's
 ordinary `rule plan --file ... --evidence ...` and returned Apply command.
 
-Bounds are 1 MiB per nonempty chunk, 16 MiB of Source bytes and 128 keys per Case,
+Bounds are 64 MiB per nonempty chunk, 64 MiB of Source bytes and 128 keys per Case,
 4096 Source APPENDs per key, 4096 successful Target chunks per Case, and 64 Source
 fragments per Target call. `redis.append_streams` exposes at most 1000 audit rows
 with Source connection/sequence/ranges, Target observation identity, returned

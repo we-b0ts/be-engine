@@ -12,7 +12,7 @@ mod value;
 
 const MAX_KEYS: usize = 128;
 const MAX_CALLS: usize = 4096;
-const MAX_BYTES: usize = 1024 * 1024;
+const MAX_BYTES: usize = crate::value_limits::MAX_VALUE_BYTES;
 
 #[derive(Debug, Default)]
 pub(super) struct ActivityRefreshes {

@@ -55,7 +55,7 @@ impl<'de> Deserialize<'de> for Strict {
     }
 }
 pub(crate) fn parse(bytes: &[u8]) -> Option<Value> {
-    parse_with_limit(bytes, 1024 * 1024)
+    parse_with_limit(bytes, crate::value_limits::MAX_VALUE_BYTES)
 }
 pub(crate) fn parse_with_limit(bytes: &[u8], limit: usize) -> Option<Value> {
     if bytes.len() > limit {

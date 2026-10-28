@@ -204,7 +204,7 @@ fn incomplete_invalid_or_oversized_source_bodies_never_enable_either_operator() 
         invalid.push(changed);
     }
     let oversized = serde_json::to_vec(&json!({
-        "event_type": "session.created", "padding": "x".repeat(1024 * 1024)
+        "event_type": "session.created", "padding": "x".repeat(crate::value_limits::MAX_VALUE_BYTES)
     }))
     .unwrap();
     invalid.push(raw_request(

@@ -2,12 +2,12 @@
 use super::*;
 use redis_protocol::resp2::types::{OwnedFrame, Resp2Frame};
 
-pub(super) const MAX_BYTES: usize = 1024 * 1024;
+pub(super) const MAX_BYTES: usize = crate::value_limits::MAX_VALUE_BYTES;
 
 pub(super) fn frame(bytes: &[u8]) -> Result<OwnedFrame> {
     ensure!(
         bytes.len() <= MAX_BYTES,
-        "Redis read_back response exceeds 1 MiB"
+        "Redis read_back response exceeds 64 MiB"
     );
     let (frame, consumed) = redis_protocol::resp2::decode::decode(bytes)?
         .context("incomplete read_back RESP response")?;
@@ -22,7 +22,7 @@ pub(super) fn encode(frame: &OwnedFrame) -> Result<Vec<u8>> {
     let size = frame.encode_len(false);
     ensure!(
         size <= MAX_BYTES,
-        "derived read_back response exceeds 1 MiB"
+        "derived read_back response exceeds 64 MiB"
     );
     let mut bytes = vec![0; size];
     let written = redis_protocol::resp2::encode::encode(&mut bytes, frame, false)?;
@@ -33,7 +33,7 @@ pub(super) fn encode(frame: &OwnedFrame) -> Result<Vec<u8>> {
 pub(super) fn value(bytes: &[u8], pointer: &str) -> Result<Value> {
     ensure!(
         bytes.len() <= MAX_BYTES,
-        "read_back write argument exceeds 1 MiB"
+        "read_back write argument exceeds 64 MiB"
     );
     if pointer.is_empty() {
         return Ok(Value::String(std::str::from_utf8(bytes)?.into()));

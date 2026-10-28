@@ -125,7 +125,7 @@ pub(in crate::replay) fn request_body(request: &Value) -> Option<Value> {
         return None;
     }
     let data = body["data"].as_str()?;
-    if data.len() > 1_398_104 {
+    if data.len() > crate::value_limits::MAX_VALUE_BYTES.div_ceil(3) * 4 {
         return None;
     }
     let bytes = match body["encoding"].as_str()? {

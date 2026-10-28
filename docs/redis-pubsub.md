@@ -135,7 +135,7 @@ compose with the protocol identity adapter using comparison copies; original
 request evidence, callback bindings and result delivery remain with their
 existing owners. See [Generated Redis request values](redis-generated-requests.md).
 
-The adapter accepts JSON RPC envelopes up to 1 MiB. Capture retains at most
+The adapter accepts JSON RPC envelopes up to 64 MiB. Capture retains at most
 4096 correlation records and expires abandoned metadata after 610 seconds;
 those records hold no in-flight reservation.
 Global notifications use a paged disk index and one ordered scheduler per

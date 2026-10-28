@@ -47,8 +47,8 @@ impl CodecPlan {
         #[cfg(test)]
         DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
         ensure!(
-            bytes.len() <= 1024 * 1024,
-            "payload exceeds the 1 MiB codec limit"
+            bytes.len() <= crate::value_limits::MAX_VALUE_BYTES,
+            "payload exceeds the 64 MiB codec limit"
         );
         let (logical, protobuf) = match &self.protobuf {
             None => (
@@ -101,8 +101,8 @@ impl DecodedValue {
             None => crate::json_value::render::derived(&self.original, logical),
         }?;
         ensure!(
-            output.len() <= 1024 * 1024,
-            "derived payload exceeds the 1 MiB codec limit"
+            output.len() <= crate::value_limits::MAX_VALUE_BYTES,
+            "derived payload exceeds the 64 MiB codec limit"
         );
         Ok(output)
     }

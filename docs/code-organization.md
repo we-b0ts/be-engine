@@ -30,6 +30,11 @@ is unclear.
 
 ## Current Boundaries
 
+- `value_limits` owns the shared 64 MiB value ceiling used by Redis carriers,
+  JSON/Protobuf codecs and derived-value rendering; business code owns actual
+  payload sizes. Protocol validation and aggregate evidence budgets stay with
+  their existing owners.
+
 - `dependency/termination` owns protocol-independent peer observations, monotonic
   termination time and explicit transport FIN/RST control. Recorder connection
   registration marks engine-owned cleanup before socket shutdown. Protocol
@@ -1233,7 +1238,7 @@ explicit repository-wide audit.
   codecs and MySQL JSON-cell delivery reuse it; policy authorization remains
   with their existing logical contract owners.
   Original semantic record readers may supply their envelope budget explicitly;
-  ordinary value decoding retains its 1 MiB bound. `dependency/http_limits` owns
+  ordinary value decoding uses the shared 64 MiB bound. `dependency/http_limits` owns
   the 64 MiB raw-body and derived HTTP witness/record byte budgets, shared by
   recording defaults, Replay, Source proof and dependency diagnostics.
 - `replay/policy/response/jwt` owns explicit JWT response selectors, response-only

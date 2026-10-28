@@ -32,7 +32,10 @@ pub(crate) fn derived(original: &[u8], logical: &Value) -> Result<Vec<u8>> {
         end = tail;
     }
     output.extend_from_slice(&original[end..]);
-    ensure!(output.len() <= 1024 * 1024, "derived JSON exceeds 1 MiB");
+    ensure!(
+        output.len() <= crate::value_limits::MAX_VALUE_BYTES,
+        "derived JSON exceeds 64 MiB"
+    );
     Ok(output)
 }
 

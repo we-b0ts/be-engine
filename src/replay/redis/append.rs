@@ -22,8 +22,8 @@ mod tcp_tests;
 #[cfg(test)]
 pub(super) mod tests;
 
-const MAX_BYTES: usize = 16 * 1024 * 1024;
-const MAX_VALUE: usize = 1024 * 1024;
+const MAX_BYTES: usize = crate::value_limits::MAX_VALUE_BYTES;
+const MAX_VALUE: usize = crate::value_limits::MAX_VALUE_BYTES;
 const MAX_PIECES: usize = 4096;
 const MAX_STREAMS: usize = 128;
 const MAX_FRAGMENTS: usize = 64;

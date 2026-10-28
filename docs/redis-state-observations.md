@@ -116,7 +116,7 @@ content/list write still match and deliver through their existing owners.
 
 Both contracts are opt-in and bounded to 128 profiles, 4096 Source observations
 and 4096 Target observations per Case. Each profile has at most 1024 states.
-Responses and raw SET values are bounded to 1 MiB. Every actual delivery remains
+Responses and raw SET values are bounded to 64 MiB. Every actual delivery remains
 tracked even when concurrent reads share a Source witness. Transport failure
 keeps the Case dirty; it cannot be hidden by another successful observation.
 A prepared Case cannot acquire additional records. Loading another ordinary
