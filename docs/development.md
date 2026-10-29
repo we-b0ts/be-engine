@@ -2583,6 +2583,21 @@ The target's native HTTP port is the port in
 positive. It bounds Replay-only idle waiting for unfinished dependency tails
 after the recorded primary inputs have completed. Real resource delivery,
 including an upstream SSE response, keeps its existing I/O budget; successful
+Clean Socket.IO/WebSocket recordings without tail sidecars can retain their
+finite Case Redis, MySQL, HTTP and connection-failure obligations from the
+original semantic inventory. Wire close does not finish a sleeping disconnect
+hook: the old Case remains active until its required calls really complete,
+before the next input is admitted. A delayed online-state read therefore receives
+its own recorded response, including a successor's socket identity; Replay does
+not invent a missing delete or serve a previous Case's inventory to a new Case.
+The absolute budget includes recorded Source elapsed time plus the normal
+execution allowance and is anchored once at admission. Existing optional-session,
+shared-initialization and proven process permissions retain their meanings.
+Explicit tail observations take precedence. Unclean or unsupported legacy
+footprints keep the existing transport/started-I/O cleanup path; no partial
+inventory is claimed and the ordinary verification gates still apply. No
+recording files are rewritten to create this wait.
+
 Case dependency completions renew the idle clock. Unrelated process activity
 does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
 CLI exposes the same setting as `--case-no-progress-timeout-ms`.

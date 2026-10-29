@@ -8,10 +8,9 @@ use std::path::Path;
 use std::time::Duration;
 
 mod async_inventory;
-
-pub(super) fn reference(event: &serde_json::Value) -> Result<Option<RecordedReference>> {
-    async_inventory::reference(event)
-}
+mod interaction_inventory;
+mod references;
+pub(super) use references::reference;
 
 const MAX_METADATA_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -142,6 +141,9 @@ pub(super) async fn load(
         } else {
             metadata = Some(legacy);
         }
+    }
+    if metadata.is_none() {
+        metadata = interaction_inventory::from_complete_source(case_dir, request_timeout).await?;
     }
     if let Some(metadata) = &metadata {
         validate(metadata)?;

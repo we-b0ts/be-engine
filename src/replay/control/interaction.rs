@@ -29,12 +29,14 @@ pub(super) async fn drain(
     transcript.validate()?;
     // Closing the primary transport and waiting for its business dependencies
     // have different budgets. New tail evidence retains the case until its
-    // absolute request deadline; legacy recordings keep the cleanup bound.
+    // absolute request deadline. A complete original interaction can prove
+    // that finite inventory without a sidecar; otherwise keep the cleanup bound.
     let deadline = observation_deadline
         .unwrap_or_else(|| started + Duration::from_millis(transcript.policy.cleanup_timeout_ms));
     // The same fixed attribution window applies to ordinary and streaming cases.
-    // Completion only waits for exchanges already delivering data; background
-    // calls after this boundary remain subject to the existing Replay policy.
+    // This transport barrier waits for exchanges already delivering data.
+    // The following dependency_tail::drain separately retains finite business
+    // obligations even when their asynchronous Target continuation is still idle.
     tokio::time::timeout_at(deadline, tokio::time::sleep(post_response_window))
         .await
         .context("interaction cleanup window timed out; case ownership was retained")?;

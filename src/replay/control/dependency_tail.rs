@@ -697,6 +697,8 @@ pub(super) fn end(state: &mut ReplayState, case_id: &str) {
 #[cfg(test)]
 mod async_tests;
 #[cfg(test)]
+mod interaction_tests;
+#[cfg(test)]
 mod no_progress_tests;
 #[cfg(test)]
 mod tests;

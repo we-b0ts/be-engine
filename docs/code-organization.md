@@ -165,6 +165,11 @@ is unclear.
   An unclean Socket.IO/WebSocket session stops the attempt before another input;
   ordinary shutdown/finalization preserves the failed Case and pending inventory.
   Started-I/O drain alone cannot prove that sleeping disconnect hooks have ended.
+  `control/dependency_tail/metadata/interaction_inventory` derives finite waits
+  from a clean original Socket.IO/WebSocket completion and its Case dependencies
+  when explicit tail observations are absent. It streams original metadata,
+  retains the Source elapsed-time budget, and never supplies response frames to
+  Target. `metadata/references` owns the shared semantic exchange identities.
   `dependency/execution` owns the protocol-independent rejection signal and typed error.
   `e2e_run/execution_failure` retains the incomplete execution cause and independent
   primary status observations for public diagnosis and evidence queries.
