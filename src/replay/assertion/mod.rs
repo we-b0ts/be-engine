@@ -287,6 +287,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
     let expected_interaction = expected.interaction.as_ref();
     let actual_interaction = actual.interaction.as_ref();
     interaction::validate_input(request.interaction.as_ref(), expected_interaction)?;
+    let ack_context = interaction::AckContext::prepare(request.interaction.as_ref())?;
     let oneway = expected.response_expected == Some(false);
     let expected_status = match expected.status.as_ref() {
         Some(status) => status.code(),
@@ -349,6 +350,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
         times,
         time_copies,
         &mut report,
+        ack_context.as_ref(),
     )?;
     if !report.identity_pairs.is_empty() {
         let proposal = crate::value_contract::identities::IdentityDecision::prepare(

@@ -188,6 +188,16 @@ a known SID, or a completed PUBLISH alone cannot replace the live event proof.
 Recorded client ACK contents and ordinal references remain unchanged; missing
 Target events remain failures instead of receiving another event's ACK payload.
 
+When input timing is compressed, independent client requests may have replies
+in flight together. Response assertions use the validated original input graph
+to pair consecutive non-binary Socket.IO ACKs by exact namespace and request id.
+This requires unique original request identities and no completion dependency
+between them. Missing, extra, duplicate or unknown replies cannot be paired;
+kind, ACK presence, payloads and configured field contracts remain strict.
+Pairing never crosses business events or protocol boundaries. Timing-preserving
+programs, causally ordered requests and comparisons without original input
+provenance retain positional comparison.
+
 SSE events and NDJSON records are framed independently of TCP/HTTP chunking. Raw
 stream comparison concatenates observed bytes. Missing, extra or reordered
 business outputs fail, and incomplete closure cannot pass even if both bodies
