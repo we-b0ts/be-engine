@@ -438,6 +438,7 @@ impl PubSubState {
                 push: PushId::Inline(index),
                 bytes,
                 matched: Some(matched.clone()),
+                request_epoch: None,
             },
         ))
     }

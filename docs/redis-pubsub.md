@@ -12,6 +12,30 @@ dependencies of whichever HTTP case is active at arrival. Replay schedules each
 finite notification after its original subscription is matched and confirmed.
 Unsubscribe and disconnect prevent later delivery to that subscriber. Different
 channels, patterns, shard channels, and source connections remain isolated.
+
+For a selected native Socket.IO namespace, ordinary external adapter broadcasts
+use proven request-clock projections instead of subscription age. A completed
+standard run must identify one unique original passive namespace subscription
+(a validated CONNECT-only input program and clean lifecycle bounds). Windows
+from skipped and unselected Cases also participate in the ambiguity check.
+An original notification timestamp supplies its request-relative offset; actual
+Target request admission and observation of its live namespace CONNECT gate
+delivery. The original Global slot, subscription realm, channel, room and all
+payload bytes remain intact. Expected response frames and bodies are never
+request-driver inputs; preparation reads only original lifecycle/time metadata.
+
+Missing clocks or run scope, overlapping or active input programs, and socket
+exclusions without an independent live identity proof keep those external slots
+unconsumed. Subscription-age timers cannot inject earlier or later broadcasts
+into a selected native namespace. Other Redis notification types keep their
+existing timers; RPC ingress and self-echoes retain their separate proofs.
+Queued native input is fenced by both Case and actual request epoch before and
+after TCP delivery, so a stale queue cannot enter another request. Admitted
+inputs participate in the started-I/O cleanup barrier until the actual write
+finishes; an abandoned or failed write marks its Case unsafe. Closing a Case
+prevents new ordinary input admission. The compact notification index stores
+namespace-only metadata for this classification.
+
 Replay resolves the original successful subscription by source connection and
 command sequence, then checks endpoint, database, username, subscription kind,
 subject, and confirmation. Missing or inconsistent subscription anchors fail

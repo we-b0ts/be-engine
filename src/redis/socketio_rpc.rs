@@ -97,6 +97,16 @@ pub(crate) fn notification_request(channel: &[u8], payload: &[u8]) -> Option<Ide
         .map(|request| request.identity)
 }
 
+/// Bounded protocol metadata only; ordinary broadcast arguments stay private.
+pub(crate) fn notification_namespace(channel: &[u8], payload: &[u8]) -> Option<String> {
+    broadcast("PUBLISH", &[channel.to_vec(), payload.to_vec()])
+        .ok()
+        .flatten()?
+        .value["namespace"]
+        .as_str()
+        .map(str::to_owned)
+}
+
 pub(crate) fn callback(payload: &[u8]) -> Result<Option<(Identity, Value)>> {
     let Some(value) = document(payload) else {
         return Ok(None);

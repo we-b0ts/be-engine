@@ -7,7 +7,10 @@ use futures_util::future::BoxFuture;
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct Observation {
     epoch: DateTime<Utc>,
-    event: NativeEvent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event: Option<NativeEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    namespace: Option<String>,
 }
 
 struct Observer {
@@ -42,12 +45,19 @@ pub(crate) async fn connect(
 }
 
 impl NativeEventSink for Observer {
+    fn connected<'a>(&'a self, namespace: &'a str) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            send(&self.socket, serde_json::json!({"command":"native_connected", "case_id":self.case,
+                "native_event":Observation {epoch:self.epoch,event:None,namespace:Some(namespace.into())}})).await?;
+            Ok(())
+        })
+    }
     fn observe(&self, event: NativeEvent) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             send(
                 &self.socket,
                 serde_json::json!({"command":"native_event", "case_id":self.case,
-                "native_event":Observation {epoch:self.epoch,event}}),
+                "native_event":Observation {epoch:self.epoch,event:Some(event),namespace:None}}),
             )
             .await?;
             Ok(())
@@ -107,9 +117,10 @@ pub(super) async fn accept(
         }
         let epoch = state
             .redis
-            .request_contracts
-            .request_times(case)
-            .target
+            .pubsub
+            .native_clock
+            .epoch(case)
+            .or_else(|| state.redis.request_contracts.request_times(case).target)
             .context("native event feedback requires request admission")?;
         if request.command == "native_event_begin" {
             let enabled = state.redis.native_events_begin(case, epoch);
@@ -123,9 +134,31 @@ pub(super) async fn accept(
             observation.epoch == epoch,
             "native event request epoch changed"
         );
-        state
-            .redis
-            .observe_native_event(case, epoch, &observation.event)?;
+        if request.command == "native_connected" {
+            ensure!(
+                observation.event.is_none(),
+                "native namespace observation carries an event"
+            );
+            let namespace = observation
+                .namespace
+                .as_deref()
+                .context("native namespace missing")?;
+            state
+                .redis
+                .pubsub
+                .native_clock
+                .connected(case, epoch, namespace)?;
+            return Ok(serde_json::json!({"ok":true}));
+        }
+        ensure!(
+            observation.namespace.is_none(),
+            "native event observation carries a namespace boundary"
+        );
+        let event = observation
+            .event
+            .as_ref()
+            .context("native event metadata missing")?;
+        state.redis.observe_native_event(case, epoch, event)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok":true}))
     }
     .await;

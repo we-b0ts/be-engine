@@ -156,6 +156,15 @@ pub(super) async fn execute_with_feedback(
                                     EngineIoPacket::Open(open) => transport.set_sid(open.sid)?,
                                     EngineIoPacket::Message(packet) if packet.kind == SocketIoKind::Connect => {
                                         namespaces.accept(&packet.namespace);
+                                        if let Some(sink) = &native_events {
+                                            tokio::select! {
+                                                biased;
+                                                _ = crate::dependency::execution::rejected(&mut dependency_failure) => break 'session (EndReason::DependencyFailure, false),
+                                                result = tokio::time::timeout_at(lifecycle_deadline, sink.connected(&packet.namespace)) => {
+                                                    result.context("native namespace observation timed out")??;
+                                                }
+                                            }
+                                        }
                                     }
                                     EngineIoPacket::Ping(payload) => {
                                         if heartbeats.ping(payload.clone(), Instant::now())? {

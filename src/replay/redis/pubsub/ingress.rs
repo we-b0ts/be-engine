@@ -146,18 +146,25 @@ impl PubSubState {
         }
     }
 
-    pub(super) fn timer_is_correlated(&self, id: PushId, digest: Option<[u8; 32]>) -> bool {
-        self.ingress.slots.contains(&id) || self.timer_controls_echo(id, digest)
+    pub(super) fn timer_is_correlated(
+        &self,
+        id: PushId,
+        digest: Option<[u8; 32]>,
+        namespace: Option<&str>,
+    ) -> bool {
+        self.ingress.slots.contains(&id)
+            || self.timer_controls_echo(id, digest)
+            || self.native_clock.guards(namespace)
     }
 
-    fn push_available(&self, id: PushId) -> bool {
+    pub(super) fn push_available(&self, id: PushId) -> bool {
         match id {
             PushId::Inline(index) => self.pushes[index].status.is_available(),
             PushId::Indexed { lane, index } => self.indexed.available(lane, index),
         }
     }
 
-    fn reserve_push(&mut self, id: PushId) {
+    pub(super) fn reserve_push(&mut self, id: PushId) {
         match id {
             PushId::Inline(index) => self.pushes[index].status = ReplayExchangeStatus::Responding,
             PushId::Indexed { lane, index } => self.indexed.responding(lane, index),

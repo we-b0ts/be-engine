@@ -20,6 +20,7 @@ pub(super) struct LiveEvents {
 impl super::super::super::RedisReplayState {
     pub(in crate::replay) fn needs_native_events(&self, case: &str) -> bool {
         self.pubsub.ingress.needs_native_events(case)
+            || self.pubsub.native_clock.needs_observer(case)
     }
 
     pub(in crate::replay) fn native_events_begin(
@@ -27,7 +28,11 @@ impl super::super::super::RedisReplayState {
         case: &str,
         epoch: DateTime<Utc>,
     ) -> bool {
-        self.pubsub.ingress.observe_begin(case, epoch)
+        let enabled = self.needs_native_events(case);
+        if self.pubsub.native_clock.observe_begin(case, epoch).is_err() {
+            return false;
+        }
+        self.pubsub.ingress.observe_begin(case, epoch, enabled)
     }
 
     pub(in crate::replay) fn observe_native_event(
@@ -120,8 +125,12 @@ impl Ingress {
             .any(|entry| entry.case == case && !entry.prerequisites.is_empty())
     }
 
-    pub(in crate::replay) fn observe_begin(&mut self, case: &str, epoch: DateTime<Utc>) -> bool {
-        let enabled = self.needs_native_events(case);
+    pub(in crate::replay) fn observe_begin(
+        &mut self,
+        case: &str,
+        epoch: DateTime<Utc>,
+        enabled: bool,
+    ) -> bool {
         if enabled
             && self
                 .observed

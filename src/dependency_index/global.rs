@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use super::{FileStamp, PageManifest, PageWriter, Paged, RecordLocation, RecordStream, store};
 
 pub(crate) const GLOBAL_FRAGMENT: &str = ".global-replay-index.json";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GlobalEntry {
@@ -35,6 +35,8 @@ pub(crate) struct NotificationEntry {
     pub(crate) adapter_echo: Option<[u8; 32]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) adapter_request: Option<(Vec<u8>, crate::redis::socketio_rpc::Identity)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) adapter_namespace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +243,10 @@ impl GlobalBuilder {
                 .flatten(),
             ordinal: self.notification_count,
             adapter_echo: crate::redis::socketio_rpc::echo_digest(&frame.channel, &frame.payload),
+            adapter_namespace: crate::redis::socketio_rpc::notification_namespace(
+                &frame.channel,
+                &frame.payload,
+            ),
             adapter_request: crate::redis::socketio_rpc::notification_request(
                 &frame.channel,
                 &frame.payload,

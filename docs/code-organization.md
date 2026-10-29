@@ -619,7 +619,17 @@ is unclear.
   Notification pages retain payload digests; `echo` prepares sparse lookups for
   loaded adapter publishers before Replay readiness and shares them across Cases.
   Command delivery only reads prepared lookups; inventory construction stays
-  outside Target connection handling. The `subscription_evidence` child
+  outside Target connection handling. The `native_clock` child projects original
+  external ordinary adapter slots onto unique passive native request windows;
+  its `source` child reads original input namespaces and lifecycle/time metadata,
+  `preparation` checks the complete run including unselected windows, and
+  `driver` requires actual namespace admission and the current request epoch.
+  Namespace-only notification metadata fences obsolete subscription-age timers
+  without exposing payloads or changing ordinary non-native notifications.
+  Ambiguous clocks/windows and unproven dynamic socket exclusions remain unused.
+  The `delivery` child retains Case/epoch ownership through queued TCP writes
+  and reports abandoned or failed Case inputs through the shared I/O barrier.
+  The `subscription_evidence` child
   resolves exact recording-level anchors and canonical single-use aliases.
   The adapter retains subscription anchors required by linked RPC callbacks;
   command matching applies their preference within the existing ownership scope

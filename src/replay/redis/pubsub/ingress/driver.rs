@@ -87,7 +87,10 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
         if !replay.redis.pubsub.push_available(slot) {
             continue;
         }
-        replay.redis.pubsub.reserve_push(slot);
+        replay
+            .redis
+            .pubsub
+            .reserve_case_push(slot, &job.case, job.client);
         let entry = &mut replay.redis.pubsub.ingress.entries[job.index];
         entry.reserved = true;
         entry.target_sid = Some(job.sid);
@@ -98,6 +101,7 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
                 bytes,
                 matched: None,
                 case_id: Some(job.case),
+                request_epoch: Some(job.started),
             })
             .is_err()
         {
@@ -199,21 +203,7 @@ fn fail(replay: &mut ReplayState, index: usize, reason: &str) {
     let entry = &mut replay.redis.pubsub.ingress.entries[index];
     entry.reserved = true;
     entry.target_sid = None;
-    let case_id = Some(entry.case.clone());
-    let target = entry.endpoint.clone();
+    let case_id = entry.case.clone();
     let push = entry.slot;
-    replay.redis.pubsub.fail(push);
-    replay
-        .redis
-        .events
-        .unsafe_events
-        .push(CommandRequestReport {
-            case_id,
-            target,
-            command: "PUBSUB_PUSH".into(),
-            target_event_index: None,
-            request_fingerprint: None,
-            reason: reason.into(),
-            diagnostic: None,
-        });
+    replay.redis.fail_pubsub_input(push, Some(&case_id), reason);
 }

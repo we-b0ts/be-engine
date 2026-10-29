@@ -354,6 +354,7 @@ pub(in crate::replay::redis) async fn deliver(
                     push: id,
                     bytes,
                     matched: None,
+                    request_epoch: None,
                 })
                 .is_err()
             {

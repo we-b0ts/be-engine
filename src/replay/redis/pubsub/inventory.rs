@@ -148,6 +148,7 @@ impl IndexedNotifications {
             .as_mut()
             .context("notification inventory already sealed")?
             .push(NotificationEntry {
+                adapter_namespace: rpc::notification_namespace(&frame.channel, &frame.payload),
                 location: reference.location,
                 duration_ms,
                 timestamp,

@@ -60,6 +60,7 @@ pub(in crate::replay::redis) fn schedule_notifications(
                         id,
                         entry.duration_ms,
                         entry.adapter_echo,
+                        entry.adapter_namespace,
                         Some(source.reference(entry.location)),
                         started,
                     )
@@ -86,12 +87,21 @@ pub(in crate::replay::redis) fn schedule_notifications(
                         .and_then(|raw| parse_pubsub_push(&raw).ok().flatten())
                         .and_then(|push| rpc::echo_digest(&push.channel, &push.payload))
                 };
+                let namespace = {
+                    let replay = state.lock().await;
+                    replay.redis.pubsub.pushes[index]
+                        .bytes()
+                        .ok()
+                        .and_then(|raw| parse_pubsub_push(&raw).ok().flatten())
+                        .and_then(|push| rpc::notification_namespace(&push.channel, &push.payload))
+                };
                 if !deliver(
                     &weak,
                     &mut job,
                     PushId::Inline(index),
                     delay,
                     digest,
+                    namespace,
                     None,
                     started,
                 )
@@ -111,16 +121,16 @@ async fn deliver(
     id: PushId,
     delay: u64,
     adapter_echo: Option<[u8; 32]>,
+    adapter_namespace: Option<String>,
     reference: Option<RecordRef>,
     started: Instant,
 ) -> bool {
     if let Some(state) = weak.upgrade()
-        && state
-            .lock()
-            .await
-            .redis
-            .pubsub
-            .timer_is_correlated(id, adapter_echo)
+        && state.lock().await.redis.pubsub.timer_is_correlated(
+            id,
+            adapter_echo,
+            adapter_namespace.as_deref(),
+        )
     {
         return true;
     }
@@ -137,7 +147,11 @@ async fn deliver(
         if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
             return false;
         }
-        if replay.redis.pubsub.timer_is_correlated(id, adapter_echo) {
+        if replay
+            .redis
+            .pubsub
+            .timer_is_correlated(id, adapter_echo, adapter_namespace.as_deref())
+        {
             return true;
         }
         match id {
@@ -186,6 +200,7 @@ async fn deliver(
             push: id,
             bytes,
             matched: None,
+            request_epoch: None,
         })
         .is_err()
     {
