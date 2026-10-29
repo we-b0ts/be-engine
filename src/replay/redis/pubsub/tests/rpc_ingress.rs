@@ -6,6 +6,7 @@ const SOURCE_SID: &str = "sourceSID0123456789a";
 const TARGET_SID: &str = "targetSID0123456";
 const START: &str = "2020-01-01T00:00:00Z";
 const SUBSCRIBED: &[u8] = b"*3\r\n$9\r\nsubscribe\r\n$4\r\njobs\r\n:1\r\n";
+mod causal_order;
 mod wire_barrier;
 
 fn request_bytes() -> Vec<u8> {

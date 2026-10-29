@@ -162,6 +162,14 @@ impl RecordedHttpClient {
         let request = build_request(&self.origin, &recorded)?;
         let request_headers = response_headers::snapshot_request_context(request.headers());
         if let Some(transcript) = &recorded.interaction {
+            let native_events = if transcript.protocol
+                == crate::interaction::model::Protocol::SocketIo
+                && let Some((session, case)) = &self.input_registration
+            {
+                crate::replay::native_event_observer(session, case).await?
+            } else {
+                None
+            };
             let response = crate::interaction::replay::execute(
                 &self.client,
                 &self.origin,
@@ -169,7 +177,10 @@ impl RecordedHttpClient {
                 transcript,
                 self.request_timeout,
                 self.max_response_bytes,
-                self.execution_failure.clone(),
+                crate::interaction::replay::Feedback {
+                    dependency_failure: self.execution_failure.clone(),
+                    native_events,
+                },
             )
             .await?;
             return Ok(RecordedHttpResponse {

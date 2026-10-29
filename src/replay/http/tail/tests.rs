@@ -19,6 +19,7 @@ fn command(name: &str) -> ReplayControlRequest {
         fail_on_incomplete: false,
         identity_pairs: vec![],
         derived_input: None,
+        native_event: None,
     }
 }
 

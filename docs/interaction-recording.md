@@ -177,6 +177,17 @@ to actual server event occurrences. Only protocol-owned dynamic IDs are
 normalized. Business fields named `sid` remain strict; application identity
 mapping requires an explicit supported input/value contract.
 
+For a remote Socket.IO RPC proven by an original Global Redis notification and
+its Case callback, replay also preserves preceding same-session native emits.
+It derives that prefix from Source dependency **requests** before the notification,
+waits for their exact PUBLISH exchanges to be consumed, and waits for the trusted
+live WebSocket driver to observe the corresponding namespace/event occurrences.
+The metadata-only observation is bounded and tied to the active request epoch.
+Only then may the original remote notification be injected. Elapsed Source time,
+a known SID, or a completed PUBLISH alone cannot replace the live event proof.
+Recorded client ACK contents and ordinal references remain unchanged; missing
+Target events remain failures instead of receiving another event's ACK payload.
+
 SSE events and NDJSON records are framed independently of TCP/HTTP chunking. Raw
 stream comparison concatenates observed bytes. Missing, extra or reordered
 business outputs fail, and incomplete closure cannot pass even if both bodies

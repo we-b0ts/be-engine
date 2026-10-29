@@ -5,6 +5,7 @@ use crate::replay::ReplayCase;
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 
+mod causal;
 mod driver;
 mod preparation;
 pub(in crate::replay) use driver::start;
@@ -17,6 +18,7 @@ pub(super) struct Ingress {
     entries: Vec<Entry>,
     callbacks: HashMap<Wire, usize>,
     slots: HashSet<PushId>,
+    observed: Option<causal::LiveEvents>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +51,7 @@ struct Entry {
     reserved: bool,
     delivered: bool,
     failed: bool,
+    prerequisites: Vec<causal::Prerequisite>,
 }
 
 impl Ingress {

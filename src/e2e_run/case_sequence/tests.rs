@@ -90,6 +90,10 @@ async fn rejected_session(protocol: Protocol) {
                     assert_eq!(active.as_deref(), case);
                     json!({"ok":true})
                 }
+                "native_event_begin" => {
+                    assert_eq!(active.as_deref(), case);
+                    json!({"ok":true,"enabled":false})
+                }
                 "case_execution_status" => {
                     let failed = case == Some(failed_id.as_str())
                         && control_rejected.load(Ordering::Acquire);

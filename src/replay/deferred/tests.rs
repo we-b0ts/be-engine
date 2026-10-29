@@ -58,6 +58,7 @@ fn request(command: &str, id: &str) -> ReplayControlRequest {
         fail_on_incomplete: false,
         identity_pairs: Vec::new(),
         derived_input: None,
+        native_event: None,
     }
 }
 

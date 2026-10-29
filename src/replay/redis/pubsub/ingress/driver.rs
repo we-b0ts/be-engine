@@ -132,6 +132,14 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         if Utc::now() < due {
             return Ok(None);
         }
+        if !replay
+            .redis
+            .pubsub
+            .ingress
+            .causal_ready(entry, started, &replay.redis.exchanges)
+        {
+            return Ok(None);
+        }
         let Some(sid) = contracts
             .observed_identity_string(case, &entry.source.sid)
             .map_err(|_| index)?

@@ -71,7 +71,7 @@ async fn normal_close_waits_for_peer_cleanup_but_dependency_failure_interrupts_t
                 request,
                 &close_program(),
                 Duration::from_secs(1),
-                Some(receiver),
+                Some(receiver).into(),
             )
             .await
         });

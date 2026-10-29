@@ -8,7 +8,9 @@ mod case_execution;
 pub(super) mod dependency_tail;
 mod derived_input;
 mod identity;
+mod native_event;
 pub(crate) use derived_input::register as register_derived_input;
+pub(crate) use native_event::connect as native_event_observer;
 mod interaction;
 mod interruption;
 mod server;
@@ -33,6 +35,8 @@ pub(super) struct ReplayControlRequest {
     pub(super) identity_pairs: Vec<crate::value_contract::identities::IdentityPair>,
     #[serde(default)]
     pub(super) derived_input: Option<derived_input::Registration>,
+    #[serde(default)]
+    pub(super) native_event: Option<native_event::Observation>,
 }
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -253,6 +257,7 @@ pub(super) async fn handle_control_request(
             }
         }
         "derived_input" => derived_input::accept(&request, &state).await,
+        "native_event_begin" | "native_event" => native_event::accept(&request, &state).await,
         "prepare_end" => target_stop::prepare(&request, &state).await,
         "end" => end_case(&request, state.clone()).await,
         "end_stopped" => end_case(&request, state.clone()).await,

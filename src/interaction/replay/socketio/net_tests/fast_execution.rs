@@ -128,7 +128,7 @@ async fn dependency_rejection_ends_a_blocked_ack_without_synthesizing_output() {
             request,
             &input,
             Duration::from_secs(1),
-            Some(receiver),
+            Some(receiver).into(),
         ),
     )
     .await

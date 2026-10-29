@@ -141,7 +141,25 @@ impl PubSubState {
                     .is_none(),
                 "duplicate remote Socket.IO reply wire identity"
             );
+            let prerequisites = causal::prerequisites(
+                exchanges,
+                &callback.case,
+                &callback.key,
+                callback.case_started,
+                timestamp,
+            )?;
+            ensure!(
+                self.ingress
+                    .entries
+                    .iter()
+                    .map(|entry| entry.prerequisites.len())
+                    .sum::<usize>()
+                    + prerequisites.len()
+                    <= 65536,
+                "remote Socket.IO causal inventory exceeds bound"
+            );
             self.ingress.entries.push(Entry {
+                prerequisites,
                 case: callback.case,
                 source: identity,
                 target_sid: None,

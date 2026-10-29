@@ -263,7 +263,9 @@ pub use report::global_evidence::{GlobalDependencyPage, read_global_dependency_p
 pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
-pub(crate) use control::{check_response_identities, register_derived_input};
+pub(crate) use control::{
+    check_response_identities, native_event_observer, register_derived_input,
+};
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
     run_replay_control(config).await

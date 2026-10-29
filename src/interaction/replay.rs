@@ -1,6 +1,8 @@
 //! Target input execution. This owner never opens expected-response evidence.
+mod feedback;
 mod http;
 mod socketio;
+pub(crate) use feedback::{Feedback, NativeEvent, NativeEventSink};
 
 use anyhow::Result;
 use bytes::Bytes;
@@ -29,7 +31,7 @@ pub(crate) async fn execute(
     transcript: &InputTranscript,
     header_timeout: Duration,
     body_limit: usize,
-    dependency_failure: Option<tokio::sync::watch::Receiver<bool>>,
+    feedback: Feedback,
 ) -> Result<ReplayResponse> {
     transcript.validate()?;
     match transcript.protocol {
@@ -40,7 +42,7 @@ pub(crate) async fn execute(
                 request,
                 transcript,
                 header_timeout,
-                dependency_failure,
+                feedback,
             )
             .await
         }
@@ -51,7 +53,7 @@ pub(crate) async fn execute(
                 transcript,
                 header_timeout,
                 body_limit,
-                dependency_failure,
+                feedback.dependency_failure,
             )
             .await
         }

@@ -10,7 +10,7 @@ use hyper::Request;
 use std::collections::BTreeMap;
 use tokio::time::{Duration, Instant, sleep_until};
 
-use super::{HttpClient, ReplayResponse, elapsed_ms};
+use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
     lifecycle::LifecycleDecision,
     model::{EndReason, InputAction, InputActionKind, InputTranscript, Protocol, WireMessage},
@@ -25,8 +25,12 @@ pub(super) async fn execute_with_feedback(
     request: Request<Full<Bytes>>,
     transcript: &InputTranscript,
     header_timeout: Duration,
-    mut dependency_failure: Option<tokio::sync::watch::Receiver<bool>>,
+    feedback: Feedback,
 ) -> Result<ReplayResponse> {
+    let Feedback {
+        mut dependency_failure,
+        native_events,
+    } = feedback;
     transcript.validate()?;
     let started = Instant::now();
     let started_at = chrono::Utc::now();
@@ -166,6 +170,16 @@ pub(super) async fn execute_with_feedback(
                                     EngineIoPacket::Message(packet) if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent) => {
                                         let ordinal = server_ordinals.entry(packet.namespace.clone()).or_default();
                                         *ordinal += 1;
+                                        if let (Some(sink), Some(event)) = (&native_events, packet.event_name()) {
+                                            let event = NativeEvent { namespace: packet.namespace.clone(), event: event.into(), ordinal: *ordinal };
+                                            tokio::select! {
+                                                biased;
+                                                _ = crate::dependency::execution::rejected(&mut dependency_failure) => break 'session (EndReason::DependencyFailure, false),
+                                                result = tokio::time::timeout_at(lifecycle_deadline, sink.observe(event)) => {
+                                                    result.context("native event observation timed out")??;
+                                                }
+                                            }
+                                        }
                                         if let Some(id) = packet.id { server_acks.insert((packet.namespace, *ordinal), id); }
                                     }
                                     EngineIoPacket::Close if !transport.is_websocket() => break 'session (EndReason::ServerEof, true),
@@ -302,7 +316,15 @@ async fn execute(
     transcript: &InputTranscript,
     header_timeout: Duration,
 ) -> Result<ReplayResponse> {
-    execute_with_feedback(client, origin, request, transcript, header_timeout, None).await
+    execute_with_feedback(
+        client,
+        origin,
+        request,
+        transcript,
+        header_timeout,
+        Feedback::default(),
+    )
+    .await
 }
 
 fn allows_pending_receipts(action: &InputAction) -> bool {

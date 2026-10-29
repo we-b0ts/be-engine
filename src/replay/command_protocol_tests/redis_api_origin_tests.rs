@@ -166,6 +166,7 @@ impl Fixture {
                 fail_on_incomplete: true,
                 identity_pairs: Vec::new(),
                 derived_input: None,
+                native_event: None,
             },
             state.clone(),
         )

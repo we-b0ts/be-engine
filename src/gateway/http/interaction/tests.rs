@@ -155,7 +155,7 @@ async fn replay_case(case: &Path, target: SocketAddr) -> OutputObservation {
             &transcript,
             Duration::from_secs(1),
             1024 * 1024,
-            None,
+            Default::default(),
         ),
     )
     .await

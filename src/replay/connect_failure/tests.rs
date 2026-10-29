@@ -11,6 +11,7 @@ fn command(command: &str) -> super::super::control::ReplayControlRequest {
         fail_on_incomplete: false,
         identity_pairs: Vec::new(),
         derived_input: None,
+        native_event: None,
     }
 }
 

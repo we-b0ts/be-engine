@@ -38,8 +38,15 @@ is unclear.
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
   `preparation` proves immutable identity, clocks and subscription slots;
-  `driver` waits for Case admission and an independently observed live SID,
-  then queues the original notification without changing Global ownership.
+  `causal` proves preceding same-session native emits from Source dependency
+  requests, and requires both their real consumption and metadata from actual
+  Target WebSocket events. `driver` waits for those prerequisites, Case admission
+  and an independently observed live SID, then queues the original notification
+  without changing Global ownership. `control/native_event` admits bounded
+  metadata from the trusted transport driver within the active request epoch;
+  `interaction/replay/feedback` carries that observation interface separately
+  from protocol parsing and control transport. No expected output enters the
+  input executor, and recorded ACK payloads retain their existing references.
   RESP delivery retains wire consumption and Case cancellation checks; the
   adapter and request contracts retain strict callback result comparison.
 
