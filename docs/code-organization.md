@@ -622,6 +622,7 @@ is unclear.
   outside Target connection handling. The `native_clock` child projects original
   external ordinary adapter slots onto unique passive native request windows;
   its `source` child reads original input namespaces and lifecycle/time metadata,
+  using the production authenticated request reader for protected INPUT,
   `preparation` checks the complete run including unselected windows, and
   `driver` requires actual namespace admission and the current request epoch.
   Namespace-only notification metadata fences obsolete subscription-age timers

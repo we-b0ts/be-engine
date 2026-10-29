@@ -23,6 +23,9 @@ Target request admission and observation of its live namespace CONNECT gate
 delivery. The original Global slot, subscription realm, channel, room and all
 payload bytes remain intact. Expected response frames and bodies are never
 request-driver inputs; preparation reads only original lifecycle/time metadata.
+Protected original INPUT uses the same authenticated, in-memory request reader
+as execution. Missing keys or tampered envelopes fail preparation; ciphertext
+cannot silently erase a namespace, and no plaintext evidence file is written.
 
 Missing clocks or run scope, overlapping or active input programs, and socket
 exclusions without an independent live identity proof keep those external slots

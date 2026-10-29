@@ -60,7 +60,7 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
     let mut windows = Vec::new();
     for file in files {
         let directory = file.parent().context("Case has no directory")?;
-        let Some(request) = read::<Request>(&directory.join("request.json"))? else {
+        let Some(request) = read_input(&directory.join("request.json"))? else {
             continue;
         };
         let Some(interaction) = request.interaction.filter(|v| v["protocol"] == "socket_io") else {
@@ -146,6 +146,23 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
         );
     }
     Ok(windows)
+}
+
+fn read_input(path: &Path) -> Result<Option<Request>> {
+    if !path
+        .try_exists()
+        .context("native notification INPUT unavailable")?
+    {
+        return Ok(None);
+    }
+    // Use the same authenticated in-memory view as request execution. Cipher
+    // failures must propagate; they cannot downgrade INPUT to an unknown
+    // namespace or release the obsolete subscription-age timer.
+    let raw = crate::request_headers::load_request_file(path)
+        .context("native notification INPUT unavailable")?;
+    serde_json::from_slice(&raw)
+        .map(Some)
+        .context("invalid original native INPUT metadata")
 }
 
 fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
