@@ -1926,8 +1926,13 @@ between attempts without changing target fingerprints.
 
 Skipped passes are scheduling history, never fresh response or dependency
 evidence. `diagnosis.case_selection` reports available, selected and skipped
-counts; other attempt counts describe only selected cases. Existing explicit
-localcache and cross-case dependency rules still load from the complete recording.
+counts; other attempt counts describe only selected cases.
+Backend-rewrite overview and execution-failure queries expose the same diagnostic
+as `case_selection`, including for an already finalized attempt. It describes
+the runner's selection, separately from the low-level Replay report's `mode`.
+Missing legacy selection metadata is reported as null, without inferring skips.
+Existing explicit localcache and cross-case dependency rules still load from the
+complete recording.
 Logical progress keeps the recorded case totals and cannot mark a partially
 selected API fully verified, even when that repair attempt passes.
 Skipping requests can nevertheless change application-local cache warmup or other

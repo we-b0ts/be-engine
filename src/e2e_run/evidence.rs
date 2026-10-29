@@ -447,6 +447,7 @@ pub(crate) fn query_execution_context(
         "session_id":state.session_id,
         "executed_cases":state.cases.iter().filter(|case|case.assertion_passed.is_some()).count(),
         "selected_cases":state.cases.len(),
+        "case_selection":super::case_selection::diagnosis(&state),
         "lifecycle_errors":state.errors.iter().rev().take(3).rev().map(|error|super::result::bounded_error(error)).collect::<Vec<_>>(),
         "execution_failures":super::execution_failure::diagnosis(&state),
         "execution_failures_summary":super::execution_failure::summary(&state)
@@ -470,6 +471,7 @@ pub(crate) fn query_execution_failure_page(
     page["status"] = serde_json::to_value(state.status)?;
     page["replay_finalized"] = state.replay_finalized.into();
     page["selected_cases"] = state.cases.len().into();
+    page["case_selection"] = serde_json::json!(super::case_selection::diagnosis(&state));
     Ok(page)
 }
 
