@@ -16,6 +16,7 @@ const MAX_METADATA_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(super) struct Metadata {
     pub request_timeout_ms: u64,
+    pub interaction_post_input_ms: Option<u64>,
     pub references: Vec<RecordedReference>,
     pub strict_references: BTreeSet<RecordedReference>,
     pub process_owned_exemptions: bool,
@@ -89,6 +90,7 @@ pub(super) async fn load(
             );
             Some(Metadata {
                 request_timeout_ms: observation.request_timeout_ms,
+                interaction_post_input_ms: None,
                 references: observation.completed_refs,
                 strict_references: BTreeSet::new(),
                 process_owned_exemptions: true,
@@ -205,6 +207,7 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
     );
     let metadata = Metadata {
         request_timeout_ms: observation.request_timeout_ms,
+        interaction_post_input_ms: None,
         strict_references: references,
         references: observation.completed_refs,
         process_owned_exemptions: false,
@@ -245,6 +248,7 @@ fn legacy(raw: &[u8]) -> Result<Metadata> {
     );
     let metadata = Metadata {
         request_timeout_ms: observation.request_timeout_ms,
+        interaction_post_input_ms: None,
         strict_references: observation
             .selected_completed_refs
             .iter()

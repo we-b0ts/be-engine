@@ -2,7 +2,8 @@
 use super::tests::{Fixture, GET, client, command, fixture, fixture_with_response};
 use super::*;
 use crate::interaction::model::{
-    EndObservation, EndReason, InputTranscript, OutputObservation, Protocol, TRANSCRIPT_VERSION,
+    EndObservation, EndReason, InputAction, InputActionKind, InputTranscript, OutputObservation,
+    Protocol, TRANSCRIPT_VERSION,
 };
 use crate::interaction::policy::InteractionPolicy;
 use crate::replay::control::{begin_case, end_case};
@@ -14,7 +15,19 @@ use tokio_tungstenite::tungstenite::Message;
 
 async fn original_interaction(fixture: &Fixture, protocol: Protocol, elapsed: u64) {
     let directory = fixture.root.join("case-a");
-    let input = InputTranscript::new(protocol, InteractionPolicy::default());
+    let mut input = InputTranscript::new(protocol, InteractionPolicy::default());
+    input.actions.push(InputAction {
+        sequence: 1,
+        offset_ms: elapsed.saturating_sub(200),
+        after: vec![],
+        compressible_gap: false,
+        gap_start_ms: None,
+        ack_ref: None,
+        action: InputActionKind::Close {
+            code: None,
+            reason: String::new(),
+        },
+    });
     let output = OutputObservation {
         version: TRANSCRIPT_VERSION,
         protocol,
@@ -66,14 +79,14 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
         // The prefix was delivered before wire close. This remaining Source
         // exchange is the disconnect hook's read after its grace interval.
         let fixture = fixture_with_response(None, 0, Some(("bulk_string", &response))).await;
-        original_interaction(&fixture, protocol, 500).await;
+        original_interaction(&fixture, protocol, 600).await;
         let state = fixture.runtime.state.clone();
         {
             let mut state = state.lock().await;
             state.case_dependency_post_response_window = Duration::ZERO;
             state.dependency_tails = CaseTails::default()
                 .with_async_rules(BTreeMap::new(), Duration::from_millis(80))
-                .with_no_progress_timeout(Duration::from_millis(500));
+                .with_no_progress_timeout(Duration::from_millis(50));
         }
         assert_eq!(
             begin_case(&command("begin"), state.clone()).await["ok"],
@@ -135,6 +148,12 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
         let ending = tokio::spawn(async move { end_case(&command("end"), ending_state).await });
         waiting(&state).await;
         assert!(!ending.is_finished());
+        {
+            let state = state.lock().await;
+            let waiting = state.dependency_tails.waiting("case-a").unwrap();
+            assert_eq!(waiting["source_post_input_allowance_ms"], 200);
+            assert_eq!(waiting["no_progress_timeout_ms"], 250);
+        }
         let deadline = deadline(&state, "case-a").await.unwrap();
         assert!(deadline > Instant::now() + Duration::from_millis(80));
         let mut next = command("begin");
@@ -158,6 +177,50 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
         next.command = "end".into();
         assert_eq!(end_case(&next, state).await["ok"], true);
     }
+}
+
+#[tokio::test]
+async fn missing_interaction_call_after_source_idle_allowance_stops_next_admission() {
+    let fixture = fixture(None, 0).await;
+    original_interaction(&fixture, Protocol::SocketIo, 600).await;
+    let state = fixture.runtime.state.clone();
+    {
+        let mut state = state.lock().await;
+        state.case_dependency_post_response_window = Duration::ZERO;
+        state.dependency_tails = CaseTails::default()
+            .with_async_rules(BTreeMap::new(), Duration::from_secs(1))
+            .with_no_progress_timeout(Duration::from_millis(50));
+    }
+    assert_eq!(
+        begin_case(&command("begin"), state.clone()).await["ok"],
+        true
+    );
+    let ending_state = state.clone();
+    let ending = tokio::spawn(async move { end_case(&command("end"), ending_state).await });
+    waiting(&state).await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_millis(225)).await;
+    assert!(!ending.is_finished());
+    tokio::time::advance(Duration::from_millis(50)).await;
+    let ended = ending.await.unwrap();
+    assert_eq!(ended["ok"], false, "{ended}");
+    assert_eq!(ended["dirty"], true);
+    assert!(
+        ended["error"]
+            .as_str()
+            .unwrap()
+            .contains("ownership was retained")
+    );
+    let state_guard = state.lock().await;
+    let failure = state_guard.dependency_tails.failure("case-a").unwrap();
+    assert_eq!(failure["kind"], "case_no_progress");
+    assert_eq!(failure["waiting"]["no_progress_timeout_ms"], 250);
+    assert_eq!(state_guard.redis.snapshot().unused_case.len(), 1);
+    assert_eq!(state_guard.active_case_id.as_deref(), Some("case-a"));
+    drop(state_guard);
+    let mut next = command("begin");
+    next.case_id = Some("case-b".into());
+    assert_eq!(begin_case(&next, state).await["ok"], false);
 }
 
 #[tokio::test]

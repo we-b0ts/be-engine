@@ -2582,7 +2582,7 @@ The target's native HTTP port is the port in
 `project.replay.case_no_progress_timeout_ms` defaults to `2000` and must be
 positive. It bounds Replay-only idle waiting for unfinished dependency tails
 after the recorded primary inputs have completed. Real resource delivery,
-including an upstream SSE response, keeps its existing I/O budget; successful
+including an upstream SSE response, keeps its existing I/O budget.
 Clean Socket.IO/WebSocket recordings without tail sidecars can retain their
 finite Case Redis, MySQL, HTTP and connection-failure obligations from the
 original semantic inventory. Wire close does not finish a sleeping disconnect
@@ -2598,6 +2598,16 @@ footprints keep the existing transport/started-I/O cleanup path; no partial
 inventory is claimed and the ordinary verification gates still apply. No
 recording files are rewritten to create this wait.
 
+For this native interaction inventory, the recorded duration after the final
+client input supplements the configured idle timeout. This permits a real
+disconnect grace interval that equals or exceeds the ordinary idle timeout;
+the absolute admission deadline remains unchanged. The supplementary interval
+uses only input offsets and elapsed time, never output frames, values, or a
+later Case's timestamps. All-consumed inventories complete immediately.
+Waiting evidence exposes `source_post_input_allowance_ms` and the effective
+`no_progress_timeout_ms`. If this native interaction still stalls, its Case
+remains active and the runner stops Target before admitting another input.
+
 Case dependency completions renew the idle clock. Unrelated process activity
 does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
 CLI exposes the same setting as `--case-no-progress-timeout-ms`.
@@ -2607,7 +2617,7 @@ Its message leads with the number of recorded dependencies left unconsumed and
 asks Target implementers to check the corresponding calls. The idle wait and
 absence of in-flight dependency I/O are secondary stop details, rather than a
 claim that a Target call was rejected or that the primary HTTP request timed out.
-The next Case still runs. Native reports retain `case_execution_failures`,
+Other tail profiles retain their existing next-Case behavior. Native reports retain `case_execution_failures`,
 matched/Target-unmatched/Source-unused evidence and bounded pending Source
 references; runner execution-failure queries retain an independently observed
 primary HTTP status. HTTP 200 does not certify async completion. `status` remains

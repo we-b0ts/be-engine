@@ -91,6 +91,7 @@ impl CaseTails {
 #[derive(Debug, Clone)]
 struct CaseTail {
     budget: Duration,
+    interaction_post_input: Option<Duration>,
     deadline: Option<Instant>,
     selected: Vec<SelectedExchange>,
     source_stop_required: bool,
@@ -236,6 +237,9 @@ pub(in crate::replay) async fn prepare(
             let budget = Duration::from_millis(metadata.request_timeout_ms);
             Ok::<_, anyhow::Error>(CaseTail {
                 budget,
+                interaction_post_input: metadata
+                    .interaction_post_input_ms
+                    .map(Duration::from_millis),
                 deadline: None,
                 selected,
                 source_stop_required: metadata.source_stop_required,
@@ -558,8 +562,10 @@ async fn drain_selected(
                 .checked_sub(tail.budget)?
                 .checked_add(offset)
         });
-    let mut progress =
-        progress::NoProgress::new(shared.lock().await.dependency_tails.no_progress_timeout);
+    let idle_budget = shared.lock().await.dependency_tails.no_progress_timeout;
+    let mut progress = progress::NoProgress::new(
+        idle_budget.saturating_add(tail.interaction_post_input.unwrap_or_default()),
+    );
     loop {
         let mut state = state.lock().await;
         ensure!(
@@ -676,6 +682,15 @@ async fn drain_selected(
                 .dependency_tails
                 .failures
                 .insert(case_id.into(), failure);
+            if tail.interaction_post_input.is_some() {
+                // Wire close did not prove the application hook finished.
+                // Keep the failed Case active so ordinary runner cleanup stops
+                // Target instead of attributing its late calls to the next Case.
+                anyhow::bail!(
+                    "{}; interaction case ownership was retained",
+                    progress.failure_reason(remaining)
+                );
+            }
             super::case_cleanup::mark_failed(&mut state, case_id)?;
             drop(state);
             continue;

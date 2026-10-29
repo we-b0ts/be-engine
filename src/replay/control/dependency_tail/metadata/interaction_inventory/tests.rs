@@ -54,6 +54,7 @@ async fn clean_native_interactions_retain_original_case_refs_without_a_sidecar()
             .unwrap()
             .unwrap();
         assert_eq!(tail.request_timeout_ms, 600);
+        assert_eq!(tail.interaction_post_input_ms, Some(500));
         assert_eq!(tail.references, references);
         assert!(!tail.source_stop_required);
         assert!(tail.cleanup_refs.is_empty());
@@ -68,6 +69,36 @@ async fn clean_native_interactions_retain_original_case_refs_without_a_sidecar()
                 .path()
                 .join("dependency-tail-observation.json")
                 .exists()
+        );
+    }
+}
+
+#[tokio::test]
+async fn source_post_input_allowance_uses_offsets_without_reading_message_bodies() {
+    let temp = tempfile::tempdir().unwrap();
+    files(temp.path(), Protocol::SocketIo).await;
+    let path = temp.path().join("request.json");
+    let mut request: Value =
+        serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+    request["interaction"]["actions"] = json!([
+        {"offset_ms":10,"action":{"kind":"message","message":{"data":"private-ignored"}}},
+        {"offset_ms":400,"action":{"kind":"close"}}
+    ]);
+    tokio::fs::write(&path, request.to_string()).await.unwrap();
+    let tail = from_complete_source(temp.path(), Duration::from_millis(100))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tail.interaction_post_input_ms, Some(100));
+    assert_eq!(tail.request_timeout_ms, 600);
+    for offsets in [[400, 10], [10, 501]] {
+        request["interaction"]["actions"][0]["offset_ms"] = offsets[0].into();
+        request["interaction"]["actions"][1]["offset_ms"] = offsets[1].into();
+        tokio::fs::write(&path, request.to_string()).await.unwrap();
+        assert!(
+            from_complete_source(temp.path(), Duration::from_millis(100))
+                .await
+                .is_err()
         );
     }
 }

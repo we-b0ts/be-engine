@@ -168,8 +168,10 @@ is unclear.
   `control/dependency_tail/metadata/interaction_inventory` derives finite waits
   from a clean original Socket.IO/WebSocket completion and its Case dependencies
   when explicit tail observations are absent. It streams original metadata,
-  retains the Source elapsed-time budget, and never supplies response frames to
-  Target. `metadata/references` owns the shared semantic exchange identities.
+  retains the Source elapsed-time budget and post-input idle allowance, and never
+  supplies response frames to Target. A stalled native interaction retains Case
+  ownership until runner shutdown rather than admitting late calls into another
+  Case. `metadata/references` owns the shared semantic exchange identities.
   `dependency/execution` owns the protocol-independent rejection signal and typed error.
   `e2e_run/execution_failure` retains the incomplete execution cause and independent
   primary status observations for public diagnosis and evidence queries.

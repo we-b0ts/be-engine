@@ -56,6 +56,7 @@ pub(super) async fn from_complete_source(
         .context("async API request budget exceeds its bound")?;
     Ok(Some(Metadata {
         request_timeout_ms,
+        interaction_post_input_ms: None,
         strict_references: references.clone(),
         references: references.into_iter().collect(),
         process_owned_exemptions: false,

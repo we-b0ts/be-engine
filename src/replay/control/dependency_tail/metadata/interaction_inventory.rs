@@ -19,6 +19,13 @@ struct Input {
     version: Option<u8>,
     protocol: Option<Protocol>,
     policy: Option<InteractionPolicy>,
+    #[serde(default)]
+    actions: Vec<InputOffset>,
+}
+
+#[derive(Deserialize)]
+struct InputOffset {
+    offset_ms: u64,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +95,14 @@ fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadat
         "unsupported interaction input version"
     );
     policy.validate()?;
+    ensure!(
+        input
+            .actions
+            .windows(2)
+            .all(|pair| pair[0].offset_ms <= pair[1].offset_ms),
+        "interaction Source input offsets decrease"
+    );
+    let last_input_ms = input.actions.last().map_or(0, |action| action.offset_ms);
     let response = match read_json::<Response>(&case_dir.join("expected-response.json"))? {
         Some(response) => Some(response),
         None => read_json::<Response>(&case_dir.join("expected_response.json"))?,
@@ -135,8 +150,21 @@ fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadat
     let budget = execution_allowance
         .checked_add(Duration::from_millis(response.duration_ms.unwrap_or(0)))
         .context("interaction Source elapsed time exceeds the request budget range")?;
+    // Compression can move wire close before a normal sleeping disconnect
+    // hook finishes. Its recorded post-input interval supplements the idle
+    // watchdog; it neither sleeps unconditionally nor supplies a Target reply.
+    let post_input_ms = response
+        .duration_ms
+        .map(|elapsed| {
+            elapsed
+                .checked_sub(last_input_ms)
+                .context("interaction Source duration precedes its last input")
+        })
+        .transpose()?
+        .unwrap_or(0);
     Ok(Some(Metadata {
         request_timeout_ms: budget.as_millis().try_into()?,
+        interaction_post_input_ms: Some(post_input_ms),
         references: references.into_iter().collect(),
         strict_references: BTreeSet::new(),
         process_owned_exemptions: true,
