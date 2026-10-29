@@ -137,6 +137,46 @@ fn source_wire_references_survive_sidecar_and_public_dirty_projection() {
 }
 
 #[test]
+fn unmatched_mysql_select_body_survives_sidecar_and_public_dirty_projection() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = shared_session(temp.path(), "get-case");
+    let columns = (0..24)
+        .map(|index| format!("installations.field_{index} AS installations_field_{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = "FROM installations WHERE installed_kind_id = ? AND device_id = ? LIMIT 1";
+    let sql = format!("SELECT {columns} {body}");
+    for command in ["COM_QUERY", "COM_STMT_EXECUTE"] {
+        let report = json!({"unmatched_queries":[{
+            "case_id":"get-case", "command":command, "sql":sql,
+            "reason":"no recorded semantic dependency matched",
+            "params":[{"kind":"integer", "value":7}]
+        }]});
+        let original = report.clone();
+        let evidence = build_dependency_evidence(&report);
+        std::fs::write(
+            dependency_evidence_path(&state.replay_report),
+            serde_json::to_vec(&evidence).unwrap(),
+        )
+        .unwrap();
+        let public = serde_json::to_value(build(&state, true, true).unwrap()).unwrap();
+        let signature =
+            &public["clusters"][0]["representative"]["difference"]["actual"]["signature"];
+        assert_eq!(signature["command"], command);
+        assert_eq!(signature["sql_summary"]["select_body"]["preview"], body);
+        assert_eq!(signature["sql_summary"]["select_body"]["truncated"], false);
+        assert_eq!(signature["sql_summary"]["truncated"], true);
+        assert!(signature["sql_summary"]["fingerprint"].as_str().is_some());
+        assert!(!signature["sql"].as_str().unwrap().contains("WHERE"));
+        assert!(signature.get("params").is_none());
+        assert_eq!(public["case_event_counts"]["mysql"]["unmatched_target"], 1);
+        assert_eq!(report, original);
+        // The public query uses its bounded sidecar, never the private report.
+        assert!(!state.replay_report.exists());
+    }
+}
+
+#[test]
 fn dirty_representative_outside_recording_is_rejected() {
     let temp = tempfile::tempdir().unwrap();
     let state = shared_session(temp.path(), "foreign-case");

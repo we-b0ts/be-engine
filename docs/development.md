@@ -1226,6 +1226,11 @@ Its own `truncated` flag covers the predicates, ordering, pagination and locks
 in that excerpt. Quoted text, comments and nested SELECTs cannot select a false
 outer FROM. Statements over 64 KiB, compound SELECTs and unsupported lexical
 forms retain the original prefix/fingerprint without an inferred body.
+Rejected Target queries derive the same summary from their original SQL before
+the bounded dependency signature truncates its `sql` field. Both text and
+prepared query rejections retain the outer clauses without exposing prepared
+parameter values. Historical sidecars without the summary require fresh Replay;
+the original clauses cannot be inferred from an already truncated prefix.
 The bounded dependency query preserves this summary together with `index`,
 `connection_id` and `query_sequence`, so an implementer can locate the original
 semantic exchange when either excerpt is truncated. These are diagnostic views,
