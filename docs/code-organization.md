@@ -171,7 +171,9 @@ is unclear.
   retains the Source elapsed-time budget and post-input idle allowance, and never
   supplies response frames to Target. A stalled native interaction retains Case
   ownership until runner shutdown rather than admitting late calls into another
-  Case. `metadata/references` owns the shared semantic exchange identities.
+  Case. Actual native Replay rejections retain that fence through the final
+  locked ownership release; recorded dependency errors remain ordinary replies.
+  `metadata/references` owns the shared semantic exchange identities.
   `dependency/execution` owns the protocol-independent rejection signal and typed error.
   `e2e_run/execution_failure` retains the incomplete execution cause and independent
   primary status observations for public diagnosis and evidence queries.

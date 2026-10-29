@@ -9,7 +9,7 @@ use crate::interaction::policy::InteractionPolicy;
 use crate::replay::control::{begin_case, end_case};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -177,6 +177,89 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
         next.command = "end".into();
         assert_eq!(end_case(&next, state).await["ok"], true);
     }
+}
+
+#[tokio::test]
+async fn rejected_native_dependency_keeps_its_case_with_pending_or_consumed_inventory() {
+    for consumed in [false, true] {
+        let fixture = fixture(None, 0).await;
+        original_interaction(&fixture, Protocol::SocketIo, 600).await;
+        let state = fixture.runtime.state.clone();
+        state.lock().await.case_dependency_post_response_window = Duration::ZERO;
+        assert_eq!(
+            begin_case(&command("begin"), state.clone()).await["ok"],
+            true
+        );
+        let (mut peer, task) = client(state.clone()).await;
+        if consumed {
+            peer.write_all(GET).await.unwrap();
+            let mut response = [0; 5];
+            peer.read_exact(&mut response).await.unwrap();
+            assert_eq!(&response, b"+OK\r\n");
+        }
+        // A real Target request is rejected. Even if every Source response was
+        // already delivered, the application's error continuation can still
+        // sleep and start another call after the primary wire close.
+        peer.write_all(b"*2\r\n$3\r\nGET\r\n$5\r\nother\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        tokio::io::BufReader::new(&mut peer)
+            .read_until(b'\n', &mut response)
+            .await
+            .unwrap();
+        assert!(response.starts_with(b"-ERR"));
+        let mut end = command("end");
+        end.fail_on_dirty = true;
+        let ended = end_case(&end, state.clone()).await;
+        assert_eq!(ended["ok"], false, "{ended}");
+        assert_eq!(ended["dirty"], true);
+        assert!(
+            ended["error"]
+                .as_str()
+                .unwrap()
+                .contains("ownership was retained")
+        );
+        {
+            let state = state.lock().await;
+            assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
+            assert!(state.redis.case_has_runtime_failure("case-a"));
+            assert_eq!(
+                state.redis.snapshot().unused_case.len(),
+                usize::from(!consumed)
+            );
+        }
+        let mut next = command("begin");
+        next.case_id = Some("case-b".into());
+        assert_eq!(begin_case(&next, state.clone()).await["ok"], false);
+        peer.shutdown().await.unwrap();
+        task.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn recorded_native_dependency_error_is_consumed_without_a_replay_rejection() {
+    let fixture = fixture_with_response(None, 0, Some(("error", "-ERR recorded\r\n"))).await;
+    original_interaction(&fixture, Protocol::SocketIo, 600).await;
+    let state = fixture.runtime.state.clone();
+    state.lock().await.case_dependency_post_response_window = Duration::ZERO;
+    assert_eq!(
+        begin_case(&command("begin"), state.clone()).await["ok"],
+        true
+    );
+    let (mut peer, task) = client(state.clone()).await;
+    peer.write_all(GET).await.unwrap();
+    let mut response = [0; 15];
+    peer.read_exact(&mut response).await.unwrap();
+    assert_eq!(&response, b"-ERR recorded\r\n");
+    let mut end = command("end");
+    end.fail_on_dirty = true;
+    let ended = end_case(&end, state.clone()).await;
+    assert_eq!(ended["ok"], true, "{ended}");
+    assert!(state.lock().await.redis.snapshot().unused_case.is_empty());
+    assert!(!state.lock().await.redis.case_has_runtime_failure("case-a"));
+    peer.shutdown().await.unwrap();
+    task.await.unwrap().unwrap();
 }
 
 #[tokio::test]

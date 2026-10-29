@@ -523,6 +523,26 @@ pub(super) async fn prepare_target_stop(
     drain_selected(state, case_id, true).await
 }
 
+/// A native peer close cannot certify application teardown after a Replay
+/// rejection. Its hook may still sleep even when accepted I/O has drained.
+/// The caller also checks this under the final ownership-release lock so a
+/// rejection between tail drain and release cannot admit the next Case.
+pub(super) fn ensure_interaction_not_failed(state: &ReplayState, case_id: &str) -> Result<()> {
+    let native = state
+        .dependency_tails
+        .cases
+        .get(case_id)
+        .and_then(Option::as_ref)
+        .is_some_and(|tail| tail.interaction_post_input.is_some());
+    ensure!(
+        !native
+            || !(state.case_cleanup.deadline(case_id).is_some()
+                || super::case_execution::failed(state, case_id)),
+        "interaction dependency execution failed; case ownership was retained for Target shutdown"
+    );
+    Ok(())
+}
+
 async fn drain_selected(
     state: &Arc<Mutex<ReplayState>>,
     case_id: &str,
@@ -583,6 +603,7 @@ async fn drain_selected(
         {
             super::case_cleanup::mark_failed(&mut state, case_id)?;
         }
+        ensure_interaction_not_failed(&state, case_id)?;
         let failure_cleanup = state.case_cleanup.deadline(case_id).is_some();
         if let Some(cleanup) = state.case_cleanup.deadline(case_id) {
             deadline = cleanup;

@@ -595,6 +595,9 @@ pub(super) async fn end_case(
                 return serde_json::json!({"ok":false,"dirty":true,"error":error});
             }
         };
+        if let Err(error) = dependency_tail::ensure_interaction_not_failed(&state, case_id) {
+            return serde_json::json!({"ok":false,"dirty":true,"error":format!("{error:#}")});
+        }
         let sample = state
             .egress_counter_starts
             .remove(case_id)

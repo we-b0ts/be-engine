@@ -2607,6 +2607,10 @@ later Case's timestamps. All-consumed inventories complete immediately.
 Waiting evidence exposes `source_post_input_allowance_ms` and the effective
 `no_progress_timeout_ms`. If this native interaction still stalls, its Case
 remains active and the runner stops Target before admitting another input.
+An actual Replay dependency rejection retains the same native Case, including
+rejections after its finite inventory was consumed. The final ownership-release
+lock repeats that check. A recorded dependency error delivered as contracted is
+ordinary consumption and does not trigger this rejection fence.
 
 Case dependency completions renew the idle clock. Unrelated process activity
 does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
