@@ -1187,7 +1187,14 @@ explicit repository-wide audit.
   strict. These facts neither change ownership nor supply Target delivery
   witnesses. The Source scanner may resume at a later
   independently known inactive start; earlier rejected spans remain diagnosed
-  and connection-level incompleteness still prevents setup omission. Its parent
+  and connection-level incompleteness still prevents setup omission. Its
+  `source/error_rollback` child retains a complete contiguous active prefix,
+  native DML ERR without status flags, and immediate successful plain ROLLBACK
+  as a strict segment. It requires known inactive Source boundaries and exact
+  identity/sequence continuity, never fills gaps with Global reads or infers
+  missing ERR flags. The existing explicit physical Target transaction witness
+  must deliver every prefix member, the error and the real end in order; this
+  proof grants neither autocommit equivalence nor end omission. Its parent
   owns connection-local Target BEGIN/end witnesses, ordered finite Source window
   correspondence and delivery-confirmed setup coverage. Multi-write windows
   include every read after the first write, through the actual matching end;

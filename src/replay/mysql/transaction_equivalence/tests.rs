@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+mod error_rollback;
 mod member_comparison;
 
 pub(crate) fn records() -> Vec<Value> {

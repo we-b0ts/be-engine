@@ -2,6 +2,8 @@
 use super::*;
 use crate::replay::dependencies::DependencyRecord;
 
+mod error_rollback;
+
 pub(in crate::replay) struct Plan {
     pub setups: Vec<usize>,
     pub transactions: Vec<Segment>,
@@ -163,7 +165,14 @@ fn collect_transactions(
     let mut reason = None;
     let mut failed_ends = Vec::new();
     let mut failure: Option<Failure> = None;
+    let mut recovered_end = None;
     for (position, &(index, record)) in records.iter().enumerate() {
+        if recovered_end == Some(position) {
+            // The strict error envelope already retained this real wire end.
+            previous = Some((record, status_after(record).unwrap()));
+            recovered_end = None;
+            continue;
+        }
         if let Some(failed) = &failure {
             // No permission is recovered until an independently known inactive
             // start. The incomplete earlier span remains strict and diagnosed.
@@ -300,6 +309,17 @@ fn collect_transactions(
             Ok(())
         })();
         if let Err(error) = result {
+            if error == "source_status_missing"
+                && let Some(segment) = error_rollback::prove(records, position, &active, explicit)
+            {
+                complete.push(segment);
+                recovered_end = Some(position + 1);
+                active.clear();
+                savepoints.clear();
+                explicit = false;
+                previous = None;
+                continue;
+            }
             reason.get_or_insert(error);
             let failed = Failure {
                 reason: error,

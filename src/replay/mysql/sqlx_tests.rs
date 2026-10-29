@@ -18,6 +18,7 @@ mod continuation_tests;
 mod dependency_time_tests;
 mod distinct_tests;
 mod dynamic_values_tests;
+mod error_rollback;
 mod field_identities;
 mod foreign_cleanup_tests;
 mod global_transaction_tests;
