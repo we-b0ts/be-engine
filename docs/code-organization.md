@@ -765,6 +765,10 @@ is unclear.
   lifecycle. Its `options` child projects optional Recorder configuration while
   retaining HTTP rules; `coordination` owns optional Redis discovery/leases and
   best-effort address refresh independently of Source and request supervision;
+  `api_policy` loads and validates the gateway's startup JSON using SDK route
+  validation, separately from Recorder capture configuration. `coordination`
+  publishes that policy (defaulting to all paths) and resets counts once after readiness and
+  before opening admission; address heartbeats never repeat these writes.
   `proxy` owns direct or reservation-aware request forwarding and completion;
   `source` owns fixed-identity process startup, trust, isolation and cleanup.
   Its `shutdown` child owns the standalone normal-stop 15-second case wait and
@@ -778,7 +782,9 @@ is unclear.
   confirmed Source exit permits engine-owned connection cleanup before the
   remaining evidence is drained. HTTP timeout recovery keeps request ownership
   through its bounded recovery period and supervised Source shutdown.
-  Redis primitives stay in the gateway SDK. CLI bootstrap initializes encryption
+  Reservation and address lease primitives stay in the gateway SDK; startup
+  policy publication uses Redis SET/DEL through the existing client.
+  CLI bootstrap initializes encryption
   before starting Tokio threads. There is one public Source recording command.
   Its `kubernetes` child owns recording-startup Service discovery, ready barriers
   and supervised port-forward shutdown. `discovery` interprets bounded Service

@@ -119,7 +119,7 @@ async fn exercise(mode: &'static str) {
             Ok(())
         };
         tokio::pin!(shutdown);
-        super::super::run_prepared(options, config, &mut forwards, shutdown.as_mut()).await
+        super::super::run_prepared(options, config, None, &mut forwards, shutdown.as_mut()).await
     };
     let client = async {
         let mut stream = connect(adapter_address).await;

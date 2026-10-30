@@ -84,6 +84,14 @@ pub struct RecordOptions {
     /// Unified traffic-policy/v2; with --config it must name project.policy.
     #[arg(long, env = "TRAFFIC_E2E_POLICY", value_name = "PATH")]
     pub policy: Option<PathBuf>,
+    /// Publish gateway case-limit/includes/excludes JSON at startup (Redis only).
+    #[arg(
+        long,
+        env = "TRAFFIC_E2E_API_POLICY",
+        value_name = "PATH",
+        requires = "coordination"
+    )]
+    pub api_policy: Option<PathBuf>,
     #[arg(long, env = "TRAFFIC_E2E_DNS_UPSTREAM")]
     pub dns_upstream: Option<SocketAddr>,
     #[arg(long, default_value = "300", value_parser = clap::value_parser!(u64).range(1..))]
@@ -138,6 +146,17 @@ impl RecordOptions {
             .unwrap_or_else(|| format!("{}:url", self.prefix))
     }
 
+    pub(super) fn load_api_policy(&self) -> Result<Option<super::api_policy::ApiPolicy>> {
+        ensure!(
+            self.api_policy.is_none() || self.coordination.is_some(),
+            "--api-policy requires Redis coordination"
+        );
+        self.api_policy
+            .as_deref()
+            .map(super::api_policy::ApiPolicy::load)
+            .transpose()
+    }
+
     pub(super) fn config(&self) -> Result<AppConfig> {
         ensure!(
             !self.source_command.is_empty(),
@@ -159,6 +178,8 @@ impl RecordOptions {
         brz_http_gateway::AdmissionTicket::new(&self.scope, "validation")?;
         ensure!(
             self.discovery_key() != format!("{}:max-gateways", self.prefix)
+                && self.discovery_key() != format!("{}:api-policy", self.prefix)
+                && self.discovery_key() != format!("{}:api-counts", self.prefix)
                 && !self
                     .discovery_key()
                     .starts_with(&format!("{}:gateway:", self.prefix))

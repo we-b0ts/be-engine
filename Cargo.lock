@@ -288,9 +288,9 @@ dependencies = [
 
 [[package]]
 name = "brz-http-gateway"
-version = "0.2.11"
+version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e488e5bc8c74a4242cbf92777d528858a791f7b9420ddd35396ff46ffec41d42"
+checksum = "69500cc5a82e8d2245148f7149dcaaf5309655e6479c9db7ead08876de90ba92"
 dependencies = [
  "brz-http-cors",
  "brz-http-router",

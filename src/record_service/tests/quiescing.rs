@@ -129,7 +129,7 @@ async fn exercise(tail_timeout: bool, async_api: bool) {
         let mut forwards = super::super::kubernetes::PortForwards::default();
         let shutdown = std::future::pending::<anyhow::Result<()>>();
         tokio::pin!(shutdown);
-        super::super::run_prepared(options, config, &mut forwards, shutdown.as_mut()).await
+        super::super::run_prepared(options, config, None, &mut forwards, shutdown.as_mut()).await
     };
     let client = async {
         let mut client = connect(adapter_address).await;

@@ -187,8 +187,12 @@ without it retain an empty method set; readers never scan or rewrite old cases
 to populate it. It does not change Replay selection or verification gates.
 
 Build the normal engine binary. The gateway SDK uses published
-`brz-http-gateway = 0.2.11` with `redis-recording` enabled; Redis uses published
-`brz-redis = 0.0.16`. No sibling gateway checkout is required.
+`brz-http-gateway = 0.2.12` with `redis-recording` enabled; Redis uses published
+`brz-redis = 0.0.16`. Its recorder-side registration, reservation renewal and
+completion protocol is compatible with gateway services using `0.2.14` and the
+API policy below. The Recorder SDK stays on `0.2.12` to avoid newer SDKs' transitive
+`serde_json/preserve_order` feature changing engine JSON serialization and Replay
+identities. No sibling gateway checkout is required.
 
 ```bash
 cargo build --locked --release --bin traffic-e2e
@@ -224,6 +228,59 @@ Source `127.0.0.1:8080`. Recorder and Source listeners must use different
 loopback ports. With Redis coordination, `--advertise-url` / `TRAFFIC_E2E_RECORD_URL` is required and
 must be the HTTP origin reachable by gateways, including any Docker port mapping.
 
+### Gateway API policy at startup
+
+In Redis coordination mode, `--api-policy PATH` / `TRAFFIC_E2E_API_POLICY` reads
+a gateway JSON policy before Source startup. Mount the file read-only in the
+recording container. For example, `api-policy.json` can select two API paths,
+each with the same admission limit:
+
+```json
+{
+  "case-limit": 200,
+  "includes": [
+    { "path": "/api/users", "match": "exact" },
+    { "path": "/api/teams/:id/skills", "match": "exact" }
+  ],
+  "excludes": [{ "path": "/internal", "match": "prefix" }]
+}
+```
+
+```bash
+traffic-e2e record --coordination redis --api-policy /etc/traffic-e2e/api-policy.json \
+  --source-workdir /app --ready-path /health \
+  -- python -m uvicorn app.main:app --host 127.0.0.1 --port 8080 --workers 1
+```
+
+Use the same Redis and advertised-address environment as above. After readiness,
+before opening admission and registering its address, Recorder writes the policy
+to `<prefix>:api-policy` and executes `DEL <prefix>:api-counts` once. Every Redis
+recording startup resets counts. When `--api-policy` is omitted, Recorder writes
+`{"includes":[],"excludes":[]}` to restore all paths without a gateway limit,
+replacing any previous round's selection or cap. Finish the previous
+round before starting another Recorder with the same prefix. Publication or reset
+failure fails startup. Heartbeats and address re-registration never rewrite the
+policy or reset counts. Shutdown removes only the owned address; policy and counts
+remain until the next round or an explicit operator update.
+
+The gateway applies `excludes` first. Missing or empty `includes` permits every
+path; missing or empty `excludes` excludes none. `prefix` is the default and matches whole path segments. `exact` supports
+`:id` and terminal `*rest` templates; query parameters do not participate. Exact
+templates share a counter across concrete paths; prefix-only matches count each
+actual path separately. All HTTP methods share the path's limit. `case-limit`
+is optional and bounded by Redis's signed integer range; zero pauses admission,
+and omission means no limit. A missing policy key also means all paths without
+a limit. Invalid files fail before Source starts. Gateways load the policy at
+startup and refresh it periodically (about 10 seconds with default leases).
+
+This JSON controls gateway admission only. It neither changes Recorder capture
+rules and case grouping nor overrides local `--case-limit` / project limits.
+Recorder may return 404 for a filtered or locally exhausted API; the gateway
+retains its existing fallback behavior. Gateway counters measure acquired
+admissions, not successfully published cases, and limits remain approximate.
+There is no per-API override map or automatic shutdown when gateway counts reach
+the limit. Direct recording does not use this option or contact Redis.
+
 The existing per-API case limit remains enabled. With project configuration,
 Recorder settings, including limits, redaction, dependency timing, DNS strategies,
 and post-ready observation, are reused. HTTP include/exclude rules are retained exactly as configured. The standalone service still supplies its
@@ -258,6 +315,7 @@ original path. There is no duration limit; SIGTERM/SIGINT ends the session.
 | `--artifact-owner` / `TRAFFIC_E2E_ARTIFACT_OWNER` | invoking controller owner | Numeric host UID:GID for private storage and finalized runs; explicit values require root |
 | `--source-workdir` / `TRAFFIC_E2E_SOURCE_WORKDIR` | `/app` | Source working directory |
 | `--policy` / `TRAFFIC_E2E_POLICY` | unset | Unified policy for standalone recording; with `--config`, must name `project.policy` |
+| `--api-policy` / `TRAFFIC_E2E_API_POLICY` | all paths, no gateway limit | Redis-only gateway JSON policy; publish once at startup, independently of Recorder rules and limits |
 | `--startup-timeout-seconds` | `300` | Startup/readiness deadline |
 | `--request-timeout-seconds` | project value or `30` seconds | Override request forwarding/response deadline |
 | `--dns-upstream` / `TRAFFIC_E2E_DNS_UPSTREAM` | project value or first system resolver | Override real DNS upstream before fake-IP projection |
@@ -333,7 +391,8 @@ uses UTC and atomically retries directory collisions. An explicit existing ID
 fails without overwriting its evidence. Ready logs include run ID and manifest
 path. SIGTERM/SIGINT withdraws admission, drains requests and finalizes the run;
 only completed runs are suitable for rewrite. Failed capture returns a nonzero
-exit status. There is no separate start command or per-invocation API selector.
+exit status. There is no separate start command; `--api-policy` only configures
+gateway ingress selection in Redis mode.
 
 The project owns its `.traffic-e2e/Dockerfile.recording`, using the example in
 [`docker/record/Dockerfile.example`](../docker/record/Dockerfile.example).
