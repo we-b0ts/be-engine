@@ -18,6 +18,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod api_policy;
 mod coordination;
 mod direct;
 mod kubernetes_failure;

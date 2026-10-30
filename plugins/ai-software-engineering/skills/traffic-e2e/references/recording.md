@@ -10,7 +10,8 @@ traffic-e2e record --config /etc/traffic-e2e/.traffic-e2e/project.yaml \
 
 Project configuration is optional. Preserve configured HTTP include/exclude
 rules; their default admits all methods and paths. Ingress selects API traffic.
-There is no per-run API selector. Source runs as 998:998; the controller owns
+Redis ingress selection can be published with `--api-policy`; it does not change
+Recorder capture rules. Source runs as 998:998; the controller owns
 interception, trust, readiness, shutdown and finalization.
 
 ## Deployment
@@ -59,6 +60,23 @@ provide a reachable `--advertise-url` and explicit coordination Redis URL throug
 `TRAFFIC_E2E_RECORDING_REDIS_URL`. Never infer coordination from Source REDIS_URL.
 The address is registered after readiness; reservations are released after case
 finalization. One local slot remains mandatory in both modes.
+
+With Redis coordination, optional `--api-policy PATH` / `TRAFFIC_E2E_API_POLICY`
+loads gateway JSON (`case-limit`, `includes`, `excludes`) before Source startup.
+After readiness and before address registration, publish it to
+`<prefix>:api-policy` and delete `<prefix>:api-counts` once. Counts reset on every
+Redis recording startup; omitting the file overwrites old policy with empty
+`includes` (all paths), empty `excludes` (exclude none) and no gateway limit.
+Finish the previous round before restarting under the same prefix. Heartbeats
+and re-registration never repeat these writes. Invalid input or failed startup
+writes fail the run. Shutdown unregisters the owned address while retaining the
+policy and counts. Gateway policy refresh follows its ordinary interval.
+
+The gateway limit is shared across methods for each API path/template and counts
+admissions, not successful publications. Recorder rules, grouping and local case
+limits stay independent; a Recorder 404 keeps the gateway's normal fallback.
+No per-API quota overrides or automatic quota-based shutdown are added. Direct
+mode never contacts Redis and does not accept `--api-policy`.
 
 One process creates one run. `--run-id` is optional; record generates and reserves
 its own UTC identity. Stop normally and retain the exact finalized manifest.

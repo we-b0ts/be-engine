@@ -109,7 +109,8 @@ async fn exercise(unexpected_exit: bool) {
         };
         tokio::pin!(shutdown);
         let result =
-            super::super::run_prepared(options, config, &mut forwards, shutdown.as_mut()).await;
+            super::super::run_prepared(options, config, None, &mut forwards, shutdown.as_mut())
+                .await;
         if let Err(error) = &result {
             eprintln!("synthetic Source recording failed: {error:#}");
         }

@@ -1,5 +1,6 @@
 //! Standalone Source/Recorder service with optional gateway coordination.
 
+mod api_policy;
 mod coordination;
 mod kubernetes;
 mod options;
@@ -36,6 +37,7 @@ pub async fn run(options: RecordOptions) -> Result<()> {
     );
     process::prepare_fixed_identity()?;
     let config = options.config()?;
+    let api_policy = options.load_api_policy()?;
     if let Some(path) = &options.config_path {
         info!(path = %path.display(), case_path_patterns = config.http_gateway.case_path_patterns.len(),
             post_ready_settle_ms = config.recording.post_ready_settle_ms,
@@ -57,7 +59,16 @@ pub async fn run(options: RecordOptions) -> Result<()> {
         signal = &mut shutdown => signal.map(|()| false),
     };
     let result = match prepared {
-        Ok(true) => run_prepared(options, config, &mut forwards, shutdown.as_mut()).await,
+        Ok(true) => {
+            run_prepared(
+                options,
+                config,
+                api_policy,
+                &mut forwards,
+                shutdown.as_mut(),
+            )
+            .await
+        }
         Ok(false) => Ok(()),
         Err(error) => Err(error),
     };
@@ -69,6 +80,7 @@ pub async fn run(options: RecordOptions) -> Result<()> {
 async fn run_prepared(
     options: RecordOptions,
     config: crate::AppConfig,
+    api_policy: Option<api_policy::ApiPolicy>,
     forwards: &mut kubernetes::PortForwards,
     mut shutdown: Pin<&mut impl Future<Output = Result<()>>>,
 ) -> Result<()> {
@@ -150,6 +162,7 @@ async fn run_prepared(
             signal = &mut shutdown => { signal?; normal_shutdown = true; return Ok(()); }
         }
         let listener = TcpListener::bind(options.listen).await?;
+        coordination.initialize_round(api_policy.as_ref()).await?;
         adapter = Some(tokio::spawn(proxy::serve(listener, relay.clone(), adapter_stopped)));
         relay.open();
         info!(listen = %options.listen, run_id = %state.recorder().run_dir.file_name().unwrap().to_string_lossy(),

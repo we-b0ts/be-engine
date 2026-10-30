@@ -1386,7 +1386,9 @@ A focused action with no `--pattern` is valid and returns
 `no_candidates: true` with no config diff.
 
 Select Source recording traffic at ingress. `record` preserves configured
-include/exclude rules and has no per-invocation API selector.
+include/exclude rules. In Redis coordination mode, `--api-policy` publishes
+gateway API selection and a shared per-API admission limit at startup; it does
+not change Recorder capture rules. See [recording](recording.md).
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup

@@ -8,7 +8,9 @@ default-run = "traffic-e2e"
 aes-gcm = "0.10"
 anyhow = "1"
 base64 = "0.22"
-brz-http-gateway = { version = "=0.2.11", features = ["redis-recording"] }
+# Recorder leases remain compatible with gateway 0.2.14. Later SDKs pull
+# brz-json/preserve_order into the engine and change persisted JSON identities.
+brz-http-gateway = { version = "=0.2.12", features = ["redis-recording"] }
 brz-redis = { version = "=0.0.16" }
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }

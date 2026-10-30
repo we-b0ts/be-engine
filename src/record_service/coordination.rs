@@ -1,13 +1,14 @@
 //! Optional gateway discovery and reservation coordination, separate from recording.
 
-use super::RecordOptions;
+use super::{RecordOptions, api_policy::ApiPolicy};
 use anyhow::{Context, Result, ensure};
 use brz_http_gateway::redis_admission::{RecorderRegistration, RedisAdmissionProvider};
-use brz_redis::{RedisService, RedisServiceOptions};
+use brz_redis::{Redis, RedisService, RedisServiceOptions, Value, cmd};
 use std::time::Duration;
 use tracing::{info, warn};
 
 pub(super) struct Coordination {
+    startup: Option<(RedisService, String)>,
     registration: Option<RecorderRegistration<RedisService>>,
     pub(super) reservations: Option<RedisAdmissionProvider<RedisService>>,
 }
@@ -16,6 +17,7 @@ impl Coordination {
     pub(super) async fn connect(options: &RecordOptions) -> Result<Self> {
         if options.coordination.is_none() {
             return Ok(Self {
+                startup: None,
                 registration: None,
                 reservations: None,
             });
@@ -39,11 +41,49 @@ impl Coordination {
             Duration::from_secs(30),
         )?;
         let reservations =
-            RedisAdmissionProvider::new(redis, &options.prefix, options.discovery_key())?;
+            RedisAdmissionProvider::new(redis.clone(), &options.prefix, options.discovery_key())?;
         Ok(Self {
+            startup: Some((redis, options.prefix.clone())),
             registration: Some(registration),
             reservations: Some(reservations),
         })
+    }
+
+    /// Called once after readiness, before exposing this round to gateways.
+    /// Heartbeats and address re-registration must never reset case counts.
+    pub(super) async fn initialize_round(&self, policy: Option<&ApiPolicy>) -> Result<()> {
+        let Some((redis, prefix)) = &self.startup else {
+            return Ok(());
+        };
+        let json = policy.map_or(r#"{"includes":[],"excludes":[]}"#, |policy| {
+            policy.json.as_str()
+        });
+        let mut command = cmd("SET");
+        command.arg(format!("{prefix}:api-policy")).arg(json);
+        let reply: Value = redis
+            .command(command)
+            .await
+            .context("failed to publish gateway API policy")?;
+        ensure!(
+            matches!(reply, Value::Okay)
+                || matches!(reply, Value::SimpleString(ref value) if value == "OK"),
+            "unexpected gateway API policy publication response"
+        );
+        let mut command = cmd("DEL");
+        command.arg(format!("{prefix}:api-counts"));
+        let deleted: i64 = redis
+            .command(command)
+            .await
+            .context("failed to reset gateway API counts")?;
+        ensure!(
+            (0..=1).contains(&deleted),
+            "unexpected gateway API count reset response"
+        );
+        info!(
+            policy_configured = policy.is_some(),
+            "gateway recording round initialized; case counts reset"
+        );
+        Ok(())
     }
 
     /// Discovery is best-effort and never changes request or Source ownership.

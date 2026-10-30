@@ -7,9 +7,13 @@ use tokio::task::JoinSet;
 
 const ADDRESS_KEY: &[u8] = b"registration-test:url";
 const TICKET_KEY: &[u8] = b"registration-test:inflight:all-apis";
+const POLICY_KEY: &[u8] = b"registration-test:api-policy";
+const COUNTS_KEY: &[u8] = b"registration-test:api-counts";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Fault {
+    RejectPolicy,
+    RejectCountReset,
     RejectRegistration,
     RejectRenewal,
     LoseRegistrationReply,
@@ -18,6 +22,9 @@ enum Fault {
 
 #[derive(Default)]
 struct AddressState {
+    policy: Option<Vec<u8>>,
+    count: usize,
+    startup_commands: Vec<&'static str>,
     value: Option<Vec<u8>>,
     fault: Option<Fault>,
     renewals: usize,
@@ -27,11 +34,35 @@ impl AddressState {
     fn reply(&mut self, command: RedisCommand) -> Option<Vec<u8>> {
         let args = command.args;
         if command.name == "GET" {
+            if args[0] == POLICY_KEY || args[0] == ADDRESS_KEY {
+                let value = if args[0] == POLICY_KEY {
+                    &self.policy
+                } else {
+                    &self.value
+                };
+                let Some(value) = value else {
+                    return Some(b"$-1\r\n".to_vec());
+                };
+                let mut response = format!("${}\r\n", value.len()).into_bytes();
+                response.extend(value);
+                response.extend(b"\r\n");
+                return Some(response);
+            }
             assert_eq!(args[0], TICKET_KEY);
             return Some(b"$7\r\ntoken-1\r\n".to_vec());
         }
         if command.name == "SET" {
+            if args[0] == POLICY_KEY {
+                assert_eq!(args.len(), 2);
+                self.startup_commands.push("policy");
+                if self.fault == Some(Fault::RejectPolicy) {
+                    return Some(b"-ERR policy unavailable\r\n".to_vec());
+                }
+                self.policy = Some(args[1].clone());
+                return Some(b"+OK\r\n".to_vec());
+            }
             assert_eq!(args[0], ADDRESS_KEY);
+            self.startup_commands.push("url");
             assert_eq!(args[2], b"NX");
             assert_eq!(args[3], b"PX");
             assert_eq!(args[4], b"30000");
@@ -52,6 +83,15 @@ impl AddressState {
             } else {
                 b"$-1\r\n".to_vec()
             });
+        }
+        if command.name == "DEL" {
+            assert_eq!(args, [COUNTS_KEY]);
+            self.startup_commands.push("counts");
+            if self.fault == Some(Fault::RejectCountReset) {
+                return Some(b"-ERR count reset unavailable\r\n".to_vec());
+            }
+            self.count = 0;
+            return Some(b":1\r\n".to_vec());
         }
         assert_eq!(command.name, "EVAL");
         if args[2] == TICKET_KEY {
@@ -84,6 +124,113 @@ impl AddressState {
         }
         Some(if owned { b":1\r\n" } else { b":0\r\n" }.to_vec())
     }
+}
+
+#[test]
+fn startup_publishes_gateway_policy_and_resets_counts_without_touching_heartbeats() {
+    runtime().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("api-policy.json");
+        std::fs::write(&path, super::api_policy::POLICY).unwrap();
+        let policy = crate::record_service::api_policy::ApiPolicy::load(&path).unwrap();
+        let fixture = RegistrationFixture::new().await;
+        fixture.state.lock().unwrap().count = 200;
+        fixture
+            .coordination
+            .initialize_round(Some(&policy))
+            .await
+            .unwrap();
+        assert_eq!(fixture.state.lock().unwrap().count, 0);
+        fixture.coordination.refresh_registration().await;
+        assert_eq!(
+            fixture.state.lock().unwrap().startup_commands,
+            ["policy", "counts", "url"]
+        );
+        let published: serde_json::Value =
+            serde_json::from_slice(fixture.state.lock().unwrap().policy.as_ref().unwrap()).unwrap();
+        assert_eq!(published["case-limit"], 200);
+        assert_eq!(
+            published["includes"][0],
+            serde_json::json!({"path":"/api/teams/:id/skills","match":"exact"})
+        );
+        assert_eq!(
+            published["excludes"][0],
+            serde_json::json!({"path":"/internal","match":"prefix"})
+        );
+        // Later operator changes and new counts survive renewal and re-registration.
+        fixture.state.lock().unwrap().policy = Some(b"{\"case-limit\":0}".to_vec());
+        fixture.state.lock().unwrap().count = 7;
+        fixture.coordination.refresh_registration().await;
+        fixture.state.lock().unwrap().value = None;
+        fixture.coordination.refresh_registration().await;
+        fixture.coordination.unregister().await.unwrap();
+        let state = fixture.state.lock().unwrap();
+        assert_eq!(state.count, 7);
+        assert_eq!(
+            state.policy.as_deref(),
+            Some(b"{\"case-limit\":0}".as_slice())
+        );
+        assert_eq!(state.startup_commands, ["policy", "counts", "url", "url"]);
+        assert!(state.value.is_none());
+    });
+}
+
+#[test]
+fn startup_without_policy_resets_counts_and_replaces_previous_selection_with_all_apis() {
+    runtime().block_on(async {
+        let fixture = RegistrationFixture::new().await;
+        fixture.state.lock().unwrap().policy =
+            Some(br#"{"case-limit":0,"excludes":[{"path":"/"}]}"#.to_vec());
+        fixture.state.lock().unwrap().count = 3;
+        fixture.coordination.initialize_round(None).await.unwrap();
+        {
+            let state = fixture.state.lock().unwrap();
+            let policy: serde_json::Value =
+                serde_json::from_slice(state.policy.as_ref().unwrap()).unwrap();
+            assert_eq!(policy, serde_json::json!({"includes":[],"excludes":[]}));
+            assert_eq!(state.count, 0);
+            assert_eq!(state.startup_commands, ["policy", "counts"]);
+        }
+    });
+}
+
+#[test]
+fn startup_policy_or_count_failure_is_fatal_before_address_publication() {
+    runtime().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("api-policy.json");
+        std::fs::write(&path, super::api_policy::POLICY).unwrap();
+        let policy = crate::record_service::api_policy::ApiPolicy::load(&path).unwrap();
+        for fault in [Fault::RejectPolicy, Fault::RejectCountReset] {
+            let fixture = RegistrationFixture::new().await;
+            fixture.state.lock().unwrap().count = 11;
+            fixture.fault(fault);
+            assert!(
+                fixture
+                    .coordination
+                    .initialize_round(Some(&policy))
+                    .await
+                    .is_err()
+            );
+            let state = fixture.state.lock().unwrap();
+            assert!(state.value.is_none());
+            assert_eq!(state.count, 11);
+            assert_eq!(
+                state.startup_commands,
+                if fault == Fault::RejectPolicy {
+                    vec!["policy"]
+                } else {
+                    vec!["policy", "counts"]
+                }
+            );
+        }
+        let options = OptionsCli::try_parse_from(["test", "--", "true"])
+            .unwrap()
+            .options;
+        let direct = Coordination::connect(&options).await.unwrap();
+        direct.initialize_round(None).await.unwrap();
+        assert!(direct.reservations.is_none());
+    });
 }
 
 struct RegistrationFixture {
