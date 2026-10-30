@@ -11,9 +11,15 @@ pub(super) async fn deliver_redis_exchange(
     started: tokio::time::Instant,
     client_id: Uuid,
 ) -> Result<bool> {
-    let lifecycle = state.lock().await.redis.exchanges[matched.index]
-        .record
-        .lifecycle_cleanup;
+    let (lifecycle, timing_scope) = {
+        let state = state.lock().await;
+        (
+            state.redis.exchanges[matched.index]
+                .record
+                .lifecycle_cleanup,
+            state.input_timing.as_ref().map(|timeline| timeline.scope()),
+        )
+    };
     if lifecycle {
         match super::lifecycle::deliver(reader, state, matched, client_id).await {
             Ok(()) => {
@@ -211,6 +217,9 @@ pub(super) async fn deliver_redis_exchange(
             return Err(error);
         }
     }
+    // TCP and contract commits have succeeded. An RPC callback may still be
+    // pending, so complete_exchange is deliberately a separate fact.
+    super::input_timing::response_delivered(&mut state, matched, timing_scope.as_ref());
     drop(state);
     if let Err(error) = pubsub::echo::deliver(state_ref, matched).await {
         state_ref

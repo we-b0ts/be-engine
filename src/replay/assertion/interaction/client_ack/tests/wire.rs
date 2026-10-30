@@ -15,7 +15,7 @@ fn open(sid: &str) -> String {
 }
 
 #[tokio::test]
-async fn actual_reversed_acks_keep_payload_ownership_after_compressing_source_idle() {
+async fn actual_reversed_acks_keep_payload_ownership_with_overlapping_inputs() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -68,6 +68,7 @@ async fn actual_reversed_acks_keep_payload_ownership_after_compressing_source_id
     for action in &mut program.actions {
         action.sequence += 1;
         action.after = vec![1];
+        action.offset_ms /= 1000;
     }
     program.actions.insert(
         0,
@@ -83,7 +84,7 @@ async fn actual_reversed_acks_keep_payload_ownership_after_compressing_source_id
             },
         },
     );
-    for (sequence, offset_ms, message) in [(4, 40_143, "41/n,"), (5, 40_187, "1")] {
+    for (sequence, offset_ms, message) in [(4, 143, "41/n,"), (5, 187, "1")] {
         program.actions.push(InputAction {
             sequence,
             offset_ms,
@@ -117,7 +118,7 @@ async fn actual_reversed_acks_keep_payload_ownership_after_compressing_source_id
     .observation;
     assert!(
         started.elapsed() < std::time::Duration::from_secs(2),
-        "Source's 40s idle was not compressed"
+        "overlapping requests must not be serialized waiting for the first ACK"
     );
     assert!(actual.end.clean);
     let source = output(&[&open("source"), r#"40/n,{"sid":"source-ns"}"#, A, B]);

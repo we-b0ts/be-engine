@@ -12,6 +12,8 @@ fn command(command: &str) -> super::super::control::ReplayControlRequest {
         identity_pairs: Vec::new(),
         derived_input: None,
         native_event: None,
+        input_timing: None,
+        socketio_timing: None,
     }
 }
 

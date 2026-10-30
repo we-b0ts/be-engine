@@ -11,6 +11,8 @@ pub(in crate::replay) struct Observation {
     event: Option<NativeEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    acknowledged: Option<u64>,
 }
 
 struct Observer {
@@ -48,7 +50,7 @@ impl NativeEventSink for Observer {
     fn connected<'a>(&'a self, namespace: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             send(&self.socket, serde_json::json!({"command":"native_connected", "case_id":self.case,
-                "native_event":Observation {epoch:self.epoch,event:None,namespace:Some(namespace.into())}})).await?;
+                "native_event":Observation {epoch:self.epoch,event:None,namespace:Some(namespace.into()),acknowledged:None}})).await?;
             Ok(())
         })
     }
@@ -57,15 +59,22 @@ impl NativeEventSink for Observer {
             send(
                 &self.socket,
                 serde_json::json!({"command":"native_event", "case_id":self.case,
-                "native_event":Observation {epoch:self.epoch,event:Some(event),namespace:None}}),
+                "native_event":Observation {epoch:self.epoch,event:Some(event),namespace:None,acknowledged:None}}),
             )
             .await?;
             Ok(())
         })
     }
+    fn acknowledged(&self, sequence: u64) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            send(&self.socket, serde_json::json!({"command":"native_input_ack","case_id":self.case,
+                "native_event":Observation {epoch:self.epoch,event:None,namespace:None,acknowledged:Some(sequence)}})).await?;
+            Ok(())
+        })
+    }
 }
 
-async fn send(socket: &Path, request: Value) -> Result<Value> {
+pub(super) async fn send(socket: &Path, request: Value) -> Result<Value> {
     tokio::time::timeout(Duration::from_secs(5), async {
         let mut payload = serde_json::to_vec(&request)?;
         ensure!(
@@ -133,6 +142,25 @@ pub(super) async fn accept(
         ensure!(
             observation.epoch == epoch,
             "native event request epoch changed"
+        );
+        if request.command == "native_input_ack" {
+            ensure!(
+                observation.event.is_none() && observation.namespace.is_none(),
+                "input ACK carries unrelated native metadata"
+            );
+            let sequence = observation
+                .acknowledged
+                .context("native input ACK missing")?;
+            state
+                .redis
+                .pubsub
+                .native_clock
+                .input_acknowledged(case, epoch, sequence)?;
+            return Ok(serde_json::json!({"ok":true}));
+        }
+        ensure!(
+            observation.acknowledged.is_none(),
+            "native event carries input ACK"
         );
         if request.command == "native_connected" {
             ensure!(

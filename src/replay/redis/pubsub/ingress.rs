@@ -55,6 +55,24 @@ struct Entry {
 }
 
 impl Ingress {
+    pub(super) fn timing_evidence(
+        &self,
+        case: &str,
+        start: DateTime<Utc>,
+    ) -> Vec<crate::replay::control::input_timing::Evidence> {
+        use crate::replay::control::input_timing::{DeliveryReference, Evidence};
+        self.entries
+            .iter()
+            .filter(|entry| entry.case == case)
+            .filter_map(|entry| {
+                let at = start.checked_add_signed(entry.offset)?;
+                Some(Evidence {
+                    reference: DeliveryReference::NativePush(entry.slot),
+                    completed_at: at,
+                })
+            })
+            .collect()
+    }
     pub(super) fn owns_callback(&self, exchange: &ReplayExchange) -> bool {
         self.callbacks
             .get(&(exchange.record.connection_id, exchange.record.sequence))

@@ -110,6 +110,9 @@ async fn ambiguous_unselected_windows_and_unsupported_programs_keep_slots_unused
         "unclean",
         "outside",
         "active_program",
+        "terminal_program",
+        "reused_ack_ids",
+        "same_millisecond",
     ] {
         let temp = tempfile::tempdir().unwrap();
         let (mut globals, original) = fixture(temp.path());
@@ -181,6 +184,31 @@ async fn ambiguous_unselected_windows_and_unsupported_programs_keep_slots_unused
                     .as_array_mut()
                     .unwrap()
                     .push(second);
+                std::fs::write(path, value.to_string()).unwrap();
+            }
+            "terminal_program" | "reused_ack_ids" | "same_millisecond" => {
+                let path = temp.path().join("case/request.json");
+                let mut value: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                let mut second = value["interaction"]["actions"][0].clone();
+                second["sequence"] = 2.into();
+                second["offset_ms"] = if mode == "same_millisecond" { 40 } else { 20 }.into();
+                second["action"]["message"]["data"] = "42/chat,0[\"work\",{}]".into();
+                value["interaction"]["actions"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(second.clone());
+                if mode == "reused_ack_ids" {
+                    second["sequence"] = 3.into();
+                    second["offset_ms"] = 30.into();
+                    value["interaction"]["actions"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(second);
+                }
+                if mode == "terminal_program" {
+                    value["interaction"]["policy"]["completion"] = json!([{"namespace":"/chat","event":"work","completion":{"kind":"terminal_event","event":"finished","require_ack":true}}]);
+                }
                 std::fs::write(path, value.to_string()).unwrap();
             }
             _ => unreachable!(),

@@ -240,12 +240,23 @@ fn input(
             time: crate::request_rules::JwtTime::PreserveRelative,
         },
     );
-    let (header, scheme, query_param) = match &effect.location {
+    let (header, scheme, query_param, socketio_connect) = match &effect.location {
         n::InputTokenLocation::BearerHeader { name } => {
-            (Some(name.clone()), Some("bearer".into()), None)
+            (Some(name.clone()), Some("bearer".into()), None, None)
         }
-        n::InputTokenLocation::RawHeader { name } => (Some(name.clone()), Some("raw".into()), None),
-        n::InputTokenLocation::Query { name } => (None, None, Some(name.clone())),
+        n::InputTokenLocation::RawHeader { name } => {
+            (Some(name.clone()), Some("raw".into()), None, None)
+        }
+        n::InputTokenLocation::Query { name } => (None, None, Some(name.clone()), None),
+        n::InputTokenLocation::SocketIoConnect { namespace, pointer } => (
+            None,
+            None,
+            None,
+            Some(crate::request_rules::SocketIoConnectLocation {
+                namespace: namespace.clone(),
+                pointer: pointer.clone(),
+            }),
+        ),
     };
     output
         .document
@@ -257,6 +268,7 @@ fn input(
             header,
             scheme,
             query_param,
+            socketio_connect,
             profile,
         });
     output.document.request_rules.validate()?;

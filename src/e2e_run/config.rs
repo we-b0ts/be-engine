@@ -117,6 +117,7 @@ pub(crate) fn render_project_config(
             replay: ReplayProjectConfig {
                 pre_match: true,
                 http_stream_timing: Default::default(),
+                socketio_timing: Default::default(),
                 case_no_progress_timeout_ms:
                     crate::replay::DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS,
                 startup_timeout_seconds: super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
@@ -245,6 +246,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     let project = ResolvedProjectConfig {
         replay_pre_match: config.project.replay.pre_match,
         replay_http_stream_timing: config.project.replay.http_stream_timing,
+        replay_socketio_timing: config.project.replay.socketio_timing,
         replay_case_no_progress_timeout: Duration::from_millis(
             config.project.replay.case_no_progress_timeout_ms,
         ),
@@ -417,6 +419,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    mod socketio_timing_tests;
     use crate::e2e_run::model::MAX_TARGET_STARTUP_TIMEOUT_SECONDS;
 
     #[test]

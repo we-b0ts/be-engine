@@ -1,4 +1,4 @@
-//! A namespace's real teardown precedes the next Case, without replaying idle offsets.
+//! A namespace's real teardown precedes the next Case, retaining explicit close timing.
 use super::*;
 
 fn close_program() -> InputTranscript {
@@ -6,13 +6,13 @@ fn close_program() -> InputTranscript {
     input.actions[1].after.clear();
     input.actions[1].compressible_gap = false;
     input.actions[1].gap_start_ms = None;
-    input.actions[1].offset_ms = 30_000;
+    input.actions[1].offset_ms = 30;
     input.actions[1].action = InputActionKind::Message {
         message: WireMessage::text("41"),
     };
     input.actions.push(InputAction {
         sequence: 3,
-        offset_ms: 40_000,
+        offset_ms: 40,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -109,7 +109,7 @@ async fn normal_close_waits_for_peer_cleanup_but_dependency_failure_interrupts_t
             assert_eq!(response.observation.end.reason, EndReason::ClientClose);
             assert!(
                 response.observation.end.offset_ms < 1000,
-                "40 seconds of input idle were not replayed"
+                "bounded peer cleanup should complete"
             );
         }
         server.await.unwrap();

@@ -10,6 +10,7 @@ use hyper::Request;
 use std::collections::BTreeMap;
 use tokio::time::{Duration, Instant, sleep_until};
 
+use super::timing::{Advance, cancellation, transport_cancellation};
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
     lifecycle::LifecycleDecision,
@@ -17,6 +18,7 @@ use crate::interaction::{
     observation::Observation,
     socketio::{EngineIoPacket, SocketIoDecoder, SocketIoKind},
 };
+mod native_receipts;
 use transport::{ReaderEvent, Transport};
 
 pub(super) async fn execute_with_feedback(
@@ -30,6 +32,7 @@ pub(super) async fn execute_with_feedback(
     let Feedback {
         mut dependency_failure,
         native_events,
+        input_timing,
     } = feedback;
     transcript.validate()?;
     let started = Instant::now();
@@ -60,7 +63,11 @@ pub(super) async fn execute_with_feedback(
     let mut last_sent = started;
     let mut server_ordinals: BTreeMap<String, u64> = BTreeMap::new();
     let mut server_acks = BTreeMap::new();
-    let mut pending_receipts = std::collections::BTreeSet::new();
+    let mut native_receipts = native_receipts::Receipts::default();
+    let mut timing_wait: Option<futures_util::future::BoxFuture<'static, Result<Advance>>> = None;
+    let mut timing_sequence = None;
+    let mut timing_ready = None;
+    let mut removed_ms = 0;
     let mut heartbeats = heartbeat::Heartbeats::new(transcript);
     let mut namespaces = namespace::Admission::default();
     let (mut reason, mut transport_clean) = 'session: loop {
@@ -97,6 +104,9 @@ pub(super) async fn execute_with_feedback(
         }
         let now = elapsed_ms(started);
         match observed.decision(now) {
+            LifecycleDecision::Close(EndReason::BusinessIdle)
+                if transcript.protocol == Protocol::SocketIo && next < transcript.actions.len() => {
+            }
             LifecycleDecision::Close(reason) => break (reason, true),
             LifecycleDecision::Fail(reason) => break (reason, false),
             _ => {}
@@ -106,12 +116,11 @@ pub(super) async fn execute_with_feedback(
             || action.is_none_or(|action| {
                 namespaces.permits(action, transcript.policy.max_message_bytes)
             });
-        let due = action
+        let admitted = action
             .filter(|_| namespace_ready)
             .filter(|action| {
-                transcript.policy.preserve_input_timing
-                    || pending_receipts.is_empty()
-                    || allows_pending_receipts(action)
+                transcript.protocol != Protocol::SocketIo
+                    || action.after.iter().all(|id| completed.contains_key(id))
             })
             .filter(|action| {
                 action.ack_ref.as_ref().is_none_or(|reference| {
@@ -120,19 +129,65 @@ pub(super) async fn execute_with_feedback(
                         reference.server_event_ordinal,
                     ))
                 })
-            })
-            .and_then(|action| {
-                action_due(
-                    transcript.protocol,
-                    action,
-                    &completed,
-                    last_offset,
-                    last_sent,
-                    transcript.policy.input_gap_ms,
-                    transcript.policy.preserve_input_timing,
-                )
             });
-        let lifecycle_deadline = started + Duration::from_millis(observed.next_deadline_ms());
+        if let (Some(action), Some(timing)) = (admitted, &input_timing)
+            && action.compressible_gap
+            && !cancellation(action)
+            && timing_sequence != Some(action.sequence)
+        {
+            let timing = timing.clone();
+            let sequence = action.sequence;
+            let completed = action.after.clone();
+            timing_sequence = Some(sequence);
+            timing_wait = Some(Box::pin(
+                async move { timing.wait(sequence, completed).await },
+            ));
+        }
+        let due = admitted.and_then(|action| {
+            if transcript.protocol == Protocol::SocketIo {
+                if input_timing.is_some() && action.compressible_gap && !cancellation(action) {
+                    return (timing_ready == Some(action.sequence)).then(Instant::now);
+                }
+                // Without dependency coverage no gap is eligible for acceleration.
+                let mut due =
+                    started + Duration::from_millis(action.offset_ms.saturating_sub(removed_ms));
+                if cancellation(action)
+                    && let Some(gap_start) = action.gap_start_ms
+                    && let Some(barrier) =
+                        action.after.iter().filter_map(|id| completed.get(id)).max()
+                {
+                    // A Source completion-bound close differs from independent
+                    // cancellation. Preserve its full post-completion interval.
+                    due = due.max(
+                        *barrier
+                            + Duration::from_millis(action.offset_ms.saturating_sub(gap_start)),
+                    );
+                }
+                return Some(due);
+            }
+            websocket_action_due(
+                action,
+                &completed,
+                last_offset,
+                last_sent,
+                transcript.policy.input_gap_ms,
+            )
+        });
+        let lifecycle_deadline = session_deadline(transcript, &observed, next, started);
+        // A recorded transport cancellation must remain available while an
+        // earlier input is waiting for an ACK, namespace or dependency delivery.
+        let cancel = (transcript.protocol == Protocol::SocketIo)
+            .then(|| {
+                transcript
+                    .actions
+                    .iter()
+                    .skip(next + 1)
+                    .find(|action| transport_cancellation(action))
+            })
+            .flatten();
+        let cancel_due = cancel.map(|action| {
+            started + Duration::from_millis(action.offset_ms.saturating_sub(removed_ms))
+        });
         let wake = due.map_or(lifecycle_deadline, |due| due.min(lifecycle_deadline));
         let heartbeat_due = heartbeats.next_due();
         tokio::select! {
@@ -143,6 +198,29 @@ pub(super) async fn execute_with_feedback(
             } } => {
                 if dependency_failure.as_ref().is_some_and(|failure|*failure.borrow()) {break (EndReason::DependencyFailure,false);}
                 dependency_failure=None;
+            }
+            _ = sleep_until(cancel_due.unwrap_or(lifecycle_deadline)), if cancel_due.is_some_and(|cancel| due.is_none_or(|due| due > cancel)) => {
+                let action = cancel.expect("cancellation deadline");
+                let deadline = Instant::now() + Duration::from_millis(transcript.policy.cleanup_timeout_ms);
+                match &action.action {
+                    InputActionKind::Close {code, reason} => {
+                        observed.client_close(*code, reason.clone(), elapsed_ms(started))?;
+                        tokio::time::timeout_at(deadline, transport.close(*code, reason)).await.context("Target cancellation timed out")??;
+                    }
+                    InputActionKind::Message {message} => {
+                        observed.input(message.clone(), elapsed_ms(started))?;
+                        tokio::time::timeout_at(deadline, transport.send(message)).await.context("Target cancellation timed out")??;
+                    }
+                    _ => unreachable!("transport cancellation"),
+                }
+                // Keep next unchanged: skipped inputs make execution incomplete.
+                break (EndReason::ClientClose, true);
+            }
+            result = async { timing_wait.as_mut().expect("pending timing query").await }, if timing_wait.is_some() => {
+                let advance = result?;
+                removed_ms = advance.removed_ms;
+                timing_ready = timing_sequence;
+                timing_wait = None;
             }
             incoming = transport.recv() => {
                 match incoming.context("Target session reader stopped")? {
@@ -173,8 +251,10 @@ pub(super) async fn execute_with_feedback(
                                                 .await.context("Engine.IO heartbeat send timed out")??;
                                         }
                                     }
-                                    EngineIoPacket::Message(packet) if matches!(packet.kind,SocketIoKind::Ack | SocketIoKind::BinaryAck) => {
-                                        if let Some(id)=packet.id {pending_receipts.remove(&(packet.namespace,id));}
+                                    EngineIoPacket::Message(packet) if matches!(packet.kind, SocketIoKind::Ack | SocketIoKind::BinaryAck) => {
+                                        if let Some(sequence) = native_receipts.acknowledge(&packet) && let Some(sink) = &native_events {
+                                            sink.acknowledged(sequence).await?;
+                                        }
                                     }
                                     EngineIoPacket::Message(packet) if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent) => {
                                         let ordinal = server_ordinals.entry(packet.namespace.clone()).or_default();
@@ -219,11 +299,6 @@ pub(super) async fn execute_with_feedback(
                 match &action.action {
                     InputActionKind::Message { message } => {
                         let message = if transcript.protocol == Protocol::SocketIo { rebind_ack(message, action, &server_acks)? } else { message.clone() };
-                        if transcript.protocol==Protocol::SocketIo && !transcript.policy.preserve_input_timing && message.kind==crate::interaction::model::MessageKind::Text
-                            && let EngineIoPacket::Message(packet)=crate::interaction::socketio::decode_engine_io_text(&message.data,transcript.policy.max_message_bytes)?
-                            && matches!(packet.kind,SocketIoKind::Event|SocketIoKind::BinaryEvent) && let Some(id)=packet.id {
-                            pending_receipts.insert((packet.namespace,id));
-                        }
                         let actual_action = observed.input(message.clone(), elapsed_ms(started))?;
                         ensure!(actual_action.sequence == action.sequence, "recorded session input identity is inconsistent; re-record this case");
                         if transcript.protocol == Protocol::SocketIo {
@@ -236,6 +311,9 @@ pub(super) async fn execute_with_feedback(
                         if !control || heartbeats.recorded_pong(&message, transcript.policy.max_message_bytes)? {
                             tokio::time::timeout_at(started + Duration::from_millis(observed.next_deadline_ms()),
                                 transport.send(&message)).await.context("Target session input send timed out")??;
+                            if native_events.is_some() && transcript.protocol == Protocol::SocketIo {
+                                native_receipts.sent(action.sequence, &message, transcript.policy.max_message_bytes)?;
+                            }
                         }
                         if transcript.protocol == Protocol::SocketIo
                             && message.kind == crate::interaction::model::MessageKind::Text
@@ -304,9 +382,7 @@ pub(super) async fn execute_with_feedback(
         transport_clean
             && closed
             && next == transcript.actions.len()
-            && heartbeats.complete(
-                !transcript.policy.preserve_input_timing && reason == EndReason::ClientClose,
-            ),
+            && heartbeats.complete(removed_ms > 0 && reason == EndReason::ClientClose),
     )?;
     Ok(ReplayResponse {
         started_at,
@@ -336,15 +412,6 @@ async fn execute(
     .await
 }
 
-fn allows_pending_receipts(action: &InputAction) -> bool {
-    // Overlapping business inputs retain their recorded order. Drain requested
-    // native receipts only before ending their namespace; transport cancellation
-    // remains an explicit client input and may end pending business.
-    !matches!(&action.action,InputActionKind::Message {message}
-        if message.kind==crate::interaction::model::MessageKind::Text
-        && matches!(crate::interaction::socketio::decode_engine_io_text(&message.data,usize::MAX),Ok(EngineIoPacket::Message(packet)) if packet.kind==SocketIoKind::Disconnect))
-}
-
 fn is_control(protocol: Protocol, message: &WireMessage, limit: usize) -> Result<bool> {
     Ok(protocol == Protocol::SocketIo
         && message.kind == crate::interaction::model::MessageKind::Text
@@ -365,39 +432,49 @@ fn note_completed(
     }
 }
 
-fn action_due(
-    protocol: Protocol,
+fn session_deadline(
+    transcript: &InputTranscript,
+    observed: &Observation,
+    next: usize,
+    started: Instant,
+) -> Instant {
+    let millis = if transcript.protocol == Protocol::SocketIo
+        && next < transcript.actions.len()
+        && observed.pending().is_empty()
+    {
+        // Header timeout bounds only Transport::connect. Future recorded input
+        // owns the session until its policy budget, not the HTTP handshake cap.
+        transcript.policy.max_duration_ms
+    } else {
+        observed.next_deadline_ms()
+    };
+    started + Duration::from_millis(millis)
+}
+
+fn websocket_action_due(
     action: &InputAction,
     completed: &BTreeMap<u64, Instant>,
     last_offset: u64,
     last_sent: Instant,
     input_gap_ms: u64,
-    preserve_input_timing: bool,
 ) -> Option<Instant> {
-    let fast = protocol == Protocol::SocketIo && !preserve_input_timing;
-    let gap = |delay: u64| if fast { 0 } else { delay };
     let mut barrier = None;
     for sequence in &action.after {
         let at = *completed.get(sequence)?;
         barrier = Some(barrier.map_or(at, |previous: Instant| previous.max(at)));
     }
-    let closes = matches!(action.action, InputActionKind::Close { .. })
-        || (protocol == Protocol::SocketIo
-            && matches!(&action.action, InputActionKind::Message { message }
-                if message.kind == crate::interaction::model::MessageKind::Text
-                    && message.data == "1"));
+    let closes = matches!(action.action, InputActionKind::Close { .. });
     if closes && let Some(gap_start) = action.gap_start_ms {
         let delay = action.offset_ms.checked_sub(gap_start)?;
         // Keep the actual completion barrier even when client idle time is compressed.
-        return barrier?.checked_add(Duration::from_millis(gap(delay)));
+        return barrier?.checked_add(Duration::from_millis(delay));
     }
     if action.compressible_gap {
         let gap_start = action.gap_start_ms?;
-        let delay = gap(action.offset_ms.saturating_sub(gap_start).min(input_gap_ms));
+        let delay = action.offset_ms.saturating_sub(gap_start).min(input_gap_ms);
         Some(barrier? + Duration::from_millis(delay))
     } else {
-        let due =
-            last_sent + Duration::from_millis(gap(action.offset_ms.saturating_sub(last_offset)));
+        let due = last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset));
         Some(barrier.map_or(due, |barrier| due.max(barrier)))
     }
 }
@@ -445,6 +522,36 @@ mod tests {
     use crate::interaction::model::InputActionKind;
 
     #[test]
+    fn future_recorded_input_uses_session_budget_then_restores_business_idle() {
+        let started = Instant::now();
+        let mut input = InputTranscript::new(
+            Protocol::SocketIo,
+            crate::interaction::policy::InteractionPolicy::default(),
+        );
+        input.actions.push(InputAction {
+            sequence: 1,
+            offset_ms: 40_000,
+            after: vec![],
+            compressible_gap: false,
+            gap_start_ms: None,
+            ack_ref: None,
+            action: InputActionKind::Message {
+                message: WireMessage::text("1"),
+            },
+        });
+        let mut observed = Observation::new(input.protocol, input.policy.clone()).unwrap();
+        observed.output(WireMessage::text("0{\"sid\":\"live\",\"upgrades\":[],\"pingInterval\":25000,\"pingTimeout\":20000}"),0).unwrap();
+        assert_eq!(
+            session_deadline(&input, &observed, 0, started),
+            started + Duration::from_millis(input.policy.max_duration_ms)
+        );
+        assert_eq!(
+            session_deadline(&input, &observed, 1, started),
+            started + Duration::from_millis(input.policy.business_idle_ms)
+        );
+    }
+
+    #[test]
     fn input_gap_compression_waits_for_independently_observed_target_completion() {
         let sent = Instant::now();
         let action = InputAction {
@@ -459,11 +566,11 @@ mod tests {
             },
         };
         let mut completed = BTreeMap::new();
-        assert!(action_due(Protocol::SocketIo, &action, &completed, 0, sent, 100, true).is_none());
+        assert!(websocket_action_due(&action, &completed, 0, sent, 100).is_none());
         let target_done = sent + Duration::from_secs(2);
         completed.insert(1, target_done);
         assert_eq!(
-            action_due(Protocol::SocketIo, &action, &completed, 0, sent, 100, true),
+            websocket_action_due(&action, &completed, 0, sent, 100),
             Some(target_done + Duration::from_millis(100))
         );
         let overlap = InputAction {
@@ -472,7 +579,7 @@ mod tests {
             ..action
         };
         assert_eq!(
-            action_due(Protocol::SocketIo, &overlap, &completed, 0, sent, 100, true),
+            websocket_action_due(&overlap, &completed, 0, sent, 100),
             Some(sent + Duration::from_secs(30))
         );
     }
@@ -494,21 +601,17 @@ mod tests {
                 reason: String::new(),
             },
         };
-        assert!(action_due(Protocol::SocketIo, &action, &completed, 10, sent, 1, true).is_none());
+        assert!(websocket_action_due(&action, &completed, 10, sent, 1).is_none());
         completed.insert(2, target_done);
         assert_eq!(
-            action_due(Protocol::SocketIo, &action, &completed, 10, sent, 1, true),
+            websocket_action_due(&action, &completed, 10, sent, 1),
             Some(target_done + Duration::from_millis(50))
         );
         action.action = InputActionKind::Message {
             message: WireMessage::text("1"),
         };
         assert_eq!(
-            action_due(Protocol::SocketIo, &action, &completed, 10, sent, 1, true),
-            Some(target_done + Duration::from_millis(50))
-        );
-        assert_eq!(
-            action_due(Protocol::WebSocket, &action, &completed, 10, sent, 1, true),
+            websocket_action_due(&action, &completed, 10, sent, 1),
             Some(sent + Duration::from_millis(47)),
             "a generic WebSocket text message is not an Engine.IO close"
         );

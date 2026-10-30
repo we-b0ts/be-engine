@@ -12,6 +12,8 @@ project:
       mode: read_write
       retention: keep
   replay:
+    # auto compresses only proven Socket.IO idle gaps; recorded preserves offsets.
+    socketio_timing: auto
     case_no_progress_timeout_ms: 2000
     startup_timeout_seconds: 60
     request_timeout_allowance_seconds: 30

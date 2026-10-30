@@ -2,6 +2,7 @@
 mod feedback;
 mod http;
 mod socketio;
+pub(crate) mod timing;
 pub(crate) use feedback::{Feedback, NativeEvent, NativeEventSink};
 
 use anyhow::Result;

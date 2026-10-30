@@ -137,6 +137,8 @@ async fn business_header_differences_return_the_response_and_fail_dirty_gates() 
             identity_pairs: Vec::new(),
             derived_input: None,
             native_event: None,
+            input_timing: None,
+            socketio_timing: None,
         },
         runtime.state.clone(),
     )
@@ -152,6 +154,8 @@ async fn business_header_differences_return_the_response_and_fail_dirty_gates() 
             identity_pairs: Vec::new(),
             derived_input: None,
             native_event: None,
+            input_timing: None,
+            socketio_timing: None,
         },
         runtime.state.clone(),
         None,

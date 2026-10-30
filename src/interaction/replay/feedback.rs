@@ -16,12 +16,16 @@ pub(crate) trait NativeEventSink: Send + Sync {
     fn connected<'a>(&'a self, _namespace: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
+    fn acknowledged(&self, _sequence: u64) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct Feedback {
     pub dependency_failure: Option<tokio::sync::watch::Receiver<bool>>,
     pub native_events: Option<Arc<dyn NativeEventSink>>,
+    pub input_timing: Option<Arc<dyn super::timing::InputTiming>>,
 }
 
 impl From<Option<tokio::sync::watch::Receiver<bool>>> for Feedback {
@@ -29,6 +33,7 @@ impl From<Option<tokio::sync::watch::Receiver<bool>>> for Feedback {
         Self {
             dependency_failure,
             native_events: None,
+            input_timing: None,
         }
     }
 }

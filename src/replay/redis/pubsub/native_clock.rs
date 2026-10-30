@@ -1,4 +1,4 @@
-//! Finite external ordinary Socket.IO inputs follow a passive native request clock.
+//! Finite external Socket.IO inputs follow a request clock and actual input ACK.
 use super::*;
 use crate::{dependency_index::RecordRef, replay::ReplayCase};
 use chrono::{DateTime, Utc};
@@ -14,6 +14,7 @@ pub(in crate::replay) struct NativeClock {
     namespaces: BTreeSet<String>,
     entries: Vec<Entry>,
     live: BTreeMap<String, Live>,
+    inputs: BTreeMap<String, BTreeSet<u64>>,
 }
 
 #[derive(Debug)]
@@ -22,6 +23,7 @@ struct Live {
     observer: bool,
     closed: bool,
     namespaces: BTreeSet<String>,
+    acknowledged: BTreeSet<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +43,7 @@ struct Entry {
     username: Option<String>,
     lifetime: chrono::TimeDelta,
     reserved: bool,
+    inputs_before: Vec<u64>,
 }
 
 impl Entry {
@@ -71,6 +74,20 @@ fn endpoint(record: &RecordedPush) -> TargetKey {
 }
 
 impl NativeClock {
+    pub(super) fn timing_evidence(
+        &self,
+        case: &str,
+    ) -> Vec<crate::replay::control::input_timing::Evidence> {
+        use crate::replay::control::input_timing::{DeliveryReference, Evidence};
+        self.entries
+            .iter()
+            .filter(|entry| entry.case == case)
+            .map(|entry| Evidence {
+                reference: DeliveryReference::NativePush(entry.slot),
+                completed_at: entry.source_at,
+            })
+            .collect()
+    }
     pub(in crate::replay) fn needs_observer(&self, case: &str) -> bool {
         self.entries
             .iter()
@@ -107,6 +124,7 @@ impl NativeClock {
                 observer: false,
                 closed: false,
                 namespaces: BTreeSet::new(),
+                acknowledged: BTreeSet::new(),
             },
         );
         Ok(())
@@ -158,5 +176,30 @@ impl NativeClock {
     }
     pub(super) fn guards(&self, namespace: Option<&str>) -> bool {
         namespace.is_some_and(|namespace| self.namespaces.contains(namespace))
+    }
+    pub(in crate::replay) fn input_acknowledged(
+        &mut self,
+        case: &str,
+        epoch: DateTime<Utc>,
+        sequence: u64,
+    ) -> Result<()> {
+        // Ingress-only observers have no ordinary notification program.
+        let Some(inputs) = self.inputs.get(case) else {
+            return Ok(());
+        };
+        ensure!(
+            inputs.contains(&sequence),
+            "native completion is outside original input scope"
+        );
+        let live = self
+            .live
+            .get_mut(case)
+            .context("native notification request not admitted")?;
+        ensure!(
+            live.observer && !live.closed && live.epoch == epoch,
+            "native input ACK epoch changed"
+        );
+        live.acknowledged.insert(sequence);
+        Ok(())
     }
 }

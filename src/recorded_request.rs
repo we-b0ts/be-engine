@@ -50,6 +50,7 @@ pub(crate) struct RecordedHttpClient {
     request_rules: Option<Arc<crate::request_rules::RequestRuleRuntime>>,
     input_registration: Option<(PathBuf, String)>,
     execution_failure: Option<tokio::sync::watch::Receiver<bool>>,
+    socketio_timing: crate::interaction::replay::timing::SocketIoTiming,
 }
 
 pub(crate) struct RecordedHttpResponse {
@@ -81,6 +82,7 @@ impl RecordedHttpClient {
             request_rules: None,
             input_registration: None,
             execution_failure: None,
+            socketio_timing: Default::default(),
         }
     }
 
@@ -110,6 +112,14 @@ impl RecordedHttpClient {
 
     pub(crate) fn with_input_registration(mut self, session: &Path, case: &str) -> Self {
         self.input_registration = Some((session.into(), case.into()));
+        self
+    }
+
+    pub(crate) fn with_socketio_timing(
+        mut self,
+        timing: crate::interaction::replay::timing::SocketIoTiming,
+    ) -> Self {
+        self.socketio_timing = timing;
         self
     }
 
@@ -170,6 +180,17 @@ impl RecordedHttpClient {
             } else {
                 None
             };
+            let input_timing = if transcript.protocol
+                == crate::interaction::model::Protocol::SocketIo
+                && let Some((session, case)) = &self.input_registration
+            {
+                Some(
+                    crate::replay::input_timing_observer(session, case, self.socketio_timing)
+                        .await?,
+                )
+            } else {
+                None
+            };
             let response = crate::interaction::replay::execute(
                 &self.client,
                 &self.origin,
@@ -180,6 +201,7 @@ impl RecordedHttpClient {
                 crate::interaction::replay::Feedback {
                     dependency_failure: self.execution_failure.clone(),
                     native_events,
+                    input_timing,
                 },
             )
             .await?;

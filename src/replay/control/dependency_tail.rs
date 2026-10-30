@@ -147,6 +147,28 @@ pub(in crate::replay) fn references_consumed(
         }))
 }
 
+/// Reuse existing ownership/omission authority without making unused business
+/// exchanges optional merely to accelerate an input.
+pub(in crate::replay) fn timing_optional(
+    state: &ReplayState,
+    case: &str,
+    reference: RecordedReference,
+) -> bool {
+    state
+        .dependency_tails
+        .cases
+        .get(case)
+        .and_then(Option::as_ref)
+        .and_then(|tail| tail.selected.iter().find(|s| s.reference == reference))
+        .is_some_and(|selected| {
+            selected.lifecycle_cleanup
+                || selected.process_owned
+                    && exchange_status(state, selected.exchange)
+                        == Some(ReplayExchangeStatus::Available)
+                || permits_unstarted_omission(state, selected)
+        })
+}
+
 fn exchange_status(
     state: &ReplayState,
     exchange: ResolvedExchange,

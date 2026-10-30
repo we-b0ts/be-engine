@@ -20,6 +20,8 @@ fn command(name: &str) -> ReplayControlRequest {
         identity_pairs: vec![],
         derived_input: None,
         native_event: None,
+        input_timing: None,
+        socketio_timing: None,
     }
 }
 

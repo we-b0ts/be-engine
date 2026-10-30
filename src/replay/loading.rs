@@ -376,6 +376,7 @@ impl ReplayRuntime {
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
         let mut state = ReplayState {
+            input_timing: None,
             http_stream_timing: lifecycle.http_stream_timing,
             case_cleanup: Default::default(),
             target_stop_prepared: BTreeSet::new(),

@@ -16,6 +16,7 @@ pub(in crate::replay) mod native_clock;
 pub(in crate::replay) use inventory::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
 };
+mod input_timing;
 mod notifications;
 mod report_inventory;
 pub(in crate::replay) mod subscription_evidence;
@@ -96,7 +97,7 @@ impl Delivery {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) enum PushId {
+pub(in crate::replay) enum PushId {
     Inline(usize),
     Indexed { lane: usize, index: usize },
 }

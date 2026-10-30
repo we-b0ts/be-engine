@@ -91,6 +91,8 @@ pub(super) struct ReplayProjectConfig {
     pub pre_match: bool,
     #[serde(default)]
     pub http_stream_timing: crate::replay::ReplayHttpStreamTiming,
+    #[serde(default)]
+    pub socketio_timing: crate::interaction::replay::timing::SocketIoTiming,
     #[serde(default = "default_replay_case_no_progress_timeout_ms")]
     pub case_no_progress_timeout_ms: u64,
     #[serde(default = "default_replay_startup_timeout_seconds")]
@@ -192,6 +194,7 @@ fn default_runtime_root() -> PathBuf {
 pub(crate) struct ResolvedProjectConfig {
     pub(crate) replay_pre_match: bool,
     pub(crate) replay_http_stream_timing: crate::replay::ReplayHttpStreamTiming,
+    pub(crate) replay_socketio_timing: crate::interaction::replay::timing::SocketIoTiming,
     pub(crate) replay_case_no_progress_timeout: Duration,
     pub(crate) replay_loading: crate::replay::ReplayDependencyLoading,
     pub(crate) target_dockerfile: PathBuf,

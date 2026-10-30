@@ -169,6 +169,7 @@ pub(super) async fn capture_case(
         config.target_max_response_bytes,
     )
     .with_execution_failure(Some(monitor.receiver()))
+    .with_socketio_timing(config.replay_socketio_timing)
     .with_request_rule_runtime(request_rules)
     .with_input_registration(input_registration.0, input_registration.1)
     .send_bytes(request_bytes, &request_path.display().to_string())
@@ -391,6 +392,7 @@ mod tests {
             replay_case_no_progress_timeout: Duration::from_secs(5),
             replay_pre_match: true,
             replay_http_stream_timing: Default::default(),
+            replay_socketio_timing: Default::default(),
             target_dockerfile: PathBuf::from("Dockerfile.target"),
             target_build_contexts: Vec::new(),
             target_startup: crate::startup::StartupConfig::default(),

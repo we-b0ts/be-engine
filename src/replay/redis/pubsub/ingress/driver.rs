@@ -133,7 +133,12 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         .min_by_key(|(_, entry)| (entry.offset, entry.ordinal))
     {
         let due = started.checked_add_signed(entry.offset).ok_or(index)?;
-        if Utc::now() < due {
+        let reached = replay
+            .input_timing
+            .as_ref()
+            .and_then(|timeline| timeline.reached(case, started, entry.offset))
+            .unwrap_or_else(|| Utc::now() >= due);
+        if !reached {
             return Ok(None);
         }
         if !replay

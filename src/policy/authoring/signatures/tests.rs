@@ -10,6 +10,38 @@ aidesk: {kind: md5_sorted_fields, key: {kind: target_env, name: AIDESK_SECRET_KE
     )
     .unwrap()
 }
+
+#[test]
+fn connect_auth_positions_roundtrip_with_exact_field_ownership() {
+    let raw = "GET /socket.io/:\n  request:\n    socketio_connect:\n      /runtime:\n        /token: default\n        /nested/access: oidc\n      /other:\n        /token: default\n";
+    let rules = expand_rules(raw).unwrap();
+    assert_eq!(rules.len(), 3);
+    assert_eq!(
+        native_values(&rules),
+        expand(
+            Some(serde_yaml::from_value(rendered(&rules)["api"].clone()).unwrap()),
+            &definitions()
+        )
+        .unwrap()
+    );
+    for rule in &rules {
+        let native = rule.as_native().unwrap();
+        let claims = crate::policy::native_field_claims(native);
+        assert_eq!(claims.len(), 1);
+        assert!(matches!(
+            claims[0].slot,
+            crate::policy::NativeOwnedSlot::SocketIoConnect(_)
+        ));
+    }
+    for raw in [
+        "GET /socket.io/: {request: {socketio_connect: {'*': {'/token': default}}}}",
+        "GET /socket.io/: {request: {socketio_connect: {'/runtime': {'/*': default}}}}",
+        "GET /socket.io/: {request: {socketio_connect: {'/runtime': {'/bad~escape': default}}}}",
+        "GET /socket.io/: {request: {socketio_connect: {'/runtime': {'/token': default, '/token': oidc}}}}",
+    ] {
+        assert!(expand_rules(raw).is_err(), "{raw}");
+    }
+}
 fn expand_rules(raw: &str) -> Result<Vec<PolicyRule>> {
     expand(Some(serde_yaml::from_str(raw)?), &definitions())?
         .into_iter()
@@ -79,6 +111,9 @@ POST /api/internal/auth/aidesk/login:
                                 "SECRET_KEY"
                             }
                         );
+                    }
+                    InputTokenLocation::SocketIoConnect { .. } => {
+                        panic!("CONNECT not selected by this fixture")
                     }
                 }
             }

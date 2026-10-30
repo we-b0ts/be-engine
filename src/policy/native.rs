@@ -263,6 +263,7 @@ pub enum InputTokenLocation {
     BearerHeader { name: String },
     RawHeader { name: String },
     Query { name: String },
+    SocketIoConnect { namespace: String, pointer: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

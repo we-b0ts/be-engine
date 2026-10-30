@@ -281,6 +281,11 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
         let mut reply_value = reply(SOURCE_SID);
         reply_value["args"] = json!([{"workspaces":[],"success":true}]);
         cases[2]["args"][1] = capture(&serde_json::to_vec(&reply_value).unwrap());
+        // Runtime timing preparation and execution must see the same complete
+        // original input program, rather than a protocol-only fixture hint.
+        let request = json!({"method":"GET","uri":"/socket.io/?EIO=4&transport=websocket",
+            "timestamp":START,"headers":{},"body":capture(b""),"interaction":input_program()});
+        std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
         let runtime = runtime(temp.path(), &cases, &globals, lazy).await.unwrap();
         // This is the same private control path used by RecordedHttpClient.
         let socket_path = temp.path().join("control.sock");
@@ -386,8 +391,6 @@ async fn slow_target_prepare_preserves_recorded_ack_payloads_across_live_ws_and_
             sub_task.abort();
             client_task.abort();
         });
-        let request = json!({"method":"GET","uri":"/socket.io/?EIO=4&transport=websocket",
-            "headers":{},"body":capture(b""),"interaction":input_program()});
         let client = crate::recorded_request::RecordedHttpClient::new(
             format!("http://{address}"),
             Duration::from_secs(3),

@@ -47,6 +47,11 @@ is unclear.
   `interaction/replay/feedback` carries that observation interface separately
   from protocol parsing and control transport. No expected output enters the
   input executor, and recorded ACK payloads retain their existing references.
+  Ordinary native notification clocks also admit bounded same-namespace client
+  events with ACK IDs. `interaction/replay/socketio/native_receipts` correlates
+  actual sent inputs and received ACK metadata independently of business
+  completion and fast timing; the native clock retains Source windows, original
+  subscription ownership and the current request epoch.
   RESP delivery retains wire consumption and Case cancellation checks; the
   adapter and request contracts retain strict callback result comparison.
   `replay/assertion/interaction/client_ack` separately owns original client
@@ -73,6 +78,13 @@ is unclear.
   execution budgets; `lifecycle`, `socketio`, `stream` and `observation` own pure
   framing, completion correlation and monotonic case decisions. They do not read
   expected evidence, persist recordings or own dependency cleanup.
+  `interaction/replay/timing` owns the replay timing choice, monotonic Source-offset
+  mapping and metadata feedback interface. `replay/control/input_timing` admits
+  active-case timing queries from immutable inputs and finite dependency facts;
+  its Source reader never opens expected outputs. Redis adapters project exact
+  response/native references and publish successful wire-delivery facts separately
+  from matching and RPC completion. Supported native clocks reuse the same mapping;
+  unsupported protocol delivery or recording timing retains original offsets.
   `heartbeat` records and validates the input program's causal PING/PONG bindings;
   `interaction/replay/socketio/heartbeat` schedules those responses from actual
   Target PING packets, separately from business completion barriers. Explicit
@@ -1321,6 +1333,10 @@ explicit repository-wide audit.
 - `request_rules` owns explicit inbound-request transformation policy and the
   per-send runtime. Its `jwt` child owns compact HMAC JWT verification,
   Bearer-header or named-query selection, and relative NumericDate translation;
+  `socketio_connect` selects exact namespace/auth JSON fields in original
+  interaction inputs. It reuses that JWT verifier and send clock, and leaves
+  unselected namespace/business frames opaque. Native policy projection and
+  named API signature declarations retain the same field ownership.
   `signed_timestamp` consumes typed `input_signed_timestamp` effects, verifies
   bounded sorted-field MD5 signatures and rebases JSON string timestamps using
   only the immutable request clock and startup secret. The Source-validation

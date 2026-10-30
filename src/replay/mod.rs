@@ -264,7 +264,7 @@ pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
 pub(crate) use control::{
-    check_response_identities, native_event_observer, register_derived_input,
+    check_response_identities, input_timing_observer, native_event_observer, register_derived_input,
 };
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -428,6 +428,7 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 
 #[derive(Debug)]
 struct ReplayState {
+    input_timing: Option<control::input_timing::Live>,
     http_stream_timing: ReplayHttpStreamTiming,
     case_cleanup: control::case_cleanup::CaseCleanup,
     connect_failures: connect_failure::Inventory,

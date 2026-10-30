@@ -116,10 +116,29 @@ impl PubSubState {
             namespaces = namespaces.len(),
             "prepared finite native external notification clocks"
         );
+        let projected = entries
+            .iter()
+            .map(|entry| entry.case.as_str())
+            .collect::<BTreeSet<_>>();
+        let inputs = windows
+            .iter()
+            .filter(|window| projected.contains(window.case.as_str()))
+            .map(|window| {
+                (
+                    window.case.clone(),
+                    window
+                        .inputs
+                        .iter()
+                        .map(|(sequence, _)| *sequence)
+                        .collect(),
+                )
+            })
+            .collect();
         self.native_clock = NativeClock {
             namespaces,
             entries,
             live: BTreeMap::new(),
+            inputs,
         };
         Ok(())
     }
@@ -159,7 +178,7 @@ fn select(
     };
     if candidates.next().is_some()
         || !window.selected
-        || !window.passive
+        || !window.projectable
         || window
             .connected_after
             .is_none_or(|connected| at < connected)
@@ -167,6 +186,21 @@ fn select(
         return Ok(None);
     }
     let start = window.start.context("native notification start missing")?;
+    let offset = at - start;
+    // Floor-millisecond input offsets cannot order a notification in that same millisecond.
+    if window
+        .inputs
+        .iter()
+        .any(|(_, input)| offset.num_milliseconds() == i64::try_from(*input).unwrap_or(i64::MAX))
+    {
+        return Ok(None);
+    }
+    let inputs_before = window
+        .inputs
+        .iter()
+        .filter(|(_, input)| offset.num_milliseconds() > i64::try_from(*input).unwrap_or(i64::MAX))
+        .map(|(sequence, _)| *sequence)
+        .collect();
     let lifetime = window.end.context("native notification end missing")? - start;
     let entry = Entry {
         case: window.case.clone(),
@@ -176,7 +210,7 @@ fn select(
         reference,
         inline,
         source_at: at,
-        offset: at - start,
+        offset,
         ordinal,
         digest,
         endpoint: endpoint(record),
@@ -184,6 +218,7 @@ fn select(
         username: record.username.clone(),
         lifetime,
         reserved: false,
+        inputs_before,
     };
     // Nonempty exclusions can name a dynamic Source socket. Without an
     // independent live identity proof, preserve the slot rather than sending

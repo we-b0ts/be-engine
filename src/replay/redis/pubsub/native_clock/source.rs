@@ -14,7 +14,8 @@ pub(super) struct Window {
     pub connected_after: Option<DateTime<Utc>>,
     pub end: Option<DateTime<Utc>>,
     pub namespaces: BTreeSet<String>,
-    pub passive: bool,
+    pub projectable: bool,
+    pub inputs: Vec<(u64, u64)>,
     pub selected: bool,
 }
 
@@ -109,18 +110,22 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
                     )
                 )
         });
-        // Fast multi-action programs need an additional causal input proof.
-        // Initially support passive namespace subscriptions, whose only input
-        // is CONNECT; unsupported or overlapping windows keep inputs unused.
-        let passive = complete
+        // Multi-input projection is limited to one CONNECT and ACK-tracked
+        // ordinary client events. Every preceding event must receive its actual
+        // Target ACK before delivery; future inputs are never prerequisites.
+        let inputs = input.as_ref().and_then(tracked_inputs);
+        let projectable = complete
             && clean
             && start.zip(closed_at).is_some_and(|(start, end)| end > start)
             && input.as_ref().is_some_and(|input| {
-                input.actions.len() == 1
+                inputs.is_some()
                     && namespaces.len() == 1
-                    && input.actions[0].ack_ref.is_none()
                     && elapsed.is_some_and(|end| {
-                        input.actions[0].offset_ms < end && end <= input.policy.max_duration_ms
+                        input
+                            .actions
+                            .last()
+                            .is_some_and(|action| action.offset_ms < end)
+                            && end <= input.policy.max_duration_ms
                     })
             });
         let connected_after = input
@@ -138,7 +143,8 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
             connected_after,
             end: closed_at,
             namespaces,
-            passive,
+            projectable,
+            inputs: inputs.unwrap_or_default(),
         });
         ensure!(
             windows.len() <= 16_384,
@@ -146,6 +152,53 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
         );
     }
     Ok(windows)
+}
+
+fn tracked_inputs(input: &InputTranscript) -> Option<Vec<(u64, u64)>> {
+    if input.actions.len() > 128 {
+        return None;
+    }
+    let first = input.actions.first()?;
+    let packet = |action: &crate::interaction::model::InputAction| {
+        let InputActionKind::Message { message } = &action.action else {
+            return None;
+        };
+        if message.kind != crate::interaction::model::MessageKind::Text || action.ack_ref.is_some()
+        {
+            return None;
+        }
+        let EngineIoPacket::Message(packet) =
+            decode_engine_io_text(&message.data, input.policy.max_message_bytes).ok()?
+        else {
+            return None;
+        };
+        Some(packet)
+    };
+    let connect = packet(first)?;
+    if connect.kind != SocketIoKind::Connect {
+        return None;
+    }
+    let mut ids = BTreeSet::new();
+    input
+        .actions
+        .iter()
+        .skip(1)
+        .map(|action| {
+            let event = packet(action)?;
+            (event.kind == SocketIoKind::Event
+                && event.id.is_some()
+                && event.attachments == 0
+                && event.namespace == connect.namespace
+                && ids.insert(event.id?)
+                && !matches!(
+                    event
+                        .event_name()
+                        .and_then(|name| input.policy.completion_for(&event.namespace, name)),
+                    Some(crate::interaction::policy::CompletionRule::TerminalEvent { .. })
+                ))
+            .then_some((action.sequence, action.offset_ms))
+        })
+        .collect()
 }
 
 fn read_input(path: &Path) -> Result<Option<Request>> {

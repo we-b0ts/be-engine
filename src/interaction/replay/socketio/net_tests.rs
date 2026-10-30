@@ -8,6 +8,7 @@ use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
+mod cancellation_timing;
 mod close_completion;
 mod fast_execution;
 mod heartbeat_behavior;

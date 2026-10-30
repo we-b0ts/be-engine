@@ -84,6 +84,7 @@ fn entry(
                         canonical,
                     )
                 }
+                InputTokenLocation::SocketIoConnect { .. } => return Ok(None),
             }
         }
         NativeEffect::InputSignedTimestamp(effect) => {
@@ -183,6 +184,36 @@ pub(super) fn compact(
     let Some(native) = rule.as_native().filter(|_| generated(rule)) else {
         return Ok(false);
     };
+    if let NativeEffect::InputJwt(effect) = &native.effect
+        && let InputTokenLocation::SocketIoConnect { namespace, pointer } = &effect.location
+    {
+        let Some(profile) = jwt_name(definitions, effect.algorithm, &effect.signing_key) else {
+            return Ok(false);
+        };
+        let api = native.selector.api.as_deref().unwrap_or("*");
+        let reference = Reference::Name(profile.clone());
+        let canonical = lower(
+            api,
+            Position::SocketIoConnect(namespace, pointer, &reference),
+            definitions,
+        )?;
+        if without_proofs(native.clone()) != canonical {
+            return Ok(false);
+        }
+        let positions = mapping(
+            mapping(
+                mapping(mapping(mapping(root, "api")?, api)?, "request")?,
+                "socketio_connect",
+            )?,
+            namespace,
+        )?;
+        ensure!(
+            !positions.contains_key(pointer),
+            "duplicate API signature position"
+        );
+        positions.insert(pointer.clone().into(), profile.into());
+        return Ok(true);
+    }
     let Some(entry) = entry(native, definitions)? else {
         return Ok(false);
     };

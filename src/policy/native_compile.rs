@@ -456,6 +456,13 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
                     );
                 }
                 InputTokenLocation::Query { name } => text(name, "input query token", 128)?,
+                InputTokenLocation::SocketIoConnect { namespace, pointer } => {
+                    crate::request_rules::SocketIoConnectLocation {
+                        namespace: namespace.clone(),
+                        pointer: pointer.clone(),
+                    }
+                    .validate()?;
+                }
             }
             Ok(())
         }

@@ -1,8 +1,8 @@
-//! Client idle offsets are optional; actual event/ACK dependencies are not.
+//! Unproven gaps retain their clock; actual event/ACK bindings remain mandatory.
 use super::*;
 
 #[tokio::test]
-async fn socketio_compresses_legacy_idle_offsets_and_keeps_actual_ack_rebinding() {
+async fn legacy_unproven_gaps_keep_offsets_and_actual_ack_rebinding() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -35,7 +35,7 @@ async fn socketio_compresses_legacy_idle_offsets_and_keeps_actual_ack_rebinding(
     input.actions[1].after.clear();
     input.actions[1].compressible_gap = false;
     input.actions[1].gap_start_ms = None;
-    input.actions[1].offset_ms = 30_000;
+    input.actions[1].offset_ms = 120;
     input.actions[1].ack_ref = Some(crate::interaction::model::AckReference {
         namespace: "/".into(),
         server_event_ordinal: 1,
@@ -45,7 +45,7 @@ async fn socketio_compresses_legacy_idle_offsets_and_keeps_actual_ack_rebinding(
     };
     input.actions.push(InputAction {
         sequence: 3,
-        offset_ms: 40_000,
+        offset_ms: 160,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -68,7 +68,7 @@ async fn socketio_compresses_legacy_idle_offsets_and_keeps_actual_ack_rebinding(
     .unwrap()
     .unwrap();
     assert!(response.observation.end.clean);
-    assert!(response.observation.end.offset_ms >= 30);
+    assert!(response.observation.end.offset_ms >= 160);
     assert!(response.observation.end.offset_ms < 1000);
     server.await.unwrap();
 }
@@ -145,7 +145,7 @@ async fn dependency_rejection_ends_a_blocked_ack_without_synthesizing_output() {
 }
 
 #[tokio::test]
-async fn fast_close_does_not_wait_for_a_recorded_heartbeat_ping_that_never_occurred() {
+async fn uncompressed_close_retains_missing_heartbeat_evidence() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -165,7 +165,7 @@ async fn fast_close_does_not_wait_for_a_recorded_heartbeat_ping_that_never_occur
     input.actions.truncate(1);
     input.actions.push(InputAction {
         sequence: 2,
-        offset_ms: 25_000,
+        offset_ms: 40,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -176,7 +176,7 @@ async fn fast_close_does_not_wait_for_a_recorded_heartbeat_ping_that_never_occur
     });
     input.actions.push(InputAction {
         sequence: 3,
-        offset_ms: 40_000,
+        offset_ms: 80,
         after: vec![],
         compressible_gap: false,
         gap_start_ms: None,
@@ -205,6 +205,7 @@ async fn fast_close_does_not_wait_for_a_recorded_heartbeat_ping_that_never_occur
     .await
     .unwrap()
     .unwrap();
-    assert!(response.observation.end.clean);
+    assert!(!response.observation.end.clean);
+    assert!(response.observation.end.offset_ms >= 80);
     server.await.unwrap();
 }

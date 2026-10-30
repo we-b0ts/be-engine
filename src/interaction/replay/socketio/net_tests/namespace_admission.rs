@@ -75,7 +75,9 @@ async fn delayed_admission(preserve_input_timing: bool) {
     {
         input.actions.push(InputAction {
             sequence: index as u64 + 1,
-            offset_ms: index as u64,
+            // The independent cancellation deadline must leave room for this
+            // test's deliberately slower Target namespace authentication.
+            offset_ms: [0, 1, 60, 100][index],
             after: vec![],
             compressible_gap: false,
             gap_start_ms: None,

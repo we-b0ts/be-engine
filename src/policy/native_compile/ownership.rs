@@ -49,6 +49,7 @@ pub enum NativeOwnedSlot {
     RedisValue(crate::policy::RedisContainer),
     Header(String),
     Query(String),
+    SocketIoConnect(String),
     PathSegment(usize),
     MultipartBoundary,
 }
@@ -365,12 +366,19 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             }
         }
         NativeEffect::InputJwt(effect) => {
-            let slot = match &effect.location {
+            let (slot, location) = match &effect.location {
                 InputTokenLocation::BearerHeader { name }
-                | InputTokenLocation::RawHeader { name } => L::Header(name.to_ascii_lowercase()),
-                InputTokenLocation::Query { name } => L::Query(name.clone()),
+                | InputTokenLocation::RawHeader { name } => {
+                    (L::Header(name.to_ascii_lowercase()), OwnedLocation::Scalar)
+                }
+                InputTokenLocation::Query { name } => {
+                    (L::Query(name.clone()), OwnedLocation::Scalar)
+                }
+                InputTokenLocation::SocketIoConnect { namespace, pointer } => {
+                    (L::SocketIoConnect(namespace.clone()), json(pointer))
+                }
             };
-            add(S::ApiInput, slot, OwnedLocation::Scalar, false);
+            add(S::ApiInput, slot, location, false);
         }
         NativeEffect::InputSignedTimestamp(effect) => {
             // Stable signed fields must also be protected from another input

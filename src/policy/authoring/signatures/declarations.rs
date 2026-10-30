@@ -30,9 +30,22 @@ pub(in crate::policy::authoring) struct Request {
     pub headers: BTreeMap<String, Header>,
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
     pub query: BTreeMap<String, Reference>,
+    #[serde(
+        default,
+        deserialize_with = "crate::policy::strict_map::unique_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub socketio_connect: BTreeMap<String, ConnectFields>,
     #[serde(default)]
     pub body: Option<Body>,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(transparent)]
+pub(in crate::policy::authoring) struct ConnectFields(
+    #[serde(deserialize_with = "crate::policy::strict_map::unique_map")]
+    pub  BTreeMap<String, Reference>,
+);
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]

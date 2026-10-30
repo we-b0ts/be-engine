@@ -49,10 +49,7 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
                 .live
                 .get(&job.case)
                 .is_none_or(|live| !live.observer || live.closed)
-            || job
-                .epoch
-                .checked_add_signed(job.source.lifetime)
-                .is_none_or(|end| Utc::now() >= end)
+            || reached(&replay, &job.case, job.epoch, job.source.lifetime)
             || !replay.redis.pubsub.is_subscribed(job.client, slot)
             || !replay.redis.pubsub.push_available(slot)
         {
@@ -127,10 +124,13 @@ fn ready(replay: &ReplayState) -> Option<Job> {
         .enumerate()
         .filter(|(_, entry)| entry.case == case && !entry.reserved)
         .min_by_key(|(_, entry)| (entry.offset, entry.ordinal))?;
-    let now = Utc::now();
-    if now < live.epoch.checked_add_signed(entry.offset)?
-        || now >= live.epoch.checked_add_signed(entry.lifetime)?
+    if !reached(replay, case, live.epoch, entry.offset)
+        || reached(replay, case, live.epoch, entry.lifetime)
         || !live.namespaces.contains(&entry.namespace)
+        || !entry
+            .inputs_before
+            .iter()
+            .all(|sequence| live.acknowledged.contains(sequence))
     {
         return None;
     }
@@ -154,6 +154,23 @@ fn ready(replay: &ReplayState) -> Option<Job> {
         sender: sub.sender.clone(),
         source: entry.clone(),
     })
+}
+
+fn reached(
+    replay: &ReplayState,
+    case: &str,
+    epoch: DateTime<Utc>,
+    offset: chrono::TimeDelta,
+) -> bool {
+    replay
+        .input_timing
+        .as_ref()
+        .and_then(|timeline| timeline.reached(case, epoch, offset))
+        .unwrap_or_else(|| {
+            epoch
+                .checked_add_signed(offset)
+                .is_none_or(|due| Utc::now() >= due)
+        })
 }
 
 fn fail(replay: &mut ReplayState, job: &Job, slot: PushId, reason: &str) {

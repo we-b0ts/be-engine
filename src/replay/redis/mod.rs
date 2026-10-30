@@ -68,6 +68,7 @@ mod admission;
 mod cleanup;
 mod delivery;
 mod evidence;
+mod input_timing;
 mod lifecycle;
 use delivery::deliver_redis_exchange;
 
@@ -587,6 +588,7 @@ async fn serve_connection(
                     if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, "callback case already ended".into()); }
                     continue;
                 }
+                let timing_scope = replay.input_timing.as_ref().map(|timeline| timeline.scope());
                 drop(replay);
                 let sent = tokio::time::timeout(std::time::Duration::from_secs(5), reader.inner.write_all(&delivery.bytes)).await;
                 let mut replay = state.lock().await;
@@ -599,6 +601,9 @@ async fn serve_connection(
                             continue;
                         }
                         replay.redis.pubsub.complete(delivery.push);
+                        if let (Some(timeline), Some((case, epoch))) = (&mut replay.input_timing, timing_scope) {
+                            timeline.delivered(&case, epoch, crate::replay::control::input_timing::DeliveryReference::NativePush(delivery.push));
+                        }
                         replay.redis.delivery_changed.notify_waiters();
                         if let Some(m) = &delivery.matched { replay.redis.complete_exchange(m); }
                     }

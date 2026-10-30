@@ -8,8 +8,10 @@ mod case_execution;
 pub(super) mod dependency_tail;
 mod derived_input;
 mod identity;
+pub(in crate::replay) mod input_timing;
 mod native_event;
 pub(crate) use derived_input::register as register_derived_input;
+pub(crate) use input_timing::connect as input_timing_observer;
 pub(crate) use native_event::connect as native_event_observer;
 mod interaction;
 mod interruption;
@@ -37,6 +39,10 @@ pub(super) struct ReplayControlRequest {
     pub(super) derived_input: Option<derived_input::Registration>,
     #[serde(default)]
     pub(super) native_event: Option<native_event::Observation>,
+    #[serde(default)]
+    pub(super) input_timing: Option<input_timing::Query>,
+    #[serde(default)]
+    pub(super) socketio_timing: Option<crate::interaction::replay::timing::SocketIoTiming>,
 }
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -268,9 +274,10 @@ pub(super) async fn handle_control_request(
             }
         }
         "derived_input" => derived_input::accept(&request, &state).await,
-        "native_event_begin" | "native_event" | "native_connected" => {
+        "native_event_begin" | "native_event" | "native_connected" | "native_input_ack" => {
             native_event::accept(&request, &state).await
         }
+        "input_timing_begin" | "input_timing" => input_timing::accept(&request, &state).await,
         "prepare_end" => target_stop::prepare(&request, &state).await,
         "end" => end_case(&request, state.clone()).await,
         "end_stopped" => end_case(&request, state.clone()).await,
@@ -512,6 +519,7 @@ pub(super) async fn begin_case(
         return serde_json::json!({"ok": false, "error": format!("dependency-tail dependency activation failed: {error:#}")});
     }
     state.active_case_id = Some(case_id.to_string());
+    state.input_timing = None;
     state.redis.pubsub.native_clock.begin_case(case_id);
     if let Some(policy) = &mut state.replay_policy {
         policy.begin_case(case_id);
