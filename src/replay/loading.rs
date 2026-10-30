@@ -281,6 +281,8 @@ impl ReplayRuntime {
                 .pubsub
                 .prepare_echo_indices()
                 .context("Redis adapter self-echo index preparation failed")?;
+            redis.prepare_ingress(&redis_cases)?;
+            redis.prepare_native_clock(&redis_root, &redis_cases)?;
             Ok((redis, targets))
         })
         .await
@@ -374,6 +376,7 @@ impl ReplayRuntime {
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
         let mut state = ReplayState {
+            input_timing: None,
             http_stream_timing: lifecycle.http_stream_timing,
             case_cleanup: Default::default(),
             target_stop_prepared: BTreeSet::new(),
@@ -460,6 +463,8 @@ impl ReplayRuntime {
             session_path: config.session_path,
             control_socket_path: config.control_socket_path,
         };
+        redis::pubsub::ingress::start(runtime.state.clone());
+        redis::pubsub::native_clock::start(runtime.state.clone());
         // A single-directory Replay starts with an implicit active case.
         let initial_case = runtime.state.lock().await.active_case_id.clone();
         if let Some(case_id) = initial_case {

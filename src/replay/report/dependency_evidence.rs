@@ -416,7 +416,7 @@ fn collect_arrays(
             if let Some(case_id) = case_id {
                 builder
                     .representative
-                    .get_or_insert(ReplayDependencyRepresentative {
+                    .get_or_insert_with(|| ReplayDependencyRepresentative {
                         case_id,
                         difference: event_difference(array.direction, event),
                         target_matches: Vec::new(),
@@ -591,6 +591,17 @@ fn signature(event: &Value) -> Value {
         if let Some(value) = event.get(field) {
             signature.insert(field.to_string(), bounded_value(value));
         }
+    }
+    // Target query reports carry the original SQL, unlike Source inventory
+    // rows, which already carry a summary. Derive the diagnostic before the
+    // public signature truncates SQL to its projection-only prefix.
+    if !signature.contains_key("sql_summary")
+        && let Some(sql) = event.get("sql").and_then(Value::as_str)
+    {
+        signature.insert(
+            "sql_summary".into(),
+            serde_json::json!(super::SqlSummary::new(sql)),
+        );
     }
     Value::Object(signature)
 }

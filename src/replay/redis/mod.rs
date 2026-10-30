@@ -68,6 +68,7 @@ mod admission;
 mod cleanup;
 mod delivery;
 mod evidence;
+mod input_timing;
 mod lifecycle;
 use delivery::deliver_redis_exchange;
 
@@ -264,6 +265,7 @@ impl RedisReplayState {
 
     pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
         self.observations.has_in_flight()
+            || self.pubsub.has_case_delivery()
             || self.activity_refresh.has_in_flight()
             || self.exchanges.iter().enumerate().any(|(index, e)| {
                 e.source == ReplaySource::Case
@@ -278,6 +280,7 @@ impl RedisReplayState {
 
     pub(in crate::replay) fn has_in_flight(&self) -> bool {
         self.observations.has_in_flight()
+            || self.pubsub.has_case_delivery()
             || self.activity_refresh.has_in_flight()
             || self.exchanges.iter().enumerate().any(|(index, e)| {
                 !self.append_streams.idle_source(index)
@@ -546,9 +549,21 @@ impl RedisReplayState {
 }
 
 pub(super) async fn handle_connection(
+    stream: TcpStream,
+    target: ReplayTarget,
+    state: Arc<Mutex<ReplayState>>,
+) -> Result<()> {
+    let client_id = Uuid::new_v4();
+    let result = serve_connection(stream, target, state.clone(), client_id).await;
+    state.lock().await.redis.finish_pubsub_client(client_id);
+    result
+}
+
+async fn serve_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
+    client_id: Uuid,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
@@ -561,35 +576,39 @@ pub(super) async fn handle_connection(
     let mut database = 0_i64;
     let mut username: Option<String> = None;
     let mut connection_binding = CaseConnectionBinding::default();
-    let client_id = Uuid::new_v4();
     let (push_tx, mut push_rx) = tokio::sync::mpsc::channel::<pubsub::Delivery>(256);
     loop {
         let read = tokio::select! {
             frame = read_redis_frame(&mut reader) => frame,
             Some(delivery) = push_rx.recv() => {
                 let mut replay = state.lock().await;
-                if delivery.matched.as_ref().is_some_and(|m| m.report.case_id != replay.active_case_id) || replay.finalized_at.is_some()
+                if !delivery.case_is_current(&replay) || replay.finalized_at.is_some()
                     || !replay.redis.pubsub.is_subscribed(client_id, delivery.push) {
-                    replay.redis.pubsub.fail(delivery.push);
+                    replay.redis.fail_pubsub_input(delivery.push,delivery.case_id.as_deref(),"Pub/Sub input Case or subscription already ended");
                     if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, "callback case already ended".into()); }
                     continue;
                 }
+                let timing_scope = replay.input_timing.as_ref().map(|timeline| timeline.scope());
                 drop(replay);
                 let sent = tokio::time::timeout(std::time::Duration::from_secs(5), reader.inner.write_all(&delivery.bytes)).await;
                 let mut replay = state.lock().await;
                 let sent = sent.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "Pub/Sub push delivery timed out")).and_then(|r| r);
                 match sent {
                     Ok(()) => {
-                        if delivery.matched.as_ref().is_some_and(|m| m.report.case_id != replay.active_case_id) {
-                            replay.redis.pubsub.fail(delivery.push);
+                        if !delivery.case_is_current(&replay) {
+                            replay.redis.fail_pubsub_input(delivery.push,delivery.case_id.as_deref(),"Pub/Sub input Case changed during delivery");
                             if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, "callback case changed during delivery".into()); }
                             continue;
                         }
                         replay.redis.pubsub.complete(delivery.push);
+                        if let (Some(timeline), Some((case, epoch))) = (&mut replay.input_timing, timing_scope) {
+                            timeline.delivered(&case, epoch, crate::replay::control::input_timing::DeliveryReference::NativePush(delivery.push));
+                        }
+                        replay.redis.delivery_changed.notify_waiters();
                         if let Some(m) = &delivery.matched { replay.redis.complete_exchange(m); }
                     }
                     Err(error) => {
-                        replay.redis.pubsub.fail(delivery.push);
+                        replay.redis.fail_pubsub_input(delivery.push,delivery.case_id.as_deref(),"Pub/Sub input TCP delivery failed");
                         if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, error.to_string()); }
                         return Err(error.into());
                     }

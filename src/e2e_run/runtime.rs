@@ -668,6 +668,7 @@ mod tests {
             replay_case_no_progress_timeout: Duration::from_secs(5),
             replay_pre_match: true,
             replay_http_stream_timing: Default::default(),
+            replay_socketio_timing: Default::default(),
             target_dockerfile,
             target_build_contexts: Vec::new(),
             target_startup: crate::startup::StartupConfig::default(),

@@ -590,6 +590,38 @@ the ordinary additive behavior. For example, clearing JSON requires an explicit
 may omit `replace_rules`. The plan exposes additions and removals before apply;
 neither mode bypasses Source proof, complete preflight or genuine verification.
 
+A finalized attempt with unexecuted Cases may revoke existing bounded key-local
+Redis `read_back` permissions through explicit `replace_rules`. The compiled
+result must remove only those permissions and preserve every other rule, field,
+format, owner and signature. It cannot add a format or broaden a selector. The
+planner still freezes the full Source inventory, validates the current policy
+and executes ordinary preflight; apply requires fresh genuine Replay. Other
+changes continue to require a complete finalized attempt, except the identity
+format changes below. Use the native rule ID from the failure
+diagnostic; do not replace the entire Redis section merely to remove one key's
+read-back permission.
+
+A finalized partial attempt can also revise the formats of existing global JSON
+identity fields through explicit `replace_sections: [json]`. The complete field
+set, identity kind and literal prefixes must remain unchanged, as must all other
+compiled permissions, signatures and owners. This explicitly permits another
+representation; it does not establish compatibility by itself. Source-wide and
+independent Target preflight still reject changed business fields, types or
+identity relationships, and application still requires fresh genuine Replay.
+Adding fields, changing kinds or prefixes, or mixing in native effects retains
+the complete-attempt requirement.
+
+A finalized partial attempt may add scalar identity formats under bounded
+`redis.keys` patterns, or revise existing identity formats without changing
+their literal prefixes. Existing key declarations cannot be removed or renamed;
+an all-key `*` selector is ineligible. Every other compiled permission must stay
+identical, including command sequences, read counts, state behavior, signatures
+and other protocol formats. This permits a streamed first Case to declare a
+Source-generated ownership token after failure stopped later Cases. The full
+immutable Source inventory and available independent Target observations still
+undergo ordinary preflight, evidence remains frozen through apply, and missing
+Target observations remain obligations for fresh genuine Replay.
+
 Distinguish candidate, needs-proof/schema/evidence, stale, unsupported,
 planned, applied-pending-verification, verified, residual-failure and
 not-observed. `apply` only records a policy change. Offline preflight is not

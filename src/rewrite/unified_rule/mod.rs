@@ -249,7 +249,7 @@ fn plan(
         "Target code, startup inputs or policy changed since genuine Replay; run fresh Replay before planning"
     );
     let identity = manifest::ExecutionIdentity::current(root, state)?;
-    let mut bundle = manifest::Bundle::load(root, state, &current.fingerprint)?;
+    let mut bundle = manifest::Bundle::load(root, state, &current.fingerprint, &before, &compiled)?;
     let preflight = preflight::verify(root, state, &mut bundle, &before, &compiled, &rule_ids)?;
     bundle.artifacts.insert(proposal.path.clone(), proposal);
     let updated = if changed {

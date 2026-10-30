@@ -35,6 +35,32 @@ is unclear.
   payload sizes. Protocol validation and aggregate evidence budgets stay with
   their existing owners.
 
+- `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
+  a Global Socket.IO request notification and its original Case callback.
+  `preparation` proves immutable identity, clocks and subscription slots;
+  `causal` proves preceding same-session native emits from Source dependency
+  requests, and requires both their real consumption and metadata from actual
+  Target WebSocket events. `driver` waits for those prerequisites, Case admission
+  and an independently observed live SID, then queues the original notification
+  without changing Global ownership. `control/native_event` admits bounded
+  metadata from the trusted transport driver within the active request epoch;
+  `interaction/replay/feedback` carries that observation interface separately
+  from protocol parsing and control transport. No expected output enters the
+  input executor, and recorded ACK payloads retain their existing references.
+  Ordinary native notification clocks also admit bounded same-namespace client
+  events with ACK IDs. `interaction/replay/socketio/native_receipts` correlates
+  actual sent inputs and received ACK metadata independently of business
+  completion and fast timing; the native clock retains Source windows, original
+  subscription ownership and the current request epoch.
+  RESP delivery retains wire consumption and Case cancellation checks; the
+  adapter and request contracts retain strict callback result comparison.
+  `replay/assertion/interaction/client_ack` separately owns original client
+  request provenance and exact native reply pairing for fast replay. It pairs
+  only contiguous plain ACK runs whose unique namespace/id request identities
+  have no direct or transitive completion ordering, with transport/namespace
+  boundaries retained. Payload contracts and all business event positions stay
+  strict; no expected output enters the input executor.
+
 - `dependency/termination` owns protocol-independent peer observations, monotonic
   termination time and explicit transport FIN/RST control. Recorder connection
   registration marks engine-owned cleanup before socket shutdown. Protocol
@@ -52,6 +78,13 @@ is unclear.
   execution budgets; `lifecycle`, `socketio`, `stream` and `observation` own pure
   framing, completion correlation and monotonic case decisions. They do not read
   expected evidence, persist recordings or own dependency cleanup.
+  `interaction/replay/timing` owns the replay timing choice, monotonic Source-offset
+  mapping and metadata feedback interface. `replay/control/input_timing` admits
+  active-case timing queries from immutable inputs and finite dependency facts;
+  its Source reader never opens expected outputs. Redis adapters project exact
+  response/native references and publish successful wire-delivery facts separately
+  from matching and RPC completion. Supported native clocks reuse the same mapping;
+  unsupported protocol delivery or recording timing retains original offsets.
   `heartbeat` records and validates the input program's causal PING/PONG bindings;
   `interaction/replay/socketio/heartbeat` schedules those responses from actual
   Target PING packets, separately from business completion barriers. Explicit
@@ -106,6 +139,11 @@ is unclear.
   while the peer is processing an earlier namespace disconnect. The scheduler
   bounds that close I/O and interrupts it on an actual dependency rejection;
   it does not wait for unused dependency inventory.
+  Its `namespace` sibling retains each live namespace CONNECT barrier before
+  sending new business events, including when recorded idle offsets are compressed.
+  Only the actual Target CONNECT response releases that namespace's barrier;
+  replies to actual Target server events and explicit transport cancellation
+  remain available during admission.
   `gateway/http/interaction/websocket` applies the same transport-lifetime
   barrier while recording: Source resource calls begun during close remain
   inside the Case until actual Source peer termination. `interaction/finish`
@@ -148,6 +186,19 @@ is unclear.
   while read-only observations remain available during dependency waits.
   `control/case_execution` exposes actual dependency rejection separately from unused inventory;
   `e2e_run/request_feedback` interrupts one primary request across HTTP, streams and Motan.
+  `e2e_run/case_sequence` owns chronological input admission on that same Target.
+  An unclean Socket.IO/WebSocket session stops the attempt before another input;
+  ordinary shutdown/finalization preserves the failed Case and pending inventory.
+  Started-I/O drain alone cannot prove that sleeping disconnect hooks have ended.
+  `control/dependency_tail/metadata/interaction_inventory` derives finite waits
+  from a clean original Socket.IO/WebSocket completion and its Case dependencies
+  when explicit tail observations are absent. It streams original metadata,
+  retains the Source elapsed-time budget and post-input idle allowance, and never
+  supplies response frames to Target. A stalled native interaction retains Case
+  ownership until runner shutdown rather than admitting late calls into another
+  Case. Actual native Replay rejections retain that fence through the final
+  locked ownership release; recorded dependency errors remain ordinary replies.
+  `metadata/references` owns the shared semantic exchange identities.
   `dependency/execution` owns the protocol-independent rejection signal and typed error.
   `e2e_run/execution_failure` retains the incomplete execution cause and independent
   primary status observations for public diagnosis and evidence queries.
@@ -383,6 +434,15 @@ is unclear.
   control. `transaction_ownership` reuses the Source name lifetime proof for
   Global-started intervals and versions its disposable proof cache separately.
 
+- `mysql/isolation` owns closed isolation-setting/probe syntax without expanding
+  the generic session-setup whitelist. `replay/mysql/isolation/source` proves
+  original baseline probes and complete override/transaction/restoration scopes
+  during preparation. Its parent binds NEXT settings to actual Target sockets,
+  observes successful deliveries through the existing transaction owner and
+  grants only proven Source restoration omission. Candidate fencing stays in
+  the MySQL matcher; values, business transaction parity, wire completion and
+  original consumption retain their existing owners.
+
 - `engine_binary` resolves companion executables and Linux reexec paths for a
   replaced running engine. Replay, coordinator workers and local interception
   share that resolver; process lifecycle remains with each caller.
@@ -571,7 +631,18 @@ is unclear.
   Notification pages retain payload digests; `echo` prepares sparse lookups for
   loaded adapter publishers before Replay readiness and shares them across Cases.
   Command delivery only reads prepared lookups; inventory construction stays
-  outside Target connection handling. The `subscription_evidence` child
+  outside Target connection handling. The `native_clock` child projects original
+  external ordinary adapter slots onto unique passive native request windows;
+  its `source` child reads original input namespaces and lifecycle/time metadata,
+  using the production authenticated request reader for protected INPUT,
+  `preparation` checks the complete run including unselected windows, and
+  `driver` requires actual namespace admission and the current request epoch.
+  Namespace-only notification metadata fences obsolete subscription-age timers
+  without exposing payloads or changing ordinary non-native notifications.
+  Ambiguous clocks/windows and unproven dynamic socket exclusions remain unused.
+  The `delivery` child retains Case/epoch ownership through queued TCP writes
+  and reports abandoned or failed Case inputs through the shared I/O barrier.
+  The `subscription_evidence` child
   resolves exact recording-level anchors and canonical single-use aliases.
   The adapter retains subscription anchors required by linked RPC callbacks;
   command matching applies their preference within the existing ownership scope
@@ -1139,7 +1210,14 @@ explicit repository-wide audit.
   strict. These facts neither change ownership nor supply Target delivery
   witnesses. The Source scanner may resume at a later
   independently known inactive start; earlier rejected spans remain diagnosed
-  and connection-level incompleteness still prevents setup omission. Its parent
+  and connection-level incompleteness still prevents setup omission. Its
+  `source/error_rollback` child retains a complete contiguous active prefix,
+  native DML ERR without status flags, and immediate successful plain ROLLBACK
+  as a strict segment. It requires known inactive Source boundaries and exact
+  identity/sequence continuity, never fills gaps with Global reads or infers
+  missing ERR flags. The existing explicit physical Target transaction witness
+  must deliver every prefix member, the error and the real end in order; this
+  proof grants neither autocommit equivalence nor end omission. Its parent
   owns connection-local Target BEGIN/end witnesses, ordered finite Source window
   correspondence and delivery-confirmed setup coverage. Multi-write windows
   include every read after the first write, through the actual matching end;
@@ -1187,6 +1265,20 @@ explicit repository-wide audit.
   parent reads immutable case dependencies once for all protocol projections.
   `config/mysql_tables.rs` owns physical table selector
   validation, matching, and intersection independently of SQL template expansion.
+- `replay/redis/pubsub/echo/window` proves disjoint finite Source publication
+  intervals for repeated identical adapter broadcasts. Echo preparation caches
+  these intervals before Target admission; protocol matching and actual delivery
+  retain finite ownership. `dependency_index/global` and the Pub/Sub inventory
+  keep notification clocks in metadata, independently of private payload bytes.
+
+- `rewrite/unified_rule/manifest/eligibility` permits a finalized partial attempt
+  to revoke existing bounded key-local Redis read-back permissions or revise
+  formats on existing JSON identity fields. Identity revisions preserve the
+  exact field set, kind and literal prefixes; every other compiled owner and
+  signature remains identical. Other additions and modifications retain the
+  complete-attempt requirement. Full Source freezing, independent Target
+  preflight, policy CAS and fresh genuine Replay remain with the normal planner.
+
 - `rewrite/case_dependencies` owns bounded, read-only per-target dependency
   projections. Its `mysql` child owns query, parameter, connection, and response
   facts, including captured before/after server-status flags, for diagnosis;
@@ -1241,6 +1333,10 @@ explicit repository-wide audit.
 - `request_rules` owns explicit inbound-request transformation policy and the
   per-send runtime. Its `jwt` child owns compact HMAC JWT verification,
   Bearer-header or named-query selection, and relative NumericDate translation;
+  `socketio_connect` selects exact namespace/auth JSON fields in original
+  interaction inputs. It reuses that JWT verifier and send clock, and leaves
+  unselected namespace/business frames opaque. Native policy projection and
+  named API signature declarations retain the same field ownership.
   `signed_timestamp` consumes typed `input_signed_timestamp` effects, verifies
   bounded sorted-field MD5 signatures and rebases JSON string timestamps using
   only the immutable request clock and startup secret. The Source-validation
@@ -1484,6 +1580,10 @@ explicit repository-wide audit.
   resolves the sole Target-root-relative `project.policy` path.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
+  `manifest/eligibility` owns narrow finalized-partial format changes: Redis
+  scalar identities and existing JSON identity representations retain every
+  other compiled permission and pass the same complete preflight and stale
+  checks. Eligibility never certifies an incomplete Replay.
   Its `change` child admits explicit replacement sets, preserving unselected
   rules and API ownership. Replacements reuse complete preflight, whole-policy
   compare-and-swap, durable publication intent and recovery; they are not an

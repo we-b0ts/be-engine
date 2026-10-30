@@ -114,6 +114,9 @@ async fn measure(root: &Path, artifacts: &Path, lazy: bool) -> Measurement {
         fail_on_incomplete: false,
         identity_pairs: Vec::new(),
         derived_input: None,
+        native_event: None,
+        input_timing: None,
+        socketio_timing: None,
     };
     let started = Instant::now();
     let prepared = crate::replay::control::begin_case(&request, runtime.state.clone()).await;

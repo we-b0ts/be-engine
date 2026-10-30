@@ -96,16 +96,26 @@ pub(super) fn plan(
             header: match &options.location {
                 JwtTokenLocation::BearerHeader { header } => Some(header.clone()),
                 JwtTokenLocation::RawHeader { raw_header } => Some(raw_header.clone()),
-                JwtTokenLocation::QueryParameter { .. } => None,
+                JwtTokenLocation::QueryParameter { .. }
+                | JwtTokenLocation::SocketIoConnect { .. } => None,
             },
             scheme: match &options.location {
                 JwtTokenLocation::BearerHeader { .. } => Some("bearer".into()),
                 JwtTokenLocation::RawHeader { .. } => Some("raw".into()),
-                JwtTokenLocation::QueryParameter { .. } => None,
+                JwtTokenLocation::QueryParameter { .. }
+                | JwtTokenLocation::SocketIoConnect { .. } => None,
             },
             query_param: match &options.location {
                 JwtTokenLocation::QueryParameter { query_param } => Some(query_param.clone()),
-                JwtTokenLocation::BearerHeader { .. } | JwtTokenLocation::RawHeader { .. } => None,
+                JwtTokenLocation::BearerHeader { .. }
+                | JwtTokenLocation::RawHeader { .. }
+                | JwtTokenLocation::SocketIoConnect { .. } => None,
+            },
+            socketio_connect: match &options.location {
+                JwtTokenLocation::SocketIoConnect { socketio_connect } => {
+                    Some(socketio_connect.clone())
+                }
+                _ => None,
             },
             profile: options.signing_key_ref.clone(),
         },

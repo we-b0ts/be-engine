@@ -31,6 +31,7 @@ impl<'de> Deserialize<'de> for ApiDefinitions {
 enum Position<'a> {
     Header(&'a str, &'a Header),
     Query(&'a str, &'a Reference),
+    SocketIoConnect(&'a str, &'a str, &'a Reference),
     Body(&'a Body),
     Json(&'a str, &'a JwtResponse),
     ResponseHeader(&'a str, &'a JwtResponse),
@@ -142,6 +143,22 @@ fn lower(
                 proof.cloned(),
             )
         }
+        Position::SocketIoConnect(namespace, pointer, value) => {
+            let (name, proof) = value.parts();
+            let (algorithm, key) = jwt(definitions, name)?;
+            (
+                NativeEffect::InputJwt(InputJwtEffect {
+                    location: InputTokenLocation::SocketIoConnect {
+                        namespace: namespace.into(),
+                        pointer: pointer.into(),
+                    },
+                    algorithm,
+                    signing_key: key.clone(),
+                    time: InputTokenTime::PreserveRelative,
+                }),
+                proof.cloned(),
+            )
+        }
         Position::Body(value) => {
             let SignatureDefinition::Md5SortedFields { key } =
                 profile(definitions, &value.signature)?
@@ -218,6 +235,10 @@ pub(super) fn expand(
         let (surface, name) = match &position {
             Position::Header(name, _) => ("request.header", header_name(name)?),
             Position::Query(name, _) => ("request.query", (*name).into()),
+            Position::SocketIoConnect(namespace, pointer, _) => (
+                "request.socketio_connect",
+                serde_json::to_string(&(namespace, pointer))?,
+            ),
             Position::Body(_) => ("request.body", String::new()),
             Position::Json(pointer, _) => ("response.json", (*pointer).into()),
             Position::ResponseHeader(name, _) => ("response.header", header_name(name)?),
@@ -241,6 +262,7 @@ pub(super) fn expand(
                 .as_ref()
                 .is_some_and(|request| !request.headers.is_empty()
                     || !request.query.is_empty()
+                    || !request.socketio_connect.is_empty()
                     || request.body.is_some())
                 || entry.response.as_ref().is_some_and(
                     |response| !response.json.is_empty() || !response.headers.is_empty()
@@ -249,7 +271,9 @@ pub(super) fn expand(
         );
         if let Some(request) = &entry.request {
             ensure!(
-                request.headers.len() <= 128 && request.query.len() <= 128,
+                request.headers.len() <= 128
+                    && request.query.len() <= 128
+                    && request.socketio_connect.len() <= 128,
                 "API request signature positions exceed bounds"
             );
             for (name, value) in &request.headers {
@@ -257,6 +281,15 @@ pub(super) fn expand(
             }
             for (name, value) in &request.query {
                 push(api, Position::Query(name, value))?;
+            }
+            for (namespace, fields) in &request.socketio_connect {
+                ensure!(
+                    !fields.0.is_empty() && fields.0.len() <= 128,
+                    "Socket.IO CONNECT signature fields exceed bounds or are empty"
+                );
+                for (pointer, value) in &fields.0 {
+                    push(api, Position::SocketIoConnect(namespace, pointer, value))?;
+                }
             }
             if let Some(body) = &request.body {
                 push(api, Position::Body(body))?;

@@ -1226,6 +1226,11 @@ Its own `truncated` flag covers the predicates, ordering, pagination and locks
 in that excerpt. Quoted text, comments and nested SELECTs cannot select a false
 outer FROM. Statements over 64 KiB, compound SELECTs and unsupported lexical
 forms retain the original prefix/fingerprint without an inferred body.
+Rejected Target queries derive the same summary from their original SQL before
+the bounded dependency signature truncates its `sql` field. Both text and
+prepared query rejections retain the outer clauses without exposing prepared
+parameter values. Historical sidecars without the summary require fresh Replay;
+the original clauses cannot be inferred from an already truncated prefix.
 The bounded dependency query preserves this summary together with `index`,
 `connection_id` and `query_sequence`, so an implementer can locate the original
 semantic exchange when either excerpt is truncated. These are diagnostic views,
@@ -1921,8 +1926,13 @@ between attempts without changing target fingerprints.
 
 Skipped passes are scheduling history, never fresh response or dependency
 evidence. `diagnosis.case_selection` reports available, selected and skipped
-counts; other attempt counts describe only selected cases. Existing explicit
-localcache and cross-case dependency rules still load from the complete recording.
+counts; other attempt counts describe only selected cases.
+Backend-rewrite overview and execution-failure queries expose the same diagnostic
+as `case_selection`, including for an already finalized attempt. It describes
+the runner's selection, separately from the low-level Replay report's `mode`.
+Missing legacy selection metadata is reported as null, without inferring skips.
+Existing explicit localcache and cross-case dependency rules still load from the
+complete recording.
 Logical progress keeps the recorded case totals and cannot mark a partially
 selected API fully verified, even when that repair attempt passes.
 Skipping requests can nevertheless change application-local cache warmup or other
@@ -2572,7 +2582,36 @@ The target's native HTTP port is the port in
 `project.replay.case_no_progress_timeout_ms` defaults to `2000` and must be
 positive. It bounds Replay-only idle waiting for unfinished dependency tails
 after the recorded primary inputs have completed. Real resource delivery,
-including an upstream SSE response, keeps its existing I/O budget; successful
+including an upstream SSE response, keeps its existing I/O budget.
+Clean Socket.IO/WebSocket recordings without tail sidecars can retain their
+finite Case Redis, MySQL, HTTP and connection-failure obligations from the
+original semantic inventory. Wire close does not finish a sleeping disconnect
+hook: the old Case remains active until its required calls really complete,
+before the next input is admitted. A delayed online-state read therefore receives
+its own recorded response, including a successor's socket identity; Replay does
+not invent a missing delete or serve a previous Case's inventory to a new Case.
+The absolute budget includes recorded Source elapsed time plus the normal
+execution allowance and is anchored once at admission. Existing optional-session,
+shared-initialization and proven process permissions retain their meanings.
+Explicit tail observations take precedence. Unclean or unsupported legacy
+footprints keep the existing transport/started-I/O cleanup path; no partial
+inventory is claimed and the ordinary verification gates still apply. No
+recording files are rewritten to create this wait.
+
+For this native interaction inventory, the recorded duration after the final
+client input supplements the configured idle timeout. This permits a real
+disconnect grace interval that equals or exceeds the ordinary idle timeout;
+the absolute admission deadline remains unchanged. The supplementary interval
+uses only input offsets and elapsed time, never output frames, values, or a
+later Case's timestamps. All-consumed inventories complete immediately.
+Waiting evidence exposes `source_post_input_allowance_ms` and the effective
+`no_progress_timeout_ms`. If this native interaction still stalls, its Case
+remains active and the runner stops Target before admitting another input.
+An actual Replay dependency rejection retains the same native Case, including
+rejections after its finite inventory was consumed. The final ownership-release
+lock repeats that check. A recorded dependency error delivered as contracted is
+ordinary consumption and does not trigger this rejection fence.
+
 Case dependency completions renew the idle clock. Unrelated process activity
 does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
 CLI exposes the same setting as `--case-no-progress-timeout-ms`.
@@ -2582,7 +2621,7 @@ Its message leads with the number of recorded dependencies left unconsumed and
 asks Target implementers to check the corresponding calls. The idle wait and
 absence of in-flight dependency I/O are secondary stop details, rather than a
 claim that a Target call was rejected or that the primary HTTP request timed out.
-The next Case still runs. Native reports retain `case_execution_failures`,
+Other tail profiles retain their existing next-Case behavior. Native reports retain `case_execution_failures`,
 matched/Target-unmatched/Source-unused evidence and bounded pending Source
 references; runner execution-failure queries retain an independently observed
 primary HTTP status. HTTP 200 does not certify async completion. `status` remains
@@ -3602,8 +3641,13 @@ The case records `execution_failure.kind: dependency_unmatched` and
 observed primary status remains a separate fact. Complete stream observations
 and interrupted framed prefixes remain protected evidence. Already started
 case I/O retains its normal drain barrier; unused Source calls remain unused.
-After cleanup, the runner continues the remaining cases under its existing
-failure limit and publishes their independent causes. Public `diagnosis.execution_failures`
+After cleanup, finite requests continue under the existing failure limit.
+A WebSocket or Socket.IO session without a clean closure stops the attempt
+before another input is admitted: a sleeping disconnect hook may issue future
+I/O even after all started deliveries drain. Normal Target shutdown and aggregate
+finalization retain the failed Case and leave later Cases unexecuted, without
+inventing another startup or treating partial coverage as a pass. Clean sessions
+continue to reuse the running Target. Public `diagnosis.execution_failures`
 and the dirty-cluster evidence query expose these causes before downstream
 missing responses, stream events or unused calls. No expected output drives
 request execution and no response or ACK is synthesized.

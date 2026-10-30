@@ -156,6 +156,7 @@ json:
                 Some(plan),
                 clocks,
                 copies,
+                None,
             )
             .unwrap()
             .passed()

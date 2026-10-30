@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 use super::super::{fingerprint, model::RewriteState};
 
+mod eligibility;
 mod primary;
 pub(super) use primary::PrimaryResponse;
 
@@ -143,7 +144,13 @@ pub(super) struct Bundle {
 }
 
 impl Bundle {
-    pub(super) fn load(root: &Path, state: &RewriteState, policy_identity: &str) -> Result<Self> {
+    pub(super) fn load(
+        root: &Path,
+        state: &RewriteState,
+        policy_identity: &str,
+        before: &crate::policy::CompiledPolicy,
+        after: &crate::policy::CompiledPolicy,
+    ) -> Result<Self> {
         let source = state
             .case_source
             .clone()
@@ -189,7 +196,8 @@ impl Bundle {
         output.freeze(&runner_state)?;
         let aggregate = output.json(&evidence.aggregate)?;
         ensure!(
-            output.replay["finalized"] == true && aggregate["complete"] == true,
+            output.replay["finalized"] == true
+                && (aggregate["complete"] == true || eligibility::allows_partial(before, after)),
             "unified rule requires a complete finalized Replay attempt"
         );
         ensure!(

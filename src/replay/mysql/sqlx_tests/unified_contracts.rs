@@ -209,6 +209,9 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
             fail_on_incomplete: false,
             identity_pairs: Vec::new(),
             derived_input: None,
+            native_event: None,
+            input_timing: None,
+            socketio_timing: None,
         };
         let end_request = request("end", Some("case-id".into()));
         let end_state = runtime.state.clone();

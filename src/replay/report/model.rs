@@ -60,6 +60,8 @@ pub(in crate::replay) struct ReplayReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) transaction_equivalent_mysql_autocommit_exchanges:
         Vec<RecordedExchangeSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) mysql_isolation_equivalence: Vec<Value>,
     pub(in crate::replay) matched_http_exchange_count: usize,
     pub(in crate::replay) matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
     pub(in crate::replay) unmatched_http_requests: Vec<http::HttpRequestReport>,

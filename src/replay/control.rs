@@ -8,7 +8,11 @@ mod case_execution;
 pub(super) mod dependency_tail;
 mod derived_input;
 mod identity;
+pub(in crate::replay) mod input_timing;
+mod native_event;
 pub(crate) use derived_input::register as register_derived_input;
+pub(crate) use input_timing::connect as input_timing_observer;
+pub(crate) use native_event::connect as native_event_observer;
 mod interaction;
 mod interruption;
 mod server;
@@ -33,6 +37,12 @@ pub(super) struct ReplayControlRequest {
     pub(super) identity_pairs: Vec<crate::value_contract::identities::IdentityPair>,
     #[serde(default)]
     pub(super) derived_input: Option<derived_input::Registration>,
+    #[serde(default)]
+    pub(super) native_event: Option<native_event::Observation>,
+    #[serde(default)]
+    pub(super) input_timing: Option<input_timing::Query>,
+    #[serde(default)]
+    pub(super) socketio_timing: Option<crate::interaction::replay::timing::SocketIoTiming>,
 }
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -198,7 +208,7 @@ pub(super) async fn handle_control_request(
             }
         }
         "request_begin" => {
-            let state = state.lock().await;
+            let mut state = state.lock().await;
             if let Some(case) = request
                 .case_id
                 .as_deref()
@@ -210,7 +220,18 @@ pub(super) async fn handle_control_request(
                     .map(|policy| policy.request_contracts.request_begin(case))
                     .transpose()
                 {
-                    Ok(_) => serde_json::json!({"ok":true}),
+                    Ok(_) => {
+                        let epoch = state
+                            .redis
+                            .request_contracts
+                            .request_times(case)
+                            .target
+                            .unwrap_or_else(Utc::now);
+                        match state.redis.pubsub.native_clock.request_begin(case, epoch) {
+                            Ok(()) => serde_json::json!({"ok":true}),
+                            Err(error) => serde_json::json!({"ok":false,"error":error.to_string()}),
+                        }
+                    }
                     Err(error) => serde_json::json!({"ok":false,"error":error.to_string()}),
                 }
             } else {
@@ -253,6 +274,10 @@ pub(super) async fn handle_control_request(
             }
         }
         "derived_input" => derived_input::accept(&request, &state).await,
+        "native_event_begin" | "native_event" | "native_connected" | "native_input_ack" => {
+            native_event::accept(&request, &state).await
+        }
+        "input_timing_begin" | "input_timing" => input_timing::accept(&request, &state).await,
         "prepare_end" => target_stop::prepare(&request, &state).await,
         "end" => end_case(&request, state.clone()).await,
         "end_stopped" => end_case(&request, state.clone()).await,
@@ -494,6 +519,8 @@ pub(super) async fn begin_case(
         return serde_json::json!({"ok": false, "error": format!("dependency-tail dependency activation failed: {error:#}")});
     }
     state.active_case_id = Some(case_id.to_string());
+    state.input_timing = None;
+    state.redis.pubsub.native_clock.begin_case(case_id);
     if let Some(policy) = &mut state.replay_policy {
         policy.begin_case(case_id);
     }
@@ -530,7 +557,7 @@ pub(super) async fn end_case(
         Err(error) => return serde_json::json!({"ok":false,"error":format!("{error:#}")}),
     };
     let (post_response_window, case_dir) = {
-        let state = state.lock().await;
+        let mut state = state.lock().await;
         if !state.cases.contains_key(case_id) {
             return serde_json::json!({
                 "ok": false,
@@ -543,6 +570,7 @@ pub(super) async fn end_case(
                 "error": format!("replay case {case_id} is not active")
             });
         }
+        state.redis.pubsub.native_clock.close_case(case_id);
         (
             state.case_dependency_post_response_window,
             state.cases[case_id].dir.clone(),
@@ -595,6 +623,9 @@ pub(super) async fn end_case(
                 return serde_json::json!({"ok":false,"dirty":true,"error":error});
             }
         };
+        if let Err(error) = dependency_tail::ensure_interaction_not_failed(&state, case_id) {
+            return serde_json::json!({"ok":false,"dirty":true,"error":format!("{error:#}")});
+        }
         let sample = state
             .egress_counter_starts
             .remove(case_id)

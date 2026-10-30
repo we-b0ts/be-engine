@@ -91,6 +91,7 @@ impl CaseTails {
 #[derive(Debug, Clone)]
 struct CaseTail {
     budget: Duration,
+    interaction_post_input: Option<Duration>,
     deadline: Option<Instant>,
     selected: Vec<SelectedExchange>,
     source_stop_required: bool,
@@ -144,6 +145,28 @@ pub(in crate::replay) fn references_consumed(
         .all(|selected| {
             exchange_status(state, selected.exchange).is_some_and(ReplayExchangeStatus::is_consumed)
         }))
+}
+
+/// Reuse existing ownership/omission authority without making unused business
+/// exchanges optional merely to accelerate an input.
+pub(in crate::replay) fn timing_optional(
+    state: &ReplayState,
+    case: &str,
+    reference: RecordedReference,
+) -> bool {
+    state
+        .dependency_tails
+        .cases
+        .get(case)
+        .and_then(Option::as_ref)
+        .and_then(|tail| tail.selected.iter().find(|s| s.reference == reference))
+        .is_some_and(|selected| {
+            selected.lifecycle_cleanup
+                || selected.process_owned
+                    && exchange_status(state, selected.exchange)
+                        == Some(ReplayExchangeStatus::Available)
+                || permits_unstarted_omission(state, selected)
+        })
 }
 
 fn exchange_status(
@@ -236,6 +259,9 @@ pub(in crate::replay) async fn prepare(
             let budget = Duration::from_millis(metadata.request_timeout_ms);
             Ok::<_, anyhow::Error>(CaseTail {
                 budget,
+                interaction_post_input: metadata
+                    .interaction_post_input_ms
+                    .map(Duration::from_millis),
                 deadline: None,
                 selected,
                 source_stop_required: metadata.source_stop_required,
@@ -519,6 +545,26 @@ pub(super) async fn prepare_target_stop(
     drain_selected(state, case_id, true).await
 }
 
+/// A native peer close cannot certify application teardown after a Replay
+/// rejection. Its hook may still sleep even when accepted I/O has drained.
+/// The caller also checks this under the final ownership-release lock so a
+/// rejection between tail drain and release cannot admit the next Case.
+pub(super) fn ensure_interaction_not_failed(state: &ReplayState, case_id: &str) -> Result<()> {
+    let native = state
+        .dependency_tails
+        .cases
+        .get(case_id)
+        .and_then(Option::as_ref)
+        .is_some_and(|tail| tail.interaction_post_input.is_some());
+    ensure!(
+        !native
+            || !(state.case_cleanup.deadline(case_id).is_some()
+                || super::case_execution::failed(state, case_id)),
+        "interaction dependency execution failed; case ownership was retained for Target shutdown"
+    );
+    Ok(())
+}
+
 async fn drain_selected(
     state: &Arc<Mutex<ReplayState>>,
     case_id: &str,
@@ -558,8 +604,10 @@ async fn drain_selected(
                 .checked_sub(tail.budget)?
                 .checked_add(offset)
         });
-    let mut progress =
-        progress::NoProgress::new(shared.lock().await.dependency_tails.no_progress_timeout);
+    let idle_budget = shared.lock().await.dependency_tails.no_progress_timeout;
+    let mut progress = progress::NoProgress::new(
+        idle_budget.saturating_add(tail.interaction_post_input.unwrap_or_default()),
+    );
     loop {
         let mut state = state.lock().await;
         ensure!(
@@ -577,6 +625,7 @@ async fn drain_selected(
         {
             super::case_cleanup::mark_failed(&mut state, case_id)?;
         }
+        ensure_interaction_not_failed(&state, case_id)?;
         let failure_cleanup = state.case_cleanup.deadline(case_id).is_some();
         if let Some(cleanup) = state.case_cleanup.deadline(case_id) {
             deadline = cleanup;
@@ -676,6 +725,15 @@ async fn drain_selected(
                 .dependency_tails
                 .failures
                 .insert(case_id.into(), failure);
+            if tail.interaction_post_input.is_some() {
+                // Wire close did not prove the application hook finished.
+                // Keep the failed Case active so ordinary runner cleanup stops
+                // Target instead of attributing its late calls to the next Case.
+                anyhow::bail!(
+                    "{}; interaction case ownership was retained",
+                    progress.failure_reason(remaining)
+                );
+            }
             super::case_cleanup::mark_failed(&mut state, case_id)?;
             drop(state);
             continue;
@@ -696,6 +754,8 @@ pub(super) fn end(state: &mut ReplayState, case_id: &str) {
 
 #[cfg(test)]
 mod async_tests;
+#[cfg(test)]
+mod interaction_tests;
 #[cfg(test)]
 mod no_progress_tests;
 #[cfg(test)]

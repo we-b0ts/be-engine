@@ -177,6 +177,27 @@ to actual server event occurrences. Only protocol-owned dynamic IDs are
 normalized. Business fields named `sid` remain strict; application identity
 mapping requires an explicit supported input/value contract.
 
+For a remote Socket.IO RPC proven by an original Global Redis notification and
+its Case callback, replay also preserves preceding same-session native emits.
+It derives that prefix from Source dependency **requests** before the notification,
+waits for their exact PUBLISH exchanges to be consumed, and waits for the trusted
+live WebSocket driver to observe the corresponding namespace/event occurrences.
+The metadata-only observation is bounded and tied to the active request epoch.
+Only then may the original remote notification be injected. Elapsed Source time,
+a known SID, or a completed PUBLISH alone cannot replace the live event proof.
+Recorded client ACK contents and ordinal references remain unchanged; missing
+Target events remain failures instead of receiving another event's ACK payload.
+
+When input timing is compressed, independent client requests may have replies
+in flight together. Response assertions use the validated original input graph
+to pair consecutive non-binary Socket.IO ACKs by exact namespace and request id.
+This requires unique original request identities and no completion dependency
+between them. Missing, extra, duplicate or unknown replies cannot be paired;
+kind, ACK presence, payloads and configured field contracts remain strict.
+Pairing never crosses business events or protocol boundaries. Timing-preserving
+programs, causally ordered requests and comparisons without original input
+provenance retain positional comparison.
+
 SSE events and NDJSON records are framed independently of TCP/HTTP chunking. Raw
 stream comparison concatenates observed bytes. Missing, extra or reordered
 business outputs fail, and incomplete closure cannot pass even if both bodies
@@ -201,6 +222,68 @@ re-record instruction; immutable recordings are never reinterpreted or rewritten
 Set `preserve_input_timing: true` before recording behavior that depends on input
 spacing, such as throttling, scheduled work or application timers. Completion and
 network quiet alone do not grant permission to change those clock semantics.
+
+Socket.IO replay timing is independently selectable for existing recordings:
+
+```yaml
+project:
+  replay:
+    socketio_timing: auto # default; use recorded for the original input timeline
+```
+
+JWT request rules also select exact fields in namespace CONNECT auth objects,
+using the same named signing profile as header or query credentials:
+
+```yaml
+api:
+  GET /socket.io/:
+    request:
+      socketio_connect:
+        /wework-runtime:
+          /token: default
+```
+
+The configured original token must verify against the startup signing key before
+its NumericDate claims are translated and re-signed. Invalid signatures and
+relative expiration failures remain failures. Other namespaces, unselected auth
+fields and business frames remain unchanged. Repeated CONNECTs with different
+tokens at the same selected field are rejected as ambiguous. Request execution
+and private derived-input reconstruction use the same transformation; neither
+reads expected responses.
+
+`auto` requires an explicit `compressible_gap` with its Source completion time,
+actual Target completion of the declared `after` inputs, and delivery of the
+finite Redis prefix completed before that input in Source. Redis matching,
+reservation and queued native messages do not count as delivery. A PUBLISH
+response written to TCP is distinct from its later RPC callback completion.
+Dependencies completed after the input, unrelated Global work and already
+authorized optional dependencies cannot become prerequisites for that input.
+An ambiguous same-millisecond boundary does not authorize compression.
+
+The active request owns one monotonic timeline. Each admitted idle cut shifts
+later inputs and already-supported native Redis notifications by the same amount.
+Native admission still requires a unique original window, actual namespace
+and subscription. Finite external ordinary notifications also support one CONNECT
+followed by at most 127 same-namespace, ACK-tracked plain client events. Delivery
+waits for the matching actual Target ACK of every input preceding that notification
+in Source; later inputs are not prerequisites. These receipts never complete
+business work or authorize fast input compression. Terminal-event completion
+contracts, reused ACK IDs, unsupported inputs and ambiguous
+same-millisecond boundaries retain their original unused slots.
+The scheduler continues receiving WS frames and handling heartbeats while waiting.
+Independent transport cancellation keeps its mapped original deadline, even if
+an earlier input is blocked; skipped inputs remain incomplete. A completion-bound
+close retains its explicit `after` prerequisites and the full interval after actual
+completion. Namespace/transport close gaps themselves are not compressed.
+A missing delivery gate falls back to the
+mapped original input deadline rather than extending it indefinitely.
+
+The first implementation covers Redis response/native delivery. Cases containing
+other dependency protocols, missing timing metadata, explicit no-PONG programs,
+or `preserve_input_timing: true` keep recorded timing. Unmanaged execution without
+dependency feedback also keeps recorded timing. `recorded` overrides acceleration
+without changing immutable recordings or their policy. Neither mode changes lane
+matching or dependency assertions, and `http_stream_timing` remains independent.
 
 ## Closing a case and background work
 

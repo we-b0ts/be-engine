@@ -56,6 +56,7 @@ pub(super) async fn from_complete_source(
         .context("async API request budget exceeds its bound")?;
     Ok(Some(Metadata {
         request_timeout_ms,
+        interaction_post_input_ms: None,
         strict_references: references.clone(),
         references: references.into_iter().collect(),
         process_owned_exemptions: false,
@@ -101,54 +102,4 @@ fn complete_inventory(
         "async API Source inventory has no proven completion resource or dependency failure; record a complete async case"
     );
     Ok((references, source_stop_required))
-}
-
-pub(super) fn reference(event: &Value) -> Result<Option<RecordedReference>> {
-    let uuid = |field| {
-        event[field]
-            .as_str()
-            .context("async Source exchange identity missing")?
-            .parse()
-            .context("invalid async Source exchange identity")
-    };
-    let sequence = |field| {
-        event[field]
-            .as_u64()
-            .context("async Source exchange sequence missing")
-    };
-    Ok(match event["event_type"].as_str() {
-        Some("dependency_connect_failure") => Some(RecordedReference::Connect {
-            event_id: uuid("id")?,
-        }),
-        Some("http_exchange") => Some(RecordedReference::Http {
-            exchange_id: uuid("id")?,
-        }),
-        Some("redis_exchange") => Some(RecordedReference::Redis {
-            connection_id: uuid("connection_id")?,
-            sequence: sequence("sequence")?,
-        }),
-        Some("mysql_exchange") => {
-            let command = event["command"]
-                .as_str()
-                .context("async Source MySQL command missing")?;
-            if crate::mysql::wire::is_no_response_command(command)
-                || command == "COM_PING" && event["response"]["status"] == "ok"
-                || command == "COM_STMT_PREPARE" && event["response"]["status"] == "stmt_prepare"
-            {
-                None
-            } else {
-                Some(RecordedReference::Mysql {
-                    connection_id: uuid("connection_id")?,
-                    sequence: sequence("query_sequence")?,
-                })
-            }
-        }
-        Some(
-            "memcached_exchange" | "motan_exchange" | "kafka_produce" | "kafka_fetch"
-            | "kafka_delivery",
-        ) => anyhow::bail!(
-            "async Source inventory contains an unsupported finite-tail protocol; record with complete inventory support"
-        ),
-        _ => None,
-    })
 }

@@ -92,6 +92,54 @@ in OK and EOF packets; a successful BEGIN therefore works with SQLx's transactio
 state checks. This status tracking does not simulate database contents or
 replace recorded effects with an in-memory database.
 
+## Transaction isolation scope
+
+Replay can match a driver's next-transaction isolation setting to a proven
+Source session override. This requires an immutable successful
+`SELECT @@transaction_isolation` or `@@session.tx_isolation` initialization
+probe for the same physical endpoint, database and username, followed by a
+complete Case-local sequence:
+
+~~~sql
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+-- one transaction, with its original reads, writes and end
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+~~~
+
+The probe must establish the restored baseline, and all recorded probes for
+that resource must agree. A pool may initialize its shared dialect on one
+connection and configure another without probing again. For that case the
+independent probe must have completed strictly before the new scope starts;
+sequence numbers from different connections are never compared. Same-connection
+proof retains its original wire order. Every intervening scope wire sequence,
+physical identity, successful response and transaction-status transition must
+be present. The supported Source scope has one implicit transaction; gaps,
+failures, savepoints, lifecycle cleanup, another transaction or an ambiguous
+baseline retain ordinary strict matching. Preparation is bounded to 128 scopes
+per Case, 260 exchanges per scope and 4096 installed scopes and baseline connections.
+
+Target can instead send `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` as
+`COM_QUERY`, then `BEGIN`, the original business operations and their end. The
+setting consumes the actual Source setup exchange. Admission binds the actual
+Target socket; every member must finish delivery on that socket in the same
+explicit transaction. Existing business SQL, value and write-transaction
+equivalence checks still apply. Another socket, wrong level, active-transaction
+setting, missing `BEGIN`, omitted member or failed delivery cannot prove the
+restoration omission. Known Target session settings also constrain the next
+scope's baseline. No new general SET builtin or policy exemption is installed.
+
+Only after the real end completes may the Source restoration exchange remain
+unstarted as optional session cleanup. Its status stays available; no Target
+reset is reported as delivered or consumed. `mysql_isolation_equivalence`
+records the original setup/end/reset indexes, baseline probe connection and sequence, levels,
+actual Target connection, delivered-member count and coverage phase. Pending
+or invalid scopes retain the restoration obligation. Immutable recordings and
+Global probe consumption are unchanged; the probe supplies Source facts rather
+than a fabricated Target observation.
+
+See MySQL's [transaction characteristics](https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html)
+for the distinct SESSION and next-transaction lifetimes.
+
 ## Transaction ownership across cases
 
 In a completed standard recording, a complete transaction whose first exchange

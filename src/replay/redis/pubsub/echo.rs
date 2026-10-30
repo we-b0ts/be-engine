@@ -2,9 +2,10 @@
 use super::*;
 use crate::dependency_index::RecordRef;
 use inventory::NotificationEntry;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 mod preparation;
+mod window;
 
 type Digest = [u8; 32];
 fn endpoint(record: &RecordedPush) -> TargetKey {
@@ -16,10 +17,19 @@ fn endpoint(record: &RecordedPush) -> TargetKey {
 pub(super) type EchoIndex =
     std::result::Result<BTreeMap<Digest, Vec<(usize, NotificationEntry)>>, String>;
 
+type PublisherKey = (TargetKey, Digest);
+type Publications = HashMap<PublisherKey, BTreeMap<window::WireIdentity, window::Publication>>;
+type Windows = HashMap<
+    PublisherKey,
+    std::result::Result<BTreeMap<window::WireIdentity, window::Bounds>, String>,
+>;
+type InlineEcho = (usize, Option<chrono::DateTime<chrono::Utc>>, Vec<u8>);
+
 #[derive(Debug, Default)]
 pub(super) struct Echoes {
-    publishers: HashSet<(TargetKey, Digest)>,
+    publishers: Publications,
     channels: HashSet<(TargetKey, Vec<u8>)>,
+    windows: OnceLock<Windows>,
 }
 impl Echoes {
     pub(super) fn register(&mut self, record: &RecordedExchange, args: &[Vec<u8>]) {
@@ -28,12 +38,48 @@ impl Echoes {
                 host: normalize_host(&record.target_host),
                 port: record.target_port,
             };
-            self.publishers.insert((target.clone(), digest));
+            let publishers = self.publishers.entry((target.clone(), digest)).or_default();
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                publishers.entry((record.connection_id, record.sequence))
+            {
+                entry.insert(window::Publication::from_record(record));
+                self.windows.take();
+            }
             self.channels.insert((target, args[0].clone()));
         }
     }
+    pub(super) fn prepare_windows(&self) {
+        self.windows.get_or_init(|| {
+            self.publishers
+                .iter()
+                .map(|(key, publishers)| {
+                    (
+                        key.clone(),
+                        window::Bounds::all(publishers).map_err(|error| format!("{error:#}")),
+                    )
+                })
+                .collect()
+        });
+    }
+    fn window(
+        &self,
+        target: &TargetKey,
+        digest: Digest,
+        record: &RecordedExchange,
+    ) -> std::result::Result<window::Bounds, String> {
+        self.windows
+            .get()
+            .ok_or("Source publication windows were not prepared")?
+            .get(&(target.clone(), digest))
+            .ok_or("Source publisher has no echo inventory")?
+            .as_ref()
+            .map_err(Clone::clone)?
+            .get(&(record.connection_id, record.sequence))
+            .cloned()
+            .ok_or_else(|| "Source publisher missing from immutable echo inventory".into())
+    }
     pub(super) fn controls(&self, record: &RecordedPush, digest: Option<Digest>) -> bool {
-        digest.is_some_and(|digest| self.publishers.contains(&(endpoint(record), digest)))
+        digest.is_some_and(|digest| self.publishers.contains_key(&(endpoint(record), digest)))
     }
 }
 
@@ -42,6 +88,8 @@ pub(in crate::replay::redis) struct Prepared {
     source: Vec<Vec<u8>>,
     actual: Vec<u8>,
     digest: Digest,
+    window: std::result::Result<window::Bounds, String>,
+    repeated_publication: bool,
 }
 
 struct Job {
@@ -55,7 +103,7 @@ enum JobInventory {
         source: Arc<crate::dependency_index::RecordSource>,
         index: Arc<OnceLock<EchoIndex>>,
     },
-    Inline(Vec<(usize, Vec<u8>)>),
+    Inline(Vec<InlineEcho>),
 }
 
 impl PubSubState {
@@ -70,8 +118,16 @@ impl PubSubState {
             return None;
         }
         self.is_adapter_source(exchange).then_some(())?;
+        let digest = rpc::echo_digest(&exchange.args[0], &exchange.args[1])?;
+        let target = TargetKey {
+            host: normalize_host(&exchange.record.target_host),
+            port: exchange.record.target_port,
+        };
+        let publications = self.echoes.publishers.get(&(target.clone(), digest))?;
         Some(Prepared {
-            digest: rpc::echo_digest(&exchange.args[0], &exchange.args[1])?,
+            digest,
+            window: self.echoes.window(&target, digest, &exchange.record),
+            repeated_publication: publications.len() > 1,
             source: exchange.args.clone(),
             actual: args.get(1)?.clone(),
         })
@@ -128,7 +184,11 @@ impl PubSubState {
                                 let push = &self.pushes[index];
                                 (push.record.database == sub.database
                                     && push.record.username == sub.username)
-                                    .then(|| push.bytes().ok().map(|bytes| (index, bytes)))
+                                    .then(|| {
+                                        push.bytes()
+                                            .ok()
+                                            .map(|bytes| (index, push.record.timestamp, bytes))
+                                    })
                                     .flatten()
                             })
                             .collect(),
@@ -158,11 +218,13 @@ fn candidates(job: &JobInventory, prepared: &Prepared) -> Result<Vec<(PushId, Ve
                 .as_ref()
                 .map_err(|error| anyhow!("adapter echo index unavailable: {error}"))?;
             if let Some(entries) = lookup.get(&prepared.digest) {
-                ensure!(
-                    entries.len() == 1,
-                    "ambiguous recorded adapter self-echo in subscription"
-                );
-                for (index, entry) in entries {
+                let selected = select(
+                    entries
+                        .iter()
+                        .map(|(index, entry)| (*index, entry.timestamp)),
+                    prepared,
+                )?;
+                for (index, entry) in entries.iter().filter(|(index, _)| selected.contains(index)) {
                     let reference: RecordRef = source.reference(entry.location.clone());
                     let raw = reference.load::<RecordedPush>()?.response.decode()?;
                     candidates.push((
@@ -176,19 +238,55 @@ fn candidates(job: &JobInventory, prepared: &Prepared) -> Result<Vec<(PushId, Ve
             }
         }
         JobInventory::Inline(pushes) => {
-            for (index, raw) in pushes {
+            let mut echoes = Vec::new();
+            for (index, timestamp, raw) in pushes {
                 let frame = parse_pubsub_push(raw)?.context("invalid adapter notification")?;
                 if frame.channel == prepared.source[0] && frame.payload == prepared.source[1] {
-                    candidates.push((PushId::Inline(*index), render(raw, prepared)?));
+                    echoes.push((*index, *timestamp, raw));
                 }
             }
-            ensure!(
-                candidates.len() <= 1,
-                "ambiguous recorded adapter self-echo in subscription"
-            );
+            let selected = select(
+                echoes
+                    .iter()
+                    .map(|(index, timestamp, _)| (*index, *timestamp)),
+                prepared,
+            )?;
+            for (index, _, raw) in echoes
+                .into_iter()
+                .filter(|(index, _, _)| selected.contains(index))
+            {
+                candidates.push((PushId::Inline(index), render(raw, prepared)?));
+            }
         }
     }
     Ok(candidates)
+}
+
+fn select(
+    entries: impl Iterator<Item = (usize, Option<chrono::DateTime<chrono::Utc>>)>,
+    prepared: &Prepared,
+) -> Result<Vec<usize>> {
+    let entries = entries.collect::<Vec<_>>();
+    if entries.len() <= 1 && !prepared.repeated_publication {
+        return Ok(entries.into_iter().map(|(index, _)| index).collect());
+    }
+    let window = prepared
+        .window
+        .as_ref()
+        .map_err(|error| anyhow!("ambiguous recorded adapter self-echo: {error}"))?;
+    let mut selected = Vec::new();
+    for (index, timestamp) in entries {
+        let timestamp = timestamp
+            .context("ambiguous recorded adapter self-echo lacks Source notification clock")?;
+        if window.contains(timestamp) {
+            selected.push(index);
+        }
+    }
+    ensure!(
+        selected.len() <= 1,
+        "ambiguous recorded adapter self-echo in Source publication interval"
+    );
+    Ok(selected)
 }
 
 fn render(raw: &[u8], prepared: &Prepared) -> Result<Vec<u8>> {
@@ -252,9 +350,11 @@ pub(in crate::replay::redis) async fn deliver(
             }
             if sender
                 .try_send(Delivery {
+                    case_id: None,
                     push: id,
                     bytes,
                     matched: None,
+                    request_epoch: None,
                 })
                 .is_err()
             {

@@ -6,6 +6,7 @@ mod assertion_publication;
 mod branch;
 mod case_progress;
 mod case_selection;
+mod case_sequence;
 mod config;
 mod delivery;
 mod dirty_evidence;

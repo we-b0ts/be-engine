@@ -69,6 +69,7 @@ impl ReplayState {
             allowed_unused_mysql_autocommit_exchanges: self.allowed_unused_autocommit(),
             transaction_equivalent_mysql_autocommit_exchanges: self
                 .transaction_equivalent_autocommit(),
+            mysql_isolation_equivalence: self.mysql.isolation.audit(),
             matched_http_exchange_count: self.http_events.matched_count,
             matched_http_exchanges: self.http_events.matched.clone(),
             unmatched_http_requests: self.http_events.unmatched.clone(),

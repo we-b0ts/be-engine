@@ -3,8 +3,10 @@ use crate::value_contract::json::{Comparison, Difference};
 use anyhow::{Result, ensure};
 use serde_json::Value;
 use std::collections::BTreeMap;
+mod client_ack;
 mod contracts;
 mod socketio;
+pub(super) use client_ack::Context as AckContext;
 pub(crate) use contracts::decode_sse;
 
 use super::model::ResponseAssertionCaseReport;
@@ -59,8 +61,16 @@ pub(super) fn compare(
     times: super::RequestTimes,
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     report: &mut ResponseAssertionCaseReport,
+    ack_context: Option<&AckContext>,
 ) -> Result<()> {
-    let checked = compare_outputs_global_with_time_copies(expected, actual, global, times, copies)?;
+    let checked = compare_outputs_global_with_time_copies(
+        expected,
+        actual,
+        global,
+        times,
+        copies,
+        ack_context,
+    )?;
     report.identity_pairs.extend(checked.identity_pairs());
     report.applied_body_rule_ids.extend(checked.evaluated);
     report.differences.extend(
@@ -79,7 +89,14 @@ pub(crate) fn compare_outputs_global(
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
 ) -> Result<Comparison> {
-    compare_outputs_global_with_time_copies(expected, actual, global, times, &Default::default())
+    compare_outputs_global_with_time_copies(
+        expected,
+        actual,
+        global,
+        times,
+        &Default::default(),
+        None,
+    )
 }
 
 fn compare_outputs_global_with_time_copies(
@@ -88,6 +105,7 @@ fn compare_outputs_global_with_time_copies(
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
+    ack_context: Option<&AckContext>,
 ) -> Result<Comparison> {
     let mut report = Comparison::default();
     let (expected, actual) = match (expected, actual) {
@@ -125,6 +143,10 @@ fn compare_outputs_global_with_time_copies(
     let actual_events = comparable(actual)?;
     let sse = expected.protocol == Protocol::Sse && actual.protocol == Protocol::Sse;
     let socketio = expected.protocol == Protocol::SocketIo && actual.protocol == Protocol::SocketIo;
+    let alignment = ack_context
+        .filter(|_| socketio)
+        .map(|context| context.alignment(&expected_events, &actual_events))
+        .unwrap_or_else(|| (0..actual_events.len()).collect());
     let source_offsets = expected
         .events
         .iter()
@@ -140,13 +162,15 @@ fn compare_outputs_global_with_time_copies(
     if expected_events.len() != actual_events.len() {
         mismatch(&mut report, "$interaction/events/length");
     }
-    for (index, (expected, actual)) in expected_events.iter().zip(&actual_events).enumerate() {
+    for (index, expected) in expected_events.iter().take(actual_events.len()).enumerate() {
+        let actual_index = alignment[index];
+        let actual = &actual_events[actual_index];
         let pointer = format!("$interaction/events/{index}");
         if sse && global.is_some() {
             let first_difference = report.differences.len();
             let observed = super::RequestTimes {
                 source: event_clock(times.source, source_offsets[index]),
-                target: event_clock(times.target, target_offsets[index]),
+                target: event_clock(times.target, target_offsets[actual_index]),
             };
             let mut comparison = contracts::compare_message(
                 expected, actual, global, times, &pointer, copies, observed,

@@ -109,6 +109,7 @@ impl IndexedNotifications {
             record.username.clone(),
         );
         let duration_ms = record.duration_ms;
+        let timestamp = record.timestamp;
         let lane = match self.by_anchor.get(&key) {
             Some(index) => *index,
             None => {
@@ -147,10 +148,14 @@ impl IndexedNotifications {
             .as_mut()
             .context("notification inventory already sealed")?
             .push(NotificationEntry {
+                adapter_namespace: rpc::notification_namespace(&frame.channel, &frame.payload),
                 location: reference.location,
                 duration_ms,
+                timestamp,
                 ordinal: self.total,
                 adapter_echo: rpc::echo_digest(&frame.channel, &frame.payload),
+                adapter_request: rpc::notification_request(&frame.channel, &frame.payload)
+                    .map(|identity| (frame.channel, identity)),
             })?;
         lane.count += 1;
         self.total += 1;

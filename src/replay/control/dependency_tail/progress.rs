@@ -73,6 +73,7 @@ pub(super) fn waiting(
     }).take(8).collect();
     serde_json::json!({
         "no_progress_timeout_ms":progress.timeout.as_millis(),
+        "source_post_input_allowance_ms":tail.interaction_post_input.map(|allowance| allowance.as_millis()),
         "idle_ms":progress.idle_since.map(|since| now.saturating_duration_since(since).as_millis()).unwrap_or_default(),
         "actual_io_in_flight":in_flight,
         "pending_source_dependencies":remaining,

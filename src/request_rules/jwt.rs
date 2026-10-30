@@ -160,6 +160,9 @@ pub(crate) fn request_token(
             };
             Ok(query_token_range(uri, query_param)?.map(|(_, token)| token))
         }
+        JwtTokenLocation::SocketIoConnect { socketio_connect } => {
+            super::socketio_connect::token(request, socketio_connect)
+        }
     }
 }
 
@@ -169,6 +172,9 @@ pub(crate) fn replace_request_token(
     token: String,
 ) -> Result<()> {
     match location {
+        JwtTokenLocation::SocketIoConnect { socketio_connect } => {
+            super::socketio_connect::replace(request, socketio_connect, token)
+        }
         JwtTokenLocation::RawHeader { raw_header } => {
             if let Some(headers) = request["headers"].as_object_mut() {
                 for (key, values) in headers {

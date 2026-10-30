@@ -6,6 +6,7 @@ pub(in crate::replay::mysql) struct TransactionMatch<'a> {
     pub(in crate::replay::mysql) savepoints: &'a super::super::savepoints::Bindings,
     pub(in crate::replay::mysql) preferred_end: Option<usize>,
     pub(in crate::replay::mysql) status_flags: u16,
+    pub(in crate::replay::mysql) connection: Uuid,
 }
 
 impl ReplayState {
@@ -123,6 +124,11 @@ impl ReplayState {
                             continue;
                         }
                         let exchange = &self.mysql.exchanges[index];
+                        if transaction.is_some_and(|context| {
+                            !self.mysql.isolation.permits(context.connection, index)
+                        }) {
+                            continue;
+                        }
                         if self.mysql.foreign.contains_key(&index) != foreign
                             || exchange.source != source
                             || !exchange.status.is_available()
@@ -256,6 +262,20 @@ impl ReplayState {
                                     .and_then(crate::mysql::autocommit::assignment)
                                     == Some(actual)
                         });
+                        let same_isolation = command == "COM_QUERY"
+                            && exchange.record.command == "COM_QUERY"
+                            && params.is_none_or(<[_]>::is_empty)
+                            && transaction.is_some_and(|context| {
+                                observed_sql.is_some_and(|sql| {
+                                    self.mysql.isolation.can_match(
+                                        index,
+                                        context.connection,
+                                        context.status_flags,
+                                        sql,
+                                        &self.mysql.exchanges,
+                                    )
+                                })
+                            });
                         let same_prepared_values = !cross_protocol
                             && sql.is_some_and(|sql| {
                                 sql_match::prepared_values_match(
@@ -317,89 +337,33 @@ impl ReplayState {
                                         })
                                     })
                             });
-                        let (mut policy_decision, projected) =
-                            if let Some(decision) = sql_value_decision {
-                                let Ok(decision) = decision else {
-                                    continue;
-                                };
-                                (decision, None)
-                            } else if semantic {
-                                let Some(actual) = semantic_target
-                                    .get_or_insert_with(|| {
-                                        sql.and_then(|sql| {
-                                            self.mysql.sql_cache.get(sql).bind(command, params)
-                                        })
+                        let (mut policy_decision, projected) = if same_isolation {
+                            (DependencyRuleDecision::default(), None)
+                        } else if let Some(decision) = sql_value_decision {
+                            let Ok(decision) = decision else {
+                                continue;
+                            };
+                            (decision, None)
+                        } else if semantic {
+                            let Some(actual) = semantic_target
+                                .get_or_insert_with(|| {
+                                    sql.and_then(|sql| {
+                                        self.mysql.sql_cache.get(sql).bind(command, params)
                                     })
-                                    .as_ref()
-                                else {
-                                    continue;
-                                };
-                                let Some(recorded_sql) = exchange.record.sql.as_deref() else {
-                                    continue;
-                                };
-                                // Positional dynamic policies keep their existing path.
-                                // Semantic matching proves actual value equality; it
-                                // never infers, moves or commits dynamic bindings.
-                                if !cross_protocol
-                                    && self.replay_policy.as_ref().is_some_and(|policy| {
-                                        policy.allows_mysql_sql_difference(&MysqlPolicyContext {
-                                            request_times: crate::replay::assertion::RequestTimes {
-                                                source: contracts::source_started(&exchange.record),
-                                                target: Some(request_observed_at),
-                                            },
-                                            case_id: active_case_id.as_deref(),
-                                            identity,
-                                            command,
-                                            recorded_sql: Some(recorded_sql),
-                                            sql,
-                                            recorded: exchange.record.params.as_deref(),
-                                            actual: params,
-                                        })
-                                    })
-                                {
-                                    continue;
-                                }
-                                let Some(recorded) = self.mysql.sql_cache.get(recorded_sql).bind(
-                                    &exchange.record.command,
-                                    exchange.record.params.as_deref(),
-                                ) else {
-                                    continue;
-                                };
-                                let Some(response) = projection::semantic_response(
-                                    &exchange.record,
-                                    &recorded,
-                                    actual,
-                                ) else {
-                                    continue;
-                                };
-                                (DependencyRuleDecision::default(), Some(response))
-                            } else {
-                                if cross_protocol
-                                    && !project_columns
-                                    && !same_autocommit
-                                    && !same_savepoint
-                                    && !sql.is_some_and(|sql| {
-                                        sql_match::cross_protocol_matches(
-                                            &exchange.record,
-                                            command,
-                                            sql,
-                                            params,
-                                        )
-                                    })
-                                {
-                                    continue;
-                                }
-                                let Some(recorded_sql) =
-                                    exchange.record.sql.as_deref().map(normalize_sql)
-                                else {
-                                    continue;
-                                };
-                                let policy_decision = if cross_protocol {
-                                    // The SQL matcher or projection adapter verifies values.
-                                    // A protocol change needs no dynamic-value exemption.
-                                    DependencyRuleDecision::default()
-                                } else if let Some(policy) = &self.replay_policy {
-                                    let context = MysqlPolicyContext {
+                                })
+                                .as_ref()
+                            else {
+                                continue;
+                            };
+                            let Some(recorded_sql) = exchange.record.sql.as_deref() else {
+                                continue;
+                            };
+                            // Positional dynamic policies keep their existing path.
+                            // Semantic matching proves actual value equality; it
+                            // never infers, moves or commits dynamic bindings.
+                            if !cross_protocol
+                                && self.replay_policy.as_ref().is_some_and(|policy| {
+                                    policy.allows_mysql_sql_difference(&MysqlPolicyContext {
                                         request_times: crate::replay::assertion::RequestTimes {
                                             source: contracts::source_started(&exchange.record),
                                             target: Some(request_observed_at),
@@ -407,62 +371,119 @@ impl ReplayState {
                                         case_id: active_case_id.as_deref(),
                                         identity,
                                         command,
-                                        recorded_sql: exchange.record.sql.as_deref(),
+                                        recorded_sql: Some(recorded_sql),
                                         sql,
                                         recorded: exchange.record.params.as_deref(),
                                         actual: params,
-                                    };
-                                    if !project_columns
-                                        && Some(recorded_sql.as_str()) != normalized_sql
-                                        && !same_autocommit
-                                        && !same_savepoint
-                                        && !same_prepared_values
-                                        && !policy.allows_mysql_sql_difference(&context)
-                                    {
-                                        continue;
-                                    }
-                                    if same_prepared_values
-                                        && !policy.allows_mysql_sql_difference(&context)
-                                    {
-                                        DependencyRuleDecision::default()
-                                    } else {
-                                        match policy.preview_mysql(&context, Utc::now()) {
-                                            Ok(decision) => decision,
-                                            Err(_) => continue,
-                                        }
-                                    }
-                                } else if !project_columns
+                                    })
+                                })
+                            {
+                                continue;
+                            }
+                            let Some(recorded) = self
+                                .mysql
+                                .sql_cache
+                                .get(recorded_sql)
+                                .bind(&exchange.record.command, exchange.record.params.as_deref())
+                            else {
+                                continue;
+                            };
+                            let Some(response) =
+                                projection::semantic_response(&exchange.record, &recorded, actual)
+                            else {
+                                continue;
+                            };
+                            (DependencyRuleDecision::default(), Some(response))
+                        } else {
+                            if cross_protocol
+                                && !project_columns
+                                && !same_autocommit
+                                && !same_savepoint
+                                && !sql.is_some_and(|sql| {
+                                    sql_match::cross_protocol_matches(
+                                        &exchange.record,
+                                        command,
+                                        sql,
+                                        params,
+                                    )
+                                })
+                            {
+                                continue;
+                            }
+                            let Some(recorded_sql) =
+                                exchange.record.sql.as_deref().map(normalize_sql)
+                            else {
+                                continue;
+                            };
+                            let policy_decision = if cross_protocol {
+                                // The SQL matcher or projection adapter verifies values.
+                                // A protocol change needs no dynamic-value exemption.
+                                DependencyRuleDecision::default()
+                            } else if let Some(policy) = &self.replay_policy {
+                                let context = MysqlPolicyContext {
+                                    request_times: crate::replay::assertion::RequestTimes {
+                                        source: contracts::source_started(&exchange.record),
+                                        target: Some(request_observed_at),
+                                    },
+                                    case_id: active_case_id.as_deref(),
+                                    identity,
+                                    command,
+                                    recorded_sql: exchange.record.sql.as_deref(),
+                                    sql,
+                                    recorded: exchange.record.params.as_deref(),
+                                    actual: params,
+                                };
+                                if !project_columns
                                     && Some(recorded_sql.as_str()) != normalized_sql
                                     && !same_autocommit
                                     && !same_savepoint
                                     && !same_prepared_values
+                                    && !policy.allows_mysql_sql_difference(&context)
                                 {
                                     continue;
-                                } else if same_prepared_values
-                                    || params_match(exchange.record.params.as_deref(), params)
+                                }
+                                if same_prepared_values
+                                    && !policy.allows_mysql_sql_difference(&context)
                                 {
                                     DependencyRuleDecision::default()
                                 } else {
+                                    match policy.preview_mysql(&context, Utc::now()) {
+                                        Ok(decision) => decision,
+                                        Err(_) => continue,
+                                    }
+                                }
+                            } else if !project_columns
+                                && Some(recorded_sql.as_str()) != normalized_sql
+                                && !same_autocommit
+                                && !same_savepoint
+                                && !same_prepared_values
+                            {
+                                continue;
+                            } else if same_prepared_values
+                                || params_match(exchange.record.params.as_deref(), params)
+                            {
+                                DependencyRuleDecision::default()
+                            } else {
+                                continue;
+                            };
+                            // Reject parameter/policy mismatches before copying any rows.
+                            let projected = if project_columns {
+                                let Some(response) = sql.and_then(|sql| {
+                                    projection::query_response(
+                                        &exchange.record,
+                                        command,
+                                        sql,
+                                        params,
+                                    )
+                                }) else {
                                     continue;
                                 };
-                                // Reject parameter/policy mismatches before copying any rows.
-                                let projected = if project_columns {
-                                    let Some(response) = sql.and_then(|sql| {
-                                        projection::query_response(
-                                            &exchange.record,
-                                            command,
-                                            sql,
-                                            params,
-                                        )
-                                    }) else {
-                                        continue;
-                                    };
-                                    Some(response)
-                                } else {
-                                    None
-                                };
-                                (policy_decision, projected)
+                                Some(response)
+                            } else {
+                                None
                             };
+                            (policy_decision, projected)
+                        };
                         let mut exchange = self.mysql.exchanges[index].clone();
                         // Only the delivered copy is projected. Capture identity and
                         // consumption still refer to the original recorded exchange.

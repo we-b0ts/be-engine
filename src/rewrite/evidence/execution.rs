@@ -82,6 +82,7 @@ pub(super) fn attach(
     facts["execution_failures"] = execution["execution_failures"].clone();
     facts["execution_failures_summary"] = execution["execution_failures_summary"].clone();
     facts["execution_failures_query"] = command(root, state, issue, 0);
+    facts["case_selection"] = execution["case_selection"].clone();
 }
 
 pub(super) fn facts(

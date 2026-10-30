@@ -2,12 +2,15 @@ use super::*;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde_json::json;
 
+mod socketio_connect;
+
 fn rule() -> JwtRule {
     JwtRule {
         id: "session-jwt".into(),
         header: Some("authorization".into()),
         scheme: Some("bearer".into()),
         query_param: None,
+        socketio_connect: None,
         profile: "session".into(),
     }
 }
@@ -27,6 +30,7 @@ fn query_rule() -> JwtRule {
         header: None,
         scheme: None,
         query_param: Some("download_token".into()),
+        socketio_connect: None,
         profile: "session".into(),
     }
 }

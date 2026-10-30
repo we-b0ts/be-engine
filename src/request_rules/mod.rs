@@ -5,6 +5,7 @@
 mod derived;
 pub(crate) mod jwt;
 pub mod keys;
+mod socketio_connect;
 pub use jwt::Algorithm as JwtAlgorithm;
 pub use jwt::nonce::{
     DynamicClaim as JwtDynamicClaim, NonceClaim as JwtNonceClaim, NonceFormat as JwtNonceFormat,
@@ -38,6 +39,8 @@ pub struct JwtRule {
     pub scheme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_param: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socketio_connect: Option<SocketIoConnectLocation>,
     pub profile: String,
 }
 
@@ -119,6 +122,7 @@ impl<'de> Deserialize<'de> for JwtRules {
                         header: legacy.header,
                         scheme: legacy.scheme,
                         query_param: legacy.query_param,
+                        socketio_connect: None,
                         profile,
                     });
                 }
@@ -131,25 +135,62 @@ impl<'de> Deserialize<'de> for JwtRules {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum JwtTokenLocation {
-    BearerHeader { header: String },
-    RawHeader { raw_header: String },
-    QueryParameter { query_param: String },
+    BearerHeader {
+        header: String,
+    },
+    RawHeader {
+        raw_header: String,
+    },
+    QueryParameter {
+        query_param: String,
+    },
+    SocketIoConnect {
+        socketio_connect: SocketIoConnectLocation,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SocketIoConnectLocation {
+    pub namespace: String,
+    pub pointer: String,
+}
+
+impl SocketIoConnectLocation {
+    pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(
+            self.namespace.starts_with('/')
+                && self.namespace.len() <= 1024
+                && !self.namespace.chars().any(|c| c.is_control() || c == ','),
+            "Socket.IO CONNECT JWT requires an exact bounded namespace"
+        );
+        crate::policy::validate_pointer(&self.pointer, false)
+    }
 }
 
 impl JwtTokenLocation {
-    fn selector_key(&self) -> (&'static str, &str) {
+    fn selector_key(&self) -> (&'static str, String) {
         match self {
-            Self::BearerHeader { header } => ("header", header),
-            Self::RawHeader { raw_header } => ("header", raw_header),
-            Self::QueryParameter { query_param } => ("query_param", query_param),
+            Self::BearerHeader { header } => ("header", header.clone()),
+            Self::RawHeader { raw_header } => ("header", raw_header.clone()),
+            Self::QueryParameter { query_param } => ("query_param", query_param.clone()),
+            Self::SocketIoConnect { socketio_connect } => (
+                "socketio_connect",
+                serde_json::to_string(socketio_connect).expect("string selector"),
+            ),
         }
     }
 }
 
 impl JwtRule {
     pub(crate) fn location(&self) -> Result<JwtTokenLocation> {
-        match (&self.header, &self.scheme, &self.query_param) {
-            (Some(header), Some(scheme), None) => {
+        match (
+            &self.header,
+            &self.scheme,
+            &self.query_param,
+            &self.socketio_connect,
+        ) {
+            (Some(header), Some(scheme), None, None) => {
                 ensure!(
                     scheme == "bearer" || scheme == "raw",
                     "JWT header rules require bearer or raw scheme"
@@ -172,7 +213,7 @@ impl JwtRule {
                     }
                 })
             }
-            (None, None, Some(query_param)) => {
+            (None, None, Some(query_param), None) => {
                 ensure!(
                     !query_param.is_empty()
                         && query_param.len() <= 128
@@ -186,8 +227,14 @@ impl JwtRule {
                     query_param: query_param.clone(),
                 })
             }
+            (None, None, None, Some(location)) => {
+                location.validate()?;
+                Ok(JwtTokenLocation::SocketIoConnect {
+                    socketio_connect: location.clone(),
+                })
+            }
             _ => anyhow::bail!(
-                "JWT rule must select exactly one header with an explicit scheme or one query_param"
+                "JWT rule must select exactly one header with an explicit scheme, query_param, or socketio_connect"
             ),
         }
     }

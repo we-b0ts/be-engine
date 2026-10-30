@@ -12,6 +12,33 @@ dependencies of whichever HTTP case is active at arrival. Replay schedules each
 finite notification after its original subscription is matched and confirmed.
 Unsubscribe and disconnect prevent later delivery to that subscriber. Different
 channels, patterns, shard channels, and source connections remain isolated.
+
+For a selected native Socket.IO namespace, ordinary external adapter broadcasts
+use proven request-clock projections instead of subscription age. A completed
+standard run must identify one unique original passive namespace subscription
+(a validated CONNECT-only input program and clean lifecycle bounds). Windows
+from skipped and unselected Cases also participate in the ambiguity check.
+An original notification timestamp supplies its request-relative offset; actual
+Target request admission and observation of its live namespace CONNECT gate
+delivery. The original Global slot, subscription realm, channel, room and all
+payload bytes remain intact. Expected response frames and bodies are never
+request-driver inputs; preparation reads only original lifecycle/time metadata.
+Protected original INPUT uses the same authenticated, in-memory request reader
+as execution. Missing keys or tampered envelopes fail preparation; ciphertext
+cannot silently erase a namespace, and no plaintext evidence file is written.
+
+Missing clocks or run scope, overlapping or active input programs, and socket
+exclusions without an independent live identity proof keep those external slots
+unconsumed. Subscription-age timers cannot inject earlier or later broadcasts
+into a selected native namespace. Other Redis notification types keep their
+existing timers; RPC ingress and self-echoes retain their separate proofs.
+Queued native input is fenced by both Case and actual request epoch before and
+after TCP delivery, so a stale queue cannot enter another request. Admitted
+inputs participate in the started-I/O cleanup barrier until the actual write
+finishes; an abandoned or failed write marks its Case unsafe. Closing a Case
+prevents new ordinary input admission. The compact notification index stores
+namespace-only metadata for this classification.
+
 Replay resolves the original successful subscription by source connection and
 command sequence, then checks endpoint, database, username, subscription kind,
 subject, and confirmation. Missing or inconsistent subscription anchors fail
@@ -96,6 +123,22 @@ Ordinary callback-null adapter broadcasts share the same process host identity
 with RPC calls. Their room, namespace, event and business data remain strict;
 only a valid UUID-v4 manager host identity is translated.
 
+For an inbound remote call, a selected Socket.IO Case's original callback
+PUBLISH can prove exactly one Global request notification with the same complete
+host/SID/namespace/counter, endpoint and channel. Both request and reply need
+Source clocks: the notification must fall between the Case request start and
+its callback. Ambiguous, missing or contradictory evidence fails preparation.
+The notification retains its original Global slot and exact subscription anchor.
+Replay delivers it at the Case request clock plus its original Source offset,
+after that Case independently observes the live Target SID through an accepted
+identity contract. An unbound historical SID cannot create a Target session.
+Only the validated room/callback SID pair changes; external host/counter,
+business data and other notifications' timers remain intact. The ordinary
+subscription timer cannot deliver that slot again, and only actual TCP delivery
+consumes it. A queued request cannot escape into another Case. Target must
+produce the real callback PUBLISH with that external identity, observed SID and
+complete result; premature, altered or extra replies remain unmatched.
+
 A recorded `message` containing the exact bytes of a finite Source adapter PUBLISH
 is its Redis self-echo. After strict Target PUBLISH admission and delivery of its
 Redis response, Replay delivers that admitted Target payload through the exact
@@ -105,10 +148,18 @@ for the recording's pre-request subscription idle time. The slot becomes consume
 only after actual TCP delivery. Its ordinary notification timer cannot duplicate
 that delivery. Unmatched application data, missing Source echoes, different
 endpoint/channel identities, and duplicate ambiguous echoes
-do not authorize new notifications. Each subscription retains its recorded
+do not authorize new notifications. Repeated identical broadcasts can use distinct
+finite notification slots only when complete Source PUBLISH clocks establish
+disjoint intervals in wire order. Each interval starts at that original PUBLISH
+and ends before the next identical Source PUBLISH; it must contain at most one
+matching notification. Missing clocks, overlapping calls, contradictory wire
+order or multiple candidates in one interval remain unsafe. Publication intervals
+are prepared once before Target admission; they neither delay Target calls by
+Source wall time nor change notification counts. Global notification indexes
+retain these Source clocks without storing response payloads. Each subscription retains its recorded
 database and authenticated identity; Redis PUBLISH fan-out remains independent
 of the publisher’s logical database. Other Global messages keep their recorded
-timing and bytes. Notification indexes retain only digests and locations; the
+timing and bytes. Notification indexes retain protocol identities, digests and locations; the
 sparse digest lookups needed by the loaded adapter publishers are prepared from
 metadata before Replay publishes readiness. APIs without those publishers skip
 this preparation. Each subscription's lookup is shared across the session's

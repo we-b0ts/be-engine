@@ -25,6 +25,9 @@ pub(super) fn command(command: &str) -> ReplayControlRequest {
         fail_on_incomplete: false,
         identity_pairs: Vec::new(),
         derived_input: None,
+        native_event: None,
+        input_timing: None,
+        socketio_timing: None,
     }
 }
 

@@ -293,6 +293,7 @@ pub(in crate::replay) async fn handle_query(
                 savepoints: &session.savepoints,
                 preferred_end: transaction_end,
                 status_flags: session.status_flags,
+                connection: session.transaction_witness.connection(),
             }),
         );
         (matched, case)
@@ -349,6 +350,10 @@ pub(in crate::replay) async fn handle_query(
             {
                 let mut state = state.lock().await;
                 let identity = session.identity();
+                state
+                    .mysql
+                    .isolation
+                    .reject_connection(session.transaction_witness.connection());
                 state.record_unmatched_in_case(
                     case_id.as_deref(),
                     &identity,
@@ -482,6 +487,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                 savepoints: &session.savepoints,
                 preferred_end: transaction_end,
                 status_flags: session.status_flags,
+                connection: session.transaction_witness.connection(),
             }),
         );
         (matched, case)
@@ -538,6 +544,10 @@ pub(in crate::replay) async fn handle_stmt_execute(
             {
                 let mut state = state.lock().await;
                 let identity = session.identity();
+                state
+                    .mysql
+                    .isolation
+                    .reject_connection(session.transaction_witness.connection());
                 state.record_unmatched_in_case(
                     case_id.as_deref(),
                     &identity,

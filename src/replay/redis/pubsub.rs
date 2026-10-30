@@ -4,15 +4,19 @@ use crate::redis::{RedisSubscriptionKind, parse_pubsub_push, socketio_rpc as rpc
 use std::path::Path;
 use tokio::sync::mpsc;
 mod adapter;
+mod delivery;
 pub(super) mod echo;
 pub(super) struct RpcComparison {
     pub source: Vec<Vec<u8>>,
     pub actual: Vec<Vec<u8>>,
 }
+pub(in crate::replay) mod ingress;
 mod inventory;
+pub(in crate::replay) mod native_clock;
 pub(in crate::replay) use inventory::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
 };
+mod input_timing;
 mod notifications;
 mod report_inventory;
 pub(in crate::replay) mod subscription_evidence;
@@ -22,6 +26,8 @@ mod tests;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedPush {
+    #[serde(default)]
+    pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) target_host: String,
     pub(super) target_port: u16,
     pub(super) database: i64,
@@ -61,10 +67,37 @@ pub(super) struct Delivery {
     pub(super) push: PushId,
     pub(super) bytes: Vec<u8>,
     pub(super) matched: Option<MatchedRedisExchange>,
+    pub(super) case_id: Option<String>,
+    pub(super) request_epoch: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) enum PushId {
+impl Delivery {
+    pub(super) fn case_is_current(&self, replay: &ReplayState) -> bool {
+        let active = replay.active_case_id.as_deref();
+        let stopped = replay.target_session_stopped;
+        self.matched
+            .as_ref()
+            .is_none_or(|matched| matched.report.case_id.as_deref() == active)
+            && self
+                .case_id
+                .as_deref()
+                .is_none_or(|case| !stopped && Some(case) == active)
+            && self.request_epoch.is_none_or(|epoch| {
+                self.case_id.as_deref().is_some_and(|case| {
+                    replay
+                        .redis
+                        .pubsub
+                        .native_clock
+                        .epoch(case)
+                        .or_else(|| replay.redis.request_contracts.request_times(case).target)
+                        == Some(epoch)
+                })
+            })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(in crate::replay) enum PushId {
     Inline(usize),
     Indexed { lane: usize, index: usize },
 }
@@ -92,6 +125,9 @@ pub(in crate::replay) struct PubSubState {
     subscriptions: Vec<Subscription>,
     bindings: adapter::Bindings,
     echoes: echo::Echoes,
+    ingress: ingress::Ingress,
+    pub(in crate::replay) native_clock: native_clock::NativeClock,
+    case_deliveries: BTreeMap<PushId, (String, Uuid)>,
     notifications: std::collections::HashMap<(Uuid, u64), Arc<Vec<usize>>>,
     delivered: usize,
     failed: usize,
@@ -289,6 +325,8 @@ impl PubSubState {
     }
 
     pub(super) fn complete(&mut self, id: PushId) {
+        self.case_deliveries.remove(&id);
+        self.complete_ingress(id);
         let index = match id {
             PushId::Inline(index) => index,
             PushId::Indexed { lane, index } => {
@@ -308,6 +346,8 @@ impl PubSubState {
         self.refresh_global_report(index);
     }
     pub(super) fn fail(&mut self, id: PushId) {
+        self.case_deliveries.remove(&id);
+        self.fail_ingress(id);
         let index = match id {
             PushId::Inline(index) => index,
             PushId::Indexed { lane, index } => {

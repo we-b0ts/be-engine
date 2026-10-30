@@ -4,7 +4,7 @@ use serde_json::Value;
 
 pub(crate) const MAX_RPC_BYTES: usize = crate::value_limits::MAX_VALUE_BYTES;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Identity {
     pub host: String,
     pub sid: String,
@@ -87,6 +87,24 @@ pub(crate) fn request(command: &str, args: &[Vec<u8>]) -> Result<Option<Request>
         "RPC callback does not match room/namespace"
     );
     Ok(Some(Request { identity, value }))
+}
+
+/// The native envelope identity only; application data stays in its original record.
+pub(crate) fn notification_request(channel: &[u8], payload: &[u8]) -> Option<Identity> {
+    request("PUBLISH", &[channel.to_vec(), payload.to_vec()])
+        .ok()
+        .flatten()
+        .map(|request| request.identity)
+}
+
+/// Bounded protocol metadata only; ordinary broadcast arguments stay private.
+pub(crate) fn notification_namespace(channel: &[u8], payload: &[u8]) -> Option<String> {
+    broadcast("PUBLISH", &[channel.to_vec(), payload.to_vec()])
+        .ok()
+        .flatten()?
+        .value["namespace"]
+        .as_str()
+        .map(str::to_owned)
 }
 
 pub(crate) fn callback(payload: &[u8]) -> Result<Option<(Identity, Value)>> {
