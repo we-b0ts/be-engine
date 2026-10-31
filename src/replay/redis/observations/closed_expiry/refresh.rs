@@ -104,6 +104,7 @@ impl RedisReplayState {
         let p = &self.observations.profiles[owner];
         let e = &self.exchanges[witness];
         Ok(Some(MatchedRedisExchange {
+            claim: Claim::Native(NativeClaimKind::StateObservation),
             observation: Some(prepared),
             refresh: None,
             append: None,

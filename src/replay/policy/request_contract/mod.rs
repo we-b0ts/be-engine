@@ -1,4 +1,5 @@
 //! Dependency request contracts: comparison copies, protected witnesses and case-local state.
+mod case_plan;
 pub(crate) mod config;
 mod derived_inputs;
 pub(in crate::replay::policy) mod evidence;
@@ -22,6 +23,7 @@ mod read_back;
 mod redis;
 mod redis_fields;
 mod redis_hypothesis;
+mod rule_dispatch;
 pub(in crate::replay) use read_back::{PreparedReadBack, RedisReadBackReport};
 pub(in crate::replay) use redis_fields::{PreparedRedisTimeRead, PreparedRedisTimeWrite};
 pub(crate) use redis_fields::{RedisFieldValue, redis_field_values};
@@ -111,6 +113,8 @@ struct SequenceKey {
 
 #[derive(Default)]
 struct State {
+    source_plan_facts: BTreeMap<String, BTreeSet<case_plan::SourceFact>>,
+    primary_protocols: BTreeMap<String, Option<crate::protocol_contract::ProtocolKind>>,
     hypothesis_attempts: Vec<HypothesisAttempt>,
     hypothesis_checkpoints: BTreeSet<String>,
     hypothesis_error: Option<String>,
@@ -146,7 +150,9 @@ pub(in crate::replay) struct RequestContracts {
     compiled: Option<Arc<crate::policy::CompiledPolicy>>,
     input_origin: Option<derived_inputs::InputOrigin>,
     witnesses: Option<crate::policy_evidence::WitnessStore>,
-    rules: Arc<Vec<ReplayDependencyRule>>,
+    rules: Arc<rule_dispatch::IndexedRules>,
+    native_dispatch: Arc<rule_dispatch::NativeDispatch>,
+    rule_catalogue: Arc<case_plan::RuleCatalogue>,
     keys: Arc<BTreeMap<(String, String), crate::request_rules::keys::ResolvedSigningKey>>,
     state: Arc<Mutex<State>>,
     identities: Arc<Mutex<crate::value_contract::identities::IdentityStore>>,
@@ -202,6 +208,9 @@ impl RequestContracts {
             }
             let raw = std::fs::read(case.dir.join("request.json"))?;
             state
+                .primary_protocols
+                .insert(id.clone(), case_plan::input_protocol(&raw));
+            state
                 .source_request_digests
                 .insert(id.clone(), crate::policy_evidence::digest(&raw));
             let request: Value = serde_json::from_slice(&raw)?;
@@ -219,6 +228,8 @@ impl RequestContracts {
             mysql_hypothesis_projections: Arc::default(),
             pre_match_enabled: false,
             compiled: None,
+            native_dispatch: Arc::default(),
+            rule_catalogue: Arc::default(),
             witnesses: None,
             input_origin: Some(derived_inputs::InputOrigin::Policy(policy.to_owned())),
             rules: Arc::new(
@@ -226,7 +237,8 @@ impl RequestContracts {
                     .iter()
                     .filter(|r| is_request_rule(r))
                     .cloned()
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
             ),
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),
@@ -311,11 +323,12 @@ impl RequestContracts {
         target: &TargetKey,
         protocol: DependencyProtocol,
     ) -> Vec<&ReplayDependencyRule> {
-        let Ok(anchor) = self.anchor(case) else {
+        let state = self.state.lock().expect("request contracts");
+        let Some(anchor) = state.cases.get(case) else {
             return vec![];
         };
         self.rules
-            .iter()
+            .candidates(protocol)
             .filter(|r| {
                 r.protocol == protocol
                     && (r.when.is_none() || anchor.conditions.contains(&r.id))
@@ -367,6 +380,7 @@ impl RequestContracts {
     }
     pub(in crate::replay) fn enabled(&self) -> bool {
         !self.rules.is_empty()
+            || self.pre_match_enabled
             || self.witnesses.is_some()
             || self.compiled.as_ref().is_some_and(|policy| {
                 policy.global_json.is_some()

@@ -64,7 +64,7 @@ impl ReplayState {
         Ok(())
     }
     pub(in crate::replay) fn global_mysql_unused_count(&self) -> usize {
-        if let Some(count) = self.mysql.global_report_usage().count() {
+        if let Some(count) = self.mysql.global_report_count() {
             return count + self.global_mysql_extra_unused_count();
         }
         self.mysql_unused_iter(ReplaySource::Startup, None).count()

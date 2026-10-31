@@ -524,7 +524,7 @@ async fn run_active_with_replay(
 
     let _ = active_progress::write(layout, state, ActiveProgressPhase::StartingTarget);
     start_target_with_replay_ca(config, layout, state, target_image, &replay_ca_cert_path).await?;
-    super::http_driver::wait_until_ready(config).await?;
+    super::primary_driver::wait_until_ready(config).await?;
     verify_target_runtime_contract(config, layout, state)
         .await
         .context("target Replay runtime contract failed")?;
@@ -629,7 +629,7 @@ pub(super) async fn execute_case(
         Ok(case_view) => match control(state, "request_begin", Some(case_id), false, false).await {
             Err(error) => Err(error),
             Ok(_) => {
-                super::http_driver::capture_case(
+                super::primary_driver::capture_case(
                     config,
                     case_view.request_path(),
                     case_view.replay_request(),
@@ -730,7 +730,7 @@ pub(super) async fn execute_case(
     state.cases[case_index].response_unavailable_reason = assertion_command
         .as_ref()
         .err()
-        .map(super::http_driver::response_unavailable_reason);
+        .map(super::primary_driver::response_unavailable_reason);
     // A different primary status (or no usable response) ends the normal
     // business path. Body-only differences retain the recorded async contract.
     let dependency_failed = assertion_command

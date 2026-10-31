@@ -127,7 +127,8 @@ async fn captured_candidate_and_evidence_performance() {
                             ))
                             .unwrap(),
                         );
-                        state.complete_exchange(&exchange);
+                        assert!(exchange.claim.publish_wire());
+                        assert!(state.complete_exchange(&exchange));
                     } else if command == "COM_STMT_PREPARE" {
                         let metadata = state.statement_metadata(&identity, sql.unwrap());
                         fingerprint.update(

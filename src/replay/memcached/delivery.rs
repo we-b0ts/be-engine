@@ -7,12 +7,18 @@ pub(super) async fn deliver_memcached_exchange(
     matched: &MatchedMemcachedExchange,
     started: tokio::time::Instant,
 ) -> Result<bool> {
+    let _delivery_guard = matched.claim.guard();
     if matched.timing.outcome().is_client_terminated()
         || matched.timing.outcome().is_server_terminated()
     {
         match deliver_termination(reader, matched, started).await {
             Ok(()) => {
-                state.lock().await.memcached.complete_exchange(matched);
+                matched.claim.publish_wire();
+                state
+                    .lock()
+                    .await
+                    .memcached
+                    .finish_exchange(matched, || Ok(()))?;
                 if matched.timing.outcome().termination().is_some_and(|end| {
                     end.side == crate::dependency::TerminationSide::Server
                         && end.kind == crate::dependency::TerminationKind::Eof
@@ -68,11 +74,21 @@ pub(super) async fn deliver_memcached_exchange(
             return Err(error.into());
         }
     }
+    // Publish actual completed native I/O before waiting for the shared state;
+    // finite consumption still requires the transaction below to commit.
+    matched.claim.publish_wire();
     let mut replay = state.lock().await;
-    if let Some(policy) = replay.replay_policy.as_mut() {
-        policy.commit(matched.report.case_id.as_deref(), decision)?;
-    }
-    replay.memcached.complete_exchange(matched);
+    let ReplayState {
+        memcached,
+        replay_policy,
+        ..
+    } = &mut *replay;
+    memcached.finish_exchange(matched, || {
+        if let Some(policy) = replay_policy {
+            policy.commit(matched.report.case_id.as_deref(), decision)?;
+        }
+        Ok(())
+    })?;
     Ok(false)
 }
 

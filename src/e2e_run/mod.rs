@@ -22,10 +22,10 @@ mod execution_failure;
 mod failure_limit;
 mod final_evidence;
 mod focused_batch;
-mod http_driver;
 mod interrupted_evidence;
 pub(crate) mod jwt_evidence;
 mod model;
+mod primary_driver;
 mod progress;
 mod project_validation;
 mod replay_publication;
@@ -77,10 +77,10 @@ pub use evidence::{
 pub(crate) use evidence::{query_execution_context, query_execution_failure_page};
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 pub(crate) use execute::{recover_focused_e2e_api, run_e2e_apis};
-pub(crate) use http_driver::wait_until_ready;
 pub use model::DEFAULT_MAX_FAILED_CASES_PER_API;
 use model::{CaseStatus, RunStatus};
 pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext};
+pub(crate) use primary_driver::wait_until_ready;
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,
     E2eReplayGate, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,

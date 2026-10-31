@@ -8,7 +8,7 @@ impl RedisReplayState {
             e.source == ReplaySource::Case
                 && !self.append_streams.idle_source(*index)
                 && matches!(
-                    e.status,
+                    self.lifecycle.live_status(*index, e.status),
                     ReplayExchangeStatus::Responding
                         | ReplayExchangeStatus::AwaitingClientTermination
                 )
@@ -19,7 +19,7 @@ impl RedisReplayState {
             .map(|(index, e)| {
                 json!({"index":index, "case_id":e.case_id,
                 "connection_id":e.record.connection_id, "sequence":e.record.sequence,
-                "status":format!("{:?}", e.status)})
+                "status":format!("{:?}", self.lifecycle.live_status(index,e.status))})
             })
             .collect::<Vec<_>>();
         json!({"count":count, "references":references, "omitted":count.saturating_sub(4),

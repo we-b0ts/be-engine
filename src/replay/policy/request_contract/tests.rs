@@ -137,7 +137,7 @@ pub(super) fn runtime(rule: ReplayDependencyRule) -> RequestContracts {
         },
     );
     RequestContracts {
-        rules: Arc::new(vec![rule]),
+        rules: Arc::new(vec![rule].into()),
         state: Arc::new(Mutex::new(state)),
         ..Default::default()
     }

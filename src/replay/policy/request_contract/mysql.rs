@@ -246,27 +246,49 @@ impl RequestContracts {
         identity: &ReplaySessionIdentity,
         record: &RecordedMysqlExchange,
     ) -> Vec<&crate::policy::CompiledNativeRule> {
-        let Some(anchor) = case.and_then(|id| self.anchor(id).ok()) else {
+        let Some(policy) = self.compiled_rules() else {
+            return vec![];
+        };
+        let state = self.state.lock().expect("request contracts");
+        let Some(anchor) = case.and_then(|id| state.cases.get(id)) else {
             return vec![];
         };
         let mut statement = None;
-        self.compiled_rules().into_iter().flat_map(|compiled| &compiled.native).filter(|compiled| {
-            let rule = &compiled.rule;
-            matches!(&rule.effect, crate::policy::NativeEffect::MysqlValues(effect) if !effect.values.is_empty() || !effect.params.is_empty())
-                && rule.selector.api.as_deref().is_none_or(|api| api.split_once(' ').is_some_and(|(method,path)|
-                    method == anchor.method && super::super::pattern::path_pattern_matches(path,&anchor.path)))
-                && rule.when.as_ref().is_none_or(|condition| anchor.source_body.as_ref().is_some_and(|body|condition.matches_body(body)))
-                && rule.selector.resource.as_ref().is_some_and(|r| r.protocol == Protocol::Mysql
-                    && identity.target.as_ref().is_some_and(|t| t.host.eq_ignore_ascii_case(&r.endpoint.host) && t.port==r.endpoint.port)
-                    && r.database.as_ref().is_none_or(|d| d.name()==identity.database.as_deref())
-                    && r.username.as_deref().is_none_or(|u|Some(u)==identity.username.as_deref()))
-                && rule.selector.operation.as_deref().is_none_or(|op|op==record.command)
-                && statement.get_or_insert_with(||super::super::matcher::mysql_values::materialized(record.sql.as_deref(),record.params.as_deref()).ok()).as_ref().is_some_and(|tokens| {
-                    let Some(sql)=rule.selector.sql.as_deref() else {return false};
-                    super::super::sql_template::SqlValueTemplate::new(sql,&rule.selector.tables,&rule.selector.table_patterns,rule.selector.table_series.as_ref())
-                        .is_ok_and(|template|template.matches_tokens(tokens))
-                })
-        }).collect()
+        self.native_dispatch
+            .candidates(
+                crate::protocol_contract::ProtocolKind::Mysql,
+                identity.target.as_ref(),
+                &record.command,
+            )
+            .filter_map(|index| {
+                let compiled = &policy.native[index];
+                let rule = &compiled.rule;
+                let matches = matches!(&rule.effect, crate::policy::NativeEffect::MysqlValues(effect)
+                    if !effect.values.is_empty() || !effect.params.is_empty())
+                    && rule.selector.api.as_deref().is_none_or(|api| {
+                        api.split_once(' ').is_some_and(|(method, path)| {
+                            method == anchor.method
+                                && super::super::pattern::path_pattern_matches(path, &anchor.path)
+                        })
+                    })
+                    && rule.when.as_ref().is_none_or(|condition| {
+                        anchor.source_body.as_ref().is_some_and(|body| condition.matches_body(body))
+                    })
+                    && rule.selector.resource.as_ref().is_some_and(|resource| {
+                        resource.database.as_ref().is_none_or(|database| {
+                            database.name() == identity.database.as_deref()
+                        }) && resource.username.as_deref().is_none_or(|username| {
+                            Some(username) == identity.username.as_deref()
+                        })
+                    })
+                    && self.native_dispatch.sql_could_match(index, record.sql.as_deref())
+                    && statement
+                        .get_or_insert_with(|| self.mysql_hypothesis_source(record).ok())
+                        .as_ref()
+                        .is_some_and(|tokens| self.native_dispatch.sql_matches(index, tokens));
+                matches.then_some(compiled)
+            })
+            .collect()
     }
     pub(in crate::replay) fn mysql_metadata(
         &self,

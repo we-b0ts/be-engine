@@ -69,12 +69,17 @@ pub(super) async fn load_dependency_file(
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
-) -> Result<()> {
+) -> Result<super::execution_plan::SourceScopeIdentity> {
     let original = path.to_owned();
-    let records = tokio::task::spawn_blocking(move || -> Result<Vec<(usize, DependencyRecord)>> {
+    let (records, scope) = tokio::task::spawn_blocking(move || -> Result<_> {
+        use sha2::Digest;
+        let mut hash = sha2::Sha256::new();
+        let mut source_bytes = 0_u64;
         let mut input = crate::dependency_index::RecordStream::open(&original)?;
         let mut records = Vec::new();
         while let Some((location, raw)) = input.next()? {
+            hash.update(raw);
+            source_bytes += raw.len() as u64;
             if raw.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
@@ -82,7 +87,13 @@ pub(super) async fn load_dependency_file(
             validate_outcome(&value)?;
             records.push((location.line, serde_json::from_value(value)?));
         }
-        Ok(records)
+        Ok((
+            records,
+            super::execution_plan::SourceScopeIdentity {
+                sha256: format!("{:x}", hash.finalize()),
+                source_bytes,
+            },
+        ))
     })
     .await
     .context("dependency scope read task failed")??;
@@ -109,7 +120,8 @@ pub(super) async fn load_dependency_file(
         connection_identities,
         process_owned_dependencies,
         &cleanup,
-    )
+    )?;
+    Ok(scope)
 }
 
 pub(super) fn parse_dependency_records(

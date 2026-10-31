@@ -30,6 +30,41 @@ is unclear.
 
 ## Current Boundaries
 
+- `protocol_contract` owns closed protocol, role and native-version identities.
+  `primary_protocol` adapts immutable HTTP/Motan inputs to genuine native
+  execution and independent observations; `e2e_run/primary_driver` owns caller
+  lifecycle and assertion inputs. The executor never reads expected outputs.
+  `replay/adapters` resolves original finite dependency references and delegates
+  real delivery state to native owners. It cannot manufacture consumption.
+
+- `value_contract/plan` owns executable rule, index and evidence requirements.
+  `policy/capability/coverage` admits supported protocol/role/carrier/codec
+  combinations before execution, with explicit unsupported reasons. Stateful
+  native effects retain their real native executor rather than a no-op generic
+  implementation.
+
+- `replay/preparation` binds an immutable Source scope and applicable contracts
+  into a Case execution plan after native registration. `replay/native_index`
+  owns ordered postings and immutable lane membership; HTTP, Redis and MySQL
+  candidate adapters retain their protocol keys. Live admission, ordering and
+  protocol eligibility remain with native matchers; the shared runtime owns
+  finite claim transitions. Deferred loading registers appended
+  ranges, and candidate lookup does not enumerate unrelated Cases.
+  `replay/candidate_selection` owns bounded hypothesis uniqueness; ambiguity or
+  an exhausted search cannot produce a selected candidate. Native hypothesis
+  executors retain their own guards and complete attempted-rule evidence.
+
+- `replay/admission/request` owns the generic request execution flow. Native
+  `DependencyRequestAdapter` hooks supply observations, protocol selection and
+  required barriers; they do not implement independent wait/retry loops.
+  `replay/admission` owns finite tickets, actual wire progress, once-only
+  commit/failure, cancellation and lost-wakeup-safe notification. Admission and
+  delivered-value barriers are distinct. `order` owns physical Target arrival
+  indexes independently of response completion. Redis/MySQL/Memcached retain
+  native framing, session constraints and response rendering, and use the shared
+  execution contracts for ordinary finite dependencies. Explicit repeat or
+  coalescing operators retain named native claims and their own proof guards.
+
 - `value_limits` owns the shared 64 MiB value ceiling used by Redis carriers,
   JSON/Protobuf codecs and derived-value rendering; business code owns actual
   payload sizes. Protocol validation and aggregate evidence budgets stay with
@@ -317,7 +352,9 @@ is unclear.
   JSON, physical SQL values and Redis arguments/key components reuse that kernel.
   `request_contract/mysql_hypothesis` owns immutable Source SQL projection caching;
   `redis_hypothesis` owns native key/value slot extraction and strict remainder.
-  Native HTTP/MySQL/Redis matchers own scope, ordering, unique selection and claims.
+  Native HTTP/MySQL/Redis matchers retain protocol eligibility and Source
+  selection. Shared native indexes, candidate selection and finite admission
+  own their common ordering, uniqueness and claim mechanisms.
   `request_contract/hypotheses` retains every attempted rule independently of
   selection; staged identity decisions commit only after native admission.
   `policy_evidence/hypotheses` owns the authenticated append journal, bounded
@@ -410,7 +447,12 @@ is unclear.
   Case response oracle, CA or listener. `global_evidence/preparation` owns portable
   source/policy/version binding and prewarm import; failure remains explicit and
   does not change Recorder's original completion contract.
-- `value_codec` prepares immutable typed decoding plans and bounded schema reuse;
+- `value_codec` prepares immutable typed codec plans and bounded schema reuse;
+  its Scalar/JSON/Protobuf providers statically dispatch decoding, comparison
+  views and authorized encoding. Decoded documents retain original bytes and
+  native Protobuf presence/unknown fields independently of logical JSON views.
+  `value_contract/encoded/prepared` caches only bounded immutable overlapping
+  schema plans, never live clocks, Target values or comparison decisions;
   decoded Source values may be shared within a comparison. The pure value kernel
   still evaluates every applicable permission and supplied clock independently.
   `replay/policy/request_contract/mysql_selection` owns immutable SQL selector

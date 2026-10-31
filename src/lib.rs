@@ -12,6 +12,7 @@ pub mod command_output;
 mod config;
 mod dependency;
 mod dependency_index;
+mod dependency_provider;
 pub use api_trigger::mysql_plan::{ApiTriggeredMysqlSelector, plan_api_triggered_mysql};
 pub use api_trigger::plan::{
     ApiTriggeredDependencyPlan, ApiTriggeredDependencyReport, ApiTriggeredMysqlPlan,
@@ -43,6 +44,8 @@ mod path_pattern;
 mod platform;
 pub mod policy;
 pub(crate) mod policy_evidence;
+mod primary_protocol;
+mod protocol_contract;
 mod proxy;
 pub mod record_service;
 mod recorded_request;

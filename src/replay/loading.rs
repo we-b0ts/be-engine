@@ -172,6 +172,7 @@ impl ReplayRuntime {
             .map(|(_, selector)| selector)
             .collect();
         let mut deferred_files = BTreeMap::new();
+        let mut prepared_scopes = BTreeMap::new();
         for (index, case) in cases.values().enumerate() {
             let cleanup = lifecycle_cleanup::load_refs(&case.dir).await?;
             connect_failures
@@ -230,7 +231,7 @@ impl ReplayRuntime {
                     },
                 );
             } else {
-                load_dependency_file(
+                let scope = load_dependency_file(
                     &case.dependencies_path,
                     ReplaySource::Case,
                     Some(&case.id),
@@ -246,6 +247,7 @@ impl ReplayRuntime {
                     process_owned_dependencies,
                 )
                 .await?;
+                prepared_scopes.insert(case.id.clone(), scope);
             }
             load_motan_debug_file(
                 &case.dir.join("dependencies-debug.jsonl"),
@@ -434,6 +436,8 @@ impl ReplayRuntime {
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
         let mut state = ReplayState {
+            admission_epoch: 0,
+            case_execution_plans: BTreeMap::new(),
             batch_scope: attribution.batch_scope,
             startup_phase: Default::default(),
             dependency_attribution_snapshot: attribution.snapshot,
@@ -475,6 +479,7 @@ impl ReplayRuntime {
             mysql,
             http_exchanges,
             http_case_exchange_index,
+            http_candidates: Default::default(),
             http_blackholes,
             redis,
             memcached,
@@ -495,6 +500,10 @@ impl ReplayRuntime {
             unrecorded_targets: Vec::new(),
             unrecorded_case_ids: BTreeSet::new(),
         };
+        for (case, source) in prepared_scopes {
+            state.install_case_execution_plan(&case, source)?;
+        }
+
         state.initialize_startup_phase();
         state.http_ingress.register(&state.http_exchanges);
         let admitted_case = state.active_case_id.clone();

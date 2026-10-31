@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+mod cross_resource_tests;
 mod http_native;
 mod memcached;
 pub(in crate::replay::policy) mod mysql_contract;

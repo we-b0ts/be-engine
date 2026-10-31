@@ -128,7 +128,7 @@ impl Fixture {
         let mut document = crate::replay::policy::load_replay_policy(&self.policy)?.document;
         document.dependency_rules.push(rule.clone());
         let runtime = RequestContracts {
-            rules: Arc::new(vec![rule.clone()]),
+            rules: Arc::new(vec![rule.clone()].into()),
             ..Default::default()
         };
         super::verify(&runtime, &rule, &report, &document, &mut Vec::new())

@@ -317,7 +317,8 @@ async fn same_resource_reads_keep_finite_delivery_and_reclassify_only_the_leftov
         for _ in 0..2 {
             request(&mut client, &["GET", "job:12"], b"$-1\r\n").await;
         }
-        state.lock().await.finalized_at = Some(Utc::now());
+        // Classify a read-only snapshot while the third finite request remains
+        // live. Finalizing this engine would correctly reject that request.
         let snapshot = settled_report(&state, 2).await;
         assert_eq!(
             snapshot["redis"]["unused_case"].as_array().unwrap().len(),

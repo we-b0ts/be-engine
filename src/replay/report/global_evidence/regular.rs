@@ -390,7 +390,7 @@ impl ReplayState {
     }
     fn regular_report_snapshot(&self, protocol: &str) -> Result<(usize, Vec<Change>)> {
         match protocol {
-            "mysql" => self.mysql.global_report_usage().snapshot(),
+            "mysql" => self.mysql.global_report_snapshot(),
             "http" => self.http_global_report_usage().snapshot(),
             "redis" => self.redis.global_report_snapshot(),
             "memcached" => self.memcached.global_report_usage().snapshot(),

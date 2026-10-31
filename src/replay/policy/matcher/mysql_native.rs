@@ -531,10 +531,24 @@ mod tests {
             }},"proof":proof},
             {"id":"members","surface":"dependency.request","match":selector,"slot":{"sql_value":2},"codec":"json","contract":{"/members":{"kind":"unordered"}},"proof":proof}
         ]});
-        let encoded = crate::policy::compile_rule(
-            &serde_json::from_value::<crate::policy::Rule>(document["rules"][1].clone()).unwrap(),
-        )
-        .unwrap();
+        let physical =
+            serde_json::from_value::<crate::policy::Rule>(document["rules"][1].clone()).unwrap();
+        assert!(
+            crate::policy::compile_rule(&physical).is_err(),
+            "a pure kernel test cannot establish an installed live MySQL value-rule route"
+        );
+        // Test codec composition in isolation: compile the value semantics on
+        // an installed carrier, then supply its native slot directly to this
+        // pure comparator. This does not install a production SQL executor.
+        let mut payload_rule = physical.clone();
+        payload_rule.surface = crate::policy::Surface::ApiResponse;
+        payload_rule.selector = crate::policy::MatchSpec {
+            api: Some("POST /events".into()),
+            ..Default::default()
+        };
+        payload_rule.slot = Slot::Body;
+        let mut encoded = crate::policy::compile_rule(&payload_rule).unwrap();
+        encoded.rule = physical;
         let mut document = document;
         document["rules"].as_array_mut().unwrap().pop();
         let policy: crate::policy::TrafficPolicy = serde_json::from_value(document).unwrap();

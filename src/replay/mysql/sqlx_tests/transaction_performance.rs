@@ -146,7 +146,8 @@ async fn measure(root: &Path, artifacts: &Path, lazy: bool) -> Measurement {
         let matched = state
             .match_exchange(&identity, "COM_QUERY", Some(sql), None)
             .expect("every generated SQL must consume its recorded evidence");
-        state.complete_exchange(&matched);
+        assert!(matched.claim.publish_wire());
+        assert!(state.complete_exchange(&matched));
         observations.push((metadata, matched.record));
     }
     let matching_ms = started.elapsed().as_secs_f64() * 1000.0;

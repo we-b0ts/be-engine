@@ -105,6 +105,13 @@ impl Usage {
             .checked_add(self.added)
     }
 
+    /// Query one sparse visibility change without materializing the report.
+    pub(in crate::replay) fn visibility_at(&self, position: Position, baseline: bool) -> bool {
+        self.changes
+            .get(&position)
+            .map_or(baseline, |change| change.after)
+    }
+
     pub(in crate::replay) fn count_with(&self, other: &Self) -> Option<usize> {
         self.count()?
             .checked_sub(other.removed)?

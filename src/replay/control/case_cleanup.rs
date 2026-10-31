@@ -49,13 +49,8 @@ pub(super) async fn failure_description(
 }
 
 pub(in crate::replay) fn has_started(state: &ReplayState) -> bool {
-    state.mysql.exchanges.iter().any(|exchange| {
-        exchange.source == ReplaySource::Case
-            && matches!(
-                exchange.status,
-                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
-            )
-    }) || state.redis.has_case_in_flight()
+    state.mysql.has_case_in_flight()
+        || state.redis.has_case_in_flight()
         || state.kafka.has_case_in_flight()
         || state.connect_failures.has_in_flight()
         || state.memcached.has_case_in_flight()

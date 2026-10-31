@@ -280,6 +280,9 @@ fn assert_recorded_response_with_policy_and_time_copies(
         "unsupported actual response version {}; expected 1",
         actual.version
     );
+    if let Some(primary) = &actual.primary {
+        primary.validate_observation(request_bytes, request.timestamp, actual.request_sent_at)?;
+    }
     ensure!(
         expected.sse_observation.is_none() && actual.sse_observation.is_none(),
         "legacy SSE observation recordings require re-recording with the interaction lifecycle"

@@ -85,7 +85,15 @@ pub(super) async fn deliver(
         stream.write_all(&raw).await?;
         stream.flush().await?;
     }
-    state.lock().await.mysql.exchanges[matched.index].status =
-        ReplayExchangeStatus::AwaitingClientTermination;
+    {
+        let mut replay = state.lock().await;
+        let mysql = &mut replay.mysql;
+        ensure!(
+            mysql
+                .lifecycle
+                .wait_client(&matched.claim, &mut mysql.exchanges[matched.index].status),
+            "MySQL cleanup claim is no longer active"
+        );
+    }
     super::super::lifecycle_cleanup::await_target_end(stream, &gate, state, case).await
 }

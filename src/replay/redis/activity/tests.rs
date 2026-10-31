@@ -68,6 +68,19 @@ fn fixture(enabled: bool) -> (tempfile::TempDir, RedisReplayState) {
     state_with_policy(&events(), document(enabled))
 }
 
+#[test]
+fn finite_activity_creation_commits_lifetime_accounting_and_retains_real_source_coverage() {
+    let (_root, mut state) = fixture(true);
+    create(&mut state);
+    assert!(!state.has_case_in_flight());
+    let report = serde_json::to_value(state.snapshot()).unwrap();
+    let audits = report["activity_refreshes"].as_array().unwrap();
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0]["command"], "SET");
+    assert_eq!(audits[0]["covered_source_observations"], 1);
+    assert_eq!(state.events.matched_count, 1);
+}
+
 fn perform(state: &mut RedisReplayState, command: &str, args: &[&[u8]]) -> Vec<u8> {
     let matched = request(state, command, args).unwrap();
     let response = matched.response.clone();

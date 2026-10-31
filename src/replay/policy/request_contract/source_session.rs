@@ -10,6 +10,10 @@ impl RequestContracts {
         let keys = signing_keys::resolve(rules, || Ok(target_root.to_owned()))?;
         let mut state = State::default();
         for (id, (dir, request)) in requests {
+            state.primary_protocols.insert(
+                id.clone(),
+                case_plan::input_protocol(&serde_json::to_vec(request)?),
+            );
             let recorded = request["timestamp"].as_str().map(str::parse).transpose()?;
             let source_body = unified::source_body(request);
             let source_input_error = identity_inputs::capture_error(request, source_body.as_ref());
@@ -48,6 +52,8 @@ impl RequestContracts {
             hypothesis_journal: None,
             mysql_hypothesis_projections: Arc::default(),
             compiled: None,
+            native_dispatch: Arc::default(),
+            rule_catalogue: Arc::default(),
             witnesses: None,
             input_origin: Some(derived_inputs::InputOrigin::Root(target_root.to_owned())),
             rules: Arc::new(
@@ -55,7 +61,8 @@ impl RequestContracts {
                     .iter()
                     .filter(|rule| is_request_rule(rule))
                     .cloned()
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
             ),
             keys: Arc::new(keys),
             state: Arc::new(Mutex::new(state)),

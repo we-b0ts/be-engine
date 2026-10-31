@@ -161,6 +161,7 @@ impl RedisReplayState {
             ReplayExchangeTiming::from_recorded(0, DependencyExchangeOutcome::Response)
         };
         Ok(MatchedRedisExchange {
+            claim: Claim::Native(NativeClaimKind::ActivityRefresh),
             refresh: Some(prepared),
             observation: None,
             append: None,

@@ -443,6 +443,7 @@ impl RedisReplayState {
         }
         let exchange = &self.exchanges[index];
         Ok(Some(MatchedRedisExchange {
+            claim: Claim::Native(NativeClaimKind::AppendStream),
             refresh: None,
             observation: None,
             append: Some(PreparedAppend {

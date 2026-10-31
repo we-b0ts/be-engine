@@ -2,6 +2,11 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
+mod coverage;
+pub(crate) use coverage::{
+    validate_actual_protocol, validate_native_coverage, validate_rule_coverage,
+};
+
 use super::{Codec, FieldContract, ProtobufCodec, ProtobufField, ProtobufType, TimestampFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

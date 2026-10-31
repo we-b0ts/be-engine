@@ -35,6 +35,7 @@ pub(in crate::replay) use cross_case::load as load_cross_case;
 pub(in crate::replay) mod activity;
 mod api_origin;
 pub(in crate::replay) mod append;
+pub(in crate::replay) mod candidates;
 mod case_scope;
 pub(crate) mod expiration;
 #[cfg(test)]
@@ -67,10 +68,14 @@ use super::report::command::{
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
 mod admission;
 mod cleanup;
+mod completion;
 mod delivery;
 mod evidence;
 mod input_timing;
 mod lifecycle;
+use super::admission::{
+    Barrier, Claim, ClaimKind, ClaimTicket, Finish, Lifecycle, NativeClaimKind,
+};
 use delivery::deliver_redis_exchange;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,6 +158,7 @@ struct RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayExchange {
+    claim: Option<ClaimTicket>,
     observation_rule: Option<String>,
     read_commutation_rule: Option<String>,
     subscription_alias: bool,
@@ -173,6 +179,7 @@ struct ReplayExchange {
 
 #[derive(Debug, Clone)]
 struct MatchedRedisExchange {
+    claim: Claim,
     refresh: Option<activity::Prepared>,
     observation: Option<observations::Prepared>,
     append: Option<append::PreparedAppend>,
@@ -195,13 +202,13 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    lifecycle: Lifecycle,
     activity_refresh: activity::ActivityRefreshes,
     pub(super) shared_source_directories: BTreeMap<String, PathBuf>,
     observations: observations::Observations,
     read_commutation: read_commutation::ReadCommutation,
     append_streams: append::AppendStreams,
     request_event_index: Option<usize>,
-    delivery_changed: Arc<tokio::sync::Notify>,
     request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
     request_observation_id: Option<uuid::Uuid>,
     request_observation_retained: bool,
@@ -214,6 +221,7 @@ pub(super) struct RedisReplayState {
     unordered_value: value::evidence::OrderEvidence,
     exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
+    pub(in crate::replay) candidates: candidates::Candidates,
     pub(super) events: RedisReplayEvents,
     snapshot_overlays: Vec<super::report::command::CommandSnapshotOverlayReport>,
     snapshot_overlay_warnings: Vec<String>,
@@ -234,6 +242,14 @@ pub(super) struct RedisReplayEvents {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn prepare_candidates(&mut self) {
+        self.candidates.register(&self.exchanges);
+    }
+
+    pub(in crate::replay) fn prepared_case_members(&self, case: &str) -> Arc<[usize]> {
+        self.candidates.case_members(case)
+    }
+
     pub(in crate::replay) fn case_wire_exchange_indices(
         &self,
         case_id: &str,
@@ -260,7 +276,9 @@ impl RedisReplayState {
     }
 
     pub(in crate::replay) fn exchange_status(&self, index: usize) -> Option<ReplayExchangeStatus> {
-        self.exchanges.get(index).map(|exchange| exchange.status)
+        self.exchanges
+            .get(index)
+            .map(|exchange| self.lifecycle.live_status(index, exchange.status))
     }
 
     pub(in crate::replay) fn case_has_runtime_failure(&self, case_id: &str) -> bool {
@@ -275,7 +293,7 @@ impl RedisReplayState {
                 e.source == ReplaySource::Case
                     && !self.append_streams.idle_source(index)
                     && matches!(
-                        e.status,
+                        self.lifecycle.live_status(index, e.status),
                         ReplayExchangeStatus::Responding
                             | ReplayExchangeStatus::AwaitingClientTermination
                     )
@@ -289,7 +307,7 @@ impl RedisReplayState {
             || self.exchanges.iter().enumerate().any(|(index, e)| {
                 !self.append_streams.idle_source(index)
                     && matches!(
-                        e.status,
+                        self.lifecycle.live_status(index, e.status),
                         ReplayExchangeStatus::Responding
                             | ReplayExchangeStatus::AwaitingClientTermination
                     )
@@ -417,6 +435,7 @@ impl RedisReplayState {
             .register(source, case_id, exchange_index);
         let rpc_push = self.pubsub.link(&record, source, case_id, &args)?;
         self.exchanges.push(ReplayExchange {
+            claim: None,
             observation_rule: None,
             read_commutation_rule: None,
             subscription_alias: false,
@@ -435,63 +454,6 @@ impl RedisReplayState {
             matched_once: false,
         });
         Ok(())
-    }
-
-    fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
-        self.delivery_changed.notify_waiters();
-        if let Some(refresh) = &matched.refresh {
-            self.complete_activity(refresh);
-        } else if let Some(append) = &matched.append {
-            self.complete_append(append);
-        } else if let Some(observation) = &matched.observation {
-            self.complete_observation(observation, matched.index);
-        } else if let Some(exchange) = self.exchanges.get_mut(matched.index) {
-            exchange.matched_once = true;
-            if !exchange.reusable_snapshot {
-                exchange.status = ReplayExchangeStatus::Consumed;
-            }
-        }
-        self.complete_closed_expiry(matched);
-        self.refresh_global_report(matched.index);
-        let case_id = matched.report.case_id.clone();
-        push_success_detail(
-            &mut self.events.matched_count,
-            &mut self.events.matched,
-            &mut self.events.matched_details,
-            case_id.as_deref(),
-            |_| matched.report.clone(),
-        );
-    }
-
-    fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
-        self.delivery_changed.notify_waiters();
-        self.fail_closed_expiry(matched.index);
-        if let Some(refresh) = &matched.refresh {
-            self.fail_activity(refresh);
-        }
-        if let Some(append) = &matched.append {
-            self.fail_append(append);
-        }
-        if let Some(observation) = &matched.observation {
-            self.fail_observation(observation);
-        }
-        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
-            exchange.status = ReplayExchangeStatus::Failed;
-        }
-        self.refresh_global_report(matched.index);
-        if let Some(case_id) = &matched.report.case_id {
-            self.events.dirty_case_ids.insert(case_id.clone());
-        }
-        self.events.unsafe_events.push(CommandRequestReport {
-            target_observation_id: None,
-            case_id: matched.report.case_id.clone(),
-            target: matched.report.target.clone(),
-            command: matched.report.command.clone(),
-            target_event_index: matched.report.target_event_index,
-            request_fingerprint: None,
-            reason,
-            diagnostic: None,
-        });
     }
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
@@ -584,6 +546,10 @@ async fn serve_connection(
         let read = tokio::select! {
             frame = read_redis_frame(&mut reader) => frame,
             Some(delivery) = push_rx.recv() => {
+                let _callback_guard=delivery.matched.as_ref().and_then(|matched|match &matched.claim {
+                    Claim::Finite(ticket)=>Some(ticket.guard()),
+                    Claim::Native(_)=>None,
+                });
                 let mut replay = state.lock().await;
                 if !delivery.case_is_current(&replay) || replay.finalized_at.is_some()
                     || !replay.redis.pubsub.is_subscribed(client_id, delivery.push) {
@@ -607,7 +573,7 @@ async fn serve_connection(
                         if let (Some(timeline), Some((case, epoch))) = (&mut replay.input_timing, timing_scope) {
                             timeline.delivered(&case, epoch, crate::replay::control::input_timing::DeliveryReference::NativePush(delivery.push));
                         }
-                        replay.redis.delivery_changed.notify_waiters();
+                        replay.redis.lifecycle.notify_waiters();
                         if let Some(m) = &delivery.matched { replay.redis.complete_exchange(m); }
                     }
                     Err(error) => {

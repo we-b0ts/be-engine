@@ -174,13 +174,15 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
         .match_exchange(&identity, "COM_QUERY", Some(sql), None)
         .unwrap();
     assert_eq!(exact.index, 1);
-    state.complete_exchange(&exact);
+    assert!(exact.claim.publish_wire());
+    assert!(state.complete_exchange(&exact));
     let projected = state
         .match_exchange(&identity, "COM_QUERY", Some(sql), None)
         .unwrap();
     assert_eq!(projected.index, 0);
     assert_eq!(projected.record.response.columns.len(), 1);
-    state.complete_exchange(&projected);
+    assert!(projected.claim.publish_wire());
+    assert!(state.complete_exchange(&projected));
     assert!(
         state
             .match_exchange(&identity, "COM_QUERY", Some(sql), None)
@@ -197,7 +199,8 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
         .match_exchange(&identity, "COM_QUERY", Some(sql), None)
         .unwrap();
     assert_eq!(global.source, ReplaySource::Startup);
-    state.complete_exchange(&global);
+    assert!(global.claim.publish_wire());
+    assert!(state.complete_exchange(&global));
     assert!(
         state
             .match_exchange(&identity, "COM_QUERY", Some(sql), None)
@@ -228,6 +231,7 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
         )
         .unwrap();
     assert_eq!(rebound.record.response.columns.len(), 1);
-    state.complete_exchange(&rebound);
+    assert!(rebound.claim.publish_wire());
+    assert!(state.complete_exchange(&rebound));
     task.abort();
 }

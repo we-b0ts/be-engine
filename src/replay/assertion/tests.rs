@@ -17,6 +17,7 @@ use super::*;
 
 mod json_arrays;
 mod motan1;
+mod primary_metadata;
 mod relative_timestamp;
 mod simple_motan;
 mod sse;

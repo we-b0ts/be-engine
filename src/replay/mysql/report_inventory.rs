@@ -2,7 +2,7 @@
 use super::*;
 use crate::replay::report::global_evidence::{
     regular::Row,
-    regular_usage::{Position, Usage},
+    regular_usage::{Change, Position, Usage},
 };
 
 #[cfg(test)]
@@ -20,6 +20,85 @@ impl MysqlReplayState {
     pub(in crate::replay) fn initialize_global_report_usage(&mut self, count: usize) {
         self.events.global_report.initialize(count);
     }
+
+    pub(in crate::replay) fn global_report_count(&self) -> Option<usize> {
+        let usage = &self.events.global_report;
+        let mut count = usage.count()?;
+        for index in self.lifecycle.cancelled_indices() {
+            let Some(exchange) = self
+                .exchanges
+                .get(index)
+                .filter(|exchange| exchange.source.is_run_owned())
+            else {
+                continue;
+            };
+            if usage
+                .layout()
+                .first()
+                .is_none_or(|boundary| index < *boundary)
+                && !usage.visibility_at(
+                    Position { section: 0, index },
+                    exchange.optional_session.is_none(),
+                )
+            {
+                count = count.checked_add(1)?;
+            }
+        }
+        Some(count)
+    }
+
+    /// Cancellation publishes through the shared receipt without taking Replay's
+    /// mutex. Fold only those sparse failures into the immutable run baseline.
+    pub(in crate::replay) fn global_report_snapshot(&self) -> Result<(usize, Vec<Change>)> {
+        let (mut count, changes) = self.events.global_report.snapshot()?;
+        let cancelled = self.lifecycle.cancelled_indices();
+        if cancelled.is_empty() {
+            return Ok((count, changes));
+        }
+        let mut changes = changes
+            .into_iter()
+            .map(|change| (change.position, change))
+            .collect::<BTreeMap<_, _>>();
+        for index in cancelled {
+            let Some(exchange) = self
+                .exchanges
+                .get(index)
+                .filter(|exchange| exchange.source.is_run_owned())
+            else {
+                continue;
+            };
+            let position = Position { section: 0, index };
+            let before = exchange.optional_session.is_none();
+            let previous = changes.remove(&position).unwrap_or(Change {
+                position,
+                before,
+                after: before,
+            });
+            if !previous.after
+                && self
+                    .events
+                    .global_report
+                    .layout()
+                    .first()
+                    .is_none_or(|boundary| index < *boundary)
+            {
+                count = count
+                    .checked_add(1)
+                    .context("cancelled MySQL run visibility overflow")?;
+            }
+            if !previous.before {
+                changes.insert(
+                    position,
+                    Change {
+                        position,
+                        before: previous.before,
+                        after: true,
+                    },
+                );
+            }
+        }
+        Ok((count, changes.into_values().collect()))
+    }
 }
 
 impl ReplayState {
@@ -28,17 +107,16 @@ impl ReplayState {
             .events
             .global_report
             .rows(0, &self.mysql.exchanges, true)
-            .filter(|(_, exchange)| {
+            .filter(|(index, exchange)| {
+                let status = self.mysql.lifecycle.live_status(*index, exchange.status);
                 let optional = exchange.optional_session.filter(|kind| {
-                    exchange.status.is_available()
+                    status.is_available()
                         || matches!(
                             kind,
                             OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
-                        ) && exchange.status == ReplayExchangeStatus::Responding
+                        ) && status == ReplayExchangeStatus::Responding
                 });
-                exchange.source.is_run_owned()
-                    && !exchange.status.is_consumed()
-                    && optional.is_none()
+                exchange.source.is_run_owned() && !status.is_consumed() && optional.is_none()
             })
             .count()
     }
@@ -51,18 +129,19 @@ impl ReplayState {
         else {
             return;
         };
+        let status = self.mysql.lifecycle.live_status(index, exchange.status);
         let optional = exchange.optional_session.filter(|kind| {
-            exchange.status.is_available()
+            status.is_available()
                 || matches!(
                     kind,
                     OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
-                ) && exchange.status == ReplayExchangeStatus::Responding
+                ) && status == ReplayExchangeStatus::Responding
         });
         self.mysql.events.global_report.observe(
             0,
             index,
             exchange.optional_session.is_none(),
-            !exchange.status.is_consumed() && optional.is_none(),
+            !status.is_consumed() && optional.is_none(),
         );
     }
 

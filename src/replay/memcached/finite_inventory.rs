@@ -28,7 +28,9 @@ impl MemcachedReplayState {
         &self,
         index: usize,
     ) -> Option<ReplayExchangeStatus> {
-        self.exchanges.get(index).map(|exchange| exchange.status)
+        self.exchanges
+            .get(index)
+            .map(|exchange| self.lifecycle.live_status(index, exchange.status))
     }
 }
 

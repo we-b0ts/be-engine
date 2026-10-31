@@ -15,7 +15,10 @@ impl MysqlReplayState {
     /// A control Target has started must still finish its real delivery.
     pub(in crate::replay) fn permits_unstarted_omission(&self, index: usize) -> bool {
         self.exchanges.get(index).is_some_and(|exchange| {
-            exchange.status.is_available() && exchange.optional_session.is_some()
+            self.lifecycle
+                .live_status(index, exchange.status)
+                .is_available()
+                && exchange.optional_session.is_some()
         })
     }
 }

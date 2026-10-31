@@ -19,6 +19,7 @@ impl RequestContracts {
             if !crate::dependency::observation::is_case_event(&event) {
                 continue;
             }
+            self.observe_plan_fact(case, &event);
             self.observe_unified_source(case, &event)?;
             let protocol = match event["event_type"].as_str() {
                 Some("redis_exchange") => DependencyProtocol::Redis,

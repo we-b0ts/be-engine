@@ -1,16 +1,170 @@
-//! Await claimed Redis predecessor deliveries without re-observing requests.
+//! Native Redis request hooks for the shared concurrent admission engine.
 use super::*;
+use crate::replay::admission::{
+    RequestAdmission,
+    request::{self, DependencyRequestAdapter, WaitDependency},
+};
 use crate::replay::report::command::CommandMatchDiagnostic;
 use std::time::Duration;
 
 #[cfg(test)]
 mod activity_tests;
 #[cfg(test)]
+mod engine_tests;
+#[cfg(test)]
 mod tests;
 
-// A stalled predecessor must not retain a connection indefinitely. Case shutdown
-// is checked independently, including when no delivery notification arrives.
 const REFRESH_WAIT: Duration = Duration::from_secs(30);
+
+struct RedisRequest<'a> {
+    target: &'a TargetKey,
+    client_id: Uuid,
+    binding: &'a mut CaseConnectionBinding,
+    resp_version: u8,
+    database: i64,
+    username: Option<&'a str>,
+    command: &'a RedisCommand,
+    connection: Option<TargetConnection>,
+}
+
+impl DependencyRequestAdapter for RedisRequest<'_> {
+    type Matched = MatchedRedisExchange;
+    type Error = CommandMatchDiagnostic;
+
+    fn observe_once(&mut self, state: &mut ReplayState) -> RequestAdmission {
+        let case = state.active_case_id.clone();
+        self.connection = Some(TargetConnection {
+            id: self.client_id,
+            bound: self.binding.connection(case.as_deref()),
+        });
+        state.redis.observe_redis(
+            case.as_deref(),
+            self.target,
+            self.database,
+            self.username,
+            &self.command.name,
+            &self.command.args,
+        );
+        RequestAdmission::capture(
+            state,
+            state.redis.request_event_index,
+            state.redis.request_observed_at,
+            state.redis.request_observation_id,
+            state.redis.request_observation_retained,
+        )
+    }
+
+    fn try_select(
+        &mut self,
+        state: &mut ReplayState,
+        observation: &RequestAdmission,
+    ) -> Result<Self::Matched, Self::Error> {
+        state.redis.request_event_index = observation.event_index;
+        state.redis.request_observed_at = observation.observed_at;
+        state.redis.request_observation_id = observation.observation_id;
+        state.redis.request_observation_retained = observation.observation_retained;
+        state
+            .redis
+            .select_redis(
+                observation.case.as_deref(),
+                self.target,
+                self.connection
+                    .expect("Redis observation installs its native connection"),
+                self.resp_version,
+                self.database,
+                self.username,
+                &self.command.name,
+                &self.command.args,
+            )
+            .map(|mut matched| {
+                matched.report.target_event_index = observation.event_index;
+                matched
+            })
+    }
+
+    fn wait_dependency<'a>(
+        &self,
+        state: &'a ReplayState,
+        observation: &RequestAdmission,
+        error: &Self::Error,
+    ) -> Option<WaitDependency<'a>> {
+        (pending_delivery(
+            &state.redis,
+            observation.case.as_deref(),
+            &self.command.name,
+            observation.event_index,
+            error,
+        ) || state.redis.pubsub.pending_ingress_reply(
+            observation.case.as_deref(),
+            self.target,
+            &self.command.name,
+            &self.command.args,
+        ))
+        .then(|| WaitDependency::changed(&state.redis.lifecycle))
+    }
+
+    fn interrupted(&self, reason: &'static str) -> Self::Error {
+        CommandMatchDiagnostic::EvidenceUnavailable {
+            reason: reason.into(),
+        }
+    }
+
+    fn on_selected(
+        &mut self,
+        state: &mut ReplayState,
+        observation: &RequestAdmission,
+        matched: &mut Self::Matched,
+    ) -> Result<(), Self::Error> {
+        if let Some(policy) = &mut state.replay_policy {
+            policy.commit_redis_rule_usage(observation.case.as_deref(), &matched.rule_ids);
+        }
+        if matched.requires_binding {
+            self.binding
+                .bind(observation.case.as_deref(), matched.connection_id);
+        }
+        Ok(())
+    }
+
+    fn on_rejected(
+        &mut self,
+        state: &mut ReplayState,
+        observation: &RequestAdmission,
+        error: &Self::Error,
+    ) {
+        let hint = redis_authentication_hint(error);
+        if let Some(case) = &observation.case {
+            state.redis.events.dirty_case_ids.insert(case.clone());
+        }
+        state.redis.events.unmatched.push(CommandRequestReport {
+            target_observation_id: observation
+                .observation_id
+                .filter(|_| observation.observation_retained)
+                .map(|id| {
+                    crate::policy_evidence::target_observation_id(
+                        &id.to_string(),
+                        crate::policy::Surface::DependencyRequest,
+                        crate::policy_evidence::TargetRole::IndependentTargetObservation,
+                    )
+                }),
+            target_event_index: observation.event_index,
+            case_id: observation.case.clone(),
+            target: self.target.clone(),
+            command: self.command.name.clone(),
+            request_fingerprint: Some(cross_case::target_fingerprint(
+                self.target,
+                self.resp_version,
+                self.database,
+                self.username,
+                &self.command.name,
+                &self.command.args,
+            )),
+            reason: hint
+                .unwrap_or("no recorded Redis exchange matched target/session/arguments")
+                .into(),
+            diagnostic: Some(error.clone()),
+        });
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn match_command(
@@ -23,147 +177,24 @@ pub(super) async fn match_command(
     username: Option<&str>,
     command: &RedisCommand,
 ) -> std::result::Result<MatchedRedisExchange, &'static str> {
-    let mut state = shared.lock().await;
-    let case = state.active_case_id.clone();
-    let connection = TargetConnection {
-        id: client_id,
-        bound: binding.connection(case.as_deref()),
-    };
-    let mut result = state.redis.match_redis(
-        case.as_deref(),
-        target,
-        connection,
-        resp_version,
-        database,
-        username,
-        &command.name,
-        &command.args,
-    );
-    let event = state.redis.request_event_index;
-    let observed_at = state.redis.request_observed_at;
-    let observation = state.redis.request_observation_id;
-    let observation_retained = state.redis.request_observation_retained;
-    let deadline = tokio::time::Instant::now() + REFRESH_WAIT;
-    while let Err(diagnostic) = &result {
-        if !pending_delivery(
-            &state.redis,
-            case.as_deref(),
-            &command.name,
-            event,
-            diagnostic,
-        ) && !state.redis.pubsub.pending_ingress_reply(
-            case.as_deref(),
+    request::execute(
+        shared,
+        &mut RedisRequest {
             target,
-            &command.name,
-            &command.args,
-        ) {
-            break;
-        }
-        let changed = state.redis.delivery_changed.clone().notified_owned();
-        tokio::pin!(changed);
-        // Register while holding the state mutex so completion cannot race registration.
-        changed.as_mut().enable();
-        drop(state);
-        tokio::select! {
-            _ = &mut changed => {},
-            _ = tokio::time::sleep(Duration::from_millis(100)) => {},
-        }
-        state = shared.lock().await;
-        let reason = if state.active_case_id != case
-            || state.finalized_at.is_some()
-            || state.target_session_stopped
-            || state.async_case_quiescing()
-            || case
-                .as_ref()
-                .is_some_and(|c| state.target_stop_prepared.contains(c))
-        {
-            Some("Redis case stopped while awaiting predecessor delivery")
-        } else if tokio::time::Instant::now() >= deadline {
-            Some("Redis predecessor delivery wait timed out")
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            result = Err(CommandMatchDiagnostic::EvidenceUnavailable {
-                reason: reason.into(),
-            });
-            break;
-        }
-        if pending_delivery(
-            &state.redis,
-            case.as_deref(),
-            &command.name,
-            event,
-            diagnostic,
-        ) || state.redis.pubsub.pending_ingress_reply(
-            case.as_deref(),
-            target,
-            &command.name,
-            &command.args,
-        ) {
-            continue;
-        }
-        state.redis.request_event_index = event;
-        state.redis.request_observed_at = observed_at;
-        state.redis.request_observation_id = observation;
-        state.redis.request_observation_retained = observation_retained;
-        result = state.redis.select_redis(
-            case.as_deref(),
-            target,
-            connection,
+            client_id,
+            binding,
             resp_version,
             database,
             username,
-            &command.name,
-            &command.args,
-        );
-        if let Ok(matched) = &mut result {
-            matched.report.target_event_index = event;
-        }
-    }
-    match result {
-        Ok(matched) => {
-            if let Some(policy) = &mut state.replay_policy {
-                policy.commit_redis_rule_usage(case.as_deref(), &matched.rule_ids);
-            }
-            if matched.requires_binding {
-                binding.bind(case.as_deref(), matched.connection_id);
-            }
-            Ok(matched)
-        }
-        Err(diagnostic) => {
-            let hint = redis_authentication_hint(&diagnostic);
-            if let Some(case) = &case {
-                state.redis.events.dirty_case_ids.insert(case.clone());
-            }
-            state.redis.events.unmatched.push(CommandRequestReport {
-                target_observation_id: observation.filter(|_| observation_retained).map(|id| {
-                    crate::policy_evidence::target_observation_id(
-                        &id.to_string(),
-                        crate::policy::Surface::DependencyRequest,
-                        crate::policy_evidence::TargetRole::IndependentTargetObservation,
-                    )
-                }),
-                target_event_index: event,
-                case_id: case,
-                target: target.clone(),
-                command: command.name.clone(),
-                request_fingerprint: Some(cross_case::target_fingerprint(
-                    target,
-                    resp_version,
-                    database,
-                    username,
-                    &command.name,
-                    &command.args,
-                )),
-                reason: hint
-                    .unwrap_or("no recorded Redis exchange matched target/session/arguments")
-                    .into(),
-                diagnostic: Some(diagnostic),
-            });
-            Err(hint.unwrap_or("no recorded Redis dependency matched"))
-        }
-    }
+            command,
+            connection: None,
+        },
+        tokio::time::Instant::now() + REFRESH_WAIT,
+    )
+    .await
+    .map_err(|error| {
+        redis_authentication_hint(&error).unwrap_or("no recorded Redis dependency matched")
+    })
 }
 
 fn pending_delivery(

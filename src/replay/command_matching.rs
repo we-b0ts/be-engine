@@ -2,6 +2,8 @@ use uuid::Uuid;
 
 use super::ReplaySource;
 use super::report::command::{CommandExchangeRefReport, CommandMatchDiagnostic};
+mod selection;
+pub(super) use selection::preferred_match_indexed_with_priority;
 
 pub(super) trait CommandExchangeScope {
     fn source(&self) -> ReplaySource;
@@ -92,20 +94,9 @@ where
         &matches,
         &priority,
     );
-    if matches!(case_match, PreferredMatch::Matched(_)) {
-        return case_match;
-    }
-
-    let global_match = match_in_scope(exchanges, ReplaySource::Startup, None, &matches, &priority);
-    if matches!(global_match, PreferredMatch::Matched(_)) {
-        return global_match;
-    }
-
-    match (case_match, global_match) {
-        (blocked @ PreferredMatch::LaneBlocked { .. }, _) => blocked,
-        (_, blocked @ PreferredMatch::LaneBlocked { .. }) => blocked,
-        _ => PreferredMatch::NotFound,
-    }
+    selection::prefer_scopes(case_match, || {
+        match_in_scope(exchanges, ReplaySource::Startup, None, &matches, &priority)
+    })
 }
 
 pub(super) fn unmatched_diagnostic<T>(
@@ -153,33 +144,15 @@ fn match_in_scope<T>(
 where
     T: CommandExchangeScope,
 {
-    let mut first_blocked = None;
-    let mut first_match = None;
-    let mut priority_blocked = None;
-    for (index, exchange) in exchanges.iter().enumerate() {
-        if !scope_matches(exchange, source, case_id) || !matches(exchange) {
-            continue;
-        }
-        if let Some(blocker) = lane_blocker(exchanges, index) {
-            first_blocked.get_or_insert((index, blocker));
-            if priority(exchange) {
-                priority_blocked.get_or_insert((index, blocker));
-            }
-        } else if priority(exchange) {
-            return PreferredMatch::Matched(index);
-        } else {
-            first_match.get_or_insert(index);
-        }
-    }
-    if let Some((candidate, blocker)) = priority_blocked {
-        return PreferredMatch::LaneBlocked { candidate, blocker };
-    }
-    if let Some(index) = first_match {
-        return PreferredMatch::Matched(index);
-    }
-    first_blocked.map_or(PreferredMatch::NotFound, |(candidate, blocker)| {
-        PreferredMatch::LaneBlocked { candidate, blocker }
-    })
+    selection::match_candidates_in_scope(
+        exchanges,
+        0..exchanges.len(),
+        source,
+        case_id,
+        matches,
+        priority,
+        &|index| lane_blocker(exchanges, index),
+    )
 }
 
 fn preferred_available_scope<T>(exchanges: &[T], active_case_id: Option<&str>) -> Vec<usize>

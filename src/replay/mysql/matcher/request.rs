@@ -22,6 +22,7 @@ impl ReplayState {
         self.match_exchange_in_case(case.as_deref(), identity, command, sql, params)
     }
 
+    #[cfg(test)]
     pub(in crate::replay::mysql) fn match_exchange_in_case(
         &mut self,
         case: Option<&str>,
@@ -33,6 +34,7 @@ impl ReplayState {
         self.match_exchange_in_case_preferred(case, identity, command, sql, params, None)
     }
 
+    #[cfg(test)]
     pub(in crate::replay::mysql) fn match_exchange_in_case_preferred(
         &mut self,
         case: Option<&str>,
@@ -42,41 +44,33 @@ impl ReplayState {
         params: Option<&[RecordedMysqlValue]>,
         transaction: Option<TransactionMatch<'_>>,
     ) -> Option<MatchedExchange> {
-        #[cfg(not(test))]
-        let request_observed_at = Utc::now();
-        #[cfg(test)]
-        let request_observed_at = self.mysql.observed_at_for_test.unwrap_or_else(Utc::now);
-        let mut observation_id = Some(uuid::Uuid::new_v4());
-        let request = contracts::ObservedRequest {
-            observation_id,
+        let observation = self.observe_mysql_request(case, identity, command, sql, params);
+        self.select_mysql_exchange(
+            case,
+            identity,
             command,
             sql,
             params,
-            started_at: request_observed_at,
-        };
-        let retention = if let (Some(policy), Some(case)) = (&self.replay_policy, case) {
-            contracts::record_target(&policy.request_contracts, case, identity, request)
-        } else {
-            contracts::record_unanchored_target(&self.target_observations, case, identity, request)
-        };
-        let observation_retained = self.target_observations.retained(&retention);
-        if matches!(
-            &retention,
-            Ok(crate::policy_evidence::ObservationRetention::Unavailable)
-        ) {
-            observation_id = None;
-        }
-        if retention.is_err() {
-            self.mysql.events.metadata_warnings.push("independent SQL Target observation unavailable; inspect target_observation_coverage_error".into());
-        }
-        self.mysql.request_observation_id =
-            observation_id.filter(|_| observation_retained).map(|id| {
-                crate::policy_evidence::target_observation_id(
-                    &id.to_string(),
-                    crate::policy::Surface::DependencyRequest,
-                    crate::policy_evidence::TargetRole::IndependentTargetObservation,
-                )
-            });
+            transaction,
+            &observation,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::replay::mysql) fn select_mysql_exchange(
+        &mut self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+        params: Option<&[RecordedMysqlValue]>,
+        transaction: Option<TransactionMatch<'_>>,
+        observation: &crate::replay::admission::RequestAdmission,
+    ) -> Option<MatchedExchange> {
+        let request_observed_at = observation
+            .observed_at
+            .expect("MySQL request observation captures native request time");
+        let observation_id = observation.observation_id;
         let observed_sql = sql;
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
@@ -613,26 +607,57 @@ impl ReplayState {
                         {
                             continue;
                         }
-                        if let Some(policy) = &mut self.replay_policy {
-                            if let (Some(case), Some(normalized)) =
+                        if let Some(policy) = &mut self.replay_policy
+                            && let (Some(case), Some(normalized)) =
                                 (active_case_id.as_deref(), dynamic.as_ref())
+                        {
+                            let mut captures =
+                                crate::replay::policy::request_contract::Decision::default();
+                            if policy
+                                .dynamic_values
+                                .join_identities(case, &normalized.decision, &mut captures)
+                                .is_err()
                             {
-                                let mut captures =
-                                    crate::replay::policy::request_contract::Decision::default();
-                                if policy
-                                    .dynamic_values
-                                    .join_identities(case, &normalized.decision, &mut captures)
-                                    .is_err()
-                                {
-                                    continue;
-                                }
-                                policy_decision.value_contracts.push(captures);
+                                continue;
                             }
+                            policy_decision.value_contracts.push(captures);
+                        }
+                        let kind = if exchange.record.outcome.is_client_terminated()
+                            && !exchange.record.lifecycle_cleanup
+                        {
+                            crate::replay::admission::ClaimKind::ClientTermination
+                        } else {
+                            crate::replay::admission::ClaimKind::Response
+                        };
+                        let claim = self.mysql.lifecycle.claim(
+                            index,
+                            &mut self.mysql.exchanges[index].status,
+                            kind,
+                        )?;
+                        if let Some(policy) = &mut self.replay_policy {
                             if policy
                                 .commit(active_case_id.as_deref(), policy_decision)
                                 .is_err()
                             {
-                                continue;
+                                self.mysql
+                                    .lifecycle
+                                    .fail(&claim, &mut self.mysql.exchanges[index].status);
+                                self.refresh_mysql_global_report(index);
+                                self.record_unmatched_in_case(
+                                    active_case_id.as_deref(),
+                                    identity,
+                                    command,
+                                    observed_sql,
+                                    observed_params,
+                                    "MySQL request contract commit failed after finite admission",
+                                );
+                                if let Some(report) = self.mysql.events.unmatched_queries.last_mut()
+                                {
+                                    report.target_event_index = observation.event_index;
+                                    report.target_observation_id =
+                                        self.mysql.request_observation_id.clone();
+                                }
+                                return None;
                             }
                             if let (Some(case_id), Some(normalized)) =
                                 (active_case_id.as_deref(), dynamic.as_ref())
@@ -642,14 +667,6 @@ impl ReplayState {
                                     .commit_after_identities(case_id, normalized.decision.clone());
                             }
                         }
-                        self.mysql.exchanges[index].status =
-                            if exchange.record.outcome.is_client_terminated()
-                                && !exchange.record.lifecycle_cleanup
-                            {
-                                ReplayExchangeStatus::AwaitingClientTermination
-                            } else {
-                                ReplayExchangeStatus::Responding
-                            };
                         self.refresh_mysql_global_report(index);
                         let owned_global = self.mysql.foreign.contains_key(&index)
                             || (exchange.source.is_run_owned()
@@ -677,9 +694,11 @@ impl ReplayState {
                             sql: observed_sql.map(ToOwned::to_owned),
                             params: observed_params.map(ToOwned::to_owned),
                             status: exchange.record.response.status.clone(),
-                            target_event_index: None,
+                            target_event_index: observation.event_index,
                         };
                         return Some(MatchedExchange {
+                            target_observation_id: observation.observation_id.filter(|_|observation.observation_retained).map(|id|crate::policy_evidence::target_observation_id(&id.to_string(),crate::policy::Surface::DependencyRequest,crate::policy_evidence::TargetRole::IndependentTargetObservation)),
+                            claim,
                             hypothesis_owner: self
                                 .replay_policy
                                 .as_ref()

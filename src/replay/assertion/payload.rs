@@ -34,6 +34,7 @@ pub(crate) fn response_rule_payload_pair(
     source: &serde_json::Value,
     target: Option<&serde_json::Value>,
 ) -> Result<ResponsePayloadPair> {
+    let original_request = request;
     let request: RecordedRequest = serde_json::from_value(request.clone())?;
     request.gateway_protocol()?;
     let source: ExpectedResponse = serde_json::from_value(source.clone())?;
@@ -74,6 +75,13 @@ pub(crate) fn response_rule_payload_pair(
     };
     if let Some(target) = target {
         let target: ActualResponse = serde_json::from_value(target.clone())?;
+        if let Some(primary) = &target.primary {
+            primary.validate_observation(
+                &serde_json::to_vec(original_request)?,
+                request.timestamp,
+                target.request_sent_at,
+            )?;
+        }
         ensure!(
             target.version == 1,
             "unsupported Target response artifact version"

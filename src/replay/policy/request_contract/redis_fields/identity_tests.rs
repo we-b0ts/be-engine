@@ -27,7 +27,7 @@ fn native_runtime(rule: Value) -> RequestContracts {
     let projection =
         crate::replay::policy::native_projection::project_native(&compiled.native).unwrap();
     let mut owner = identity_runtime();
-    owner.rules = Arc::new(projection.document.dependency_rules);
+    owner.rules = Arc::new(projection.document.dependency_rules.into());
     owner.configure_compiled(Some(Arc::new(compiled))).unwrap();
     owner
 }

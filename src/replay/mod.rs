@@ -20,8 +20,11 @@ use uuid::Uuid;
 
 use crate::MitmCa;
 use crate::request_headers::validate_request_file;
+mod adapters;
+pub(crate) mod admission;
 mod assertion;
 mod auto_protocol;
+mod candidate_selection;
 mod case_index;
 mod command_matching;
 #[cfg(test)]
@@ -91,8 +94,11 @@ pub(crate) use mysql::contracts::{
 };
 pub(crate) use policy::mysql_native_witness_matches;
 pub(crate) use policy::validate_mysql_value_selector;
+mod execution_plan;
+mod native_index;
 mod network_access;
 mod policy;
+mod preparation;
 pub(crate) use policy::replace_request_rule_section;
 pub(crate) use policy::request_contract::redis_bulk_payload;
 pub(crate) use policy::request_contract::{
@@ -439,6 +445,8 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 
 #[derive(Debug)]
 struct ReplayState {
+    admission_epoch: u64,
+    case_execution_plans: BTreeMap<String, Arc<execution_plan::CaseExecutionPlan>>,
     batch_scope: Option<reconciliation::BatchScope>,
     startup_phase: startup::StartupPhase,
     dependency_attribution_snapshot: Option<String>,
@@ -471,6 +479,7 @@ struct ReplayState {
     mysql: mysql::MysqlReplayState,
     http_exchanges: Vec<http::ReplayHttpExchange>,
     http_case_exchange_index: CaseExchangeIndex,
+    http_candidates: http::candidates::Candidates,
     http_blackholes: Vec<http::ReplayHttpBlackhole>,
     redis: redis::RedisReplayState,
     memcached: memcached::MemcachedReplayState,

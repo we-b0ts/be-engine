@@ -6,7 +6,8 @@ impl MysqlReplayState {
         close: bool,
     ) -> crate::replay::startup::Counts {
         let mut counts = crate::replay::startup::Counts::default();
-        for exchange in &mut self.exchanges {
+        for (index, exchange) in self.exchanges.iter_mut().enumerate() {
+            self.lifecycle.synchronize(index, &mut exchange.status);
             let control = optional_session::successful_begin(&exchange.record)
                 || optional_session::successful_end(&exchange.record, &["commit", "rollback"]);
             let mandatory = exchange.optional_session.is_none()

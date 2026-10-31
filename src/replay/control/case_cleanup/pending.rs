@@ -5,13 +5,21 @@ use serde_json::{Value, json};
 const MAX_REFERENCES: usize = 4;
 
 pub(super) fn snapshot(state: &ReplayState) -> Value {
-    let mysql = state.mysql.exchanges.iter().enumerate().filter(|(_, e)| {
-        e.source == ReplaySource::Case
-            && matches!(
-                e.status,
-                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
-            )
-    });
+    let mysql = state
+        .mysql
+        .exchanges
+        .iter()
+        .enumerate()
+        .filter(|(index, e)| {
+            e.source == ReplaySource::Case
+                && matches!(
+                    state.mysql.exchange_status(*index),
+                    Some(
+                        ReplayExchangeStatus::Responding
+                            | ReplayExchangeStatus::AwaitingClientTermination
+                    )
+                )
+        });
     let mysql_count = mysql.clone().count();
     let mysql_references = mysql
         .take(MAX_REFERENCES)

@@ -448,3 +448,101 @@ fn scalar_codec_retains_native_types_and_rejects_containers() {
     assert!(plan.decode(b"[]").is_err());
     assert!(plan.decode(b"null").unwrap().logical.is_null());
 }
+
+#[test]
+fn static_codec_providers_share_a_borrowed_view_without_erasing_presence_or_wire_bytes() {
+    let pb = codec(&[("/value", &[1], Type::Uint64, false)]);
+    for (definition, payload, expected_kind) in [
+        (Codec::Scalar, &b"0"[..], CodecKind::Scalar),
+        (Codec::Json, &br#"{"value":null}"#[..], CodecKind::Json),
+        (pb, &[8, 0, 0x10, 0x87, 0][..], CodecKind::Protobuf),
+    ] {
+        let plan = CodecPlan::compile(&definition).unwrap();
+        assert_eq!(ValueCodec::kind(&plan), expected_kind);
+        let document = ValueCodec::decode(&plan, payload).unwrap();
+        let view = document.view();
+        assert_eq!(view.kind(), expected_kind);
+        assert!(std::ptr::eq(view.logical(), &document.logical));
+        assert_eq!(view.presence("/missing"), Presence::Absent);
+        if expected_kind != CodecKind::Scalar {
+            assert_eq!(view.presence("/value"), Presence::Present);
+        }
+        assert_eq!(document.encode(view.logical(), &[]).unwrap(), payload);
+    }
+}
+
+#[test]
+fn json_and_pb_apply_one_time_relation_while_preserving_their_unselected_remainders() {
+    let contract = FieldContract::Time {
+        format: TimestampFormat::UnixSeconds,
+        relation: TimeRelation::PreserveOffset,
+        anchor: TimeAnchor::DependencyRequestStart,
+        utc_offset: None,
+        clock_group: None,
+        clock_scope: Default::default(),
+    };
+    let clocks = AnchorClocks {
+        dependency: ClockPair {
+            source: chrono::DateTime::from_timestamp(10, 0),
+            target: chrono::DateTime::from_timestamp(110, 0),
+        },
+        ..Default::default()
+    };
+    for (definition, source, target, wrong) in [
+        (
+            Codec::Json,
+            br#"{"at":10,"fixed":7}"#.to_vec(),
+            br#"{"at":110,"fixed":7}"#.to_vec(),
+            br#"{"at":110,"fixed":8}"#.to_vec(),
+        ),
+        (
+            codec(&[("/at", &[1], Type::Uint64, false)]),
+            vec![8, 10, 16, 7],
+            vec![8, 110, 16, 7],
+            vec![8, 110, 16, 8],
+        ),
+    ] {
+        crate::policy::validate_contract_binding(&definition, "/at", &contract).unwrap();
+        let plan = CodecPlan::compile(&definition).unwrap();
+        let source = plan.decode(&source).unwrap();
+        let paths = vec!["/at".to_owned()];
+        let fields = [Field {
+            rule_id: "same-time",
+            pointer: "/at",
+            contract: &contract,
+        }];
+        for (bytes, passed) in [(target, true), (wrong, false)] {
+            let target = plan.decode(&bytes).unwrap();
+            assert_eq!(
+                json::compare(
+                    &source.comparison_view(&paths),
+                    &target.comparison_view(&paths),
+                    &fields,
+                    clocks
+                )
+                .passed(),
+                passed
+            );
+        }
+    }
+}
+
+#[test]
+fn pb_identity_remains_an_explicit_unsupported_capability() {
+    let identity = FieldContract::Identity {
+        prefix: String::new(),
+        format: crate::policy::IdentityFormat::Uuid,
+    };
+    crate::policy::validate_contract_binding(&Codec::Json, "/id", &identity).unwrap();
+    let pb = codec(&[("/id", &[1], Type::String, false)]);
+    let error = crate::policy::validate_contract_binding(&pb, "/id", &identity).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("identity contracts require JSON or a physical SQL scalar")
+    );
+    let plan = CodecPlan::compile(&pb).unwrap();
+    let source = bytes(1, b"captured-identity");
+    let document = plan.decode(&source).unwrap();
+    assert_eq!(document.encode(&document.logical, &[]).unwrap(), source);
+}

@@ -1,79 +1,58 @@
 //! Bounded payload decoding with typed values and lossless protocol remainders.
 mod protobuf;
+mod providers;
 pub(crate) mod sse;
-
-use std::{borrow::Cow, sync::Arc};
-
-use anyhow::{Context, Result, ensure};
-use serde_json::Value;
+mod view;
 
 use crate::policy::Codec;
+use anyhow::{Result, ensure};
+#[cfg(test)]
+use providers::ValueCodec;
+#[cfg(test)]
+pub(crate) use providers::measured_compiles;
+pub(crate) use providers::{CodecKind, CodecPlan};
+use serde_json::Value;
+use std::borrow::Cow;
+#[cfg(test)]
+use view::Presence;
+pub(crate) use view::ValueView;
 
 pub(crate) struct CodecView;
 
-/// Immutable schema preparation only. Payloads, permissions and clocks are
-/// evaluated independently for every decode and comparison.
+/// One decoded payload, never an entire native protocol message. Protocol
+/// adapters retain their framing, physical scalar types and immutable slots.
 #[derive(Debug, Clone)]
-pub(crate) struct CodecPlan {
-    protobuf: Option<Arc<protobuf::Schema>>,
-    scalar: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct DecodedValue {
+pub(crate) struct DecodedDocument {
     pub(crate) logical: Value,
     original: Vec<u8>,
     protobuf: Option<protobuf::Document>,
+    kind: CodecKind,
+}
+
+pub(crate) type DecodedValue = DecodedDocument;
+
+/// Constructed only after the common document authorization check. Providers
+/// encode a validated logical edit; callers cannot bypass that check.
+pub(crate) struct AuthorizedPatch<'a> {
+    logical: &'a Value,
+}
+impl AuthorizedPatch<'_> {
+    pub(crate) fn logical(&self) -> &Value {
+        self.logical
+    }
 }
 
 impl CodecView {
-    pub(crate) fn decode(codec: &Codec, bytes: &[u8]) -> Result<DecodedValue> {
+    pub(crate) fn decode(codec: &Codec, bytes: &[u8]) -> Result<DecodedDocument> {
         CodecPlan::compile(codec)?.decode(bytes)
     }
 }
 
-impl CodecPlan {
-    pub(crate) fn compile(codec: &Codec) -> Result<Self> {
-        Ok(Self {
-            protobuf: match codec {
-                Codec::Json | Codec::Scalar => None,
-                Codec::Protobuf(codec) => Some(protobuf::schema(codec)?),
-            },
-            scalar: matches!(codec, Codec::Scalar),
-        })
+impl DecodedDocument {
+    pub(crate) fn view(&self) -> ValueView<'_> {
+        ValueView::new(self.kind, &self.logical)
     }
 
-    pub(crate) fn decode(&self, bytes: &[u8]) -> Result<DecodedValue> {
-        #[cfg(test)]
-        DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
-        ensure!(
-            bytes.len() <= crate::value_limits::MAX_VALUE_BYTES,
-            "payload exceeds the 64 MiB codec limit"
-        );
-        let (logical, protobuf) = match &self.protobuf {
-            None => (
-                crate::json_value::parse(bytes)
-                    .context("payload requires complete JSON without duplicate members")?,
-                None,
-            ),
-            Some(schema) => {
-                let (document, logical) = schema.decode(bytes)?;
-                (logical, Some(document))
-            }
-        };
-        ensure!(
-            !self.scalar || (!logical.is_array() && !logical.is_object()),
-            "native scalar codec rejects structured payloads"
-        );
-        Ok(DecodedValue {
-            logical,
-            original: bytes.to_vec(),
-            protobuf,
-        })
-    }
-}
-
-impl DecodedValue {
     /// Codec declarations describe types, not permission to ignore encoded data.
     /// Only actual contract locations lose their corresponding raw identity.
     pub(crate) fn comparison_value(&self, contract_paths: &[String]) -> Value {
@@ -81,12 +60,7 @@ impl DecodedValue {
     }
 
     pub(crate) fn comparison_view(&self, contract_paths: &[String]) -> Cow<'_, Value> {
-        if self.protobuf.is_none() || contract_paths.is_empty() {
-            return Cow::Borrowed(&self.logical);
-        }
-        let mut logical = self.logical.clone();
-        protobuf::prepare_comparison(&mut logical, "", contract_paths);
-        Cow::Owned(logical)
+        <CodecPlan as providers::ValueCodec>::comparison_view(self, contract_paths)
     }
 
     /// The caller supplies the same rule's authorized delivery selectors. Shape,
@@ -96,10 +70,8 @@ impl DecodedValue {
         if logical == &self.logical {
             return Ok(self.original.clone());
         }
-        let output = match &self.protobuf {
-            Some(document) => document.encode(logical),
-            None => crate::json_value::render::derived(&self.original, logical),
-        }?;
+        let patch = AuthorizedPatch { logical };
+        let output = <CodecPlan as providers::ValueCodec>::encode(self, &patch)?;
         ensure!(
             output.len() <= crate::value_limits::MAX_VALUE_BYTES,
             "derived payload exceeds the 64 MiB codec limit"
