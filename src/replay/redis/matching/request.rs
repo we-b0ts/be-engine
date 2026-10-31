@@ -11,6 +11,41 @@ impl RedisReplayState {
         original_source: &[Vec<u8>],
         original_actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
+        if exchange.source.is_run_owned() && exchange.shared_rule_id.is_none() {
+            let capture = exchange.record.capture.as_ref()?;
+            let scope = self
+                .run_value_scopes
+                .get(&capture.exchange_id)
+                .cloned()
+                .or_else(|| {
+                    crate::replay::attribution::run_value_scope(&capture.attribution)
+                        .map(Arc::<str>::from)
+                })?;
+            let normalized = match super::super::expiration::normalize(
+                &exchange.record.command,
+                source,
+                actual,
+                crate::value_contract::time::ClockPair {
+                    source: exchange.record.started_at(),
+                    target: self.request_observed_at,
+                },
+            ) {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error)),
+            };
+            let (source, actual) = super::super::value::paired_values(
+                &exchange.record.command,
+                source,
+                normalized.as_deref().unwrap_or(actual),
+            )?;
+            return self.request_contracts.preview_run_owned_value(
+                &scope,
+                source,
+                actual,
+                exchange.record.started_at(),
+                self.request_observed_at,
+            );
+        }
         if exchange.source != ReplaySource::Case || exchange.shared_rule_id.is_some() {
             return None;
         }

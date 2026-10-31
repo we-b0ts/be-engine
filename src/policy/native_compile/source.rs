@@ -103,6 +103,13 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                 proven(origin, validate_origin)?;
             }
             match &effect.selector {
+                ProcessSelector::RedisPubsub(selector) => {
+                    ensure!(
+                        effect.origin.is_none(),
+                        "Redis Pub/Sub input ownership has no API origin adapter"
+                    );
+                    crate::config::process_owned_dependencies::pubsub::validate(selector)?;
+                }
                 ProcessSelector::Mysql {
                     selector,
                     transaction_members,

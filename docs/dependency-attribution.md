@@ -28,9 +28,9 @@ coordinates, shapes and digests.
 
 ## Implementer claims
 
-An API implementer proves current API behavior and value mechanisms. For concrete
-unused occurrences, exclusion from the current API is enough to open an independent
-investigation; it is insufficient for acceptance. The coordinator submits:
+An API implementer owns its API behavior, including any traffic it reports as
+missing. A concrete unused occurrence may be returned as an ownership dispute
+without proving exclusion or tracing another API or task. The coordinator submits:
 
 ```json
 {
@@ -38,41 +38,83 @@ investigation; it is insufficient for acceptance. The coordinator submits:
   "api": "/current-api",
   "evidence_id": "<current-method-evidence-id>",
   "source_exchange_ids": ["<actual-unused-source-uuid>"],
-  "exclusion": {
-    "source_revision": "<current-source-revision>",
-    "source_locations": ["src/api.rs:handle"],
-    "call_chain": "Complete current API path and relevant branches",
-    "exclusive_scope": "Why these concrete requests cannot originate here"
-  }
+  "reason": "The implementer returns these specific occurrences as not belonging to its API"
 }
 ```
 
 Use `backend-rewrite dependency-attribution claim --file claim.json`. The engine
-checks current implementer confirmation, exact finalized unused-only attempt and
-original Source membership. The claim creates independent analyst work, not a
-waiver. Implementer work on other issues can continue.
+checks current implementer confirmation, exact finalized real unused evidence and
+original Source membership. Passing responses and an exclusion proof are not
+required to report the dispute. An optional historical `exclusion` proof remains
+readable. The analyst must either reject the return with Source proof, preserving
+the original owner, or prove another owner under effective rules. A return never
+waives dirty or incomplete capture and does not itself change the owner.
+
+### Missing traffic remains with its reporting API
 
 An unmatched request is an independent Target observation, even when it has no
-Source candidate. Submit `investigate --file investigation.json` with the same
-schema, canonical `api`, current `evidence_id`, a nonempty factual `reason` and
-`target_observation_ids` from the actual report. Do not invent a Source UUID.
-The engine authenticates protected observation coverage and the actual attempt.
-Unmatched does not imply async behavior: possible outcomes include a value rule,
-Target implementation defect, cross-scope ownership, missing capture or unresolved.
+Source candidate. Reporting missing traffic claims that traffic for the current
+API; it does not open repository-analyst work. The existing API implementer traces
+its actual async lifecycle, caches, client topology and complete capture evidence.
+If the API's asynchronous work was captured elsewhere, it supplies its own
+`async_api` rule. If capture omitted the required call, it supplies the exact
+Source endpoint and omission reason: for example a fixed IP requiring explicit
+interception or an IP URL returned in a dependency response requiring
+`http.response_rewrite`. It does not infer capture loss from an empty candidate
+page, or invent a hostname, missing response or unrelated owner.
+
+The coordinator may retain authenticated observations with
+`investigate --file investigation.json` using the same schema, canonical `api`,
+current `evidence_id`, a nonempty factual `reason` and exact
+`target_observation_ids`. The result and `show --api` explicitly retain
+`owner: api_implementer` and return offline candidate-discovery commands.
+
+The implementer's conclusion is published by the coordinator with
+`dependency-attribution resolve --file diagnosis.json`. Supply `schema`, current
+`evidence_id`, `expected_revision` from the API investigation view, and `resolution`
+with `investigation_id`, `outcome`, `source_task`, current Source `proof`,
+`origin_scope` and factual `reason`. Resolution checks the current API owner,
+attempt, report, Source inventory and revision. `cross_scope` requires the
+reporting API's effective async lifecycle rule; `missing_capture` retains capture
+debt on that API. Value-rule, implementation and unresolved results remain
+explicit and never grant acceptance. Analyst `apply` does not resolve owned
+missing-traffic investigations.
+
+When an implementer's async rule proves that its existing Source dependencies
+were captured in another scope, the coordinator publishes that implementer's
+positive ownership proof through the existing `context` / `apply` transaction
+before resolving `cross_scope`. Bind the actual origin input, exact Source
+occurrences and effective async lifecycle rule. This known-owner diagnosis does
+not require another analyst. A rule or `resolve` result alone does not move
+recorded ownership or grant matching permission. Keep missing origin/occurrence
+proof unresolved; use a concrete ownership return if another owner is disputed.
 
 ## Independent analyst proof
 
+The engine requests the repository analyst only for actual ownerless semantic
+Source occurrences or concrete ownership returns. Changing batches, known-owned
+startup dirt, unused dependencies or unmatched Target requests alone do not
+request attribution analysis. Known-owned new inventories are admitted
+mechanically without a repository scan.
+
+All ownerless Source occurrences must acquire supported effective process-task
+or async-origin API rules and independent positive attribution proof before
+formal Replay. Empty or partial review cannot admit the remaining ownerless
+inventory. A mistaken ownership return can instead be rejected with Source
+proof. Status, scoped acceptance and the actual Replay execution boundary retain
+the same gate. Capture and final-batch verification obligations remain separate.
+
 The coordinator obtains `dependency-attribution context` and dispatches its exact
 assignment to the read-only repository analyst. The context includes Source and
-proof revisions, pending claims/investigations, actual declared task groups,
+proof revisions, ownership returns, actual declared task groups,
 unattributed business occurrences and origin obligations. Protocol control facts
 remain in the inventory and follow their native contracts; they are not silently
 counted as unattributed business requests.
 
 `dependency-attribution source --exchange-id UUID` inspects an authenticated
-original occurrence without exposing payloads. Investigations include offline
-resource/operation candidate pages across all Source scopes, with executable
-continuations:
+original occurrence without exposing payloads. API-owned missing-traffic
+investigations expose offline resource/operation candidate pages across Source
+scopes to their implementer, with executable continuations:
 
 ```text
 backend-rewrite dependency-attribution candidates --investigation ID \
@@ -95,11 +137,20 @@ request/response scenario must match the lifecycle rule.
 `dependency-attribution rules` returns complete active task/lifecycle rule groups
 and their fingerprints. The coordinator publishes any new Source-proven rule
 through unified rule plan/apply first, then obtains fresh attribution context.
+Before the first Replay, use the context's exact `rule_planning` evidence token
+and plan command for Source-only owner rules; no fabricated Target attempt is
+needed. Source-only ownership planning cannot authorize value differences or
+successful consumption.
+New named process-owner rules bind the current workflow Source revision explicitly.
+An older document-level `source_revision` remains the default for existing rules;
+it neither changes those proofs nor overrides a newly reviewed owner's revision.
+The native rule retains that explicit revision when it cannot use the compact
+task declaration under the older header.
 The analyst submission echoes `assignment_id`, `expected_revision`,
 `recording_run_id`, `source_revision`, `source_inventory_id` and contains:
 
 - `decisions`: positive ownership proposals;
-- `investigation_resolutions`: independent unmatched investigation conclusions;
+- `investigation_resolutions`: empty; API-owned conclusions use `resolve`;
 - `claim_rejections`: independently proved rejections of mistaken foreign-unused claims;
 - `unresolved_claim_ids`: claims requiring more evidence.
 
@@ -183,7 +234,8 @@ backend-rewrite dependency-attribution target --session SESSION \
 
 The same batch view returns `rule_analysis` when the latest finalized full
 execution still matches the current Source inventory, ownership revision and
-Target execution identity. Dispatch its independent repository analyst assignment.
+Target execution identity. The coordinator routes known-owned failures to their
+existing implementation owner; this query does not dispatch a repository analyst.
 Its `batch-evidence-*` token is accepted by the ordinary `rule plan --file ...
 --evidence ...` transaction. The planner freezes the actual full report, runner
 assertions and complete Source scope, then applies the shared typed preflight and

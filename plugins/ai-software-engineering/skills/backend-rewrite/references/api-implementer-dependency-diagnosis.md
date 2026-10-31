@@ -10,7 +10,30 @@ and planner commands; do not reconstruct commands from historical flag examples.
 Also read the API-triggered traffic section when unused dependencies may come
 from a source-detached API task.
 
+## Traffic ownership
+
+Your API owns the traffic you report as missing. Investigate its async lifecycle
+and supply its own supported `async_api` rule when the work was captured in
+another scope. Otherwise identify the exact recorder omission and repair inputs,
+including fixed-IP interception or response IP-URL rewriting. Empty candidates
+alone prove neither omission nor asynchronous ownership. Return the diagnosis to
+the coordinator; only the coordinator publishes rules or investigation results.
+
+For concrete recorded unused traffic you consider foreign, return the exact
+Source occurrence IDs, current evidence ID and a bounded factual reason. You do
+not need to prove exclusion or trace the true owner. The coordinator submits an
+ownership return and the engine requests the repository analyst. The analyst may
+reject your return or prove another API/task owner through supported rules.
+
 ## Missing Recorded Dependency Evidence
+
+Claiming missing traffic gives this diagnosis an API owner. For an own async
+scope gap, return the actual origin input, recorded occurrence IDs, supported
+async lifecycle rule and positive Source ownership proof to the coordinator.
+The coordinator can apply this known-owner proof through attribution before
+resolving the investigation; it does not dispatch a repository analyst for it.
+An async rule or investigation resolution alone cannot authorize another
+Case's recorded dependencies. Missing origin or occurrence proof remains explicit.
 
 Treat a recording omission as a bounded hypothesis when a response or Replay difference traces through source code to one exact response-driving
 backend endpoint, but the representative recording contains no corresponding
@@ -209,9 +232,10 @@ the current dirty-cluster evidence ID and one protocol-specific planner returned
 in `applicable_rule_planners`. Run its exact read-only help argv and return only
 the source-proven selector inputs to the workflow coordinator. Replay evidence, case
 source, and immutable Source revision come from engine state; do not invent them
-or replace the provided identity. Return exactly one proven ownership classification:
-`request-owned`, `process-owned`, or `unresolved`. A request-owned result requires
-normal target implementation; it cannot justify a process-owned rule. Never
+or replace the provided identity. When ownership is known, retain that owner and diagnose its behavior. For
+specific unused occurrences you return as foreign, provide IDs and reason rather
+than taking responsibility for discovering the true owner. A request-owned
+result requires normal target implementation; it cannot justify a process-owned rule. Never
 rewrite Replay reports, trim traffic, or edit immutable capture files.
 
 For dependency value mismatches, inspect each entry returned in

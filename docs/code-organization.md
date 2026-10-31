@@ -830,7 +830,15 @@ is unclear.
   the prepared recording witnesses for every case in that session before
   deriving method evidence. Original reports, Case outcomes and errors remain
   immutable. `rewrite/dependency_review` owns independently proved attribution,
-  conditional API receipts and explicit owner verification debt. `rewrite/fingerprint`
+  conditional API receipts and explicit owner verification debt. Its `analysis`
+  child selects concrete ownerless/disputed Source work and gates formal Replay
+  until supported owner rules resolve it. Known-owned batch changes need no
+  analyst; `investigations/resolution` publishes the existing API implementer's
+  current-attempt diagnosis of its owned missing traffic.
+  `rewrite/unified_rule/attribution` admits Source-only ownership/lifecycle plans
+  before Replay, without inventing a Target attempt. Its execution identity and
+  preflight stay distinct from actual API and batch witnesses; value/sharing
+  permissions retain their execution evidence requirements. `rewrite/fingerprint`
   separates executed behavior identity from pure classification changes.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
@@ -1376,6 +1384,13 @@ explicit repository-wide audit.
   `config/process_owned_dependencies/mysql.rs` owns MySQL rule validation and
   matching, while `config/background_mysql_feedback.rs` owns immutable-evidence
   planning and atomic configuration application.
+  `config/process_owned_dependencies/redis` validates finite Redis task selectors,
+  including exact-key process writes without snapshot permission. Its `pubsub`
+  sibling validates exact received-notification scope and original subscription
+  confirmations; it never matches outgoing commands or infers external producers.
+  Recorder classification, Source-only rule preflight and independent attribution
+  reuse that scope. Protocol delivery retains its original finite-consumption
+  and subscription guards.
 
 - `rewrite/dependency_rule/planner.rs` owns protocol selector conversion and
   construction of engine evidence plans; its parent owns coordinator rule

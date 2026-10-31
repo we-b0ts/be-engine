@@ -13,6 +13,37 @@ mod template_tests;
 mod tests;
 
 impl RequestContracts {
+    /// Run-owned data has its own correspondence scope and dependency clocks.
+    /// It cannot borrow an API's input, conditional rules or primary clock.
+    pub(in crate::replay) fn preview_run_owned_value(
+        &self,
+        scope: &str,
+        source: &[u8],
+        actual: &[u8],
+        recorded_at: Option<DateTime<Utc>>,
+        observed_at: Option<DateTime<Utc>>,
+    ) -> Option<Result<Decision>> {
+        let global = self.global_json()?;
+        Some((|| {
+            let clocks = self.contract_clocks(None, recorded_at, observed_at, None, None);
+            let comparison =
+                crate::value_contract::global::compare(source, actual, global, &[], clocks)?;
+            ensure!(
+                comparison.passed(),
+                "run-owned global value contract failed at {} fields",
+                comparison.differences.len()
+            );
+            let identity = IdentityDecision::prepare(scope, comparison.identity_pairs())?;
+            self.identities
+                .lock()
+                .expect("identity contracts")
+                .validate(&identity)?;
+            let mut decision = Decision::from_value_comparison(comparison);
+            decision.identity = Some(identity);
+            Ok(decision)
+        })())
+    }
+
     pub(in crate::replay) fn global_json(&self) -> Option<&CompiledJsonPolicy> {
         self.compiled.as_ref()?.global_json.as_ref().or_else(|| {
             static EMPTY: std::sync::OnceLock<CompiledJsonPolicy> = std::sync::OnceLock::new();

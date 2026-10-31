@@ -202,6 +202,7 @@ struct MatchedRedisExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayState {
+    pub(in crate::replay) run_value_scopes: BTreeMap<Uuid, Arc<str>>,
     lifecycle: Lifecycle,
     activity_refresh: activity::ActivityRefreshes,
     pub(super) shared_source_directories: BTreeMap<String, PathBuf>,
@@ -225,6 +226,15 @@ pub(super) struct RedisReplayState {
     pub(super) events: RedisReplayEvents,
     snapshot_overlays: Vec<super::report::command::CommandSnapshotOverlayReport>,
     snapshot_overlay_warnings: Vec<String>,
+}
+
+impl RedisReplayState {
+    pub(in crate::replay) fn with_run_value_scopes(scopes: BTreeMap<Uuid, Arc<str>>) -> Self {
+        Self {
+            run_value_scopes: scopes,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Default)]

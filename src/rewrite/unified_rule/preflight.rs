@@ -175,6 +175,23 @@ pub(super) fn verify(
     Ok(result)
 }
 
+/// This path authorizes ownership declarations before any Target execution.
+/// Its proposal/change allowlist excludes value, sharing and delivery effects.
+pub(super) fn verify_attribution(
+    root: &Path,
+    state: &RewriteState,
+    bundle: &mut Bundle,
+    previous: &CompiledPolicy,
+    policy: &CompiledPolicy,
+    selected: &BTreeSet<String>,
+) -> Result<Preflight> {
+    source::validate_project(root, policy)?;
+    let mut result = Preflight::default();
+    source::verify(root, state, bundle, previous, policy, selected, &mut result)?;
+    async_api::verify(state, bundle, policy, selected, true, &mut result)?;
+    Ok(result)
+}
+
 fn redis_payload(surface: Surface, event: &Value, raw: &[u8]) -> Result<Vec<u8>> {
     if surface == Surface::DependencyRequest {
         let args: Vec<Vec<u8>> = serde_json::from_slice(raw)?;

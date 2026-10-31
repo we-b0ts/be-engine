@@ -10,6 +10,7 @@ use crate::dependency_index::{recording, scoped};
 mod inventory;
 
 pub(super) struct Frozen {
+    pub run_value_scopes: BTreeMap<Uuid, Arc<str>>,
     pub snapshot: Option<String>,
     pub startup: Option<PathBuf>,
     pub process: Option<PathBuf>,
@@ -24,6 +25,7 @@ pub(super) fn freeze(
 ) -> Result<Frozen> {
     let Some(root) = recording::root(source) else {
         return Ok(Frozen {
+            run_value_scopes: BTreeMap::new(),
             snapshot: None,
             startup: super::find_run_level_dependencies(source).0,
             process: None,
@@ -41,6 +43,7 @@ pub(super) fn freeze(
         .unwrap_or_default();
     let digest = crate::policy_evidence::digest(&serde_json::to_vec(&decisions)?);
     let mut frozen = Frozen {
+        run_value_scopes: BTreeMap::new(),
         snapshot: Some(digest.clone()),
         startup: Some(root.join("indexes/startup-scope.json")),
         process: Some(root.join("indexes/process-scope.json")),
@@ -56,6 +59,7 @@ pub(super) fn freeze(
         return Ok(frozen);
     }
     let mut by_exchange = BTreeMap::new();
+    let mut value_scopes = BTreeMap::<String, Arc<str>>::new();
     for decision in &decisions {
         decision.owner.validate()?;
         ensure!(
@@ -78,6 +82,14 @@ pub(super) fn freeze(
                 "attribution refers to an absent origin Case"
             ),
             DependencyOwner::Unattributed { .. } => {}
+        }
+        if let Some(scope) = run_value_scope(&decision.owner) {
+            let value = value_scopes
+                .entry(scope.clone())
+                .or_insert_with(|| Arc::from(scope));
+            frozen
+                .run_value_scopes
+                .insert(decision.exchange_id, value.clone());
         }
     }
     let mut scopes = Vec::new();
@@ -180,4 +192,19 @@ pub(super) fn freeze(
         }
     }
     Ok(frozen)
+}
+
+pub(in crate::replay) fn run_value_scope(owner: &DependencyOwner) -> Option<String> {
+    match owner {
+        DependencyOwner::Process {
+            process_epoch,
+            source_task,
+            ..
+        } => Some(format!("process:{process_epoch}:{source_task}")),
+        DependencyOwner::Startup {
+            process_epoch,
+            initialization_unit,
+        } => Some(format!("startup:{process_epoch}:{initialization_unit}")),
+        _ => None,
+    }
 }

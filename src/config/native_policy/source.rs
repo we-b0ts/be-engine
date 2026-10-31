@@ -16,7 +16,7 @@ pub(crate) struct NativeSourceScope<'a> {
     pub source_revision: &'a str,
     pub recording_run_id: &'a str,
     pub prepared_cases: &'a BTreeMap<String, PathBuf>,
-    pub replay_report: &'a Path,
+    pub replay_report: Option<&'a Path>,
     pub policy_rules: &'a [CompiledNativeRule],
 }
 
@@ -88,7 +88,9 @@ pub(crate) fn validate_source(
                 obligations.insert(SourceObligation::Replay);
                 crate::replay::validate_native_finite_sharing(
                     scope.case_source,
-                    scope.replay_report,
+                    scope
+                        .replay_report
+                        .context("finite sharing requires genuine Replay evidence")?,
                     compiled,
                 )?
             }

@@ -36,7 +36,7 @@ pub(super) fn required_action(root: &Path, state: &RewriteState) -> Option<Rewri
         let stale = (!plan
             .unified
             .as_ref()
-            .is_some_and(|record| record.is_batch())
+            .is_some_and(|record| !record.requires_api_confirmation())
             && scoped.active_issue.as_ref().map(|i| i.id.as_str()) != Some(plan.issue_id.as_str()))
             || plan
                 .unified

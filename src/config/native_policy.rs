@@ -171,6 +171,12 @@ fn process_owned(rule: &n::NativeRule, effect: &n::ProcessOwnedEffect) -> Result
         .map(|origin| origin_source(&origin.contract))
         .transpose()?;
     Ok(match &effect.selector {
+        n::ProcessSelector::RedisPubsub(selector) => B::RedisPubsub {
+            name,
+            source_revision,
+            source_evidence,
+            selector: selector.clone(),
+        },
         n::ProcessSelector::Mysql {
             selector,
             include_transaction_boundaries,

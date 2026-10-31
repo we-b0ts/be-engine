@@ -199,11 +199,23 @@ async fn recovery_clears_a_crashed_retry_without_refunding_its_permit() {
 async fn execution_preflight_error_keeps_the_consumed_permit_and_releases_running_state() {
     let target = worker::tests::configured_target();
     let mut state = runtime_state(None);
-    state.case_source = Some(target.path().join("missing-recording"));
+    let recorder = crate::Recorder::new(target.path().join(".traffic-e2e/local/recordings"))
+        .await
+        .unwrap();
+    recorder.finish_run().await.unwrap();
+    state.case_source = Some(recorder.run_dir.as_ref().clone());
+    state.recording_run_id = recorder
+        .run_dir
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .into();
     state.group_id = Some(state.api.clone());
     let store = RewriteStore::new(target.path()).unwrap();
     store.save(&state).unwrap();
-    // Missing target Dockerfile/recording fails preflight before Docker can run.
+    // A valid known-owned inventory admits execution. The missing target
+    // Dockerfile still fails preflight before Docker can run, after reservation.
     let error = rewrite::verification::run_and_transition(target.path(), &mut state, false)
         .await
         .unwrap_err();
@@ -221,6 +233,31 @@ async fn execution_preflight_error_keeps_the_consumed_permit_and_releases_runnin
     assert!(!traditional_pending(&restored.active_slice));
     assert_eq!(restored.attempts.len(), 1);
     assert_eq!(worker::runtime::scopes(&restored).len(), 1);
+}
+
+#[tokio::test]
+async fn missing_source_inventory_blocks_before_consuming_an_engine_retry_permit() {
+    let target = worker::tests::configured_target();
+    let mut state = runtime_state(None);
+    state.case_source = Some(target.path().join("missing-recording"));
+    state.group_id = Some(state.api.clone());
+    assert!(
+        !rewrite::verification::run_and_transition(target.path(), &mut state, false)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !state
+            .engine_retry_fingerprints
+            .contains(crate::build_info::ENGINE_FINGERPRINT)
+    );
+    assert!(!state.engine_retry_running);
+    assert!(traditional_pending(&state.active_slice));
+    assert_eq!(state.attempts.len(), 1);
+    assert!(matches!(
+        rewrite::dependency_review::required_action(target.path(), &state),
+        Some(RewriteAction::InputRequired { .. })
+    ));
 }
 
 #[test]

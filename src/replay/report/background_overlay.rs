@@ -120,6 +120,9 @@ fn matching_rule<'a>(
 ) -> Option<&'a str> {
     rules.iter().find_map(|rule| {
         let matches = match rule {
+            BackgroundDependencyRuleConfig::RedisPubsub { selector, .. } => {
+                crate::config::process_owned_dependencies::pubsub::matches_value(selector, event)
+            }
             BackgroundDependencyRuleConfig::Redis { .. } => redis_event_matches_rule(event, rule),
             BackgroundDependencyRuleConfig::Memcached {
                 name,

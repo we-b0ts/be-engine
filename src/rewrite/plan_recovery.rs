@@ -11,7 +11,7 @@ pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Res
         .rule_plan
         .as_ref()
         .and_then(|plan| plan.unified.as_ref())
-        .filter(|plan| plan.is_batch())
+        .filter(|plan| !plan.requires_api_confirmation())
     {
         return Ok(super::unified_rule::stale(target_root, state, plan));
     }
@@ -113,7 +113,7 @@ pub fn recover_rewrite_rule_plan(context: RewriteContext, plan_id: &str) -> Resu
             .rule_plan
             .as_ref()
             .and_then(|plan| plan.unified.as_ref())
-            .is_some_and(|plan| plan.is_batch())
+            .is_some_and(|plan| !plan.requires_api_confirmation())
     {
         super::worker::ensure_api_confirmed(&state, &api, "recovering a traffic rule")?;
     }

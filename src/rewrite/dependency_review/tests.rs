@@ -427,3 +427,6 @@ async fn a_scoped_new_source_run_cannot_erase_another_required_workflow_method()
     assert!(value.to_string().contains("POST /other"));
     assert!(!batch_verification::current(target.path(), &state).unwrap());
 }
+
+#[path = "tests/ownership.rs"]
+mod ownership;

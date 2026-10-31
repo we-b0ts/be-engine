@@ -227,7 +227,7 @@ fn redis_rule(rule: &PolicyRule) -> bool {
                 | crate::policy::NativeEffect::RedisActivityRefresh(_)
         )
         || matches!(&rule.effect, crate::policy::NativeEffect::ProcessOwned(effect)
-            if matches!(effect.selector, crate::policy::native::ProcessSelector::Redis { .. }))
+            if matches!(effect.selector, crate::policy::native::ProcessSelector::Redis { .. } | crate::policy::native::ProcessSelector::RedisPubsub(_)))
 }
 
 /// Typed callers can insert rules without a document context; normalize them

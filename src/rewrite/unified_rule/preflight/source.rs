@@ -11,7 +11,7 @@ pub(super) struct SourceRecord {
     source_revision: String,
     recording_run_id: String,
     prepared_cases: BTreeMap<String, PathBuf>,
-    replay_report: PathBuf,
+    replay_report: Option<PathBuf>,
     inventory: NativeSourceInventory,
     rule_ids: BTreeSet<String>,
 }
@@ -66,7 +66,8 @@ pub(super) fn verify(
             .context("Source effect has no revision")?,
         recording_run_id: state.recording_run_id.clone(),
         prepared_cases: bundle.cases.clone(),
-        replay_report: bundle.replay_path.clone(),
+        replay_report: (!bundle.replay_path.as_os_str().is_empty())
+            .then(|| bundle.replay_path.clone()),
         inventory: NativeSourceInventory {
             recording_root: PathBuf::new(),
             recording_run_id: String::new(),
@@ -119,7 +120,7 @@ impl SourceRecord {
             source_revision: &self.source_revision,
             recording_run_id: &self.recording_run_id,
             prepared_cases: &self.prepared_cases,
-            replay_report: &self.replay_report,
+            replay_report: self.replay_report.as_deref(),
             policy_rules: policy,
         }
     }

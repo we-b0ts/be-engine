@@ -1,4 +1,5 @@
 //! Independent Source attribution and API-scoped verification obligations.
+mod analysis;
 mod batch;
 mod batch_verification;
 mod investigations;
@@ -27,12 +28,14 @@ use super::{
     verification_obligations::{ScopeObligation, VerificationScope},
 };
 use crate::dependency::attribution::{AttributionDecision, DependencyOwner};
+pub(super) use analysis::required_action;
 pub use batch::{dependency_attribution_batch_information, retry_dependency_batch};
 pub(super) use batch::{required_action as batch_action, run as run_batch};
 pub(super) use batch_verification::current as batch_current;
 pub use investigations::{
     InvestigationOutcome, InvestigationResolution, TargetInvestigation,
-    TargetInvestigationSubmission, investigate_unmatched_dependency,
+    TargetInvestigationResolutionSubmission, TargetInvestigationSubmission,
+    investigate_unmatched_dependency, resolve_target_investigation,
 };
 pub(super) use model::ReviewLedger;
 pub use model::{
@@ -109,6 +112,8 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
             state.dependency_review.revision += 1;
         }
     }
+    investigations::refresh(state);
+    analysis::refresh_inventory(state)?;
     if !state.dependency_review.receipts.is_empty() {
         verification::invalidate_receipts(root, state)?;
     }
@@ -132,12 +137,6 @@ pub fn dependency_attribution_context(
         .claims
         .iter()
         .map(|claim| claim.api.clone())
-        .chain(
-            context
-                .investigations
-                .iter()
-                .map(|request| request.api.clone()),
-        )
         .collect::<BTreeSet<_>>();
     context.evidence_commands = apis
         .into_iter()
@@ -202,44 +201,6 @@ fn context_for(
         .map(|(id, _)| *id)
         .collect();
     let assignment_id = assignment_id(state)?;
-    let owners = decisions
-        .iter()
-        .map(|(id, decision)| (**id, decision.owner.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let investigations = state
-        .dependency_review
-        .investigations
-        .values()
-        .filter(|request| {
-            request.recording_run_id == state.recording_run_id
-                && matches!(
-                    request.status,
-                    ClaimStatus::Pending | ClaimStatus::Unresolved
-                )
-        })
-        .cloned()
-        .map(|mut request| {
-            request.candidate_discovery = request
-                .target_observations
-                .iter()
-                .map(|(id, observation)| {
-                    (
-                        id.clone(),
-                        queries::candidate_page(
-                            root,
-                            state,
-                            source,
-                            (&request.id, id),
-                            observation,
-                            &owners,
-                            0,
-                        ),
-                    )
-                })
-                .collect();
-            request
-        })
-        .collect();
     Ok(AttributionReviewContext {
         schema: SCHEMA,
         work_type: "dependency_attribution",
@@ -250,11 +211,11 @@ fn context_for(
         revision: state.dependency_review.revision,
         assignment_id,
         claims,
-        investigations,
         task_groups: BTreeMap::new(),
         evidence_commands: vec![],
         effective_policy_fingerprint: String::new(),
         rule_groups: vec![],
+        rule_planning: crate::rewrite::unified_rule::attribution::information(root, state)?,
         unattributed_exchange_ids,
         obligations: state
             .dependency_review
@@ -263,7 +224,7 @@ fn context_for(
             .filter(|o| o.pending())
             .cloned()
             .collect(),
-        next_step: "Analyze actual Source tasks and indirect callers read-only. Submit independent positive owner proofs; claim exclusion alone never removes a consumption obligation.",
+        next_step: "Resolve every ownerless Source occurrence through supported process-task or async-origin API rules and independent positive proof before formal Replay. Reject mistaken ownership returns with Source proof. Missing traffic remains with its reporting API implementer; no ownership result proves consumption.",
     })
 }
 
@@ -286,30 +247,38 @@ pub fn claim_foreign_unused(options: AttributionCommandOptions) -> Result<Value>
     super::worker::ensure_api_confirmed(&state, &api, "submitting an unused ownership claim")?;
     let selected = super::inventory::scoped(&state, Some(&api.parse()?))?;
     let original = source::load(&state)?;
-    let actual = verification::actual(&root, &selected, &original)?;
-    input.exclusion.validate(
-        selected
-            .source_revision
-            .as_deref()
-            .context("Source revision absent")?,
-    )?;
+    let actual = verification::claim_actual(&root, &selected, &original)?;
+    let source_revision = selected
+        .source_revision
+        .as_deref()
+        .context("Source revision absent")?;
+    if let Some(proof) = &input.exclusion {
+        proof.validate(source_revision)?;
+    }
+    let reason = if input.reason.trim().is_empty() {
+        input
+            .exclusion
+            .as_ref()
+            .map(|proof| proof.exclusive_scope.clone())
+            .unwrap_or_default()
+    } else {
+        input.reason.clone()
+    };
+    ensure!(
+        !reason.trim().is_empty() && reason.len() <= 4096,
+        "ownership return requires concrete unused occurrences and a bounded reason, not an exclusion proof"
+    );
     ensure!(
         !input.source_exchange_ids.is_empty()
             && input.source_exchange_ids.is_subset(&actual.unused),
         "claim must select actual unused occurrences from this exact finalized attempt"
-    );
-    ensure!(
-        input.source_exchange_ids.iter().all(|id| original
-            .exchanges
-            .get(id)
-            .is_some_and(|event| event.complete)),
-        "claim cannot exempt incomplete Source capture"
     );
     let id = source::digest(&serde_json::to_vec(&(
         &state.workflow_id,
         &api,
         actual.attempt,
         &input.source_exchange_ids,
+        &reason,
         &input.exclusion,
     ))?);
     if !state.dependency_review.claims.contains_key(&id) {
@@ -320,13 +289,14 @@ pub fn claim_foreign_unused(options: AttributionCommandOptions) -> Result<Value>
                 api: input.api,
                 method_api: api,
                 recording_run_id: state.recording_run_id.clone(),
-                source_revision: input.exclusion.source_revision.clone(),
+                source_revision: source_revision.into(),
                 source_inventory_id: original.identity,
                 attempt: actual.attempt,
                 execution_identity: actual.execution_identity,
                 report_sha256: actual.report_sha256,
                 source_exchange_ids: input.source_exchange_ids,
                 exclusion: input.exclusion,
+                reason,
                 status: ClaimStatus::Pending,
                 rejection: None,
             },
@@ -454,9 +424,10 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
         claim.status = ClaimStatus::Rejected;
         claim.rejection = Some(rejection.clone());
     }
-    for resolution in &input.investigation_resolutions {
-        investigations::apply_resolution(&mut state, resolution)?;
-    }
+    ensure!(
+        input.investigation_resolutions.is_empty(),
+        "missing or unmatched traffic has an API owner; submit its implementer diagnosis with dependency-attribution resolve"
+    );
     for claim in state.dependency_review.claims.values_mut() {
         if claim.status != ClaimStatus::Rejected
             && claim.recording_run_id == state.recording_run_id
@@ -495,10 +466,12 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
     let accepted = verification::reconcile(&root, &mut state, &original)?;
     state.bump();
     store.save(&state)?;
+    let pending = required_action(&root, &state);
     Ok(
         json!({"schema":SCHEMA,"revision":next_revision,"accepted_apis":accepted,
         "pending_obligations":state.dependency_review.obligations.values().filter(|o|o.pending()).collect::<Vec<_>>(),
-        "batch_verified":false,"next_command":super::action::next_command(&root)}),
+        "ownership_complete":pending.is_none(),"unattributed_remaining":state.dependency_review.unresolved_source_exchange_ids.len(),
+        "next_action":pending,"batch_verified":false,"next_command":super::action::next_command(&root)}),
     )
 }
 
@@ -663,44 +636,6 @@ pub(super) fn batch_pending(state: &RewriteState) -> bool {
                         ClaimStatus::Pending | ClaimStatus::Unresolved
                     )
             })
-}
-
-pub(super) fn required_action(
-    root: &Path,
-    state: &RewriteState,
-) -> Option<super::model::RewriteAction> {
-    let initial = state.case_source.is_some()
-        && state.dependency_review.recording_run_id.as_deref()
-            != Some(state.recording_run_id.as_str());
-    let count = state
-        .dependency_review
-        .claims
-        .values()
-        .filter(|claim| {
-            claim.recording_run_id == state.recording_run_id && claim.status == ClaimStatus::Pending
-        })
-        .count();
-    let unmatched = state
-        .dependency_review
-        .investigations
-        .values()
-        .filter(|request| {
-            request.recording_run_id == state.recording_run_id
-                && request.status == ClaimStatus::Pending
-        })
-        .count();
-    let final_unresolved = batch::apis_ready(state)
-        && !state
-            .dependency_review
-            .unresolved_source_exchange_ids
-            .is_empty();
-    (count > 0 || unmatched > 0 || initial || final_unresolved).then(||super::model::RewriteAction::DependencyAttributionRequired {
-        summary:if initial {"review new recording attribution once before Replay; retain unresolved scopes without blocking unrelated API diagnosis".into()} else {format!("independently prove Source ownership for {count} unused dependency claims; current API implementation may continue")},
-        assignment_id:assignment_id(state).expect("serializable attribution assignment"),dispatch_generation:state.dependency_review.revision,
-        claim_kinds:BTreeMap::from([("foreign_unused".into(),count),("target_request_investigation".into(),unmatched)]),
-        context:super::action::command(root,vec!["dependency-attribution".into(),"context".into()],vec![]),
-        apply:super::action::command(root,vec!["dependency-attribution".into(),"apply".into(),"--file".into(),"<attribution.json>".into()],vec![]),
-    })
 }
 
 fn assignment_id(state: &RewriteState) -> Result<String> {

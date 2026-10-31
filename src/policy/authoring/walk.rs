@@ -26,31 +26,48 @@ enum Shape {
 }
 
 pub(crate) fn expand_rule(value: &mut Value, revision: Option<&str>) -> Result<()> {
-    Walker {
-        revision,
-        compact: false,
-        require_proof: false,
-    }
-    .rule(value)
+    rule_with_revision(value, revision, false, false)
 }
 pub(super) fn compact_rule(value: &mut Value, revision: Option<&str>) -> Result<()> {
-    Walker {
-        revision,
-        compact: true,
-        require_proof: false,
-    }
-    .rule(value)
+    rule_with_revision(value, revision, true, false)
 }
 
 /// Source evidence belongs to a plan proposal, independently of the runtime
 /// policy produced by rendering that proposal.
 pub(crate) fn require_source_proof(value: &mut Value, revision: Option<&str>) -> Result<()> {
+    rule_with_revision(value, revision, false, true)
+}
+
+fn rule_with_revision(
+    value: &mut Value,
+    revision: Option<&str>,
+    compact: bool,
+    require_proof: bool,
+) -> Result<()> {
+    // A named independent owner can be reviewed against a newer Source without
+    // silently rebinding the document's existing permissions. Its explicit
+    // effect revision owns both its local and nested proof defaults.
+    let local = value
+        .get("effect")
+        .filter(|effect| {
+            effect.get("kind").and_then(Value::as_str) == Some("process_owned")
+                && effect.get("origin").is_none_or(Value::is_null)
+                && effect.get("task_name").and_then(Value::as_str).is_some()
+        })
+        .and_then(|effect| effect.get("source_revision"))
+        .and_then(Value::as_str)
+        .filter(|local| Some(*local) != revision)
+        .map(str::to_owned);
     Walker {
-        revision,
-        compact: false,
-        require_proof: true,
+        revision: local.as_deref().or(revision),
+        compact,
+        require_proof,
     }
-    .rule(value)
+    .rule(value)?;
+    if compact && let Some(local) = local {
+        value["effect"]["source_revision"] = local.into();
+    }
+    Ok(())
 }
 
 struct Walker<'a> {

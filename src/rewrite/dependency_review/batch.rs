@@ -141,6 +141,9 @@ pub(in crate::rewrite) async fn run(root: &Path) -> Result<RewriteActionEnvelope
     let _lock = store.lock()?;
     let mut state = store.load()?.context("rewrite workflow absent")?;
     bind_source_context(&root, &mut state)?;
+    if let Some(required) = super::required_action(&root, &state) {
+        return Ok(crate::rewrite::action::envelope(&root, &state, required));
+    }
     ensure!(
         apis_ready(&state),
         "finish independent API implementation/acceptance before the final actual batch"

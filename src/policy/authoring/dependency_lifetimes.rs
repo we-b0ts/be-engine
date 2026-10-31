@@ -64,7 +64,7 @@ impl<'de> Deserialize<'de> for Entry {
         let (protocol, payload) = fields.into_iter().next().expect("one protocol");
         if !matches!(
             protocol.as_str(),
-            "http" | "redis" | "mysql" | "memcached" | "motan"
+            "http" | "redis" | "redis_pubsub" | "mysql" | "memcached" | "motan"
         ) || !payload.is_mapping()
         {
             return Err(serde::de::Error::custom(

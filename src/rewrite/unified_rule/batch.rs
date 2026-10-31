@@ -43,12 +43,8 @@ fn id(state: &RewriteState, evidence: &crate::e2e_run::BatchRuleEvidence) -> Res
 pub(in crate::rewrite) fn information(root: &Path, state: &RewriteState) -> Result<Value> {
     let evidence = evidence(root, state)?;
     let evidence_id = id(state, &evidence)?;
-    let assignment_id = format!(
-        "batch-rule-analysis-{}",
-        fingerprint::id(&[&state.workflow_id, &evidence_id])
-    );
     Ok(
-        json!({"scope":"actual_batch","evidence_id":evidence_id,"assignment":{"id":assignment_id,"generation":state.dependency_review.revision,"role":"repository_analyst","read_only_task":"Analyze genuine whole-batch failures and provide Source code proof for any proposed supported value/task rule. Ownership and actual consumption remain separate."},"actual_session_id":evidence.session_id,"report_sha256":evidence.report_sha256,"source_inventory_id":evidence.source_inventory_id,"attribution_snapshot":evidence.dependency_attribution_snapshot,"execution_identity":evidence.execution_identity,"plan_command":action::command(root,vec!["rule".into(),"plan".into(),"--file".into(),"<source-proven-rule.yaml>".into(),"--evidence".into(),evidence_id],vec![]),"acceptance":false,"runtime_changes_require":"one fresh complete actual session"}),
+        json!({"scope":"actual_batch","evidence_id":evidence_id,"diagnosis_owner":"coordinator","source_proof_routing":"Known-owned failures stay with their existing implementation owner. Dispatch a repository analyst only for the engine dependency_attribution_required action with concrete ownerless or disputed Source occurrences.","actual_session_id":evidence.session_id,"report_sha256":evidence.report_sha256,"source_inventory_id":evidence.source_inventory_id,"attribution_snapshot":evidence.dependency_attribution_snapshot,"execution_identity":evidence.execution_identity,"plan_command":action::command(root,vec!["rule".into(),"plan".into(),"--file".into(),"<source-proven-rule.yaml>".into(),"--evidence".into(),evidence_id],vec![]),"acceptance":false,"runtime_changes_require":"one fresh complete actual session"}),
     )
 }
 

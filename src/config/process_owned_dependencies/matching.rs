@@ -43,6 +43,10 @@ pub(super) fn matches(rule: &BackgroundDependencyRuleConfig, event: &RecorderEve
     }
     match (rule, event) {
         (
+            BackgroundDependencyRuleConfig::RedisPubsub { selector, .. },
+            RecorderEvent::RedisPubSubPush(event),
+        ) => super::pubsub::matches_record(selector, event),
+        (
             BackgroundDependencyRuleConfig::Mysql { selector, .. },
             RecorderEvent::MysqlExchange(exchange),
         ) => selector.matches(exchange),

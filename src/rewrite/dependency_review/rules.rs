@@ -17,6 +17,10 @@ use std::{
 };
 use uuid::Uuid;
 
+#[cfg(test)]
+#[path = "rules_pubsub_tests.rs"]
+mod pubsub_tests;
+
 pub(super) fn load(root: &Path) -> Result<CompiledPolicy> {
     crate::policy::parse_and_compile_policy(&fs::read_to_string(
         crate::rewrite::fingerprint::policy_file(root)?,
@@ -409,6 +413,7 @@ fn process_matches(
     let origins = crate::api_trigger::OriginIndex::default();
     let mut reader = crate::dependency_index::RecordReader::new(16 * 1024 * 1024);
     let mut covered = BTreeSet::new();
+    let mut subscriptions = BTreeMap::new();
     for (id, event) in &source.exchanges {
         if epoch.is_some_and(|epoch| epoch != event.capture.process_epoch)
             || !event.capture.semantic_required
@@ -416,7 +421,10 @@ fn process_matches(
             continue;
         }
         let original;
-        let selector = if event.selector["_source_proof_requires_original"] == true {
+        let selector = if event.selector["_source_proof_requires_original"] == true
+            || event.selector["event_type"] == "redis_pub_sub_push"
+                && policy.process_owned_dependencies.iter().any(|rule| matches!(rule,
+                    crate::config::process_owned_dependencies::BackgroundDependencyRuleConfig::RedisPubsub { .. })) {
             original = source.original_selector(id, &mut reader)?;
             &original
         } else {
@@ -431,6 +439,17 @@ fn process_matches(
                 &ports,
                 &origins,
             )? {
+                if let crate::config::process_owned_dependencies::BackgroundDependencyRuleConfig::RedisPubsub { selector: input, .. } = rule {
+                    let anchor = crate::config::process_owned_dependencies::pubsub::anchor(selector).context("Source Pub/Sub input anchor is invalid")?;
+                    if !subscriptions.contains_key(&anchor) {
+                        let ids = source.native.get(&("redis".into(), anchor.0.to_string(), anchor.1))
+                            .context("Source Pub/Sub input lacks its original subscription")?;
+                        ensure!(ids.len() == 1, "Source Pub/Sub subscription identity is ambiguous");
+                        let subscription = source.original_selector(ids.first().expect("one original subscription"), &mut reader)?;
+                        subscriptions.insert(anchor, subscription);
+                    }
+                    crate::config::process_owned_dependencies::pubsub::validate_subscription(input, selector, &subscriptions[&anchor])?;
+                }
                 covered.insert(*id);
                 break;
             }

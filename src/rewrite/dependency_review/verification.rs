@@ -22,18 +22,35 @@ pub(super) fn actual(
     state: &RewriteState,
     source: &source::SourceSnapshot,
 ) -> Result<ActualAttempt> {
+    ensure!(
+        state
+            .attempts
+            .last()
+            .is_some_and(|attempt| attempt.engine_fingerprint.as_deref()
+                == Some(crate::build_info::ENGINE_FINGERPRINT)),
+        "attribution acceptance requires an actual attempt from the current engine build"
+    );
+    ensure!(
+        state
+            .attempts
+            .last()
+            .is_some_and(super::super::replay_admission::dependency_only),
+        "unused attribution acceptance requires passing responses and complete actual Replay with dependency-only failures"
+    );
+    claim_actual(root, state, source)
+}
+
+/// Reporting disputed ownership requires real unused evidence, not a passing
+/// response or an implementer's proof of who actually owns the occurrence.
+pub(super) fn claim_actual(
+    root: &Path,
+    state: &RewriteState,
+    source: &source::SourceSnapshot,
+) -> Result<ActualAttempt> {
     let attempt = state
         .attempts
         .last()
         .context("API has no real Replay attempt")?;
-    ensure!(
-        attempt.engine_fingerprint.as_deref() == Some(crate::build_info::ENGINE_FINGERPRINT),
-        "attribution acceptance requires an actual attempt from the current engine build"
-    );
-    ensure!(
-        super::super::replay_admission::dependency_only(attempt),
-        "unused attribution requires passing responses and complete actual Replay with dependency-only failures"
-    );
     let execution_identity = super::super::fingerprint::replay_identity(root)?;
     ensure!(
         state.replay_identity.as_deref() == Some(&execution_identity),

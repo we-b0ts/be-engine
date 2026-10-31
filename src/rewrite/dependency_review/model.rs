@@ -70,7 +70,10 @@ pub struct ForeignUnusedClaim {
     pub execution_identity: String,
     pub report_sha256: String,
     pub source_exchange_ids: BTreeSet<Uuid>,
-    pub exclusion: AttributionProof,
+    #[serde(default)]
+    pub exclusion: Option<AttributionProof>,
+    #[serde(default)]
+    pub reason: String,
     pub status: ClaimStatus,
     pub rejection: Option<ClaimRejection>,
 }
@@ -90,6 +93,8 @@ pub enum ClaimStatus {
     Proved,
     Rejected,
     Unresolved,
+    /// Historical API request investigation replaced by a newer real attempt.
+    Superseded,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +104,11 @@ pub struct ForeignUnusedSubmission {
     pub api: String,
     pub evidence_id: String,
     pub source_exchange_ids: BTreeSet<Uuid>,
-    pub exclusion: AttributionProof,
+    /// Optional historical diagnosis; an implementer need not prove exclusion.
+    #[serde(default)]
+    pub exclusion: Option<AttributionProof>,
+    #[serde(default)]
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,11 +122,11 @@ pub struct AttributionReviewContext {
     pub revision: u64,
     pub assignment_id: String,
     pub claims: Vec<ForeignUnusedClaim>,
-    pub investigations: Vec<super::investigations::TargetInvestigation>,
     pub task_groups: BTreeMap<String, Vec<String>>,
     pub evidence_commands: Vec<crate::rewrite::RewriteCommandSpec>,
     pub effective_policy_fingerprint: String,
     pub rule_groups: Vec<serde_json::Value>,
+    pub rule_planning: serde_json::Value,
     pub unattributed_exchange_ids: BTreeSet<Uuid>,
     pub obligations: Vec<ScopeObligation>,
     pub next_step: &'static str,

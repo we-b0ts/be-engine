@@ -78,7 +78,8 @@ impl ReplayRuntime {
         let mut http_exchanges = Vec::new();
         let mut http_events = http::HttpReplayEvents::default();
         let mut http_blackholes = Vec::new();
-        let mut redis = redis::RedisReplayState::default();
+        let mut redis =
+            redis::RedisReplayState::with_run_value_scopes(attribution.run_value_scopes);
         let mut memcached = memcached::MemcachedReplayState::default();
         let mut kafka = kafka::KafkaReplayState::default();
         let mut motan = motan::MotanReplayState::default();

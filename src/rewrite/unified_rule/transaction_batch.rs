@@ -93,7 +93,8 @@ fn dirty_full_batch_can_plan_and_apply_without_fabricating_api_issue_or_acceptan
     let full = install_actual_batch(&fixture);
     let evidence =
         crate::rewrite::unified_rule::batch::information(fixture.root(), &fixture.state()).unwrap();
-    assert_eq!(evidence["assignment"]["role"], "repository_analyst");
+    assert_eq!(evidence["diagnosis_owner"], "coordinator");
+    assert!(evidence.get("assignment").is_none());
     assert!(fixture.state().active_issue.is_none());
     let report_before = fs::read(full.join("reports/replay-report.json")).unwrap();
     let plan = plan_rewrite_unified_rule(

@@ -115,23 +115,26 @@ pub(super) struct BatchExecutionIdentity {
 pub(super) enum ExecutionIdentity {
     ApiIssue(ApiExecutionIdentity),
     Batch(BatchExecutionIdentity),
+    Attribution(super::attribution::Identity),
 }
 
 impl ExecutionIdentity {
     pub(super) fn method_api(&self) -> Option<&str> {
         match self {
             Self::ApiIssue(identity) => Some(&identity.api),
-            Self::Batch(_) => None,
+            Self::Batch(_) | Self::Attribution(_) => None,
         }
     }
     pub(super) fn is_batch(&self) -> bool {
         matches!(self, Self::Batch(_))
     }
     pub(super) fn revalidate(&self, root: &Path, state: &RewriteState) -> Result<Self> {
-        if self.is_batch() {
-            Self::batch_current(root, state)
-        } else {
-            Self::current(root, state)
+        match self {
+            Self::Attribution(_) => Ok(Self::Attribution(super::attribution::Identity::current(
+                state,
+            )?)),
+            Self::Batch(_) => Self::batch_current(root, state),
+            Self::ApiIssue(_) => Self::current(root, state),
         }
     }
     pub(super) fn batch_current(root: &Path, state: &RewriteState) -> Result<Self> {
