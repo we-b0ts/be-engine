@@ -80,6 +80,11 @@ is unclear.
   preceding write/read proofs, including recognized textual times; recognition
   alone still permits comparison without generating delivery translations.
 
+- `replay/mysql/session_setup` recognizes narrow successful nonsemantic driver
+  observations. Native registration and Source transaction/read-span proof use
+  that same boundary; business SQL, AUTOCOMMIT, errors and status-changing or
+  unknown session effects retain their existing finite contracts.
+
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
   `preparation` proves immutable identity, clocks and subscription slots;

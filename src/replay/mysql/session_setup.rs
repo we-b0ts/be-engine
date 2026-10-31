@@ -1,6 +1,30 @@
 //! Narrow recognition of driver-owned session initialization, never business SQL.
 use crate::mysql::sql::{Token, tokens};
 
+/// Retained driver observations keep their native builtin owner. They neither
+/// create finite SQL obligations nor invalidate later proven transactions.
+pub(in crate::replay) fn is_nonsemantic_session_setup(
+    record: &super::RecordedMysqlExchange,
+) -> bool {
+    record
+        .capture
+        .as_ref()
+        .is_some_and(|capture| !capture.semantic_required)
+        && !record.lifecycle_cleanup
+        && record
+            .sql
+            .as_deref()
+            .is_some_and(is_mysql_session_setup_sql)
+        && super::optional_session::successful_control(record)
+        && record.response.server_status.is_some_and(|after| {
+            record
+                .server_status_before
+                .map_or(record.query_sequence == Some(1), |before| {
+                    before & 0x200b == after & 0x200b
+                })
+        })
+}
+
 pub(super) fn is_mysql_session_setup_sql(sql: &str) -> bool {
     let Some(tokens) = tokens(sql) else {
         return false;
@@ -160,6 +184,35 @@ fn supported_modes(value: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_setup_observations_require_native_success_and_no_transaction_effect() {
+        let mut capture = crate::dependency::observation::fixture_capture("case");
+        capture.semantic_required = false;
+        let value = serde_json::json!({
+            "capture":capture, "command":"COM_QUERY", "sql":"SET NAMES utf8mb4",
+            "query_sequence":1, "server_status_before":null,
+            "response":{"status":"ok", "server_status":2, "affected_rows":0,
+                        "last_insert_id":0}
+        });
+        let parse =
+            |value| serde_json::from_value::<super::super::RecordedMysqlExchange>(value).unwrap();
+        assert!(is_nonsemantic_session_setup(&parse(value.clone())));
+        for (pointer, replacement) in [
+            ("/capture/semantic_required", serde_json::json!(true)),
+            ("/capture", serde_json::Value::Null),
+            ("/sql", serde_json::json!("SET AUTOCOMMIT = 0")),
+            ("/sql", serde_json::json!("SET @business = 1")),
+            ("/response/status", serde_json::json!("error")),
+            ("/response/affected_rows", serde_json::json!(1)),
+            ("/server_status_before", serde_json::json!(1)),
+            ("/query_sequence", serde_json::json!(2)),
+        ] {
+            let mut changed = value.clone();
+            *changed.pointer_mut(pointer).unwrap() = replacement;
+            assert!(!is_nonsemantic_session_setup(&parse(changed)), "{pointer}");
+        }
+    }
 
     #[test]
     fn accepts_default_sqlx_and_pymysql_initialization() {

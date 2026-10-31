@@ -86,6 +86,8 @@ pub(in crate::replay) struct RecordedMysqlConnection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedMysqlExchange {
+    #[serde(default)]
+    pub(in crate::replay) capture: Option<crate::dependency::observation::CaptureMetadata>,
     #[serde(skip)]
     pub(in crate::replay) lifecycle_cleanup: bool,
     #[serde(default)]

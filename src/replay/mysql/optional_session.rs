@@ -49,6 +49,9 @@ pub(in crate::replay) fn classify(
         let DependencyRecord::MysqlExchange(exchange) = record else {
             continue;
         };
+        if super::is_nonsemantic_session_setup(exchange) {
+            continue;
+        }
         let Some(connection) = exchange.connection_id else {
             continue;
         };
