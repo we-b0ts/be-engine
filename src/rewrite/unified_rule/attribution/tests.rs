@@ -286,8 +286,20 @@ async fn historical_policy_header_does_not_rebind_a_new_owner_to_the_old_source(
             .native
             .iter()
             .all(|rule| matches!(&rule.rule.effect,
-        NativeEffect::ProcessOwned(effect) if effect.source_revision == REVISION))
+        NativeEffect::ProcessOwned(effect) if effect.source_revision.is_empty()))
     );
+    assert!(
+        plan.traffic_e2e_report["preflight"]["source_validations"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let state = RewriteStore::new(target.path())
+        .unwrap()
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(Identity::current(&state).unwrap().source_revision, REVISION);
 }
 
 #[tokio::test]

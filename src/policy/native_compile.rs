@@ -37,6 +37,9 @@ pub enum NativeDomain {
 }
 
 pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
+    let mut normalized = rule.clone();
+    source::normalize_process_owner(&mut normalized);
+    let rule = &normalized;
     identifier(&rule.id, "rule id")?;
     if let Some(proof) = &rule.proof {
         proof.validate(matches!(rule.effect, NativeEffect::CaptureHttp(_)))?;
@@ -108,7 +111,8 @@ pub(crate) fn semantic_rule(rule: &NativeRule) -> Result<serde_json::Value> {
             _ => (),
         }
     }
-    let rule = rule.clone();
+    let mut rule = rule.clone();
+    source::normalize_process_owner(&mut rule);
     let mut value = serde_json::to_value(rule)?;
     strip_proofs(&mut value);
     Ok(value)

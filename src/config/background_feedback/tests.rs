@@ -158,6 +158,8 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(!plan.report().applied);
     assert_eq!(plan.report().authority, "config.internal");
     assert_eq!(plan.report().method, "GET");
+    assert_eq!(plan.report().source_revision, REVISION);
+    assert_eq!(plan.report().source_evidence, EVIDENCE);
     assert_eq!(plan.report().matched_unused_exchanges, 2);
     assert_eq!(plan.report().matched_case_ids, ["case-a", "case-b"]);
     let applied = plan.apply().unwrap();
@@ -168,12 +170,19 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(raw.contains("kind: process_owned"));
     assert!(raw.contains("protocol: http"));
     assert!(!raw.contains("response_role"));
-    assert!(raw.contains("source_revision:"));
+    assert!(!raw.contains("source_revision:"));
     assert!(!raw.contains(EVIDENCE));
     assert!(!raw.contains("proof:"));
+    assert_eq!(applied.source_revision, REVISION);
     assert_eq!(applied.source_evidence, EVIDENCE);
     let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 1);
+    assert!(
+        matches!(&config.process_owned_dependencies[0], BackgroundDependencyRuleConfig::Http {
+        authorities, methods, path_prefixes, source_revision, ..
+    } if authorities == &["config.internal"] && methods == &["GET"]
+        && path_prefixes == &["/refresh"] && source_revision.is_empty())
+    );
 
     let repeated = plan_background_dependency(fixture.feedback()).unwrap();
     assert!(!repeated.report().changed);

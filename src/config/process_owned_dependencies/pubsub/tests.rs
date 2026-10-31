@@ -131,7 +131,8 @@ fn pubsub_task_rule_roundtrips_and_rejects_missing_database_or_implicit_pattern(
     );
     let rendered =
         crate::policy::render_policy(&crate::policy::parse_policy(&raw).unwrap()).unwrap();
-    assert!(rendered.contains("redis_pubsub"));
+    assert!(!rendered.contains("redis_pubsub"));
+    assert!(rendered.contains("operation: SUBSCRIBE"));
     assert_eq!(
         crate::policy::parse_and_compile_policy(&rendered)
             .unwrap()
@@ -146,6 +147,26 @@ fn pubsub_task_rule_roundtrips_and_rejects_missing_database_or_implicit_pattern(
     ] {
         assert!(crate::policy::parse_and_compile_policy(&invalid).is_err());
     }
+}
+
+#[test]
+fn shard_subscription_command_preserves_its_actual_confirmation_and_native_input() {
+    let mut selected = selector();
+    selected.kind = RedisPubsubKind::Smessage;
+    let mut push = event();
+    push["response"] = body(&crate::redis::encode_array(&[
+        b"smessage",
+        b"socketio",
+        b"input",
+    ]));
+    let mut subscription = json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,
+        "target_host":"cache.test","target_port":6379,"database":0,"username":null,"command":"SSUBSCRIBE",
+        "args":[body(b"socketio")],"response":body(b"*3\r\n$10\r\nssubscribe\r\n$8\r\nsocketio\r\n:1\r\n"),
+        "outcome":"response","replay_safe":true});
+    assert!(matches_value(&selected, &push));
+    validate_subscription(&selected, &push, &subscription).unwrap();
+    subscription["command"] = "SUBSCRIBE".into();
+    assert!(validate_subscription(&selected, &push, &subscription).is_err());
 }
 
 #[test]

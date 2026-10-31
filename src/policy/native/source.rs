@@ -60,6 +60,7 @@ pub enum CaptureResponseContract {
 pub struct ProcessOwnedEffect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_name: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_revision: String,
     pub selector: ProcessSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]

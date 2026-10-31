@@ -146,6 +146,11 @@ is unclear.
   Target PING packets, separately from business completion barriers. Explicit
   peer Close observations retain pending business identities without inventing
   completion or accepting unobserved transport truncation.
+  `interaction/websocket_transport` owns bounded raw-frame boundary and real
+  peer FIN/RST observations without retaining payloads. Its continuous read tap
+  preserves read-ahead and unfinished fragmentation, independently of decoded
+  message observation and application completion. Typed client transport-end
+  inputs retain their original clocks and unfinished business identities.
   `gateway/http/interaction` owns primary transport forwarding, session admission,
   recording and close orchestration. Its `ordinary` child forwards finite HTTP
   frames independently of case-owned capture, drain and publication.
@@ -212,9 +217,12 @@ is unclear.
   responses and automatic WS close echoes cannot prove completion. Native
   statuses require complete JSON-string and SID matches. Transport failures
   remain visible to `finish` even when the primary close was already observed;
-  Its `disconnect` child retains lost-client failures through native application
-  disconnect confirmation; it never creates a client CLOSE input or clean
-  transcript. `failure` classifies transport errors without formatting private
+  Its `disconnect` child forwards a proven complete-boundary TCP FIN/RST as a
+  typed terminal input and retains exact native application confirmation. Raw
+  frame truncation retains failed evidence through the existing recovery path;
+  no path synthesizes a client CLOSE input. Its `upstream` child retains Hyper
+  preread bytes and the actual upgraded TCP control through HTTP/TLS adapters.
+  `failure` classifies transport errors without formatting private
   frames or I/O context. `interaction/recovery` permits Source reuse only after
   this protocol proof, complete dependency/writer drain and failure publication;
   `active_case/recovery` owns the shared closed-attribution check. Protocol errors,
@@ -835,6 +843,10 @@ is unclear.
   until supported owner rules resolve it. Known-owned batch changes need no
   analyst; `investigations/resolution` publishes the existing API implementer's
   current-attempt diagnosis of its owned missing traffic.
+  `decisions` stores immutable, shared proof templates with complete finite UUID
+  membership and ordered history; `decisions/serde` reads legacy occurrence
+  maps/arrays and publishes compact groups. Status validates proof groups without
+  expanding per-occurrence DTOs; the Replay overlay owns that explicit projection.
   `rewrite/unified_rule/attribution` admits Source-only ownership/lifecycle plans
   before Replay, without inventing a Target attempt. Its execution identity and
   preflight stay distinct from actual API and batch witnesses; value/sharing

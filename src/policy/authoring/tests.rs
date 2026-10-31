@@ -346,13 +346,17 @@ fn standalone_rule_proposals_inherit_proof_and_get_revision_context_before_compa
 }
 
 #[test]
-fn an_explicit_named_owner_keeps_its_source_revision_and_rejects_a_conflicting_local_proof() {
+fn independent_task_revision_belongs_to_evidence_and_not_its_runtime_selector() {
     let old = format!("sha256:{}", "a".repeat(64));
     let current = format!("sha256:{}", "b".repeat(64));
     let raw = format!(
         "format: traffic-policy/v3\nsource_revision: {old}\nrules:\n  - id: owner\n    match: {{}}\n    effect:\n      kind: process_owned\n      source_revision: {current}\n      task_name: receive_loop\n      selector: {{protocol: http, authorities: [worker.test], methods: [GET], path_prefixes: [/refresh]}}\n    proof: {{source: 'subscriber.py:run @ {current}', fact: 'This current Source loop receives the task inputs'}}\n"
     );
     let policy = parse_policy(&raw).unwrap();
+    assert!(
+        matches!(&policy.rules[0].as_native().unwrap().effect, NativeEffect::ProcessOwned(effect) if effect.source_revision.is_empty())
+    );
+    assert!(policy.rules[0].proof().unwrap().source.ends_with(&current));
     let before = compile_policy(&policy).unwrap();
     let rendered = render_policy(&policy).unwrap();
     let after = parse_policy(&rendered).unwrap();
@@ -361,11 +365,13 @@ fn an_explicit_named_owner_keeps_its_source_revision_and_rejects_a_conflicting_l
         compile_policy(&after).unwrap().fingerprints,
         before.fingerprints
     );
-    assert!(
-        parse_policy(&raw.replace(
-            &format!("subscriber.py:run @ {current}"),
-            &format!("subscriber.py:run @ {old}")
-        ))
-        .is_err()
+    let different_evidence = parse_policy(&raw.replace(
+        &format!("subscriber.py:run @ {current}"),
+        &format!("subscriber.py:run @ {old}"),
+    ))
+    .unwrap();
+    assert_eq!(
+        compile_policy(&different_evidence).unwrap().fingerprints,
+        before.fingerprints
     );
 }

@@ -33,6 +33,7 @@ pub enum BackgroundDependencyRuleConfig {
     RedisPubsub {
         name: String,
         selector: crate::policy::native::RedisPubsubSelector,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         source_revision: String,
         source_evidence: String,
     },
@@ -47,6 +48,7 @@ pub enum BackgroundDependencyRuleConfig {
         identity_value_index: Option<usize>,
         name: String,
         selector: MysqlBackgroundSelector,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         source_revision: String,
         source_evidence: String,
     },
@@ -170,7 +172,9 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 ..
             } => {
                 pubsub::validate(selector)?;
-                validate_source_revision(source_revision)?;
+                if !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
+                }
                 validate_optional_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Mysql {
@@ -185,7 +189,9 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                     selector.validate()?;
                 }
                 super::api_trigger::mysql::validate(rule)?;
-                validate_source_revision(source_revision)?;
+                if rule.trigger_source().is_some() || !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
+                }
                 validate_optional_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Http {

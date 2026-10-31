@@ -77,33 +77,38 @@ engine does not infer redaction or put message payloads in diagnostic reports.
 
 A real Source subscriber receive task can own its received inputs without
 claiming to identify the external publisher. Declare its complete input scope
-with a distinct `redis_pubsub` process request:
+with its real Redis subscription command and exact arguments:
 
 ```yaml
-source_revision: sha256:<immutable-source-revision>
 process_dependencies:
   tasks:
     redis_notification_reader:
       requests:
-        - redis_pubsub:
+        - redis:
             resource:
               protocol: redis
               endpoint: cache.example:6379
               database: 0
-            channel: socketio
-            kind: message
+            operation: SUBSCRIBE
+            arguments: [socketio]
 ```
 
 The actual Source task name, entrypoint and exclusive selector ownership need
 independent Source proof. Resource host/port, logical database, username and
-channel are exact; omitted username selects anonymous authentication. `kind`
-accepts `message`, `pmessage` or `smessage`. A `pmessage` selector also requires
-its exact `pattern`; other kinds reject that field. The rule does not select
+channel are exact; omitted username selects anonymous authentication. `SUBSCRIBE`
+and `SSUBSCRIBE` currently require one exact argument. Pattern subscription
+commands remain unsupported in this compact declaration because their proven
+delivery scope cannot be inferred as a concrete channel. Legacy declarations
+remain readable without discarding their narrower channel constraints. The rule does not select
 outgoing `PUBLISH`, `SUBSCRIBE`, ordinary Redis commands or correlated RPC replies.
+The declared command anchors the receive stream; its original Startup or Case
+ownership remains unchanged. It does not move the handshake into the task.
 Source validation authenticates complete native frames and the original
 successful subscription confirmation, including its connection/sequence,
 realm, kind and subject. Partial task-selector groups and overlapping owners
 cannot acquire attribution.
+Task selectors do not carry Source versions. Independently reviewed proof still
+binds the concrete immutable Source inventory and is revalidated before use.
 
 Completed old central recordings can apply this rule and independent attribution
 overlay without re-recording. The original physical records remain immutable.

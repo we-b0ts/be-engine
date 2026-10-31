@@ -117,18 +117,31 @@ fn plans_exact_breeze_identity_without_persisting_dynamic_port() {
     assert_eq!(plan.report().resolved_port, 9448);
     assert_eq!(plan.report().initial_load_timeout_ms, 30_000);
     assert!(!plan.report().breeze_identity.contains(":9448"));
-    plan.apply().unwrap();
+    assert_eq!(plan.report().source_revision, REVISION);
+    assert_eq!(plan.report().source_evidence, EVIDENCE);
+    let identity = plan.report().breeze_identity.clone();
+    let applied = plan.apply().unwrap();
+    assert_eq!(applied.source_revision, REVISION);
+    assert_eq!(applied.source_evidence, EVIDENCE);
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
     assert!(raw.contains("protocol: memcached"));
     assert!(!raw.contains("response_role"));
-    assert!(raw.contains("source_revision:"));
+    assert!(!raw.contains("source_revision:"));
     assert!(raw.contains("key_start: 0"));
     assert!(raw.contains("key_end: 4095"));
     assert!(raw.contains("initial_load_timeout_ms: 30000"));
     assert!(!raw.contains("mc:9448"));
     let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert_eq!(config.process_owned_dependencies.len(), 1);
+    assert!(
+        matches!(&config.process_owned_dependencies[0], BackgroundDependencyRuleConfig::Memcached {
+        breeze_identity, command, key_start, key_end, key_separator, key_suffix,
+        initial_load_timeout_ms, source_revision, ..
+    } if breeze_identity == &identity && command == "get" && *key_start == 0
+        && *key_end == 4095 && key_separator == "." && key_suffix == "pl_video"
+        && *initial_load_timeout_ms == 30_000 && source_revision.is_empty())
+    );
 }
 
 #[test]

@@ -3,6 +3,15 @@ use anyhow::{Result, ensure};
 
 use super::*;
 
+pub(super) fn normalize_process_owner(rule: &mut NativeRule) {
+    if let NativeEffect::ProcessOwned(effect) = &mut rule.effect
+        && effect.task_name.is_some()
+        && effect.origin.is_none()
+    {
+        effect.source_revision.clear();
+    }
+}
+
 pub(super) fn validate(rule: &NativeRule) -> Result<()> {
     match &rule.effect {
         NativeEffect::CaptureHttp(effect) => {
