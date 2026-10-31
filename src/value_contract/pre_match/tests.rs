@@ -2,6 +2,7 @@ use super::*;
 
 fn plan() -> CompiledJsonPolicy {
     CompiledJsonPolicy {
+        time: Default::default(),
         signatures: Default::default(),
         fields: Default::default(),
         fingerprint: String::new(),
@@ -55,5 +56,41 @@ fn structural_changes_business_scalars_unknown_bytes_and_declared_failures_stay_
             Default::default()
         )
         .is_none()
+    );
+}
+
+#[test]
+fn builtin_dates_never_become_provisional_rule_hints_even_when_another_field_needs_one() {
+    let source =
+        br#"{"id":"123e4567-e89b-42d3-a456-426614174000","at":"2020-01-01T00:00:00.123Z"}"#;
+    let target =
+        br#"{"id":"123e4567-e89b-42d3-a456-426614174001","at":"2021-01-01T00:00:00.123Z"}"#;
+    let clocks = AnchorClocks::for_request(
+        Default::default(),
+        crate::value_contract::time::ClockPair {
+            source: Some("2020-01-01T00:00:00Z".parse().unwrap()),
+            target: Some("2021-01-01T00:00:00Z".parse().unwrap()),
+        },
+        Default::default(),
+    );
+    let plan = plan();
+    let preview = super::super::hypothesis::preview_json("case", source, target, &plan, clocks);
+    let comparison = preview.comparison.unwrap();
+    assert_eq!(comparison.pre_matches.len(), 1);
+    assert!(
+        preview
+            .attempts
+            .iter()
+            .all(|attempt| attempt.candidate.pointer == "/id")
+    );
+    let invalid =
+        br#"{"id":"123e4567-e89b-42d3-a456-426614174001","at":"2021-01-01T00:00:00.123000Z"}"#;
+    let preview = super::super::hypothesis::preview_json("case", source, invalid, &plan, clocks);
+    assert!(preview.comparison.is_none());
+    assert!(
+        preview
+            .attempts
+            .iter()
+            .all(|attempt| attempt.candidate.pointer == "/id")
     );
 }

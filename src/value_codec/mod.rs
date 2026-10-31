@@ -49,6 +49,10 @@ impl CodecView {
 }
 
 impl DecodedDocument {
+    pub(crate) fn original_bytes(&self) -> &[u8] {
+        &self.original
+    }
+
     pub(crate) fn view(&self) -> ValueView<'_> {
         ValueView::new(self.kind, &self.logical)
     }

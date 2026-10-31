@@ -8,7 +8,7 @@ fn rule(format: &str, pointer: &str, mode: &str) -> String {
 }
 
 #[test]
-fn relative_timestamp_accepts_expiry_offsets_formats_and_timezone_equivalence() {
+fn relative_timestamp_accepts_expiry_offsets_formats_and_preserves_timezone_representation() {
     for (format, source, target) in [
         (
             "rfc3339",
@@ -18,7 +18,7 @@ fn relative_timestamp_accepts_expiry_offsets_formats_and_timezone_equivalence() 
         (
             "rfc3339",
             json!("2023-11-15T07:13:20+08:00"),
-            json!("2023-11-14T23:14:20Z"),
+            json!("2023-11-15T07:14:20+08:00"),
         ),
         (
             "rfc3339",
@@ -64,7 +64,11 @@ fn relative_timestamp_preserves_ttl_and_uses_inclusive_five_second_tolerance() {
         if !valid {
             assert_eq!(
                 report.differences[0].kind,
-                ResponseDifferenceKind::DurationDeltaMismatch
+                if target.contains('.') {
+                    ResponseDifferenceKind::TimeFieldInvalid
+                } else {
+                    ResponseDifferenceKind::DurationDeltaMismatch
+                }
             );
         }
     }
@@ -143,7 +147,7 @@ fn relative_timestamp_rejects_invalid_types_missing_fields_and_other_field_chang
 }
 
 #[test]
-fn relative_timestamp_requires_both_captured_request_clocks() {
+fn relative_timestamp_requires_both_captured_response_clocks() {
     for source_missing in [true, false] {
         let (_temp, options) = write_raw_case(
             &rule("rfc3339", "/expires_at", "preserve_relative"),
@@ -151,9 +155,9 @@ fn relative_timestamp_requires_both_captured_request_clocks() {
             r#"{"expires_at":"2023-11-14T23:14:20Z"}"#,
         );
         let (path, key) = if source_missing {
-            (&options.request, "timestamp")
+            (&options.expected_response, "timestamp")
         } else {
-            (&options.actual_response, "request_sent_at")
+            (&options.actual_response, "response_completed_at")
         };
         let mut document: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         document.as_object_mut().unwrap().remove(key);

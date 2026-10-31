@@ -78,7 +78,18 @@ pub(in crate::replay::mysql::contracts) fn translate_selection(
             .to_string()
             .into();
     }
-    for (pointer, contract) in &selected.fields {
+    let authored;
+    let fields = if selected.id == crate::policy::GLOBAL_JSON_ID {
+        authored = owner
+            .global_json()
+            .map(|plan| plan.delivery_fields_with_clocks(&selected.source, clocks))
+            .transpose()?
+            .unwrap_or_default();
+        &authored
+    } else {
+        &selected.fields
+    };
+    for (pointer, contract) in fields {
         if let Some(time) = contract.time() {
             let original = selected
                 .source
@@ -171,9 +182,18 @@ fn fresh_native_time(
         return false;
     };
     if time.format == crate::policy::TimestampFormat::CalendarDate {
-        return value.as_str().is_some_and(|value| {
-            chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
-                .is_ok_and(|date| date == source.date_naive())
+        return time.offset().ok().flatten().is_some_and(|offset| {
+            crate::value_contract::time::calendar::compare(
+                value,
+                value,
+                offset,
+                crate::value_contract::time::TimeMode::RequestWindow,
+                crate::value_contract::time::ClockPair {
+                    source: Some(source),
+                    target: Some(source),
+                },
+            )
+            .is_ok()
         });
     }
     crate::value_contract::json::parse_time_pair(value, value, time).is_ok_and(|(value, _)| {

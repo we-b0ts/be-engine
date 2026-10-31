@@ -6,7 +6,8 @@ use crate::request_rules::jwt::{Algorithm, Token, contract};
 use crate::value_contract::identities::IdentityPair;
 use crate::value_contract::json::{LeafContext, LeafObservations};
 
-const TIME_TOLERANCE_NANOS: i128 = 5_000_000_000;
+const TIME_TOLERANCE_NANOS: i128 =
+    crate::value_contract::time::DEFAULT_TOLERANCE.as_nanos() as i128;
 
 pub(super) fn compare(
     context: LeafContext<'_>,
@@ -60,9 +61,9 @@ fn compare_authenticated(
 
     let anchors = context
         .clocks
-        .dependency
+        .observation()
         .source
-        .zip(context.clocks.dependency.target)
+        .zip(context.clocks.observation().target)
         .map(|(source, target)| [source, target].map(crate::value_contract::time::date_nanos));
     let mut source = source.claims;
     let mut target = target.claims;

@@ -121,7 +121,7 @@ fn array_rules_support_root_scalars_and_keep_explicit_indexes() {
 }
 
 #[test]
-fn time_array_rules_fail_on_one_invalid_element_or_missing_request_time() {
+fn time_array_rules_fail_on_one_invalid_element_or_missing_response_time() {
     for (kind, source, target, failure) in [
         (
             "timestamp",
@@ -165,7 +165,10 @@ fn time_array_rules_fail_on_one_invalid_element_or_missing_request_time() {
         );
         let mut actual: serde_json::Value =
             serde_json::from_slice(&fs::read(&options.actual_response).unwrap()).unwrap();
-        actual.as_object_mut().unwrap().remove("request_sent_at");
+        actual
+            .as_object_mut()
+            .unwrap()
+            .remove("response_completed_at");
         fs::write(
             &options.actual_response,
             serde_json::to_vec(&actual).unwrap(),

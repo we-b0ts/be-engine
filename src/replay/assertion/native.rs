@@ -4,7 +4,10 @@ mod header_jwt;
 #[cfg(test)]
 mod tests;
 pub(crate) use body::{compare_body, compare_header};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -321,6 +324,16 @@ impl NativeResponseContext {
         )
     }
 
+    pub(crate) fn compare_encoded_source_coverage(
+        &self,
+        source: &[u8],
+        rules: &[&CompiledRule],
+        global: Option<&crate::policy::CompiledJsonPolicy>,
+        clocks: AnchorClocks,
+    ) -> Result<Comparison> {
+        self.compare_encoded_global(source, source, rules, global, clocks)
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.generated.is_empty()
             && self.jwt.is_empty()
@@ -403,7 +416,7 @@ impl NativeResponseContext {
     ) -> Result<Comparison> {
         self.ensure_current()?;
         let global_fields = global
-            .map(|plan| plan.comparison_fields(source, target, clocks))
+            .map(|plan| plan.selected_fields_with_clocks(source, clocks))
             .transpose()?
             .unwrap_or_default();
         let mut fields = rules
@@ -424,13 +437,35 @@ impl NativeResponseContext {
             pointer,
             contract,
         }));
-        for (pointer, contract) in &global_fields {
+        let native_owned = fields
+            .iter()
+            .map(|field| field.pointer)
+            .chain(self.generated.iter().map(|field| field.pointer.as_str()))
+            .chain(self.jwt.iter().flat_map(|field| {
+                std::iter::once(field.rule.pointer.as_str())
+                    .chain(field.rule.companion_pointers())
+                    .chain(field.rule.ttl.iter().map(String::as_str))
+            }))
+            .chain(self.joined.iter().map(|(_, pointer, _)| pointer.as_str()))
+            .map(|pattern| crate::value_contract::delivery::select(pattern, source))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        for selected in &global_fields {
+            let pointer = &selected.pointer;
+            let contract = &selected.contract;
+            if selected.rule_id == crate::value_contract::time::automatic::RULE_ID
+                && native_owned.contains(pointer)
+            {
+                continue;
+            }
             if !fields
                 .iter()
                 .any(|field| field.pointer == pointer && field.contract == contract)
             {
                 fields.push(Field {
-                    rule_id: crate::policy::GLOBAL_JSON_ID,
+                    rule_id: selected.rule_id,
                     pointer,
                     contract,
                 });
@@ -576,11 +611,6 @@ impl NativeResponseContext {
         }
         let mut result =
             json::compare_with_verified(source, target, &fields, &generated, &verified, clocks);
-        if !global_fields.is_empty() {
-            result
-                .evaluated
-                .insert(crate::policy::GLOBAL_JSON_ID.into());
-        }
         result.evaluated.extend(self.codec_ids.iter().cloned());
         Ok(result)
     }

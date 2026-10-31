@@ -22,12 +22,12 @@ pub(super) fn compare_with_rules(
     actual_request: Option<&HeaderMapSnapshot>,
     rules: &crate::replay::policy::response_headers::ResponseHeaderRules,
     global: Option<&crate::policy::HttpPolicy>,
-    times: super::time::RequestTimes,
+    clocks: crate::value_contract::json::AnchorClocks,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
     compare_standard_headers(expected, actual, expected_request, actual_request, report)?;
     if let Some(global) = global {
-        self::global::compare(expected, actual, global, times, report)?;
+        self::global::compare(expected, actual, global, clocks, report)?;
     }
     let matching = rules
         .iter()
@@ -51,7 +51,8 @@ pub(super) fn compare_with_rules(
                     .iter()
                     .chain(target)
                     .any(|value| value == "<redacted>")
-                    && date::compare(source, target, &selected, times).unwrap_or(false)
+                    && date::compare(source, target, &selected, clocks.observation())
+                        .unwrap_or(false)
             });
             if valid {
                 report

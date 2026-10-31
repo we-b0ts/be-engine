@@ -113,7 +113,7 @@ fn time_rules_parse_milliseconds_rfc3339_and_numeric_strings() {
                 format: ResponseTimestampFormat::Rfc3339,
             },
             json!("2023-11-15T06:13:20+08:00"),
-            json!("2023-11-14T22:14:20Z"),
+            json!("2023-11-15T06:14:20+08:00"),
         ),
         (
             ResponseTimeRule::Duration {

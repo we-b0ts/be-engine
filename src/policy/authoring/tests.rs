@@ -154,7 +154,7 @@ fn local_inheritance_expands_every_contract_and_partial_override_without_crossin
     );
     assert_eq!(
         fields["/updatedAt"].contract.anchor,
-        TimeAnchor::DependencyRequestStart
+        TimeAnchor::Observation
     );
     assert_eq!(
         fields["/updatedAt"].contract.relation,
@@ -187,7 +187,16 @@ fn compact_and_fully_explicit_documents_have_identical_effects_proofs_and_identi
     let rendered = render_policy(&compact).unwrap();
     assert!(rendered.contains("relative_time: sql_datetime"));
     assert!(!rendered.contains("preserve_offset"));
-    assert!(!rendered.contains("utc_offset"));
+    let mut rendered_document: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    rendered_document
+        .as_mapping_mut()
+        .unwrap()
+        .remove(serde_yaml::Value::String("time".into()));
+    assert!(
+        !serde_yaml::to_string(&rendered_document)
+            .unwrap()
+            .contains("utc_offset")
+    );
     assert!(!rendered.contains(" @ source-v1"));
     assert_eq!(rendered.matches("source_revision:").count(), 1);
     assert!(!rendered.contains("proof:"));

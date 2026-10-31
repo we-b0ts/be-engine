@@ -277,6 +277,7 @@ pub struct MemcachedExchangeEvent {
     pub connection_id: Uuid,
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
+    pub request_started_at: DateTime<Utc>,
     pub client_addr: Option<String>,
     pub target_host: String,
     pub target_port: u16,
@@ -525,6 +526,7 @@ pub struct MysqlExchangeEvent {
     pub connection_id: Uuid,
     pub query_sequence: u64,
     pub timestamp: DateTime<Utc>,
+    pub request_started_at: DateTime<Utc>,
     pub client_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub route_name: Option<String>,

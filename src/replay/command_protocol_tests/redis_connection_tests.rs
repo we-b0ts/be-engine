@@ -576,8 +576,12 @@ async fn script_commands_in_transaction_lanes_remain_connection_bound() {
         assert_reply(&mut owner, &[command, script, "1", "key"], b"+QUEUED\r\n").await;
         assert_unmatched(&mut other, &["EXEC"]).await;
         assert_reply(&mut owner, &["EXEC"], b"*1\r\n:1\r\n").await;
-        let report = wait_for_unmatched_count(&report_path, "redis", 3).await;
+        wait_for_unmatched_count(&report_path, "redis", 3).await;
+        // Reading EXEC's wire reply can precede its report publication. The
+        // third rejection alone does not prove the final delivery was recorded.
+        let report = wait_for_matched_count(&report_path, "redis", 4).await;
         assert_eq!(report["redis"]["matched_count"], 4);
+        assert_eq!(report["redis"]["unmatched"].as_array().unwrap().len(), 3);
         for mismatch in report["redis"]["unmatched"].as_array().unwrap() {
             assert_eq!(
                 mismatch["diagnostic"]["fields"],

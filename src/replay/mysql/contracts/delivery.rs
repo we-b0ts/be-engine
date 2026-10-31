@@ -90,8 +90,7 @@ pub(super) fn materialize_response(
                 }
             }
             if logical != selected.source {
-                *value =
-                    automatic::write_value(value, logical, selected.id == automatic::MYSQL_ID)?;
+                *value = automatic::write_value(value, logical, selected.native_scalar)?;
             }
         }
     }

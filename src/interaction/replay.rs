@@ -19,6 +19,7 @@ type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
 pub(crate) struct ReplayResponse {
     pub(crate) started_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) completed_at: chrono::DateTime<chrono::Utc>,
     pub(crate) status: StatusCode,
     pub(crate) headers: HeaderMapSnapshot,
     pub(crate) body: Bytes,

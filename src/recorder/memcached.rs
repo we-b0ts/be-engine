@@ -50,6 +50,7 @@ struct PendingMemcachedExchange {
     replay_safe: bool,
     warnings: Vec<String>,
     started: Instant,
+    request_started_at: chrono::DateTime<chrono::Utc>,
     termination: Option<ObservedTermination>,
 }
 
@@ -274,6 +275,7 @@ async fn proxy_text(
                 replay_safe,
                 warnings,
                 started: Instant::now(),
+                request_started_at: chrono::Utc::now(),
                 termination: None,
             };
             if no_response {
@@ -713,6 +715,7 @@ async fn proxy_binary(
                     replay_safe: !sasl && !unknown,
                     warnings,
                     started: Instant::now(),
+                    request_started_at: chrono::Utc::now(),
                     termination: None,
                 });
             upstream_write.write_all(&frame.raw).await?;

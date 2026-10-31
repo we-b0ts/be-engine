@@ -36,6 +36,56 @@ json:
     .unwrap()
 }
 
+#[test]
+fn automatic_redis_text_preflight_keeps_builtin_coverage_separate_and_checks_request_clocks() {
+    let policy = crate::policy::parse_and_compile_policy("format: traffic-policy/v3\n").unwrap();
+    let event = json!({"event_type":"redis_exchange","command":"SET",
+        "target_host":"cache.test","target_port":6379,"database":0});
+    let source = args(&["key", "2026-10-16T00:00:30Z"]);
+    let clocks = AnchorClocks::for_request(
+        ClockPair {
+            source: Some("2026-10-16T00:00:00Z".parse().unwrap()),
+            target: Some("2026-10-16T00:01:00Z".parse().unwrap()),
+        },
+        ClockPair {
+            source: Some("2026-10-16T00:00:30Z".parse().unwrap()),
+            target: Some("2026-10-16T00:02:30Z".parse().unwrap()),
+        },
+        Default::default(),
+    );
+    let coverage = compare(
+        &event,
+        Surface::DependencyRequest,
+        &source,
+        &source,
+        &policy,
+        clocks,
+    )
+    .unwrap();
+    assert!(coverage.passed(), "{:?}", coverage.differences);
+    assert!(
+        coverage
+            .evaluated
+            .contains(crate::value_contract::time::automatic::RULE_ID)
+    );
+    assert!(!coverage.evaluated.contains(GLOBAL_JSON_ID));
+    for target in ["2026-10-16T00:02:30Z", "2026-10-16T00:01:30Z"] {
+        let checked = compare(
+            &event,
+            Surface::DependencyRequest,
+            &source,
+            &args(&["key", target]),
+            &policy,
+            clocks,
+        );
+        if target.ends_with("02:30Z") {
+            assert!(checked.unwrap().passed());
+        } else {
+            assert!(checked.is_err() || !checked.unwrap().passed());
+        }
+    }
+}
+
 fn redis(command: &str) -> Value {
     json!({"event_type":"redis_exchange","command":command})
 }

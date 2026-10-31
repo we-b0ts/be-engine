@@ -73,7 +73,7 @@ async fn redis_rfc3339_time_rule_replays_finitely_and_rejects_changed_offsets() 
     ] {
         let timestamp = (Utc::now() + chrono::Duration::seconds(seconds))
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
-            .to_rfc3339();
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
         let actual = json!({"last_activity_at":timestamp,"status":status}).to_string();
         redis_value_tests::request(
             &mut client,

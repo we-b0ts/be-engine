@@ -33,6 +33,7 @@ fn event(port: u16, command: &str, key: &[u8]) -> RecorderEvent {
         id: Uuid::new_v4(),
         connection_id: Uuid::new_v4(),
         sequence: 1,
+        request_started_at: Utc::now(),
         timestamp: Utc::now(),
         client_addr: None,
         target_host: "breeze.recording".to_string(),

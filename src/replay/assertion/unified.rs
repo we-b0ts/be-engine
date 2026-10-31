@@ -10,16 +10,11 @@ pub(super) fn compare(
     global: Option<&crate::policy::CompiledJsonPolicy>,
     source: &AssertionBody,
     target: &AssertionBody,
-    times: RequestTimes,
+    clocks: AnchorClocks,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
     let global = global.context("global JSON field strategy missing")?;
     let (source_payload, target_payload) = (source.body(), target.body());
-    let clocks = AnchorClocks {
-        case: times,
-        dependency: times,
-        ..Default::default()
-    };
     let comparison = crate::value_contract::global::compare(
         source_payload,
         target_payload,
@@ -94,8 +89,10 @@ pub(super) fn contract_difference(
             reason
                 if reason.contains("DeltaMismatch")
                     || reason.contains("RelationshipMismatch")
+                    || reason.contains("CalendarDayMismatch")
                     || reason == "time difference does not preserve the anchor difference"
-                    || reason == "time parameter relationship changed" =>
+                    || reason == "time parameter relationship changed"
+                    || reason == "calendar date does not preserve its local day relation to the observation clock" =>
             {
                 K::DurationDeltaMismatch
             }
@@ -103,7 +100,8 @@ pub(super) fn contract_difference(
                 if reason.contains("NumericCategoryChanged")
                     || reason.contains("InvalidValue")
                     || reason == "timestamp numeric category changed"
-                    || reason == "invalid time value" =>
+                    || reason == "invalid time value"
+                    || reason == "timestamp representation changed from Source format" =>
             {
                 K::TimeFieldInvalid
             }

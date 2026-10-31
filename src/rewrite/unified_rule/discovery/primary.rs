@@ -93,11 +93,7 @@ pub(super) fn observe(
             &expected["headers"],
             actual.as_ref().map(|actual| &actual["headers"]),
             case["case_id"].as_str().unwrap_or("api-response"),
-            AnchorClocks {
-                case: source_pair.times,
-                dependency: source_pair.times,
-                ..Default::default()
-            },
+            AnchorClocks::for_response(source_pair.request_times, source_pair.times),
         )?;
         if !source_pair.body_available {
             if let Some(next_event) = interaction::observe(
@@ -114,24 +110,10 @@ pub(super) fn observe(
             }
             continue;
         }
+        let clocks = AnchorClocks::for_response(source_pair.request_times, source_pair.times);
         let source = source_pair.source;
-        let target = actual
-            .as_ref()
-            .and_then(|actual| {
-                crate::replay::response_payload_pair(&request, &expected, Some(actual)).ok()
-            })
-            .and_then(|pair| pair.target);
+        let target = source_pair.target;
         let base = json!({"surface":"api.response","match":{"api":state.api},"slot":"body"});
-        let clocks = AnchorClocks {
-            case: crate::value_contract::time::ClockPair {
-                source: request["timestamp"].as_str().and_then(|s| s.parse().ok()),
-                target: actual
-                    .as_ref()
-                    .and_then(|value| value["request_sent_at"].as_str())
-                    .and_then(|s| s.parse().ok()),
-            },
-            ..Default::default()
-        };
         drafts.observe(
             &source,
             target.as_deref(),

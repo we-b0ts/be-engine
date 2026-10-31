@@ -116,8 +116,7 @@ pub(in crate::replay) struct MemcachedPolicyContext<'a> {
     pub(in crate::replay) key: Option<&'a [u8]>,
     pub(in crate::replay) recorded_value: Option<&'a [u8]>,
     pub(in crate::replay) actual_value: Option<&'a [u8]>,
-    pub(in crate::replay) recorded_observed_at: DateTime<Utc>,
-    pub(in crate::replay) recorded_duration_ms: u64,
+    pub(in crate::replay) recorded_request_started_at: Option<DateTime<Utc>>,
     pub(in crate::replay) actual_observed_at: DateTime<Utc>,
 }
 

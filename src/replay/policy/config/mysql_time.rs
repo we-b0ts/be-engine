@@ -1,6 +1,7 @@
 //! Compact SQL time configuration; retain the original nested syntax on input.
 use super::{
-    MysqlTimeFieldRule, MysqlTimeValueRule, TimeReference, TimeRule, parse_duration, parse_timezone,
+    MysqlTimeFieldRule, MysqlTimeValueRule, TimeReference, TimeRule, fixed_time_tolerance,
+    parse_duration, parse_timezone,
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -52,13 +53,17 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
 
     fn try_from(config: TimeFieldConfig) -> Result<Self> {
         ensure!(
-            config.anchor == crate::policy::TimeAnchor::DependencyRequestStart,
+            matches!(
+                config.anchor,
+                crate::policy::TimeAnchor::Observation
+                    | crate::policy::TimeAnchor::DependencyRequestStart
+            ),
             "SQL request times require the corresponding dependency request start"
         );
         let mut time = match config.time {
             TimeConfig::Reference(relative_to) => TimeRule {
                 relative_to,
-                tolerance: config.tolerance.unwrap_or_else(|| "5s".into()),
+                tolerance: config.tolerance.unwrap_or_else(fixed_time_tolerance),
                 offset: config.offset.unwrap_or_else(|| "0s".into()),
                 format: Some(config.format.unwrap_or_else(|| FORMAT.into())),
                 timezone: Some(config.timezone.unwrap_or_else(|| TIMEZONE.into())),
@@ -75,8 +80,10 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
             }
         };
         ensure!(
-            parse_duration(&time.tolerance)? == 5_000,
-            "MySQL SQL time tolerance is fixed at 5s"
+            parse_duration(&time.tolerance)?
+                == crate::value_contract::time::DEFAULT_TOLERANCE.as_millis() as i64,
+            "MySQL SQL time tolerance is fixed at {}s",
+            crate::value_contract::time::DEFAULT_TOLERANCE.as_secs()
         );
         // Legacy options remain readable, but a shared timezone and source
         // offset cancel in the source/target difference. No rule sets a clock.
@@ -85,7 +92,7 @@ impl TryFrom<TimeFieldConfig> for MysqlTimeFieldRule {
             parse_timezone(timezone)?;
         }
         time.relative_to = TimeReference::PreserveRelative;
-        time.tolerance = "5s".into();
+        time.tolerance = fixed_time_tolerance();
         time.offset = "0s".into();
         time.timezone = Some(TIMEZONE.into());
         Ok(Self {

@@ -13,7 +13,7 @@ use super::super::response::{
 };
 use super::document::{render_response_rules, replace_response_rules};
 use super::evidence::{AggregateEvidence, AssertionEvidence};
-use crate::replay::assertion::{RequestTimes, diagnose_response_body, read_replay_request_times};
+use crate::replay::assertion::{RequestTimes, diagnose_response_body, read_replay_response_times};
 use crate::replay::{
     ResponseAssertionCaseReport, ResponseBodyJoinedStringCandidate,
     ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind, read_actual_response_body,
@@ -263,7 +263,7 @@ fn load_focused_e2e_evidence(
                 read_actual_response_body(&actual_response, detail.gateway_protocol)?,
             )
         };
-        let times = read_replay_request_times(&request, &actual_response)?;
+        let times = read_replay_response_times(&expected_response, &actual_response)?;
         let policy_mismatch_rule_ids = detail
             .unused_applicable_generated_rule_ids
             .iter()

@@ -138,8 +138,7 @@ fn one_global_time_identity_contract_and_bijection_are_shared_by_redis_mysql_and
             key: Some(b"session"),
             recorded_value: Some(&source),
             actual_value: Some(&value),
-            recorded_observed_at: DateTime::from_timestamp(1000, 0).unwrap(),
-            recorded_duration_ms: 0,
+            recorded_request_started_at: DateTime::from_timestamp(1000, 0),
             actual_observed_at: DateTime::from_timestamp(2000, 0).unwrap(),
         });
         assert_eq!(mc_result.is_ok(), passes, "Memcached: {mc_result:?}");

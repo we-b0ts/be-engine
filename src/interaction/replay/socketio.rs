@@ -386,6 +386,7 @@ pub(super) async fn execute_with_feedback(
     )?;
     Ok(ReplayResponse {
         started_at,
+        completed_at: chrono::Utc::now(),
         status: transport.status,
         headers: transport.headers.clone(),
         body: Bytes::new(),

@@ -119,29 +119,21 @@ pub(super) fn verify(
                 let raw = dependency::source_witness(surface, &event, &directory)?;
                 let source_time = timestamp(&request["timestamp"]);
                 let completed = timestamp(&event["timestamp"]);
-                let started = timestamp(&event["request_started_at"]).or_else(|| {
-                    completed
-                        .zip(event["duration_ms"].as_u64())
-                        .and_then(|(t, n)| {
-                            t.checked_sub_signed(chrono::TimeDelta::milliseconds(
-                                i64::try_from(n).ok()?,
-                            ))
-                        })
-                });
-                let source_clocks = AnchorClocks {
-                    case: crate::value_contract::time::ClockPair {
+                let started = crate::replay::dependency_started_at(&event);
+                let source_clocks = AnchorClocks::for_request(
+                    crate::value_contract::time::ClockPair {
                         source: source_time,
                         target: source_time,
                     },
-                    dependency: crate::value_contract::time::ClockPair {
+                    crate::value_contract::time::ClockPair {
                         source: started,
                         target: started,
                     },
-                    delivery: crate::value_contract::time::ClockPair {
+                    crate::value_contract::time::ClockPair {
                         source: completed,
                         target: completed,
                     },
-                };
+                );
                 let checked =
                     dependency::compare_source(surface, &event, &raw, &native_sql, source_clocks)?;
                 if checked.is_empty() {

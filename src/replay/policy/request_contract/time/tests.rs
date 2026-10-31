@@ -10,6 +10,29 @@ fn clocks() -> crate::replay::assertion::RequestTimes {
         target: DateTime::from_timestamp(2000, 0),
     }
 }
+
+#[test]
+fn explicit_native_time_keeps_source_fraction_width_and_timezone_spelling() {
+    let rfc = rule("rfc3339");
+    let source = json!("1970-01-01T00:16:40.123Z");
+    assert!(compare(&source, &json!("1970-01-01T00:33:20.123Z"), &rfc, clocks()).is_ok());
+    for target in [
+        "1970-01-01T00:33:20.123000Z",
+        "1970-01-01T00:33:20.123+00:00",
+    ] {
+        let error = compare(&source, &json!(target), &rfc, clocks()).unwrap_err();
+        assert!(error.to_string().contains("representation changed"));
+    }
+    assert!(
+        compare(
+            &json!("1970-01-01 00:16:40.123"),
+            &json!("1970-01-01 00:33:20.123000"),
+            &rule("sql_datetime"),
+            clocks(),
+        )
+        .is_err()
+    );
+}
 #[test]
 fn microseconds_keep_integer_precision_and_fixed_inclusive_tolerance() {
     let rule = rule("unix_microseconds");

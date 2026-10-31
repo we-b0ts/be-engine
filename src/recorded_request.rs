@@ -56,6 +56,7 @@ pub(crate) struct RecordedHttpClient {
 pub(crate) struct RecordedHttpResponse {
     pub(crate) interaction_started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) request_sent_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) response_completed_at: chrono::DateTime<chrono::Utc>,
     pub(crate) request_rules: Vec<crate::request_rules::RequestRuleObservation>,
     pub(crate) request_headers: HeaderMapSnapshot,
     pub(crate) status: StatusCode,
@@ -208,6 +209,7 @@ impl RecordedHttpClient {
             return Ok(RecordedHttpResponse {
                 interaction_started_at: Some(response.started_at),
                 request_sent_at,
+                response_completed_at: response.completed_at,
                 request_rules,
                 request_headers,
                 status: response.status,
@@ -231,9 +233,11 @@ impl RecordedHttpClient {
             _=crate::dependency::execution::rejected(&mut failure) => return Err(crate::dependency::execution::UnmatchedDependency {observed_status:Some(status.as_u16())}.into()),
             body=tokio::time::timeout_at(deadline,collect_limited(response.into_body(),self.max_response_bytes))=>body.context("recorded HTTP request timed out")??,
         };
+        let response_completed_at = chrono::Utc::now();
         Ok(RecordedHttpResponse {
             interaction_started_at: None,
             request_sent_at,
+            response_completed_at,
             request_rules,
             request_headers,
             status,

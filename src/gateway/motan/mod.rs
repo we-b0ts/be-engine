@@ -162,7 +162,6 @@ async fn handle_connection(
                 (None, Some(error.to_string()))
             }
         };
-        let drain_invalidation = state.drain_active_case_dependencies(case_context.id).await;
         let response_record = case::response_record(
             &state,
             &request,
@@ -170,6 +169,7 @@ async fn handle_connection(
             started.elapsed().as_millis(),
             error,
         );
+        let drain_invalidation = state.drain_active_case_dependencies(case_context.id).await;
         if let Err(error) = case::finalize_case(
             state.recorder(),
             &case_context,

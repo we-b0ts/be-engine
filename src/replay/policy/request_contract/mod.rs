@@ -436,7 +436,22 @@ impl RequestContracts {
         };
         let state = self.state.lock().expect("request contracts");
         [
-            (policy.global_json.is_some(), crate::policy::GLOBAL_JSON_ID),
+            (
+                policy
+                    .global_json
+                    .as_ref()
+                    .is_some_and(|json| !json.fields.is_empty()),
+                crate::policy::GLOBAL_JSON_ID,
+            ),
+            (
+                state
+                    .applicable
+                    .contains(crate::value_contract::time::automatic::RULE_ID)
+                    || state
+                        .usage
+                        .contains_key(crate::value_contract::time::automatic::RULE_ID),
+                crate::value_contract::time::automatic::RULE_ID,
+            ),
             (policy.mysql.is_some(), "global.mysql"),
             (policy.redis.is_some(), crate::policy::GLOBAL_REDIS_ID),
             (policy.http.is_some(), crate::policy::GLOBAL_HTTP_ID),

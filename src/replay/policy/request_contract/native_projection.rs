@@ -75,8 +75,10 @@ pub(in crate::replay::policy) fn time(
     value: &n::NativeTime,
 ) -> Result<config::TimeField> {
     ensure!(
-        matches!(value.anchor, TimeAnchor::DependencyRequestStart)
-            && value.relation == TimeRelation::PreserveOffset,
+        matches!(
+            value.anchor,
+            TimeAnchor::Observation | TimeAnchor::DependencyRequestStart
+        ) && value.relation == TimeRelation::PreserveOffset,
         "atomic Redis sequence timestamps require preserve_offset and the corresponding dependency request start"
     );
     let format = match value.format {

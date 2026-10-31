@@ -100,7 +100,8 @@ json:
         )
         .unwrap();
     let copies = store.delivered_copies("case");
-    let observation = |created, stamp, block_offset| OutputObservation {
+    let observation = |created, stamp, block_offset| {
+        OutputObservation {
         version: TRANSCRIPT_VERSION,
         protocol: Protocol::Sse,
         events: [
@@ -111,7 +112,7 @@ json:
             ),
             (
                 block_offset + 1,
-                json!({"response":{"created_at":created,"blocks":[{"timestamp":stamp}]}}),
+                json!({"response":{"created_at":created + block_offset / 1000,"blocks":[{"timestamp":stamp}]}}),
             ),
         ]
         .into_iter()
@@ -139,9 +140,10 @@ json:
             partial_message: None,
             close: None,
         },
+    }
     };
     let source = observation(1001, 1010000, 100001);
-    let target = observation(2001, 2210000, 300001);
+    let target = observation(2001, 2210000, 400001);
     let clocks = ClockPair {
         source: chrono::DateTime::from_timestamp(1000, 0),
         target: chrono::DateTime::from_timestamp(2000, 0),
@@ -155,6 +157,7 @@ json:
                 Some(target),
                 Some(plan),
                 clocks,
+                Default::default(),
                 copies,
                 None,
             )
@@ -165,12 +168,12 @@ json:
     assert!(compare(&source, &target, &copies));
     assert!(!compare(
         &source,
-        &observation(2001, 2210001, 300001),
+        &observation(2001, 2210001, 400001),
         &copies
     ));
     assert!(!compare(
         &source,
-        &observation(2210, 2210000, 300001),
+        &observation(2210, 2210000, 400001),
         &copies
     ));
     assert!(!compare(
@@ -180,7 +183,7 @@ json:
     ));
     assert!(!compare(
         &source,
-        &observation(2001, 2210000, 299999),
+        &observation(2001, 2210000, 290000),
         &copies
     ));
 }

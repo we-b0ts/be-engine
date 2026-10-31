@@ -20,17 +20,9 @@ impl ReplayPolicyRuntime {
                 "Memcached value contract requires complete values on both requests".into(),
             );
         };
-        let source_started =
-            i64::try_from(context.recorded_duration_ms)
-                .ok()
-                .and_then(|duration| {
-                    context
-                        .recorded_observed_at
-                        .checked_sub_signed(chrono::Duration::milliseconds(duration))
-                });
         let clocks = self.request_contracts.contract_clocks(
             context.case_id,
-            source_started,
+            context.recorded_request_started_at,
             Some(context.actual_observed_at),
             None,
             None,
@@ -115,7 +107,9 @@ impl ReplayPolicyRuntime {
             recorded,
             actual,
             &field_numbers,
-            context.recorded_observed_at,
+            context.recorded_request_started_at.ok_or(
+                "Memcached timestamp contract requires the Source dependency request start",
+            )?,
             context.actual_observed_at,
         )?;
 

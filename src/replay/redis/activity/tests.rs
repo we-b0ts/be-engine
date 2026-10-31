@@ -24,6 +24,10 @@ pub(in crate::replay::redis) fn document(enabled: bool) -> Value {
     value
 }
 
+pub(in crate::replay::redis) fn now_string() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 fn object(start: &str, last: &str) -> Vec<u8> {
     serde_json::to_vec(
         &json!({"subtask_id":7,"user_id":3,"username":"synthetic-user",
@@ -89,7 +93,7 @@ fn perform(state: &mut RedisReplayState, command: &str, args: &[&[u8]]) -> Vec<u
 }
 
 pub(in crate::replay::redis) fn create(state: &mut RedisReplayState) -> Vec<u8> {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_string();
     let value = object(&now, &now);
     assert_eq!(
         perform(state, "SET", &[b"activity:1", &value, b"EX", b"3600"]),
@@ -104,7 +108,7 @@ fn touch(state: &mut RedisReplayState, previous: &[u8]) -> Vec<u8> {
         value::bulk(previous)
     );
     let mut value: Value = serde_json::from_slice(previous).unwrap();
-    value["last_activity_at"] = json!(chrono::Utc::now().to_rfc3339());
+    value["last_activity_at"] = json!(now_string());
     let next = serde_json::to_vec(&value).unwrap();
     assert_eq!(
         perform(state, "SET", &[b"activity:1", &next, b"EX", b"3600"]),
@@ -159,7 +163,7 @@ fn activity_refresh_is_opt_in_and_preserves_unused_read_and_write_obligations() 
     perform(&mut ordinary, "APPEND", &[b"content:1", b"abcd"]);
     perform(&mut ordinary, "GET", &[b"activity:1"]);
     let mut next: Value = serde_json::from_slice(&current).unwrap();
-    next["last_activity_at"] = json!(chrono::Utc::now().to_rfc3339());
+    next["last_activity_at"] = json!(now_string());
     current = serde_json::to_vec(&next).unwrap();
     perform(
         &mut ordinary,
@@ -194,6 +198,7 @@ fn activity_refresh_rejects_wrong_business_fields_timestamp_ttl_and_missing_get(
         "field",
         "field-set",
         "timestamp",
+        "timestamp-format",
         "ttl",
         "options",
     ] {
@@ -209,7 +214,8 @@ fn activity_refresh_rejects_wrong_business_fields_timestamp_ttl_and_missing_get(
                 next.as_object_mut().unwrap().remove("username");
             }
             "timestamp" => next["last_activity_at"] = json!("2020-01-01T00:00:00Z"),
-            _ => next["last_activity_at"] = json!(chrono::Utc::now().to_rfc3339()),
+            "timestamp-format" => next["last_activity_at"] = json!(chrono::Utc::now().to_rfc3339()),
+            _ => next["last_activity_at"] = json!(now_string()),
         }
         let raw = serde_json::to_vec(&next).unwrap();
         let ttl = if scenario == "ttl" {
@@ -244,7 +250,7 @@ fn activity_refresh_cannot_hide_failed_delivery_or_cross_pending_deletion_and_tt
         let failed = if failed_write {
             state.complete_exchange(&read);
             let mut next: Value = serde_json::from_slice(&current).unwrap();
-            next["last_activity_at"] = json!(chrono::Utc::now().to_rfc3339());
+            next["last_activity_at"] = json!(now_string());
             request(
                 &mut state,
                 "SET",
@@ -295,7 +301,7 @@ fn activity_refresh_does_not_borrow_observations_from_another_or_unqualified_lif
     perform(&mut state, "DEL", &[b"activity:1"]);
     assert!(request(&mut state, "GET", &[b"activity:1"]).is_err());
     perform(&mut state, "GET", &[b"content:1"]);
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_string();
     let next = object(&now, &now);
     perform(&mut state, "SET", &[b"activity:1", &next, b"EX", b"3600"]);
     perform(&mut state, "GET", &[b"activity:1"]);

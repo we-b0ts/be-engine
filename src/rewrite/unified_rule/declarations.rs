@@ -18,6 +18,9 @@ pub(super) fn merge_with_replacements(
     replace: &BTreeSet<String>,
 ) -> Result<bool> {
     let mut candidate = document.clone();
+    if replace.contains("time") {
+        candidate.time = proposed.time.clone();
+    }
     if let Some(json) = &proposed.json {
         if replace.contains("json") {
             candidate.json = Some(json.clone());

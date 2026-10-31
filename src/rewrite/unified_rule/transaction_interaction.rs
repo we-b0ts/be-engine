@@ -37,6 +37,11 @@ fn stream(target: bool) -> Value {
     if target {
         output["version"] = json!(1);
         output["request_sent_at"] = json!("2026-10-16T00:01:00Z");
+        output["interaction_started_at"] = json!("2026-10-16T00:01:00Z");
+        output["response_completed_at"] = json!("2026-10-16T00:01:00.030Z");
+    } else {
+        output["timestamp"] = json!("2026-10-16T00:00:00.030Z");
+        output["duration_ms"] = json!(30);
     }
     output
 }

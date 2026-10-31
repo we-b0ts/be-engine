@@ -16,6 +16,7 @@ pub(crate) enum PrimaryObservation {
 pub(crate) struct PrimaryOutput {
     pub(crate) api: ApiIdentity,
     pub(crate) clocks: CaseClock,
+    pub(crate) response_completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) observation: PrimaryObservation,
 }
 
@@ -26,6 +27,8 @@ struct ActualResponse<'a> {
     interaction_started_at: Option<chrono::DateTime<chrono::Utc>>,
     version: u8,
     request_sent_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_completed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     request_rules: &'a Vec<crate::request_rules::RequestRuleObservation>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,6 +115,7 @@ impl PrimaryOutput {
                 interaction_started_at: response.interaction_started_at,
                 version: 1,
                 request_sent_at: self.clocks.target_request_started_at,
+                response_completed_at: self.response_completed_at,
                 request_rules: &response.request_rules,
                 request_headers: Some(&response.request_headers),
                 status: response.status.as_u16(),
@@ -128,6 +132,7 @@ impl PrimaryOutput {
                 interaction_started_at: None,
                 version: 1,
                 request_sent_at: self.clocks.target_request_started_at,
+                response_completed_at: self.response_completed_at,
                 request_rules: &empty_rules,
                 request_headers: None,
                 status: *status,

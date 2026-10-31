@@ -19,7 +19,7 @@ pub(super) fn compare_message(
     source: &WireMessage,
     target: &WireMessage,
     global: Option<&crate::policy::CompiledJsonPolicy>,
-    times: super::super::RequestTimes,
+    clocks: crate::value_contract::json::AnchorClocks,
     pointer: &str,
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     observed: super::super::RequestTimes,
@@ -53,11 +53,7 @@ pub(super) fn compare_message(
         target_event.data.as_bytes(),
         global.expect("global JSON field strategy checked"),
         &[],
-        crate::value_contract::json::AnchorClocks {
-            case: times,
-            dependency: times,
-            ..Default::default()
-        },
+        clocks,
         copies,
         observed,
     );

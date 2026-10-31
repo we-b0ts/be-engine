@@ -171,6 +171,7 @@ pub(super) async fn record_exchange(
             connection_id,
             sequence: pending.sequence,
             timestamp: Utc::now(),
+            request_started_at: pending.request_started_at,
             client_addr: context.client_addr.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,

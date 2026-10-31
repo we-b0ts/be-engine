@@ -90,6 +90,8 @@ pub(in crate::replay) struct RecordedMysqlExchange {
     pub(in crate::replay) lifecycle_cleanup: bool,
     #[serde(default)]
     pub(in crate::replay) timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub(in crate::replay) request_started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(in crate::replay) server_status_before: Option<u16>,
     pub(in crate::replay) query_sequence: Option<u64>,
     pub(in crate::replay) connection_id: Option<Uuid>,

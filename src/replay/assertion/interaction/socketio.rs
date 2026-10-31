@@ -6,7 +6,7 @@ pub(super) fn compare_message(
     source: &WireMessage,
     target: &WireMessage,
     global: &crate::policy::CompiledJsonPolicy,
-    times: super::super::RequestTimes,
+    clocks: crate::value_contract::json::AnchorClocks,
     pointer: &str,
 ) -> Result<Option<Comparison>> {
     if source.kind != MessageKind::Text
@@ -89,11 +89,7 @@ pub(super) fn compare_message(
             &serde_json::to_vec(target)?,
             global,
             &[],
-            crate::value_contract::json::AnchorClocks {
-                case: times,
-                dependency: times,
-                ..Default::default()
-            },
+            clocks,
         )?;
         checked.scope_schema_clocks(index);
         for difference in &mut checked.differences {

@@ -45,11 +45,13 @@ pub(super) fn verify(
         source: source_payload.times.source,
         target: source_payload.times.source,
     };
-    let clocks = AnchorClocks {
-        case: source_times,
-        dependency: source_times,
-        ..Default::default()
-    };
+    let clocks = AnchorClocks::for_response(
+        crate::value_contract::time::ClockPair {
+            source: source_payload.request_times.source,
+            target: source_payload.request_times.source,
+        },
+        source_times,
+    );
     let checked = compare_payload(
         &source_payload.source,
         &source_payload.source,
@@ -75,7 +77,12 @@ pub(super) fn verify(
             let values = header(&source_payload.source_headers, &effect.header);
             if !values.is_empty() {
                 ensure!(
-                    crate::replay::native_response_header(rule, &values, &values, clocks.case)?,
+                    crate::replay::native_response_header(
+                        rule,
+                        &values,
+                        &values,
+                        clocks.observation(),
+                    )?,
                     "Source header-date contract {:?} failed",
                     rule.rule.id
                 );
@@ -98,11 +105,7 @@ pub(super) fn verify(
     let Some(pair) = super::response::target_pair(request, &source, &target, case, result)? else {
         return Ok(());
     };
-    let clocks = AnchorClocks {
-        case: pair.times,
-        dependency: pair.times,
-        ..Default::default()
-    };
+    let clocks = AnchorClocks::for_response(pair.request_times, pair.times);
     compare_payload(
         &pair.source,
         pair.target
@@ -122,7 +125,7 @@ pub(super) fn verify(
     for (id, _, result) in context.header_results(
         pair.source_headers.as_ref(),
         pair.target_headers.as_ref(),
-        pair.times,
+        pair.request_times,
     ) {
         ensure!(
             result.is_ok(),
@@ -153,7 +156,7 @@ fn compare_payload(
             "opaque API body requires one compiled codec owner"
         );
         ensure!(
-            crate::replay::native_response_body(&opaque, source, target, clocks.case)?,
+            crate::replay::native_response_body(&opaque, source, target, clocks.observation())?,
             "Source/Target opaque response contract failed"
         );
         return Ok(opaque.iter().map(|rule| rule.rule.id.clone()).collect());

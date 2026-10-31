@@ -659,6 +659,7 @@ pub(super) async fn execute_case(
         .response_assertions
         .as_ref()
         .is_some_and(|runtime| runtime.needs_time_copies())
+        && execution_status["has_response_time_copies"].as_bool() != Some(false)
     {
         let snapshot = control(state, "response_time_copies", Some(case_id), false, false).await?;
         serde_json::from_value(snapshot["time_copies"].clone())

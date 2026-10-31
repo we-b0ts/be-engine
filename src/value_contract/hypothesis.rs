@@ -59,10 +59,28 @@ pub(crate) fn preview_values(
     plan: &CompiledJsonPolicy,
     clocks: AnchorClocks,
 ) -> Preview {
+    let automatic = match plan.selected_fields_with_clocks(source, clocks) {
+        Ok(fields) => fields
+            .into_iter()
+            .filter(|field| field.rule_id == super::time::automatic::RULE_ID)
+            .map(|field| field.pointer)
+            .collect::<Vec<_>>(),
+        Err(_) => {
+            return Preview {
+                complete: false,
+                ..Default::default()
+            };
+        }
+    };
     let mut walk = Walk {
         case,
         clocks,
-        selected: plan.fields.keys().map(String::as_str).collect(),
+        selected: plan
+            .fields
+            .keys()
+            .chain(automatic.iter())
+            .map(String::as_str)
+            .collect(),
         nodes: 0,
         complete: true,
         comparison: Default::default(),

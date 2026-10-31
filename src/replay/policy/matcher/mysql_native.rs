@@ -173,24 +173,8 @@ fn compare_inner(
     copies: Option<&CopyProofs<'_>>,
     automatic: Option<&crate::replay::mysql::contracts::automatic::RequestContext<'_>>,
 ) -> Result<Comparison> {
-    if let (Some(source), Some(target)) = (source_params, actual_params) {
-        ensure!(
-            source.len() == target.len(),
-            "MySQL prepared parameter inventory changed"
-        );
-        ensure!(
-            source
-                .iter()
-                .zip(target)
-                .all(|(source, target)| source.kind == target.kind),
-            "MySQL prepared parameter kind changed"
-        );
-    }
-    let source =
-        mysql_values::materialized(source_sql, source_params).map_err(anyhow::Error::msg)?;
-    let actual =
-        mysql_values::materialized(actual_sql, actual_params).map_err(anyhow::Error::msg)?;
-    ensure!(source.len() == actual.len(), "SQL token inventory changed");
+    let (source, actual) =
+        fields::materialized_pair(source_sql, source_params, actual_sql, actual_params)?;
     let mut selected = BTreeMap::<usize, Selected<'_>>::new();
     for rule in value_rules {
         let positions = match &rule.rule.slot {
@@ -384,11 +368,29 @@ fn compare_inner(
         if !selected.scalar
             && let Some(json) = automatic.and_then(|context| context.policy.global_json.as_ref())
         {
-            for (pointer, contract) in json.fields_with_clocks(&source_value, clocks)? {
+            for field in json.selected_fields_with_clocks(&source_value, clocks)? {
+                if field.rule_id == crate::value_contract::time::automatic::RULE_ID
+                    && selected
+                        .times
+                        .iter()
+                        .map(|(_, pointer, _)| pointer)
+                        .chain(
+                            selected
+                                .values
+                                .iter()
+                                .flat_map(|rule| rule.rule.contract.keys()),
+                        )
+                        .any(|pointer| {
+                            crate::value_contract::delivery::select(pointer, &source_value)
+                                .is_ok_and(|paths| paths.contains(&field.pointer))
+                        })
+                {
+                    continue;
+                }
                 fields.push((
-                    crate::policy::GLOBAL_JSON_ID.into(),
-                    format!("{root}{pointer}"),
-                    contract,
+                    field.rule_id.into(),
+                    format!("{root}{}", field.pointer),
+                    field.contract,
                 ));
             }
         }

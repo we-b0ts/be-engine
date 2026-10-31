@@ -113,6 +113,10 @@ fn native_event(value: &Value) -> RecorderEvent {
                 connection_id: connection,
                 sequence: value["sequence"].as_u64().unwrap(),
                 timestamp: now,
+                request_started_at: value["request_started_at"]
+                    .as_str()
+                    .map(|value| value.parse().unwrap())
+                    .unwrap_or(now),
                 client_addr: None,
                 target_host: host.into(),
                 target_port: port,
@@ -152,6 +156,10 @@ fn native_event(value: &Value) -> RecorderEvent {
             connection_id: connection,
             query_sequence: value["query_sequence"].as_u64().unwrap(),
             timestamp: now,
+            request_started_at: value["request_started_at"]
+                .as_str()
+                .map(|value| value.parse().unwrap())
+                .unwrap_or(now),
             client_addr: None,
             route_name: None,
             target_host: Some(host.into()),

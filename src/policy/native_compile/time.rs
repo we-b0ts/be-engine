@@ -25,8 +25,12 @@ fn validate(time: &NativeTime) -> Result<()> {
         "calendar_date requires a value codec contract, including explicit delivery.rebase_time for read-state translation"
     );
     ensure!(
-        time.anchor == crate::policy::TimeAnchor::DependencyRequestStart,
-        "time contracts require the corresponding dependency request start"
+        matches!(
+            time.anchor,
+            crate::policy::TimeAnchor::Observation
+                | crate::policy::TimeAnchor::DependencyRequestStart
+        ),
+        "time contracts require the corresponding comparison event"
     );
     ensure!(
         match time.format {

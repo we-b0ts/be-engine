@@ -627,6 +627,7 @@ async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned
             id: Uuid::new_v4(),
             connection_id: Uuid::new_v4(),
             query_sequence: 1,
+            request_started_at: Utc::now(),
             timestamp: Utc::now(),
             client_addr: None,
             route_name: None,

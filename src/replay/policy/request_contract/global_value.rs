@@ -18,6 +18,7 @@ impl RequestContracts {
             static EMPTY: std::sync::OnceLock<CompiledJsonPolicy> = std::sync::OnceLock::new();
             self.pre_match_enabled.then(|| {
                 EMPTY.get_or_init(|| CompiledJsonPolicy {
+                    time: Default::default(),
                     signatures: Default::default(),
                     fields: Default::default(),
                     fingerprint: String::new(),

@@ -39,6 +39,7 @@ impl Delivery {
             case: source_clock(clocks.case),
             dependency: source_clock(clocks.dependency),
             delivery: source_clock(clocks.delivery),
+            observation: clocks.observation.map(source_clock),
         };
         let check = crate::value_contract::global::compare_decoded(
             &decoded,
@@ -93,9 +94,11 @@ impl Delivery {
         )?;
         let selected = self
             .global
-            .fields_with_clocks(&self.decoded.logical, clocks)?;
+            .selected_delivery_fields_with_clocks(&self.decoded.logical, clocks)?;
         let mut allowed = Vec::new();
-        for (pointer, contract) in selected {
+        for selected in selected {
+            let pointer = selected.pointer;
+            let contract = selected.contract;
             let Some(time) = contract.time() else {
                 continue;
             };
@@ -107,7 +110,7 @@ impl Delivery {
                     })?;
                 ensure!(
                     copy.proof.permits_value(
-                        crate::policy::GLOBAL_JSON_ID,
+                        selected.rule_id,
                         &pointer,
                         &pointer,
                         source,
@@ -154,7 +157,7 @@ impl Delivery {
         allowed.extend(copied_allowed);
         allowed.extend(
             self.global
-                .fields_with_clocks(&self.decoded.logical, clocks)?
+                .delivery_fields_with_clocks(&self.decoded.logical, clocks)?
                 .into_iter()
                 .filter_map(|(pointer, field)| field.time().map(|_| pointer)),
         );

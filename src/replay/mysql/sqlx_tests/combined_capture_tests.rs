@@ -8,7 +8,7 @@ const TARGET: &str = "task-pending-aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa";
 #[tokio::test]
 async fn combined_capture_from_real_unmatched_insert_then_fresh_replay_is_finite() {
     tokio::time::timeout(Duration::from_secs(30), async {
-        let mut source = exchange(&format!("INSERT INTO items (name, created_at, owner_id) VALUES ('{SOURCE}', '2020-01-01 00:00:00', 7)"),json!({"status":"ok","affected_rows":1,"last_insert_id":9}));
+        let mut source = exchange(&format!("INSERT INTO items (name, created_at, owner_id) VALUES ('{SOURCE}', '2020-01-01 00:00:00.000000', 7)"),json!({"status":"ok","affected_rows":1,"last_insert_id":9}));
         source["parse_warnings"] = json!([]);
         let empty = "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n";
         let (temp,addr,runtime,task) = fixture_with_policy(std::slice::from_ref(&source),Some(empty)).await;
@@ -55,7 +55,7 @@ async fn combined_capture_from_real_unmatched_insert_then_fresh_replay_is_finite
 async fn combined_table_capture_replays_two_shards_without_cross_table_consumption() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let sources = [1,2].map(|shard| {
-            let mut source = exchange(&format!("INSERT INTO items_{shard:04} (name, created_at, owner_id) VALUES ('source-{shard}', '2020-01-01 00:00:00', {})",shard+6),json!({"status":"ok","affected_rows":1,"last_insert_id":shard}));
+            let mut source = exchange(&format!("INSERT INTO items_{shard:04} (name, created_at, owner_id) VALUES ('source-{shard}', '2020-01-01 00:00:00.000000', {})",shard+6),json!({"status":"ok","affected_rows":1,"last_insert_id":shard}));
             source["parse_warnings"]=json!([]);
             source
         });

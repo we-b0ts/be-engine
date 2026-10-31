@@ -117,11 +117,17 @@ pub(super) fn verify(
     }
     identities::require_replay(policy, selected, &mut result);
     source::verify(root, state, bundle, previous, policy, selected, &mut result)?;
-    let (scope, mut foreign) = resource::prepare(root, state, bundle, policy, selected)?;
-    global_values::verify(root, bundle, policy, selected, &mut result)?;
-    global_values::global_trace(state, bundle, policy, selected, &mut result)?;
+    let mut validation_ids = selected.clone();
+    if previous.global_json != policy.global_json {
+        // Built-in interpretation changes still validate complete Source/Target
+        // evidence, but never become authored permissions or Source proofs.
+        validation_ids.insert(crate::value_contract::time::automatic::RULE_ID.into());
+    }
+    let (scope, mut foreign) = resource::prepare(root, state, bundle, policy, &validation_ids)?;
+    global_values::verify(root, bundle, policy, &validation_ids, &mut result)?;
+    global_values::global_trace(state, bundle, policy, &validation_ids, &mut result)?;
     payload::verify(root, bundle, policy, selected, &mut result)?;
-    let resource_ids = resource::selected(policy, selected);
+    let resource_ids = resource::selected(policy, &validation_ids);
     for other in &mut foreign {
         global_values::verify(root, other, policy, &resource_ids, &mut result)?;
         payload::verify(root, other, policy, &resource_ids, &mut result)?;

@@ -116,17 +116,72 @@ impl RequestContracts {
         };
         let position =
             super::time_copies::redis_time_position(&target.host, target.port, database, value);
+        if scalar.is_none()
+            && let Some(global) = self.global_json()
+            && let Some(source) = redis_scalar::decode_automatic(source, global, clocks)?
+        {
+            let actual = source.target(actual)?;
+            let copies = if value.stored && self.has_time_copies(case) {
+                let lookups = crate::value_contract::time_copies::global_leaves(
+                    &source.logical,
+                    global,
+                    clocks,
+                )?
+                .into_iter()
+                .filter_map(|leaf| {
+                    crate::value_contract::time_copies::TimeCopyLookup::new_time(
+                        &leaf.time,
+                        position,
+                        position,
+                        &leaf.pattern,
+                        &leaf.pattern,
+                        &leaf.value,
+                        leaf.rule_id,
+                    )
+                    .map(|lookup| lookup.at(&leaf.pointer, &leaf.pattern))
+                })
+                .collect();
+                self.time_copy_proofs(case, lookups, clocks.dependency)
+            } else {
+                vec![]
+            };
+            return crate::value_contract::global::compare_logical_with_time_copies(
+                &source.logical,
+                &actual,
+                global,
+                &[],
+                clocks,
+                &copies,
+            );
+        }
         let mut copies = Vec::new();
         if self.has_time_copies(case)
             && let Some((field, scalar)) = &scalar
         {
             let lookups = super::time_copies::redis_scalar_time_write_lookups(
-                position, scalar, field, clocks,
+                position,
+                scalar,
+                field,
+                &self
+                    .global_json()
+                    .map(|plan| plan.time.clone())
+                    .unwrap_or_default(),
+                clocks,
             )?;
             copies.extend(self.time_copy_proofs(case, lookups, clocks.dependency));
         }
         let mut compared = if let Some((field, _)) = &scalar {
-            redis_scalar::compare(source, actual, field, clocks, &copies)?
+            redis_scalar::compare(
+                source,
+                actual,
+                field,
+                &self
+                    .global_json()
+                    .map(|plan| plan.time.clone())
+                    .unwrap_or_default(),
+                clocks,
+                &copies,
+            )?
         } else {
             Default::default()
         };
@@ -142,6 +197,7 @@ impl RequestContracts {
         };
         if json_constraint {
             let empty = crate::policy::CompiledJsonPolicy {
+                time: Default::default(),
                 signatures: Default::default(),
                 fields: Default::default(),
                 fingerprint: String::new(),
@@ -230,11 +286,11 @@ impl RequestContracts {
                 source: pair.source,
                 target: pair.source,
             };
-        let clocks = crate::value_contract::json::AnchorClocks {
-            case: same(clocks.case),
-            dependency: same(clocks.dependency),
-            delivery: same(clocks.delivery),
-        };
+        let clocks = crate::value_contract::json::AnchorClocks::for_request(
+            same(clocks.case),
+            same(clocks.dependency),
+            same(clocks.delivery),
+        );
         let mut ids = BTreeSet::new();
         for value in requests.into_iter().chain(responses) {
             let Some(payload) = value.payload else {

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::policy::{CompiledRule, FieldContract, TimeAnchor, TimeContract, TimestampFormat};
 use anyhow::{Context, Result, ensure};
-use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -30,14 +30,19 @@ pub(crate) fn materialize(
         }
     }
     let mut deltas = BTreeMap::new();
-    for (contract, _) in &selected {
+    for (contract, pointers) in &selected {
         if contract.format == TimestampFormat::CalendarDate {
             continue;
         }
         let pair = anchor(clocks, contract.anchor);
-        let (source, target) = pair.require()?;
-        let delta = time::date_nanos(target) - time::date_nanos(source);
-        let quantum = quantum(contract.format);
+        let (source_clock, target_clock) = pair.require()?;
+        let delta = time::date_nanos(target_clock) - time::date_nanos(source_clock);
+        let quantum = pointers
+            .iter()
+            .filter_map(|pointer| source.pointer(pointer))
+            .map(|value| value_quantum(value, contract.format))
+            .max()
+            .unwrap_or_else(|| quantum(contract.format));
         let entry = deltas.entry(contract.anchor).or_insert((delta, quantum));
         entry.1 = entry.1.max(quantum);
     }
@@ -99,10 +104,7 @@ pub(crate) fn materialize(
 }
 
 fn anchor(clocks: AnchorClocks, anchor: TimeAnchor) -> time::ClockPair {
-    match anchor {
-        TimeAnchor::DependencyRequestStart => clocks.dependency,
-        TimeAnchor::ApiRequestStart | TimeAnchor::DependencyDelivery => time::ClockPair::default(),
-    }
+    clocks.get(anchor)
 }
 
 fn quantum(format: TimestampFormat) -> i128 {
@@ -115,6 +117,8 @@ fn quantum(format: TimestampFormat) -> i128 {
 }
 
 pub(crate) fn shift(value: &Value, config: &TimeContract, delta: i128) -> Result<Value> {
+    let unit = value_quantum(value, config.format);
+    let delta = delta / unit * unit;
     let nanos = time::parse_timestamp(value, json::core_format(config.format)?, config.offset()?)?
         .checked_add(delta)
         .context("delivery time overflow")?;
@@ -164,27 +168,82 @@ pub(crate) fn shift(value: &Value, config: &TimeContract, delta: i128) -> Result
             let text = match format {
                 TimestampFormat::Rfc3339 => {
                     let offset = *DateTime::parse_from_rfc3339(original)?.offset();
-                    translated
-                        .with_timezone(&offset)
-                        .to_rfc3339_opts(SecondsFormat::AutoSi, original.ends_with(['Z', 'z']))
+                    let local = translated.with_timezone(&offset);
+                    let mut rendered = local.format("%Y-%m-%dT%H:%M:%S").to_string();
+                    if original.as_bytes().get(10) == Some(&b't') {
+                        rendered.replace_range(10..11, "t");
+                    }
+                    append_fraction(
+                        &mut rendered,
+                        local.timestamp_subsec_nanos(),
+                        fraction_width(original),
+                    );
+                    let suffix = if original.ends_with(['Z', 'z']) {
+                        &original[original.len() - 1..]
+                    } else {
+                        &original[original.len() - 6..]
+                    };
+                    rendered.push_str(suffix);
+                    rendered
                 }
                 TimestampFormat::AmzDate => translated.format("%Y%m%dT%H%M%SZ").to_string(),
-                TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => translated
-                    .with_timezone(
+                TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime => {
+                    let local = translated.with_timezone(
                         &config
                             .offset()?
                             .context("naive timestamp requires offset")?,
-                    )
-                    .format(if format == TimestampFormat::SqlDatetime {
-                        "%Y-%m-%d %H:%M:%S%.f"
-                    } else {
-                        "%Y-%m-%dT%H:%M:%S%.f"
-                    })
-                    .to_string(),
+                    );
+                    let mut rendered = local
+                        .format(if format == TimestampFormat::SqlDatetime {
+                            "%Y-%m-%d %H:%M:%S%.f"
+                        } else {
+                            "%Y-%m-%dT%H:%M:%S%.f"
+                        })
+                        .to_string();
+                    rendered.truncate(19);
+                    append_fraction(
+                        &mut rendered,
+                        local.timestamp_subsec_nanos(),
+                        fraction_width(original),
+                    );
+                    rendered
+                }
                 _ => unreachable!(),
             };
             Ok(text.into())
         }
+    }
+}
+
+/// Source fixes textual precision independently for each physical value.
+pub(crate) fn value_quantum(value: &Value, format: TimestampFormat) -> i128 {
+    if matches!(
+        format,
+        TimestampFormat::Rfc3339 | TimestampFormat::Iso8601Naive | TimestampFormat::SqlDatetime
+    ) && let Some(source) = value.as_str()
+    {
+        return 10_i128.pow(9 - fraction_width(source) as u32);
+    }
+    quantum(format)
+}
+
+fn fraction_width(text: &str) -> usize {
+    if text.as_bytes().get(19) != Some(&b'.') {
+        return 0;
+    }
+    text.as_bytes()[20..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count()
+        .min(9)
+}
+
+fn append_fraction(output: &mut String, nanos: u32, width: usize) {
+    if width != 0 {
+        output.push('.');
+        use std::fmt::Write as _;
+        write!(output, "{:0width$}", nanos / 10_u32.pow(9 - width as u32))
+            .expect("writing a String is infallible");
     }
 }
 

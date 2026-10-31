@@ -86,7 +86,7 @@ async fn status_failure_notifies_cleanup_and_remains_primary_while_body_only_fai
             }
             reader
                 .into_inner()
-                .write_all(b"{\"ok\":true}\n")
+                .write_all(b"{\"ok\":true,\"has_response_time_copies\":false}\n")
                 .await
                 .unwrap();
         }
@@ -239,7 +239,7 @@ async fn successful_stream_cases_reuse_the_running_target_and_normal_case_contro
             }
             reader
                 .into_inner()
-                .write_all(b"{\"ok\":true}\n")
+                .write_all(b"{\"ok\":true,\"has_response_time_copies\":false}\n")
                 .await
                 .unwrap();
         }
@@ -364,7 +364,7 @@ async fn unmatched_dependency_interrupts_only_its_case_and_reports_execution_evi
                 "case_execution_status" => {
                     let failed = case == Some(failed_id.as_str())
                         && control_rejected.load(Ordering::Acquire);
-                    reply = json!({"ok":true,"failed":failed,"failures":if failed {json!([{"protocol":"redis","command":"PUBLISH","target_event_index":1,"reason":"request arguments did not match"}])} else {json!([])}});
+                    reply = json!({"ok":true,"has_response_time_copies":false,"failed":failed,"failures":if failed {json!([{"protocol":"redis","command":"PUBLISH","target_event_index":1,"reason":"request arguments did not match"}])} else {json!([])}});
                 }
                 "end" => {
                     assert_eq!(active.take().as_deref(), case);

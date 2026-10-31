@@ -60,11 +60,7 @@ impl ResponseAssertionRuntime {
             .compiled
             .as_ref()
             .and_then(|policy| policy.global_json.as_ref())
-            .is_some_and(|json| {
-                json.fields
-                    .values()
-                    .any(|field| matches!(field, crate::policy::GlobalField::Time { .. }))
-            })
+            .is_some()
     }
     pub(crate) fn load(policy: &Path) -> Result<Self> {
         let policy = load_replay_policy(policy)?;
@@ -135,6 +131,24 @@ pub(crate) fn read_replay_request_times(
     Ok(RequestTimes {
         source: request.timestamp,
         target: actual.request_sent_at,
+    })
+}
+
+pub(crate) fn read_replay_response_times(
+    expected_path: &Path,
+    actual_path: &Path,
+) -> Result<RequestTimes> {
+    let expected_bytes = read_regular(expected_path, "expected response")?;
+    let decrypted_expected = interaction::decrypt_output_bytes(&expected_bytes, expected_path)?;
+    let expected: ExpectedResponse =
+        serde_json::from_slice(decrypted_expected.as_deref().unwrap_or(&expected_bytes))?;
+    let actual_bytes = read_regular(actual_path, "actual response")?;
+    let decrypted_actual = interaction::decrypt_output_bytes(&actual_bytes, actual_path)?;
+    let actual: ActualResponse =
+        serde_json::from_slice(decrypted_actual.as_deref().unwrap_or(&actual_bytes))?;
+    Ok(RequestTimes {
+        source: expected.response_completed_at(),
+        target: actual.response_completed_at,
     })
 }
 
@@ -310,8 +324,16 @@ fn assert_recorded_response_with_policy_and_time_copies(
     };
     let actual_status = actual.status;
     let times = RequestTimes {
-        source: expected.clock_start(request.timestamp),
-        target: actual.interaction_started_at.or(actual.request_sent_at),
+        source: expected.response_completed_at(),
+        target: actual.response_completed_at,
+    };
+    let request_times = RequestTimes {
+        source: request.timestamp,
+        target: actual.request_sent_at,
+    };
+    let interaction_times = RequestTimes {
+        source: expected.interaction_started_at(),
+        target: actual.interaction_started_at,
     };
     let expected_request_headers = request.headers.clone();
     let expected_body =
@@ -322,6 +344,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
     let mut report = evaluate_response(
         AssertionInputs {
             times,
+            request_times,
             case_id: options.case_id,
             request,
             request_path: options.request,
@@ -350,7 +373,8 @@ fn assert_recorded_response_with_policy_and_time_copies(
             .compiled
             .as_ref()
             .and_then(|p| p.global_json.as_ref()),
-        times,
+        interaction_times,
+        request_times,
         time_copies,
         &mut report,
         ack_context.as_ref(),
@@ -376,6 +400,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
 struct AssertionInputs {
     body_available: bool,
     times: RequestTimes,
+    request_times: RequestTimes,
     case_id: String,
     request: RecordedRequest,
     request_path: PathBuf,

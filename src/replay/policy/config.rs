@@ -251,10 +251,13 @@ pub(super) enum TimeReference {
 }
 
 fn fixed_time_tolerance() -> String {
-    "5s".into()
+    format!(
+        "{}s",
+        crate::value_contract::time::DEFAULT_TOLERANCE.as_secs()
+    )
 }
 fn is_fixed_time_tolerance(value: &str) -> bool {
-    value == "5s"
+    value == fixed_time_tolerance()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -313,6 +316,7 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
                 compiled
                     .global_json
                     .iter()
+                    .filter(|json| !json.fields.is_empty())
                     .map(|_| crate::policy::GLOBAL_JSON_ID.to_owned()),
             )
             .chain(compiled.mysql.iter().map(|_| "global.mysql".to_owned()))
@@ -348,6 +352,7 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
                 compiled
                     .global_json
                     .iter()
+                    .filter(|json| !json.fields.is_empty())
                     .map(|_| crate::policy::GLOBAL_JSON_ID.to_owned()),
             )
             .chain(
@@ -739,7 +744,11 @@ fn validate_dynamic_value(rule: &DynamicValueRule) -> Result<()> {
     if let Some(time) = &rule.time {
         parse_duration(&time.offset).context("invalid time.offset")?;
         let tolerance = parse_duration(&time.tolerance).context("invalid time.tolerance")?;
-        ensure!(tolerance == 5_000, "time tolerance is fixed at 5s");
+        ensure!(
+            tolerance == crate::value_contract::time::DEFAULT_TOLERANCE.as_millis() as i64,
+            "time tolerance is fixed at {}s",
+            crate::value_contract::time::DEFAULT_TOLERANCE.as_secs()
+        );
         if let Some(timezone) = &time.timezone {
             parse_timezone(timezone)?;
         }

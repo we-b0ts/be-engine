@@ -10,6 +10,15 @@ pub(super) fn summarize(
     replace: &BTreeSet<String>,
 ) -> Value {
     let mut changes = Map::new();
+    if before.time != after.time {
+        changes.insert(
+            "time".into(),
+            json!({
+                "mode":"replace", "location":"time",
+                "before":before.time, "after":after.time,
+            }),
+        );
+    }
     section(
         &mut changes,
         "json",

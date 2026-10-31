@@ -72,13 +72,20 @@ impl RequestContracts {
             None,
             None,
         );
-        let selected_fields = global.comparison_fields(source, target, clocks)?;
+        let selected_fields = global
+            .selected_fields_with_clocks(source, clocks)?
+            .into_iter()
+            .filter(|field| {
+                field.rule_id != crate::value_contract::time::automatic::RULE_ID
+                    || !native.contains(&field.pointer)
+            })
+            .collect::<Vec<_>>();
         let fields = selected_fields
             .iter()
-            .map(|(pointer, contract)| Field {
-                rule_id: crate::policy::GLOBAL_JSON_ID,
-                pointer,
-                contract,
+            .map(|selected| Field {
+                rule_id: selected.rule_id,
+                pointer: &selected.pointer,
+                contract: &selected.contract,
             })
             .collect::<Vec<_>>();
         let mut selected = BTreeSet::new();
@@ -106,7 +113,9 @@ impl RequestContracts {
             .iter()
             .filter(|pointer| {
                 !selected.contains(*pointer)
-                    || selected_fields.iter().any(|(path, _)| path == *pointer)
+                    || selected_fields
+                        .iter()
+                        .any(|field| field.pointer.as_str() == pointer.as_str())
             })
             .map(|pointer| VerifiedField {
                 rule_id: "schema:redis-native-prevalidated",
@@ -140,7 +149,7 @@ impl RequestContracts {
                     &leaf.pattern,
                     &leaf.pattern,
                     &leaf.value,
-                    crate::policy::GLOBAL_JSON_ID,
+                    leaf.rule_id,
                 ) {
                     lookups.push(lookup.at(&leaf.pointer, &leaf.pattern));
                 }

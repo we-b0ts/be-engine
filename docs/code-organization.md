@@ -70,6 +70,13 @@ is unclear.
   payload sizes. Protocol validation and aggregate evidence budgets stay with
   their existing owners.
 
+- `value_contract/time` owns standard temporal recognition, representation,
+  relative-clock comparison and the common tolerance. `policy/time_defaults`
+  owns the project-wide civil offset. Callers supply dependency request or
+  response-event clocks through `AnchorClocks`; explicit request and delivery
+  provenance remain separate. Protocol adapters retain native value framing.
+  Built-in validation never supplies positive coverage for an authored rule.
+
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
   `preparation` proves immutable identity, clocks and subscription slots;
@@ -1209,6 +1216,14 @@ is unclear.
   recorder fields remain embedded in `.traffic-e2e/project.yaml`; planners
   validate both documents and atomically replace only
   the unified file named by `project.policy`.
+- `config/document.rs` owns the Recorder authoring-to-runtime boundary shared by
+  standalone, embedded and generated configuration. Its common serde path
+  compiles business capture requirements before validation and omits derived
+  defaults when serializing, while retaining explicit overrides.
+  `config/capture.rs` owns independent ingress/dependency protocol requirements,
+  their required transport facilities and conflicting-override diagnostics.
+  It reuses protocol identities rather than defining another protocol enum.
+  Requirements do not filter observed traffic or add Replay matching work.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
 - `platform/mod.rs` owns one managed subprocess composition boundary: it maps
   validated project/recorder state into the staged shell runtime and collects

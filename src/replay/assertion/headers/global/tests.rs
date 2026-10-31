@@ -27,8 +27,8 @@ http:
             actual_response: temp.path().join("actual.json"), policy: policy.clone(),
         },
         &serde_json::to_vec(&json!({"method":"POST","uri":"/unrelated","timestamp":"1970-01-01T00:16:40Z"})).unwrap(),
-        &serde_json::to_vec(&json!({"status":200,"headers":{"X-Amz-Date":["19700101T001640Z"],"X-Item-Id":[source_id]},"body":capture(json!({"id":source_id}))})).unwrap(),
-        &serde_json::to_vec(&json!({"version":1,"status":200,"headers":headers,"request_sent_at":"1970-01-01T00:33:20Z","body":capture(body)})).unwrap(),
+        &serde_json::to_vec(&json!({"status":200,"timestamp":"1970-01-01T00:16:40Z","headers":{"X-Amz-Date":["19700101T001640Z"],"X-Item-Id":[source_id]},"body":capture(json!({"id":source_id}))})).unwrap(),
+        &serde_json::to_vec(&json!({"version":1,"status":200,"headers":headers,"request_sent_at":"1970-01-01T00:33:20Z","response_completed_at":"1970-01-01T00:33:20Z","body":capture(body)})).unwrap(),
         &load_replay_policy(&policy).unwrap(),
     ).unwrap()
 }

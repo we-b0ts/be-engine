@@ -6,6 +6,51 @@ fn policy(value: Value) -> TrafficPolicy {
 }
 
 #[test]
+fn field_addition_and_json_replacement_preserve_project_time_settings() {
+    let original = policy(json!({"format":"traffic-policy/v3",
+        "time":{"default_utc_offset":"+05:30"},
+        "json":{"fields":{"/created":{"kind":"time","formats":["rfc3339"]}}}}));
+    let mut current = original.clone();
+    let addition = policy(
+        json!({"format":"traffic-policy/v3","json":{"fields":{"/items":{"kind":"unordered"}}}}),
+    );
+    merge(&mut current, &addition).unwrap();
+    assert_eq!(current.time, original.time);
+    let replacement = policy(json!({"format":"traffic-policy/v3","json":{"fields":{}}}));
+    merge_with_replacements(&mut current, &replacement, &BTreeSet::from(["json".into()])).unwrap();
+    assert_eq!(current.time, original.time);
+    let rendered = crate::policy::render_policy(&current).unwrap();
+    let reparsed = crate::policy::parse_policy(&rendered).unwrap();
+    assert_eq!(reparsed.time, original.time);
+    assert!(
+        super::super::impact::affects_api(
+            &crate::policy::render_policy(&original).unwrap(),
+            &rendered,
+            "GET /api"
+        )
+        .unwrap(),
+        "removing a redundant declaration must retain the runtime revalidation obligation"
+    );
+}
+
+#[test]
+fn time_settings_change_only_through_explicit_replacement_and_are_not_source_permissions() {
+    let mut current =
+        policy(json!({"format":"traffic-policy/v3","time":{"default_utc_offset":"+05:30"}}));
+    let replacement =
+        policy(json!({"format":"traffic-policy/v3","time":{"default_utc_offset":"+09:00"}}));
+    assert!(!merge(&mut current, &replacement).unwrap());
+    assert_eq!(current.time.default_utc_offset, "+05:30");
+    assert!(
+        merge_with_replacements(&mut current, &replacement, &BTreeSet::from(["time".into()]))
+            .unwrap()
+    );
+    assert_eq!(current.time.default_utc_offset, "+09:00");
+    super::super::source_proof::SourceProofSnapshot::capture(&current).unwrap();
+    assert!(current.rules.is_empty());
+}
+
+#[test]
 fn formats_append_in_original_order_and_reapplication_is_a_noop() {
     for (first, addition, expected) in [
         (

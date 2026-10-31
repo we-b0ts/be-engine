@@ -19,6 +19,7 @@ mod json_arrays;
 mod motan1;
 mod primary_metadata;
 mod relative_timestamp;
+mod response_clocks;
 mod simple_motan;
 mod sse;
 mod x_request_id;
@@ -59,6 +60,7 @@ fn write_raw_case(
         &expected,
         serde_json::to_vec(&json!({
             "status": 200,
+            "timestamp": "2023-11-14T22:13:20Z",
             "body": {
                 "encoding": "utf8",
                 "data": expected_body,
@@ -73,6 +75,7 @@ fn write_raw_case(
         serde_json::to_vec(&json!({
             "version": 1,
             "request_sent_at": "2023-11-14T22:14:20Z",
+            "response_completed_at": "2023-11-14T22:14:20Z",
             "status": 200,
             "body": {
                 "encoding": "utf8",

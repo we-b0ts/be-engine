@@ -109,7 +109,7 @@ fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire(
     );
     assert_eq!(
         delivered.rows[0][2].value.as_ref().unwrap(),
-        &json!("2026-01-01 00:00:05")
+        &json!("2020-01-01 00:00:05")
     );
     assert_eq!(
         record.response.rows[0][0].value.as_ref().unwrap(),
@@ -120,7 +120,7 @@ fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire(
         "UPDATE tasks SET payload='{payload}',created_at='2020-01-01 00:00:05' WHERE id='{A}'"
     );
     let target_sql = format!(
-        "UPDATE tasks SET payload='{rendered}',created_at='2026-01-01 00:00:05' WHERE id='{X}'"
+        "UPDATE tasks SET payload='{rendered}',created_at='2020-01-01 00:00:05' WHERE id='{X}'"
     );
     let source_record: RecordedMysqlExchange = serde_json::from_value(
         json!({"command":"COM_QUERY","sql":source_sql,"database":"app","response":{"status":"ok"}}),
@@ -178,6 +178,14 @@ fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire(
         .unwrap();
     let comparison = compare(&target_sql).unwrap();
     assert!(comparison.passed(), "{:?}", comparison.differences);
+    assert!(
+        compare(&target_sql.replace(
+            "created_at='2020-01-01 00:00:05'",
+            "created_at='2026-01-01 00:00:05'"
+        ))
+        .is_err(),
+        "implicit textual time comparison cannot invent a rebased delivered value"
+    );
     assert!(compare(&target_sql.replace("\"stable\":7", "\"stable\":8")).is_err());
     owner.clear_time_copies("case");
     assert!(compare(&target_sql).is_err());

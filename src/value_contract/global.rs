@@ -8,9 +8,12 @@ use super::{
     json::{self, AnchorClocks, Comparison, Field},
     time,
 };
+#[cfg(test)]
+use crate::policy::GLOBAL_JSON_ID;
 use crate::{
     policy::{
-        Codec, CompiledJsonPolicy, CompiledRule, FieldContract, GLOBAL_JSON_ID, TimestampFormat,
+        Codec, CompiledJsonPolicy, CompiledRule, FieldContract, SelectedGlobalField,
+        TimestampFormat,
     },
     value_codec::{CodecView, DecodedValue},
 };
@@ -74,11 +77,55 @@ pub(crate) fn compare_decoded_with_time_copies(
     clocks: AnchorClocks,
     copies: &[json::VerifiedTimeCopy],
 ) -> Result<Comparison> {
+    if plan.fields.is_empty()
+        && rules.is_empty()
+        && source.comparison_view(&[]) == target.comparison_view(&[])
+    {
+        return Ok(Comparison::default());
+    }
+    compare_decoded_selected(source, target, plan, rules, clocks, copies)
+}
+
+/// Preflight must inventory semantic Source witnesses even when its immutable
+/// Source self-comparison is exact. Ordinary replay retains the exact fast path.
+pub(crate) fn compare_source_coverage(
+    source: &[u8],
+    plan: &CompiledJsonPolicy,
+    rules: &[&CompiledRule],
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
+    if !rules.is_empty() {
+        let codec = encoded::prepared_codec(rules)?;
+        return compare_decoded_source_coverage(&codec.decode(source)?, plan, rules, clocks);
+    }
+    let Ok(decoded) = CodecView::decode(&Codec::Json, source) else {
+        return compare(source, source, plan, rules, clocks);
+    };
+    compare_decoded_source_coverage(&decoded, plan, rules, clocks)
+}
+
+pub(crate) fn compare_decoded_source_coverage(
+    source: &DecodedValue,
+    plan: &CompiledJsonPolicy,
+    rules: &[&CompiledRule],
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
+    compare_decoded_selected(source, source, plan, rules, clocks, &[])
+}
+
+fn compare_decoded_selected(
+    source: &DecodedValue,
+    target: &DecodedValue,
+    plan: &CompiledJsonPolicy,
+    rules: &[&CompiledRule],
+    clocks: AnchorClocks,
+    copies: &[json::VerifiedTimeCopy],
+) -> Result<Comparison> {
     let protocols = super::global_protocol::checks(plan, &source.logical)?;
     let verified = protocols.fields();
-    let selected = plan.comparison_fields(&source.logical, &target.logical, clocks)?;
+    let selected = selected_fields(&source.logical, plan, rules, clocks)?;
     let mut paths = encoded::comparison_paths(&source.logical, rules)?;
-    paths.extend(selected.iter().map(|(pointer, _)| pointer.clone()));
+    paths.extend(selected.iter().map(|field| field.pointer.clone()));
     paths.extend(verified.iter().map(|field| field.pointer.to_owned()));
     let source_view = source.comparison_view(&paths);
     let target_view = target.comparison_view(&paths);
@@ -112,7 +159,10 @@ pub(crate) fn compare_logical_with_time_copies(
     clocks: AnchorClocks,
     copies: &[json::VerifiedTimeCopy],
 ) -> Result<Comparison> {
-    let selected = plan.comparison_fields(source, target, clocks)?;
+    if plan.fields.is_empty() && rules.is_empty() && source == target {
+        return Ok(Comparison::default());
+    }
+    let selected = selected_fields(source, plan, rules, clocks)?;
     let protocols = super::global_protocol::checks(plan, source)?;
     compare_selected_with_time_copies(
         source,
@@ -134,7 +184,7 @@ pub(crate) fn compare_logical_with_verified(
     clocks: AnchorClocks,
     additional: &[json::VerifiedField<'_>],
 ) -> Result<Comparison> {
-    let selected = plan.comparison_fields(source, target, clocks)?;
+    let selected = selected_fields(source, plan, &[], clocks)?;
     let protocols = super::global_protocol::checks(plan, source)?;
     let mut verified = protocols.fields();
     verified.extend(additional.iter().map(|field| json::VerifiedField {
@@ -148,7 +198,7 @@ pub(crate) fn compare_logical_with_verified(
 fn compare_selected(
     source: &Value,
     target: &Value,
-    selected: &[(String, FieldContract)],
+    selected: &[SelectedGlobalField],
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Comparison> {
@@ -158,7 +208,7 @@ fn compare_selected(
 fn compare_selected_with_time_copies(
     source: &Value,
     target: &Value,
-    selected: &[(String, FieldContract)],
+    selected: &[SelectedGlobalField],
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
     copies: &[json::VerifiedTimeCopy],
@@ -177,7 +227,9 @@ fn compare_selected_with_time_copies(
                 })
         })
         .collect::<Vec<_>>();
-    for (pointer, contract) in selected {
+    for selected in selected {
+        let pointer = &selected.pointer;
+        let contract = &selected.contract;
         let existing = fields
             .iter()
             .filter(|field| {
@@ -191,7 +243,7 @@ fn compare_selected_with_time_copies(
             !existing.is_empty() && existing.iter().all(|field| field.contract == contract);
         if !duplicate {
             fields.push(Field {
-                rule_id: GLOBAL_JSON_ID,
+                rule_id: selected.rule_id,
                 pointer,
                 contract,
             });
@@ -199,9 +251,9 @@ fn compare_selected_with_time_copies(
     }
     let mut comparison =
         json::compare_with_verified_time_copies(source, target, &fields, verified, clocks, copies);
-    if !selected.is_empty() {
-        comparison.evaluated.insert(GLOBAL_JSON_ID.into());
-    }
+    comparison
+        .evaluated
+        .extend(selected.iter().map(|field| field.rule_id.into()));
     Ok(comparison)
 }
 
@@ -228,7 +280,10 @@ pub(crate) fn materialize_decoded(
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Vec<u8>> {
-    let selected = plan.fields_with_clocks(&source.logical, clocks)?;
+    if plan.fields.is_empty() && rules.is_empty() {
+        return Ok(source.original_bytes().to_vec());
+    }
+    let selected = plan.selected_delivery_fields_with_clocks(&source.logical, clocks)?;
     let result = materialize_selected(&source.logical, &selected, rules, clocks)?;
     let mut allowed = rules
         .iter()
@@ -237,8 +292,8 @@ pub(crate) fn materialize_decoded(
     allowed.extend(
         selected
             .iter()
-            .filter(|(_, contract)| contract.time().is_some())
-            .map(|(pointer, _)| pointer.clone()),
+            .filter(|field| field.contract.time().is_some())
+            .map(|field| field.pointer.clone()),
     );
     source.encode(&result, &allowed)
 }
@@ -249,9 +304,12 @@ pub(crate) fn materialize_logical(
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Value> {
+    if plan.fields.is_empty() && rules.is_empty() {
+        return Ok(source.clone());
+    }
     materialize_selected(
         source,
-        &plan.fields_with_clocks(source, clocks)?,
+        &plan.selected_delivery_fields_with_clocks(source, clocks)?,
         rules,
         clocks,
     )
@@ -259,25 +317,15 @@ pub(crate) fn materialize_logical(
 
 fn materialize_selected(
     source: &Value,
-    selected: &[(String, FieldContract)],
+    selected: &[SelectedGlobalField],
     rules: &[&CompiledRule],
     clocks: AnchorClocks,
 ) -> Result<Value> {
     let mut result = delivery::materialize(source, rules, clocks)?;
     let times = selected
         .iter()
-        .filter_map(|(pointer, contract)| contract.time().map(|time| (pointer, time)))
+        .filter_map(|field| field.contract.time().map(|time| (&field.pointer, time)))
         .collect::<Vec<_>>();
-    let quantum = times
-        .iter()
-        .map(|(_, contract)| match contract.format {
-            TimestampFormat::UnixSeconds | TimestampFormat::AmzDate => 1_000_000_000,
-            TimestampFormat::UnixMilliseconds => 1_000_000,
-            TimestampFormat::UnixMicroseconds => 1_000,
-            _ => 1,
-        })
-        .max()
-        .unwrap_or(1);
     for (pointer, contract) in &times {
         // Existing scoped delivery owns its selected field. Translate once,
         // then validate the combined declarations against the final copy.
@@ -297,11 +345,12 @@ fn materialize_selected(
                 contract
                     .offset()?
                     .context("calendar_date requires utc_offset")?,
-                clocks.dependency,
+                clocks.get(contract.anchor),
             )?
         } else {
-            let (a, b) = clocks.dependency.require()?;
+            let (a, b) = clocks.get(contract.anchor).require()?;
             let delta = time::date_nanos(b) - time::date_nanos(a);
+            let quantum = delivery::value_quantum(original, contract.format);
             delivery::shift(original, contract, delta / quantum * quantum)?
         };
         *result
@@ -310,7 +359,7 @@ fn materialize_selected(
     }
     let writable = selected
         .iter()
-        .filter(|(_, contract)| contract.time().is_some())
+        .filter(|field| field.contract.time().is_some())
         .cloned()
         .collect::<Vec<_>>();
     let check = compare_selected(source, &result, &writable, rules, clocks)?;
@@ -320,6 +369,39 @@ fn materialize_selected(
         check.differences
     );
     Ok(result)
+}
+
+fn selected_fields(
+    source: &Value,
+    plan: &CompiledJsonPolicy,
+    rules: &[&CompiledRule],
+    clocks: AnchorClocks,
+) -> Result<Vec<SelectedGlobalField>> {
+    let mut selected = plan.selected_fields_with_clocks(source, clocks)?;
+    if rules.is_empty() {
+        return Ok(selected);
+    }
+    let mut owned = Vec::new();
+    for rule in rules {
+        for (pattern, contract) in &rule.rule.contract {
+            // Unordered authorizes array pairing; its scalar descendants still
+            // retain their ordinary standard timestamp semantics.
+            if !matches!(contract, FieldContract::Unordered) {
+                owned.extend(delivery::select(pattern, source)?);
+            }
+        }
+    }
+    selected.retain(|field| {
+        field.rule_id != time::automatic::RULE_ID
+            || !owned.iter().any(|owner| {
+                field.pointer == *owner
+                    || field
+                        .pointer
+                        .strip_prefix(owner)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            })
+    });
+    Ok(selected)
 }
 
 #[cfg(test)]

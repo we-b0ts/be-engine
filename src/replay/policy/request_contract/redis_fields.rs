@@ -114,19 +114,15 @@ pub(crate) fn redis_field_values<'a>(
                 "Redis script key count exceeds arguments"
             );
             for index in start..args.len() {
-                if crate::json_value::parse(&args[index])
-                    .is_some_and(|value| value.is_object() || value.is_array())
-                {
-                    values.push(RedisFieldValue {
-                        container: String,
-                        key: if keys == 0 { &[] } else { &args[2] },
-                        hash_field: None,
-                        payload: Some(&args[index]),
-                        stored: false,
-                        argument: Some(index),
-                        response: None,
-                    });
-                }
+                values.push(RedisFieldValue {
+                    container: String,
+                    key: if keys == 0 { &[] } else { &args[2] },
+                    hash_field: None,
+                    payload: Some(&args[index]),
+                    stored: false,
+                    argument: Some(index),
+                    response: None,
+                });
             }
         }
         _ => {}

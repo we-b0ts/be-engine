@@ -19,8 +19,15 @@ fn write_field(path: &Path, field: &str, observation: serde_json::Value) {
 }
 
 fn observation(data: &str, clean: bool) -> serde_json::Value {
+    let message = serde_json::to_string(&crate::interaction::stream::SseEvent {
+        event: None,
+        id: None,
+        retry: None,
+        data: data.into(),
+    })
+    .unwrap();
     json!({"version":1,"protocol":"sse", "events":[
-        {"sequence":1,"offset_ms":20,"message":{"kind":"text","data":data},"heartbeat":false}
+        {"sequence":1,"offset_ms":20,"message":{"kind":"text","data":message},"heartbeat":false}
     ], "end":{"reason":"server_eof","offset_ms":100,"pending":[],"clean":clean}})
 }
 
@@ -43,7 +50,11 @@ fn legacy_fifty_ms_evidence_requires_rerecording_and_stays_immutable() {
 fn semantic_stream_events_and_closure_determine_compatibility() {
     for (actual, should_pass, pointer) in [
         (observation("source", true), true, ""),
-        (observation("target", true), false, "$interaction/events/0"),
+        (
+            observation("target", true),
+            false,
+            "$interaction/events/0/sse/data",
+        ),
         (
             observation("source", false),
             false,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::replay::redis::activity::tests::{create, document, events};
+use crate::replay::redis::activity::tests::{create, document, events, now_string};
 use crate::replay::redis::append::tests::request;
 use crate::replay::{ReplayExchangeStatus, ReplayRuntime};
 
@@ -18,7 +18,7 @@ fn target() -> TargetKey {
 
 fn refresh(current: &[u8]) -> RedisCommand {
     let mut next: serde_json::Value = serde_json::from_slice(current).unwrap();
-    next["last_activity_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+    next["last_activity_at"] = serde_json::json!(now_string());
     let next = serde_json::to_vec(&next).unwrap();
     redis_command(&bytes::Bytes::from(crate::redis::encode_array(&[
         b"SET",

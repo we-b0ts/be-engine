@@ -65,9 +65,9 @@ json:
     )
     .unwrap();
     let capture = |body: Value| json!({"encoding":"utf8","data":body.to_string(),"truncated":false,"decode_error":null});
-    let expected=serde_json::to_vec(&json!({"status":200,"body":capture(json!({"members":[1,2,1],"expiry":1_792_108_810_000_001i64,"stable":"yes"}))})).unwrap();
+    let expected=serde_json::to_vec(&json!({"status":200,"timestamp":"2026-10-16T00:00:00Z","body":capture(json!({"members":[1,2,1],"expiry":1_792_108_810_000_001i64,"stable":"yes"}))})).unwrap();
     let evaluate = |body: Value, status: u16| {
-        let actual=serde_json::to_vec(&json!({"version":1,"status":status,"request_sent_at":"2026-10-16T00:01:00Z","body":capture(body)})).unwrap();
+        let actual=serde_json::to_vec(&json!({"version":1,"status":status,"request_sent_at":"2026-10-16T00:01:00Z","response_completed_at":"2026-10-16T00:01:00Z","body":capture(body)})).unwrap();
         assert_recorded_response_with_policy(
             ResponseAssertionOptions {
                 case_id: "session".into(),

@@ -73,7 +73,7 @@ async fn historical_read_then_immediate_write_on_another_connection_is_repeatabl
             runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
             document["updatedAt"] = json!(
                 (observed + chrono::Duration::seconds(1))
-                    .format("%Y-%m-%dT%H:%M:%S%.6f")
+                    .format("%Y-%m-%dT%H:%M:%S")
                     .to_string()
             );
             assert_eq!(document["createdAt"], delivered_created);
@@ -171,7 +171,7 @@ async fn delivered_time_facts_are_visible_before_the_async_global_delivery_ledge
         runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
         document["updatedAt"] = json!(
             (observed + chrono::Duration::seconds(1))
-                .format("%Y-%m-%dT%H:%M:%S%.6f")
+                .format("%Y-%m-%dT%H:%M:%S")
                 .to_string()
         );
         assert_eq!(

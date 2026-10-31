@@ -45,6 +45,7 @@ fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
         .context("expected a rule, rule list, or traffic-policy/v3 document")?;
     let document = if value.get("rules").is_some()
         || value.get("format").is_some()
+        || value.get("time").is_some()
         || value.get("json").is_some()
         || value.get("mysql").is_some()
         || value.get("redis").is_some()
@@ -169,17 +170,24 @@ fn plan(
     let resolved = proposal_context::resolve(&input, &document)?;
     source_proof::validate_proposal(&resolved.input)?;
     let mut change = change::parse(&resolved.input)?;
+    ensure!(
+        !change.explicit_time
+            || change.replace_sections.contains("time")
+            || change.policy.time == document.time,
+        "changing time settings requires an explicit replace_sections: [time] proposal"
+    );
     crate::policy::require_source_proofs(&change.policy)?;
     let proposed = &mut change.policy;
     ensure!(
         !proposed.rules.is_empty()
+            || change.explicit_time
             || resolved.explicit_resources && !proposed.resources.is_empty()
             || proposed.json.is_some()
             || proposed.mysql.is_some()
             || proposed.redis.is_some()
             || proposed.http.is_some()
             || proposed.async_api.is_some(),
-        "policy proposal must contain JSON/MySQL/Redis/HTTP formats, async capture, endpoint aliases or native rules"
+        "policy proposal must contain time settings, JSON/MySQL/Redis/HTTP formats, async capture, endpoint aliases or native rules"
     );
     let before = compile_policy(&document)?;
     if batch_scope {
@@ -405,7 +413,7 @@ impl UnifiedRulePlanRecord {
             "requires_attribution_review":attribution_required,
             "requires_fresh_recording":self.changed() && self.preflight.needs_recording(), "verified":false,
             "policy":self.policy, "evidence_artifacts":self.artifacts.len(), "source_proofs":self.source_proofs,
-            "expanded_rules":rules, "json":expanded.as_ref().and_then(|p| p.global_json.as_ref()), "mysql":expanded.as_ref().and_then(|p| p.mysql.as_ref()), "redis":expanded.as_ref().and_then(|p|p.redis.as_ref()), "http":expanded.as_ref().and_then(|p|p.http.as_ref()), "async_api":expanded.as_ref().map(|p| &p.async_api), "effect_identity":expanded.as_ref().map(|p| &p.fingerprints),
+            "expanded_rules":rules, "time":updated.as_ref().map(|p| &p.time), "json":expanded.as_ref().and_then(|p| p.global_json.as_ref()), "mysql":expanded.as_ref().and_then(|p|p.mysql.as_ref()), "redis":expanded.as_ref().and_then(|p|p.redis.as_ref()), "http":expanded.as_ref().and_then(|p|p.http.as_ref()), "async_api":expanded.as_ref().map(|p| &p.async_api), "effect_identity":expanded.as_ref().map(|p| &p.fingerprints),
             "declaration_changes":declaration_changes,
             "checks":{"full_source_inventory":true,"immutable_attempt_and_witnesses":true,"policy_compare_and_swap":true,
                 "source_field_types":true,"unselected_fields_and_arguments":true,"independent_and_derived_roles_separate":true},

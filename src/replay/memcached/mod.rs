@@ -65,6 +65,8 @@ pub(super) struct RecordedExchange {
     sequence: u64,
     #[serde(default = "default_recorded_timestamp")]
     timestamp: DateTime<Utc>,
+    #[serde(default)]
+    request_started_at: Option<DateTime<Utc>>,
     target_host: String,
     target_port: u16,
     wire_protocol: String,
@@ -523,8 +525,7 @@ fn memcached_policy_context<'a>(
         key: request.key.as_deref(),
         recorded_value: exchange.value.as_deref(),
         actual_value: request.value.as_deref(),
-        recorded_observed_at: exchange.record.timestamp,
-        recorded_duration_ms: exchange.record.duration_ms,
+        recorded_request_started_at: contracts::source_start(&exchange.record),
         actual_observed_at: observed_at,
     }
 }
@@ -664,12 +665,12 @@ fn memcached_mismatch_fields(
                 ArgumentSnapshot {
                     args: &exchange.args,
                     extras: exchange.extras.as_deref(),
-                    observed_at: exchange.record.timestamp,
+                    observed_at: contracts::source_start(&exchange.record),
                 },
                 ArgumentSnapshot {
                     args: &request.args,
                     extras: request.extras.as_deref(),
-                    observed_at,
+                    observed_at: Some(observed_at),
                 },
             ))
         || exchange.value != request.value

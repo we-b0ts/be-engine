@@ -463,8 +463,7 @@ fn memcached_json_uses_global_formats_across_keys_and_resources_without_exposing
             key: Some(key),
             recorded_value: Some(&source),
             actual_value,
-            recorded_observed_at: source_at,
-            recorded_duration_ms: 0,
+            recorded_request_started_at: Some(source_at),
             actual_observed_at: target_at,
         };
         let decision = runtime.preview_memcached(&context(Some(&target))).unwrap();
@@ -501,8 +500,7 @@ fn unknown_memcached_bytes_remain_exact_and_value_presence_is_strict() {
         key: Some(b"u42"),
         recorded_value: Some(&source),
         actual_value,
-        recorded_observed_at: Utc::now(),
-        recorded_duration_ms: 0,
+        recorded_request_started_at: Some(Utc::now()),
         actual_observed_at: Utc::now(),
     };
     assert!(runtime.preview_memcached(&context(Some(&source))).is_ok());

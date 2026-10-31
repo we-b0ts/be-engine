@@ -35,6 +35,12 @@ pub(super) fn observe(
             return Ok(Some(index));
         }
         drafts.observations += 1;
+        let event_times = crate::value_contract::time::ClockPair {
+            source: event_clock(pair.interaction_times.source, source.offset_ms),
+            target: targets
+                .get(index)
+                .and_then(|event| event_clock(pair.interaction_times.target, event.offset_ms)),
+        };
         let Ok(source) = crate::replay::decode_sse(&source.message) else {
             continue;
         };
@@ -63,14 +69,19 @@ pub(super) fn observe(
             target.as_ref().map(|e| e.data.as_bytes()),
             base,
             &format!("{witness}:sse:{index}"),
-            AnchorClocks {
-                case: pair.times,
-                dependency: pair.times,
-                ..Default::default()
-            },
+            AnchorClocks::for_response(pair.request_times, event_times),
             schemas,
             None,
         )?;
     }
     Ok(None)
+}
+
+fn event_clock(
+    started: Option<chrono::DateTime<chrono::Utc>>,
+    offset_ms: u64,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    started?.checked_add_signed(chrono::TimeDelta::try_milliseconds(
+        i64::try_from(offset_ms).ok()?,
+    )?)
 }

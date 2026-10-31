@@ -22,9 +22,18 @@ pub struct JsonPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CompiledJsonPolicy {
     pub fields: BTreeMap<String, GlobalField>,
+    pub time: super::TimePolicy,
     pub fingerprint: String,
     #[serde(skip)]
     pub(crate) signatures: super::signatures::SignatureRegistry,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SelectedGlobalField {
+    pub(crate) pattern: String,
+    pub(crate) pointer: String,
+    pub(crate) contract: FieldContract,
+    pub(crate) rule_id: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,7 +189,7 @@ impl GlobalTimeFormat {
         FieldContract::Time {
             format: self.format,
             relation: TimeRelation::PreserveOffset,
-            anchor: TimeAnchor::DependencyRequestStart,
+            anchor: TimeAnchor::Observation,
             utc_offset: self.utc_offset.clone(),
             // Every physical occurrence owns its clock observations; an authored
             // global field declaration does not join unrelated business clocks.
@@ -387,7 +396,7 @@ impl GlobalField {
                     .context("duration requires exactly one unit")?;
                 Ok(FieldContract::Duration {
                     unit,
-                    anchor: TimeAnchor::DependencyRequestStart,
+                    anchor: TimeAnchor::Observation,
                 })
             }
             Self::Unordered => {
@@ -428,6 +437,15 @@ impl JsonPolicy {
         &self,
         signatures: &BTreeMap<String, super::SignatureDefinition>,
     ) -> Result<CompiledJsonPolicy> {
+        self.compile_with_settings(signatures, &super::TimePolicy::default())
+    }
+
+    pub(crate) fn compile_with_settings(
+        &self,
+        signatures: &BTreeMap<String, super::SignatureDefinition>,
+        time: &super::TimePolicy,
+    ) -> Result<CompiledJsonPolicy> {
+        time.offset()?;
         ensure!(
             self.fields.len() <= 4096,
             "json.fields accepts at most 4096 fields"
@@ -449,7 +467,8 @@ impl JsonPolicy {
         }
         Ok(CompiledJsonPolicy {
             fields: self.fields.clone(),
-            fingerprint: super::digest("traffic-policy/global-json/v1", &(self, signatures))?,
+            time: time.clone(),
+            fingerprint: super::digest("traffic-policy/global-json/v2", &(self, signatures, time))?,
             signatures: super::signatures::SignatureRegistry::new(
                 signatures,
                 &self
@@ -482,7 +501,11 @@ impl CompiledJsonPolicy {
     }
 
     pub(crate) fn identity_fields(&self, source: &Value) -> Result<Vec<(String, FieldContract)>> {
-        self.select_fields(source, None, true)
+        Ok(self
+            .select_authored_fields(source, None, true)?
+            .into_iter()
+            .map(|field| (field.pointer, field.contract))
+            .collect())
     }
 
     pub(crate) fn fields_with_clocks(
@@ -490,11 +513,33 @@ impl CompiledJsonPolicy {
         source: &Value,
         clocks: crate::value_contract::json::AnchorClocks,
     ) -> Result<Vec<(String, FieldContract)>> {
-        self.select_fields(
-            source,
-            clocks.dependency.source.or(clocks.case.source),
-            false,
-        )
+        Ok(self
+            .selected_fields_with_clocks(source, clocks)?
+            .into_iter()
+            .map(|field| (field.pointer, field.contract))
+            .collect())
+    }
+
+    /// Standard textual time recognition permits comparison only. Delivery
+    /// translation continues to require an authored field declaration.
+    pub(crate) fn delivery_fields_with_clocks(
+        &self,
+        source: &Value,
+        clocks: crate::value_contract::json::AnchorClocks,
+    ) -> Result<Vec<(String, FieldContract)>> {
+        Ok(self
+            .selected_delivery_fields_with_clocks(source, clocks)?
+            .into_iter()
+            .map(|field| (field.pointer, field.contract))
+            .collect())
+    }
+
+    pub(crate) fn selected_delivery_fields_with_clocks(
+        &self,
+        source: &Value,
+        clocks: crate::value_contract::json::AnchorClocks,
+    ) -> Result<Vec<SelectedGlobalField>> {
+        self.select_authored_fields(source, clocks.observation().source, false)
     }
 
     pub(crate) fn comparison_fields(
@@ -508,12 +553,59 @@ impl CompiledJsonPolicy {
         self.fields_with_clocks(source, clocks)
     }
 
-    fn select_fields(
+    pub(crate) fn selected_fields_with_clocks(
+        &self,
+        source: &Value,
+        clocks: crate::value_contract::json::AnchorClocks,
+    ) -> Result<Vec<SelectedGlobalField>> {
+        let authored = self.select_authored_fields(source, clocks.observation().source, false)?;
+        let mut selected = authored
+            .into_iter()
+            .map(|field| (field.pointer.clone(), field))
+            .collect::<BTreeMap<_, _>>();
+        let mut protocol_owned = std::collections::BTreeSet::new();
+        for (pattern, field) in &self.fields {
+            if matches!(
+                field,
+                GlobalField::Url { .. } | GlobalField::Template { .. } | GlobalField::Jwt { .. }
+            ) {
+                protocol_owned.extend(crate::value_contract::delivery::select(pattern, source)?);
+            }
+        }
+        for (pointer, mut contract) in
+            crate::value_contract::time::automatic::fields(source, &self.time)?
+        {
+            if protocol_owned.contains(&pointer) {
+                continue;
+            }
+            if let Some(authored) = selected.get(&pointer) {
+                let numeric_only = matches!(&self.fields[&authored.pattern], GlobalField::Time { formats } if formats.iter().all(|format| matches!(format.format, TimestampFormat::UnixSeconds | TimestampFormat::UnixMilliseconds | TimestampFormat::UnixMicroseconds)));
+                if !numeric_only {
+                    continue;
+                }
+            }
+            scope_time(&pointer, &mut contract)?;
+            selected.insert(
+                pointer.clone(),
+                SelectedGlobalField {
+                    pattern: crate::value_contract::time::automatic::pointer_pattern(
+                        source, &pointer,
+                    ),
+                    pointer,
+                    contract,
+                    rule_id: crate::value_contract::time::automatic::RULE_ID,
+                },
+            );
+        }
+        Ok(selected.into_values().collect())
+    }
+
+    fn select_authored_fields(
         &self,
         source: &Value,
         source_clock: Option<chrono::DateTime<chrono::Utc>>,
         identity_only: bool,
-    ) -> Result<Vec<(String, FieldContract)>> {
+    ) -> Result<Vec<SelectedGlobalField>> {
         let mut fields = Vec::new();
         for (pattern, field) in &self.fields {
             if matches!(
@@ -527,15 +619,22 @@ impl CompiledJsonPolicy {
                     for pointer in crate::value_contract::delivery::select(pattern, source)? {
                         let value = source.pointer(&pointer).context("JWT field disappeared")?;
                         if crate::value_contract::global_protocol::is_jwt(value) {
-                            fields.push((
+                            fields.push(SelectedGlobalField {
+                                pattern: pattern.clone(),
                                 pointer,
-                                FieldContract::Identity {
+                                contract: FieldContract::Identity {
                                     prefix: String::new(),
                                     format: IdentityFormat::Jwt,
                                 },
-                            ));
+                                rule_id: GLOBAL_JSON_ID,
+                            });
                         } else if !value.is_null() && !value.is_array() && !value.is_object() {
-                            fields.push((pointer, FieldContract::IdentityAnchor));
+                            fields.push(SelectedGlobalField {
+                                pattern: pattern.clone(),
+                                pointer,
+                                contract: FieldContract::IdentityAnchor,
+                                rule_id: GLOBAL_JSON_ID,
+                            });
                         }
                     }
                 }
@@ -559,15 +658,25 @@ impl CompiledJsonPolicy {
                 {
                     continue;
                 }
-                if let FieldContract::Time { clock_group, .. } = &mut contract {
-                    let digest = super::digest("traffic-policy/global-json-clock/v1", &pointer)?;
-                    *clock_group = Some(format!("schema.{}", &digest[7..39]));
-                }
-                fields.push((pointer, contract));
+                scope_time(&pointer, &mut contract)?;
+                fields.push(SelectedGlobalField {
+                    pattern: pattern.clone(),
+                    pointer,
+                    contract,
+                    rule_id: GLOBAL_JSON_ID,
+                });
             }
         }
         Ok(fields)
     }
+}
+
+fn scope_time(pointer: &str, contract: &mut FieldContract) -> Result<()> {
+    if let FieldContract::Time { clock_group, .. } = contract {
+        let digest = super::digest("traffic-policy/global-json-clock/v1", &pointer)?;
+        *clock_group = Some(format!("schema.{}", &digest[7..39]));
+    }
+    Ok(())
 }
 
 /// Automatic groups carry no authored cross-field clock relationship.

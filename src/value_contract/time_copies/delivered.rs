@@ -73,9 +73,9 @@ impl DeliveredTimeCopies {
                         .any(|&(a, b)| a <= observed.0 && b <= observed.1)
             }) {
                 proofs.push(VerifiedTimeCopy {
-                    rule_id: crate::policy::GLOBAL_JSON_ID.into(),
+                    rule_id: leaf.rule_id.into(),
                     source_pointer: leaf.pointer.clone(),
-                    target_pattern: leaf.pointer.clone(),
+                    target_pattern: leaf.pattern.clone(),
                     source,
                     target: pair.target,
                     typed: true,
@@ -253,6 +253,80 @@ json:
                 .proofs(&source, plan, clocks, ClockPair::default())
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn builtin_copied_dates_follow_only_authorized_array_pairing() {
+        let compiled = crate::policy::parse_and_compile_policy(
+            "format: traffic-policy/v3\njson:\n  fields:\n    /items: {kind: unordered}\n",
+        )
+        .unwrap();
+        let plan = compiled.global_json.as_ref().unwrap();
+        let source = json!({"items":[{"id":1,"at":"2020-01-01T00:10:00Z"},{"id":2,"at":"fixed"}]});
+        let target = json!({"items":[{"id":2,"at":"fixed"},{"id":1,"at":"2021-01-01T00:20:00Z"}]});
+        let at = |text: &str| Some(text.parse().unwrap());
+        let clocks = AnchorClocks::for_response(
+            ClockPair::default(),
+            ClockPair {
+                source: at("2020-01-01T00:20:00Z"),
+                target: at("2021-01-01T00:50:00Z"),
+            },
+        );
+        let leaf = global_leaves(&source, plan, clocks).unwrap().remove(0);
+        assert_eq!(leaf.pattern, "/items/*/at");
+        assert_eq!(
+            leaf.rule_id,
+            crate::value_contract::time::automatic::RULE_ID
+        );
+        let position = TimeCopyPosition::Http {
+            host: "dependency.test",
+            port: 80,
+            exchange: "read",
+        };
+        let record = TimeCopyRecord::new_time(
+            &leaf.time,
+            position,
+            position,
+            &leaf.pattern,
+            &leaf.pattern,
+            &source["items"][0]["at"],
+            &target["items"][1]["at"],
+        )
+        .unwrap();
+        let mut store = TimeCopyStore::default();
+        store.set_record_clocks(ClockPair {
+            source: at("2020-01-01T00:15:00Z"),
+            target: at("2021-01-01T00:30:00Z"),
+        });
+        store.record_batch("case", vec![record]).unwrap();
+        let copies = store
+            .delivered_copies("case")
+            .proofs(&source, plan, clocks, clocks.observation())
+            .unwrap();
+        assert!(
+            !global::compare_logical(&source, &target, plan, &[], clocks)
+                .unwrap()
+                .passed()
+        );
+        assert!(
+            global::compare_logical_with_time_copies(&source, &target, plan, &[], clocks, &copies)
+                .unwrap()
+                .passed()
+        );
+        let mut changed = target.clone();
+        changed["items"][1]["at"] = json!("2021-01-01T00:20:01Z");
+        assert!(
+            !global::compare_logical_with_time_copies(
+                &source,
+                &changed,
+                plan,
+                &[],
+                clocks,
+                &copies
+            )
+            .unwrap()
+            .passed()
         );
     }
 }

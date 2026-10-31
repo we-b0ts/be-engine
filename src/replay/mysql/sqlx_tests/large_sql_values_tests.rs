@@ -102,10 +102,10 @@ dependency_rules:
 "#;
         let recorded_payload = json!({
             "name":"stable", "data":"x".repeat(300_000),
-            "status":{"updatedAt":"2020-01-01T00:00:00+00:00"}
+            "status":{"updatedAt":"2020-01-01T00:00:00.000000Z"}
         })
         .to_string();
-        let recorded_sql = text_sql(&recorded_payload, "2020-01-01 00:00:00", 7);
+        let recorded_sql = text_sql(&recorded_payload, "2020-01-01 00:00:00.000000", 7);
         assert!(recorded_sql.len() > 256 * 1024 && recorded_sql.len() < 1024 * 1024);
         for source_prepared in [false, true] {
             for target_prepared in [false, true] {
@@ -116,7 +116,7 @@ dependency_rules:
                     write["params"] = json!([
                         {"kind":"string","value":recorded_payload},
                         {"kind":"integer","value":0},
-                        {"kind":"datetime","value":"2020-01-01 00:00:00"},
+                        {"kind":"datetime","value":"2020-01-01 00:00:00.000000"},
                         {"kind":"integer","value":7}
                     ]);
                 }
@@ -138,7 +138,7 @@ dependency_rules:
                     let now = chrono::Utc::now();
                     let timestamp = now.naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
                     let observed = if attempt == 2 {
-                        "2020-01-01T00:00:00+00:00".to_string()
+                        "2020-01-01T00:00:00.000000Z".to_string()
                     } else {
                         now.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
                     };

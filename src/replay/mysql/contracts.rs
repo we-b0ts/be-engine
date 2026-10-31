@@ -160,6 +160,15 @@ pub(in crate::replay) fn prepare_delivery(
         None,
     );
     let source_clocks = source_clocks(clocks);
+    if !automatic::has_response_contracts(
+        automatic.expect("global MySQL mode"),
+        &record.response,
+        record.sql.as_deref(),
+        record.database.as_deref(),
+        source_clocks,
+    )? {
+        return Ok(None);
+    }
     let validation = automatic::compare_response(
         automatic.expect("global MySQL mode"),
         &record.response,
@@ -491,11 +500,13 @@ fn validate_request_clocks(
 pub(in crate::replay) fn source_started(
     record: &RecordedMysqlExchange,
 ) -> Option<chrono::DateTime<Utc>> {
-    record
-        .timestamp?
-        .checked_sub_signed(chrono::TimeDelta::try_milliseconds(
-            i64::try_from(record.duration_ms).ok()?,
-        )?)
+    record.request_started_at.or_else(|| {
+        record
+            .timestamp?
+            .checked_sub_signed(chrono::TimeDelta::try_milliseconds(
+                i64::try_from(record.duration_ms).ok()?,
+            )?)
+    })
 }
 fn source_clocks(clocks: AnchorClocks) -> AnchorClocks {
     fn pair(p: crate::value_contract::time::ClockPair) -> crate::value_contract::time::ClockPair {
@@ -504,11 +515,11 @@ fn source_clocks(clocks: AnchorClocks) -> AnchorClocks {
             target: p.source,
         }
     }
-    AnchorClocks {
-        case: pair(clocks.case),
-        dependency: pair(clocks.dependency),
-        delivery: pair(clocks.delivery),
-    }
+    AnchorClocks::for_request(
+        pair(clocks.case),
+        pair(clocks.dependency),
+        pair(clocks.delivery),
+    )
 }
 fn projected_response(
     record: &RecordedMysqlExchange,

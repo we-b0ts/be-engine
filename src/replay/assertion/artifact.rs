@@ -61,22 +61,22 @@ pub(super) struct ExpectedResponse {
 }
 
 impl ExpectedResponse {
-    /// Duration and event offsets share the capture's monotonic start. Legacy
-    /// request.json timestamps were captured after admission and body reads.
-    pub(super) fn clock_start(
-        &self,
-        fallback: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.interaction
-            .as_ref()
-            .and_then(|_| {
-                let elapsed = i64::try_from(self.duration_ms.as_ref()?.as_u64()?).ok()?;
-                chrono::DateTime::parse_from_rfc3339(self.timestamp.as_ref()?.as_str()?)
-                    .ok()?
-                    .with_timezone(&chrono::Utc)
-                    .checked_sub_signed(chrono::TimeDelta::try_milliseconds(elapsed)?)
-            })
-            .or(fallback)
+    pub(super) fn response_completed_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        chrono::DateTime::parse_from_rfc3339(self.timestamp.as_ref()?.as_str()?)
+            .ok()
+            .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+    }
+
+    /// Duration and event offsets share the interaction's monotonic start;
+    /// an API request timestamp cannot substitute for a missing stream clock.
+    pub(super) fn interaction_started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.interaction.as_ref().and_then(|_| {
+            let elapsed = i64::try_from(self.duration_ms.as_ref()?.as_u64()?).ok()?;
+            chrono::DateTime::parse_from_rfc3339(self.timestamp.as_ref()?.as_str()?)
+                .ok()?
+                .with_timezone(&chrono::Utc)
+                .checked_sub_signed(chrono::TimeDelta::try_milliseconds(elapsed)?)
+        })
     }
 }
 
@@ -116,6 +116,8 @@ pub(super) struct ActualResponse {
     pub(super) sse_observation: Option<SseObservation>,
     #[serde(default)]
     pub(super) request_sent_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub(super) response_completed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, rename = "request_rules")]
     _request_rules: Vec<crate::request_rules::RequestRuleObservation>,
     #[serde(default)]

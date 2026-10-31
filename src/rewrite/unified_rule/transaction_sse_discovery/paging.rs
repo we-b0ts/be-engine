@@ -160,7 +160,7 @@ fn a_failed_case_late_in_inventory_is_examined_before_passing_cases() {
         }).collect()
     });
     fixture.confirm();
-    fixture.replace_case_responses("00000000-0000-4000-8000-00000000012c", json!({"status":200,"body":body(json!({"late":START}))}), json!({"version":1,"status":200,"body":body(json!({"late":START+60})),"request_sent_at":"2026-10-16T00:01:00Z"}));
+    fixture.replace_case_responses("00000000-0000-4000-8000-00000000012c", json!({"status":200,"body":body(json!({"late":START})),"timestamp":"2026-10-16T00:00:00Z"}), json!({"version":1,"status":200,"body":body(json!({"late":START+60})),"request_sent_at":"2026-10-16T00:01:00Z","response_completed_at":"2026-10-16T00:01:00Z"}));
     let mut assertions: Value =
         serde_json::from_slice(&fs::read(&fixture.paths.assertions).unwrap()).unwrap();
     for case in assertions["cases"].as_array_mut().unwrap() {

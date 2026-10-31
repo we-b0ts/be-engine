@@ -46,11 +46,11 @@ impl WitnessClocks {
             source: p.source,
             target: p.target,
         };
-        crate::value_contract::json::AnchorClocks {
-            case: pair(&self.case),
-            dependency: pair(&self.dependency),
-            delivery: pair(&self.delivery),
-        }
+        crate::value_contract::json::AnchorClocks::for_request(
+            pair(&self.case),
+            pair(&self.dependency),
+            pair(&self.delivery),
+        )
     }
 }
 

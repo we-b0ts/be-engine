@@ -120,7 +120,7 @@ pub(super) fn validate_legacy_offset(offset: &Value) -> Result<()> {
     crate::policy::TimeContract {
         format: crate::policy::TimestampFormat::SqlDatetime,
         relation: crate::policy::TimeRelation::PreserveOffset,
-        anchor: crate::policy::TimeAnchor::DependencyRequestStart,
+        anchor: crate::policy::TimeAnchor::Observation,
         utc_offset: Some(offset.into()),
         clock_group: None,
         clock_scope: Default::default(),

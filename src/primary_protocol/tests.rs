@@ -47,11 +47,13 @@ async fn http_static_adapter_executes_real_input_and_retains_independent_clocks(
         }
         assert!(head.starts_with(b"GET /api/42 HTTP/1.1\r\n"));
         stream
-            .write_all(
-                b"HTTP/1.1 201 Created\r\nContent-Length: 6\r\nConnection: close\r\n\r\nactual",
-            )
+            .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 6\r\nConnection: close\r\n\r\n")
             .await
             .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let body_released_at = chrono::Utc::now();
+        stream.write_all(b"actual").await.unwrap();
+        body_released_at
     });
     let temp = tempfile::tempdir().unwrap();
     let request_path = temp.path().join("request.json");
@@ -82,7 +84,11 @@ async fn http_static_adapter_executes_real_input_and_retains_independent_clocks(
         artifact["primary"]["clocks"]["case"]["target"],
         artifact["primary"]["clocks"]["case"]["source"]
     );
-    server.await.unwrap();
+    let completed_at: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(artifact["response_completed_at"].clone()).unwrap();
+    assert!(completed_at >= server.await.unwrap());
+    assert!(completed_at > output.clocks.target_request_started_at);
+    assert!(completed_at <= chrono::Utc::now());
 }
 
 fn motan2_request() -> Vec<u8> {
@@ -124,8 +130,9 @@ async fn motan_versions_use_real_wire_and_typed_identity_without_expected_eviden
                 motan_protocol::Limits::default(),
             )
             .unwrap();
+            let body_released_at = chrono::Utc::now();
             stream.write_all(&response).await.unwrap();
-            response
+            (response, body_released_at)
         });
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("request.json");
@@ -156,7 +163,9 @@ async fn motan_versions_use_real_wire_and_typed_identity_without_expected_eviden
         let PrimaryObservation::Motan { response_frame, .. } = &output.observation else {
             panic!("native Motan output required")
         };
-        assert_eq!(*response_frame, server.await.unwrap());
+        let (expected_frame, body_released_at) = server.await.unwrap();
+        assert_eq!(*response_frame, expected_frame);
+        assert!(output.response_completed_at.unwrap() >= body_released_at);
         assert_eq!(
             output.artifact(&temp.path().join("actual.json")).unwrap()["primary"]["api"]["protocol"],
             "motan"

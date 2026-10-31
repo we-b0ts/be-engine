@@ -44,6 +44,7 @@ fn check(source: &str, target: &str) -> Comparison {
             source: chrono::DateTime::from_timestamp(1000, 0),
             target: chrono::DateTime::from_timestamp(2000, 0),
         },
+        Default::default(),
     )
     .unwrap()
 }
@@ -126,10 +127,13 @@ json:
         &WireMessage::text(r#"451024-["binary",{"_placeholder":true,"num":100}]"#),
         &WireMessage::text(r#"451024-["binary",{"_placeholder":true,"num":101}]"#),
         compiled.global_json.as_ref().unwrap(),
-        super::super::super::RequestTimes {
-            source: chrono::DateTime::from_timestamp(1000, 0),
-            target: chrono::DateTime::from_timestamp(1000, 0),
-        },
+        crate::value_contract::json::AnchorClocks::for_response(
+            Default::default(),
+            super::super::super::RequestTimes {
+                source: chrono::DateTime::from_timestamp(1000, 0),
+                target: chrono::DateTime::from_timestamp(1000, 0),
+            },
+        ),
         "event",
     )
     .unwrap()

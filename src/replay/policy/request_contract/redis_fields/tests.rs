@@ -4,6 +4,8 @@ use serde_json::json;
 #[path = "size_tests.rs"]
 mod size_tests;
 
+#[path = "automatic_tests.rs"]
+mod automatic_tests;
 #[path = "identity_tests.rs"]
 mod identity_tests;
 #[path = "scalar_tests.rs"]

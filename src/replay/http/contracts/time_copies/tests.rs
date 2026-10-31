@@ -4,6 +4,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn http_time_provenance_is_not_published_before_stream_eof() {
+    check_time_provenance(false).await;
+}
+
+#[tokio::test]
+async fn implicit_time_http_bytes_stay_original_and_provenance_waits_for_stream_eof() {
+    check_time_provenance(true).await;
+}
+
+async fn check_time_provenance(implicit: bool) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let case = root.join(".traffic-e2e/local/recordings/case");
@@ -15,7 +24,12 @@ async fn http_time_provenance_is_not_published_before_stream_eof() {
     )
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
-    let body = "data: {\"block\":{\"timestamp\":1010000}}\n\n";
+    let source = if implicit {
+        json!({"block":{"timestamp":"1970-01-01T00:16:50Z"}})
+    } else {
+        json!({"block":{"timestamp":1010000}})
+    };
+    let body = format!("data: {source}\n\n");
     let record = json!({"event_type":"http_exchange","id":"source-stream","scheme":"http","authority":"stream.test",
         "method":"POST","uri":"/stream","outcome":"response",
         "request_body":{"encoding":"utf8","truncated":false,"data":""},
@@ -25,7 +39,11 @@ async fn http_time_provenance_is_not_published_before_stream_eof() {
         "response_stream":{"version":1,"headers_ms":0,"chunks":[{"at_ms":10,"start":0,"end":body.len()}],"end_ms":300,"complete":true}});
     std::fs::write(case.join("dependencies.jsonl"), record.to_string()).unwrap();
     let policy = root.join("policy.yaml");
-    std::fs::write(&policy,"format: traffic-policy/v3\njson:\n  fields:\n    /block/timestamp: {kind: time, formats: [unix_milliseconds]}\n").unwrap();
+    std::fs::write(&policy, if implicit {
+        "format: traffic-policy/v3\n"
+    } else {
+        "format: traffic-policy/v3\njson:\n  fields:\n    /block/timestamp: {kind: time, formats: [unix_milliseconds]}\n"
+    }).unwrap();
     let (address, runtime, task) = crate::replay::http::tests::spawn_http_replay_with_policy(
         &case,
         vec![],
@@ -52,12 +70,18 @@ async fn http_time_provenance_is_not_published_before_stream_eof() {
     let mut crlf = [0; 2];
     client.read_exact(&mut crlf).await.unwrap();
     assert_eq!(&crlf, b"\r\n");
+    if implicit {
+        assert_eq!(
+            payload.as_slice(),
+            body.as_bytes(),
+            "implicit comparison never rewrites dependency inputs"
+        );
+    }
     let delivered = crate::value_codec::sse::Document::decode(&payload).unwrap();
     let target: serde_json::Value = serde_json::from_str(&delivered.events[0].data).unwrap();
     let compiled =
         crate::policy::parse_and_compile_policy(&std::fs::read_to_string(policy).unwrap()).unwrap();
     let plan = compiled.global_json.as_ref().unwrap();
-    let source = json!({"block":{"timestamp":1010000}});
     let clocks = AnchorClocks {
         dependency: crate::value_contract::time::ClockPair {
             source: chrono::DateTime::from_timestamp(1000, 0),

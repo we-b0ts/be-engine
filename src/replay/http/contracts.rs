@@ -176,8 +176,9 @@ pub(super) fn preview_request(
     } else {
         active_case
     }?;
-    owner.global_json()?;
-    Some((|| {
+    let global = owner.global_json()?;
+    let mut owns_body = true;
+    let result = (|| {
         anyhow::ensure!(
             uri_mismatch_reason(
                 &exchange.record.uri,
@@ -188,6 +189,10 @@ pub(super) fn preview_request(
             "HTTP body contract preserves path and unowned query parameters"
         );
         let source = decode_body(&exchange.record.request_body)?;
+        if global.fields.is_empty() && source == actual.body {
+            owns_body = false;
+            return Ok(crate::replay::policy::request_contract::Decision::default());
+        }
         let clocks = policy.request_contracts.contract_clocks(
             Some(case),
             request_headers::time_reference::source(&exchange.record),
@@ -197,6 +202,12 @@ pub(super) fn preview_request(
         );
         let comparison =
             owner.compare_global_case_value(case, &source, actual.body, &[], clocks)?;
+        // An empty automatic plan must preserve ordinary strict comparison and
+        // its discovery diagnostics when Source has no semantic field owner.
+        owns_body = !comparison.evaluated.is_empty() || !comparison.pre_matches.is_empty();
+        if !owns_body {
+            return Ok(crate::replay::policy::request_contract::Decision::default());
+        }
         *diagnostic = Some(serde_json::json!({
             "source_exchange_id":exchange.record.id,
             "selected_rule_ids":comparison.evaluated,
@@ -218,7 +229,8 @@ pub(super) fn preview_request(
             crate::replay::policy::request_contract::Decision::from_value_comparison(comparison);
         decision.identity = Some(identity);
         Ok(decision)
-    })())
+    })();
+    owns_body.then_some(result)
 }
 
 pub(super) fn materialize_response(
@@ -354,6 +366,12 @@ fn materialize_value(
     delivered_at: chrono::DateTime<Utc>,
     decision: &mut DependencyRuleDecision,
 ) -> Result<Vec<u8>> {
+    if owner
+        .global_json()
+        .is_none_or(|plan| plan.fields.is_empty())
+    {
+        return Ok(payload.to_vec());
+    }
     let global = owner
         .global_json()
         .filter(|_| crate::json_value::parse(payload).is_some());
@@ -461,6 +479,12 @@ fn observe_known_value(
     payload: &[u8],
     clocks: AnchorClocks,
 ) -> Result<()> {
+    if contracts
+        .global_json()
+        .is_none_or(|plan| plan.fields.is_empty())
+    {
+        return Ok(());
+    }
     if let Some(global) = contracts
         .global_json()
         .filter(|_| crate::json_value::parse(payload).is_some())

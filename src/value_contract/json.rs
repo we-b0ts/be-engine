@@ -41,11 +41,36 @@ pub(crate) struct AnchorClocks {
     pub(crate) case: ClockPair,
     pub(crate) dependency: ClockPair,
     pub(crate) delivery: ClockPair,
+    /// Explicit response/event clocks, including an explicitly missing pair.
+    /// Dependency-only adapters can retain their actual request pair above.
+    pub(crate) observation: Option<ClockPair>,
 }
 
 impl AnchorClocks {
-    fn get(self, anchor: TimeAnchor) -> ClockPair {
+    pub(crate) fn for_request(case: ClockPair, dependency: ClockPair, delivery: ClockPair) -> Self {
+        Self {
+            case,
+            dependency,
+            delivery,
+            observation: Some(dependency),
+        }
+    }
+
+    pub(crate) fn for_response(request: ClockPair, response: ClockPair) -> Self {
+        Self {
+            case: request,
+            observation: Some(response),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn observation(self) -> ClockPair {
+        self.observation.unwrap_or(self.dependency)
+    }
+
+    pub(crate) fn get(self, anchor: TimeAnchor) -> ClockPair {
         match anchor {
+            TimeAnchor::Observation => self.observation(),
             TimeAnchor::DependencyRequestStart => self.dependency,
             TimeAnchor::ApiRequestStart | TimeAnchor::DependencyDelivery => ClockPair::default(),
         }
@@ -649,6 +674,7 @@ impl Comparator<'_> {
                             | crate::policy::GLOBAL_HTTP_ID
                             | crate::policy::GLOBAL_REDIS_ID
                             | "global.mysql"
+                            | super::time::automatic::RULE_ID
                     ) && source == target
                     {
                         return Ok(());
@@ -670,6 +696,7 @@ impl Comparator<'_> {
                             | crate::policy::GLOBAL_HTTP_ID
                             | crate::policy::GLOBAL_REDIS_ID
                             | "global.mysql"
+                            | super::time::automatic::RULE_ID
                     ) && source == target
                     {
                         return Ok(());
@@ -830,6 +857,9 @@ pub(crate) fn parse_time_pair(
 ) -> Result<(i128, i128), TimeError> {
     if !same_type(source, target) {
         return Err(TimeError::NumericCategoryChanged);
+    }
+    if config.format != TimestampFormat::CalendarDate {
+        time::validate_representation(source, target, core_format(config.format)?)?;
     }
     Ok((
         parse_time_value(source, config)?,

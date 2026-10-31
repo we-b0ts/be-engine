@@ -68,7 +68,7 @@ fn columns_for_policy(
             if leaves.is_empty() {
                 continue;
             }
-            let codec = if selected.id == automatic::MYSQL_ID {
+            let codec = if selected.native_scalar {
                 crate::policy::Codec::Scalar
             } else {
                 crate::policy::Codec::Json
