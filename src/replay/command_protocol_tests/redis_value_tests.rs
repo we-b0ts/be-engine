@@ -111,7 +111,7 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
     .unwrap();
     std::fs::write(
         &policy,
-        "format: traffic-policy/v2\njson: {fields: {/ids: {kind: unordered}}}\n",
+        "format: traffic-policy/v3\njson: {fields: {/ids: {kind: unordered}}}\n",
     )
     .unwrap();
     let (addr, state, task) = spawn(&case, Some(policy)).await;

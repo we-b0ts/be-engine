@@ -99,7 +99,12 @@ fn recovery_rolls_back_exact_published_bytes_and_never_drops_a_foreign_write_int
         } else {
             // Make frozen evidence stale; the applied effect must be reverted
             // before the stale intent can be retired.
-            let actual = fixture.paths.replay.parent().unwrap().join("case-1.json");
+            let actual = fixture
+                .paths
+                .replay
+                .parent()
+                .unwrap()
+                .join("00000000-0000-4000-8000-000000000001.json");
             fs::write(actual, "{}").unwrap();
         }
         let result = recover_rewrite_rule_plan(fixture.context(), &plan);

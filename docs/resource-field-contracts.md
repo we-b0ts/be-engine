@@ -1,6 +1,6 @@
 # Global field formats
 
-`project.policy` names one `traffic-policy/v2` document. Declare JSON field
+`project.policy` names one `traffic-policy/v3` document. Declare JSON field
 formats once under `json.fields`, regardless of the API, SSE event, database
 column or cache key that carries the payload. Protocol adapters still pair the
 same requests, resources, rows and response positions before comparing values.
@@ -17,7 +17,7 @@ use the capture start; legacy recordings recover that start from the recorded
 completion timestamp and duration without changing their original files.
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 json:
   fields:
     /created_at: {kind: time, formats: [unix_seconds]}

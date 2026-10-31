@@ -45,6 +45,7 @@ impl RewriteStore {
             super::repository_analysis::refresh(&self.target_root, state)?;
             super::group_replay::refresh(state);
             super::implementer::refresh(state)?;
+            super::dependency_review::refresh_receipts(&self.target_root, state)?;
         } else {
             super::regression_scope::validate_uninitialized(&self.target_root)?;
         }
@@ -73,11 +74,6 @@ impl RewriteStore {
         );
         super::worker::events::overlay(&self.target_root, &mut state)?;
         super::rule_plans::events::overlay(&self.target_root, &mut state)?;
-        if state.api_inventory.is_empty()
-            && state.phase != super::model::RewritePhase::RecordingRequired
-        {
-            super::inventory::initialize_legacy(&mut state);
-        }
         super::repository_analysis::refresh(&self.target_root, &mut state)?;
         super::group_replay::refresh(&mut state);
         super::implementer::refresh(&mut state)?;

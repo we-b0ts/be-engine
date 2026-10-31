@@ -22,7 +22,7 @@ fn rule() -> BackgroundDependencyRuleConfig {
         key_patterns: Vec::<RedisKeyPatternConfig>::new(),
         key_prefix: String::new(),
         key_suffix: String::new(),
-        initial_load_timeout_ms: None,
+        initial_load_timeout_ms: Some(1000),
         fields: vec!["version".to_string()],
         source_revision: "abcdef1".to_string(),
         source_evidence: "CacheLoader.java:42".to_string(),
@@ -62,7 +62,15 @@ fn record(reason: Option<&str>, response: &str) -> RecordedExchange {
         cache_snapshot_rule: None,
         cache_snapshot_hit: false,
         session_setup: false,
-        global_dependency_reason: reason.map(str::to_string),
+        capture: reason.map(|reason| {
+            crate::dependency::observation::fixture_capture(if reason == "background_rule" {
+                "process"
+            } else if reason == "bootstrap_window" {
+                "startup"
+            } else {
+                "unattributed"
+            })
+        }),
     }
 }
 
@@ -70,12 +78,16 @@ fn record(reason: Option<&str>, response: &str) -> RecordedExchange {
 fn finite_process_get_preserves_each_response_and_never_derives_reuse() {
     let mut rule = rule();
     let BackgroundDependencyRuleConfig::Redis {
-        command, fields, ..
+        command,
+        fields,
+        initial_load_timeout_ms,
+        ..
     } = &mut rule
     else {
         unreachable!()
     };
     *command = "GET".into();
+    *initial_load_timeout_ms = None;
     fields.clear();
     let mut state = RedisReplayState::default();
     for response in ["$2\r\nv1\r\n", "$-1\r\n"] {
@@ -85,7 +97,7 @@ fn finite_process_get_preserves_each_response_and_never_derives_reuse() {
         state
             .register_exchange(
                 record,
-                ReplaySource::Global,
+                ReplaySource::Process,
                 None,
                 &mut BTreeMap::new(),
                 std::slice::from_ref(&rule),
@@ -143,7 +155,7 @@ fn finite_process_get_preserves_each_response_and_never_derives_reuse() {
         state
             .register_exchange(
                 seed,
-                ReplaySource::Global,
+                ReplaySource::Process,
                 None,
                 &mut BTreeMap::new(),
                 &[rule]
@@ -160,7 +172,7 @@ fn derives_one_reusable_seed_from_consistent_old_global_and_case_evidence() {
     state
         .register_exchange(
             record(Some("bootstrap_window"), "$2\r\nv1\r\n"),
-            ReplaySource::Global,
+            ReplaySource::Process,
             None,
             &mut targets,
             std::slice::from_ref(&rule),
@@ -210,7 +222,7 @@ fn conflicting_case_response_rejects_the_entire_rule_overlay() {
     state
         .register_exchange(
             record(Some("bootstrap_window"), "$2\r\nv1\r\n"),
-            ReplaySource::Global,
+            ReplaySource::Process,
             None,
             &mut targets,
             std::slice::from_ref(&rule),
@@ -244,7 +256,7 @@ fn failed_response_is_not_eligible_for_derivation() {
     let rule = rule();
     let mut failed = evidence_from_record(
         None,
-        ReplaySource::Global,
+        ReplaySource::Process,
         record(Some("bootstrap_window"), "-ERR unavailable\r\n"),
     )
     .unwrap();
@@ -261,7 +273,7 @@ fn overlay_fingerprint_is_bound_to_the_case_source_and_current_rule() {
     let evidence = vec![
         evidence_from_record(
             None,
-            ReplaySource::Global,
+            ReplaySource::Process,
             record(Some("bootstrap_window"), "$2\r\nv1\r\n"),
         )
         .unwrap(),
@@ -367,7 +379,15 @@ fn record_json(reason: Option<&str>, response: &str) -> serde_json::Value {
         "session_setup": false
     });
     if let Some(reason) = reason {
-        value["global_dependency_reason"] = json!(reason);
+        value["capture"] = json!(crate::dependency::observation::fixture_capture(
+            if reason == "background_rule" {
+                "process"
+            } else if reason == "bootstrap_window" {
+                "startup"
+            } else {
+                "unattributed"
+            }
+        ));
     }
     value
 }

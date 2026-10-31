@@ -359,6 +359,14 @@ pub(super) fn annotate_status(target_root: &Path, action: &mut RewriteAction) ->
     Ok(())
 }
 
+/// Preserve the resource state of an already observed operation while projecting
+/// one status response, even if its marker finishes during that projection.
+pub(super) fn snapshot_blocks_replay(action: Option<&RewriteAction>) -> bool {
+    matches!(action, Some(RewriteAction::WaitRequired { resource, .. })
+        if resource == "coordinator_operation")
+        || matches!(action, Some(RewriteAction::RecoveryRequired { .. }))
+}
+
 pub(super) fn status_action(target_root: &Path) -> Result<Option<RewriteAction>> {
     let Some(execution) = load(target_root)? else {
         return Ok(None);

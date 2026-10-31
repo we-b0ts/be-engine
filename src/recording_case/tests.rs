@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::{AppConfig, AppState, BackgroundDependencyRuleConfig, HttpGatewayRuleConfig};
+use crate::{AppConfig, AppState, HttpGatewayRuleConfig};
 
 mod http_limits;
 mod queued_http;
@@ -25,26 +25,21 @@ async fn head(socket: &mut TcpStream) {
 }
 
 #[tokio::test]
-async fn background_api_delivers_response_then_records_a_delayed_real_redis_request() {
-    delayed_dependency(false, false, false).await;
-}
-
-#[tokio::test]
 async fn async_api_records_a_delayed_terminal_resource_as_an_ordinary_case_dependency() {
-    delayed_dependency(true, false, false).await;
+    delayed_dependency(false, false).await;
 }
 
 #[tokio::test]
-async fn async_api_dependency_failure_publishes_a_complete_case_and_quiesces_source() {
-    delayed_dependency(true, true, false).await;
+async fn async_api_dependency_failure_retries_then_reaches_the_declared_end() {
+    delayed_dependency(true, false).await;
 }
 
 #[tokio::test]
 async fn async_api_initial_del_before_primary_response_waits_for_the_final_del() {
-    delayed_dependency(true, false, true).await;
+    delayed_dependency(false, true).await;
 }
 
-async fn delayed_dependency(async_api: bool, failure: bool, repeated: bool) {
+async fn delayed_dependency(failure: bool, repeated: bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let temp = tempfile::tempdir().unwrap();
@@ -57,30 +52,12 @@ async fn delayed_dependency(async_api: bool, failure: bool, repeated: bool) {
             name: Some("jobs".into()), methods: vec!["POST".into()], paths: vec!["/jobs".into()], ..Default::default()
         }];
         config.recording.output_dir = temp.path().join("recordings");
-        config.recording.case_dependency_post_response_window_ms = 5;
-        config.recording.api_origin_dependency_idle_ms = 100;
+        config.recording.case_dependency_post_response_window_ms = 0;
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
-        let rule: BackgroundDependencyRuleConfig = serde_json::from_value(serde_json::json!({
-            "protocol": "redis", "name": "job-cancel", "ports": [6379], "command": "GET",
-            "key_templates": ["cancel:{task_id}"], "source_revision": "a".repeat(64),
-            "source_evidence": "app/jobs.rs:1 detached job cancellation check",
-            "trigger_source": {
-                "kind": "api", "method": "POST", "path": "/jobs", "request_body_json": {"/background": true},
-                "capture": {"task_id": {
-                    "protocol": "mysql", "target_host": "mysql.test", "target_port": 3306,
-                    "database": "jobs", "username": "app", "operation": "INSERT",
-                    "tables": ["tasks"], "row_match": {"kind": "Task"}, "column": "id"
-                }}
-            }
-        })).unwrap();
-        if async_api {
             config.async_api.insert("POST /jobs".into(), serde_json::from_value(serde_json::json!({
                 "when":{"/background":true},"end":[{"redis":{"operation":if repeated {"DEL"} else {"GET"},"key":"cancel:*","occurrence":if repeated {2} else {1}}}]
             })).unwrap());
-        } else {
-            config.process_owned_dependencies = vec![rule];
-        }
         let state = AppState::new(config).await.unwrap();
         let (mut source_redis, redis_client) = pair().await;
         let (mut redis_server, redis_upstream) = pair().await;
@@ -113,6 +90,12 @@ async fn delayed_dependency(async_api: bool, failure: bool, repeated: bool) {
             let mut response = vec![0;expected.len()];
             source_redis.read_exact(&mut response).await.unwrap();
             assert_eq!(response, expected);
+            if failure {
+                source_redis.write_all(command).await.unwrap();
+                let mut recovered=[0;5];
+                source_redis.read_exact(&mut recovered).await.unwrap();
+                assert_eq!(&recovered,b"$-1\r\n");
+            }
         });
         let upstream_task = tokio::spawn(async move {
             if repeated {
@@ -126,6 +109,10 @@ async fn delayed_dependency(async_api: bool, failure: bool, repeated: bool) {
             // A slow selected request must remain in flight beyond one idle window.
             tokio::time::sleep(Duration::from_millis(120)).await;
             redis_server.write_all(if failure {b"-ERR failure\r\n"} else if repeated {b":1\r\n"} else {b"$-1\r\n"}).await.unwrap();
+            if failure {
+                redis_server.read_exact(&mut command).await.unwrap();
+                redis_server.write_all(b"$-1\r\n").await.unwrap();
+            }
         });
         let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = gateway.local_addr().unwrap();
@@ -143,23 +130,20 @@ async fn delayed_dependency(async_api: bool, failure: bool, repeated: bool) {
         upstream_task.await.unwrap();
         assert!(state.inner.active_cases.wait_for_no_active_case(Duration::from_secs(2)).await);
         let directory = state.recorder().case_dir(&case);
-        let report_path=if async_api {"async-api-observation.json"} else {"api-origin-observation.json"};
+        let report_path="async-api-observation.json";
         let report: serde_json::Value = serde_json::from_slice(&tokio::fs::read(directory.join(report_path)).await.unwrap()).unwrap();
-        if async_api {
-            assert_eq!(report["end_reason"],if failure {"dependency_failure"} else {"resource"});
-            assert_eq!(report["complete"],true);
-            assert_eq!(state.inner.active_cases.is_quiescing(),failure);
+        {
+            assert_eq!(report["end_reason"],"resource");
+            assert_eq!(report["capture_complete"],true);
+            assert_eq!(report["business_complete"],true);
+            assert!(!state.inner.active_cases.is_quiescing());
             assert!(!directory.join("recording-error.json").exists());
             assert!(directory.join("expected-response.json").exists());
-        } else {
-            assert_eq!(report["outcome"], "quiet");
-            assert_eq!(report["selected_completed_refs"].as_array().unwrap().len(), 1);
-            assert_eq!(report["rules"][0]["selected_selector_only"], 1);
         }
-        let dependencies = tokio::fs::read_to_string(directory.join("dependencies.jsonl")).await.unwrap();
+        let dependencies = crate::recorder::test_io::read_to_string(directory.join("dependencies.jsonl")).await.unwrap();
         let observed=dependencies.lines().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()).filter(|event|event["event_type"]=="redis_exchange" && event["command"]==if repeated {"DEL"} else {"GET"}).count();
-        assert_eq!(observed,if repeated {2} else {1});
-        if async_api {
+        assert_eq!(observed,if repeated || failure {2} else {1});
+        {
             assert_eq!(report["inventory_complete"],true);
             assert_eq!(report["request_timeout_ms"],2000);
             assert_eq!(report["completed_refs"].as_array().unwrap().len(),observed);

@@ -29,6 +29,19 @@ pub(super) fn scope<T>(operation: impl FnOnce() -> T) -> T {
     operation()
 }
 
+/// Runtime boundaries cannot reuse the caller's read-only repository snapshot.
+pub(super) fn fresh<T>(operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<FingerprintCache>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CACHE.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = CACHE.with(|slot| slot.borrow_mut().take());
+    let _restore = Restore(previous);
+    scope(operation)
+}
+
 pub(super) fn repository_files(root: &Path, review: bool) -> Option<Fnv1a> {
     CACHE.with(|slot| {
         slot.borrow()

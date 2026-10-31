@@ -17,6 +17,7 @@ use super::{
 };
 use crate::policy::{PolicyRule, TrafficPolicy, compile_policy, parse_policy};
 
+pub(super) mod batch;
 mod change;
 mod declaration_changes;
 mod declarations;
@@ -26,6 +27,7 @@ mod preflight;
 pub(super) use preflight::dependency::{
     source_witness as dependency_source_witness, values as dependency_witness_values,
 };
+mod impact;
 mod proposal;
 mod proposal_context;
 mod source_proof;
@@ -40,7 +42,7 @@ pub struct RewriteUnifiedRulePlanOptions {
 
 fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
     let value: serde_yaml::Value = serde_yaml::from_str(input)
-        .context("expected a rule, rule list, or traffic-policy/v2 document")?;
+        .context("expected a rule, rule list, or traffic-policy/v3 document")?;
     let document = if value.get("rules").is_some()
         || value.get("format").is_some()
         || value.get("json").is_some()
@@ -50,7 +52,7 @@ fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
         || value.get("async_api").is_some()
     {
         serde_yaml::from_value::<TrafficPolicy>(value)
-            .context("invalid traffic-policy/v2 proposal")?
+            .context("invalid traffic-policy/v3 proposal")?
     } else {
         let rules = if value.is_sequence() {
             serde_yaml::from_value::<Vec<PolicyRule>>(value)
@@ -94,6 +96,9 @@ pub fn plan_rewrite_unified_rule(
     context: RewriteContext,
     options: RewriteUnifiedRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
+    if batch::matches(&options.evidence_id) {
+        return batch::plan(context, options);
+    }
     let (root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&root)?;
     let mut state = store
@@ -106,7 +111,8 @@ pub fn plan_rewrite_unified_rule(
     // coordinator's in-flight snapshot. Other APIs may keep replaying.
     let expected = inventory::scoped(&state, Some(&api.parse()?))?;
     worker::ensure_api_confirmed(&state, &api, "planning a unified traffic rule")?;
-    let report = inventory::with_slice_mut(&mut state, &api, |state| plan(&root, state, options))?;
+    let report =
+        inventory::with_slice_mut(&mut state, &api, |state| plan(&root, state, options, false))?;
     let record = inventory::scoped(&state, Some(&api.parse()?))?
         .rule_plan
         .clone()
@@ -119,21 +125,29 @@ fn plan(
     root: &Path,
     state: &mut RewriteState,
     options: RewriteUnifiedRulePlanOptions,
+    batch_scope: bool,
 ) -> Result<RewriteRuleReport> {
-    let issue = state
-        .active_issue
-        .as_ref()
-        .context("rule plan requires an active issue")?;
-    ensure!(
-        matches!(
-            issue.kind,
-            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-        ),
-        "unified value rules require response or dependency evidence"
-    );
-    let evidence = evidence::report_for_id(root, state, &options.evidence_id)
-        .context("rule evidence is stale or unavailable")?;
-    evidence::policy_freshness::ensure_plannable(&evidence)?;
+    let issue_id = if batch_scope {
+        options.evidence_id.clone()
+    } else {
+        let issue = state
+            .active_issue
+            .as_ref()
+            .context("rule plan requires an active issue")?;
+        ensure!(
+            matches!(
+                issue.kind,
+                RewriteIssueKind::Response
+                    | RewriteIssueKind::Dependency
+                    | RewriteIssueKind::Replay
+            ),
+            "unified value rules require response or dependency evidence"
+        );
+        let evidence = evidence::report_for_id(root, state, &options.evidence_id)
+            .context("rule evidence is stale or unavailable")?;
+        evidence::policy_freshness::ensure_plannable(&evidence)?;
+        issue.id.clone()
+    };
     if let Some(record) = state.rule_plan.as_ref().and_then(|p| p.unified.as_ref()) {
         record.ensure_current(root, state)?;
     }
@@ -150,7 +164,7 @@ fn plan(
     let (_, config) = crate::e2e_run::resolve_project(root)?;
     let original = fs::read_to_string(&config.replay_policy)?;
     let mut document = parse_policy(&original).context(
-        "unified authoring requires a traffic-policy/v2 policy; no legacy fallback is used",
+        "unified authoring requires a traffic-policy/v3 policy; no legacy fallback is used",
     )?;
     let resolved = proposal_context::resolve(&input, &document)?;
     source_proof::validate_proposal(&resolved.input)?;
@@ -168,7 +182,11 @@ fn plan(
         "policy proposal must contain JSON/MySQL/Redis/HTTP formats, async capture, endpoint aliases or native rules"
     );
     let before = compile_policy(&document)?;
-    proposal::prepare_scopes(proposed, &document, &state.api)?;
+    if batch_scope {
+        batch::validate_proposal(proposed)?;
+    } else {
+        proposal::prepare_scopes(proposed, &document, &state.api)?;
+    }
     if let Some(revision) = &document.source_revision {
         ensure!(
             proposed
@@ -245,12 +263,25 @@ fn plan(
     }
     let current = crate::validate_replay_policy(&config.replay_policy)?;
     ensure!(
-        state.replay_identity.as_ref() == Some(&fingerprint::replay_identity(root)?),
+        batch_scope || state.replay_identity.as_ref() == Some(&fingerprint::replay_identity(root)?),
         "Target code, startup inputs or policy changed since genuine Replay; run fresh Replay before planning"
     );
-    let identity = manifest::ExecutionIdentity::current(root, state)?;
-    let mut bundle = manifest::Bundle::load(root, state, &current.fingerprint, &before, &compiled)?;
+    let identity = if batch_scope {
+        manifest::ExecutionIdentity::batch_current(root, state)?
+    } else {
+        manifest::ExecutionIdentity::current(root, state)?
+    };
+    let mut bundle = match &identity {
+        manifest::ExecutionIdentity::Batch(actual) => {
+            manifest::Bundle::load_batch(&actual.evidence, &current.fingerprint)?
+        }
+        _ => manifest::Bundle::load(root, state, &current.fingerprint, &before, &compiled)?,
+    };
     let preflight = preflight::verify(root, state, &mut bundle, &before, &compiled, &rule_ids)?;
+    ensure!(
+        !batch_scope || !preflight.needs_recording() || !preflight.capture_scopes.is_empty(),
+        "unsupported batch capture change without a proven origin capture scope; provide an exact supported origin capture declaration instead of borrowing the API transaction anchor"
+    );
     bundle.artifacts.insert(proposal.path.clone(), proposal);
     let updated = if changed {
         crate::policy::render_policy(&document)?
@@ -274,13 +305,12 @@ fn plan(
         "plan-{}",
         fingerprint::id(&[
             &state.workflow_id,
-            &issue.id,
+            &issue_id,
             &options.evidence_id,
             &serde_json::to_string(&record)?
         ])
         .trim_start_matches("fnv1a64:")
     );
-    let issue_id = issue.id.clone();
     let traffic_e2e_report = record.report(false);
     let outer: RewriteRulePlanRecord = serde_json::from_value(json!({
         "id":id, "issue_id":issue_id, "kind":"unified", "json_pointer":"",
@@ -299,6 +329,9 @@ fn plan(
 }
 
 impl UnifiedRulePlanRecord {
+    pub(in crate::rewrite) fn is_batch(&self) -> bool {
+        self.identity.is_batch()
+    }
     pub(super) fn applying(&self) -> bool {
         self.apply_started
     }
@@ -319,7 +352,7 @@ impl UnifiedRulePlanRecord {
     fn ensure_current(&self, root: &Path, state: &RewriteState) -> Result<()> {
         self.ensure_policy_current()?;
         ensure!(
-            manifest::ExecutionIdentity::current(root, state)? == self.identity,
+            self.identity.revalidate(root, state)? == self.identity,
             "Target/Source/engine/attempt identity changed after planning"
         );
         for artifact in &self.artifacts {
@@ -334,6 +367,15 @@ impl UnifiedRulePlanRecord {
     }
 
     fn report(&self, applied: bool) -> serde_json::Value {
+        let replay_required = self.changed()
+            && self.identity.method_api().is_none_or(|api| {
+                impact::affects_api(&self.original, &self.updated, api).unwrap_or(true)
+            });
+        let attribution_required = self.changed()
+            && self
+                .preflight
+                .obligations
+                .contains(&crate::config::native_policy::SourceObligation::AttributionReview);
         let updated = parse_policy(&self.updated).ok();
         let expanded = updated
             .as_ref()
@@ -354,11 +396,14 @@ impl UnifiedRulePlanRecord {
                 declaration_changes::summarize(&before, after, &self.replace_sections)
             })
             .unwrap_or_else(|| json!({}));
-        json!({"kind":"unified", "status":if !self.changed() && applied {"applied_no_change"} else if !self.changed() {"planned_no_change"} else if applied && self.preflight.needs_recording() {"applied_pending_recording"} else if applied {"applied_pending_replay"} else {self.preflight.status()},
+        json!({"kind":"unified", "status":if !self.changed() && applied {"applied_no_change"} else if !self.changed() {"planned_no_change"} else if applied && self.preflight.needs_recording() {"applied_pending_recording"} else if applied && replay_required {"applied_pending_replay"} else if applied && attribution_required {"applied_pending_attribution"} else if applied {"applied_pending_scoped_verification"} else if attribution_required && !replay_required {"planned_requires_attribution_review"} else {self.preflight.status()},
             "applied":applied, "changed":self.original != self.updated,
             "rule_ids":self.rule_ids, "replaced_rules":self.replaced_rules, "preflight":self.preflight,
             "replace_sections":self.replace_sections,
-            "requires_fresh_replay":self.changed(), "requires_fresh_recording":self.changed() && self.preflight.needs_recording(), "verified":false,
+            "requires_fresh_replay":replay_required, "replay_scope":if self.is_batch(){json!({"kind":"complete_source_run"})}else{json!(self.identity.method_api())},
+            "evidence_scope":self.identity,
+            "requires_attribution_review":attribution_required,
+            "requires_fresh_recording":self.changed() && self.preflight.needs_recording(), "verified":false,
             "policy":self.policy, "evidence_artifacts":self.artifacts.len(), "source_proofs":self.source_proofs,
             "expanded_rules":rules, "json":expanded.as_ref().and_then(|p| p.global_json.as_ref()), "mysql":expanded.as_ref().and_then(|p| p.mysql.as_ref()), "redis":expanded.as_ref().and_then(|p|p.redis.as_ref()), "http":expanded.as_ref().and_then(|p|p.http.as_ref()), "async_api":expanded.as_ref().map(|p| &p.async_api), "effect_identity":expanded.as_ref().map(|p| &p.fingerprints),
             "declaration_changes":declaration_changes,
@@ -374,40 +419,57 @@ pub(super) fn apply(
     state: &mut RewriteState,
     outer: RewriteRulePlanRecord,
 ) -> Result<RewriteRuleReport> {
-    worker::ensure_api_confirmed(state, &state.api, "applying a unified traffic rule")?;
     let record = outer
         .unified
         .as_ref()
         .context("pending plan has no unified contract")?;
+    if !record.is_batch() {
+        worker::ensure_api_confirmed(state, &state.api, "applying a unified traffic rule")?;
+    }
     ensure!(
         record.apply_started,
         "unified apply requires the durable coordinator intent"
     );
     record.ensure_current(root, state)?;
+    let previous_execution = super::fingerprint::replay_identity(root)?;
     crate::config::edit::write_atomic(&record.policy, record.updated.as_bytes())?;
     let report = record.report(true);
     state.rule_plan = None;
     if record.original != record.updated {
-        super::rule_replay::request(state);
+        if record.is_batch() {
+            batch::request_replay(state, &record.original, &record.updated, &outer.id)?;
+        } else {
+            impact::request_replays(state, &record.original, &record.updated, &outer.id)?;
+        }
+        if record
+            .preflight
+            .obligations
+            .contains(&crate::config::native_policy::SourceObligation::AttributionReview)
+        {
+            state.dependency_review.recording_run_id = None;
+            state.dependency_review.revision += 1;
+        }
+        if !record.is_batch() && impact::affects_api(&record.original, &record.updated, &state.api)?
+        {
+            super::rule_replay::request(state);
+        }
+        impact::rebase_unchanged(
+            root,
+            state,
+            &record.original,
+            &record.updated,
+            &previous_execution,
+        )?;
+        super::dependency_review::refresh_receipts(root, state)?;
         if record.preflight.needs_recording() {
-            let proof = record.source_proofs.summary(&record.rule_ids);
-            super::dependency_rule::schedule_cache_snapshot_refresh(
-                root,
-                state,
-                super::model::RewriteDependencyRuleAppliedRecord {
-                    plan_id: outer.id.clone(),
-                    issue_id: outer.issue_id.clone(),
-                    evidence_id: outer.evidence_id.clone(),
-                    api: state.api.clone(),
-                    rule_name: record
-                        .rule_ids
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    source_evidence: proof,
-                },
-            )?;
+            let mut scopes = record.preflight.capture_scopes.clone();
+            if scopes.is_empty() {
+                scopes.insert(
+                    state.api.clone(),
+                    record.source_proofs.summary(&record.rule_ids),
+                );
+            }
+            super::verification_obligations::request_capture(state, &scopes, &outer.id)?;
         }
     }
     state.bump();
@@ -431,7 +493,10 @@ pub(super) fn begin_apply(root: &Path, state: &mut RewriteState) -> Result<Unifi
     let mut record = record.clone();
     record.apply_started = true;
     state.rule_plan.as_mut().unwrap().unified = Some(record.clone());
-    if record.original != record.updated {
+    if record.original != record.updated
+        && !record.is_batch()
+        && impact::affects_api(&record.original, &record.updated, &state.api)?
+    {
         super::rule_replay::request(state);
     }
     Ok(record)
@@ -451,15 +516,4 @@ pub(super) fn rollback(record: &UnifiedRulePlanRecord) -> Result<()> {
 
 pub(super) fn stale(root: &Path, state: &RewriteState, record: &UnifiedRulePlanRecord) -> bool {
     record.ensure_current(root, state).is_err()
-}
-
-pub(super) fn invalidate_global(state: &mut RewriteState) {
-    for slice in std::iter::once(&mut state.active_slice).chain(state.parked_slices.values_mut()) {
-        slice.e2e_current = false;
-        slice.target_fingerprint = None;
-    }
-    for api in &mut state.api_inventory {
-        api.e2e_current = false;
-        api.verified_target_fingerprint = None;
-    }
 }

@@ -1,6 +1,4 @@
 use std::collections::BTreeSet;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -76,6 +74,7 @@ pub(crate) struct Builder {
     endpoints: BTreeSet<Endpoint>,
     hash: Sha256,
     offset: u64,
+    scoped: bool,
 }
 
 impl Builder {
@@ -97,10 +96,28 @@ impl Builder {
             endpoints: BTreeSet::new(),
             hash: Sha256::new(),
             offset: 0,
+            scoped: false,
         }
     }
 
     /// Observe exact on-disk bytes, including their line terminator.
+    pub(crate) fn observe_at(
+        &mut self,
+        location: &RecordLocation,
+        raw: &[u8],
+        value: Option<&Value>,
+    ) -> Result<()> {
+        if self.offset != location.offset {
+            self.scoped = true;
+        }
+        self.offset = location.offset;
+        self.observe(location.line, raw, value)
+    }
+
+    pub(crate) fn set_scoped(&mut self) {
+        self.scoped = true;
+    }
+
     pub(crate) fn observe(&mut self, line: usize, raw: &[u8], value: Option<&Value>) -> Result<()> {
         let offset = self.offset;
         self.hash.update(raw);
@@ -127,7 +144,7 @@ impl Builder {
                 .expect("SQL metadata inventory")
                 .push(record);
         }
-        if tag.ends_with("_exchange") {
+        if super::proof::is_evidence(value) {
             self.index
                 .proof_records
                 .as_mut()
@@ -299,7 +316,7 @@ impl Builder {
 
     pub(crate) fn finish(mut self) -> Result<FileIndex> {
         ensure!(
-            self.offset == self.index.stamp.size,
+            self.scoped || self.offset == self.index.stamp.size,
             "dependency file changed while building index"
         );
         self.index.sha256 = format!("{:x}", self.hash.finalize());
@@ -326,25 +343,22 @@ pub(crate) fn build_file(
 ) -> Result<FileIndex> {
     let stamp = FileStamp::read(path)?;
     let mut builder = Builder::new(stamp.clone());
-    let mut input = BufReader::new(File::open(path)?);
-    let mut raw = Vec::new();
-    let mut line = 0;
-    while input.read_until(b'\n', &mut raw)? != 0 {
+    let mut input = super::RecordStream::open(path)?;
+    if super::scoped::view_path(path).is_some() {
+        builder.set_scoped();
+    }
+    while let Some((location, raw)) = input.next()? {
         super::store::check_cancelled(cancelled)?;
-        line += 1;
+        let line = location.line;
         let value = if raw.iter().all(u8::is_ascii_whitespace) {
             None
         } else {
-            Some(serde_json::from_slice::<Value>(&raw).with_context(|| {
+            Some(serde_json::from_slice::<Value>(raw).with_context(|| {
                 format!("invalid dependency evidence {} line {line}", path.display())
             })?)
         };
-        builder.observe(line, &raw, value.as_ref())?;
-        raw.clear();
+        builder.observe_at(&location, raw, value.as_ref())?;
     }
-    ensure!(
-        FileStamp::read(path)? == stamp,
-        "dependency file changed while building index"
-    );
+    super::scoped::validate_stamp(path, &stamp)?;
     builder.finish()
 }

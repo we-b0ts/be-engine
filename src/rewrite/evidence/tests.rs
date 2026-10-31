@@ -404,7 +404,7 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
     let target = tempfile::tempdir().unwrap();
     let policy = target.path().join(".traffic-e2e/policy.yaml");
     std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
-    std::fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
+    std::fs::write(&policy, "format: traffic-policy/v3\nrules: []\n").unwrap();
     let case_source = target.path().join("recording");
     let case_dir = case_source.join("case-status-mismatch");
     std::fs::create_dir_all(&case_dir).unwrap();

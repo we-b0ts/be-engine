@@ -45,13 +45,19 @@ pub(super) fn observe(
                 continue;
             };
             if !source_events.contains_key(directory) {
-                let path = Path::new(directory).join("dependencies.jsonl");
-                let size = fs::metadata(&path)?.len();
+                let path = case
+                    .and_then(|case| case["dependencies_path"].as_str())
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| {
+                        crate::dependency_index::scoped::case_path(Path::new(directory))
+                    });
+                let bytes = crate::dependency_index::scoped::read_bytes(&path)?;
+                let size = bytes.len() as u64;
                 let events = if size <= 16 * 1024 * 1024
                     && source_bytes.saturating_add(size) <= SOURCE_CACHE_LIMIT
                 {
                     source_bytes += size;
-                    BufReader::new(fs::File::open(path)?)
+                    BufReader::new(bytes.as_slice())
                         .lines()
                         .map(|line| -> Result<Option<Value>> {
                             let line = line?;

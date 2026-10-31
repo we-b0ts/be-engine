@@ -13,7 +13,7 @@ struct IdentityFacts {
     connection_id: Value,
     sequence: Value,
     query_sequence: Value,
-    global_dependency_reason: Value,
+    capture: Option<crate::dependency::observation::CaptureMetadata>,
 }
 impl IdentityFacts {
     fn identity(&self, case: &str) -> SourceIdentity {
@@ -72,17 +72,23 @@ impl RequestContracts {
         let Some(store) = &self.witnesses else {
             return Ok(());
         };
-        let path = self.anchor(case)?.dir.join("dependencies.jsonl");
-        if !path.is_file() {
+        let path = self.anchor(case)?.dependencies_path;
+        if !crate::dependency_index::scoped::exists(&path) {
             return Ok(());
         }
         let stamp = FileStamp::read(&path)?;
+        let source = crate::dependency_index::scoped::resolve(&path)?;
         ensure!(
-            stamp.size == bytes.len() as u64,
+            crate::dependency_index::scoped::view_path(&path).is_some()
+                || stamp.size == bytes.len() as u64,
             "Source dependency bytes differ from their immutable file"
         );
         let register = |facts: IdentityFacts, location: RecordLocation| -> Result<()> {
-            if facts.global_dependency_reason.is_string() {
+            if facts
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.owner_kind() != "case")
+            {
                 return Ok(());
             }
             let protocol = match facts.event_type.as_str() {
@@ -97,11 +103,7 @@ impl RequestContracts {
                 store.register_source_record(
                     &id,
                     protocol,
-                    SourceRecord {
-                        path: path.clone(),
-                        stamp: stamp.clone(),
-                        location,
-                    },
+                    SourceRecord::from_source(&source, stamp.clone(), location),
                 )?;
             }
             Ok(())

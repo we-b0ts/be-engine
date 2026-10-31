@@ -38,6 +38,36 @@ fn exchange() -> RecorderEvent {
     })
 }
 
+#[test]
+fn redis_rpc_push_inventory_uses_publisher_identity_instead_of_subscription_identity() {
+    let publisher = Uuid::new_v4();
+    let subscription = Uuid::new_v4();
+    let mut push = crate::recorder::RedisPubSubPushEvent {
+        timestamp: chrono::Utc::now(),
+        target_host: "redis.test".into(),
+        target_port: 6379,
+        database: 0,
+        username: None,
+        connection_id: subscription,
+        subscription_sequence: 41,
+        rpc_request: Some(crate::recorder::RedisRpcRequestRef {
+            connection_id: publisher,
+            sequence: 3,
+            case_id: None,
+        }),
+        replay_safe: true,
+        response: crate::recorder::capture_body(b"callback", 1024),
+        duration_ms: 1,
+    };
+    let reference = CompletedRef::for_event(&RecorderEvent::RedisPubSubPush(push.clone())).unwrap();
+    assert_eq!(
+        serde_json::to_value(reference).unwrap(),
+        serde_json::json!({"protocol":"redis_rpc_push", "connection_id":publisher, "sequence":3})
+    );
+    push.rpc_request = None;
+    assert!(CompletedRef::for_event(&RecorderEvent::RedisPubSubPush(push)).is_none());
+}
+
 fn drain(
     registry: &ActiveCaseRegistry,
     id: Uuid,

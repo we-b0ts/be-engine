@@ -7,7 +7,7 @@ const X: &str = "00000000-0000-4000-8000-000000000002";
 #[test]
 fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire() {
     let compiled = crate::policy::parse_and_compile_policy(&json!({
-        "format":"traffic-policy/v2",
+        "format":"traffic-policy/v3",
         "json":{"fields":{"/item_id":{"kind":"identity","formats":["uuid"]},"/created_at":{"kind":"time","formats":["unix_seconds"]}}},
         "mysql":{"tables":{"tasks":{"pattern":"tasks","fields":{"id":{"kind":"identity","formats":["uuid"]}}}}}
     }).to_string()).unwrap();
@@ -23,6 +23,7 @@ fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire(
             recorded: Some("2020-01-01T00:00:00Z".parse().unwrap()),
             actual: Some("2026-01-01T00:00:00Z".parse().unwrap()),
             dir: PathBuf::new(),
+            dependencies_path: PathBuf::new(),
             conditions: Default::default(),
             source_body: None,
         },

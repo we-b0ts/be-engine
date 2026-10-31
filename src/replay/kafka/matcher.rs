@@ -18,6 +18,8 @@ use super::report::{
     KafkaMatchedReport, KafkaProtocolReport, KafkaRequestReport, KafkaUnusedReport,
 };
 mod evidence;
+mod finite_inventory;
+pub(in crate::replay) use finite_inventory::FiniteExchange;
 mod report_inventory;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -30,6 +32,8 @@ pub(in crate::replay) struct RecordedKafkaConnection {
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedKafkaProduce {
     pub(super) connection_id: Uuid,
+    #[serde(default, rename = "sequence")]
+    pub(super) record_sequence: Option<u64>,
     pub(super) request_sequence: u64,
     pub(super) target_host: String,
     pub(super) target_port: u16,
@@ -59,6 +63,8 @@ pub(in crate::replay) struct RecordedKafkaFetch {
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedKafkaDelivery {
     pub(super) connection_id: Uuid,
+    #[serde(default)]
+    pub(super) sequence: Option<u64>,
     pub(super) fetch_sequence: u64,
     pub(super) target_host: String,
     pub(super) target_port: u16,
@@ -102,6 +108,7 @@ impl RecordedCapture {
 
 #[derive(Debug, Clone)]
 struct ReplayKafkaProduce {
+    record_sequence: Option<u64>,
     evidence: Option<crate::dependency_index::RecordRef>,
     source: ReplaySource,
     case_id: Option<String>,
@@ -127,6 +134,7 @@ struct ReplayKafkaFetch {
 
 #[derive(Debug, Clone)]
 struct ReplayKafkaDelivery {
+    sequence: Option<u64>,
     evidence: Option<crate::dependency_index::RecordRef>,
     source: ReplaySource,
     case_id: Option<String>,
@@ -241,6 +249,7 @@ impl KafkaReplayState {
         self.produce_case_index
             .register(source, case_id, exchange_index);
         self.produces.push(ReplayKafkaProduce {
+            record_sequence: record.record_sequence,
             evidence: None,
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -320,6 +329,7 @@ impl KafkaReplayState {
         self.delivery_case_index
             .register(source, case_id, exchange_index);
         self.deliveries.push(ReplayKafkaDelivery {
+            sequence: record.sequence,
             evidence: None,
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -609,7 +619,7 @@ impl KafkaReplayState {
             unsafe_events: self.events.unsafe_events.clone(),
             unused_case: self.unused(ReplaySource::Case),
             unused_global_count: Some(self.global_unused_count()),
-            unused_global: self.unused(ReplaySource::Global),
+            unused_global: self.unused(ReplaySource::Startup),
         }
     }
 
@@ -681,7 +691,7 @@ impl KafkaReplayState {
             .iter()
             .enumerate()
             .filter(move |(_, exchange)| {
-                exchange.source == source && !exchange.status.is_consumed()
+                exchange.source.matches_scope(source) && !exchange.status.is_consumed()
             })
             .map(move |(index, exchange)| KafkaUnusedReport {
                 index,
@@ -696,7 +706,7 @@ impl KafkaReplayState {
                     .iter()
                     .enumerate()
                     .filter(move |(_, exchange)| {
-                        exchange.source == source && !exchange.status.is_consumed()
+                        exchange.source.matches_scope(source) && !exchange.status.is_consumed()
                     })
                     .map(move |(index, exchange)| KafkaUnusedReport {
                         index,
@@ -717,7 +727,7 @@ impl KafkaReplayState {
                     .iter()
                     .enumerate()
                     .filter(move |(_, exchange)| {
-                        exchange.source == source && !exchange.status.is_consumed()
+                        exchange.source.matches_scope(source) && !exchange.status.is_consumed()
                     })
                     .map(move |(index, exchange)| KafkaUnusedReport {
                         index,
@@ -732,7 +742,7 @@ impl KafkaReplayState {
 
     fn unused(&self, source: ReplaySource) -> Vec<KafkaUnusedReport> {
         self.unused_iter(source)
-            .take(if source == ReplaySource::Global {
+            .take(if source.is_run_owned() {
                 100
             } else {
                 usize::MAX
@@ -792,7 +802,7 @@ fn scope_matches(
 ) -> bool {
     match active_case_id {
         Some(active) => source == ReplaySource::Case && case_id == Some(active),
-        None => source == ReplaySource::Global,
+        None => source.is_run_owned(),
     }
 }
 

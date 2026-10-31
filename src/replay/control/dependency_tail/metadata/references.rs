@@ -28,6 +28,17 @@ pub(in crate::replay::control::dependency_tail) fn reference(
             connection_id: uuid("connection_id")?,
             sequence: sequence("sequence")?,
         }),
+        Some("redis_pub_sub_push") if event["rpc_request"].is_object() => {
+            Some(RecordedReference::RedisRpcPush {
+                connection_id: event["rpc_request"]["connection_id"]
+                    .as_str()
+                    .context("Redis callback publisher identity missing")?
+                    .parse()?,
+                sequence: event["rpc_request"]["sequence"]
+                    .as_u64()
+                    .context("Redis callback publisher sequence missing")?,
+            })
+        }
         Some("mysql_exchange") => {
             let command = event["command"]
                 .as_str()
@@ -44,12 +55,65 @@ pub(in crate::replay::control::dependency_tail) fn reference(
                 })
             }
         }
-        Some(
-            "memcached_exchange" | "motan_exchange" | "kafka_produce" | "kafka_fetch"
-            | "kafka_delivery",
-        ) => anyhow::bail!(
-            "Source inventory contains an unsupported finite-tail protocol; record with complete inventory support"
-        ),
+        Some("memcached_exchange") => Some(RecordedReference::Memcached {
+            connection_id: uuid("connection_id")?,
+            sequence: sequence("sequence")?,
+        }),
+        Some("motan_exchange") if event["heartbeat"] != true => Some(RecordedReference::Motan {
+            connection_id: uuid("connection_id")?,
+            sequence: sequence("sequence")?,
+        }),
+        Some("kafka_produce") => Some(RecordedReference::KafkaProduce {
+            connection_id: uuid("connection_id")?,
+            sequence: sequence("sequence")?,
+        }),
+        Some("kafka_fetch") => Some(RecordedReference::KafkaFetch {
+            connection_id: uuid("connection_id")?,
+            sequence: sequence("sequence")?,
+        }),
+        Some("kafka_delivery") => Some(RecordedReference::KafkaDelivery {
+            connection_id: uuid("connection_id")?,
+            sequence: sequence("sequence")?,
+        }),
+        Some("udp_datagram") => anyhow::bail!("finite-tail UDP replay is unsupported"),
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn native_finite_inventory_preserves_kafka_effects_and_excludes_only_heartbeats() {
+        let connection = Uuid::new_v4();
+        for (event, field, expected) in [
+            ("memcached_exchange", "sequence", "memcached"),
+            ("motan_exchange", "sequence", "motan"),
+            ("kafka_produce", "sequence", "kafka_produce"),
+            ("kafka_fetch", "sequence", "kafka_fetch"),
+            ("kafka_delivery", "sequence", "kafka_delivery"),
+        ] {
+            let mut raw = json!({"event_type":event,"connection_id":connection,"heartbeat":false,"request_sequence":1,"fetch_sequence":1});
+            raw[field] = json!(7);
+            let selected = reference(&raw).unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(selected).unwrap(),
+                json!({"protocol":expected,"connection_id":connection,"sequence":7})
+            );
+            raw.as_object_mut().unwrap().remove(field);
+            assert!(
+                reference(&raw).is_err(),
+                "missing native semantic identity must stay incomplete"
+            );
+        }
+        assert!(
+            reference(&json!({"event_type":"motan_exchange","heartbeat":true}))
+                .unwrap()
+                .is_none()
+        );
+        assert!(reference(&json!({"event_type":"udp_datagram"})).is_err());
+    }
 }

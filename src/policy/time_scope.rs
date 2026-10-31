@@ -190,7 +190,7 @@ mod tests {
         for rule in [mysql, http] {
             assert!(
                 policy::parse_and_compile_policy(
-                    &json!({"format":"traffic-policy/v2","rules":[rule]}).to_string()
+                    &json!({"format":"traffic-policy/v3","rules":[rule]}).to_string()
                 )
                 .is_err()
             );

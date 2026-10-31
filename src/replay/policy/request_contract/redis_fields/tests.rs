@@ -20,7 +20,7 @@ fn args(values: &[&str]) -> Vec<Vec<u8>> {
 
 fn runtime() -> RequestContracts {
     let compiled = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /at: {kind: time, formats: [unix_seconds]}
@@ -42,6 +42,7 @@ json:
             recorded: DateTime::from_timestamp(1000, 0),
             actual: DateTime::from_timestamp(2000, 0),
             dir: PathBuf::new(),
+            dependencies_path: PathBuf::new(),
             conditions: Default::default(),
             source_body: None,
         },

@@ -120,9 +120,10 @@ async fn exchanges(forwarded: bool, streaming: bool) {
     connection.await.unwrap().unwrap();
     gateway.await.unwrap();
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let events = traffic
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())

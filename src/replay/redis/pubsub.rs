@@ -16,6 +16,7 @@ pub(in crate::replay) mod native_clock;
 pub(in crate::replay) use inventory::{
     NotificationDelta, NotificationIdentity, NotificationLaneEvidence, NotificationSessionEvidence,
 };
+mod finite_inventory;
 mod input_timing;
 mod notifications;
 mod report_inventory;
@@ -141,11 +142,17 @@ impl PubSubState {
         &mut self,
         record: RecordedPush,
         reference: crate::dependency_index::RecordRef,
+        source_kind: ReplaySource,
     ) -> Result<()> {
         if record.rpc_request.is_none() {
-            return self.indexed.register(record, reference);
+            let before = self.indexed.lanes.len();
+            self.indexed.register(record, reference)?;
+            for lane in &mut self.indexed.lanes[before..] {
+                lane.source_kind = source_kind;
+            }
+            return Ok(());
         }
-        self.register(record, ReplaySource::Global, None)?;
+        self.register(record, source_kind, None)?;
         let push = self.pushes.last_mut().expect("registered push");
         push.report_index = Some(reference.location.line - 1);
         push.evidence = Some(reference);
@@ -162,8 +169,14 @@ impl PubSubState {
         lanes: Vec<crate::dependency_index::global::NotificationLane>,
         root: &Path,
         source: Arc<crate::dependency_index::RecordSource>,
+        source_kind: ReplaySource,
     ) -> Result<()> {
-        self.indexed.restore(lanes, root, source)
+        let before = self.indexed.lanes.len();
+        self.indexed.restore(lanes, root, source)?;
+        for lane in &mut self.indexed.lanes[before..] {
+            lane.source_kind = source_kind;
+        }
+        Ok(())
     }
 
     pub(super) fn case_is_dirty(&self, case: &str) -> bool {
@@ -227,7 +240,7 @@ impl PubSubState {
         self.bindings.index(&record, source, case_id, index)?;
         if record.rpc_request.is_none() {
             ensure!(
-                source == ReplaySource::Global,
+                source.is_run_owned(),
                 "uncorrelated Redis Pub/Sub notifications require Global process ownership"
             );
             Arc::make_mut(
@@ -372,7 +385,7 @@ impl PubSubState {
             .iter()
             .enumerate()
             .filter(|(_, p)| p.source == source && p.status != ReplayExchangeStatus::Consumed)
-            .take(if source == ReplaySource::Global {
+            .take(if source.is_run_owned() {
                 100
             } else {
                 usize::MAX
@@ -390,7 +403,7 @@ impl PubSubState {
                 command: "PUBSUB_PUSH".into(),
             })
             .collect();
-        if source == ReplaySource::Global {
+        if source.is_run_owned() {
             result.extend(self.indexed.unused(100usize.saturating_sub(result.len())));
         }
         result
@@ -399,9 +412,7 @@ impl PubSubState {
     pub(super) fn global_unused_count(&self) -> usize {
         self.pushes
             .iter()
-            .filter(|p| {
-                p.source == ReplaySource::Global && p.status != ReplayExchangeStatus::Consumed
-            })
+            .filter(|p| p.source.is_run_owned() && p.status != ReplayExchangeStatus::Consumed)
             .count()
             + self.indexed.total
             - self.indexed.delivered
@@ -415,12 +426,12 @@ impl PubSubState {
             .pushes
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.source == ReplaySource::Global && !p.status.is_consumed())
+            .filter(|(_, p)| p.source.is_run_owned() && !p.status.is_consumed())
         {
             visitor(serde_json::to_value(CommandUnusedReport {
                 index: push.report_index.unwrap_or(index),
                 case_id: None,
-                source: ReplaySource::Global,
+                source: push.source,
                 target: TargetKey {
                     host: normalize_host(&push.record.target_host),
                     port: push.record.target_port,
@@ -534,6 +545,7 @@ fn fail_rpc_delivery(
 ) {
     if detached {
         redis.events.unsafe_events.push(CommandRequestReport {
+            target_observation_id: None,
             case_id: None,
             target: matched.report.target.clone(),
             command: "PUBSUB_PUSH".into(),

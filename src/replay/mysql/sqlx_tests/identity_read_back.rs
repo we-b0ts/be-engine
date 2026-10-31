@@ -3,7 +3,7 @@ use super::*;
 use sqlx::Executor;
 
 fn policy() -> String {
-    r#"format: traffic-policy/v2
+    r#"format: traffic-policy/v3
 mysql:
   tables:
     blocks:

@@ -57,7 +57,7 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
         replay_report: report,
     })
     .unwrap();
-    let yaml = std::fs::read_to_string(&policy).unwrap();
+    let yaml = crate::recorder::test_io::read_to_string_sync(&policy).unwrap();
     assert!(yaml.contains("kind: identity"));
     assert!(!yaml.contains("dynamic_values:"));
     let (addr, state, task) = spawn(&case, Some(policy)).await;
@@ -228,7 +228,7 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
     );
     assert_eq!(std::fs::read(&dependencies).unwrap(), original);
     crate::replay::policy::test_fixture::install_dynamic_value(feedback()).unwrap();
-    let saved = std::fs::read_to_string(&policy).unwrap();
+    let saved = crate::recorder::test_io::read_to_string_sync(&policy).unwrap();
     assert!(saved.contains("prefix: 'task:'") || saved.contains("prefix: task:"));
     assert!(saved.contains("kind: numeric"));
     let (addr, state, task) = spawn(&case, Some(policy)).await;

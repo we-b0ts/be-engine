@@ -1,13 +1,18 @@
 use super::*;
 
+mod recording;
 mod source_reference;
+
+pub(super) fn publish(case: &Path, raw: &str) -> PathBuf {
+    recording::publish(case, raw)
+}
 
 #[test]
 fn http_targets_include_source_metadata_and_route_to_current_request_evidence() {
     let temp = tempfile::tempdir().unwrap();
     let case = temp
         .path()
-        .join(".traffic-e2e/local/artifacts/run/api/case-http");
+        .join(".traffic-e2e/local/artifacts/run/api/00000000-0000-0000-0000-000000000002");
     std::fs::create_dir_all(&case).unwrap();
     std::fs::write(
         case.join("request.json"),
@@ -19,7 +24,7 @@ fn http_targets_include_source_metadata_and_route_to_current_request_evidence() 
         "request_headers":{"authorization":["private-token"]},
         "request_body":{"encoding":"utf8","data":"private-body","original_len":12,"truncated":false},
         "response_status":200,"response_headers":{},"response_body":null,"error":null});
-    std::fs::write(case.join("dependencies.jsonl"), event.to_string()).unwrap();
+    publish(&case, &event.to_string());
     let options = RewriteCaseDependenciesOptions {
         target_root: temp.path().into(),
         case_dir: case,
@@ -57,6 +62,7 @@ fn http_targets_include_source_metadata_and_route_to_current_request_evidence() 
         ),
     ] {
         std::fs::write(options.case_dir.join("request.json"), request.to_string()).unwrap();
+        publish(&options.case_dir, &event.to_string());
         let detail = serde_json::to_value(
             query(RewriteCaseDependenciesOptions {
                 target_id: Some(id.into()),
@@ -78,7 +84,8 @@ fn http_targets_include_source_metadata_and_route_to_current_request_evidence() 
 fn summary_stays_bounded_and_detail_returns_decoded_keys() {
     let temp = tempfile::tempdir().unwrap();
     let target_root = temp.path();
-    let case_dir = target_root.join(".traffic-e2e/local/artifacts/run/api/case-a");
+    let case_dir = target_root
+        .join(".traffic-e2e/local/artifacts/run/api/00000000-0000-0000-0000-000000000003");
     std::fs::create_dir_all(&case_dir).unwrap();
     let redis_key = STANDARD.encode("42.cntbf");
     let redis_response = STANDARD.encode("$1\r\n7\r\n");
@@ -88,7 +95,7 @@ fn summary_stays_bounded_and_detail_returns_decoded_keys() {
     let raw = format!(
         "{{\"event_type\":\"redis_exchange\",\"target_host\":\"breeze.recording\",\"target_port\":9332,\"command\":\"GET\",\"args\":[{{\"encoding\":\"base64\",\"original_len\":8,\"stored_len\":8,\"truncated\":false,\"data\":\"{redis_key}\"}}],\"response_kind\":\"bulk_string\",\"response\":{{\"encoding\":\"base64\",\"original_len\":7,\"stored_len\":7,\"truncated\":false,\"data\":\"{redis_response}\"}},\"outcome\":\"response\"}}\n{{\"event_type\":\"redis_exchange\",\"target_host\":\"breeze.recording\",\"target_port\":9332,\"command\":\"GET\",\"args\":[{{\"encoding\":\"base64\",\"original_len\":8,\"stored_len\":8,\"truncated\":false,\"data\":\"{second_redis_key}\"}}],\"response_kind\":\"bulk_string\",\"response\":{{\"encoding\":\"base64\",\"original_len\":7,\"stored_len\":7,\"truncated\":false,\"data\":\"{second_redis_response}\"}},\"outcome\":\"response\"}}\n{{\"event_type\":\"memcached_exchange\",\"target_host\":\"breeze.recording\",\"target_port\":9400,\"command\":\"get\",\"key\":{{\"encoding\":\"base64\",\"original_len\":6,\"stored_len\":6,\"truncated\":false,\"data\":\"{memcached_key}\"}},\"flags\":4098,\"quiet\":false,\"no_response\":false,\"response_status\":\"0\",\"response_frames\":[{{\"original_len\":128}}],\"outcome\":\"response\"}}\n"
     );
-    std::fs::write(case_dir.join("dependencies.jsonl"), raw).unwrap();
+    publish(&case_dir, &raw);
 
     let summary = query(RewriteCaseDependenciesOptions {
         target_root: target_root.to_path_buf(),

@@ -8,22 +8,44 @@ mod tests;
 
 pub(crate) fn selector(value: &Value) -> Value {
     // Keep request selectors and lifecycle facts, without response or body data.
-    let mut selected = value.clone();
+    let mut selected = value
+        .as_object()
+        .map(|fields| {
+            fields
+                .iter()
+                .filter(|(name, _)| {
+                    !matches!(
+                        name.as_str(),
+                        "request_body"
+                            | "response_body"
+                            | "request"
+                            | "response"
+                            | "response_frames"
+                            | "value"
+                            | "headers"
+                            | "raw"
+                            | "request_headers"
+                            | "protected_request_headers"
+                    )
+                })
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect::<serde_json::Map<_, _>>()
+        })
+        .map_or_else(|| value.clone(), Value::Object);
     if let Some(fields) = selected.as_object_mut() {
-        for field in [
-            "request_body",
-            "response_body",
-            "request",
-            "response",
-            "response_frames",
-            "value",
-            "headers",
-            "raw",
-            "request_headers",
-            "protected_request_headers",
-        ] {
-            fields.remove(field);
-        }
+        fields.insert(
+            "_capture_complete".into(),
+            Value::Bool(
+                value["replay_safe"] != false
+                    && value["response"]["status"] != "incomplete"
+                    && value["capture_incomplete"] != true
+                    && value["capture_failure"] != true
+                    && value["request_body"]["truncated"] != true
+                    && value["response_body"]["truncated"] != true
+                    && value["response"]["truncated"] != true
+                    && value["response"]["rows_truncated"] != true,
+            ),
+        );
         if let Some(Value::String(raw)) = fields.get_mut("uri")
             && let Ok(uri) = raw.parse::<hyper::Uri>()
         {
@@ -42,6 +64,21 @@ pub(crate) fn selector(value: &Value) -> Value {
         }
     }
     selected
+}
+
+pub(crate) fn is_evidence(value: &Value) -> bool {
+    let tag = value["event_type"].as_str().unwrap_or_default();
+    value["capture"]["semantic_required"] == true
+        || tag.ends_with("_exchange")
+        || matches!(
+            tag,
+            "dependency_connect_failure"
+                | "kafka_produce"
+                | "kafka_fetch"
+                | "kafka_delivery"
+                | "redis_pub_sub_push"
+                | "tcp_gateway_connection"
+        )
 }
 
 pub(crate) fn visit(

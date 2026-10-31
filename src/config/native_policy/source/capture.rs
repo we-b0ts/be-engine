@@ -23,7 +23,7 @@ pub(super) fn validate(
             let mut matched = 0;
             for file in files.iter().filter(|file| {
                 file.file_name()
-                    .is_some_and(|name| name == "dependencies.jsonl")
+                    .is_some_and(|name| name == crate::dependency_index::scoped::CASE_SCOPE)
             }) {
                 let request: Value =
                     serde_json::from_slice(&std::fs::read(file.with_file_name("request.json"))?)?;

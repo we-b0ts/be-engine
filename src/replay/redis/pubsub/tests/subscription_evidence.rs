@@ -63,7 +63,6 @@ async fn selected_subscription_mirror_and_startup_alias_share_one_case_slot() {
                     exchange(Uuid::new_v4(), 1, "GET", &[b"private"], b"$1\r\nv\r\n"),
                 ],
                 &[
-                    mirror(&original),
                     notification(connection, 1, 10),
                     notification(connection, 1, 50),
                 ],
@@ -198,14 +197,9 @@ async fn mirror_without_selected_original_provides_one_exact_global_control_slot
 async fn unreferenced_mirror_does_not_promote_a_case_command_to_global() {
     let temp = tempfile::tempdir().unwrap();
     let original = subscription(Uuid::new_v4(), 1);
-    let runtime = runtime(
-        temp.path(),
-        std::slice::from_ref(&original),
-        &[mirror(&original)],
-        true,
-    )
-    .await
-    .unwrap();
+    let runtime = runtime(temp.path(), std::slice::from_ref(&original), &[], true)
+        .await
+        .unwrap();
     runtime.state.lock().await.active_case_id = None;
     let (mut client, task) = connect(&runtime).await;
     assert!(
@@ -228,7 +222,7 @@ async fn subscription_alias_preserves_selected_case_lane_barriers() {
             exchange(connection, 1, "GET", &[b"private"], b"$1\r\nv\r\n"),
             original.clone(),
         ],
-        &[mirror(&original), notification(connection, 2, 10)],
+        &[notification(connection, 2, 10)],
         true,
     )
     .await

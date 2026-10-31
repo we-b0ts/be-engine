@@ -39,7 +39,7 @@ fn body(now: i64, request_id: &str) -> Value {
 }
 
 fn rule() -> Value {
-    json!({"format":"traffic-policy/v2","signatures":{
+    json!({"format":"traffic-policy/v3","signatures":{
         "default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}
     },"json":{"fields":{
         "/metadata/request_id":{"kind":"identity","formats":[{"hex":8}]},

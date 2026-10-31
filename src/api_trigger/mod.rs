@@ -15,14 +15,6 @@ pub(crate) use cache::load;
 pub(crate) use cache::seal;
 pub(crate) use evidence::OriginIndex;
 
-/// Reuse the immutable-origin capture contract for Recorder's online scope.
-pub(crate) fn capture_identity(
-    capture: &crate::config::ApiTriggerCapture,
-    event: &serde_json::Value,
-) -> Option<String> {
-    evidence::capture_identity(capture, event)
-}
-
 /// Shared Source preparation for managed Replay's index phase and standalone loading.
 pub(crate) fn prepare(
     source: &std::path::Path,

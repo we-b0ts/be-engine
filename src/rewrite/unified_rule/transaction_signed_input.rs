@@ -15,7 +15,7 @@ fn signed_input_plan_apply_freezes_secret_and_requires_fresh_replay() {
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1/request.json");
+            .join("apis/api/00000000-0000-4000-8000-000000000001/request.json");
         let sign = format!(
             "{:x}",
             Md5::digest(b"timestamp=1792108800&user=user&secret=test-key")

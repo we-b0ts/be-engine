@@ -136,16 +136,29 @@ async fn exercise_rpc(close_origin: bool) {
     } else {
         original
     };
-    let raw = tokio::fs::read_to_string(original).await.unwrap();
+    if !close_origin {
+        state
+            .recorder()
+            .flush_case_dependency_files(&state.recorder().case_staging_dir(&first))
+            .await
+            .unwrap();
+    }
+    let raw = crate::recorder::test_io::read_to_string(original)
+        .await
+        .unwrap();
     let events: Vec<Value> = raw
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     let request = events.iter().find(|e| e["command"] == "PUBLISH").unwrap();
-    let global =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
+    let global = crate::recorder::test_io::read_to_string(
+        state
+            .recorder()
+            .run_dir
+            .join("indexes/unattributed-scope.json"),
+    )
+    .await
+    .unwrap();
     let global_events: Vec<Value> = global
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -179,10 +192,14 @@ async fn exercise_rpc(close_origin: bool) {
         serde_json::from_slice::<Value>(&parsed.payload).unwrap()["args"][0]["exit_code"],
         7
     );
-    let global =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
+    let global = crate::recorder::test_io::read_to_string(
+        state
+            .recorder()
+            .run_dir
+            .join("indexes/unattributed-scope.json"),
+    )
+    .await
+    .unwrap();
     assert!(global.lines().any(|l| {
         let v: Value = serde_json::from_str(l).unwrap();
         v["event_type"] == "redis_pub_sub_push" && v.get("rpc_request").is_none()
@@ -191,7 +208,7 @@ async fn exercise_rpc(close_origin: bool) {
         .recorder()
         .case_staging_dir(&second)
         .join("dependencies.jsonl");
-    if let Ok(raw) = tokio::fs::read_to_string(current).await {
+    if let Ok(raw) = crate::recorder::test_io::read_to_string(current).await {
         assert!(!raw.contains("redis_pub_sub_push"));
     }
 }
@@ -220,9 +237,14 @@ async fn generic_binary_pubsub_capture_is_semantic_evidence_with_no_rpc_adapter(
         .unwrap()
         .unwrap();
     state.recorder().flush_all_dependency_files().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-        .await
-        .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        state
+            .recorder()
+            .run_dir
+            .join("indexes/unattributed-scope.json"),
+    )
+    .await
+    .unwrap();
     let event: Value = raw
         .lines()
         .map(|l| serde_json::from_str::<Value>(l).unwrap())
@@ -239,7 +261,7 @@ async fn generic_binary_pubsub_capture_is_semantic_evidence_with_no_rpc_adapter(
 }
 
 #[tokio::test]
-async fn idle_rpc_publisher_and_callback_are_global_without_collecting_ordinary_idle_publish() {
+async fn idle_rpc_and_ordinary_publish_are_retained_without_inventing_an_owner() {
     let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
     assert!(state.inner.active_cases.close_bootstrap());
     let (mut subscriber, proxy_sub) = tcp_pair().await;
@@ -301,9 +323,14 @@ async fn idle_rpc_publisher_and_callback_are_global_without_collecting_ordinary_
         .unwrap()
         .unwrap();
     state.recorder().flush_all_dependency_files().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-        .await
-        .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        state
+            .recorder()
+            .run_dir
+            .join("indexes/unattributed-scope.json"),
+    )
+    .await
+    .unwrap();
     let events: Vec<Value> = raw
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -312,11 +339,19 @@ async fn idle_rpc_publisher_and_callback_are_global_without_collecting_ordinary_
         .iter()
         .filter(|event| event["command"] == "PUBLISH")
         .collect();
-    assert_eq!(publishes.len(), 1);
-    let request = publishes[0];
+    assert_eq!(publishes.len(), 2);
+    assert!(
+        publishes
+            .iter()
+            .all(|event| event["capture"]["attribution"]["kind"] == "unattributed")
+    );
+    let request = publishes
+        .iter()
+        .find(|event| event["sequence"] == 2)
+        .unwrap();
     assert_eq!(request["sequence"], 2);
     assert_eq!(request["rpc_callback_capture"], "bounded_window");
-    assert_eq!(request["global_dependency_reason"], "rpc_publisher");
+    assert_eq!(request["capture"]["attribution"]["kind"], "unattributed");
     let callback = events
         .iter()
         .find(|event| event["event_type"] == "redis_pub_sub_push")

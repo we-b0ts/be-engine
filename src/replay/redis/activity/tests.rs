@@ -13,7 +13,7 @@ mod source_tests;
 mod tcp_tests;
 
 pub(in crate::replay::redis) fn document(enabled: bool) -> Value {
-    let mut value = json!({"format":"traffic-policy/v2","json":{"fields":{
+    let mut value = json!({"format":"traffic-policy/v3","json":{"fields":{
         "/last_activity_at":{"kind":"time","formats":["rfc3339"]},
         "/started_at":{"kind":"time","formats":["rfc3339"]}
     }}, "rules":[append_rule()]});

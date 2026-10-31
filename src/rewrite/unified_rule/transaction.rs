@@ -13,6 +13,8 @@ mod activity_refresh_transaction;
 mod api_time_transaction;
 #[path = "transaction_append.rs"]
 mod append_transaction;
+#[path = "transaction_batch.rs"]
+mod batch_transaction;
 #[path = "transaction_calendar_date.rs"]
 mod calendar_date_transaction;
 #[path = "transaction_capture_refresh.rs"]
@@ -49,6 +51,8 @@ mod mysql_composite_transaction;
 mod mysql_table_values_transaction;
 #[path = "transaction_native.rs"]
 mod native_transaction;
+#[path = "transaction_ownership.rs"]
+mod ownership_transaction;
 #[path = "transaction_partial_redis.rs"]
 mod partial_redis_transaction;
 #[path = "transaction_read_back.rs"]
@@ -84,7 +88,7 @@ fn global_format_proposals_preserve_source_revision_and_policy_stale_guards() {
         let fixture = Fixture::new();
         fs::write(
             fixture.policy(),
-            "format: traffic-policy/v2\nsource_revision: source\nrules: []\n",
+            "format: traffic-policy/v3\nsource_revision: source\nrules: []\n",
         )
         .unwrap();
         write(&fixture.proposal, super::rule());
@@ -97,7 +101,7 @@ fn global_format_proposals_preserve_source_revision_and_policy_stale_guards() {
         assert_eq!(plan.traffic_e2e_report["rule_ids"], json!(["global.json"]));
         assert_eq!(plan.traffic_e2e_report["verified"], false);
         if stale {
-            let bytes = "format: traffic-policy/v2\nsource_revision: changed-source\nrules: []\n";
+            let bytes = "format: traffic-policy/v3\nsource_revision: changed-source\nrules: []\n";
             fs::write(fixture.policy(), bytes).unwrap();
             assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
             assert_eq!(fs::read_to_string(fixture.policy()).unwrap(), bytes);
@@ -119,6 +123,9 @@ fn global_format_proposals_preserve_source_revision_and_policy_stale_guards() {
     }
 }
 
+#[path = "transaction_recording.rs"]
+mod recording_fixture;
+
 struct Fixture {
     target: tempfile::TempDir,
     proposal: PathBuf,
@@ -136,6 +143,25 @@ fn body(value: serde_json::Value) -> serde_json::Value {
 fn raw_body(bytes: &[u8]) -> serde_json::Value {
     use base64::Engine as _;
     json!({"encoding":"base64","data":base64::engine::general_purpose::STANDARD.encode(bytes),"truncated":false})
+}
+
+fn assert_scoped_capture_pending(fixture: &Fixture) {
+    use crate::rewrite::verification_obligations::{VerificationRequirement, VerificationScope};
+    let state = fixture.state();
+    assert!(state.recording_refresh.is_none());
+    assert!(!state.e2e_current);
+    assert!(
+        state
+            .dependency_review
+            .obligations
+            .values()
+            .any(|obligation| {
+                obligation.pending()
+                    && obligation.requirement == VerificationRequirement::Capture
+                    && matches!(&obligation.scope, VerificationScope::Api { api, method, .. }
+                if api == "/api" && method.as_deref() == Some("GET"))
+            })
+    );
 }
 
 impl Fixture {
@@ -177,9 +203,9 @@ impl Fixture {
         )
         .unwrap();
         let policy = root.join(".traffic-e2e/policy.yaml");
-        fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
+        fs::write(&policy, "format: traffic-policy/v3\nrules: []\n").unwrap();
         let source = root.join(".traffic-e2e/local/artifacts/recordings/recording");
-        let case = source.join("apis/api/case-1");
+        let case = source.join("apis/api/00000000-0000-4000-8000-000000000001");
         fs::create_dir_all(&case).unwrap();
         write(
             &source.join("recording-run.json"),
@@ -209,6 +235,7 @@ impl Fixture {
             .unwrap()
             .parent()
             .unwrap();
+        recording_fixture::seal(&source);
         let grouped = crate::case_group::ensure_case_group(crate::CaseGroupOptions {
             case_source: source.clone(),
             case_dir: source.join("apis"),
@@ -263,12 +290,13 @@ impl Fixture {
         fs::write(&state_path, serde_yaml::to_string(&focused).unwrap()).unwrap();
         write(
             &paths.replay,
-            json!({"finalized":true,"replay_policy":{"fingerprint":fingerprint},"cases":cases.iter().map(|case| json!({"case_id":case.file_name().unwrap().to_str().unwrap(),"case_dir":case})).collect::<Vec<_>>()}),
+            json!({"version":7,"finalized":true,"replay_policy":{"fingerprint":fingerprint},"cases":cases.iter().map(|case| json!({"case_id":case.file_name().unwrap().to_str().unwrap(),"case_dir":case})).collect::<Vec<_>>()}),
         );
         write(
             &paths.aggregate,
             json!({"complete":true,"case_source":source,"selected_case_ids":cases.iter().map(|case| case.file_name().unwrap().to_str().unwrap()).collect::<Vec<_>>()}),
         );
+        recording_fixture::seal(&source);
         let proposal = root.join(".traffic-e2e/local/rule.yaml");
         write(&proposal, super::rule());
         let mut state = crate::rewrite::worker::tests::implementation_state_with_inventory(false);
@@ -306,6 +334,7 @@ impl Fixture {
         self.root().join(".traffic-e2e/policy.yaml")
     }
     fn confirm(&self) {
+        recording_fixture::seal(self.state().case_source.as_ref().unwrap());
         worker::confirm(RewriteWorkerConfirmOptions {
             target_root: self.root().into(),
             work_scope: RewriteWorkScope::Api { api: "/api".into() },
@@ -316,6 +345,7 @@ impl Fixture {
         .unwrap();
     }
     fn evidence(&self) -> super::super::super::evidence_model::RewriteEvidenceReport {
+        recording_fixture::seal(self.state().case_source.as_ref().unwrap());
         let overview = query_rewrite_evidence_for_scope(
             self.context(),
             &RewriteWorkScope::Api { api: "/api".into() },
@@ -347,7 +377,7 @@ impl Fixture {
     }
 
     fn replace_responses(&self, source: serde_json::Value, target: serde_json::Value) {
-        self.replace_case_responses("case-1", source, target);
+        self.replace_case_responses("00000000-0000-4000-8000-000000000001", source, target);
     }
 
     fn replace_case_responses(
@@ -468,7 +498,12 @@ fn incomplete_source_inventory_and_changed_actual_bytes_cannot_plan() {
                 json!({"complete":true,"case_source":fixture.state().case_source,"selected_case_ids":[]}),
             );
         } else {
-            let actual = fixture.paths.replay.parent().unwrap().join("case-1.json");
+            let actual = fixture
+                .paths
+                .replay
+                .parent()
+                .unwrap()
+                .join("00000000-0000-4000-8000-000000000001.json");
             write(
                 &actual,
                 json!({"status":200,"body":body(json!({"members":[2,1],"business":"changed"}))}),

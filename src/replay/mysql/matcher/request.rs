@@ -47,34 +47,36 @@ impl ReplayState {
         #[cfg(test)]
         let request_observed_at = self.mysql.observed_at_for_test.unwrap_or_else(Utc::now);
         let mut observation_id = Some(uuid::Uuid::new_v4());
-        if let (Some(policy), Some(case)) = (&self.replay_policy, case) {
-            match contracts::record_target(
-                &policy.request_contracts,
-                case,
-                identity,
-                contracts::ObservedRequest {
-                    observation_id,
-                    command,
-                    sql,
-                    params,
-                    started_at: request_observed_at,
-                },
-            ) {
-                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
-                    observation_id = None
-                }
-                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
-                Err(error) => {
-                    self.mysql
-                        .events
-                        .metadata_warnings
-                        .push(format!("SQL Target observation unavailable: {error:#}"));
-                    // Global candidates do not own Case rule witnesses. Keep the
-                    // identity so an ordinary Case candidate still fails closed
-                    // when association cannot find its retained Target.
-                }
-            }
+        let request = contracts::ObservedRequest {
+            observation_id,
+            command,
+            sql,
+            params,
+            started_at: request_observed_at,
+        };
+        let retention = if let (Some(policy), Some(case)) = (&self.replay_policy, case) {
+            contracts::record_target(&policy.request_contracts, case, identity, request)
+        } else {
+            contracts::record_unanchored_target(&self.target_observations, case, identity, request)
+        };
+        let observation_retained = self.target_observations.retained(&retention);
+        if matches!(
+            &retention,
+            Ok(crate::policy_evidence::ObservationRetention::Unavailable)
+        ) {
+            observation_id = None;
         }
+        if retention.is_err() {
+            self.mysql.events.metadata_warnings.push("independent SQL Target observation unavailable; inspect target_observation_coverage_error".into());
+        }
+        self.mysql.request_observation_id =
+            observation_id.filter(|_| observation_retained).map(|id| {
+                crate::policy_evidence::target_observation_id(
+                    &id.to_string(),
+                    crate::policy::Surface::DependencyRequest,
+                    crate::policy_evidence::TargetRole::IndependentTargetObservation,
+                )
+            });
         let observed_sql = sql;
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
@@ -100,26 +102,52 @@ impl ReplayState {
                 baseline_normalized_sql.as_deref(),
             )
         });
-        for source in [ReplaySource::Case, ReplaySource::Global] {
+        for (source, allow_hypotheses) in [
+            (ReplaySource::Case, false),
+            (ReplaySource::Startup, false),
+            (ReplaySource::Process, false),
+            (ReplaySource::Case, true),
+        ] {
+            let hypothesis = if allow_hypotheses {
+                Some(self.select_mysql_hypothesis(
+                    active_case_id.as_deref()?,
+                    identity,
+                    command,
+                    observed_sql,
+                    observed_params,
+                    transaction,
+                    request_observed_at,
+                    observation_id,
+                )?)
+            } else {
+                None
+            };
             // Preserve existing candidate precedence before trying compatible
             // projections, without allowing Global to outrank the active Case.
             // An authoritative socket witness admits exactly one end. Avoid
             // collecting the scope only to reject all of its other candidates.
-            let candidates = transaction_end.is_none().then(|| {
-                self.mysql.candidates.select(
-                    &self.mysql.exchanges,
-                    source,
-                    active_case_id.as_deref(),
-                    identity,
-                    Some(command),
-                )
-            });
+            let candidates = if let Some((index, _)) = &hypothesis {
+                Some(std::sync::Arc::from(vec![*index]))
+            } else {
+                transaction_end.is_none().then(|| {
+                    self.mysql.candidates.select(
+                        &self.mysql.exchanges,
+                        source,
+                        active_case_id.as_deref(),
+                        identity,
+                        Some(command),
+                    )
+                })
+            };
             for foreign in [false, true] {
                 for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
                     for index in preferred_end
                         .into_iter()
                         .chain(candidates.as_deref().unwrap_or_default().iter().copied())
                     {
+                        if allow_hypotheses && (foreign || project_columns || semantic) {
+                            continue;
+                        }
                         if transaction_end.is_some_and(|expected| expected != index) {
                             continue;
                         }
@@ -130,7 +158,7 @@ impl ReplayState {
                             continue;
                         }
                         if self.mysql.foreign.contains_key(&index) != foreign
-                            || exchange.source != source
+                            || !exchange.source.matches_scope(source)
                             || !exchange.status.is_available()
                             || !active_case_matches(active_case_id.as_deref(), exchange)
                             || !identity_matches_exchange(identity, &exchange.identity)
@@ -189,21 +217,25 @@ impl ReplayState {
                                 .push(format!("SQL request witness unavailable: {error:#}"));
                             return None;
                         }
-                        let dynamic = self.replay_policy.as_ref().and_then(|policy| {
-                            policy.dynamic_values.mysql(&MysqlPolicyContext {
-                                request_times: crate::replay::assertion::RequestTimes {
-                                    source: contracts::source_started(&exchange.record),
-                                    target: Some(request_observed_at),
-                                },
-                                case_id: exchange.case_id.as_deref(),
-                                identity,
-                                command,
-                                recorded_sql: exchange.record.sql.as_deref(),
-                                sql,
-                                recorded: exchange.record.params.as_deref(),
-                                actual: params,
-                            })
-                        });
+                        let dynamic = self
+                            .replay_policy
+                            .as_ref()
+                            .filter(|_| !allow_hypotheses)
+                            .and_then(|policy| {
+                                policy.dynamic_values.mysql(&MysqlPolicyContext {
+                                    request_times: crate::replay::assertion::RequestTimes {
+                                        source: contracts::source_started(&exchange.record),
+                                        target: Some(request_observed_at),
+                                    },
+                                    case_id: exchange.case_id.as_deref(),
+                                    identity,
+                                    command,
+                                    recorded_sql: exchange.record.sql.as_deref(),
+                                    sql,
+                                    recorded: exchange.record.params.as_deref(),
+                                    actual: params,
+                                })
+                            });
                         let dynamic = match dynamic {
                             Some(Ok(normalized)) => Some(normalized),
                             Some(Err(error)) => {
@@ -285,7 +317,9 @@ impl ReplayState {
                                     params,
                                 )
                             });
-                        let sql_value_decision =
+                        let sql_value_decision = if let Some((_, decision)) = &hypothesis {
+                            Some(Ok(decision.clone()))
+                        } else {
                             self.replay_policy.as_ref().and_then(|policy| {
                                 let global = policy.request_contracts.compiled_rules().is_some_and(
                                     |compiled| {
@@ -336,7 +370,8 @@ impl ReplayState {
                                             actual: params,
                                         })
                                     })
-                            });
+                            })
+                        };
                         let (mut policy_decision, projected) = if same_isolation {
                             (DependencyRuleDecision::default(), None)
                         } else if let Some(decision) = sql_value_decision {
@@ -617,7 +652,7 @@ impl ReplayState {
                             };
                         self.refresh_mysql_global_report(index);
                         let owned_global = self.mysql.foreign.contains_key(&index)
-                            || (exchange.source == ReplaySource::Global
+                            || (exchange.source.is_run_owned()
                                 && exchange
                                     .record
                                     .connection_id
@@ -645,6 +680,10 @@ impl ReplayState {
                             target_event_index: None,
                         };
                         return Some(MatchedExchange {
+                            hypothesis_owner: self
+                                .replay_policy
+                                .as_ref()
+                                .map(|p| p.request_contracts.clone()),
                             transaction_owner: if baseline_normalized_sql
                                 .as_deref()
                                 .is_some_and(super::super::transaction_scope::is_business)

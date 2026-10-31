@@ -63,7 +63,7 @@ fn encrypted_duration_does_not_require_or_accept_an_anchor() {
 
 #[test]
 fn rendered_policy_omits_default_path_modes_and_calendar_timezones() {
-    let raw = r#"format: traffic-policy/v2
+    let raw = r#"format: traffic-policy/v3
 rules:
 - id: object-key
   match:
@@ -110,7 +110,7 @@ rules:
 }
 
 fn sql_policy() -> &'static str {
-    r#"format: traffic-policy/v2
+    r#"format: traffic-policy/v3
 source_revision: source-v1
 rules:
 - id: task-time
@@ -175,7 +175,7 @@ fn local_inheritance_expands_every_contract_and_partial_override_without_crossin
 fn compact_and_fully_explicit_documents_have_identical_effects_proofs_and_identities() {
     let compact = parse_policy(sql_policy()).unwrap();
     let full = format!(
-        "format: traffic-policy/v2\nrules:\n{}",
+        "format: traffic-policy/v3\nrules:\n{}",
         serde_yaml::to_string(&compact.rules).unwrap()
     );
     let expanded = parse_policy(&full).unwrap();
@@ -230,7 +230,7 @@ fn conflicting_revisions_empty_overrides_duplicate_slots_and_mixed_abbreviations
 
 #[test]
 fn declared_revision_is_explicit_in_capture_effects_and_changes_the_full_identity() {
-    let raw = r#"format: traffic-policy/v2
+    let raw = r#"format: traffic-policy/v3
 source_revision: source-v1
 rules:
 - id: capture
@@ -294,7 +294,7 @@ fn renderer_excludes_plan_proof_text_and_still_validates_its_bounds() {
 fn renderer_quotes_flow_delimiters_in_native_key_patterns_and_keeps_them_exact() {
     let revision = format!("sha256:{}", "1".repeat(64));
     let raw = format!(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 source_revision: {revision}
 rules:
 - id: redis-maintenance

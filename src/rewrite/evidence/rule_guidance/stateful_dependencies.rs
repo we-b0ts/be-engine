@@ -115,7 +115,7 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
             capability: capability.into(),
             rule: capability.into(),
             hint: format!(
-                "This is a supported capability to investigate from bounded operation facts, not proof that a rule applies or that the engine has a gap. {} Use fresh Source file:line proof and a self-contained traffic-policy/v2 rule; rule plan --file <rule.yaml> --evidence <evidence-id> validates complete Source coverage. Inspect the immutable plan, apply, and run fresh genuine Replay with unchanged recordings. Counts, equal responses and missing candidates grant no permission.",
+                "This is a supported capability to investigate from bounded operation facts, not proof that a rule applies or that the engine has a gap. {} Use fresh Source file:line proof and a self-contained traffic-policy/v3 rule; rule plan --file <rule.yaml> --evidence <evidence-id> validates complete Source coverage. Inspect the immutable plan, apply, and run fresh genuine Replay with unchanged recordings. Counts, equal responses and missing candidates grant no permission.",
                 instruction(capability)
             ),
             help: help(root),

@@ -7,14 +7,14 @@ fn public_plan_distinguishes_default_additions_and_explicit_section_replacements
         let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v2",
+                json!({"format":"traffic-policy/v3",
                 "json":{"fields":{"/existing":{"kind":"identity","formats":["uuid"]}}},
                 "http":{"headers":{"x-existing":{"kind":"identity","formats":["uuid"]}}}}),
             );
             vec![]
         });
         let fields = json!({"/members":{"kind":"unordered"}});
-        let policy = json!({"format":"traffic-policy/v2","json":{"fields":fields}});
+        let policy = json!({"format":"traffic-policy/v3","json":{"fields":fields}});
         write(
             &fixture.proposal,
             if replace_existing {
@@ -66,7 +66,7 @@ fn identity_fixture(formats: serde_json::Value) -> Fixture {
     let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v2",
+            json!({"format":"traffic-policy/v3",
             "json":{"fields":{"/id":{"kind":"identity","formats":formats},"/kept":{"kind":"unordered"}}}}),
         );
         vec![]
@@ -80,7 +80,7 @@ fn public_format_addition_preserves_order_deduplicates_and_reports_only_added_fo
     let fixture = identity_fixture(json!(["uuid"]));
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","json":{"fields":{
+        json!({"format":"traffic-policy/v3","json":{"fields":{
             "/id":{"kind":"identity","formats":["decimal","uuid","decimal"]}
         }}}),
     );
@@ -118,7 +118,7 @@ fn duplicate_addition_and_empty_maps_are_noops_and_clear_requires_explicit_repla
         let fixture = identity_fixture(json!(["uuid", "decimal"]));
         write(
             &fixture.proposal,
-            json!({"format":"traffic-policy/v2","json":{"fields":proposed}}),
+            json!({"format":"traffic-policy/v3","json":{"fields":proposed}}),
         );
         fixture.confirm();
         let original = fs::read(fixture.policy()).unwrap();
@@ -135,7 +135,7 @@ fn duplicate_addition_and_empty_maps_are_noops_and_clear_requires_explicit_repla
     write(
         &fixture.proposal,
         json!({"format":"traffic-policy-change/v1","replace_sections":["json"],
-        "policy":{"format":"traffic-policy/v2","json":{"fields":{}}}}),
+        "policy":{"format":"traffic-policy/v3","json":{"fields":{}}}}),
     );
     fixture.confirm();
     let planned = fixture.plan().unwrap();
@@ -164,7 +164,7 @@ fn public_addition_cannot_change_an_existing_field_kind() {
     let fixture = identity_fixture(json!(["uuid"]));
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","json":{"fields":{
+        json!({"format":"traffic-policy/v3","json":{"fields":{
             "/id":{"kind":"time","formats":["unix_seconds"]}
         }}}),
     );

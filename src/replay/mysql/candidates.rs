@@ -20,7 +20,7 @@ pub(super) struct Candidates {
 fn key(source: ReplaySource, case: Option<&str>, identity: &ReplaySessionIdentity) -> Option<Key> {
     let target = identity.target.as_ref()?;
     Some((
-        u8::from(source == ReplaySource::Global),
+        u8::from(source.is_run_owned()),
         if source == ReplaySource::Case {
             case.map(str::to_owned)
         } else {

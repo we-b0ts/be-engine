@@ -97,7 +97,8 @@ pub(super) async fn send(socket: &Path, request: Value) -> Result<Value> {
         let response: Value = serde_json::from_str(&line)?;
         ensure!(
             response["ok"] == true,
-            "native event feedback admission failed"
+            "replay control feedback admission failed: {}",
+            feedback_rejection(&request, &response)
         );
         Ok(response)
     })
@@ -190,5 +191,58 @@ pub(super) async fn accept(
         Ok::<_, anyhow::Error>(serde_json::json!({"ok":true}))
     }
     .await;
-    result.unwrap_or_else(|error| serde_json::json!({"ok":false,"error":error.to_string()}))
+    result.unwrap_or_else(|error| {
+        serde_json::json!({"ok":false,"reason":"native_event_rejected","error":error.to_string()})
+    })
+}
+
+fn feedback_rejection(request: &Value, response: &Value) -> Value {
+    let command = request["command"]
+        .as_str()
+        .filter(|command| {
+            matches!(
+                *command,
+                "native_event_begin"
+                    | "native_connected"
+                    | "native_event"
+                    | "native_input_ack"
+                    | "input_timing_begin"
+                    | "input_timing"
+            )
+        })
+        .unwrap_or("unknown_command");
+    let reason = response["reason"]
+        .as_str()
+        .filter(|reason| {
+            matches!(
+                *reason,
+                "native_event_rejected"
+                    | "input_timing_rejected"
+                    | "input_timing_source_unavailable"
+            )
+        })
+        .unwrap_or("control_rejected");
+    // Control errors can originate in private Source evidence. Propagate only
+    // engine-owned categories, never arbitrary server details or payloads.
+    serde_json::json!({"command":command,"reason":reason})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feedback_rejection_names_the_stage_without_disclosing_server_details() {
+        let request = serde_json::json!({"command":"input_timing_begin"});
+        let response = serde_json::json!({"reason":"input_timing_source_unavailable","error":"private-source-token"});
+        assert_eq!(
+            feedback_rejection(&request, &response),
+            serde_json::json!({"command":"input_timing_begin","reason":"input_timing_source_unavailable"})
+        );
+        let untrusted = serde_json::json!({"command":"private-command", "reason":"private-reason", "error":"private-source-token"});
+        assert_eq!(
+            feedback_rejection(&untrusted, &untrusted),
+            serde_json::json!({"command":"unknown_command","reason":"control_rejected"})
+        );
+    }
 }

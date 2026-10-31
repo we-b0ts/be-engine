@@ -10,7 +10,7 @@ fn header() -> Value {
         "proof":{"source":"api.py:1","fact":"Source renders the current request date"}})
 }
 fn base() -> Value {
-    json!({"format":"traffic-policy/v2","source_revision":"source-v1","resources":{"cache":{"protocol":"redis","endpoint":"cache.test:6379","database":0}}})
+    json!({"format":"traffic-policy/v3","source_revision":"source-v1","resources":{"cache":{"protocol":"redis","endpoint":"cache.test:6379","database":0}}})
 }
 
 #[test]
@@ -57,9 +57,9 @@ fn redis_scalar_settings_and_stateful_rules_share_author_section_without_duplica
     raw["rules"] = json!([native_redis()]);
     assert!(parse_policy(&raw.to_string()).is_err());
     for invalid in [
-        "format: traffic-policy/v2\nredis: {rules: null}\n",
-        "format: traffic-policy/v2\nredis: {rules: [], unknown: true}\n",
-        "format: traffic-policy/v2\nredis:\n  keys:\n    same: {kind: time, formats: [unix_seconds]}\n    same: {kind: time, formats: [unix_seconds]}\n  rules: []\n",
+        "format: traffic-policy/v3\nredis: {rules: null}\n",
+        "format: traffic-policy/v3\nredis: {rules: [], unknown: true}\n",
+        "format: traffic-policy/v3\nredis:\n  keys:\n    same: {kind: time, formats: [unix_seconds]}\n    same: {kind: time, formats: [unix_seconds]}\n  rules: []\n",
     ] {
         assert!(parse_policy(invalid).is_err(), "{invalid}");
     }

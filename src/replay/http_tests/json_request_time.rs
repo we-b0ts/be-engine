@@ -42,7 +42,7 @@ fn body(end: i64) -> Value {
     json!({"query":"private-expression", "start":end-300, "end":end, "step":"1m", "ordered":[1,2]})
 }
 fn rule() -> Value {
-    json!({"format":"traffic-policy/v2","json":{"fields":{
+    json!({"format":"traffic-policy/v3","json":{"fields":{
         "/start":{"kind":"time","formats":["unix_seconds"]},
         "/end":{"kind":"time","formats":["unix_seconds"]}
     }}})

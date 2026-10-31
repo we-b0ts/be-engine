@@ -26,6 +26,7 @@ pub(super) fn snapshot(state: &ReplayState) -> Value {
             "omitted":mysql_count.saturating_sub(MAX_REFERENCES)},
         "redis":state.redis.case_in_flight_diagnostic(),
         "http":state.http_case_in_flight_diagnostic(),
+        "http_ingress":state.http_ingress.pending_diagnostic(),
         "kafka":state.kafka.has_case_in_flight(),
         "connect_failures":state.connect_failures.has_in_flight(),
         "memcached":state.memcached.has_case_in_flight(),

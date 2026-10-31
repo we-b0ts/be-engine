@@ -71,6 +71,13 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<boo
         !apis.is_empty(),
         "standard recording contains no API inventory"
     );
+    for api in &apis {
+        api.parse::<RecordingApi>()?;
+    }
+    state
+        .dependency_review
+        .required_method_apis
+        .extend(apis.iter().cloned());
     source_route::retain_bindings(state);
     state.skipped_api_statuses.clear();
     state.revalidation_round = None;
@@ -455,28 +462,6 @@ pub(super) fn defer_completed_for_target_change(
         state.bump();
     }
     Ok(changed)
-}
-
-pub(super) fn restore_recorded_progress(
-    state: &mut RewriteState,
-    apis: Vec<String>,
-    active_api: &str,
-) -> Result<()> {
-    install(state, apis)?;
-    let active = state
-        .api_inventory
-        .iter()
-        .position(|item| item.api == active_api)
-        .with_context(|| format!("recorded API inventory does not contain {active_api:?}"))?;
-    for (index, item) in state.api_inventory.iter_mut().enumerate() {
-        item.status = match index.cmp(&active) {
-            std::cmp::Ordering::Less => RewriteApiStatus::Complete,
-            std::cmp::Ordering::Equal => RewriteApiStatus::Active,
-            std::cmp::Ordering::Greater => RewriteApiStatus::Pending,
-        };
-    }
-    state.current_api_index = Some(active);
-    load_pending(state, active)
 }
 
 pub(super) fn next_pending_api_for_concurrent_work(state: &RewriteState) -> Option<&str> {

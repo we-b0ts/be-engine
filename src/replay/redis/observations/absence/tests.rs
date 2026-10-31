@@ -117,7 +117,7 @@ fn absent_read_rejects_non_nil_writers_missing_bounds_and_foreign_mutations_atom
     let mut foreign = events();
     foreign.push(event(5, "DEL", &[b"cancel:1"], b":0\r\n"));
     let (_root, mut state) = state(&foreign, vec![rule()]);
-    state.exchanges[4].source = ReplaySource::Global;
+    state.exchanges[4].source = ReplaySource::Startup;
     assert!(state.prepare_observations("case").is_err());
     assert!(state.observations.profiles.is_empty());
 }

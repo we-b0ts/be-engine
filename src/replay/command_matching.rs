@@ -8,7 +8,7 @@ pub(super) trait CommandExchangeScope {
     /// Protocol control evidence can alias its original finite slot at startup.
     /// This never changes the slot's owner or connection-order barriers.
     fn available_in_global_scope(&self) -> bool {
-        self.source() == ReplaySource::Global
+        self.source().is_run_owned()
     }
     fn case_id(&self) -> Option<&str>;
     fn connection_id(&self) -> Uuid;
@@ -26,11 +26,8 @@ pub(super) trait CommandExchangeScope {
     }
 }
 
-pub(super) fn is_connection_independent_background(
-    source: ReplaySource,
-    reason: Option<&str>,
-) -> bool {
-    source == ReplaySource::Global && reason == Some("background_rule")
+pub(super) fn is_process_lane(source: ReplaySource) -> bool {
+    source == ReplaySource::Process
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +96,7 @@ where
         return case_match;
     }
 
-    let global_match = match_in_scope(exchanges, ReplaySource::Global, None, &matches, &priority);
+    let global_match = match_in_scope(exchanges, ReplaySource::Startup, None, &matches, &priority);
     if matches!(global_match, PreferredMatch::Matched(_)) {
         return global_match;
     }
@@ -204,7 +201,7 @@ where
         .iter()
         .enumerate()
         .filter(|(_, exchange)| {
-            exchange.is_available() && scope_matches(*exchange, ReplaySource::Global, None)
+            exchange.is_available() && scope_matches(*exchange, ReplaySource::Startup, None)
         })
         .map(|(index, _)| index)
         .collect()
@@ -234,7 +231,7 @@ where
     T: CommandExchangeScope,
 {
     match source {
-        ReplaySource::Global => exchange.available_in_global_scope(),
+        ReplaySource::Startup | ReplaySource::Process => exchange.available_in_global_scope(),
         ReplaySource::Case => exchange.source() == source && exchange.case_id() == case_id,
     }
 }
@@ -366,7 +363,7 @@ mod tests {
         let connection_id = Uuid::new_v4();
         let exchanges = [
             Exchange {
-                source: ReplaySource::Global,
+                source: ReplaySource::Startup,
                 case_id: None,
                 connection_id,
                 sequence: 1,
@@ -374,7 +371,7 @@ mod tests {
                 preserves_connection_order: true,
             },
             Exchange {
-                source: ReplaySource::Global,
+                source: ReplaySource::Startup,
                 case_id: None,
                 connection_id,
                 sequence: 2,

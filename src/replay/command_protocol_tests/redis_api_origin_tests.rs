@@ -260,13 +260,10 @@ async fn redis_api_origin_unblocks_presence_and_preserves_finite_inventory_and_r
             &std::collections::BTreeMap::from([("victim".into(), f.victim.clone())]),
         )
         .unwrap();
-        assert_eq!(result.matched_unused_case, 2);
-        assert!(result.remaining_dirty_case_ids.is_empty());
+        assert_eq!(result.matched_unused_case, 0);
+        assert!(result.remaining_dirty_case_ids.contains("victim"));
         let classified: Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
-        assert_eq!(
-            classified["redis"]["unused_global"][0]["api_trigger_source"]["case_id"],
-            "origin"
-        );
+        assert_eq!(classified, snapshot);
         assert_eq!(
             fs::read(f.victim.join("dependencies.jsonl")).unwrap(),
             before
@@ -338,11 +335,11 @@ async fn same_resource_reads_keep_finite_delivery_and_reclassify_only_the_leftov
             &std::collections::BTreeMap::from([("victim".into(), f.victim.clone())]),
         )
         .unwrap();
-        assert_eq!(result.matched_unused_case, 1);
-        assert!(result.remaining_dirty_case_ids.is_empty());
+        assert_eq!(result.matched_unused_case, 0);
+        assert!(result.remaining_dirty_case_ids.contains("victim"));
         let classified: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
         assert_eq!(classified["redis"]["matched_count"], 2);
-        assert_eq!(classified["redis"]["unused_global"][0]["sequence"], 3);
+        assert_eq!(classified, snapshot);
         request(&mut client, &["GET", "job:12"], b"$-1\r\n").await;
         request(&mut client, &["GET", "job:12"], ERROR).await;
         let snapshot = settled_report(&state, 3).await;

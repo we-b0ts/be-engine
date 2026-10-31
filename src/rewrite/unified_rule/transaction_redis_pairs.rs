@@ -9,7 +9,7 @@ use serde_json::Value;
 fn install(fixture: &Fixture, scenario: &str, reversed: bool) {
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","json":{"fields":{
+        json!({"format":"traffic-policy/v3","json":{"fields":{
             "/members":{"kind":"unordered"},
             "/id":{"kind":"identity","formats":[
                 {"prefix":"thinking-","hex":12},
@@ -23,7 +23,7 @@ fn install(fixture: &Fixture, scenario: &str, reversed: bool) {
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/api/case-1");
+        .join("apis/api/00000000-0000-4000-8000-000000000001");
     let source_time: chrono::DateTime<chrono::Utc> = "2026-10-16T00:00:00Z".parse().unwrap();
     let target_time = source_time + chrono::Duration::seconds(60);
     let block = |thinking: bool, time: chrono::DateTime<chrono::Utc>, content: &str| {
@@ -91,7 +91,7 @@ fn install(fixture: &Fixture, scenario: &str, reversed: bool) {
             source_role: SourceRole::DependencyRequest,
             target_role: TargetRole::IndependentTargetObservation,
             source: SourceIdentity {
-                case_id: "case-1".into(),
+                case_id: "00000000-0000-4000-8000-000000000001".into(),
                 exchange_id: None,
                 connection_id: Some(uuid::Uuid::nil().to_string()),
                 sequence: Some(index as u64 + 1),
@@ -177,7 +177,7 @@ fn redis_request_pair_search_cannot_hide_an_invalid_actual_observation() {
         let error = format!("{:#}", fixture.plan().unwrap_err());
         assert!(error.contains("no valid pair"), "{scenario}: {error}");
         assert!(
-            error.contains("Source candidate case=case-1"),
+            error.contains("Source candidate case=00000000-0000-4000-8000-000000000001"),
             "{scenario}: {error}"
         );
         assert!(

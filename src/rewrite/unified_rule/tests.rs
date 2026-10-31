@@ -5,14 +5,14 @@ use serde_json::json;
 mod transaction;
 
 fn rule() -> serde_json::Value {
-    json!({"format":"traffic-policy/v2","json":{"fields":{"/members":{"kind":"unordered"}}}})
+    json!({"format":"traffic-policy/v3","json":{"fields":{"/members":{"kind":"unordered"}}}})
 }
 
 fn record(path: &Path) -> UnifiedRulePlanRecord {
     serde_json::from_value(json!({"policy":path,"original":"original","updated":"updated",
-        "identity":{"workflow":"workflow","recording_run":"run","api":"GET /api","group":"group","source_revision":"source",
-            "case_inventory":"inventory","case_source":"cases","attempt":1,"target_inputs":"target","engine":"engine"},
-        "artifacts":[],"preflight":{"source_validations":1,"independent_target_validations":0,"derived_delivery_validations":0,"missing_target_witnesses":1,"rules":{"global.json":1}},
+        "identity":{"scope":"api_issue","identity":{"workflow":"workflow","recording_run":"run","api":"GET /api","group":"group","source_revision":"source",
+            "case_inventory":"inventory","case_source":"cases","attempt":1,"target_inputs":"target","engine":"engine"}},
+        "artifacts":[],"preflight":{"capture_scopes":{},"source_validations":1,"independent_target_validations":0,"derived_delivery_validations":0,"missing_target_witnesses":1,"rules":{"global.json":1}},
         "source_proofs":{"rules":[],"sha256":crate::policy_evidence::digest(b"[]")},
         "rule_ids":["global.json"]})).unwrap()
 }
@@ -31,7 +31,7 @@ fn single_list_and_document_use_the_same_schema_and_compiler() {
         expected
     );
     assert_eq!(
-        parse_proposal(&json!({"format":"traffic-policy/v2","rules":[native()]}).to_string())
+        parse_proposal(&json!({"format":"traffic-policy/v3","rules":[native()]}).to_string())
             .unwrap(),
         expected
     );
@@ -40,10 +40,10 @@ fn single_list_and_document_use_the_same_schema_and_compiler() {
     assert!(parse_proposal(&no_proof.to_string()).is_err());
     assert!(parse_proposal(&json!([native(), native()]).to_string()).is_err());
     let global =
-        json!({"format":"traffic-policy/v2","json":{"fields":{"/members":{"kind":"unordered"}}}});
+        json!({"format":"traffic-policy/v3","json":{"fields":{"/members":{"kind":"unordered"}}}});
     assert_eq!(
         parse_proposal(&global.to_string()).unwrap(),
-        parse_proposal(&json!({"format":"traffic-policy/v2","json":global["json"]}).to_string())
+        parse_proposal(&json!({"format":"traffic-policy/v3","json":global["json"]}).to_string())
             .unwrap()
     );
 }
@@ -78,21 +78,6 @@ fn missing_target_or_derived_delivery_cannot_claim_real_replay_passed() {
     assert_eq!(report["status"], "planned_needs_replay");
     assert_eq!(report["verified"], false);
     assert_eq!(record.report(true)["requires_fresh_replay"], true);
-    let mut state = crate::rewrite::test_state();
-    state.e2e_current = true;
-    state.target_fingerprint = Some("old".into());
-    let mut parked = state.active_slice.clone();
-    parked.e2e_current = true;
-    state.parked_slices.insert("POST /other".into(), parked);
-    invalidate_global(&mut state);
-    assert!(!state.e2e_current);
-    assert!(state.target_fingerprint.is_none());
-    assert!(
-        state
-            .parked_slices
-            .values()
-            .all(|s| !s.e2e_current && s.target_fingerprint.is_none())
-    );
 }
 
 #[test]

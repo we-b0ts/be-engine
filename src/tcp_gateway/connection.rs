@@ -433,6 +433,12 @@ async fn proxy_raw_tcp(
             serve_http_connection(client, fake_addr, entry, client_addr, state).await
         }
         DetectedProtocol::Http | DetectedProtocol::Raw => {
+            let targets = state.capture_dependency_start(
+                crate::dependency::observation::ProtocolRef::Observation {
+                    event_id: id,
+                    kind: "tcp_gateway_connection".into(),
+                },
+            );
             let _connection = state
                 .dependency_connections()
                 .register("raw_tcp", &[&client, &upstream])?;
@@ -468,6 +474,7 @@ async fn proxy_raw_tcp(
                         duration_ms: started.elapsed().as_millis(),
                         error: None,
                     },
+                    targets,
                 )
                 .await;
             }

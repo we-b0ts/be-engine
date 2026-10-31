@@ -78,7 +78,6 @@ impl ManagedSocketFixture {
         }];
         config.recording.output_dir = temp.path().join(".traffic-e2e/local/artifacts/recordings");
         config.recording.case_dependency_post_response_window_ms = 0;
-        config.recording.api_origin_dependency_idle_ms = 10;
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
         let state = crate::AppState::new(config).await.unwrap();

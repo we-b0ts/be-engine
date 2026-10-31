@@ -102,7 +102,7 @@ fn perform(
 fn one_key_rule_partitions_source_endpoints_databases_and_users_before_rechunking() {
     let (_root, mut state) = state_with_policy(
         &events(),
-        json!({"format":"traffic-policy/v2","rules":rules()}),
+        json!({"format":"traffic-policy/v3","rules":rules()}),
     );
     for (host, database, user, chunk) in [
         ("second.test", 1, "reader", b"a".as_slice()),
@@ -196,7 +196,7 @@ fn one_key_rule_partitions_source_endpoints_databases_and_users_before_rechunkin
 fn global_key_behavior_keeps_each_physical_database_inventory_independent() {
     let (_root, mut state) = state_with_policy(
         &events(),
-        json!({"format":"traffic-policy/v2",
+        json!({"format":"traffic-policy/v3",
         "rules":rules()}),
     );
     assert_eq!(

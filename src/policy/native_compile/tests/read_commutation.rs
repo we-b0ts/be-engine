@@ -21,7 +21,7 @@ fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
     let mut missing_proof = rule();
     missing_proof.as_object_mut().unwrap().remove("proof");
     let runtime = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2","rules":[missing_proof]}).to_string(),
+        &json!({"format":"traffic-policy/v3","rules":[missing_proof]}).to_string(),
     )
     .unwrap();
     crate::policy::compile_policy(&runtime).unwrap();
@@ -49,7 +49,7 @@ fn read_commutation_requires_bounded_scope_and_exclusive_unchanged_response() {
 }
 
 fn compile(rules: Vec<Value>) -> anyhow::Result<crate::policy::CompiledPolicy> {
-    crate::policy::parse_policy(&json!({"format":"traffic-policy/v2","rules":rules}).to_string())
+    crate::policy::parse_policy(&json!({"format":"traffic-policy/v3","rules":rules}).to_string())
         .and_then(|p| crate::policy::compile_policy(&p))
 }
 

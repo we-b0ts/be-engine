@@ -487,7 +487,10 @@ fn nested_target_maps_repository_worktree_and_reviews_managed_sibling() {
         agent_name: None,
     })
     .unwrap();
-    assert_eq!(envelope.schema_version, 39);
+    assert_eq!(
+        envelope.schema_version,
+        crate::rewrite::model::ACTION_SCHEMA_VERSION
+    );
     let stored = RewriteStore::new(&target).unwrap().load().unwrap().unwrap();
     assert_eq!(
         stored

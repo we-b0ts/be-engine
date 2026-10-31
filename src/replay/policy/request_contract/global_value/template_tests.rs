@@ -6,7 +6,7 @@ use serde_json::json;
 fn owner() -> RequestContracts {
     let compiled = crate::policy::parse_and_compile_policy(
         r#"
-format: traffic-policy/v2
+format: traffic-policy/v3
 json:
   fields:
     /session_id: {kind: identity, formats: [{prefix: vnc-, base64url: 24}]}

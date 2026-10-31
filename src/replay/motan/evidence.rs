@@ -6,11 +6,12 @@ impl MotanReplayState {
     pub(in crate::replay) fn register_global_exchange(
         &mut self,
         record: RecordedExchange,
+        source_kind: ReplaySource,
         reference: RecordRef,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     ) -> Result<()> {
         let before = self.exchanges.len();
-        self.register_exchange(record, ReplaySource::Global, None, targets)?;
+        self.register_exchange(record, source_kind, None, targets)?;
         if self.exchanges.len() != before {
             let exchange = self
                 .exchanges
@@ -41,7 +42,7 @@ impl MotanReplayState {
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
-        for item in unused_iter(&self.exchanges, ReplaySource::Global) {
+        for item in unused_iter(&self.exchanges, ReplaySource::Startup) {
             visitor(serde_json::to_value(item)?)?;
         }
 
@@ -51,6 +52,6 @@ impl MotanReplayState {
         if let Some(count) = self.global_report_usage().count() {
             return count + self.global_report_extra_count();
         }
-        unused_iter(&self.exchanges, ReplaySource::Global).count()
+        unused_iter(&self.exchanges, ReplaySource::Startup).count()
     }
 }

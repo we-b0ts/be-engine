@@ -16,40 +16,24 @@ const MAX_SELECTED_REFS: usize = 100_000;
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 pub(in crate::replay) const TARGET_STOP_CLEANUP_GRACE: Duration = Duration::from_secs(30);
 mod metadata;
-mod ownership;
 mod progress;
 pub(in crate::replay) use metadata::load_cleanup_refs;
 
 #[derive(Debug)]
 pub(in crate::replay) struct CaseTails {
     cases: BTreeMap<String, Option<CaseTail>>,
-    process_rules: Vec<crate::BackgroundDependencyRuleConfig>,
     async_rules: BTreeMap<String, crate::policy::AsyncApiRules>,
     request_timeout: Duration,
     no_progress_timeout: Duration,
     waits: BTreeMap<String, serde_json::Value>,
     failures: BTreeMap<String, serde_json::Value>,
+    source_business_incomplete: BTreeSet<String>,
 }
 
 impl Default for CaseTails {
     fn default() -> Self {
-        Self::with_process_rules(Vec::new())
-    }
-}
-
-impl CaseTails {
-    pub(in crate::replay) fn target_stop_required(&self, case_id: &str) -> bool {
-        self.cases
-            .get(case_id)
-            .and_then(Option::as_ref)
-            .is_some_and(|tail| tail.source_stop_required)
-    }
-    pub(in crate::replay) fn with_process_rules(
-        process_rules: Vec<crate::BackgroundDependencyRuleConfig>,
-    ) -> Self {
         Self {
             cases: BTreeMap::new(),
-            process_rules,
             async_rules: BTreeMap::new(),
             request_timeout: crate::replay::ReplayLifecycleConfig::default().request_timeout,
             no_progress_timeout: Duration::from_millis(
@@ -57,9 +41,17 @@ impl CaseTails {
             ),
             waits: BTreeMap::new(),
             failures: BTreeMap::new(),
+            source_business_incomplete: BTreeSet::new(),
         }
     }
-
+}
+impl CaseTails {
+    pub(in crate::replay) fn target_stop_required(&self, case_id: &str) -> bool {
+        self.cases
+            .get(case_id)
+            .and_then(Option::as_ref)
+            .is_some_and(|tail| tail.source_stop_required)
+    }
     pub(in crate::replay) fn with_async_rules(
         mut self,
         rules: BTreeMap<String, crate::policy::AsyncApiRules>,
@@ -80,7 +72,9 @@ impl CaseTails {
     }
 
     pub(in crate::replay) fn failures(&self) -> Vec<serde_json::Value> {
-        self.failures.values().cloned().collect()
+        self.failures.values().cloned().chain(self.source_business_incomplete.iter().map(|case|
+            serde_json::json!({"kind":"source_business_incomplete","case_id":case,"requires_new_recording":true,"reason":"Source observation ended without its declared async completion resource"})
+        )).collect()
     }
 
     pub(in crate::replay) fn waiting(&self, case: &str) -> Option<&serde_json::Value> {
@@ -105,17 +99,21 @@ struct CaseTail {
 #[derive(Debug, Clone, Copy)]
 enum ResolvedExchange {
     Redis(usize),
+    RedisRpcPush(usize),
     Mysql(usize),
     Http(usize),
     Connect(usize),
+    Memcached(usize),
+    Motan(usize),
+    Kafka(crate::replay::kafka::FiniteExchange),
 }
 
 #[derive(Debug, Clone)]
 struct SelectedExchange {
     reference: RecordedReference,
     exchange: ResolvedExchange,
-    process_owned: bool,
     shared_initialization: bool,
+    strict_reference: bool,
     lifecycle_cleanup: bool,
     lifecycle_gate: Option<Arc<AtomicBool>>,
 }
@@ -124,9 +122,15 @@ struct SelectedExchange {
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub(in crate::replay) enum RecordedReference {
     Redis { connection_id: Uuid, sequence: u64 },
+    RedisRpcPush { connection_id: Uuid, sequence: u64 },
     Mysql { connection_id: Uuid, sequence: u64 },
     Http { exchange_id: Uuid },
     Connect { event_id: Uuid },
+    Memcached { connection_id: Uuid, sequence: u64 },
+    Motan { connection_id: Uuid, sequence: u64 },
+    KafkaProduce { connection_id: Uuid, sequence: u64 },
+    KafkaFetch { connection_id: Uuid, sequence: u64 },
+    KafkaDelivery { connection_id: Uuid, sequence: u64 },
 }
 
 pub(in crate::replay) fn recorded_reference(
@@ -140,11 +144,9 @@ pub(in crate::replay) fn references_consumed(
     case: &str,
     references: &[RecordedReference],
 ) -> Result<bool> {
-    Ok(resolve(state, case, references, &BTreeSet::new())?
-        .iter()
-        .all(|selected| {
-            exchange_status(state, selected.exchange).is_some_and(ReplayExchangeStatus::is_consumed)
-        }))
+    Ok(resolve(state, case, references)?.iter().all(|selected| {
+        exchange_status(state, selected.exchange).is_some_and(ReplayExchangeStatus::is_consumed)
+    }))
 }
 
 /// Reuse existing ownership/omission authority without making unused business
@@ -161,11 +163,7 @@ pub(in crate::replay) fn timing_optional(
         .and_then(Option::as_ref)
         .and_then(|tail| tail.selected.iter().find(|s| s.reference == reference))
         .is_some_and(|selected| {
-            selected.lifecycle_cleanup
-                || selected.process_owned
-                    && exchange_status(state, selected.exchange)
-                        == Some(ReplayExchangeStatus::Available)
-                || permits_unstarted_omission(state, selected)
+            selected.lifecycle_cleanup || permits_unstarted_omission(state, selected)
         })
 }
 
@@ -175,6 +173,7 @@ fn exchange_status(
 ) -> Option<ReplayExchangeStatus> {
     match exchange {
         ResolvedExchange::Redis(index) => state.redis.exchange_status(index),
+        ResolvedExchange::RedisRpcPush(index) => state.redis.pubsub.finite_rpc_push_status(index),
         ResolvedExchange::Mysql(index) => state
             .mysql
             .exchanges
@@ -182,10 +181,16 @@ fn exchange_status(
             .map(|exchange| exchange.status),
         ResolvedExchange::Http(index) => state.http_exchange_status(index),
         ResolvedExchange::Connect(index) => state.connect_failures.status(index),
+        ResolvedExchange::Memcached(index) => state.memcached.finite_exchange_status(index),
+        ResolvedExchange::Motan(index) => state.motan.finite_exchange_status(index),
+        ResolvedExchange::Kafka(exchange) => state.kafka.finite_exchange_status(exchange),
     }
 }
 
 fn permits_unstarted_omission(state: &ReplayState, selected: &SelectedExchange) -> bool {
+    if selected.strict_reference {
+        return false;
+    }
     match selected.exchange {
         ResolvedExchange::Mysql(index) => state.mysql.permits_unstarted_omission(index),
         ResolvedExchange::Http(index) => {
@@ -202,7 +207,7 @@ pub(in crate::replay) async fn prepare(
     state: &Arc<Mutex<ReplayState>>,
     case_id: &str,
 ) -> Result<()> {
-    let (case_dir, process_rules, async_rules, request_timeout) = {
+    let (case_dir, dependencies, async_rules, request_timeout) = {
         let state = state.lock().await;
         if state.dependency_tails.cases.contains_key(case_id) {
             return Ok(());
@@ -214,25 +219,31 @@ pub(in crate::replay) async fn prepare(
                 .context("dependency-tail observation has no replay case")?
                 .dir
                 .clone(),
-            state.dependency_tails.process_rules.clone(),
+            state
+                .cases
+                .get(case_id)
+                .context("dependency-tail Case missing")?
+                .dependencies_path
+                .clone(),
             state.dependency_tails.async_rules.clone(),
             state.dependency_tails.request_timeout,
         )
     };
-    let metadata = metadata::load(&case_dir, &async_rules, request_timeout).await?;
+    let metadata =
+        metadata::load_effective(&case_dir, &dependencies, &async_rules, request_timeout).await?;
     let http_completion = metadata::http_completion_rules(&case_dir, &async_rules).await?;
-    let process_owned = match &metadata {
-        Some(metadata) if metadata.process_owned_exemptions => {
-            let mut owned =
-                ownership::prepare(&case_dir, case_id, &metadata.references, process_rules).await?;
-            owned.retain(|reference| !metadata.strict_references.contains(reference));
-            owned
-        }
-        _ => BTreeSet::new(),
-    };
     let mut state = state.lock().await;
     if state.dependency_tails.cases.contains_key(case_id) {
         return Ok(());
+    }
+    if metadata
+        .as_ref()
+        .is_some_and(|metadata| !metadata.business_complete)
+    {
+        state
+            .dependency_tails
+            .source_business_incomplete
+            .insert(case_id.to_owned());
     }
     let tail = metadata
         .map(|metadata| {
@@ -243,8 +254,9 @@ pub(in crate::replay) async fn prepare(
                     "dependency-tail observation repeats a selected exchange reference"
                 );
             }
-            let mut selected = resolve(&state, case_id, &metadata.references, &process_owned)?;
+            let mut selected = resolve(&state, case_id, &metadata.references)?;
             for (selected, reference) in selected.iter_mut().zip(&metadata.references) {
+                selected.strict_reference = metadata.strict_references.contains(reference);
                 selected.shared_initialization = match selected.exchange {
                     ResolvedExchange::Http(index) => {
                         state.http_shared_initialization(index, &http_completion)
@@ -443,7 +455,6 @@ fn resolve(
     state: &ReplayState,
     case_id: &str,
     references: &[RecordedReference],
-    process_owned: &BTreeSet<RecordedReference>,
 ) -> Result<Vec<SelectedExchange>> {
     let redis_keys = references
         .iter()
@@ -499,6 +510,10 @@ fn resolve(
         mysql.len() == mysql_keys.len(),
         "dependency-tail MySQL reference is absent from its Case semantic dependencies"
     );
+    let rpc_pushes = state.redis.pubsub.finite_rpc_pushes(case_id)?;
+    let memcached = state.memcached.finite_exchanges(case_id)?;
+    let motan = state.motan.finite_exchanges(case_id)?;
+    let kafka = state.kafka.finite_exchanges(case_id)?;
     references
         .iter()
         .map(|reference| {
@@ -511,18 +526,66 @@ fn resolve(
                     connection_id,
                     sequence,
                 } => ResolvedExchange::Mysql(mysql[&(*connection_id, *sequence)]),
+                RecordedReference::RedisRpcPush {
+                    connection_id,
+                    sequence,
+                } => ResolvedExchange::RedisRpcPush(
+                    *rpc_pushes
+                        .get(&(*connection_id, *sequence))
+                        .context("finite Redis callback reference is absent from Case inventory")?,
+                ),
                 RecordedReference::Http { exchange_id } => {
                     ResolvedExchange::Http(http[exchange_id])
                 }
                 RecordedReference::Connect { event_id } => {
                     ResolvedExchange::Connect(state.connect_failures.resolve(case_id, *event_id)?)
                 }
+                RecordedReference::Memcached {
+                    connection_id,
+                    sequence,
+                } => ResolvedExchange::Memcached(
+                    *memcached
+                        .get(&(*connection_id, *sequence))
+                        .context("finite Memcached reference absent from Case inventory")?,
+                ),
+                RecordedReference::Motan {
+                    connection_id,
+                    sequence,
+                } => ResolvedExchange::Motan(
+                    *motan
+                        .get(&(*connection_id, *sequence))
+                        .context("finite Motan reference absent from Case inventory")?,
+                ),
+                RecordedReference::KafkaProduce {
+                    connection_id,
+                    sequence,
+                } => ResolvedExchange::Kafka(
+                    *kafka
+                        .get(&("produce", *connection_id, *sequence))
+                        .context("finite Kafka reference absent from Case inventory")?,
+                ),
+                RecordedReference::KafkaFetch {
+                    connection_id,
+                    sequence,
+                } => ResolvedExchange::Kafka(
+                    *kafka
+                        .get(&("fetch", *connection_id, *sequence))
+                        .context("finite Kafka reference absent from Case inventory")?,
+                ),
+                RecordedReference::KafkaDelivery {
+                    connection_id,
+                    sequence,
+                } => ResolvedExchange::Kafka(
+                    *kafka
+                        .get(&("delivery", *connection_id, *sequence))
+                        .context("finite Kafka reference absent from Case inventory")?,
+                ),
             };
             Ok(SelectedExchange {
                 reference: *reference,
                 exchange,
-                process_owned: process_owned.contains(reference),
                 shared_initialization: false,
+                strict_reference: false,
                 lifecycle_cleanup: false,
                 lifecycle_gate: None,
             })
@@ -661,7 +724,6 @@ async fn drain_selected(
                     || before_target_stop
                         && selected.lifecycle_cleanup
                         && status == ReplayExchangeStatus::AwaitingClientTermination)
-                    && !(selected.process_owned && status == ReplayExchangeStatus::Available)
                     && !permits_unstarted_omission(&state, selected)
                     && !(failure_cleanup
                         && matches!(

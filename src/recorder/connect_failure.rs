@@ -76,11 +76,15 @@ pub(crate) async fn connect_upstream<A: tokio::net::ToSocketAddrs>(
     target: (&str, u16),
     upstream: A,
 ) -> io::Result<Option<TcpStream>> {
-    let targets = state.capture_dependency_targets();
+    let targets =
+        state.capture_dependency_start(crate::dependency::observation::ProtocolRef::Observation {
+            event_id: uuid::Uuid::new_v4(),
+            kind: format!("{protocol}_connect"),
+        });
     let started = Instant::now();
     tokio::select! {
         result = TcpStream::connect(upstream) => match result {
-            Ok(stream) => Ok(Some(stream)),
+            Ok(stream) => {targets.finish_capture_metadata("connection_established");Ok(Some(stream))},
             Err(error) => {
                 record_connect_failure(state, client, targets, protocol, target, started, &error)?;
                 Err(error)

@@ -151,7 +151,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
 }
 
 #[tokio::test]
-async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_does_not() {
+async fn mysql_request_start_owns_slow_response_and_late_query_is_unattributed() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -159,7 +159,11 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
     let [mysql_proxy_addr, gateway_addr] = reserved_ports.addresses();
     let mysql_upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mysql_upstream_addr = mysql_upstream.local_addr().unwrap();
+    let (seen, query_seen) = tokio::sync::oneshot::channel();
+    let (response_sent, response_observed) = tokio::sync::oneshot::channel();
     let mysql_upstream_task = tokio::spawn(async move {
+        let mut seen = Some(seen);
+        let mut response_observed = Some(response_observed);
         let (mut stream, _) = mysql_upstream.accept().await.unwrap();
         write_mysql_packet(&mut stream, 0, &[0x0a]).await;
         let login = read_mysql_packet(&mut stream).await.unwrap();
@@ -174,6 +178,11 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
             assert_eq!(query.0, 0);
             assert_eq!(query.1[0], 0x03);
             assert_eq!(String::from_utf8_lossy(&query.1[1..]), expected);
+            if let Some(seen) = seen.take() {
+                seen.send(()).unwrap();
+                response_observed.take().unwrap().await.unwrap();
+                tokio::time::sleep(Duration::from_millis(60)).await;
+            }
             write_mysql_packet(&mut stream, 1, &[0x00]).await;
         }
     });
@@ -192,9 +201,10 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
         let sql = b"INSERT INTO request_log(message) VALUES ('gateway-get')";
         let mut query = vec![0x03];
         query.extend_from_slice(sql);
-        write_http_response(&mut stream, r#"{"ok":true}"#).await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
         write_mysql_packet(&mut mysql, 0, &query).await;
+        query_seen.await.unwrap();
+        write_http_response(&mut stream, r#"{"ok":true}"#).await;
+        response_sent.send(()).unwrap();
         assert_eq!(read_mysql_packet(&mut mysql).await.unwrap().1[0], 0x00);
 
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -255,6 +265,7 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
     tokio::time::sleep(Duration::from_millis(100)).await;
     recorder_task.abort();
     recorder.flush_traffic().await.unwrap();
+    recorder.finish_run().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     assert!(!run_dir.join("failed").exists());
@@ -289,6 +300,10 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
             .any(|event| event["event_type"] == "readonly_rejection")
     );
 
+    let central = read_json_lines(&run_dir.join("dependencies.jsonl"));
+    assert!(central.iter().any(|event| event["sql"]
+        == "INSERT INTO request_log(message) VALUES ('background-after-window')"
+        && event["capture"]["attribution"]["kind"] == "unattributed"));
     let traffic = read_json_lines(&run_dir.join("traffic.jsonl"));
     assert!(traffic.iter().any(|event| {
         event["event_type"] == "access_policy_allow"
@@ -423,9 +438,38 @@ fn only_recording_run_dir(recordings_dir: &Path) -> PathBuf {
 }
 
 fn read_json_lines(path: &Path) -> Vec<Value> {
+    if path
+        .file_name()
+        .is_some_and(|name| name == "dependencies.jsonl")
+        && !path.is_file()
+    {
+        use std::io::{Read, Seek, SeekFrom};
+        let scope_path = path.with_file_name("dependency-scope.json");
+        let scope: Value = serde_json::from_slice(&std::fs::read(&scope_path).unwrap()).unwrap();
+        let ledger = scope_path
+            .parent()
+            .unwrap()
+            .join(scope["run_relpath"].as_str().unwrap())
+            .join("dependencies.jsonl");
+        let mut input = std::fs::File::open(ledger).unwrap();
+        return scope["locations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|location| {
+                input
+                    .seek(SeekFrom::Start(location["offset"].as_u64().unwrap()))
+                    .unwrap();
+                let mut bytes = vec![0; location["length"].as_u64().unwrap() as usize];
+                input.read_exact(&mut bytes).unwrap();
+                serde_json::from_slice(&bytes).unwrap()
+            })
+            .collect();
+    }
     std::fs::read_to_string(path)
         .unwrap()
         .lines()
+        .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
 }

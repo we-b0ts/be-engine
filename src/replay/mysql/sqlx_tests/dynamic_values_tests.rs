@@ -173,9 +173,9 @@ async fn sql_time_evidence_uses_committed_identity_proofs_and_retired_authoring_
                 "sql":"INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)",
                 "sql_values":{"2":{"time":"replay_now","tolerance":"5s","format":"%Y-%m-%d %H:%M:%S%.f","timezone":"+00:00"}}}
         })).unwrap();
-        assert!(std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap().contains("insert-time"));
+        assert!(crate::recorder::test_io::read_to_string_sync(temp.path().join("policy.yaml")).unwrap().contains("insert-time"));
         task.abort();
-        let updated = std::fs::read_to_string(&policy_path).unwrap();
+        let updated = crate::recorder::test_io::read_to_string_sync(&policy_path).unwrap();
         let (next,addr,_,task) = fixture_with_policy(&records,Some(&updated)).await;
         let mut client = connect(addr,&next.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         sqlx::query("SELECT count(*) FROM kinds WHERE name=?").bind("new-name").fetch_one(&mut client).await.unwrap();

@@ -7,7 +7,7 @@ const SOURCE: &str = "11111111-1111-4111-8111-111111111111";
 const TARGET: &str = "22222222-2222-4222-8222-222222222222";
 
 fn owner(uri: &str, body: Option<Value>, prefix: &str, format: &str) -> RequestContracts {
-    let document = json!({"format":"traffic-policy/v2", "mysql":{"tables":{"tasks":{
+    let document = json!({"format":"traffic-policy/v3", "mysql":{"tables":{"tasks":{
         "pattern":"tasks", "fields":{"id":{"kind":"identity","formats":[{"prefix":prefix,"format":format}]}}
     }}}});
     let mut owner = RequestContracts::default();
@@ -27,6 +27,7 @@ fn owner(uri: &str, body: Option<Value>, prefix: &str, format: &str) -> RequestC
             recorded: None,
             actual: None,
             dir: PathBuf::new(),
+            dependencies_path: PathBuf::new(),
             conditions: BTreeSet::new(),
         },
     );

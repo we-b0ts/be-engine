@@ -83,10 +83,26 @@ async fn capture_cancelled_stream(engine_reset: bool) {
     assert!(state.active_case_invalidation(case.id).is_none());
     state.recorder().publish_case(&case).await.unwrap();
     state.recorder().flush_traffic().await.unwrap();
-    let raw =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
+    let case_dir = state.recorder().case_dir(&case);
+    let scope: crate::dependency::observation::ScopeIndex = serde_json::from_slice(
+        &tokio::fs::read(case_dir.join("dependency-scope.json"))
             .await
-            .unwrap();
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        tokio::fs::canonicalize(case_dir.join(scope.run_relpath))
+            .await
+            .unwrap(),
+        tokio::fs::canonicalize(state.recorder().run_dir.as_ref())
+            .await
+            .unwrap(),
+        "publishing an ungrouped case must preserve the scope's central-ledger address"
+    );
+    assert!(!case_dir.join("dependencies.jsonl").exists());
+    let raw = crate::recorder::test_io::read_to_string(case_dir.join("dependencies.jsonl"))
+        .await
+        .unwrap();
     let record: Value = serde_json::from_str(raw.trim()).unwrap();
     let outcome: crate::DependencyExchangeOutcome =
         serde_json::from_value(record["outcome"].clone()).unwrap();

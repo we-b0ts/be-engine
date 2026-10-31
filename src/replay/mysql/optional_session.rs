@@ -37,7 +37,7 @@ pub(in crate::replay) fn classify(
     source: ReplaySource,
     global_prefixes: &mut ReadPrefixes,
 ) -> BTreeMap<usize, OptionalSessionExchange> {
-    if source == ReplaySource::Global {
+    if source.is_run_owned() {
         global_prefixes.0.clear();
     }
     let mut connections = BTreeMap::<Uuid, BTreeMap<u64, (usize, &RecordedMysqlExchange)>>::new();
@@ -147,7 +147,7 @@ pub(in crate::replay) fn classify(
                         *read_sql.entry(sql).or_insert_with(|| read::classify(sql))
                             == read::Effect::ReadOnly
                     });
-            if source == ReplaySource::Global
+            if source.is_run_owned()
                 && read_only
                 && let Some(next) = sequence.checked_add(1)
                 && !exchanges.contains_key(&next)

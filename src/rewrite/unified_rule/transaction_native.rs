@@ -1,5 +1,6 @@
 //! Native proposal transactions retain Source scope and genuine Replay duties.
 use super::*;
+use serde_json::Value;
 
 fn generated() -> serde_json::Value {
     let proof =
@@ -46,7 +47,7 @@ fn native_response_and_global_formats_share_the_public_strict_payload_transactio
             .replace_response_bodies(source.to_string().as_bytes(), target.to_string().as_bytes());
         write(
             &fixture.proposal,
-            json!({"format":"traffic-policy/v2","json":super::super::rule()["json"],"rules":[generated()]}),
+            json!({"format":"traffic-policy/v3","json":super::super::rule()["json"],"rules":[generated()]}),
         );
         fixture.confirm();
         let planned = fixture.plan();
@@ -74,20 +75,43 @@ fn native_response_and_global_formats_share_the_public_strict_payload_transactio
 
 fn source_event() -> serde_json::Value {
     json!({"event_type":"redis_exchange","connection_id":uuid::Uuid::nil(),"sequence":1,"timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
-        "target_host":"cache.test","target_port":6379,"database":0,"command":"SCARD",
-        "args":[raw_body(b"session")],"response":raw_body(b":2\r\n"),"replay_safe":true,
+        "target_host":"cache.test","target_port":6379,"database":0,"command":"GET",
+        "args":[raw_body(b"session")],"response":raw_body(b"$1\r\n2\r\n"),"replay_safe":true,
         "session_setup":false,"outcome":"response"})
 }
 
 fn ownership() -> serde_json::Value {
-    json!({"id":"refresh","match":{},"effect":{"kind":"process_owned","source_revision":"",
-        "selector":{"protocol":"redis","ports":[6379],"operation":"SCARD",
-        "keys":[{"kind":"exact","value":"session"}],"initial_load_timeout_ms":1000}},
+    json!({"id":"refresh","match":{},"effect":{"kind":"process_owned","task_name":"refresh",
+        "source_revision":format!("sha256:{}","1".repeat(64)),
+        "selector":{"protocol":"redis","ports":[6379],"operation":"GET",
+        "keys":[{"kind":"exact","value":"session"}]}},
         "proof":{"source":"src/session.rs:42","fact":"The process refreshes this exact cache key independently of API calls"}})
 }
 
 fn source_scope(fixture: &Fixture) -> PathBuf {
     let mut state = fixture.state();
+    let revision = crate::source_snapshot::test_fixture::install(fixture.root());
+    let inventory = fixture
+        .paths
+        .replay
+        .ancestors()
+        .map(|path| path.join("case-groups.json"))
+        .find(|path| path.is_file())
+        .unwrap();
+    let mut groups: Value = serde_json::from_slice(&fs::read(&inventory).unwrap()).unwrap();
+    groups["source_revision"] = json!(revision);
+    write(&inventory, groups);
+    let runner = fixture
+        .paths
+        .replay
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .join("state.yaml");
+    let mut execution: Value = serde_yaml::from_str(&fs::read_to_string(&runner).unwrap()).unwrap();
+    execution["source_revision"] = json!(revision);
+    fs::write(&runner, serde_yaml::to_string(&execution).unwrap()).unwrap();
+    state.source_revision = Some(revision);
     state.recording_run_id = "recording".into();
     let source = state.case_source.clone().unwrap();
     write(
@@ -95,7 +119,7 @@ fn source_scope(fixture: &Fixture) -> PathBuf {
         json!({"run_id":"recording","status":"completed"}),
     );
     fs::write(
-        source.join("apis/api/case-1/dependencies.jsonl"),
+        source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
         source_event().to_string(),
     )
     .unwrap();
@@ -105,7 +129,7 @@ fn source_scope(fixture: &Fixture) -> PathBuf {
 }
 
 #[test]
-fn source_only_ownership_reenumerates_added_cases_at_apply_and_retains_replay_obligation() {
+fn source_only_ownership_reenumerates_added_cases_and_retains_independent_attribution_work() {
     for added_case in [false, true] {
         let fixture = Fixture::new();
         let source = source_scope(&fixture);
@@ -113,14 +137,14 @@ fn source_only_ownership_reenumerates_added_cases_at_apply_and_retains_replay_ob
         let planned = fixture.plan().unwrap();
         assert_eq!(
             planned.traffic_e2e_report["preflight"]["obligations"],
-            json!(["reclassify"])
+            json!(["attribution_review"])
         );
         assert_eq!(
             planned.traffic_e2e_report["preflight"]["independent_target_validations"],
             0
         );
         if added_case {
-            let other = source.join("apis/other/case-2");
+            let other = source.join("apis/other/00000000-0000-4000-8000-000000000002");
             fs::create_dir_all(&other).unwrap();
             write(
                 &other.join("request.json"),
@@ -128,13 +152,19 @@ fn source_only_ownership_reenumerates_added_cases_at_apply_and_retains_replay_ob
             );
             write(&other.join("expected-response.json"), json!({}));
             fs::write(other.join("dependencies.jsonl"), source_event().to_string()).unwrap();
+            recording_fixture::seal(&source);
             assert!(apply_rewrite_rule(fixture.context(), &planned.plan_id).is_err());
             assert!(fixture.state().rule_plan.is_some());
         } else {
             let applied = apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
-            assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
-            assert!(fixture.state().rule_replay_pending);
-            assert!(!fixture.state().e2e_current);
+            assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], false);
+            let state = fixture.state();
+            assert!(!state.e2e_current);
+            assert!(!state.rule_replay_pending);
+            assert!(
+                crate::rewrite::dependency_review::required_action(fixture.root(), &state)
+                    .is_some()
+            );
         }
     }
 }
@@ -151,7 +181,7 @@ fn capture_source_proof_requires_fresh_recording_and_crash_recovery_restores_the
             "timestamp":"2026-10-16T00:00:00Z","request_started_at":"2026-10-16T00:00:00Z",
             "duration_ms":0,"outcome":"response","error":null});
         fs::write(
-            source.join("apis/api/case-1/dependencies.jsonl"),
+            source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
             event.to_string(),
         )
         .unwrap();
@@ -211,7 +241,11 @@ fn capture_source_proof_requires_fresh_recording_and_crash_recovery_restores_the
             // A crash may publish the exact updated policy. Recovery must undo
             // its effect before retiring the saved fresh-recording obligation.
             fs::write(fixture.policy(), &record.updated).unwrap();
-            fs::write(source.join("apis/api/case-1/dependencies.jsonl"), "changed").unwrap();
+            fs::write(
+                source.join("dependencies.jsonl"),
+                "changed authoritative Source",
+            )
+            .unwrap();
             recover_rewrite_rule_plan(fixture.context(), &planned.plan_id).unwrap();
             assert_eq!(fs::read(fixture.policy()).unwrap(), original);
             assert!(fixture.state().rule_replay_pending && fixture.state().rule_plan.is_none());
@@ -221,13 +255,7 @@ fn capture_source_proof_requires_fresh_recording_and_crash_recovery_restores_the
                 applied.traffic_e2e_report["status"],
                 "applied_pending_recording"
             );
-            assert!(fixture.state().recording_refresh.is_some());
-            assert!(!fixture.state().e2e_current);
-            assert!(matches!(
-                fixture.state().phase,
-                crate::rewrite::model::RewritePhase::AwaitingRecordingRefresh
-                    | crate::rewrite::model::RewritePhase::RecordingRequired
-            ));
+            assert_scoped_capture_pending(&fixture);
         }
     }
 }
@@ -264,7 +292,7 @@ fn stateful_sequence_plan_requires_the_complete_source_trace_and_preserves_targe
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1");
+            .join("apis/api/00000000-0000-4000-8000-000000000001");
         fs::write(
             case.join("dependencies.jsonl"),
             events
@@ -317,7 +345,7 @@ fn independent_redis_nonce_with_key_capture_survives_public_plan_and_apply() {
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/api/case-1");
+        .join("apis/api/00000000-0000-4000-8000-000000000001");
     fs::write(source.join("dependencies.jsonl"),json!({"event_type":"redis_exchange","timestamp":"2026-10-16T00:00:00Z",
         "connection_id":uuid::Uuid::nil(),"sequence":1,"duration_ms":0,"target_host":"cache.test","target_port":6379,
         "database":0,"resp_version":2,"command":"SET","args":[raw_body(b"sessions:01234567-89ab-4def-8123-456789abcdef"),
@@ -352,7 +380,7 @@ fn generated_queue_uuid_and_bounded_origin_survive_public_plan_apply_with_fresh_
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/api/case-1");
+        .join("apis/api/00000000-0000-4000-8000-000000000001");
     let event = json!({"event_type":"redis_exchange","timestamp":"2026-10-16T00:00:00Z",
         "connection_id":uuid::Uuid::nil(),"sequence":1,"duration_ms":0,"target_host":"cache.test","target_port":6379,
         "database":0,"resp_version":2,"command":"LPUSH","args":[raw_body(b"queue"),raw_body(json!({"delivery_tag":"01234567-89ab-4def-8123-456789abcdef","origin":"gen123@source","body":"exact"}).to_string().as_bytes())],

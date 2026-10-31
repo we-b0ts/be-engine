@@ -112,7 +112,7 @@ mod tests {
         let id = "11111111-1111-4111-8111-111111111111";
         let alternate = "22222222-2222-4222-8222-222222222222";
         let compiled = crate::policy::parse_and_compile_policy(
-            "format: traffic-policy/v2\njson: {fields: {/id: {kind: identity, formats: [uuid]}}}\n",
+            "format: traffic-policy/v3\njson: {fields: {/id: {kind: identity, formats: [uuid]}}}\n",
         )
         .unwrap();
         let mut owner = policy::request_contract::RequestContracts::default();

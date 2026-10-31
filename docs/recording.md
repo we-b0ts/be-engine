@@ -62,7 +62,7 @@ recorder:
       paths: [/api/jobs]
 ```
 
-Standalone recording can load the Source effects of a `traffic-policy/v2`
+Standalone recording can load the Source effects of a `traffic-policy/v3`
 document with `--policy PATH` / `TRAFFIC_E2E_POLICY`. With `--config`, an explicit
 policy must resolve to the same file as `project.policy`; it cannot override the
 project authority. Without project configuration or policy, cases use literal
@@ -503,21 +503,17 @@ user. The reserved Source UID cannot own recording artifacts.
 
 ## Rewrite handoff
 
-Finalization builds Case fragments and a paged Global index before publishing
-the completed run. See [large Global dependencies](global-dependencies.md) for
-legacy preparation, source checks, Replay memory and paginated report details.
-After final manifest/ownership publication, it also prewarms the complete Source
-file catalog for [indexed rule proof](rule-evidence-index.md). Later rule plans
-reuse recording hashes and read only applicable original evidence; skipped APIs
-remain part of that immutable catalog.
+Finalization seals `dependency-manifest.json`, the central `dependencies.jsonl`
+and lifecycle ledger, the complete input inventory and reference-only Case,
+startup, process and unattributed scopes. Replay authenticates the sealed inventory
+and prepares bounded native indexes and reusable read caches. There are no separate
+Case or Global payload files in current recordings.
 
-Finalization also prepares `.mysql-transactions.json` (SQL-free connection,
-sequence and transaction-state facts) and, when API-origin rules are configured,
-`.mysql-ownership.json` (Source-backed operation ownership). Transaction facts join
-Global and Case records without changing their original capture attribution.
-These derived artifacts are private and contain no Target observations. Preparation
-failure is explicit in Recorder logs and preserves recording completion; Replay
-rebuilds missing, corrupt or stale artifacts under a shared cache lock.
+Source proof retains original central byte positions and content hashes. Derived
+indexes and independent attribution overlays do not modify the sealed recording.
+Legacy API-origin ownership discovery and transaction promotion cannot replace a
+current-format frozen owner. A full-session reconciliation receipt retains all
+mandatory Source obligations, including unsupported and unattributed observations.
 
 Expose the finalized recording tree under the target's conventional
 `.traffic-e2e/local/artifacts/recordings/<run-id>/`, with its key accessible

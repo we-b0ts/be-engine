@@ -29,12 +29,13 @@ pub(in crate::replay) mod contracts;
 mod delivery;
 mod evidence;
 mod expiration;
+mod finite_inventory;
 mod report_inventory;
 #[cfg(test)]
 mod termination_tests;
 use super::command_matching::{
-    CommandExchangeScope, PreferredMatch, is_connection_independent_background,
-    lane_blocked_diagnostic, preferred_match, unmatched_diagnostic,
+    CommandExchangeScope, PreferredMatch, is_process_lane, lane_blocked_diagnostic,
+    preferred_match, unmatched_diagnostic,
 };
 use super::report::command::{
     CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
@@ -82,8 +83,6 @@ pub(super) struct RecordedExchange {
     #[serde(default)]
     duration_ms: u64,
     replay_safe: bool,
-    #[serde(default)]
-    global_dependency_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -273,10 +272,7 @@ impl MemcachedReplayState {
             record.outcome
         };
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, outcome);
-        let connection_independent = is_connection_independent_background(
-            source,
-            record.global_dependency_reason.as_deref(),
-        );
+        let connection_independent = is_process_lane(source);
         let exchange_index = self.exchanges.len();
         self.case_exchange_index
             .register(source, case_id, exchange_index);
@@ -466,6 +462,7 @@ impl MemcachedReplayState {
             self.events.dirty_case_ids.insert(case_id.clone());
         }
         self.events.unsafe_events.push(CommandRequestReport {
+            target_observation_id: None,
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
@@ -486,7 +483,7 @@ impl MemcachedReplayState {
             unsafe_events: self.events.unsafe_events.clone(),
             unused_case: unused(&self.exchanges, ReplaySource::Case),
             unused_global_count: Some(self.global_unused_count()),
-            unused_global: unused(&self.exchanges, ReplaySource::Global),
+            unused_global: unused(&self.exchanges, ReplaySource::Startup),
             ..Default::default()
         }
     }
@@ -642,6 +639,7 @@ async fn record_runtime_unsafe(
 ) {
     let mut state = state.lock().await;
     let request = CommandRequestReport {
+        target_observation_id: None,
         case_id: state.active_case_id.clone(),
         target: target.clone(),
         command: command.to_string(),
@@ -683,6 +681,7 @@ async fn match_memcached_request(
             .events
             .unsupported
             .push(CommandRequestReport {
+                target_observation_id: None,
                 case_id: active_case_id,
                 target: target.clone(),
                 command: request.command.clone(),
@@ -725,6 +724,7 @@ async fn match_memcached_request(
                     .insert(case_id.clone());
             }
             state.memcached.events.unmatched.push(CommandRequestReport {
+                target_observation_id: None,
                 case_id: active_case_id,
                 target: target.clone(),
                 command: request.command.clone(),
@@ -942,11 +942,13 @@ fn unused_iter(
     exchanges
         .iter()
         .enumerate()
-        .filter(move |(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
+        .filter(move |(_, exchange)| {
+            exchange.source.matches_scope(source) && !exchange.status.is_consumed()
+        })
         .map(move |(index, exchange)| CommandUnusedReport {
             index,
             case_id: exchange.case_id.clone(),
-            source,
+            source: exchange.source,
             target: TargetKey {
                 host: normalize_host(&exchange.record.target_host),
                 port: exchange.record.target_port,
@@ -959,7 +961,7 @@ fn unused_iter(
 
 fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
     unused_iter(exchanges, source)
-        .take(if source == ReplaySource::Global {
+        .take(if source.is_run_owned() {
             100
         } else {
             usize::MAX

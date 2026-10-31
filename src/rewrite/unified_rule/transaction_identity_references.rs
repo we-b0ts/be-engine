@@ -22,7 +22,7 @@ fn identity_reference_extension_public_plan_apply_proves_use_after_capture_and_f
             crate::platform::encryption_key::load_or_create(root).unwrap();
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v2","rules":[proposal(false)]}),
+                json!({"format":"traffic-policy/v3","rules":[proposal(false)]}),
             );
             let redis = |sequence, command, args: &[&str], response: &str| {
                 json!({"event_type":"redis_exchange","timestamp":"2026-10-16T00:00:00Z","duration_ms":0,
@@ -41,7 +41,7 @@ fn identity_reference_extension_public_plan_apply_proves_use_after_capture_and_f
                 events.push(event);
             }
             fs::write(
-                source.join("apis/api/case-1/dependencies.jsonl"),
+                source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
                 events.iter().map(|v| format!("{v}\n")).collect::<String>(),
             )
             .unwrap();
@@ -54,7 +54,7 @@ fn identity_reference_extension_public_plan_apply_proves_use_after_capture_and_f
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1/dependencies.jsonl");
+            .join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl");
         let original = fs::read(&path).unwrap();
         let plan = fixture.plan();
         if matches!(scenario, "absent" | "before-capture") {
@@ -72,8 +72,13 @@ fn identity_reference_extension_public_plan_apply_proves_use_after_capture_and_f
         assert_eq!(plan.traffic_e2e_report["verified"], false);
         if scenario == "stale" {
             fs::write(
-                &path,
-                format!("{}\n", std::str::from_utf8(&original).unwrap()),
+                fixture
+                    .state()
+                    .case_source
+                    .as_ref()
+                    .unwrap()
+                    .join("dependencies.jsonl"),
+                "tampered authoritative Source occurrence",
             )
             .unwrap();
             assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());

@@ -80,7 +80,7 @@ fn fixture() -> (tempfile::TempDir, RedisReplayState, Vec<CaseSource>) {
     let policy = root.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        json!({"format":"traffic-policy/v2","redis":{"keys":{
+        json!({"format":"traffic-policy/v3","redis":{"keys":{
             "content:*":{"append_stream":true}
         }}})
         .to_string(),
@@ -199,7 +199,7 @@ fn global_shared_reads_keep_their_owner_even_with_the_current_case_as_origin() {
     state
         .register_exchange(
             serde_json::from_value(event(2, "GET", &[b"content:1"], b"$2\r\nab\r\n")).unwrap(),
-            ReplaySource::Global,
+            ReplaySource::Startup,
             Some("case"),
             &mut BTreeMap::new(),
             &[],

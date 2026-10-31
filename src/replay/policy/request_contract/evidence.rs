@@ -331,6 +331,7 @@ pub(in crate::replay::policy) fn verify_capture(
                     recorded,
                     actual: Some(candidate.actual_anchor),
                     dir: dir.clone(),
+                    dependencies_path: dir.join("dependencies.jsonl"),
                     conditions: BTreeSet::from([rule.id.clone()]),
                 },
             );
@@ -353,9 +354,7 @@ pub(in crate::replay::policy) fn verify_capture(
             if event
                 .get("outcome")
                 .is_some_and(|outcome| outcome != "response")
-                || event
-                    .get("global_dependency_reason")
-                    .is_some_and(|v| !v.is_null())
+                || !crate::dependency::observation::is_case_event(&event)
             {
                 continue;
             }
@@ -592,9 +591,7 @@ fn validate_source_commands(
             || event["target_host"] != candidate.host
             || event["target_port"] != candidate.port
             || event["replay_safe"] != true
-            || event
-                .get("global_dependency_reason")
-                .is_some_and(|v| !v.is_null())
+            || !crate::dependency::observation::is_case_event(&event)
         {
             continue;
         }

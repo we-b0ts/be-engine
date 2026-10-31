@@ -68,7 +68,7 @@ pub(super) fn waiting(
         let status = exchange_status(state, selected.exchange)?;
         (!status.is_consumed()
             && !permits_unstarted_omission(state, selected)
-            && !(selected.process_owned && status == ReplayExchangeStatus::Available))
+)
             .then(|| serde_json::json!({"reference":selected.reference,"state":format!("{status:?}")}))
     }).take(8).collect();
     serde_json::json!({

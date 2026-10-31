@@ -103,7 +103,7 @@ async fn capture_and_replay(reset: bool, prefix: bool, extra_input: bool) {
     recorder.recorder().publish_case(&case).await.unwrap();
     recorder.recorder().flush_traffic().await.unwrap();
     let case_dir = recorder.recorder().case_dir(&case);
-    let raw = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(case_dir.join("dependencies.jsonl"))
         .await
         .unwrap();
     let event: Value = serde_json::from_str(raw.trim()).unwrap();

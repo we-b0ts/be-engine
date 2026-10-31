@@ -25,33 +25,21 @@ fn current_rule() -> crate::BackgroundDependencyRuleConfig {
 }
 
 #[tokio::test]
-async fn retired_http_ownership_cannot_survive_in_an_old_global_file() {
+async fn legacy_rule_annotations_do_not_control_finite_startup_inventory() {
     let record = exchange();
     let (_root, _pages, source) = indexed(std::slice::from_ref(&record));
     let before = std::fs::read(source.path()).unwrap();
-    let stamp = crate::dependency_index::FileStamp::read(source.path()).unwrap();
-    let error = super::super::super::global_source::GlobalSource::load(source.path(), &[])
-        .await
-        .err()
-        .expect("removed ownership must reject the old Global inventory");
-    assert!(format!("{error:#}").contains("fresh capture is required"));
-    assert_eq!(std::fs::read(source.path()).unwrap(), before);
-    assert_eq!(
-        crate::dependency_index::FileStamp::read(source.path()).unwrap(),
-        stamp
-    );
-
-    // Semantic coverage survives a rule rename without trusting the old ID.
-    let loaded =
-        super::super::super::global_source::GlobalSource::load(source.path(), &[current_rule()])
+    for rules in [vec![], vec![current_rule()]] {
+        let loaded = super::super::super::global_source::GlobalSource::load(source.path(), &rules)
             .await
             .unwrap();
-    assert_eq!(loaded.http.len(), 1);
+        assert_eq!(loaded.http.len(), 1);
+    }
     assert_eq!(std::fs::read(source.path()).unwrap(), before);
 }
 
 #[tokio::test]
-async fn an_old_rule_name_cannot_mask_a_different_physical_request() {
+async fn startup_inventory_does_not_depend_on_a_retired_background_selector() {
     for (field, value) in [
         ("authority", json!("other.example:80")),
         ("method", json!("POST")),
@@ -60,21 +48,14 @@ async fn an_old_rule_name_cannot_mask_a_different_physical_request() {
     ] {
         let mut record = exchange();
         record[field] = value;
-        if field == "authority" {
-            record["uri"] = "http://config.api.demo.test/1/config/service".into();
-        }
         let (_root, _pages, source) = indexed(&[record]);
-        let error = super::super::super::global_source::GlobalSource::load(
+        let loaded = super::super::super::global_source::GlobalSource::load(
             source.path(),
             &[current_rule()],
         )
         .await
-        .err()
-        .expect("current selector must cover the actual request");
-        assert!(
-            format!("{error:#}").contains("fresh capture is required"),
-            "{field}: {error:#}"
-        );
+        .unwrap();
+        assert_eq!(loaded.http.len(), 1);
     }
 }
 

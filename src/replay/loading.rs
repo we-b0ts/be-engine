@@ -31,6 +31,14 @@ impl ReplayRuntime {
         let lazy = lifecycle.dependency_loading.lazy_cases;
         clear_report_artifacts(config.report_path.as_deref()).await?;
         let root_dir = config.case_dir;
+        if crate::dependency_index::recording::root(&root_dir).is_some() {
+            let source = root_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::dependency_index::recording::authenticate(&source)
+            })
+            .await
+            .context("recording authentication task failed")??;
+        }
         let process_owned_dependencies = &config.process_owned_dependencies;
         let replay_artifact_dir = config
             .report_path
@@ -50,8 +58,18 @@ impl ReplayRuntime {
             .collect::<BTreeSet<_>>();
         let (mode, mut cases, active_case_id) =
             discover_replay_cases(&root_dir, &selected_case_ids).await?;
+        let source = root_dir.clone();
+        let output = replay_artifact_dir.clone();
+        let (prepared_cases, attribution) = tokio::task::spawn_blocking(move || -> Result<_> {
+            let frozen = attribution::freeze(&source, &output, &mut cases)?;
+            Ok((cases, frozen))
+        })
+        .await
+        .context("dependency attribution snapshot preparation failed")??;
+        let mut cases = prepared_cases;
         let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
-        let (global_path, global_debug_path) = find_run_level_dependencies(&root_dir);
+        let (_, global_debug_path) = find_run_level_dependencies(&root_dir);
+        let global_path = attribution.startup;
         let global_report_stamp = global_path
             .as_ref()
             .map(|path| crate::dependency_index::FileStamp::read(path))
@@ -84,6 +102,25 @@ impl ReplayRuntime {
         if let Some(path) = &global_path {
             global::load(
                 path,
+                ReplaySource::Startup,
+                &mut mysql,
+                &mut http_exchanges,
+                &mut http_blackholes,
+                &mut redis,
+                &mut memcached,
+                &mut kafka,
+                &mut motan,
+                &mut targets,
+                &mut connection_identities,
+                process_owned_dependencies,
+                reader.clone(),
+            )
+            .await?;
+        }
+        if let Some(path) = attribution.process {
+            global::load(
+                &path,
+                ReplaySource::Process,
                 &mut mysql,
                 &mut http_exchanges,
                 &mut http_blackholes,
@@ -109,7 +146,11 @@ impl ReplayRuntime {
             &mut kafka,
             &mut motan,
         );
-        if mysql.has_global_transaction_start {
+        // Current capture/frozen scopes are authoritative per request. A shared
+        // physical BEGIN cannot assign later Case queries to its run owner.
+        if mysql.has_global_transaction_start
+            && crate::dependency_index::recording::root(&root_dir).is_none()
+        {
             let transaction_root = root_dir.clone();
             let prepared_transactions = tokio::task::spawn_blocking(move || {
                 mysql::transaction_ownership::prepare(&transaction_root)
@@ -140,7 +181,7 @@ impl ReplayRuntime {
                 let path = case.dependencies_path.clone();
                 let cache = reader.clone();
                 let shared_http = shared_http_selectors.clone();
-                let (file_index, startup, shared_lines) =
+                let (file_index, startup, shared_lines, source_bytes) =
                     tokio::task::spawn_blocking(move || -> Result<_> {
                         let index = crate::dependency_index::load_file(&path)?;
                         let mut cache = cache
@@ -153,7 +194,8 @@ impl ReplayRuntime {
                             &mut cache,
                             &shared_http,
                         )?;
-                        Ok((index, records, shared_lines))
+                        let source_bytes = crate::dependency_index::scoped::selected_bytes(&path)?;
+                        Ok((index, records, shared_lines, source_bytes))
                     })
                     .await
                     .context("case startup index task failed")??;
@@ -182,6 +224,7 @@ impl ReplayRuntime {
                     case.id.clone(),
                     deferred::CaseInventory {
                         index: file_index,
+                        source_bytes,
                         skip,
                         cleanup,
                     },
@@ -311,15 +354,30 @@ impl ReplayRuntime {
             .as_deref()
             .map(|path| ReplayPolicyRuntime::load_with_sources(path, &cases, !lazy))
             .transpose()?;
+        let witness_policy = replay_policy
+            .as_ref()
+            .map(|policy| policy.report().fingerprint)
+            .unwrap_or_else(|| {
+                crate::policy_evidence::digest(b"native-strict-request-evidence/v1")
+            });
+        let witnesses = crate::policy_evidence::WitnessStore::new_bound(
+            &replay_artifact_dir,
+            &session_id.to_string(),
+            &witness_policy,
+        )?;
+        let key_context =
+            crate::dependency_index::recording::root(&root_dir).unwrap_or_else(|| root_dir.clone());
+        let target_observations = target_observation::TargetObservations::new(
+            witnesses.clone(),
+            session_id,
+            key_context,
+            witness_policy,
+        );
+        redis.target_observations = Some(target_observations.clone());
         if let Some(policy) = &mut replay_policy {
             policy
                 .request_contracts
                 .configure_pre_match(lifecycle.pre_match);
-            let witnesses = crate::policy_evidence::WitnessStore::new_bound(
-                &replay_artifact_dir,
-                &session_id.to_string(),
-                &policy.report().fingerprint,
-            )?;
             for (case, directory) in &redis.shared_source_directories {
                 policy
                     .request_contracts
@@ -376,8 +434,13 @@ impl ReplayRuntime {
             .clone()
             .unwrap_or_else(|| replay_artifact_dir.join("replay-report.json"));
         let mut state = ReplayState {
+            batch_scope: attribution.batch_scope,
+            startup_phase: Default::default(),
+            dependency_attribution_snapshot: attribution.snapshot,
             input_timing: None,
             http_stream_timing: lifecycle.http_stream_timing,
+            http_ingress: Default::default(),
+            target_observations,
             case_cleanup: Default::default(),
             target_stop_prepared: BTreeSet::new(),
             target_session_stopped: false,
@@ -394,18 +457,16 @@ impl ReplayRuntime {
             root_dir,
             cases,
             active_case_id,
-            dependency_tails: control::dependency_tail::CaseTails::with_process_rules(
-                process_owned_dependencies.to_vec(),
-            )
-            .with_async_rules(
-                replay_policy
-                    .as_ref()
-                    .and_then(|policy| policy.request_contracts.compiled_rules())
-                    .map(|compiled| compiled.async_api.clone())
-                    .unwrap_or_default(),
-                lifecycle.request_timeout,
-            )
-            .with_no_progress_timeout(lifecycle.case_no_progress_timeout),
+            dependency_tails: control::dependency_tail::CaseTails::default()
+                .with_async_rules(
+                    replay_policy
+                        .as_ref()
+                        .and_then(|policy| policy.request_contracts.compiled_rules())
+                        .map(|compiled| compiled.async_api.clone())
+                        .unwrap_or_default(),
+                    lifecycle.request_timeout,
+                )
+                .with_no_progress_timeout(lifecycle.case_no_progress_timeout),
             connect_failures,
             case_dependency_post_response_window: lifecycle.case_dependency_post_response_window,
             global_path,
@@ -434,6 +495,10 @@ impl ReplayRuntime {
             unrecorded_targets: Vec::new(),
             unrecorded_case_ids: BTreeSet::new(),
         };
+        state.initialize_startup_phase();
+        state.http_ingress.register(&state.http_exchanges);
+        let admitted_case = state.active_case_id.clone();
+        state.http_ingress.activate_case(admitted_case.as_deref());
         let state = tokio::task::spawn_blocking(move || -> Result<_> {
             if let (Some(source), Some(expected)) = (&state.global_path, &global_report_stamp) {
                 ensure!(

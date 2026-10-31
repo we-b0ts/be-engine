@@ -98,7 +98,7 @@ mod tests {
 
     fn fixture() -> (TimeCopyStore, crate::policy::CompiledPolicy, AnchorClocks) {
         let plan = crate::policy::parse_and_compile_policy(
-            r#"format: traffic-policy/v2
+            r#"format: traffic-policy/v3
 json:
   fields:
     /block/timestamp: {kind: time, formats: [unix_milliseconds]}

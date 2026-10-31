@@ -80,8 +80,8 @@ pub(super) fn record_target(
     actual: &RequestView<'_>,
 ) -> Result<crate::policy_evidence::ObservationRetention> {
     let owner = &policy.request_contracts;
-    if owner.compiled_rules().is_none() || !owner.retains_value_witnesses() {
-        return Ok(crate::policy_evidence::ObservationRetention::Retained);
+    if !owner.retains_value_witnesses() {
+        return Ok(crate::policy_evidence::ObservationRetention::Unavailable);
     }
     let target = serde_json::json!({"protocol":"http", "exchange_id":actual.observation_id,
         "scheme":actual.scheme, "endpoint":{"host":actual.target.host,"port":actual.target.port},
@@ -109,6 +109,35 @@ pub(super) fn record_target(
     )
 }
 
+pub(super) fn record_unanchored_target(
+    observations: &crate::replay::target_observation::TargetObservations,
+    case: Option<&str>,
+    actual: &RequestView<'_>,
+) -> Result<crate::policy_evidence::ObservationRetention> {
+    let target = serde_json::json!({"protocol":"http", "exchange_id":actual.observation_id,
+        "scheme":actual.scheme,"endpoint":{"host":actual.target.host,"port":actual.target.port},
+        "method":actual.method.as_str().to_ascii_uppercase(),"uri":actual.uri.to_string(),
+        "request_headers":actual.headers,"request_body":STANDARD.encode(actual.body),"request_started_at":actual.started_at});
+    observations.record(
+        actual
+            .observation_id
+            .context("HTTP Target observation identity missing")?,
+        case,
+        Some(crate::policy::Resource {
+            protocol: crate::policy::Protocol::Http,
+            endpoint: crate::policy::Endpoint {
+                host: actual.target.host.clone(),
+                port: actual.target.port,
+            },
+            database: None,
+            username: None,
+        }),
+        actual.method.as_str(),
+        actual.started_at,
+        &serde_json::to_vec(&target)?,
+    )
+}
+
 pub(super) fn preview_request(
     policy: &ReplayPolicyRuntime,
     exchange: &ReplayHttpExchange,
@@ -119,7 +148,17 @@ pub(super) fn preview_request(
     allow_pre_match: bool,
 ) -> Option<Result<crate::replay::policy::request_contract::Decision>> {
     let ordinary = exchange.source == ReplaySource::Case && exchange.shared_origin.is_none();
-    let mut owner = policy.request_contracts.clone();
+    let mut owner = if allow_pre_match && ordinary {
+        policy.request_contracts.with_hypothesis_context(
+            crate::replay::policy::request_contract::HypothesisContext {
+                carrier: "json".into(),
+                source_reference: serde_json::json!({"exchange_id":exchange.record.id}),
+                target_observation_id: actual.observation_id.map(|id| id.to_string()),
+            },
+        )
+    } else {
+        policy.request_contracts.clone()
+    };
     if !allow_pre_match || !ordinary {
         owner.configure_pre_match(false);
     }

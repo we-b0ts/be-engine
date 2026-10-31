@@ -169,7 +169,7 @@ impl Registry {
         optional: &BTreeMap<usize, OptionalSessionExchange>,
         scope: ReplaySource,
     ) -> Vec<source::Plan> {
-        if scope == ReplaySource::Global {
+        if scope.is_run_owned() {
             self.global_reads.record(records);
         }
         source::prepare(records, optional, scope, &self.global_reads)
@@ -391,6 +391,24 @@ impl Registry {
                 valid,
             });
             return violation.unwrap_or_default();
+        }
+        // A delivered native statement can start an implicit transaction after
+        // SET AUTOCOMMIT=0. Only a matched business slot and the actual socket's
+        // inactive -> IN_TRANS transition establish this connection-local trace.
+        if witness.active.is_none()
+            && successful
+            && before & 0x200b == 0
+            && after & 0x200b == 1
+            && index.is_some_and(|index| {
+                self.free_reads.contains(&index)
+                    || self.members.contains_key(&index) && !self.ends.contains_key(&index)
+            })
+        {
+            witness.active = Some(Trace {
+                id: Uuid::new_v4(),
+                members: Vec::new(),
+                valid: true,
+            });
         }
         if let Some(loc @ (r, t)) = location {
             let group = &self.requirements[r].transactions[t];

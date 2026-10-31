@@ -24,7 +24,7 @@ fn output(message: &str) -> OutputObservation {
 
 fn policy() -> crate::policy::CompiledPolicy {
     crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /id: {kind: identity, formats: [decimal]}
@@ -115,7 +115,7 @@ fn ack_ids_argument_count_order_attachments_and_transport_controls_stay_strict()
 #[test]
 fn business_formats_cannot_change_binary_placeholder_identity() {
     let compiled = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /num: {kind: time, formats: [unix_seconds]}

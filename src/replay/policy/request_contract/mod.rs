@@ -4,12 +4,15 @@ mod derived_inputs;
 pub(in crate::replay::policy) mod evidence;
 mod global_value;
 mod http_value;
+pub(in crate::replay) mod hypotheses;
+pub(in crate::replay) use hypotheses::{HypothesisAttempt, HypothesisContext};
 mod identity;
 mod identity_inputs;
 mod jwt;
 pub(in crate::replay::policy) mod key;
 mod memcached;
 mod mysql;
+mod mysql_hypothesis;
 pub(in crate::replay::policy) mod native_projection;
 mod signing_keys;
 mod value_decision;
@@ -18,6 +21,7 @@ mod overlap;
 mod read_back;
 mod redis;
 mod redis_fields;
+mod redis_hypothesis;
 pub(in crate::replay) use read_back::{PreparedReadBack, RedisReadBackReport};
 pub(in crate::replay) use redis_fields::{PreparedRedisTimeRead, PreparedRedisTimeWrite};
 pub(crate) use redis_fields::{RedisFieldValue, redis_field_values};
@@ -62,6 +66,7 @@ struct CaseAnchor {
     recorded: Option<DateTime<Utc>>,
     actual: Option<DateTime<Utc>>,
     dir: PathBuf,
+    dependencies_path: PathBuf,
     conditions: BTreeSet<String>,
     source_body: Option<Value>,
 }
@@ -79,6 +84,7 @@ impl CaseAnchor {
                 .and_then(|value| value.parse().ok()),
             actual: None,
             dir: dir.into(),
+            dependencies_path: dir.join("dependencies.jsonl"),
             conditions: super::case_condition::matching_rule_ids(
                 request,
                 rules.iter().filter_map(|rule| {
@@ -105,6 +111,9 @@ struct SequenceKey {
 
 #[derive(Default)]
 struct State {
+    hypothesis_attempts: Vec<HypothesisAttempt>,
+    hypothesis_checkpoints: BTreeSet<String>,
+    hypothesis_error: Option<String>,
     pre_matches: Vec<crate::value_contract::pre_match::Candidate>,
     read_back: read_back::ReadBackState,
     key_bindings: BTreeMap<key::BindingScope, BTreeMap<String, String>>,
@@ -130,6 +139,9 @@ struct Sequence {
 }
 #[derive(Clone, Default)]
 pub(in crate::replay) struct RequestContracts {
+    hypothesis_context: Option<Arc<HypothesisContext>>,
+    hypothesis_journal: Option<crate::policy_evidence::hypotheses::Journal>,
+    mysql_hypothesis_projections: Arc<Mutex<mysql_hypothesis::ProjectionCache>>,
     pre_match_enabled: bool,
     compiled: Option<Arc<crate::policy::CompiledPolicy>>,
     input_origin: Option<derived_inputs::InputOrigin>,
@@ -195,10 +207,16 @@ impl RequestContracts {
             let request: Value = serde_json::from_slice(&raw)?;
             state.cases.insert(
                 id.clone(),
-                CaseAnchor::from_request(&case.dir, &request, rules),
+                CaseAnchor {
+                    dependencies_path: case.dependencies_path.clone(),
+                    ..CaseAnchor::from_request(&case.dir, &request, rules)
+                },
             );
         }
         Ok(Self {
+            hypothesis_context: None,
+            hypothesis_journal: None,
+            mysql_hypothesis_projections: Arc::default(),
             pre_match_enabled: false,
             compiled: None,
             witnesses: None,
@@ -314,6 +332,7 @@ impl RequestContracts {
             .collect()
     }
     pub(in crate::replay) fn commit(&self, decision: Decision) -> Result<()> {
+        self.commit_hypothesis_attempts(&decision.pre_matches)?;
         if let Some(identity) = decision.identity {
             self.commit_identity(identity)?;
         }

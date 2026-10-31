@@ -40,6 +40,7 @@ pub(crate) struct KafkaConnectionContext {
 
 #[derive(Debug)]
 struct PendingRequest {
+    targets: crate::active_case::DependencyTargets,
     api_key: ApiKey,
     api_version: i16,
     sequence: u64,
@@ -241,6 +242,12 @@ pub(crate) async fn handle_connected(
                 }
             };
             let request = PendingRequest {
+                targets: request_state.capture_dependency_start(
+                    crate::dependency::observation::ProtocolRef::Kafka {
+                        connection_id,
+                        sequence: request_sequence,
+                    },
+                ),
                 api_key: decoded.api_key,
                 api_version: decoded.header.request_api_version,
                 sequence: request_sequence,
@@ -543,6 +550,7 @@ async fn record_client_request_without_response(
         connection_id,
         context,
         ProduceCompletion {
+            targets: request.targets,
             request_sequence: request.sequence,
             record_sequence,
             api_version: request.api_version,
@@ -575,6 +583,7 @@ async fn record_completed_response(
                 connection_id,
                 context,
                 ProduceCompletion {
+                    targets: request.targets,
                     request_sequence: request.sequence,
                     record_sequence,
                     api_version: request.api_version,
@@ -596,6 +605,7 @@ async fn record_completed_response(
                 delivery_sequence,
                 context,
                 FetchCompletion {
+                    targets: request.targets,
                     sequence: request.sequence,
                     api_version: request.api_version,
                     started: request.started,
@@ -607,7 +617,10 @@ async fn record_completed_response(
             )
             .await
         }
-        PendingKind::Control | PendingKind::Unsupported(_) => Ok(()),
+        PendingKind::Control | PendingKind::Unsupported(_) => {
+            request.targets.finish_capture_metadata("protocol_control");
+            Ok(())
+        }
     }
 }
 
@@ -632,6 +645,7 @@ async fn record_terminated_request(
                 connection_id,
                 context,
                 ProduceCompletion {
+                    targets: request.targets,
                     request_sequence: request.sequence,
                     record_sequence,
                     api_version: request.api_version,
@@ -651,6 +665,7 @@ async fn record_terminated_request(
                 delivery_sequence,
                 context,
                 FetchCompletion {
+                    targets: request.targets,
                     sequence: request.sequence,
                     api_version: request.api_version,
                     started: request.started,
@@ -662,8 +677,16 @@ async fn record_terminated_request(
             )
             .await
         }
-        PendingKind::Control => Ok(()),
+        PendingKind::Control => {
+            request
+                .targets
+                .finish_capture_metadata("control_terminated");
+            Ok(())
+        }
         PendingKind::Unsupported(reason) => {
+            request
+                .targets
+                .finish_capture_metadata("unsupported_control_terminated");
             let _ = reason;
             Ok(())
         }

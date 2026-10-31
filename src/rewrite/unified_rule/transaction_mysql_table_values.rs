@@ -1,7 +1,7 @@
 use super::*;
 
 fn completed() -> serde_json::Value {
-    json!({"format":"traffic-policy/v2","json":{"fields":{
+    json!({"format":"traffic-policy/v3","json":{"fields":{
         "/members":{"kind":"unordered"},
         "/status/completedAt":{"kind":"time","formats":[{"format":"iso8601_naive","utc_offset":"+00:00"}]}
     }}})
@@ -76,7 +76,7 @@ fn global_sql_json_formats_keep_null_exact_and_prepared_statements_strict() {
                 .case_source
                 .as_ref()
                 .unwrap()
-                .join("apis/api/case-1/dependencies.jsonl");
+                .join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl");
             let original = fs::read(&path).unwrap();
             fixture.confirm();
             let planned = fixture.plan();

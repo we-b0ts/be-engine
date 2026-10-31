@@ -13,7 +13,7 @@ use crate::replay::{ReplaySource, TargetKey};
 fn policy(revision: &str) -> String {
     let revision = format!("sha256:{:x}", Sha256::digest(revision.as_bytes()));
     format!(
-        "format: traffic-policy/v2
+        "format: traffic-policy/v3
 source_revision: {revision}
 process_dependencies:
   tasks:
@@ -22,7 +22,8 @@ process_dependencies:
         - redis:
             ports: [6379]
             operation: HSCAN
-            keys: [{{kind: numeric, prefix: 'inbox:', suffix: ''}}]
+            initial_load_timeout_ms: 1000
+            keys: [{{kind: exact, value: 'inbox:123'}}]
 "
     )
 }
@@ -64,7 +65,7 @@ fn seed(name: &str) -> RecordedExchange {
         "response_kind": "array",
         "response": {"encoding": "utf8", "data": "*2\r\n$1\r\n0\r\n*0\r\n", "truncated": false},
         "replay_safe": true, "cache_snapshot_rule": name,
-        "global_dependency_reason": "background_rule"
+        "capture": crate::dependency::observation::fixture_capture("process")
     }))
     .unwrap()
 }
@@ -79,7 +80,7 @@ fn source_upgrade_keeps_generated_snapshot_reusable_and_overlay_consistent() {
     state
         .register_exchange(
             seed(previous.name()),
-            ReplaySource::Global,
+            ReplaySource::Process,
             None,
             &mut BTreeMap::new(),
             std::slice::from_ref(&current),
@@ -124,7 +125,7 @@ fn generated_name_does_not_waive_current_scope_or_seed_safety() {
     let current = rule("source-v2");
     let args = vec![b"inbox:123".to_vec(), b"0".to_vec()];
     let original = seed(previous.name());
-    assert!(validate(&original, ReplaySource::Global, &[], &args).is_err());
+    assert!(validate(&original, ReplaySource::Process, &[], &args).is_err());
     for (port, command, key) in [
         (6380, "HSCAN", "inbox:123"),
         (6379, "GET", "inbox:123"),
@@ -138,7 +139,7 @@ fn generated_name_does_not_waive_current_scope_or_seed_safety() {
         assert!(
             validate(
                 &changed,
-                ReplaySource::Global,
+                ReplaySource::Process,
                 std::slice::from_ref(&current),
                 &changed_args
             )
@@ -150,13 +151,15 @@ fn generated_name_does_not_waive_current_scope_or_seed_safety() {
         match invalid {
             "hit" => changed.cache_snapshot_hit = true,
             "error" => changed.response_kind = "error".into(),
-            "ownership" => changed.global_dependency_reason = Some("bootstrap_window".into()),
+            "ownership" => {
+                changed.capture = Some(crate::dependency::observation::fixture_capture("startup"))
+            }
             _ => unreachable!(),
         }
         assert!(
             validate(
                 &changed,
-                ReplaySource::Global,
+                ReplaySource::Process,
                 std::slice::from_ref(&current),
                 &args
             )
@@ -187,7 +190,7 @@ fn explicit_names_and_malformed_generated_names_retain_exact_matching() {
     assert!(
         validate(
             &seed("explicit-rule"),
-            ReplaySource::Global,
+            ReplaySource::Process,
             &[current],
             &[b"inbox:123".to_vec(), b"0".to_vec()]
         )

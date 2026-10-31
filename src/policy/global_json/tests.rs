@@ -1,7 +1,7 @@
 use super::*;
 use crate::policy::{compile_policy, parse_policy, render_policy};
 
-const POLICY: &str = "format: traffic-policy/v2\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n    /item_id: {kind: identity, formats: [uuid, {prefix: msg_, hex: 12}]}\n    /array: {kind: unordered}\n";
+const POLICY: &str = "format: traffic-policy/v3\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n    /item_id: {kind: identity, formats: [uuid, {prefix: msg_, hex: 12}]}\n    /array: {kind: unordered}\n";
 
 #[test]
 fn global_formats_roundtrip_without_location_declarations_or_expanded_rules() {
@@ -40,7 +40,7 @@ fn global_format_changes_affect_full_and_runtime_but_not_capture() {
 
 #[test]
 fn empty_global_map_preserves_exact_json_and_can_clear_formats() {
-    let document = parse_policy("format: traffic-policy/v2\njson: {fields: {}}\n").unwrap();
+    let document = parse_policy("format: traffic-policy/v3\njson: {fields: {}}\n").unwrap();
     let compiled = compile_policy(&document).unwrap();
     assert!(compiled.global_json.unwrap().fields.is_empty());
     assert!(render_policy(&document).unwrap().contains("fields: {}"));
@@ -48,7 +48,7 @@ fn empty_global_map_preserves_exact_json_and_can_clear_formats() {
 
 #[test]
 fn null_is_implicit_and_not_an_authored_format() {
-    let document = parse_policy("format: traffic-policy/v2\njson:\n  fields:\n    /time: {kind: time, formats: [unix_seconds]}\n    /id: {kind: identity, formats: [uuid]}\n").unwrap();
+    let document = parse_policy("format: traffic-policy/v3\njson:\n  fields:\n    /time: {kind: time, formats: [unix_seconds]}\n    /id: {kind: identity, formats: [uuid]}\n").unwrap();
     let rendered = render_policy(&document).unwrap();
     assert!(!rendered.contains("null"));
     let plan = compile_policy(&document).unwrap().global_json.unwrap();
@@ -58,7 +58,7 @@ fn null_is_implicit_and_not_an_authored_format() {
             .is_empty()
     );
     for kind in ["time", "identity"] {
-        assert!(parse_policy(&format!("format: traffic-policy/v2\njson:\n  fields:\n    /field: {{kind: {kind}, formats: [null]}}\n")).is_err());
+        assert!(parse_policy(&format!("format: traffic-policy/v3\njson:\n  fields:\n    /field: {{kind: {kind}, formats: [null]}}\n")).is_err());
     }
 }
 
@@ -70,7 +70,7 @@ fn redundant_exact_literal_and_null_format_syntax_is_rejected() {
     ] {
         assert!(
             parse_policy(&format!(
-                "format: traffic-policy/v2\njson:\n  fields:\n    /field: {field}\n"
+                "format: traffic-policy/v3\njson:\n  fields:\n    /field: {field}\n"
             ))
             .is_err()
         );
@@ -129,7 +129,7 @@ fn wildcard_optional_selection_is_source_driven_and_format_choice_is_ordered() {
 
 #[test]
 fn redis_scalar_formats_roundtrip_and_change_only_comparison_identities() {
-    let raw = "format: traffic-policy/v2\nredis:\n  keys:\n    'task-run-monitor:v2:as-of': {kind: time, formats: [unix_seconds]}\n    'session:*': {kind: identity, formats: [uuid]}\n";
+    let raw = "format: traffic-policy/v3\nredis:\n  keys:\n    'task-run-monitor:v2:as-of': {kind: time, formats: [unix_seconds]}\n    'session:*': {kind: identity, formats: [uuid]}\n";
     let policy = parse_policy(raw).unwrap();
     let compiled = compile_policy(&policy).unwrap();
     let rendered = render_policy(&policy).unwrap();
@@ -153,9 +153,9 @@ fn global_mysql_and_redis_formats_reject_retired_database_selectors() {
         "mysql: {database: app, tables: {}}",
         "redis: {database: 0, keys: {}}",
     ] {
-        assert!(parse_policy(&format!("format: traffic-policy/v2\n{body}\n")).is_err());
+        assert!(parse_policy(&format!("format: traffic-policy/v3\n{body}\n")).is_err());
     }
-    let policy = parse_policy("format: traffic-policy/v2\nmysql: {}\nredis: {}\n").unwrap();
+    let policy = parse_policy("format: traffic-policy/v3\nmysql: {}\nredis: {}\n").unwrap();
     let rendered = render_policy(&policy).unwrap();
     assert!(!rendered.contains("database:"));
     assert_eq!(parse_policy(&rendered).unwrap(), policy);
@@ -163,7 +163,7 @@ fn global_mysql_and_redis_formats_reject_retired_database_selectors() {
 
 #[test]
 fn duration_has_one_unit_and_no_business_condition_syntax() {
-    let raw = "format: traffic-policy/v2\njson:\n  fields:\n    /elapsed: {kind: duration, formats: [seconds]}\n";
+    let raw = "format: traffic-policy/v3\njson:\n  fields:\n    /elapsed: {kind: duration, formats: [seconds]}\n";
     let policy = parse_policy(raw).unwrap();
     assert!(
         render_policy(&policy)
@@ -183,7 +183,7 @@ fn duration_has_one_unit_and_no_business_condition_syntax() {
 
 #[test]
 fn bounded_string_identity_format_roundtrips_with_optional_literal_prefix() {
-    let raw = "format: traffic-policy/v2\njson:\n  fields:\n    /_content_key: {kind: identity, formats: [{prefix: 'chat:streaming:block_content:', format: string}]}\n    /access_token: {kind: identity, formats: [string]}\n";
+    let raw = "format: traffic-policy/v3\njson:\n  fields:\n    /_content_key: {kind: identity, formats: [{prefix: 'chat:streaming:block_content:', format: string}]}\n    /access_token: {kind: identity, formats: [string]}\n";
     let policy = parse_policy(raw).unwrap();
     assert_eq!(
         parse_policy(&render_policy(&policy).unwrap()).unwrap(),
@@ -197,7 +197,7 @@ fn bounded_string_identity_format_roundtrips_with_optional_literal_prefix() {
 
 #[test]
 fn url_and_authenticated_jwt_formats_roundtrip_without_carrier_ownership() {
-    let raw = "format: traffic-policy/v2\nsignatures:\n  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}\njson:\n  fields:\n    /download_path: {kind: url, formats: [aws_sigv4]}\n    /headers/origin: {kind: identity, formats: [{string: 255}]}\n    /access_token: {kind: jwt}\n";
+    let raw = "format: traffic-policy/v3\nsignatures:\n  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}\njson:\n  fields:\n    /download_path: {kind: url, formats: [aws_sigv4]}\n    /headers/origin: {kind: identity, formats: [{string: 255}]}\n    /access_token: {kind: jwt}\n";
     let policy = parse_policy(raw).unwrap();
     let compiled = compile_policy(&policy).unwrap();
     let rendered = render_policy(&policy).unwrap();
@@ -211,7 +211,7 @@ fn url_and_authenticated_jwt_formats_roundtrip_without_carrier_ownership() {
 
 #[test]
 fn protocol_declarations_reject_unsupported_branches_scopes_and_scalar_carriers() {
-    let prefix = "format: traffic-policy/v2\njson:\n  fields:\n";
+    let prefix = "format: traffic-policy/v3\njson:\n  fields:\n";
     for field in [
         "    /url: {kind: url, formats: []}\n",
         "    /url: {kind: url, formats: [aws_sigv4, aws_sigv4]}\n",
@@ -236,7 +236,7 @@ fn protocol_declarations_reject_unsupported_branches_scopes_and_scalar_carriers(
             format!("mysql: {{tables: {{t: {{pattern: t, fields: {{token: {format}}}}}}}}}"),
         ] {
             assert!(
-                parse_policy(&format!("format: traffic-policy/v2\n{carrier}\n")).is_err(),
+                parse_policy(&format!("format: traffic-policy/v3\n{carrier}\n")).is_err(),
                 "accepted {carrier}"
             );
         }
@@ -249,7 +249,7 @@ fn bounded_random_string_formats_cover_all_existing_native_lengths() {
         "{kind: identity, formats: [{prefix: id_, hex: 1024}]}",
         "{kind: identity, formats: [{base64url: 1024}]}",
     ] {
-        let raw = format!("format: traffic-policy/v2\njson:\n  fields:\n    /id: {field}\n");
+        let raw = format!("format: traffic-policy/v3\njson:\n  fields:\n    /id: {field}\n");
         assert!(parse_policy(&raw).is_ok());
         assert!(parse_policy(&raw.replace("1024", "1025")).is_err());
     }
@@ -266,7 +266,7 @@ fn authored_opaque_jwt_identity_formats_are_retired_in_every_scalar_carrier() {
             ),
             format!("http: {{headers: {{authorization: {{kind: identity, formats: {formats}}}}}}}"),
         ] {
-            let error = parse_policy(&format!("format: traffic-policy/v2\n{declaration}\n"))
+            let error = parse_policy(&format!("format: traffic-policy/v3\n{declaration}\n"))
                 .err()
                 .unwrap();
             assert!(format!("{error:#}").contains("kind: jwt"), "{error:#}");

@@ -19,7 +19,7 @@ const H: &str = "66666666-6666-4666-8666-666666666666";
 
 fn owner() -> RequestContracts {
     let mut compiled = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 signatures:
   default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: JWT_TEST_KEY}}
 json:
@@ -56,6 +56,7 @@ json:
             recorded: DateTime::from_timestamp(1000, 0),
             actual: DateTime::from_timestamp(2000, 0),
             dir: PathBuf::new(),
+            dependencies_path: PathBuf::new(),
             conditions: Default::default(),
             source_body: None,
         },

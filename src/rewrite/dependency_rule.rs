@@ -382,25 +382,6 @@ pub(super) fn apply(
             &record.spec,
         )?;
     }
-    if !record.spec.requires_fresh_replay()
-        && state.case_source.is_some()
-        && state.group_id.is_some()
-    {
-        crate::e2e_run::ensure_focused_background_reclassification_revisable(
-            E2eRunContext {
-                target_root: target_root.to_path_buf(),
-                case_source: state
-                    .case_source
-                    .clone()
-                    .context("rewrite workflow has no case source to reclassify")?,
-                run_key: None,
-            },
-            state
-                .group_id
-                .as_deref()
-                .context("rewrite workflow has no focused API to reclassify")?,
-        )?;
-    }
     let plan = build_plan(target_root, state, &record)?;
     if let Some(reviewed) = &record.review_fingerprint {
         ensure!(

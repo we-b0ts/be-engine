@@ -334,6 +334,8 @@ pub(super) struct ActiveRunState {
     pub case_selection: Option<super::case_selection::CaseSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_replay_identity: Option<String>,
     pub run_key: String,
     pub sequence: u64,
     pub status: RunStatus,
@@ -422,6 +424,7 @@ impl ActiveRunState {
             aggregate_report: reports.join("aggregate.json"),
             assertions_report: reports.join("assertions.json"),
             engine_fingerprint: Some(crate::build_info::ENGINE_FINGERPRINT.into()),
+            executed_replay_identity: None,
             session_id: None,
             replay_pid: None,
             target_started: false,

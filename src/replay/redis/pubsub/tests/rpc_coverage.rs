@@ -163,7 +163,7 @@ async fn late_global_callback_links_only_its_original_publish_and_is_delivered_o
             state.redis.pubsub.report().unwrap().delivered_rpc_callbacks,
             1
         );
-        assert!(state.redis.pubsub.unused(ReplaySource::Global).is_empty());
+        assert!(state.redis.pubsub.unused(ReplaySource::Startup).is_empty());
         assert_eq!(
             state.redis.snapshot().matched_count,
             2,
@@ -288,7 +288,7 @@ async fn global_rpc_started_during_an_api_delivers_once_after_the_active_case_ch
         );
         let state = runtime.state.lock().await;
         assert!(state.redis.snapshot().unsafe_events.is_empty());
-        assert!(state.redis.pubsub.unused(ReplaySource::Global).is_empty());
+        assert!(state.redis.pubsub.unused(ReplaySource::Startup).is_empty());
         assert_eq!(state.redis.snapshot().matched_count, 2);
         pub_task.abort();
         sub_task.abort();

@@ -28,12 +28,19 @@ pub(super) async fn write_dependency_summary(
         let mut input = input;
         let stamp = input.stamp.clone();
         let mut case_index = case_dependencies.then(|| Builder::new(stamp.clone()));
+        let scoped = crate::dependency_index::scoped::view_path(&path).is_some();
+        if scoped && let Some(index) = &mut case_index {
+            index.set_scoped();
+        }
         let mut global_index = if case_dependencies {
             None
         } else {
             Some(GlobalBuilder::new(&dir, stamp.clone())?)
         };
         let mut summary = DependencySummaryBuilder::default();
+        if scoped && let Some(index) = &mut global_index {
+            index.set_scoped();
+        }
         while let Some((location, raw)) = input.next()? {
             let value = if raw.iter().all(u8::is_ascii_whitespace) {
                 None
@@ -44,16 +51,13 @@ pub(super) async fn write_dependency_summary(
                 summary.observe(value);
             }
             if let Some(index) = &mut case_index {
-                index.observe(location.line, raw, value.as_ref())?;
+                index.observe_at(&location, raw, value.as_ref())?;
             }
             if let Some(index) = &mut global_index {
                 index.observe(location, raw, value)?;
             }
         }
-        anyhow::ensure!(
-            FileStamp::read(&path)? == stamp,
-            "dependency file changed before publication"
-        );
+        crate::dependency_index::scoped::validate_stamp(&path, &stamp)?;
         if let Some(index) = case_index {
             crate::dependency_index::store::write_json(&dir.join(FRAGMENT), &index.finish()?)?;
         }

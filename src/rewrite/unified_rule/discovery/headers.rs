@@ -72,7 +72,7 @@ impl Drafts {
                     && self.values.len() < LIMIT
                 {
                     self.values.push(json!({"candidate_id":id,"witness_id":witness,"mechanism":"http_header_time",
-                        "draft_policy":{"format":"traffic-policy/v2","http":{"headers":{name:{"kind":"time","formats":[format]}}}},
+                        "draft_policy":{"format":"traffic-policy/v3","http":{"headers":{name:{"kind":"time","formats":[format]}}}},
                         "section_update":"add",
                         "source_proof_required":true,"plan_ready":false}));
                 }

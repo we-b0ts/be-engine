@@ -124,9 +124,10 @@ async fn routed_exchange(secure: bool) {
     gateway.abort();
     upstream_server.abort();
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let events: Vec<serde_json::Value> = traffic
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())

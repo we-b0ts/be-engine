@@ -111,21 +111,48 @@ fn finite_process_get_unblocks_case_lane_and_keeps_consumption_and_session_bound
     }))
     .unwrap();
     crate::config::process_owned_dependencies::validate(std::slice::from_ref(&rule)).unwrap();
-    for stateful in [false, true] {
-        let mut state = fixture(DependencyExchangeOutcome::Response);
-        if stateful {
-            let mut setup = state.exchanges[0].record.clone();
-            setup.session_setup = true;
+    {
+        let original = fixture(DependencyExchangeOutcome::Response);
+        let mut state = RedisReplayState::default();
+        let mut targets = BTreeMap::new();
+        for (index, exchange) in original.exchanges.into_iter().enumerate() {
             state
-                .connection_scopes
-                .register(&setup, &[], ReplaySource::Case, Some("case"));
+                .register_exchange(
+                    exchange.record,
+                    if index == 0 {
+                        ReplaySource::Process
+                    } else {
+                        ReplaySource::Case
+                    },
+                    if index == 0 { None } else { Some("case") },
+                    &mut targets,
+                    std::slice::from_ref(&rule),
+                )
+                .unwrap();
         }
         state.apply_finite_process_order(std::slice::from_ref(&rule));
-        if stateful {
-            assert!(request(&mut state, "case", "DEL").is_err());
-            continue;
-        }
-        assert!(request(&mut state, "other", "GET").is_err());
+        assert!(
+            request(&mut state, "other", "DEL").is_err(),
+            "a Process lane cannot authorize another Case's DEL"
+        );
+        assert!(
+            state
+                .match_redis(
+                    Some("case"),
+                    &TargetKey {
+                        host: "redis.test".into(),
+                        port: 6379
+                    },
+                    TargetConnection::default(),
+                    2,
+                    1,
+                    None,
+                    "DEL",
+                    &[b"session".to_vec()]
+                )
+                .is_err(),
+            "native database identity still separates sessions"
+        );
         let del = request(&mut state, "case", "DEL").unwrap();
         state.complete_exchange(&del);
         let get = request(&mut state, "case", "GET").unwrap();
@@ -133,6 +160,12 @@ fn finite_process_get_unblocks_case_lane_and_keeps_consumption_and_session_bound
         assert!(request(&mut state, "case", "GET").is_err());
         assert_eq!(state.snapshot().matched_count, 2);
     }
+    let mut case_only = fixture(DependencyExchangeOutcome::Response);
+    case_only.apply_finite_process_order(std::slice::from_ref(&rule));
+    assert!(
+        request(&mut case_only, "case", "DEL").is_err(),
+        "a selector alone cannot change recorded Case ownership"
+    );
     let mut state = fixture(DependencyExchangeOutcome::ClientTerminated);
     state.apply_finite_process_order(&[rule]);
     assert!(request(&mut state, "case", "DEL").is_err());

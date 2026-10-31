@@ -2,7 +2,7 @@ use crate::policy::{compile_policy, parse_policy, render_policy};
 use serde_json::{Value, json};
 
 fn policy(keys: Value) -> Value {
-    json!({"format":"traffic-policy/v2", "source_revision":"source-v1",
+    json!({"format":"traffic-policy/v3", "source_revision":"source-v1",
         "redis":{"keys":keys},
         "rules":[]})
 }
@@ -120,7 +120,7 @@ fn malformed_and_duplicate_key_permissions_are_rejected() {
             "accepted {keys}"
         );
     }
-    let duplicate = "format: traffic-policy/v2\nredis:\n  keys:\n    content: {resource: cache, append_stream: true, append_stream: true}\nresources:\n  cache: {protocol: redis, endpoint: 'cache.test:6379', database: 0}\n";
+    let duplicate = "format: traffic-policy/v3\nredis:\n  keys:\n    content: {resource: cache, append_stream: true, append_stream: true}\nresources:\n  cache: {protocol: redis, endpoint: 'cache.test:6379', database: 0}\n";
     assert!(parse_policy(duplicate).is_err());
     let named = policy(json!({"content:*":{"resource":"cache","append_stream":true}}));
     assert!(parse_policy(&named.to_string()).is_err());

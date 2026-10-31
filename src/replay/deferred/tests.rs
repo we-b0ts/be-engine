@@ -216,7 +216,7 @@ async fn global_read_prefixes_are_available_to_eager_and_lazy_case_cleanup() {
         }
         let state = runtime.state.lock().await;
         assert_eq!(state.allowed_unused_commits().len(), 2);
-        assert_eq!(state.unused_exchanges(ReplaySource::Global).len(), 4);
+        assert_eq!(state.unused_exchanges(ReplaySource::Startup).len(), 4);
     }
 }
 

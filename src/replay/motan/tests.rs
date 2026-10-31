@@ -16,6 +16,7 @@ fn global_motan_response_is_loaded_from_evidence_and_consumed_once() {
     state
         .register_global_exchange(
             serde_json::from_value(record).unwrap(),
+            ReplaySource::Startup,
             reference,
             &mut BTreeMap::new(),
         )
@@ -437,5 +438,47 @@ fn heartbeat_template_can_serve_another_node_and_patch_request_id() {
     assert_eq!(
         u64::from_be_bytes(template.response[20..28].try_into().unwrap()),
         77
+    );
+}
+
+#[test]
+fn finite_tail_reference_waits_for_the_original_native_response_completion() {
+    let record = exchange(false);
+    let key = (record.connection_id, record.sequence);
+    let mut state = MotanReplayState::default();
+    state
+        .register_exchange(
+            record,
+            ReplaySource::Case,
+            Some("owner"),
+            &mut BTreeMap::new(),
+        )
+        .unwrap();
+    let refs = state.finite_exchanges("owner").unwrap();
+    assert!(state.finite_exchanges("other").unwrap().is_empty());
+    let index = refs[&key];
+    assert_eq!(
+        state.finite_exchange_status(index),
+        Some(ReplayExchangeStatus::Available)
+    );
+    let request = request_match(business_request(2, 1, None));
+    let matched = state
+        .match_exchange(
+            Some("owner"),
+            &business_target(),
+            None,
+            1,
+            &business_identity(),
+            Some(&request),
+        )
+        .unwrap();
+    assert_eq!(
+        state.finite_exchange_status(index),
+        Some(ReplayExchangeStatus::Responding)
+    );
+    state.complete(&matched);
+    assert_eq!(
+        state.finite_exchange_status(index),
+        Some(ReplayExchangeStatus::Consumed)
     );
 }

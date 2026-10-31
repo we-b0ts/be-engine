@@ -30,7 +30,7 @@ async fn rpc_sid_representation_requires_explicit_formats_without_relaxing_busin
             std::fs::write(
                 root.join(".traffic-e2e/policy.yaml"),
                 format!(
-                    "format: traffic-policy/v2\njson:\n  fields:\n    /host_id: {{kind: identity, formats: [{{hex: 32}}]}}\n    /room: {{kind: identity, formats: [{format}]}}\n    /callback/0: {{kind: identity, formats: [{format}]}}\n"
+                    "format: traffic-policy/v3\njson:\n  fields:\n    /host_id: {{kind: identity, formats: [{{hex: 32}}]}}\n    /room: {{kind: identity, formats: [{format}]}}\n    /callback/0: {{kind: identity, formats: [{format}]}}\n"
                 ),
             )
             .unwrap();

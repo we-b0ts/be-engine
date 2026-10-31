@@ -1,5 +1,5 @@
+//! Derive summaries from actual Replay facts without changing case outcomes.
 use anyhow::{Context, Result, ensure};
-use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::model::{
@@ -9,9 +9,8 @@ use super::model::{
 use super::store;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{
-    BackgroundReclassification, ReplayAggregateCounts, ReplayAggregateOptions,
-    ReplayAggregateReport, aggregate_runner_replay_report, aggregate_runner_replay_report_value,
-    reclassify_background_report,
+    ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport,
+    aggregate_runner_replay_report,
 };
 
 pub(super) fn build_final_evidence(
@@ -20,140 +19,7 @@ pub(super) fn build_final_evidence(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
 ) -> Result<()> {
-    let mut report = read_replay_report(state)?;
-    let reclassified = refresh_background_report(config, state, inventory, &mut report)?;
-    apply_reclassified_case_outcomes(state, &reclassified);
-    build_final_evidence_with_report(config, layout, inventory, state, Some(&report))?;
-    clear_resolved_dependency_errors(state);
-    Ok(())
-}
-
-pub(super) fn refresh_background_evidence(
-    config: &ResolvedProjectConfig,
-    state: &ActiveRunState,
-    inventory: &CaseGroupInventory,
-) -> Result<BackgroundReclassification> {
-    let mut report = read_replay_report(state)?;
-    refresh_background_report(config, state, inventory, &mut report)
-}
-
-fn read_replay_report(state: &ActiveRunState) -> Result<Value> {
-    serde_json::from_slice(&std::fs::read(&state.replay_report)?)
-        .context("invalid runner Replay report")
-}
-
-fn refresh_background_report(
-    config: &ResolvedProjectConfig,
-    state: &ActiveRunState,
-    inventory: &CaseGroupInventory,
-    report: &mut Value,
-) -> Result<BackgroundReclassification> {
-    let session_cases = report["cases"]
-        .as_array()
-        .context("replay report has no session cases")?
-        .iter()
-        .map(|case| {
-            case["case_id"]
-                .as_str()
-                .context("replay session case has no id")
-        })
-        .collect::<Result<BTreeSet<_>>>()?;
-    let case_dirs = inventory
-        .groups
-        .iter()
-        .flat_map(|group| &group.cases)
-        .filter(|case| session_cases.contains(case.case_id.as_str()))
-        .map(|case| (case.case_id.clone(), case.case_dir.clone()))
-        .collect::<BTreeMap<_, _>>();
-    ensure!(
-        case_dirs.len() == session_cases.len(),
-        "replay session references cases outside the prepared recording inventory"
-    );
-    reclassify_background_report(
-        &config.source_traffic_policy,
-        &state.replay_report,
-        report,
-        &case_dirs,
-    )
-}
-
-pub(super) fn apply_reclassified_case_outcomes(
-    state: &mut ActiveRunState,
-    reclassified: &BackgroundReclassification,
-) {
-    for case in &mut state.cases {
-        if matches!(case.status, CaseStatus::Pending | CaseStatus::Incomplete) {
-            continue;
-        }
-        let dirty = reclassified
-            .remaining_dirty_case_ids
-            .contains(&case.case_id);
-        case.replay_clean = Some(!dirty);
-        case.status =
-            if case.assertion_passed == Some(true) && !dirty && case.execution_failure.is_none() {
-                CaseStatus::Passed
-            } else {
-                CaseStatus::Failed
-            };
-    }
-}
-
-pub(super) fn clear_resolved_dependency_errors(state: &mut ActiveRunState) {
-    let clean_case_ids = state
-        .cases
-        .iter()
-        .filter(|case| case.replay_clean == Some(true))
-        .map(|case| case.case_id.clone())
-        .collect::<BTreeSet<_>>();
-    let dependency_view_clean = dependency_view_is_clean(state);
-    clear_resolved_dependency_error_messages(
-        &mut state.errors,
-        &clean_case_ids,
-        dependency_view_clean,
-    );
-}
-
-pub(super) fn clear_resolved_dependency_error_messages(
-    errors: &mut Vec<String>,
-    clean_case_ids: &BTreeSet<String>,
-    dependency_view_clean: bool,
-) {
-    errors.retain(|error| {
-        if is_clean_case_dependency_error(error, clean_case_ids) {
-            return false;
-        }
-        !(dependency_view_clean && is_strict_dependency_finalize_error(error))
-    });
-}
-
-pub(super) fn dependency_view_is_clean(state: &ActiveRunState) -> bool {
-    state.replay_finalized
-        && state.aggregate_complete
-        && state.aggregate_clean
-        && state
-            .cases
-            .iter()
-            .all(|case| case.replay_clean == Some(true))
-}
-
-pub(super) fn is_clean_case_dependency_error(
-    error: &str,
-    clean_case_ids: &BTreeSet<String>,
-) -> bool {
-    let Some(rest) = error.strip_prefix("case ") else {
-        return false;
-    };
-    let Some((case_id, _)) = rest.split_once(" replay evidence is dirty:") else {
-        return false;
-    };
-    clean_case_ids.contains(case_id)
-}
-
-pub(super) fn is_strict_dependency_finalize_error(error: &str) -> bool {
-    [
-        "strict replay finalize failed: cannot finalize replay with dirty dependency evidence;",
-        "strict replay finalize failed: cannot finalize replay with unmatched, unused, or unsupported exchanges;",
-    ].iter().any(|prefix| error.starts_with(prefix))
+    build_final_evidence_from_current_report(config, layout, inventory, state)
 }
 
 pub(super) fn build_final_evidence_from_current_report(
@@ -161,16 +27,6 @@ pub(super) fn build_final_evidence_from_current_report(
     layout: &RunLayout,
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
-) -> Result<()> {
-    build_final_evidence_with_report(config, layout, inventory, state, None)
-}
-
-fn build_final_evidence_with_report(
-    config: &ResolvedProjectConfig,
-    layout: &RunLayout,
-    inventory: &CaseGroupInventory,
-    state: &mut ActiveRunState,
-    report: Option<&Value>,
 ) -> Result<()> {
     let session_id = state
         .session_id
@@ -185,21 +41,12 @@ fn build_final_evidence_with_report(
         case_ids: all_case_ids,
         session_ids: BTreeSet::from([session_id.clone()]),
     };
-    let aggregate = match report {
-        Some(report) => aggregate_runner_replay_report_value(
-            &layout.case_source,
-            &state.replay_report,
-            &layout.active_dir,
-            report,
-            &options,
-        ),
-        None => aggregate_runner_replay_report(
-            &layout.case_source,
-            &state.replay_report,
-            &layout.active_dir,
-            &options,
-        ),
-    }?;
+    let aggregate = aggregate_runner_replay_report(
+        &layout.case_source,
+        &state.replay_report,
+        &layout.active_dir,
+        &options,
+    )?;
     state.aggregate_complete = aggregate.is_complete();
     state.aggregate_clean = !aggregate.is_dirty();
     store::write_json(&state.aggregate_report, &aggregate)?;

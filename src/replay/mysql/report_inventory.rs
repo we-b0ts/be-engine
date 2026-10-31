@@ -36,7 +36,7 @@ impl ReplayState {
                             OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
                         ) && exchange.status == ReplayExchangeStatus::Responding
                 });
-                exchange.source == ReplaySource::Global
+                exchange.source.is_run_owned()
                     && !exchange.status.is_consumed()
                     && optional.is_none()
             })
@@ -47,7 +47,7 @@ impl ReplayState {
             .mysql
             .exchanges
             .get(index)
-            .filter(|exchange| exchange.source == ReplaySource::Global)
+            .filter(|exchange| exchange.source.is_run_owned())
         else {
             return;
         };
@@ -91,7 +91,7 @@ impl MysqlReplayState {
             .events
             .global_report
             .rows(0, &self.exchanges, extras)
-            .filter(|(_, exchange)| exchange.source == ReplaySource::Global)
+            .filter(|(_, exchange)| exchange.source.is_run_owned())
         {
             visitor(Row {
                 position: Position { section: 0, index },

@@ -18,7 +18,7 @@ not an old-format fallback hidden behind the new schema.
 
 ## Current global field authoring
 
-`traffic-policy/v2` declares one carrier-independent `json.fields` map. Fields
+`traffic-policy/v3` declares one carrier-independent `json.fields` map. Fields
 use `kind: time` or `kind: identity` with `formats`, or `kind: unordered`.
 Source case capture uses `recording.case_paths` with the root `source_revision`.
 Time comparisons preserve relative differences. JSON payloads are recognized
@@ -316,7 +316,7 @@ missing-witness/fresh-Replay obligation. Excluding a search edge never changes
 runtime matching or clears an unmatched Target command.
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 rules:
   - id: response-download-token
     match: {api: POST /api/attachments/*/download-token}
@@ -562,7 +562,7 @@ An explicit reviewed replacement uses the same plan/apply CLI with this wrapper:
 format: traffic-policy-change/v1
 replace_rules: [old-a, old-b]
 policy:
-  format: traffic-policy/v2
+  format: traffic-policy/v3
   rules:
     - id: cache-stream
       match:

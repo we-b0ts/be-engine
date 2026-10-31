@@ -22,11 +22,7 @@ pub struct RecordingConfig {
     pub cache_snapshot_fill_timeout_ms: u64,
     pub post_ready_settle_ms: u64,
     pub post_ready_max_wait_ms: u64,
-    #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
-    /// Idle window for primary stream tails and API-origin selected dependencies.
-    /// Zero removes the idle wait; stream tails still retain unfinished requests.
-    pub api_origin_dependency_idle_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
     pub shutdown_case_drain_timeout_ms: u64,
     pub encrypt_request_headers: Vec<String>,
@@ -157,6 +153,11 @@ impl RecordingConfig {
                 "recording.post_ready_max_wait_ms must be at least the effective post-ready quiet period"
             );
         }
+        if self.case_dependency_post_response_window_ms != 0 {
+            bail!(
+                "ordinary dependency capture closes at the response boundary; case_dependency_post_response_window_ms must be zero"
+            );
+        }
         if self.case_dependency_drain_timeout_ms == 0 {
             bail!("recording.case_dependency_drain_timeout_ms must be greater than zero");
         }
@@ -252,8 +253,7 @@ impl Default for RecordingConfig {
             cache_snapshot_fill_timeout_ms: 30_000,
             post_ready_settle_ms: 15_000,
             post_ready_max_wait_ms: 180_000,
-            case_dependency_post_response_window_ms: 100,
-            api_origin_dependency_idle_ms: 60_000,
+            case_dependency_post_response_window_ms: 0,
             case_dependency_drain_timeout_ms: 5_000,
             shutdown_case_drain_timeout_ms: 5_000,
             encrypt_request_headers: Vec::new(),
@@ -333,6 +333,13 @@ mod tests {
     }
 
     #[test]
+    fn rejects_retired_api_origin_idle_configuration() {
+        let error = serde_yaml::from_str::<RecordingConfig>("api_origin_dependency_idle_ms: 60000")
+            .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
     fn normalizes_legacy_post_ready_settle_to_the_fifteen_second_minimum() {
         let mut config = AppConfig::default();
         config.recording.post_ready_settle_ms = 10_000;
@@ -370,19 +377,15 @@ mod tests {
     }
 
     #[test]
-    fn accepts_legacy_quiet_period_as_post_response_window() {
-        let config: AppConfig = toml::from_str(
+    fn rejects_legacy_quiet_period_as_post_response_window() {
+        let error = toml::from_str::<AppConfig>(
             r#"
             [recording]
             case_dependency_quiet_period_ms = 250
             "#,
         )
-        .unwrap();
-
-        assert_eq!(
-            config.recording.case_dependency_post_response_window_ms,
-            250
-        );
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
     }
 
     #[test]

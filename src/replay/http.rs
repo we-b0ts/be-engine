@@ -41,6 +41,7 @@ use crate::DiscoveredTcpTarget;
 pub(crate) mod cross_case;
 mod evidence;
 mod identity;
+pub(in crate::replay) mod ingress;
 mod lifecycle;
 mod recording;
 pub(super) use evidence::register_global_exchange;
@@ -96,11 +97,7 @@ pub(super) struct RecordedHttpExchange {
     #[serde(default)]
     discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
     #[serde(default)]
-    global_dependency_reason: Option<String>,
-    #[serde(default)]
-    global_dependency_phase: Option<String>,
-    #[serde(default)]
-    global_dependency_matched_by: Option<String>,
+    capture: Option<crate::dependency::observation::CaptureMetadata>,
     error: Option<String>,
 }
 
@@ -231,6 +228,8 @@ pub(super) struct HttpRequestReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct RecordedHttpExchangeSummary {
+    source: ReplaySource,
+    source_http_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     shared_origin: Option<cross_case::SharedOrigin>,
     index: usize,
@@ -450,7 +449,8 @@ fn normalize_scheme(value: &str) -> Result<HttpReplayScheme> {
 
 impl ReplayState {
     pub(super) fn http_case_is_dirty(&self, case_id: &str) -> bool {
-        self.http_events.dirty_case_ids.contains(case_id)
+        self.http_ingress.case_failed(case_id)
+            || self.http_events.dirty_case_ids.contains(case_id)
             || self.http_case_exchange_index.any(case_id, |index| {
                 self.http_exchanges.get(index).is_some_and(|exchange| {
                     let allowed = self.allowed_unused_http.as_ref().is_some_and(|config| {
@@ -484,6 +484,18 @@ impl ReplayState {
         true
     }
 
+    fn bind_last_unmatched_http_observation(&mut self, id: Option<uuid::Uuid>) {
+        if let Some(report) = self.http_events.unmatched.last_mut() {
+            report.target_observation_id = id.map(|id| {
+                crate::policy_evidence::target_observation_id(
+                    &id.to_string(),
+                    crate::policy::Surface::DependencyRequest,
+                    crate::policy_evidence::TargetRole::IndependentTargetObservation,
+                )
+            });
+        }
+    }
+
     fn record_unmatched_http(
         &mut self,
         scheme: HttpReplayScheme,
@@ -492,11 +504,30 @@ impl ReplayState {
         uri: &Uri,
         reason: String,
     ) {
-        if let Some(case_id) = &self.active_case_id {
+        self.record_unmatched_http_for(
+            self.active_case_id.clone(),
+            scheme,
+            target,
+            method,
+            uri,
+            reason,
+        );
+    }
+
+    fn record_unmatched_http_for(
+        &mut self,
+        case_id: Option<String>,
+        scheme: HttpReplayScheme,
+        target: &TargetKey,
+        method: &Method,
+        uri: &Uri,
+        reason: String,
+    ) {
+        if let Some(case_id) = &case_id {
             self.http_events.dirty_case_ids.insert(case_id.clone());
         }
         self.http_events.unmatched.push(HttpRequestReport {
-            case_id: self.active_case_id.clone(),
+            case_id,
             scheme,
             target: target.clone(),
             method: method.to_string(),
@@ -519,7 +550,16 @@ impl ReplayState {
             .iter()
             .enumerate()
             .filter(move |(_, exchange)| {
-                if exchange.source != source || exchange.status.is_consumed() {
+                let in_scope = if source.is_run_owned() {
+                    exchange.available_in_run_pool()
+                } else {
+                    exchange.source == ReplaySource::Case
+                        && exchange
+                            .case_id
+                            .as_ref()
+                            .is_some_and(|case| self.cases.contains_key(case))
+                };
+                if !in_scope || exchange.status.is_consumed() {
                     return false;
                 }
                 let is_allowed = source == ReplaySource::Case
@@ -529,6 +569,8 @@ impl ReplayState {
                 is_allowed == allowed
             })
             .map(move |(index, exchange)| RecordedHttpExchangeSummary {
+                source: exchange.source,
+                source_http_id: exchange.record.id.clone(),
                 shared_origin: exchange.shared_origin.clone(),
                 index,
                 case_id: exchange.case_id.clone(),
@@ -545,7 +587,7 @@ impl ReplayState {
         allowed: bool,
     ) -> Vec<RecordedHttpExchangeSummary> {
         self.unused_http_iter(source, allowed)
-            .take(if source == ReplaySource::Global {
+            .take(if source.is_run_owned() {
                 100
             } else {
                 usize::MAX
@@ -555,15 +597,23 @@ impl ReplayState {
 }
 
 impl ReplayHttpExchange {
+    fn available_in_run_pool(&self) -> bool {
+        self.source.is_run_owned() || self.shared_origin.is_some()
+    }
     fn is_repeatable_preflight_probe(&self) -> bool {
-        self.source == ReplaySource::Global
+        self.source.is_run_owned()
             && self.record.outcome == crate::DependencyExchangeOutcome::Response
-            && self.record.global_dependency_reason.as_deref() == Some("preflight_probe")
-            && self.record.global_dependency_phase.as_deref() == Some("runtime")
-            && matches!(
-                self.record.global_dependency_matched_by.as_deref(),
-                Some("java_truststore" | "system_network")
-            )
+            && self
+                .record
+                .capture
+                .as_ref()
+                .and_then(|capture| capture.initialization_unit())
+                .is_some_and(|unit| {
+                    matches!(
+                        unit,
+                        "preflight_probe/java_truststore" | "preflight_probe/system_network"
+                    )
+                })
     }
 }
 
@@ -607,8 +657,10 @@ fn http_request_comparison(
 
 fn active_http_case_matches(active_case_id: Option<&str>, exchange: &ReplayHttpExchange) -> bool {
     match exchange.source {
-        ReplaySource::Global => true,
-        ReplaySource::Case => exchange.case_id.as_deref() == active_case_id,
+        ReplaySource::Startup | ReplaySource::Process => true,
+        ReplaySource::Case => {
+            exchange.shared_origin.is_some() || exchange.case_id.as_deref() == active_case_id
+        }
     }
 }
 
@@ -882,23 +934,39 @@ impl ReplayState {
     }
 
     pub(in crate::replay) fn http_has_case_in_flight(&self) -> bool {
-        self.http_exchanges.iter().any(|e| {
-            e.source == ReplaySource::Case
-                && matches!(
+        self.http_ingress
+            .has_case_pending(self.active_case_id.as_deref())
+            || self.http_exchanges.iter().any(|e| {
+                e.source == ReplaySource::Case
+                    && matches!(
+                        e.status,
+                        super::ReplayExchangeStatus::Responding
+                            | super::ReplayExchangeStatus::AwaitingClientTermination
+                    )
+            })
+    }
+
+    pub(in crate::replay) fn http_has_in_flight(&self) -> bool {
+        self.http_ingress.has_pending()
+            || self.http_exchanges.iter().any(|e| {
+                matches!(
                     e.status,
                     super::ReplayExchangeStatus::Responding
                         | super::ReplayExchangeStatus::AwaitingClientTermination
                 )
-        })
+            })
     }
+}
 
-    pub(in crate::replay) fn http_has_in_flight(&self) -> bool {
-        self.http_exchanges.iter().any(|e| {
-            matches!(
-                e.status,
-                super::ReplayExchangeStatus::Responding
-                    | super::ReplayExchangeStatus::AwaitingClientTermination
-            )
-        })
+/// Native protocol probes remain available; business initialization closes once.
+pub(in crate::replay) fn startup_counts(
+    exchanges: &mut [ReplayHttpExchange],
+    close: bool,
+) -> super::startup::Counts {
+    let mut counts = super::startup::Counts::default();
+    for exchange in exchanges {
+        let mandatory = !exchange.is_repeatable_preflight_probe();
+        counts.observe(exchange.source, &mut exchange.status, mandatory, close);
     }
+    counts
 }

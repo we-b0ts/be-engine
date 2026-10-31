@@ -10,7 +10,7 @@ impl PubSubState {
     pub(in crate::replay) fn global_report_extra_count(&self) -> usize {
         self.global_report
             .rows(1, &self.pushes, true)
-            .filter(|(_, push)| push.source == ReplaySource::Global && !push.status.is_consumed())
+            .filter(|(_, push)| push.source.is_run_owned() && !push.status.is_consumed())
             .count()
     }
     pub(in crate::replay) fn freeze_global_report_layout(&mut self) {
@@ -26,7 +26,7 @@ impl PubSubState {
         let Some(push) = self
             .pushes
             .get(index)
-            .filter(|push| push.source == ReplaySource::Global)
+            .filter(|push| push.source.is_run_owned())
         else {
             return;
         };
@@ -53,7 +53,7 @@ impl PubSubState {
         for (index, push) in self
             .global_report
             .rows(1, &self.pushes, extras)
-            .filter(|(_, push)| push.source == ReplaySource::Global)
+            .filter(|(_, push)| push.source.is_run_owned())
         {
             visitor(Row {
                 position: Position { section: 1, index },
@@ -61,7 +61,7 @@ impl PubSubState {
                 value: serde_json::to_value(CommandUnusedReport {
                     index: push.report_index.unwrap_or(index),
                     case_id: None,
-                    source: ReplaySource::Global,
+                    source: push.source,
                     target: TargetKey {
                         host: normalize_host(&push.record.target_host),
                         port: push.record.target_port,

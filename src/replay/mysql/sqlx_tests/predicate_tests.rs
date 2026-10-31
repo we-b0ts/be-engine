@@ -6,7 +6,7 @@ async fn global_formats_preserve_numeric_string_in_permutations() {
         let source = "SELECT resource_members.resource_id AS resource_members_resource_id FROM resource_members WHERE resource_members.resource_type IN ('Namespace') AND resource_members.entity_type='namespace' AND resource_members.entity_id IN ('801','388','693','535','539','699') AND resource_members.status='approved'";
         let target = "SELECT resource_members.resource_id AS resource_members_resource_id FROM resource_members WHERE resource_members.resource_type IN (?) AND resource_members.entity_type='namespace' AND resource_members.entity_id IN (?,?,?,?,?,?) AND resource_members.status='approved'";
         let response = result(json!([{"name":"resource_members_resource_id","family":"integer","sql_type":"BIGINT"}]), json!([[{"kind":"integer","value":7}]]));
-        let policy = "format: traffic-policy/v2\njson:\n  fields:\n    /now: {kind: time, formats: [unix_seconds]}\nmysql: {}\n";
+        let policy = "format: traffic-policy/v3\njson:\n  fields:\n    /now: {kind: time, formats: [unix_seconds]}\nmysql: {}\n";
         let (temp, addr, runtime, task) = fixture_with_policy(&[exchange(source, response)], Some(policy)).await;
         let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
         let original = std::fs::read(&path).unwrap();
@@ -29,7 +29,7 @@ async fn global_formats_preserve_unordered_predicates_without_selected_sql_field
     for policy in [
         None,
         Some(
-            "format: traffic-policy/v2\njson:\n  fields:\n    /now: {kind: time, formats: [unix_seconds]}\n",
+            "format: traffic-policy/v3\njson:\n  fields:\n    /now: {kind: time, formats: [unix_seconds]}\n",
         ),
     ] {
         let response = result(
@@ -195,7 +195,7 @@ async fn predicate_cache_preserves_identity_case_precedence_and_finite_consumpti
     );
     state.complete_exchange(&matched);
     // Global exact matching must not outrank Case semantic matching.
-    state.mysql.exchanges[1].source = ReplaySource::Global;
+    state.mysql.exchanges[1].source = ReplaySource::Startup;
     state.mysql.exchanges[1].case_id = None;
     state.mysql.invalidate_scope_index();
     state.mysql.exchanges[1].status = ReplayExchangeStatus::Available;
@@ -207,7 +207,7 @@ async fn predicate_cache_preserves_identity_case_precedence_and_finite_consumpti
     let matched = state
         .match_exchange(&identity, "COM_QUERY", Some(exact), None)
         .unwrap();
-    assert_eq!(matched.source, ReplaySource::Global);
+    assert_eq!(matched.source, ReplaySource::Startup);
     state.complete_exchange(&matched);
     assert!(
         state

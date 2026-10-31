@@ -7,27 +7,44 @@ unchanged. A hypothesis always leaves the Case dirty, even when the primary
 response matches. Source proof, ordinary rule plan/apply and fresh Replay are
 required before verification can pass.
 
-The initial capability covers complete JSON UUID and timestamp leaves in shared
-request value adapters. Object members, array lengths, scalar types and all
-unexplained values remain strict. Existing authored contracts retain their
-failures; hypotheses cannot replace them. SQL statement identifiers, Redis
-commands/keys/options, protocol identity, finite consumption and lane order stay
-with their existing owners. Unsupported differences still fail the current Case.
-Additional scalar, TTL, encoding and read-back mechanisms can be added separately.
+The shared typed hypothesis kernel covers complete JSON UUID and request-clock
+leaves, MySQL SQL literal slots and prepared statement arguments, Redis scalar or
+JSON arguments, and UUID segments in Redis keys. SQL structure and binding, scalar
+types, JSON members and array order, Redis command/options and unexplained bytes
+remain strict. Arbitrary numeric IDs, counters, strings and TTL values are not
+assumed dynamic. Existing authored contracts retain their failures; a hypothesis
+cannot override them.
 
-HTTP and Redis selection exhaust strict matches before considering a hypothesis.
-Previews are bounded and publish candidate evidence only when their exchange is
-selected and its ordinary identity decision commits. Repeated identities retain
-the shared case-local bijection. Provisional permissions never authorize a
-process-owned exclusion, a reused snapshot, missing calls or additional calls.
+Every adapter exhausts strict matches first. Pure previews evaluate bounded
+candidates without consuming Source inventory or committing identity bindings.
+Exactly one eligible candidate is required before a real claim. Multiple possible
+candidates leave an explicit ambiguity; the engine does not pick the first match.
+Repeated identities retain the shared case-local bijection across JSON, SQL and
+Redis carriers. Provisional rules do not authorize ownership changes, response
+reuse, missing calls, additional calls or relaxed lane order.
 
-`dependency_pre_matches` in the Replay report records case IDs, stable candidate
-IDs, actual JSON pointers, proposed policy fragments and value digests. It does
-not persist raw value tokens. Dirty-cluster evidence includes these observations
-and their requirement for Source proof. The same candidate ID can occur at
-multiple observations, allowing one proof/plan to address several locations.
-Continuing execution is diagnostic; it does not establish that a proposed field
-is semantically generated or that later behavior is independent of the hypothesis.
+`dependency_hypothesis_attempts` retains every considered hypothesis, including
+rejected and unselected probes and a partially explained request that ultimately
+failed. `dependency_pre_matches` identifies hypotheses that actually influenced
+delivery. An unused or rejected guess alone does not make an otherwise strict
+passing request provisional. Every entry has its actual observation identity,
+original native coordinate, candidate rule, result, selection state and Source
+proof requirement. Values remain in protected evidence; summaries use types,
+shapes and digests.
+
+Selected diagnostic delivery waits for authenticated hypothesis evidence and the
+protected Target request to become durable. The bounded writer batches persistence
+outside Replay's state lock. A persistence failure refuses diagnostic delivery,
+retains the failure and stops claiming complete evidence coverage. Final, failed
+and recoverable interrupted attempts expose the same queryable journal; evidence
+budget exhaustion is explicit rather than silently truncating the attempted rules.
+
+`backend-rewrite dependency-attribution show --api /route` returns a bounded API
+projection and exact continuation commands. It distinguishes a value hypothesis,
+no resource/operation candidate, an ownership fence and an actual consumption
+failure. Cross-case discovery is an investigation hint, not permission to serve
+another API's response. Source proof and batched plan/apply follow a diagnostic
+run; changes to actual matching or execution require one fresh affected-scope Replay.
 
 Ordinary request-header differences remain dirty observations without interrupting
 an otherwise matched HTTP exchange. A true unmatched or unsupported dependency

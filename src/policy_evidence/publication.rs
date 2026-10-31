@@ -8,6 +8,7 @@ use super::{WitnessManifest, artifact_path, digest};
 /// Keep the authenticated relative artifact reference valid when publishing Replay.
 pub(crate) fn stage(source_report: &Path, destination_report: &Path) -> Result<()> {
     let report: Value = serde_json::from_slice(&fs::read(source_report)?)?;
+    super::hypotheses::stage(source_report, destination_report, &report)?;
     let Some(value) = report.get("policy_witnesses") else {
         return Ok(());
     };

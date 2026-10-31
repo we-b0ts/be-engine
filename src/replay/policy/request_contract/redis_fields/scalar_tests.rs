@@ -2,7 +2,7 @@ use super::*;
 
 fn scalar_runtime() -> RequestContracts {
     let policy = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /id: {kind: identity, formats: [{prefix: text-, format: decimal}]}
@@ -242,7 +242,7 @@ fn complete_json_identity_keys_match_atomically_without_relaxing_native_argument
 #[test]
 fn all_digit_hex_identities_keep_text_wire_form_in_writes_reads_and_script_references() {
     let compiled = crate::policy::parse_and_compile_policy(
-        "format: traffic-policy/v2\nredis:\n  keys:\n    'hex:*': {kind: identity, formats: [{hex: 32}]}\n",
+        "format: traffic-policy/v3\nredis:\n  keys:\n    'hex:*': {kind: identity, formats: [{hex: 32}]}\n",
     ).unwrap();
     let mut owner = runtime();
     owner.configure_compiled(Some(Arc::new(compiled))).unwrap();

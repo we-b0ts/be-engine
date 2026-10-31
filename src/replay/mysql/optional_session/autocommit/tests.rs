@@ -26,7 +26,7 @@ fn records() -> Vec<Value> {
 }
 
 fn optional(records: &[Value]) -> BTreeMap<usize, OptionalSessionExchange> {
-    optional_in(records, ReplaySource::Global)
+    optional_in(records, ReplaySource::Startup)
 }
 
 fn optional_in(

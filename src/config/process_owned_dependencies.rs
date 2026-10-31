@@ -129,11 +129,17 @@ impl BackgroundDependencyRuleConfig {
         matching::matches(self, event)
     }
 
-    /// GET without an initial-load contract is finite process work. Other
-    /// authorized Redis reads retain their existing run-local snapshot mode.
+    /// Only an explicit initial-load contract authorizes reusable snapshot reads.
+    /// A process owner alone never changes a finite dependency into a cache.
     pub(crate) fn uses_redis_snapshot(&self) -> bool {
-        matches!(self, Self::Redis { command, initial_load_timeout_ms, trigger_source: None, .. }
-            if command != "GET" || initial_load_timeout_ms.is_some())
+        matches!(
+            self,
+            Self::Redis {
+                initial_load_timeout_ms: Some(_),
+                trigger_source: None,
+                ..
+            }
+        )
     }
 }
 
@@ -279,9 +285,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                             );
                         }
                         validate_exact_redis_keys(name, command, keys)?;
-                        if *initial_load_timeout_ms == Some(0)
-                            || (command != "GET" && initial_load_timeout_ms.is_none())
-                        {
+                        if *initial_load_timeout_ms == Some(0) {
                             bail!(
                                 "Redis {command} process-owned dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
                             );
@@ -293,9 +297,12 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                                 "Redis {command} process-owned dependency rule {name:?} must use keys/key_patterns instead of key_prefix/key_suffix"
                             );
                         }
-                        if initial_load_timeout_ms.is_some() {
+                        if *initial_load_timeout_ms == Some(0)
+                            || initial_load_timeout_ms.is_some()
+                                && (keys.is_empty() || !key_patterns.is_empty())
+                        {
                             bail!(
-                                "Redis {command} process-owned dependency rule {name:?} must not use initial_load_timeout_ms"
+                                "Redis {command} process-owned dependency rule {name:?} initial_load_timeout_ms requires a positive timeout and exact initial-load keys"
                             );
                         }
                         validate_redis_key_selectors(name, command, keys, key_patterns)?;
@@ -343,7 +350,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
             }
         }
     }
-    validate_non_overlapping_rules(rules)?;
+    validate_api_origin_selector_conflicts(rules)?;
     Ok(())
 }
 
@@ -384,9 +391,16 @@ pub(crate) fn validate_source_evidence(source_evidence: &str) -> Result<()> {
     validate_single_line("dependency source evidence", source_evidence, 1_024)
 }
 
-fn validate_non_overlapping_rules(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
+fn validate_api_origin_selector_conflicts(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
     for (index, left) in rules.iter().enumerate() {
         for right in &rules[index + 1..] {
+            // Process selectors are observations of a whole Source task. Their
+            // complete actual match set decides ownership at request admission;
+            // cross-task overlap remains first-class unattributed evidence.
+            // API-origin identity/order contracts retain their strict conflicts.
+            if left.trigger_source().is_none() && right.trigger_source().is_none() {
+                continue;
+            }
             if rules_overlap(left, right) {
                 bail!(
                     "process-owned dependency rules {:?} and {:?} have overlapping selectors",

@@ -84,8 +84,8 @@ pub fn plan_mysql_background_dependency(
     let raw = read(&feedback.replay_report_path)?;
     let evidence: Value = crate::replay::report::parse_background_dependency_evidence(&raw)?;
     ensure!(
-        evidence["version"] == 6 && evidence["finalized"] == true,
-        "MySQL ownership planning requires a finalized version-6 replay report"
+        evidence["version"] == 7 && evidence["finalized"] == true,
+        "MySQL ownership planning requires a finalized version-7 replay report"
     );
     for key in ["unmatched_queries", "unsupported_commands"] {
         for event in array(&evidence, key)? {
@@ -185,14 +185,14 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, MysqlBackgroundDependencyFeedback) {
         let temp = tempfile::tempdir().unwrap();
         let rules = temp.path().join("source-traffic-policy.yaml");
-        fs::write(&rules, "format: traffic-policy/v2\nrules: []\n").unwrap();
+        fs::write(&rules, "format: traffic-policy/v3\nrules: []\n").unwrap();
         let deps = temp.path().join("dependencies.jsonl");
         let sql = "SELECT id FROM tasks_0001 WHERE status='RUNNING' AND created_at >= '2026-09-05'";
         let event = json!({"event_type":"mysql_exchange","command":"COM_QUERY","target_host":"db.internal","target_port":3306,"database":"app","username":"user","sql":sql,"parse_warnings":[],"response":{"status":"resultset","columns":[{"name":"id"}],"rows":[],"row_count":0,"rows_truncated":false}});
         fs::write(&deps, event.to_string()).unwrap();
         let replay = temp.path().join("replay.json");
         let target = json!({"host":"db.internal","port":3306});
-        fs::write(&replay,json!({"version":6,"finalized":true,"cases":[{"case_id":"case-a","dependencies_path":deps}],"unmatched_queries":[],"unsupported_commands":[],"unused_case_exchanges":[{"case_id":"case-a","command":"COM_QUERY","target":target,"database":"app","username":"user","sql_summary":{"fingerprint":fingerprint(sql)}}]}).to_string()).unwrap();
+        fs::write(&replay,json!({"version":7,"finalized":true,"cases":[{"case_id":"case-a","dependencies_path":deps}],"unmatched_queries":[],"unsupported_commands":[],"unused_case_exchanges":[{"case_id":"case-a","command":"COM_QUERY","target":target,"database":"app","username":"user","sql_summary":{"fingerprint":fingerprint(sql)}}]}).to_string()).unwrap();
         let selector = MysqlBackgroundSelector {
             target_host: "db.internal".into(),
             target_port: 3306,

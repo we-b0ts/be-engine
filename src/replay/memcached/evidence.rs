@@ -6,10 +6,11 @@ impl MemcachedReplayState {
     pub(in crate::replay) fn register_global_exchange(
         &mut self,
         record: RecordedExchange,
+        source_kind: ReplaySource,
         reference: RecordRef,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     ) -> Result<()> {
-        self.register_exchange(record, ReplaySource::Global, None, targets)?;
+        self.register_exchange(record, source_kind, None, targets)?;
         let exchange = self
             .exchanges
             .last_mut()
@@ -40,7 +41,7 @@ impl MemcachedReplayState {
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
-        for item in unused_iter(&self.exchanges, ReplaySource::Global) {
+        for item in unused_iter(&self.exchanges, ReplaySource::Startup) {
             visitor(serde_json::to_value(item)?)?;
         }
 
@@ -50,6 +51,6 @@ impl MemcachedReplayState {
         if let Some(count) = self.global_report_usage().count() {
             return count + self.global_report_extra_count();
         }
-        unused_iter(&self.exchanges, ReplaySource::Global).count()
+        unused_iter(&self.exchanges, ReplaySource::Startup).count()
     }
 }

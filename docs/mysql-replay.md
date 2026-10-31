@@ -39,7 +39,7 @@ This fixture checks three Source statements, one independently observed request
 and two missing Target witnesses. It preserves the original artifact hashes and
 does not replace a successful genuine API Replay.
 
-> Rule authoring now uses self-contained `traffic-policy/v2` records in
+> Rule authoring now uses self-contained `traffic-policy/v3` records in
 > `project.policy` and `rule plan --file … --evidence …`. Legacy rule YAML and
 > commands below are historical semantic references; protocol/TLS/transaction
 > requirements remain current. See [unified rule contracts](unified-rule-contracts.md).

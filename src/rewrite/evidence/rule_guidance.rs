@@ -55,7 +55,7 @@ pub(super) fn rule_hints(root: &Path, query: &str, facts: &Value) -> Vec<Rewrite
     let mut add = |capability: &str, rule: &str, instruction: &str| {
         hints.push(RewriteRuleHint {
         capability: capability.into(), rule: rule.into(),
-        hint: format!("{instruction} Return a traffic-policy/v2 proposal with fresh Source file:line proof and the current evidence ID. Use rule plan --file <rule.yaml> --evidence <evidence-id>, review the plan, apply, then complete its genuine Replay or recording obligations."),
+        hint: format!("{instruction} Return a traffic-policy/v3 proposal with fresh Source file:line proof and the current evidence ID. Use rule plan --file <rule.yaml> --evidence <evidence-id>, review the plan, apply, then complete its genuine Replay or recording obligations."),
         help: help(root),
     })
     };

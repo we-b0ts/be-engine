@@ -8,7 +8,7 @@ const ENV_NAME: &str = "SIGNATURE_REGISTRY_TEST_KEY";
 
 fn policy() -> CompiledPolicy {
     parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 signatures:
   default:
     kind: jwt
@@ -93,7 +93,7 @@ fn startup_key_snapshot_is_immutable_while_plan_freshness_detects_changed_inputs
 fn compilation_validates_profiles_without_resolving_startup_inputs() {
     let root = tempfile::tempdir().unwrap();
     let document = crate::policy::parse_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 signatures:
   default: {kind: jwt, algorithm: HS256, key: {kind: target_file, path: /absent-signature-registry-fixture.env, field: SECRET}}
 json:
@@ -121,11 +121,11 @@ fn jwt_fields_fail_closed_for_missing_wrong_kind_and_invalid_profiles() {
         json!({"default":{"kind":"jwt","algorithm":"none","key":{"kind":"target_env","name":"SECRET"}}}),
         json!({"default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":""}}}),
     ] {
-        let document = json!({"format":"traffic-policy/v2","signatures":signatures,
+        let document = json!({"format":"traffic-policy/v3","signatures":signatures,
             "json":{"fields":{"/token":{"kind":"jwt"}}}});
         assert!(parse_and_compile_policy(&document.to_string()).is_err());
     }
-    let unknown_reference = json!({"format":"traffic-policy/v2",
+    let unknown_reference = json!({"format":"traffic-policy/v3",
         "signatures":{"default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET"}}},
         "json":{"fields":{"/token":{"kind":"jwt","signature":"missing"}}}});
     assert!(parse_and_compile_policy(&unknown_reference.to_string()).is_err());

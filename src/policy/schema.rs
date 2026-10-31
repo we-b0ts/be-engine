@@ -1,4 +1,4 @@
-//! Typed traffic-policy/v2 rules. Authoring defaults expand before compilation.
+//! Typed traffic-policy/v3 rules. Authoring defaults expand before compilation.
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -6,7 +6,7 @@ use super::ClockScope;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub const POLICY_FORMAT: &str = "traffic-policy/v2";
+pub const POLICY_FORMAT: &str = "traffic-policy/v3";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrafficPolicy {

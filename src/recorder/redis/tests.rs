@@ -107,9 +107,10 @@ async fn single_subscription_confirmation_is_recorded_as_replay_safe() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let exchange = raw
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -158,9 +159,10 @@ async fn subscribed_push_is_forwarded_without_degrading_capture() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     assert!(!traffic.contains("proxy_error"));
 }
 
@@ -264,7 +266,7 @@ async fn unsubscription_restores_ordinary_responses_and_keeps_case_dependencies_
                 .unwrap(),
             None
         );
-        let semantic = tokio::fs::read_to_string(
+        let semantic = crate::recorder::test_io::read_to_string(
             state
                 .recorder()
                 .case_staging_dir(&case)
@@ -389,9 +391,10 @@ async fn background_read_reuses_the_first_successful_response_for_the_run() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let exchanges = raw
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -408,17 +411,18 @@ async fn background_read_reuses_the_first_successful_response_for_the_run() {
         .flush_global_dependency_files()
         .await
         .unwrap();
-    let semantic =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
+    let semantic = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("indexes/process-scope.json"),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         semantic
             .lines()
             .filter(|line| line.contains("\"event_type\":\"redis_exchange\""))
             .count(),
-        1,
-        "only the first cache value is a Replay seed"
+        2,
+        "seed and reuse remain immutable observations"
     );
 }
 
@@ -485,9 +489,10 @@ async fn pending_exchange_records_client_termination_as_replay_safe() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let exchange = raw
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -500,7 +505,7 @@ async fn pending_exchange_records_client_termination_as_replay_safe() {
 }
 
 #[tokio::test]
-async fn pending_quit_is_a_safe_debug_only_terminal_exchange() {
+async fn pending_quit_is_a_safe_control_fact_with_no_business_consumption_slot() {
     let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
     let (mut client, proxy_client) = tcp_pair().await;
     let (mut upstream, proxy_upstream) = tcp_pair().await;
@@ -525,9 +530,10 @@ async fn pending_quit_is_a_safe_debug_only_terminal_exchange() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let events = raw
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -551,20 +557,17 @@ async fn pending_quit_is_a_safe_debug_only_terminal_exchange() {
         .flush_global_dependency_files()
         .await
         .unwrap();
-    let semantic =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
-    assert!(!semantic.contains("\"command\":\"QUIT\""));
-    let debug = tokio::fs::read_to_string(
-        state
-            .recorder()
-            .run_dir
-            .join("global-dependencies-debug.jsonl"),
+    let semantic = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("global-dependencies.jsonl"),
     )
     .await
     .unwrap();
-    assert!(debug.contains("\"command\":\"QUIT\""));
+    let quit: serde_json::Value = semantic
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|value| value["command"] == "QUIT")
+        .unwrap();
+    assert_eq!(quit["capture"]["semantic_required"], false);
 }
 
 #[tokio::test]
@@ -674,7 +677,7 @@ async fn case_proxy_errors(state: &AppState, case: &CaseContext) -> Vec<serde_js
         .flush_case_dependency_files(&dir)
         .await
         .unwrap();
-    let raw = tokio::fs::read_to_string(dir.join("dependencies.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(dir.join("dependencies.jsonl"))
         .await
         .unwrap();
     raw.lines()
@@ -702,6 +705,9 @@ async fn redis_process_test_state(initial_load_timeout_ms: Option<u64>) -> (AppS
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();
     let mut config = AppConfig::default();
+    config
+        .process_dependency_tasks
+        .insert("snapshot-get".into(), "cache_refresh".into());
     config.recording.output_dir = temp.path().join("recordings");
     config.http_gateway.enabled = true;
     config.http_gateway.ready.enabled = true;

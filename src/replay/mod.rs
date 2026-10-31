@@ -37,11 +37,14 @@ pub(crate) use policy::{NativeSourceCase, validate_native_source_dependencies};
 pub(crate) use report::source_owned_match;
 mod control;
 pub(crate) use redis::request_fingerprint as redis_request_fingerprint;
+mod attribution;
 mod deferred;
 mod dependencies;
 mod loading;
 mod loading_config;
+mod reconciliation;
 pub use loading_config::ReplayDependencyLoading;
+pub(crate) use reconciliation::validate_completed_receipt;
 mod dns;
 mod egress_counter;
 mod exchange;
@@ -50,6 +53,8 @@ mod global_source;
 #[cfg(test)]
 mod global_test_support;
 mod snapshot;
+mod startup;
+mod target_observation;
 pub use egress_counter::{
     ReplayEgressCounterReader, ReplayEgressCounterSnapshot, ReplayEgressRejections,
 };
@@ -111,7 +116,6 @@ use policy::*;
 #[cfg(test)]
 pub(crate) use report::reclassify_background_dependencies;
 use report::*;
-pub(crate) use report::{BackgroundReclassification, reclassify_background_report};
 #[cfg(test)]
 use test_support::write_test_recording_network_manifest;
 
@@ -136,7 +140,7 @@ pub struct ReplayConfig {
     pub allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
 }
 
-pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 10;
+pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 0;
 pub const DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(
@@ -251,12 +255,10 @@ pub use policy::{
     plan_dynamic_value_redis_time_rule, plan_dynamic_value_rule, plan_response_header_date_rule,
 };
 pub(crate) use redis::snapshot_overlay::inspect_case_source_snapshot_overlay;
+pub(crate) use report::aggregate::aggregate_runner_replay_report;
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,
-};
-pub(crate) use report::aggregate::{
-    aggregate_runner_replay_report, aggregate_runner_replay_report_value,
 };
 pub use report::global_evidence::{GlobalDependencyPage, read_global_dependency_page};
 
@@ -403,7 +405,16 @@ impl ReplayRuntime {
 
 fn find_run_level_dependencies(root: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     (
-        find_upward(root, "global-dependencies.jsonl"),
+        find_upward(root, "indexes/startup-scope.json").or({
+            #[cfg(test)]
+            {
+                find_upward(root, "global-dependencies.jsonl")
+            }
+            #[cfg(not(test))]
+            {
+                None
+            }
+        }),
         find_upward(root, "global-dependencies-debug.jsonl"),
     )
 }
@@ -428,8 +439,13 @@ async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
 
 #[derive(Debug)]
 struct ReplayState {
+    batch_scope: Option<reconciliation::BatchScope>,
+    startup_phase: startup::StartupPhase,
+    dependency_attribution_snapshot: Option<String>,
     input_timing: Option<control::input_timing::Live>,
     http_stream_timing: ReplayHttpStreamTiming,
+    http_ingress: http::ingress::HttpIngress,
+    target_observations: target_observation::TargetObservations,
     case_cleanup: control::case_cleanup::CaseCleanup,
     connect_failures: connect_failure::Inventory,
     deferred: Option<Arc<deferred::DeferredDependencies>>,

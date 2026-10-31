@@ -14,6 +14,9 @@ pub(super) async fn publish(state: Arc<Mutex<ReplayState>>, path: Option<&Path>)
 
 async fn snapshot(state: Arc<Mutex<ReplayState>>, path: Option<&Path>) -> Result<()> {
     let path = path.context("interrupted Replay requires a configured report path")?;
+    if let Err(error) = policy::request_contract::hypotheses::await_durable(&state).await {
+        tracing::warn!(error=%error,"publishing incomplete interrupted hypothesis evidence");
+    }
     let report = {
         let state = state.lock().await;
         ensure!(
@@ -22,9 +25,7 @@ async fn snapshot(state: Arc<Mutex<ReplayState>>, path: Option<&Path>) -> Result
         );
         // Seal the observations actually captured, not the execution. In-flight
         // exchanges, active ownership and pending cases retain their real states.
-        if let Some(policy) = &state.replay_policy {
-            policy.request_contracts.seal_witnesses()?;
-        }
+        state.target_observations.seal()?;
         let mut report = serde_json::to_value(state.snapshot_report())?;
         report["interrupted"] = true.into();
         report["interrupted_at"] = serde_json::to_value(Utc::now())?;

@@ -47,7 +47,7 @@ async fn rejected_session(protocol: Protocol) {
     config.max_failed_cases_per_api = 10;
     std::fs::write(
         &config.replay_policy,
-        "format: traffic-policy/v2\nrules: []\n",
+        "format: traffic-policy/v3\nrules: []\n",
     )
     .unwrap();
     let runtime = CaseExecutionRuntime {

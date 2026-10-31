@@ -2,6 +2,17 @@ use super::super::*;
 
 #[derive(Debug, Serialize)]
 pub(in crate::replay) struct ReplayReport {
+    pub(in crate::replay) batch_reconciliation: Option<reconciliation::BatchReconciliation>,
+    pub(in crate::replay) startup_phase: startup::StartupPhaseReport,
+    pub(in crate::replay) http_ingress: http::ingress::IngressReport,
+    pub(in crate::replay) dependency_attribution_snapshot: Option<String>,
+    pub(in crate::replay) dependency_hypothesis_attempts:
+        Vec<policy::request_contract::HypothesisAttempt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) dependency_hypothesis_coverage_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) dependency_hypothesis_journal:
+        Option<crate::policy_evidence::hypotheses::JournalManifest>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) dependency_pre_matches: Vec<crate::value_contract::pre_match::Candidate>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -9,6 +20,10 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) connect_failures: connect_failure::Report,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) policy_witnesses: Option<crate::policy_evidence::WitnessManifest>,
+    pub(in crate::replay) target_observation_coverage_error:
+        Option<target_observation::CoverageError>,
+    pub(in crate::replay) target_observation_key_context: PathBuf,
+    pub(in crate::replay) target_observation_policy_fingerprint: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) egress_rejections: Vec<ReplayEgressRejections>,
     pub(in crate::replay) version: u8,
@@ -95,7 +110,11 @@ impl ReplayReport {
     }
 
     pub(in crate::replay) fn is_dirty(&self) -> bool {
-        !self.dependency_pre_matches.is_empty()
+        self.startup_phase.is_dirty()
+            || self.target_observation_coverage_error.is_some()
+            || self.http_ingress.is_dirty()
+            || self.dependency_hypothesis_coverage_error.is_some()
+            || !self.dependency_pre_matches.is_empty()
             || !self.case_execution_failures.is_empty()
             || self.connect_failures.is_dirty()
             || !self.unrecorded_targets.is_empty()
@@ -167,6 +186,8 @@ pub(in crate::replay) struct ConnectionReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct QueryReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) target_observation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) diagnostic: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

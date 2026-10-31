@@ -1,7 +1,6 @@
 //! Immutable input timing and protocol coverage, without expected output values.
 use super::*;
 use crate::interaction::model::{InputTranscript, Protocol};
-use std::io::BufReader;
 
 #[derive(Debug)]
 pub(super) struct Plan {
@@ -26,16 +25,20 @@ pub(super) fn load(case: &ReplayCase) -> Result<Plan> {
     );
     // Other protocols retain recorded timing until their actual delivery
     // adapters exist. Their claim/consumed state is not a delivery substitute.
-    let file = std::fs::File::open(&case.dependencies_path)?;
+    let mut records = crate::dependency_index::RecordStream::open(&case.dependencies_path)?;
     let mut covered = request.timestamp.is_some();
     #[derive(Deserialize)]
     struct Kind {
         event_type: String,
     }
-    // Deserialize only the kind; large authenticated carrier strings are
-    // skipped by serde rather than retained as timing-plan values.
-    for kind in serde_json::Deserializer::from_reader(BufReader::new(file)).into_iter::<Kind>() {
-        let kind = kind?;
+    // Prepare once at request admission, following the frozen scope's original
+    // offsets. Keep one record buffer and deserialize only its kind; carrier
+    // values never enter the live per-input timing plan.
+    while let Some((_, raw)) = records.next()? {
+        if raw.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let kind: Kind = serde_json::from_slice(raw)?;
         covered &= matches!(
             kind.event_type.as_str(),
             "redis_exchange" | "redis_pub_sub_push"

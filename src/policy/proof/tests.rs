@@ -15,7 +15,7 @@ fn native_rule() -> Value {
 }
 
 fn parse(rules: Vec<Value>) -> anyhow::Result<TrafficPolicy> {
-    parse_policy(&json!({"format":"traffic-policy/v2","rules":rules}).to_string())
+    parse_policy(&json!({"format":"traffic-policy/v3","rules":rules}).to_string())
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn source_lists_are_bounded_and_inherit_one_document_revision() {
     let mut rule = value_rule();
     rule["proof"]["source"] = json!(["items.py:1", "clock.py:2", "model.py:3"]);
     let input =
-        json!({"format":"traffic-policy/v2","source_revision":"source-v1","rules":[rule.clone()]})
+        json!({"format":"traffic-policy/v3","source_revision":"source-v1","rules":[rule.clone()]})
             .to_string();
     let parsed = parse_policy(&input).unwrap();
     let output = render_policy(&parsed).unwrap();
@@ -77,7 +77,7 @@ fn runtime_rules_omit_proofs_while_provided_plan_proofs_remain_validated() {
     let capture = json!({"id":"paths","match":{},"effect":{"kind":"capture_http","case_paths":["/items"]},
         "proof":{"fact":"Capture this route without granting comparison permission"}});
     let input =
-        json!({"format":"traffic-policy/v2","source_revision":format!("sha256:{}", "1".repeat(64)),
+        json!({"format":"traffic-policy/v3","source_revision":format!("sha256:{}", "1".repeat(64)),
         "rules":[value_rule(),capture]})
         .to_string();
     let parsed = parse_policy(&input).unwrap();
@@ -152,7 +152,7 @@ fn state_epoch_proof_text_is_metadata_but_permission_presence_is_semantic() {
     assert_eq!(before.fingerprints.runtime, changed.fingerprints.runtime);
     assert_eq!(before.fingerprints.full, changed.fingerprints.full);
     let shared = parse_policy(
-        &json!({"format":"traffic-policy/v2","source_revision":"source-v1",
+        &json!({"format":"traffic-policy/v3","source_revision":"source-v1",
         "rules":[rule.clone()]})
         .to_string(),
     )

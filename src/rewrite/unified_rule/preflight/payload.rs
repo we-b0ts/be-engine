@@ -72,13 +72,13 @@ pub(super) fn verify(
                 result,
             )?;
         }
-        let dependency_path = directory.join("dependencies.jsonl");
+        let dependency_path = bundle.dependency_path(&directory)?;
         bundle.freeze(&dependency_path)?;
+        let dependency_bytes = crate::dependency_index::scoped::read_bytes(&dependency_path)?;
         ensure!(
-            fs::metadata(&dependency_path)?.len() <= 1024 * 1024 * 1024,
+            dependency_bytes.len() <= 1024 * 1024 * 1024,
             "Source trace inventory exceeds supported evidence bounds"
         );
-        let dependency_bytes = fs::read(&dependency_path)?;
         for line in BufReader::new(dependency_bytes.as_slice()).lines() {
             let line = line?;
             ensure!(

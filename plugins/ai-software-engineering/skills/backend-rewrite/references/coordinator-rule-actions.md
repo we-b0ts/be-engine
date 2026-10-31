@@ -30,7 +30,7 @@ backend-rewrite rule plan --file rule.yaml --evidence <current-evidence-id>
 backend-rewrite rule apply --plan <returned-plan-id>
 ```
 
-The proposal may be one rule, a list, or a full `traffic-policy/v2` authored
+The proposal may be one rule, a list, or a full `traffic-policy/v3` authored
 document containing global formats, dependency lifetimes and any additional
 native `rules`. Ordinary proposals add new fields and append new formats to
 existing declarations, preserving the old order and deduplicating exact matches.
@@ -88,11 +88,12 @@ When `policy_freshness.requires_fresh_replay` is true, follow its refresh comman
 and scheduling gates before planning; discovery observations remain diagnostic.
 
 Apply only the returned reviewed plan. Concurrent policy, evidence, key, schema,
-Source inventory or execution changes invalidate it. A changed rule requires
-fresh genuine Replay before acceptance; capture and snapshot changes additionally
-return consolidated Recording requirements. Continue runnable APIs while refresh
-waits. Reclassification preserves original unused provenance and never certifies
-old Target behavior under a changed runtime contract. A byte-identical no-op
+Source inventory or execution changes invalidate it. A changed matching or delivery contract requires fresh genuine Replay for the
+affected API scope. Only genuinely missing Source evidence requires new recording
+for its actual origin scope. An independently proved foreign-unused overlay may
+reuse the unaffected API's original complete attempt. Continue runnable APIs while refresh
+waits. Attribution proofs preserve original unused facts and never invent consumption
+or certify behavior under a changed runtime contract. A byte-identical no-op
 neither reorders rules nor creates a rerun obligation.
 
 Pending plans block verification admission. After an interrupted apply, follow
@@ -274,3 +275,40 @@ implement destination state. If the worker proves that the dependency drives
 state, return its initial-load, refresh, cache, fallback, or readiness repair
 to the implementation owner. `initial_load_timeout_ms` only bounds source
 recording observation.
+
+## Independent Dependency Attribution
+
+For `dependency_attribution_required`, dispatch the returned assignment to the
+read-only repository analyst. Dedupe by assignment ID and generation; do not
+require the current API implementer to identify every foreign caller. Unmatched
+investigations and foreign-unused claims are separate authenticated inputs.
+
+Use `dependency-attribution rules` to inspect complete effective task/lifecycle
+groups. Publish Source-proven process/async rules through unified rule plan/apply
+first. Obtain fresh attribution context, then apply the independent analyst
+submission with the exact policy fingerprint, rule IDs, Source inventory and
+expected revision. Names or exclusion evidence alone cannot authorize a pass.
+
+`dependency-attribution show --api <canonical-route>` is the factual Target view
+for all method contracts, hypotheses, original Source IDs, actual unmatched
+Target IDs, receipts and pending origin obligations. Follow every pagination
+command. Resource/operation discovery is an investigation hint; all actual
+requests still require strict matching. `ai-verified` is engine-issued for a
+complete unused-only real attempt whose foreign occurrences have independent
+positive ownership proof. It does not close original-owner obligations or the
+whole batch. Do not re-record an unrelated API merely because an async rule was
+added elsewhere. Close an origin obligation with `dependency-attribution verify`
+only after its actual required execution/capture; process/startup closure belongs
+to complete batch execution. A `claim_rejections` result withdraws only a mistaken
+claim; its negative Source proof leaves original dirty execution facts and cannot
+authorize a pass.
+
+After final candidate review, follow `BatchReplay` for one actual complete final
+session. Method results come from that same session. The current sealed Source
+run must be complete and must contain every required workflow method; scoped
+recapture cannot erase the durable method requirement. Inspect actual batch
+requests through `dependency-attribution batch` pages and explicit session-bound,
+bounded `target` queries. Do not publish private queried values in summaries or
+equate authenticated observations with Source ownership or consumption. Only the
+engine's current complete-session receipt closes final batch verification. See
+[dependency attribution](../../../../../docs/dependency-attribution.md).

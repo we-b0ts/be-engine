@@ -159,7 +159,7 @@ fn project_recording_settings_and_policy_survive_online_routing() {
     assert_eq!(policy.max_duration_ms, 2000);
     assert!(!overridden.http_gateway.record_streaming);
 
-    let yaml = std::fs::read_to_string(&path).unwrap();
+    let yaml = crate::recorder::test_io::read_to_string_sync(&path).unwrap();
     std::fs::write(
         &path,
         yaml.replace("record_streaming: false", "record_streaming: true"),
@@ -172,7 +172,7 @@ fn project_recording_settings_and_policy_survive_online_routing() {
 fn missing_project_or_invalid_post_ready_cap_fails_configuration() {
     let temp = tempfile::tempdir().unwrap();
     let path = fixture(&temp);
-    let original = std::fs::read_to_string(&path).unwrap();
+    let original = crate::recorder::test_io::read_to_string_sync(&path).unwrap();
     for value in ["0", "14999", "wrong"] {
         std::fs::write(
             &path,

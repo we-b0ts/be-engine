@@ -87,10 +87,60 @@ async fn runtime_with_background(
         .unwrap();
     }
     write_test_recording_network_manifest(root);
+    let load_root = if background {
+        let mut config = crate::AppConfig::default();
+        config
+            .process_dependency_tasks
+            .insert("fixture_process".into(), "background_http_task".into());
+        std::fs::create_dir_all(root.join(crate::repository::LOCAL_ROOT)).unwrap();
+        crate::platform::encryption_key::load_or_create(root).unwrap();
+        let recorder = crate::recorder::Recorder::new(
+            root.join(crate::repository::LOCAL_ROOT)
+                .join("central-background"),
+        )
+        .await
+        .unwrap()
+        .with_global_preparation(&config)
+        .await
+        .unwrap();
+        let event: Value =
+            serde_json::from_slice(&std::fs::read(root.join("global-dependencies.jsonl")).unwrap())
+                .unwrap();
+        crate::replay::test_support::recording::append(&recorder, &event, true).await;
+        for index in 0..2 {
+            let context = crate::recorder::CaseContext {
+                id: Uuid::from_u128(index as u128 + 1),
+                rule_name: "fixture".into(),
+                uri_group: None,
+            };
+            let request = serde_json::json!({"method":"GET","uri":"/events"});
+            recorder
+                .write_case_json(
+                    &context,
+                    "admission.json",
+                    &serde_json::json!({"fixture":true}),
+                )
+                .await
+                .unwrap();
+            recorder
+                .write_case_json(&context, "request.json", &request)
+                .await
+                .unwrap();
+            recorder
+                .write_case_json(&context, "expected-response.json", &serde_json::json!({}))
+                .await
+                .unwrap();
+            recorder.publish_case(&context).await.unwrap();
+        }
+        recorder.finish_run().await.unwrap();
+        recorder.run_dir.as_ref().clone()
+    } else {
+        root.to_owned()
+    };
     Arc::new(
         ReplayRuntime::load_with_lifecycle(
             MysqlReplayConfig {
-                case_dir: root.into(),
+                case_dir: load_root,
                 selected_case_ids: Vec::new(),
                 dns_listen: "127.0.0.1:0".parse().unwrap(),
                 tcp_listen: "127.0.0.1:0".parse().unwrap(),
@@ -279,8 +329,10 @@ async fn global_background_delivery_spans_cases_but_still_blocks_session_finaliz
 async fn background_spans_cases() {
     let temp = tempfile::tempdir().unwrap();
     let runtime = runtime_with_background(temp.path(), 500, true).await;
+    let first = Uuid::from_u128(1).to_string();
+    let second = Uuid::from_u128(2).to_string();
     assert_eq!(
-        begin_case(&command("begin", "case-a"), runtime.state.clone()).await["ok"],
+        begin_case(&command("begin", &first), runtime.state.clone()).await["ok"],
         true
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -295,14 +347,14 @@ async fn background_spans_cases() {
         assert!(state.http_has_in_flight());
         assert!(!state.http_has_case_in_flight());
     }
-    let ended = end_case(&command("end", "case-a"), runtime.state.clone()).await;
+    let ended = end_case(&command("end", &first), runtime.state.clone()).await;
     assert_eq!(ended["ok"], true, "{ended}");
     assert_eq!(
-        begin_case(&command("begin", "case-b"), runtime.state.clone()).await["ok"],
+        begin_case(&command("begin", &second), runtime.state.clone()).await["ok"],
         true
     );
     assert!(runtime.state.lock().await.http_has_in_flight());
-    let ended = end_case(&command("end", "case-b"), runtime.state.clone()).await;
+    let ended = end_case(&command("end", &second), runtime.state.clone()).await;
     assert_eq!(ended["ok"], true, "{ended}");
     let finalize = ReplayControlRequest {
         command: "finalize".into(),
@@ -335,8 +387,8 @@ async fn background_spans_cases() {
     let report = state.snapshot_report();
     assert_eq!(report.matched_http_exchanges.len(), 1);
     let delivered = serde_json::to_value(&report.matched_http_exchanges[0]).unwrap();
-    assert_eq!(delivered["source"], "global");
-    assert_eq!(delivered["case_id"], "case-a");
+    assert_eq!(delivered["source"], "process");
+    assert_eq!(delivered["case_id"], first);
     assert!(report.unused_global_http_exchanges.is_empty());
     drop(state);
     let (finished, report) = finalize_replay(&finalize, runtime.state.clone()).await;

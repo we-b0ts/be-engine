@@ -42,7 +42,7 @@ pub(super) fn prepare(
                 && exchange.record.cache_snapshot_rule.is_none()
                 && !exchange.record.cache_snapshot_hit
                 && !exchange.record.session_setup
-                && exchange.record.global_dependency_reason.is_none()
+                && exchange.record.run_owner_kind().is_none()
                 && exchange.record.outcome == DependencyExchangeOutcome::Response
                 && exchange.record.resp_version == seed.record.resp_version
                 && normalize_optional(exchange.record.username.as_deref())

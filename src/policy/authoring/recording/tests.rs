@@ -1,7 +1,7 @@
 use super::*;
 use crate::policy::{self, TrafficPolicy};
 
-const DECLARED: &str = r#"format: traffic-policy/v2
+const DECLARED: &str = r#"format: traffic-policy/v3
 source_revision: source-v1
 recording:
   case_paths: [/api/z/*, /api/a/*]
@@ -17,7 +17,7 @@ fn declared() -> String {
 
 fn legacy(name: &str) -> String {
     format!(
-        "format: traffic-policy/v2\nsource_revision: {}\nrules:\n- id: {name}\n  match: {{}}\n  effect: {{kind: capture_http, case_paths: [/api/z/*, /api/a/*]}}\n",
+        "format: traffic-policy/v3\nsource_revision: {}\nrules:\n- id: {name}\n  match: {{}}\n  effect: {{kind: capture_http, case_paths: [/api/z/*, /api/a/*]}}\n",
         revision('1')
     )
 }
@@ -471,7 +471,7 @@ fn initial_recording_never_overwrites_existing_revision_or_discards_conflicting_
     };
     let old = revision('0');
     let new = revision('1');
-    let bound = format!("format: traffic-policy/v2\nsource_revision: {old}\n");
+    let bound = format!("format: traffic-policy/v3\nsource_revision: {old}\n");
     let mut proposal = parse_source_policy(&bound).unwrap();
     proposal.http.source_revision = new.clone();
     proposal.http.case_path_patterns = vec!["/api/*".into()];
@@ -482,7 +482,7 @@ fn initial_recording_never_overwrites_existing_revision_or_discards_conflicting_
     assert_eq!(raw["source_revision"], old);
     assert!(raw.get("rules").is_none());
     assert!(raw.get("recording").is_some());
-    let old_effect = r#"format: traffic-policy/v2
+    let old_effect = r#"format: traffic-policy/v3
 rules:
   - id: existing-source-task
     match: {}
@@ -491,7 +491,7 @@ rules:
       source_revision: source-v0
       selector: {protocol: http, authorities: [background.test], methods: [GET], path_prefixes: [/health]}
 "#.replace("source-v0", &old);
-    let old_proof = r#"format: traffic-policy/v2
+    let old_proof = r#"format: traffic-policy/v3
 signatures:
   default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: JWT_KEY}}
 api:

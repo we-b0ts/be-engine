@@ -279,7 +279,7 @@ async fn autocommit_and_required_sql_use_their_native_visibility_transitions() {
     let (source, index) = state
         .consume_builtin_exchange(&identity(), "COM_QUERY", Some("SET NAMES utf8mb4"))
         .unwrap();
-    assert_eq!(source, ReplaySource::Global);
+    assert_eq!(source, ReplaySource::Startup);
     assert!(state.mysql.exchanges[index].optional_session.is_none());
     assert_eq!(
         state.mysql.exchanges[index].status,

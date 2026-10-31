@@ -13,7 +13,7 @@ use crate::config::process_owned_dependencies::{
 };
 use crate::config::{BackgroundDependencyRuleConfig, SourceTrafficPolicyConfig};
 use crate::replay::dependencies::DependencyRecord;
-use crate::replay::model::{ReplaySource, find_upward};
+use crate::replay::model::ReplaySource;
 use crate::replay::report::command::CommandSnapshotOverlayReport;
 
 const MAX_MATCHING_EXCHANGES: usize = 16_384;
@@ -40,7 +40,7 @@ struct SnapshotEvidence {
     cache_snapshot_rule: Option<String>,
     cache_snapshot_hit: bool,
     session_setup: bool,
-    global_dependency_reason: Option<String>,
+    run_owner_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -75,7 +75,7 @@ struct FingerprintEvidence {
     identity: SnapshotIdentity,
     response_kind: String,
     response: Vec<u8>,
-    global_dependency_reason: Option<String>,
+    run_owner_kind: Option<String>,
     cache_snapshot_rule: Option<String>,
 }
 
@@ -96,14 +96,16 @@ pub(crate) fn inspect_case_source_snapshot_overlay(
         rule.uses_redis_snapshot(),
         "process-owned dependency rule {rule_name:?} does not authorize Redis snapshots"
     );
-    let global = find_upward(&case_source, "global-dependencies.jsonl").with_context(|| {
-        format!(
-            "case source {} has no global-dependencies.jsonl",
-            case_source.display()
-        )
-    })?;
+    let global = super::super::find_run_level_dependencies(&case_source)
+        .0
+        .with_context(|| {
+            format!(
+                "case source {} has no global-dependencies.jsonl",
+                case_source.display()
+            )
+        })?;
     let mut evidence = loading::EvidenceCollector::default();
-    loading::read_snapshot_evidence(&global, ReplaySource::Global, rule, &mut evidence)?;
+    loading::read_snapshot_evidence(&global, ReplaySource::Startup, rule, &mut evidence)?;
     for path in crate::case_group::published_case_dependency_paths(&case_source)? {
         loading::read_snapshot_evidence(&path, ReplaySource::Case, rule, &mut evidence)?;
     }
@@ -170,7 +172,7 @@ fn evidence_from_replay(index: usize, exchange: &ReplayExchange) -> Result<Snaps
         cache_snapshot_rule: exchange.record.cache_snapshot_rule.clone(),
         cache_snapshot_hit: exchange.record.cache_snapshot_hit,
         session_setup: exchange.record.session_setup,
-        global_dependency_reason: exchange.record.global_dependency_reason.clone(),
+        run_owner_kind: exchange.record.run_owner_kind().map(str::to_owned),
     })
 }
 
@@ -185,6 +187,7 @@ fn evidence_from_record(
         .map(super::RecordedCapture::decode)
         .collect::<Result<Vec<_>>>()?;
     let response = record.response.decode()?;
+    let run_owner_kind = record.run_owner_kind().map(str::to_owned);
     Ok(SnapshotEvidence {
         replay_index,
         source,
@@ -204,7 +207,7 @@ fn evidence_from_record(
         cache_snapshot_rule: record.cache_snapshot_rule,
         cache_snapshot_hit: record.cache_snapshot_hit,
         session_setup: record.session_setup,
-        global_dependency_reason: record.global_dependency_reason,
+        run_owner_kind,
     })
 }
 
@@ -243,7 +246,7 @@ fn analyze_snapshot_evidence(
             MAX_MATCHING_BYTES
         );
         match exchange.source {
-            ReplaySource::Global => matching_global_exchanges += 1,
+            ReplaySource::Startup | ReplaySource::Process => matching_global_exchanges += 1,
             ReplaySource::Case => matching_case_exchanges += 1,
         }
         let identity = snapshot_identity(exchange);
@@ -276,16 +279,15 @@ fn analyze_snapshot_evidence(
             display_identity(identity)
         );
         let explicit = entries.iter().copied().find(|entry| {
-            entry.source == ReplaySource::Global
-                && entry.global_dependency_reason.as_deref() == Some("background_rule")
+            entry.source.is_run_owned()
+                && entry.run_owner_kind.as_deref() == Some("process")
                 && entry
                     .cache_snapshot_rule
                     .as_deref()
                     .is_some_and(|name| super::snapshot_seed::owner_name_matches(name, rule.name()))
         });
         let bootstrap = entries.iter().copied().find(|entry| {
-            entry.source == ReplaySource::Global
-                && entry.global_dependency_reason.as_deref() == Some("bootstrap_window")
+            entry.source.is_run_owned() && entry.run_owner_kind.as_deref() == Some("startup")
         });
         let seed = explicit.or(bootstrap).with_context(|| {
             format!(
@@ -345,15 +347,15 @@ fn ensure_safe_snapshot_exchange(
             && !exchange.response_kind.eq_ignore_ascii_case("error"),
         "Redis snapshot rule {rule_name:?} matches a failed or error response"
     );
-    if exchange.source == ReplaySource::Global {
+    if exchange.source.is_run_owned() {
         ensure!(
             matches!(
-                exchange.global_dependency_reason.as_deref(),
-                Some("bootstrap_window" | "background_rule")
+                exchange.run_owner_kind.as_deref(),
+                Some("startup" | "process")
             ),
             "Redis snapshot rule {rule_name:?} matches ambiguous Global evidence"
         );
-        if exchange.global_dependency_reason.as_deref() == Some("background_rule") {
+        if exchange.run_owner_kind.as_deref() == Some("process") {
             ensure!(
                 exchange.cache_snapshot_rule.as_deref().is_some_and(|name| {
                     super::snapshot_seed::owner_name_matches(name, rule_name)
@@ -363,7 +365,7 @@ fn ensure_safe_snapshot_exchange(
         }
     } else {
         ensure!(
-            exchange.cache_snapshot_rule.is_none() && exchange.global_dependency_reason.is_none(),
+            exchange.cache_snapshot_rule.is_none() && exchange.run_owner_kind.is_none(),
             "Redis snapshot rule {rule_name:?} matches case evidence with Global snapshot metadata"
         );
     }
@@ -443,7 +445,7 @@ fn evidence_fingerprint(
         .flat_map(|(identity, entries)| {
             entries.iter().map(move |entry| FingerprintEvidence {
                 source: match entry.source {
-                    ReplaySource::Global => "global",
+                    ReplaySource::Startup | ReplaySource::Process => "global",
                     ReplaySource::Case => "case",
                 },
                 connection_id: entry.connection_id.to_string(),
@@ -451,7 +453,7 @@ fn evidence_fingerprint(
                 identity: identity.clone(),
                 response_kind: entry.response_kind.clone(),
                 response: entry.response.clone(),
-                global_dependency_reason: entry.global_dependency_reason.clone(),
+                run_owner_kind: entry.run_owner_kind.clone(),
                 cache_snapshot_rule: entry.cache_snapshot_rule.clone(),
             })
         })

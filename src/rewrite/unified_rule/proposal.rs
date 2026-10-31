@@ -143,7 +143,7 @@ mod tests {
     use serde_json::{Value, json};
 
     fn document(rule: Value) -> TrafficPolicy {
-        serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[rule]})).unwrap()
+        serde_json::from_value(json!({"format":"traffic-policy/v3","rules":[rule]})).unwrap()
     }
 
     #[test]

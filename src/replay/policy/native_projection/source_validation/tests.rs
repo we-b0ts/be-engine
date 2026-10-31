@@ -12,7 +12,7 @@ fn proof() -> Value {
 }
 fn compile(rules: Vec<Value>) -> CompiledPolicy {
     crate::policy::compile_policy(
-        &serde_json::from_value(json!({"format":"traffic-policy/v2","rules":rules})).unwrap(),
+        &serde_json::from_value(json!({"format":"traffic-policy/v3","rules":rules})).unwrap(),
     )
     .unwrap()
 }
@@ -89,7 +89,7 @@ fn source_session_validates_independent_random_json_with_a_generated_session_key
         bad["effect"]["commands"][0]["arguments"]["1"]["contract"]["fields"]["/poll_token"]["contract"]
             [field] = value;
         let document =
-            serde_json::from_value(json!({"format":"traffic-policy/v2","rules":[bad]})).unwrap();
+            serde_json::from_value(json!({"format":"traffic-policy/v3","rules":[bad]})).unwrap();
         assert!(crate::policy::compile_policy(&document).is_err());
     }
 }

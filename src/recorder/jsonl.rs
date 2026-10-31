@@ -105,19 +105,6 @@ impl JsonlWriterPool {
         Ok(())
     }
 
-    pub(super) async fn flush_and_remove_under(&mut self, dir: &Path) -> Result<()> {
-        let paths = self
-            .writers
-            .keys()
-            .filter(|path| path.starts_with(dir))
-            .cloned()
-            .collect::<Vec<_>>();
-        for path in paths {
-            self.flush_and_remove(&path).await?;
-        }
-        Ok(())
-    }
-
     pub(super) async fn flush_all(&mut self) -> Result<()> {
         let paths = self.writers.keys().cloned().collect::<Vec<_>>();
         for path in paths {
@@ -161,7 +148,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writer_pool_flushes_only_selected_directory() {
+    async fn writer_pool_flushes_only_selected_file() {
         let temp = tempfile::tempdir().unwrap();
         let first = temp.path().join("first/events.jsonl");
         let second = temp.path().join("second/events.jsonl");
@@ -169,9 +156,7 @@ mod tests {
         pool.append(&first, b"first\n").await.unwrap();
         pool.append(&second, b"second\n").await.unwrap();
 
-        pool.flush_and_remove_under(first.parent().unwrap())
-            .await
-            .unwrap();
+        pool.flush_and_remove(&first).await.unwrap();
 
         assert_eq!(tokio::fs::read(&first).await.unwrap(), b"first\n");
         assert_eq!(tokio::fs::read(&second).await.unwrap(), b"");

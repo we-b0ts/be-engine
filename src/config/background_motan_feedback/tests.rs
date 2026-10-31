@@ -63,7 +63,7 @@ fn command(command: &str, case_id: Option<&str>) -> Value {
 
 fn report_with_unused() -> Value {
     json!({
-        "version": 6,
+        "version": 7,
         "finalized": true,
         "motan": {
             "unmatched": [],

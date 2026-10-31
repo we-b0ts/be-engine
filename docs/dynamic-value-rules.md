@@ -2,7 +2,7 @@
 
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
-> syntax. Use the self-contained `traffic-policy/v2` rules, `project.policy`,
+> syntax. Use the self-contained `traffic-policy/v3` rules, `project.policy`,
 > and `rule plan --file … --evidence …` described in
 > [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
 > evidence and lifecycle constraints described here remain mandatory.
@@ -336,7 +336,7 @@ JSON fields under root `json.fields`. Native SQL temporal columns are inferred
 from metadata. For example:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 json:
   fields:
     /item_id: {kind: identity, formats: [uuid]}

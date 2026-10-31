@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub(super) const VERSION: u32 = 3;
+pub(super) const VERSION: u32 = 5;
 pub(crate) const FRAGMENT: &str = ".dependency-index.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,6 +17,10 @@ pub(crate) struct FileStamp {
 
 impl FileStamp {
     pub(crate) fn read(path: &std::path::Path) -> anyhow::Result<Self> {
+        let source = super::scoped::resolve(path)?;
+        Self::read_native(&source.path)
+    }
+    pub(crate) fn read_native(path: &std::path::Path) -> anyhow::Result<Self> {
         use anyhow::ensure;
         use std::os::unix::fs::MetadataExt;
         let m = std::fs::symlink_metadata(path)?;
@@ -99,6 +103,7 @@ pub(crate) struct RunIndex {
     pub version: u32,
     pub run_id: String,
     pub files: Vec<IndexedFile>,
+    pub source_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -223,7 +223,7 @@ fn a_future_closed_lifetime_cannot_supply_an_earlier_refresh() {
 fn native_source_preflight_counts_real_closed_lifetime_instead_of_inventing_expire() {
     let events = events();
     let compiled = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2","rules":[refresh_rule()]}).to_string(),
+        &json!({"format":"traffic-policy/v3","rules":[refresh_rule()]}).to_string(),
     )
     .and_then(|p| crate::policy::compile_policy(&p))
     .unwrap();

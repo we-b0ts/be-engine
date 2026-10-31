@@ -358,9 +358,10 @@ async fn pending_query_uses_uncompressed_framing_and_records_client_termination(
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let exchange = raw
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -460,9 +461,10 @@ async fn assert_blocked_query(sql: &str) {
     );
 
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     assert!(traffic.contains(r#""event_type":"readonly_rejection""#));
     assert!(traffic.contains(r#""protocol":"mysql""#));
     assert!(traffic.contains(r#""operation_class":"write""#));
@@ -586,9 +588,11 @@ async fn allowed_insert_reaches_upstream_and_records_exchange_and_audit() {
     let mut traffic = String::new();
     for _ in 0..100 {
         state.recorder().flush_traffic().await.unwrap();
-        traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-            .await
-            .unwrap();
+        traffic = crate::recorder::test_io::read_to_string(
+            state.recorder().run_dir.join("traffic.jsonl"),
+        )
+        .await
+        .unwrap();
         if traffic.contains(r#""event_type":"mysql_exchange""#) {
             break;
         }
@@ -759,9 +763,10 @@ async fn stmt_close_is_forwarded_without_recording_an_incomplete_exchange() {
     );
 
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let events = traffic
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())

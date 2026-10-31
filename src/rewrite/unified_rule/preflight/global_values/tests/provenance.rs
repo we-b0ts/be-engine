@@ -54,7 +54,7 @@ fn protected_global_read_copy_requires_real_delivery_matching_request_and_both_c
         fs::create_dir_all(&directory).unwrap();
         let artifacts = local.join("runtime/attempt");
         let witnesses = WitnessStore::new(&artifacts).unwrap();
-        let policy=crate::policy::parse_and_compile_policy("format: traffic-policy/v2\njson:\n  fields:\n    /at: {kind: time, formats: [unix_seconds]}\n    /updated: {kind: time, formats: [unix_seconds]}\n").unwrap();
+        let policy=crate::policy::parse_and_compile_policy("format: traffic-policy/v3\njson:\n  fields:\n    /at: {kind: time, formats: [unix_seconds]}\n    /updated: {kind: time, formats: [unix_seconds]}\n").unwrap();
         let source_payload = json!({"at":100,"stable":1});
         let target_payload = json!({"at":1100,"stable":1});
         let source_response = bulk(&source_payload);

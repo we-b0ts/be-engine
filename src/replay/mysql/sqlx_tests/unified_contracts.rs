@@ -2,7 +2,7 @@ use super::*;
 use sqlx::Executor;
 
 fn policy(_surface: &str, _operation: &str, _sql: &str, _slot: &str, _delivery: bool) -> String {
-    "format: traffic-policy/v2\njson:\n  fields:\n    /members: {kind: unordered}\n    /time: {kind: time, formats: [unix_microseconds]}\n".into()
+    "format: traffic-policy/v3\njson:\n  fields:\n    /members: {kind: unordered}\n    /time: {kind: time, formats: [unix_microseconds]}\n".into()
 }
 
 fn payload(micros: i64, members: Value) -> String {
@@ -50,7 +50,7 @@ async fn mysql_json_wildcard_times_preserve_array_shape_members_and_finite_consu
         record["connection_id"] = json!(uuid::Uuid::new_v4());
         record["query_sequence"] = json!(1);
         record["params"] = json!([{"kind":"string","value":payload(start).to_string()},{"kind":"integer","value":7}]);
-        let policy = "format: traffic-policy/v2\njson:\n  fields:\n    /blocks/*/timestamp: {kind: time, formats: [unix_seconds]}\n";
+        let policy = "format: traffic-policy/v3\njson:\n  fields:\n    /blocks/*/timestamp: {kind: time, formats: [unix_seconds]}\n";
         let (temp, addr, runtime, task) = fixture_with_policy(&[record], Some(policy)).await;
         let observed = Utc::now();
         runtime.state.lock().await.mysql.observed_at_for_test = Some(observed);
@@ -263,7 +263,7 @@ async fn finalized_evidence_waits_for_actual_dependency_delivery() {
 #[tokio::test]
 async fn absent_sql_json_leaf_is_inactive_and_business_values_remain_exact() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let policy = "format: traffic-policy/v2\njson:\n  fields:\n    /updated_at: {kind: time, formats: [unix_seconds]}\n";
+        let policy = "format: traffic-policy/v3\njson:\n  fields:\n    /updated_at: {kind: time, formats: [unix_seconds]}\n";
         let sql = "UPDATE settings SET json='{\"stable\":7}' WHERE id=7";
         let record = exchange(sql, json!({"status":"ok","affected_rows":1}));
         let (temp, addr, runtime, server) = fixture_with_policy(&[record], Some(policy)).await;

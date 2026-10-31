@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 fn compile(field: Value) -> anyhow::Result<crate::policy::CompiledPolicy> {
-    let document = json!({"format":"traffic-policy/v2","rules":[{
+    let document = json!({"format":"traffic-policy/v3","rules":[{
         "id":"generated","match":{"api":"POST /queue","resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"key":{"kind":"exact","value":"queue"}},
         "effect":{"kind":"redis_sequence","commands":[{"operation":"LPUSH","arguments":{"1":{"kind":"json","fields":{"/items/*/value":field}}}}]},
         "proof":{"source":"src/producer.rs:publish","fact":"Source generates the selected field for each queued item"}
@@ -41,7 +41,7 @@ fn url_date_scope_requires_a_selected_time_and_inherits_source_proof() {
     }});
     let compiled = compile(url.clone()).unwrap();
     let document = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2","rules":[compiled.native[0].rule]}).to_string(),
+        &json!({"format":"traffic-policy/v3","rules":[compiled.native[0].rule]}).to_string(),
     )
     .unwrap();
     let rendered = crate::policy::render_policy(&document).unwrap();

@@ -83,7 +83,7 @@ impl Fixture {
 
 fn report(dependencies: &Path) -> Value {
     json!({
-        "version": 6,
+        "version": 7,
         "finalized": true,
         "cases": [{
             "case_id": "case-a",
@@ -229,7 +229,7 @@ fn rejects_pre_global_replay_reports() {
         plan_in(fixture.feedback(), &fixture.socks)
             .unwrap_err()
             .to_string()
-            .contains("requires replay report version 6")
+            .contains("requires replay report version 7")
     );
 }
 

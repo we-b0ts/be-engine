@@ -66,10 +66,11 @@ async fn traffic_jsonl_off_skips_the_file() {
     recorder.finish_run().await.unwrap();
 
     assert!(!recorder.run_dir.join("traffic.jsonl").exists());
-    let dependencies =
-        tokio::fs::read_to_string(recorder.case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let dependencies = crate::recorder::test_io::read_to_string(
+        recorder.case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     assert!(dependencies.contains("\"event_type\":\"proxy_error\""));
 }
 
@@ -87,7 +88,7 @@ async fn traffic_jsonl_errors_keeps_only_diagnostic_events() {
     recorder.record(test_proxy_error("boom")).await.unwrap();
     recorder.finish_run().await.unwrap();
 
-    let raw = tokio::fs::read_to_string(recorder.run_dir.join("traffic.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(recorder.run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
     assert_eq!(raw.lines().count(), 1);
@@ -162,10 +163,11 @@ async fn queued_dependencies_hold_bootstrap_reservations_until_persisted() {
     .expect("queued dependency reservations should drain");
     recorder.flush_global_dependency_files().await.unwrap();
 
-    let dependencies =
-        tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
+    let dependencies = crate::recorder::test_io::read_to_string(
+        recorder.run_dir.join("global-dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     assert_eq!(dependencies.lines().count(), 2_048);
 }
 
@@ -239,13 +241,18 @@ async fn case_dependency_records_match_reason() {
         .unwrap();
     flush_case_dependencies(&recorder, &case).await;
 
-    let raw =
-        tokio::fs::read_to_string(recorder.case_staging_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        recorder.case_staging_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "proxy_error");
-    assert_eq!(value["case_dependency_matched_by"], "active_window");
+    assert_eq!(value["capture"]["attribution"]["kind"], "case");
+    assert_eq!(
+        value["capture"]["attribution"]["origin_case_id"],
+        case.id.to_string()
+    );
 }
 
 #[tokio::test]
@@ -291,14 +298,15 @@ async fn global_dependency_summary_is_generated_only_when_run_finishes() {
         .unwrap();
     flush_global_dependencies(&recorder).await;
 
-    let raw = tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
-        .await
-        .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        recorder.run_dir.join("global-dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "proxy_error");
-    assert_eq!(value["global_dependency_matched_by"], "bootstrap_window");
-    assert_eq!(value["global_dependency_reason"], "bootstrap_window");
-    assert_eq!(value["global_dependency_phase"], "bootstrap");
+    assert_eq!(value["capture"]["attribution"]["kind"], "startup");
+    assert_eq!(value["capture"]["phase"], "startup");
     assert!(
         !tokio::fs::try_exists(recorder.run_dir.join("global-dependencies-summary.json"))
             .await
@@ -312,17 +320,19 @@ async fn global_dependency_summary_is_generated_only_when_run_finishes() {
     )
     .unwrap();
     assert_eq!(global_index.records.count, 1);
-    let summary_raw =
-        tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies-summary.json"))
-            .await
-            .unwrap();
+    let summary_raw = crate::recorder::test_io::read_to_string(
+        recorder.run_dir.join("global-dependencies-summary.json"),
+    )
+    .await
+    .unwrap();
     let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
     assert_eq!(summary["total_events"], 1);
     assert_eq!(summary["event_types"]["proxy_error"], 1);
-    let pre_readiness_raw =
-        tokio::fs::read_to_string(recorder.run_dir.join("pre-readiness-traffic-summary.json"))
-            .await
-            .unwrap();
+    let pre_readiness_raw = crate::recorder::test_io::read_to_string(
+        recorder.run_dir.join("pre-readiness-traffic-summary.json"),
+    )
+    .await
+    .unwrap();
     let pre_readiness: serde_json::Value = serde_json::from_str(&pre_readiness_raw).unwrap();
     assert_eq!(pre_readiness["phase"], "bootstrap");
     assert_eq!(pre_readiness["bootstrap_events"], 1);
@@ -411,18 +421,24 @@ async fn case_dependency_summary_skips_successful_prepare() {
 
     flush_case_dependencies(&recorder, &case).await;
 
-    let raw = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(case_dir.join("dependencies.jsonl"))
         .await
         .unwrap();
-    assert_eq!(raw.lines().count(), 2);
-    assert!(!raw.contains("\"status\":\"stmt_prepare\""));
+    assert_eq!(raw.lines().count(), 3);
+    let prepare = raw
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|value| value["response"]["status"] == "stmt_prepare")
+        .unwrap();
+    assert_eq!(prepare["capture"]["semantic_required"], false);
 
     summary::write_case_dependency_summary(&case_dir)
         .await
         .unwrap();
-    let summary_raw = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
-        .await
-        .unwrap();
+    let summary_raw =
+        crate::recorder::test_io::read_to_string(case_dir.join("dependencies-summary.json"))
+            .await
+            .unwrap();
     let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
     assert_eq!(summary["total_events"], 2);
     assert_eq!(summary["event_types"]["mysql_exchange"], 2);
@@ -513,16 +529,12 @@ async fn case_dependency_skips_successful_mysql_session_setup() {
 
     flush_case_dependencies(&recorder, &case).await;
 
-    let raw = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(case_dir.join("dependencies.jsonl"))
         .await
         .unwrap();
-    assert_eq!(raw.lines().count(), 1);
+    assert_eq!(raw.lines().count(), 9);
     assert!(raw.contains("SET @tenant_id = 1"));
-    assert!(!raw.contains("SET NAMES utf8"));
-    assert!(!raw.contains("SET sql_mode"));
-    assert!(!raw.contains("SELECT 2"));
-    assert!(!raw.contains("SHOW COLLATION"));
-    assert!(!raw.contains("auto_increment_increment"));
+    assert_eq!(raw.lines().filter(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["capture"]["semantic_required"] == true).count(), 1);
 }
 
 #[tokio::test]
@@ -561,10 +573,11 @@ async fn autocommit_controls_remain_semantic_evidence_for_replay_classification(
             .unwrap();
     }
     flush_case_dependencies(&recorder, &case).await;
-    let raw =
-        tokio::fs::read_to_string(recorder.case_staging_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        recorder.case_staging_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     let records: Vec<serde_json::Value> = raw
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -603,12 +616,16 @@ async fn case_dependency_routes_mysql_protocol_details_to_debug_file() {
 
     let case_dir = recorder.case_staging_dir(&case);
     assert!(!case_dir.join("dependencies.jsonl").exists());
-    let raw = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(case_dir.join("dependencies-debug.jsonl"))
         .await
         .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "mysql_query");
-    assert_eq!(value["case_dependency_matched_by"], "active_window");
+    assert_eq!(value["capture"]["attribution"]["kind"], "case");
+    assert_eq!(
+        value["capture"]["attribution"]["origin_case_id"],
+        case.id.to_string()
+    );
 }
 
 #[tokio::test]
@@ -633,21 +650,24 @@ async fn publish_case_moves_staging_to_published_and_updates_report() {
         .join("apis/api-users")
         .join(case.id.to_string());
     assert!(published_case_dir.join("request.json").exists());
-    let dependencies = tokio::fs::read_to_string(published_case_dir.join("dependencies.jsonl"))
-        .await
-        .unwrap();
-    assert!(dependencies.is_empty());
-    let summary_raw =
-        tokio::fs::read_to_string(published_case_dir.join("dependencies-summary.json"))
+    let dependencies =
+        crate::recorder::test_io::read_to_string(published_case_dir.join("dependencies.jsonl"))
             .await
             .unwrap();
+    assert!(dependencies.is_empty());
+    let summary_raw = crate::recorder::test_io::read_to_string(
+        published_case_dir.join("dependencies-summary.json"),
+    )
+    .await
+    .unwrap();
     let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
     assert_eq!(summary["source"], "dependencies.jsonl");
     assert_eq!(summary["total_events"], 0);
     assert_eq!(summary["event_types"], serde_json::json!({}));
-    let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
-        .await
-        .unwrap();
+    let report_raw =
+        crate::recorder::test_io::read_to_string(recorder.run_dir.join("recording-run.json"))
+            .await
+            .unwrap();
     let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
     assert_eq!(report["published_cases"], 1);
     assert_eq!(report["failed_cases"], 0);
@@ -687,14 +707,16 @@ async fn finalized_case_ignores_late_dependencies() {
         .run_dir
         .join("apis/api-users")
         .join(case.id.to_string());
-    let dependencies = tokio::fs::read_to_string(published_case_dir.join("dependencies.jsonl"))
-        .await
-        .unwrap();
-    assert!(dependencies.is_empty());
-    let summary_raw =
-        tokio::fs::read_to_string(published_case_dir.join("dependencies-summary.json"))
+    let dependencies =
+        crate::recorder::test_io::read_to_string(published_case_dir.join("dependencies.jsonl"))
             .await
             .unwrap();
+    assert!(dependencies.is_empty());
+    let summary_raw = crate::recorder::test_io::read_to_string(
+        published_case_dir.join("dependencies-summary.json"),
+    )
+    .await
+    .unwrap();
     let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
     assert_eq!(summary["total_events"], 0);
 }
@@ -737,13 +759,15 @@ async fn fail_case_moves_staging_to_failed_and_records_error() {
             .join(case.id.to_string())
             .exists()
     );
-    let errors_raw = tokio::fs::read_to_string(recorder.run_dir.join("errors.jsonl"))
-        .await
-        .unwrap();
+    let errors_raw =
+        crate::recorder::test_io::read_to_string(recorder.run_dir.join("errors.jsonl"))
+            .await
+            .unwrap();
     assert!(errors_raw.contains("expected_response_body_truncated"));
-    let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
-        .await
-        .unwrap();
+    let report_raw =
+        crate::recorder::test_io::read_to_string(recorder.run_dir.join("recording-run.json"))
+            .await
+            .unwrap();
     let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
     assert_eq!(report["status"], "running");
     assert_eq!(report["published_cases"], 0);
@@ -772,14 +796,15 @@ async fn startup_global_dependency_routes_mysql_protocol_details_to_debug_file()
     flush_global_dependencies(&recorder).await;
 
     assert!(!recorder.run_dir.join("global-dependencies.jsonl").exists());
-    let raw = tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies-debug.jsonl"))
-        .await
-        .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        recorder.run_dir.join("global-dependencies-debug.jsonl"),
+    )
+    .await
+    .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "mysql_query");
-    assert_eq!(value["global_dependency_matched_by"], "bootstrap_window");
-    assert_eq!(value["global_dependency_reason"], "bootstrap_window");
-    assert_eq!(value["global_dependency_phase"], "bootstrap");
+    assert_eq!(value["capture"]["attribution"]["kind"], "startup");
+    assert_eq!(value["capture"]["phase"], "startup");
 }
 
 fn mysql_exchange(

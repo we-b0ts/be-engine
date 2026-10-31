@@ -94,7 +94,7 @@ async fn matched_publish_echoes_actual_payload_without_recorded_idle_or_duplicat
             0
         );
         assert!(state.redis.snapshot().unused_case.is_empty());
-        assert!(state.redis.pubsub.unused(ReplaySource::Global).is_empty());
+        assert!(state.redis.pubsub.unused(ReplaySource::Startup).is_empty());
         task.abort();
         sub_task.abort();
     }

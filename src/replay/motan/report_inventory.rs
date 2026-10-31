@@ -11,7 +11,7 @@ impl MotanReplayState {
             .global_report
             .rows(0, &self.exchanges, true)
             .filter(|(_, exchange)| {
-                exchange.source == ReplaySource::Global && !exchange.status.is_consumed()
+                exchange.source.is_run_owned() && !exchange.status.is_consumed()
             })
             .count()
     }
@@ -30,7 +30,7 @@ impl MotanReplayState {
         let Some(exchange) = self
             .exchanges
             .get(index)
-            .filter(|exchange| exchange.source == ReplaySource::Global)
+            .filter(|exchange| exchange.source.is_run_owned())
         else {
             return;
         };
@@ -59,7 +59,7 @@ impl MotanReplayState {
             .events
             .global_report
             .rows(0, &self.exchanges, extras)
-            .filter(|(_, exchange)| exchange.source == ReplaySource::Global)
+            .filter(|(_, exchange)| exchange.source.is_run_owned())
         {
             visitor(Row {
                 position: Position { section: 0, index },
@@ -67,7 +67,7 @@ impl MotanReplayState {
                 value: serde_json::to_value(CommandUnusedReport {
                     index,
                     case_id: exchange.case_id.clone(),
-                    source: ReplaySource::Global,
+                    source: exchange.source,
                     target: TargetKey {
                         host: normalize_host(&exchange.record.target_host),
                         port: exchange.record.target_port,
@@ -80,4 +80,41 @@ impl MotanReplayState {
         }
         Ok(())
     }
+}
+
+pub(super) fn unused_iter(
+    exchanges: &[ReplayExchange],
+    source: ReplaySource,
+) -> impl Iterator<Item = CommandUnusedReport> + '_ {
+    exchanges
+        .iter()
+        .enumerate()
+        .filter(move |(_, exchange)| {
+            exchange.source.matches_scope(source) && !exchange.status.is_consumed()
+        })
+        .map(move |(index, exchange)| CommandUnusedReport {
+            index,
+            case_id: exchange.case_id.clone(),
+            source: exchange.source,
+            target: TargetKey {
+                host: normalize_host(&exchange.record.target_host),
+                port: exchange.record.target_port,
+            },
+            connection_id: exchange.record.connection_id,
+            sequence: exchange.record.sequence,
+            command: exchange.record.command.clone(),
+        })
+}
+
+pub(super) fn unused(
+    exchanges: &[ReplayExchange],
+    source: ReplaySource,
+) -> Vec<CommandUnusedReport> {
+    unused_iter(exchanges, source)
+        .take(if source.is_run_owned() {
+            100
+        } else {
+            usize::MAX
+        })
+        .collect()
 }

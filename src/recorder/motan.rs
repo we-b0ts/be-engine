@@ -32,6 +32,7 @@ pub(crate) struct ConnectionContext {
 
 #[derive(Debug)]
 struct PendingRequest {
+    targets: crate::active_case::DependencyTargets,
     sequence: u64,
     frame: Frame,
     identity: RequestIdentity,
@@ -87,6 +88,7 @@ pub(crate) async fn handle_connected(
     let response_ended_for_requests = responses_ended.clone();
     let request_safe = replay_safe.clone();
     let request_termination = termination.clone();
+    let request_state = state.clone();
     let requests = tokio::spawn(async move {
         let result = async {
             let mut bytes = 0_u64;
@@ -124,6 +126,13 @@ pub(crate) async fn handle_connected(
                 bytes = bytes.saturating_add(frame.raw.len() as u64);
                 let request_id = frame.request_id;
                 let request = PendingRequest {
+                    targets: request_state.capture_motan_dependency(
+                        connection_id,
+                        sequence,
+                        &metadata.identity,
+                        metadata.group.as_deref(),
+                        metadata.heartbeat,
+                    ),
                     sequence,
                     frame,
                     identity: metadata.identity,
@@ -426,8 +435,7 @@ async fn record_exchange(
     let replay_safe = !request_capture.truncated
         && !response_capture.truncated
         && (outcome.termination().is_some() || response.is_some());
-    record_event(
-        state,
+    state.record_event_for_targets(
         RecorderEvent::MotanExchange(MotanExchangeEvent {
             id: Uuid::new_v4(),
             connection_id,
@@ -466,8 +474,9 @@ async fn record_exchange(
             replay_safe,
             parse_warnings: Vec::new(),
         }),
-    )
-    .await
+        request.targets,
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

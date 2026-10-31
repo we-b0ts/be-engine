@@ -4,8 +4,14 @@ use std::{fs, io::Read};
 
 pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInventory, Vec<PathBuf>)> {
     let (root, files) = crate::dependency_index::recording_files(scope.case_source)?;
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("recording-run.json"))?)?;
+    let manifest_path = root.join(crate::dependency::observation::MANIFEST_FILE);
+    #[cfg(test)]
+    let manifest_path = if manifest_path.is_file() {
+        manifest_path
+    } else {
+        root.join("recording-run.json")
+    };
+    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
     ensure!(
         manifest["run_id"].as_str() == Some(scope.recording_run_id),
         "Source inventory belongs to a different recording run"
@@ -19,7 +25,7 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
         "Source proof case inventory exceeds bounds"
     );
     let snapshot = crate::dependency_index::evidence::prepare(&root)?;
-    let artifacts = BTreeSet::from([root.join("recording-run.json"), snapshot.path.clone()]);
+    let artifacts = BTreeSet::from([manifest_path, snapshot.path.clone()]);
     for path in &files {
         for name in ["request.json", "expected-response.json"] {
             let file = path.with_file_name(name);
@@ -32,7 +38,7 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
         }
     }
     for (case, directory) in scope.prepared_cases {
-        let expected = fs::canonicalize(directory.join("dependencies.jsonl"))?;
+        let expected = fs::canonicalize(prepared_path(directory))?;
         ensure!(
             files.contains(&expected)
                 && directory.file_name().and_then(|v| v.to_str()) == Some(case),
@@ -40,9 +46,15 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
         );
     }
     let mut all = files;
-    let global = root.join("global-dependencies.jsonl");
-    if global.exists() {
-        all.push(global);
+    if let Some(recording) = crate::dependency_index::recording::root(scope.case_source) {
+        all.push(recording.join("indexes/startup-scope.json"));
+        all.push(recording.join("indexes/process-scope.json"));
+        all.push(recording.join("indexes/unattributed-scope.json"));
+    } else {
+        #[cfg(test)]
+        if root.join("global-dependencies.jsonl").is_file() {
+            all.push(root.join("global-dependencies.jsonl"));
+        }
     }
     Ok((
         NativeSourceInventory {
@@ -56,9 +68,20 @@ pub(super) fn load(scope: &NativeSourceScope<'_>) -> Result<(NativeSourceInvento
     ))
 }
 
+fn prepared_path(directory: &Path) -> PathBuf {
+    #[cfg(test)]
+    if !directory
+        .join(crate::dependency_index::scoped::CASE_SCOPE)
+        .is_file()
+    {
+        return directory.join("dependencies.jsonl");
+    }
+    crate::dependency_index::scoped::case_path(directory)
+}
+
 pub(super) fn digest(inventory: &NativeSourceInventory) -> Result<String> {
     let mut hash = Sha256::new();
-    hash.update(b"traffic-policy/source-inventory/v1\0");
+    hash.update(b"traffic-policy/source-inventory/v3\0");
     hash.update(inventory.recording_root.as_os_str().as_encoded_bytes());
     hash.update(inventory.recording_run_id.as_bytes());
     hash.update(inventory.snapshot.digest.as_bytes());

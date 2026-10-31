@@ -186,7 +186,7 @@ fn ack_pairing_never_crosses_output_events_namespace_controls_or_binary_frames()
 #[test]
 fn paired_ack_arguments_still_evaluate_global_field_contracts() {
     let policy = crate::policy::parse_and_compile_policy(
-        "format: traffic-policy/v2\njson:\n  fields:\n    /id: {kind: identity, formats: [decimal]}\n",
+        "format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [decimal]}\n",
     ).unwrap();
     let input = input();
     let context = Context::prepare(Some(&input)).unwrap().unwrap();
@@ -244,7 +244,7 @@ fn public_response_assertion_prepares_context_before_consuming_the_request() {
             .to_string(),
     )
     .unwrap();
-    std::fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
+    std::fs::write(&policy, "format: traffic-policy/v3\nrules: []\n").unwrap();
     let result = crate::assert_recorded_response(crate::ResponseAssertionOptions {
         case_id: "ack-proof".into(),
         request,

@@ -11,7 +11,10 @@ pub(crate) mod mysql_transactions;
 mod pages;
 pub(crate) mod proof;
 mod reader;
+pub(crate) mod reconciliation;
+pub(crate) mod recording;
 mod reference;
+pub(crate) mod scoped;
 pub(crate) mod store;
 mod stream;
 #[cfg(test)]

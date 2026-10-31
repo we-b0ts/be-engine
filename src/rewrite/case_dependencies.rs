@@ -1,6 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -17,9 +15,9 @@ pub use model::{
     RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencySourceReference,
     RewriteCaseDependencyTarget, RewriteCaseDependencyTargetSummary,
-    RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail,
-    RewriteMysqlOperationDetail, RewriteMysqlParameterDetail, RewriteRedisExchangeDetail,
-    RewriteRedisOperationDetail,
+    RewriteDependencyCaptureDetail, RewriteMemcachedExchangeDetail,
+    RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail, RewriteMysqlOperationDetail,
+    RewriteMysqlParameterDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
 };
 
 const MAX_DEPENDENCIES_BYTES: u64 = 1024 * 1024 * 1024;
@@ -572,13 +570,17 @@ fn resolve_case_dir(target_root: &Path, case_dir: &Path) -> Result<PathBuf> {
 }
 
 fn resolve_dependencies(case_dir: &Path) -> Result<PathBuf> {
-    let dependencies = std::fs::canonicalize(case_dir.join("dependencies.jsonl"))
-        .with_context(|| format!("case {} has no dependencies.jsonl", case_dir.display()))?;
+    let dependencies = std::fs::canonicalize(crate::dependency_index::scoped::case_path(case_dir))
+        .with_context(|| format!("case {} has no dependency scope", case_dir.display()))?;
     ensure!(
         dependencies.starts_with(case_dir) && dependencies.is_file(),
         "case dependencies must be a regular file inside the case directory"
     );
-    let bytes = dependencies.metadata()?.len();
+    let bytes = crate::dependency_index::scoped::resolve(&dependencies)?
+        .locations
+        .as_ref()
+        .map(|locations| locations.iter().map(|location| location.length).sum())
+        .unwrap_or(0);
     ensure!(
         bytes <= MAX_DEPENDENCIES_BYTES,
         "case dependencies exceed the supported {} byte bound",
@@ -588,25 +590,16 @@ fn resolve_dependencies(case_dir: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn read_events(path: &Path, mut visit: impl FnMut(&Value) -> Result<()>) -> Result<()> {
-    let file = File::open(path)
-        .with_context(|| format!("failed to open case dependencies {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
+    let mut reader = crate::dependency_index::RecordStream::open(path)?;
     let mut count = 0_usize;
-    loop {
-        line.clear();
-        let bytes = reader
-            .read_line(&mut line)
-            .with_context(|| format!("failed to read case dependencies {}", path.display()))?;
-        if bytes == 0 {
-            break;
-        }
+    while let Some((_, line)) = reader.next()? {
+        let bytes = line.len();
         ensure!(
             bytes <= MAX_EVENT_BYTES,
             "case dependency event exceeds the supported {} byte bound",
             MAX_EVENT_BYTES
         );
-        if line.trim().is_empty() {
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
         count += 1;
@@ -614,7 +607,7 @@ pub(super) fn read_events(path: &Path, mut visit: impl FnMut(&Value) -> Result<(
             count <= MAX_DEPENDENCY_EVENTS,
             "case dependency event count exceeds the supported bound of {MAX_DEPENDENCY_EVENTS}"
         );
-        let event = serde_json::from_str::<Value>(&line).with_context(|| {
+        let event = serde_json::from_slice::<Value>(line).with_context(|| {
             format!(
                 "case dependency event {count} in {} is invalid JSON",
                 path.display()

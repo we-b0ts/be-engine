@@ -96,9 +96,12 @@ pub(super) struct TcpConnectionRecord {
     pub(super) error: Option<String>,
 }
 
-pub(super) async fn record_tcp_connection(state: &AppState, record: TcpConnectionRecord) {
-    record_event_and_case_dependency(
-        state,
+pub(super) async fn record_tcp_connection(
+    state: &AppState,
+    record: TcpConnectionRecord,
+    targets: DependencyTargets,
+) {
+    state.record_event_for_targets(
         RecorderEvent::TcpGatewayConnection(TcpGatewayConnectionEvent {
             id: record.id,
             timestamp: Utc::now(),
@@ -111,6 +114,7 @@ pub(super) async fn record_tcp_connection(state: &AppState, record: TcpConnectio
             duration_ms: record.duration_ms,
             error: record.error,
         }),
+        targets,
     );
 }
 

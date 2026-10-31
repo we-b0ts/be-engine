@@ -49,7 +49,23 @@ pub(super) fn discover_published_cases(case_source: &Path) -> Result<Vec<Publish
         case_source.display()
     );
     let mut raw = Vec::new();
-    walk_case_directories(case_source, case_source, &mut raw)?;
+    if crate::dependency_index::recording::root(case_source).is_some() {
+        let (_, files) = crate::dependency_index::recording::cases(case_source)?;
+        for file in files {
+            walk_case_directories(
+                case_source,
+                file.parent().context("Case scope has no directory")?,
+                &mut raw,
+            )?;
+        }
+    } else {
+        #[cfg(not(test))]
+        anyhow::bail!(
+            "case discovery requires a sealed central recording manifest; legacy recordings are unsupported"
+        );
+        #[cfg(test)]
+        walk_case_directories(case_source, case_source, &mut raw)?;
+    }
     raw.sort_by(|left, right| left.dir.cmp(&right.dir));
     let direct_collection = raw.iter().any(|case| {
         case.dir

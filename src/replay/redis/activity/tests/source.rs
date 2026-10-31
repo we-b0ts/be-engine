@@ -46,7 +46,7 @@ fn activity_refresh_source_proof_rejects_business_mutations_ttl_readback_and_for
                     )
                     .unwrap();
                 if scenario == "foreign" {
-                    state.exchanges.last_mut().unwrap().source = ReplaySource::Global;
+                    state.exchanges.last_mut().unwrap().source = ReplaySource::Startup;
                 }
             }
             "missing-clock" => {

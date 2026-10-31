@@ -3,7 +3,7 @@ mod literal_paths;
 
 #[test]
 fn finite_process_get_changes_only_classification_fingerprint() {
-    let header = "format: traffic-policy/v2\nsource_revision: sha256:0000000000000000000000000000000000000000000000000000000000000000\n";
+    let header = "format: traffic-policy/v3\nsource_revision: sha256:0000000000000000000000000000000000000000000000000000000000000000\n";
     let empty = parse_and_compile_policy(header).unwrap();
     let raw = format!(
         "{header}process_dependencies:\n  tasks:\n    monitor:\n      requests:\n        - redis:\n            ports: [6379]\n            operation: GET\n            keys: [{{kind: exact, value: heartbeat}}]\n"
@@ -104,7 +104,7 @@ fn all_closed_capabilities_have_one_descriptor_and_proof_requirements() {
 
 #[test]
 fn malformed_native_rule_errors_identify_rule_and_typed_field() {
-    let error=parse_policy("format: traffic-policy/v2\nrules:\n- id: wrong-native\n  match: {api: 'GET /test'}\n  effect: {kind: response_generated, unexpected: true}\n  proof: {source: Source, fact: 'A typed fact'}\n").unwrap_err();
+    let error=parse_policy("format: traffic-policy/v3\nrules:\n- id: wrong-native\n  match: {api: 'GET /test'}\n  effect: {kind: response_generated, unexpected: true}\n  proof: {source: Source, fact: 'A typed fact'}\n").unwrap_err();
     let diagnostic = format!("{error:#}");
     assert!(diagnostic.contains("wrong-native"), "{diagnostic}");
     assert!(!diagnostic.contains("did not match any variant of untagged enum PolicyRule"));
@@ -116,7 +116,7 @@ fn documented_self_contained_examples_compile() {
     let mut examples = 0;
     for block in document.split("```yaml\n").skip(1) {
         let yaml = block.split("```").next().unwrap();
-        if yaml.starts_with("format: traffic-policy/v2") {
+        if yaml.starts_with("format: traffic-policy/v3") {
             parse_policy(yaml)
                 .unwrap_or_else(|error| panic!("documented policy is invalid: {error:#}"));
             examples += 1;

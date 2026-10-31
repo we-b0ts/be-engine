@@ -13,6 +13,7 @@ fn state(api_passed: u32, api_failed: u32, sequence: u64) -> ActiveRunState {
         .collect::<Vec<_>>();
     ActiveRunState {
         engine_fingerprint: None,
+        executed_replay_identity: None,
         case_selection: None,
         version: STATE_VERSION,
         run_key: "run".to_string(),
@@ -319,7 +320,7 @@ fn replay_progress_does_not_recount_an_older_focused_attempt_after_a_full_run() 
 }
 
 #[test]
-fn revises_an_older_focused_attempt_after_another_api_advances() {
+fn a_new_focused_attempt_updates_coverage_after_another_api_advances() {
     let directory = tempfile::tempdir().unwrap();
     let progress_path = directory.path().join("progress.yaml");
     let legacy_path = directory.path().join("e2e-progress.yaml");
@@ -335,11 +336,10 @@ fn revises_an_older_focused_attempt_after_another_api_advances() {
     write_replay_progress(&progress_path, &legacy_path, &index, &previous).unwrap();
     update_focused_index(&mut index, &later, &inventory, true);
     write_replay_progress(&progress_path, &legacy_path, &index, &later).unwrap();
-    ensure_replay_progress_revisable(&progress_path, &index, &previous).unwrap();
 
-    let current = state(3, 0, 1);
+    let current = state(3, 0, 3);
     update_focused_index(&mut index, &current, &inventory, true);
-    revise_replay_progress(&progress_path, &index, &previous, &current).unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &index, &current).unwrap();
 
     let report = load(&progress_path, VerificationStage::Progress)
         .unwrap()
@@ -353,7 +353,7 @@ fn revises_an_older_focused_attempt_after_another_api_advances() {
 }
 
 #[test]
-fn focused_revision_merges_partial_scope_and_preserves_unprepared_api_progress() {
+fn new_attempts_merge_partial_scope_and_preserve_unprepared_api_progress() {
     let directory = tempfile::tempdir().unwrap();
     let progress_path = directory.path().join("progress.yaml");
     let legacy_path = directory.path().join("e2e-progress.yaml");
@@ -361,21 +361,18 @@ fn focused_revision_merges_partial_scope_and_preserves_unprepared_api_progress()
     let mut index = RunIndex::empty("run".into(), PathBuf::from("/cases"));
     update_focused_index(&mut index, &previous, &inventory_with_friends(), false);
     write_replay_progress(&progress_path, &legacy_path, &index, &previous).unwrap();
-    update_focused_index(&mut index, &previous, &inventory(), false);
-    write_replay_progress(&progress_path, &legacy_path, &index, &previous).unwrap();
+    let narrowed_attempt = state(2, 1, 2);
+    update_focused_index(&mut index, &narrowed_attempt, &inventory(), false);
+    write_replay_progress(&progress_path, &legacy_path, &index, &narrowed_attempt).unwrap();
     let report = load(&progress_path, VerificationStage::Progress)
         .unwrap()
         .unwrap();
     let before = report.counted_observations["run"].observation.clone();
     assert_eq!(before.apis.len(), 2);
     assert_eq!(index.current_run.api_keys.len(), 1);
-    let original = fs::read(&progress_path).unwrap();
-
-    ensure_replay_progress_revisable(&progress_path, &index, &previous).unwrap();
-    assert_eq!(fs::read(&progress_path).unwrap(), original);
-    let current = state(3, 0, 1);
+    let current = state(3, 0, 3);
     update_focused_index(&mut index, &current, &inventory(), false);
-    revise_replay_progress(&progress_path, &index, &previous, &current).unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &index, &current).unwrap();
     let report = load(&progress_path, VerificationStage::Progress)
         .unwrap()
         .unwrap();
@@ -390,56 +387,27 @@ fn focused_revision_merges_partial_scope_and_preserves_unprepared_api_progress()
     assert_eq!(report.totals.runs.executed, 1);
     assert_eq!(report.totals.cases.executed, 4);
     assert_eq!(report.totals.cases.passed, 3);
-    let revised = fs::read(&progress_path).unwrap();
-    ensure_replay_progress_revisable(&progress_path, &index, &current).unwrap();
-    revise_replay_progress(&progress_path, &index, &previous, &current).unwrap();
-    assert_eq!(fs::read(&progress_path).unwrap(), revised);
+    let persisted = fs::read(&progress_path).unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &index, &current).unwrap();
+    assert_eq!(fs::read(&progress_path).unwrap(), persisted);
 }
 
 #[test]
-fn partial_revision_still_rejects_changed_counts_results_and_authoritative_scope() {
-    let directory = tempfile::tempdir().unwrap();
-    let progress_path = directory.path().join("progress.yaml");
-    let previous = state(2, 1, 1);
+fn a_changed_view_of_the_same_attempt_cannot_promote_progress() {
+    let inventory = inventory();
+    let original = state(2, 1, 1);
     let mut index = RunIndex::empty("run".into(), PathBuf::from("/cases"));
-    update_focused_index(&mut index, &previous, &inventory_with_friends(), false);
-    write_replay_progress(
-        &progress_path,
-        &directory.path().join("legacy.yaml"),
-        &index,
-        &previous,
-    )
-    .unwrap();
-    update_focused_index(&mut index, &previous, &inventory(), false);
-    let original = fs::read(&progress_path).unwrap();
-    for change in 0..5 {
-        let mut changed = index.clone();
-        match change {
-            0 => changed.apis.get_mut("GET /api/orders/*").unwrap().cases += 1,
-            1 => {
-                changed
-                    .current_run
-                    .apis
-                    .get_mut("GET /api/orders/*")
-                    .unwrap()
-                    .passed_cases += 1
-            }
-            2 => {
-                changed
-                    .current_run
-                    .apis
-                    .get_mut("GET /api/orders/*")
-                    .unwrap()
-                    .passed = true
-            }
-            3 => {
-                changed.current_run.api_keys.insert("GET /unknown".into());
-            }
-            _ => changed.inventory_complete = true,
-        }
-        assert!(ensure_replay_progress_revisable(&progress_path, &changed, &previous).is_err());
-        assert_eq!(fs::read(&progress_path).unwrap(), original);
-    }
+    update_focused_index(&mut index, &original, &inventory, true);
+    let before = serde_json::to_value(&index).unwrap();
+
+    let changed_view = state(3, 0, 1);
+    update_focused_index(&mut index, &changed_view, &inventory, true);
+    assert_eq!(serde_json::to_value(&index).unwrap(), before);
+
+    let next_attempt = state(3, 0, 2);
+    update_focused_index(&mut index, &next_attempt, &inventory, true);
+    assert!(index.current_run.passed);
+    assert_eq!(index.latest_focused_sequences["GET /api/orders/*"], 2);
 }
 
 #[test]
@@ -508,4 +476,113 @@ fn replay_progress_uses_passed_wording_without_verified_state() {
     assert!(yaml.contains("passed: 3"));
     assert!(!yaml.contains("successful"));
     assert!(!yaml.contains("verified"));
+}
+
+// Old on-disk observation fixtures exercise progress migration only.
+fn legacy_attempt_observation(
+    state: &ActiveRunState,
+    kind: &'static str,
+) -> Result<ProgressObservation> {
+    ensure!(
+        state.status.is_terminal(),
+        "replay progress requires a terminal run"
+    );
+    ensure!(
+        !state.apis.is_empty(),
+        "replay progress requires at least one summarized API"
+    );
+    if kind == "focused" {
+        ensure!(
+            state.apis.len() == 1,
+            "focused replay progress requires exactly one API"
+        );
+    }
+    let evidence_clean =
+        state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
+    let apis = state
+        .apis
+        .iter()
+        .map(|api| {
+            (
+                api.api_key.clone(),
+                ApiObservation {
+                    cases: LatestCounts {
+                        executed: u64::from(api.total),
+                        passed: u64::from(api.passed),
+                    },
+                    finalized: true,
+                    passed: evidence_clean && api.complete_pass,
+                    success_streak: None,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let scope = state
+        .apis
+        .iter()
+        .map(|api| ReplayApiEvidence {
+            api: &api.api_key,
+            total: api.total,
+            passed: api.passed,
+            failed: api.failed,
+            incomplete: api.incomplete,
+            complete_pass: api.complete_pass,
+        })
+        .collect::<Vec<_>>();
+    let evidence = ReplayEvidence {
+        run_key: &state.run_key,
+        sequence: state.sequence,
+        kind,
+        source_revision: &state.source_revision,
+        case_inventory_id: &state.case_inventory_id,
+        replay_finalized: state.replay_finalized,
+        aggregate_complete: state.aggregate_complete,
+        aggregate_clean: state.aggregate_clean,
+        apis: scope,
+    };
+    let evidence_bytes = serde_json::to_vec(&evidence)?;
+    let scope_key = state
+        .apis
+        .iter()
+        .map(|api| api.api_key.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(ProgressObservation {
+        key: format!(
+            "{}|{}|{}|{}",
+            state.run_key, kind, scope_key, state.sequence
+        ),
+        evidence_fingerprint: fingerprint(&evidence_bytes),
+        finished_at: state
+            .finished_at
+            .context("terminal replay run is missing finished_at")?
+            .to_rfc3339(),
+        finalized: true,
+        passed: None,
+        success_streak: None,
+        apis,
+    })
+}
+
+#[derive(Serialize)]
+struct ReplayEvidence<'a> {
+    run_key: &'a str,
+    sequence: u64,
+    kind: &'a str,
+    source_revision: &'a str,
+    case_inventory_id: &'a str,
+    replay_finalized: bool,
+    aggregate_complete: bool,
+    aggregate_clean: bool,
+    apis: Vec<ReplayApiEvidence<'a>>,
+}
+
+#[derive(Serialize)]
+struct ReplayApiEvidence<'a> {
+    api: &'a str,
+    total: u32,
+    passed: u32,
+    failed: u32,
+    incomplete: u32,
+    complete_pass: bool,
 }

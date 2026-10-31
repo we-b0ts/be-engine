@@ -45,21 +45,6 @@ pub(super) async fn dependency(address: std::net::SocketAddr) -> TcpStream {
     stream
 }
 
-async fn process_rule(runtime: &Arc<ReplayRuntime>) {
-    runtime.state.lock().await.dependency_tails =
-        crate::replay::control::dependency_tail::CaseTails::with_process_rules(vec![
-            crate::BackgroundDependencyRuleConfig::Http {
-                name: "process-http".into(),
-                authorities: vec!["dependency.test".into()],
-                methods: vec!["POST".into()],
-                path_prefixes: vec!["/tail/".into()],
-                source_revision: String::new(),
-                source_evidence: "the process sends periodic work independently of API requests"
-                    .into(),
-            },
-        ]);
-}
-
 #[tokio::test]
 async fn long_tail_waits_for_real_delayed_http_work_without_repeating_source_idle() {
     let temp = tempfile::tempdir().unwrap();
@@ -207,23 +192,23 @@ async fn a_missing_http_call_remains_dirty_and_retains_the_case() {
 }
 
 #[tokio::test]
-async fn source_proven_process_work_is_not_fabricated_to_satisfy_a_tail() {
+async fn every_case_tail_obligation_requires_real_delivery() {
     let temp = tempfile::tempdir().unwrap();
     let runtime = runtime(temp.path(), 30).await;
-    metadata(temp.path(), 2000).await;
-    process_rule(&runtime).await;
+    metadata(temp.path(), 180).await;
     assert_eq!(
         begin_case(&command("begin", "case-a"), runtime.state.clone()).await["ok"],
         true
     );
     let started = tokio::time::Instant::now();
     let ended = end_case(&command("end", "case-a"), runtime.state.clone()).await;
-    // Runtime retains unused evidence for normal report reclassification. This
-    // proof removes only the wait; it never invents a successful Target call.
+    // Only a new effective-owner scope can change the obligation. A selector
+    // or report classification cannot discharge this captured Case inventory.
+    assert_eq!(ended["ok"], false);
     assert_eq!(ended["dirty"], true);
     assert!(started.elapsed() < Duration::from_secs(1));
     let state = runtime.state.lock().await;
-    assert!(state.active_case_id.is_none());
+    assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
     assert!(state.snapshot_report().matched_http_exchanges.is_empty());
     assert_eq!(state.snapshot_report().unused_case_http_exchanges.len(), 2);
 }
@@ -249,7 +234,6 @@ async fn legacy_selected_calls_remain_strict_when_a_general_tail_and_process_rul
         )
         .await
         .unwrap();
-        process_rule(&runtime).await;
         assert_eq!(
             begin_case(&command("begin", "case-a"), runtime.state.clone()).await["ok"],
             true
@@ -308,7 +292,6 @@ async fn an_invalid_legacy_inventory_cannot_hide_behind_a_valid_general_tail() {
         )
         .await
         .unwrap();
-        process_rule(&runtime).await;
         let began = begin_case(&command("begin", "case-a"), runtime.state.clone()).await;
         assert_eq!(began["ok"], false, "{problem}: {began}");
         assert!(runtime.state.lock().await.active_case_id.is_none());

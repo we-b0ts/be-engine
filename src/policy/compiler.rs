@@ -75,7 +75,7 @@ pub fn parse_and_compile_policy(yaml: &str) -> Result<CompiledPolicy> {
 }
 
 fn decode_policy(yaml: &str) -> Result<TrafficPolicy> {
-    serde_yaml::from_str(yaml).context("invalid traffic-policy/v2 document")
+    serde_yaml::from_str(yaml).context("invalid traffic-policy/v3 document")
 }
 
 pub fn compile_policy(document: &TrafficPolicy) -> Result<CompiledPolicy> {
@@ -257,11 +257,11 @@ struct RuntimeIdentity<'a> {
     capabilities: &'a [CapabilityId],
 }
 
-/// Initial-load Redis GET selectors also govern bootstrap seed admission.
-/// Finite GET ownership changes classification without acquiring a snapshot.
+/// Explicit initial-load contracts govern bootstrap and reusable seed admission.
+/// Finite ownership changes classification without acquiring a snapshot.
 fn affects_snapshot(rule: &CompiledNativeRule) -> bool {
     matches!(&rule.rule.effect, NativeEffect::ProcessOwned(effect)
-        if matches!(&effect.selector, super::native::ProcessSelector::Redis {operation,initial_load_timeout_ms:Some(_),..} if operation == "GET"))
+        if matches!(&effect.selector, super::native::ProcessSelector::Redis {initial_load_timeout_ms:Some(_),..}))
 }
 
 pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {

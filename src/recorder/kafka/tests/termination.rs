@@ -74,9 +74,10 @@ async fn send_request(client: &mut TcpStream, upstream: &mut TcpStream, id: i32)
 
 async fn events(state: &AppState) -> Vec<serde_json::Value> {
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     raw.lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()

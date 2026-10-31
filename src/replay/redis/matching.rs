@@ -1,5 +1,6 @@
 //! Redis command selection with semantic value matching and source-lane order diagnostics.
 use super::*;
+mod hypothesis;
 mod request;
 use crate::replay::command_matching::{
     CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic, preferred_match,
@@ -148,8 +149,10 @@ impl RedisReplayState {
         self.request_event_index = self.events.request_order.latest(active_case_id);
         self.request_observed_at = Some(chrono::Utc::now());
         self.request_observation_id = Some(uuid::Uuid::new_v4());
-        if let Some(case) = active_case_id {
-            match self.request_contracts.record_redis_target(
+        let retention = if let Some(case) =
+            active_case_id.filter(|_| self.request_contracts.retains_value_witnesses())
+        {
+            self.request_contracts.record_redis_target(
                 &crate::replay::policy::request_contract::RedisRequestContext {
                     case,
                     target,
@@ -163,15 +166,46 @@ impl RedisReplayState {
                     observation_id: self.request_observation_id,
                 },
                 args,
-            ) {
-                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
-                    self.request_observation_id = None
-                }
-                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
-                Err(error) => {
-                    tracing::warn!(%error, "failed to preserve independent Redis Target observation")
-                }
-            }
+            )
+        } else if let Some(observations) = &self.target_observations {
+            observations.record(
+                self.request_observation_id.unwrap(),
+                active_case_id,
+                Some(crate::policy::Resource {
+                    protocol: crate::policy::Protocol::Redis,
+                    endpoint: crate::policy::Endpoint {
+                        host: target.host.clone(),
+                        port: target.port,
+                    },
+                    database: Some(crate::policy::Database::Index(database)),
+                    username: username.map(str::to_owned),
+                }),
+                command,
+                self.request_observed_at.unwrap(),
+                &serde_json::to_vec(args).expect("Redis native arguments are serializable"),
+            )
+        } else {
+            Ok(crate::policy_evidence::ObservationRetention::Unavailable)
+        };
+        self.request_observation_retained = self.target_observations.as_ref().map_or_else(
+            || {
+                matches!(
+                    &retention,
+                    Ok(crate::policy_evidence::ObservationRetention::Retained)
+                )
+            },
+            |observations| observations.retained(&retention),
+        );
+        if matches!(
+            &retention,
+            Ok(crate::policy_evidence::ObservationRetention::Unavailable)
+        ) {
+            self.request_observation_id = None;
+        }
+        if retention.is_err() {
+            tracing::warn!(
+                "independent Redis Target observation unavailable; inspect target_observation_coverage_error"
+            );
         }
         self.select_redis(
             active_case_id,
@@ -279,6 +313,19 @@ impl RedisReplayState {
             }
             self.request_contracts
                 .configure_pre_match(allow_pre_match && pre_match_enabled);
+            if allow_pre_match {
+                matched = self.unique_hypothesis_match(
+                    active_case_id,
+                    target,
+                    connection,
+                    resp_version,
+                    database,
+                    username,
+                    command,
+                    args,
+                )?;
+                continue;
+            }
             matched = preferred_match_with_priority(
                 &self.exchanges,
                 active_case_id,
@@ -801,7 +848,7 @@ impl CommandExchangeScope for ReplayExchange {
     }
 
     fn available_in_global_scope(&self) -> bool {
-        self.source == ReplaySource::Global || self.subscription_alias
+        self.source.is_run_owned() || self.subscription_alias
     }
 
     fn case_id(&self) -> Option<&str> {

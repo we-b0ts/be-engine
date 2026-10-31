@@ -84,7 +84,7 @@ fn capture(data: &str) -> Value {
 
 fn report(dependencies: &Path) -> Value {
     json!({
-        "version": 6,
+        "version": 7,
         "finalized": true,
         "cases": [{
             "case_id": "case-a",
@@ -310,7 +310,7 @@ fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
     fs::write(
         &replay_report,
         serde_json::to_vec_pretty(&json!({
-            "version": 6,
+            "version": 7,
             "finalized": true,
             "global_dependencies_path": global,
             "cases": [],
@@ -449,7 +449,7 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
     fs::write(
         &replay_report,
         serde_json::to_vec_pretty(&json!({
-            "version": 6,
+            "version": 7,
             "finalized": true,
             "global_dependencies_path": global,
             "cases": [],

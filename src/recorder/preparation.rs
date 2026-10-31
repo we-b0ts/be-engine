@@ -38,12 +38,16 @@ impl Recorder {
         }
     }
 
-    pub(crate) fn with_global_preparation(mut self, config: &crate::AppConfig) -> Self {
+    pub(crate) async fn with_global_preparation(
+        mut self,
+        config: &crate::AppConfig,
+    ) -> Result<Self> {
+        self.register_capture_policy(config).await?;
         self.global_preparation = Some(Arc::new(GlobalPreparation {
             rules: config.process_owned_dependencies.clone(),
             fingerprint: config.global_projection_policy.clone(),
         }));
-        self
+        Ok(self)
     }
     pub(super) async fn prepare_global_report(&self) {
         let Some(options) = &self.global_preparation else {

@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 
 fn proposal() -> serde_json::Value {
-    json!({"format":"traffic-policy/v2","rules":[{
+    json!({"format":"traffic-policy/v3","rules":[{
         "id":"append","match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"APPEND","key":{"kind":"exact","value":"proof"}},
         "effect":{"kind":"redis_append_stream"},
         "proof":{"source":"session.py:42","fact":"Source appends exact chunks to this stream"}
@@ -98,7 +98,7 @@ fn state_epoch_permissions_require_separate_local_source_evidence_in_the_submitt
     // Absence of Source explanations does not disable the explicit runtime
     // permission. Source evidence is required by plan admission separately.
     let document = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2","rules":[value]}).to_string(),
+        &json!({"format":"traffic-policy/v3","rules":[value]}).to_string(),
     )
     .unwrap();
     let rendered = crate::policy::render_policy(&document).unwrap();
@@ -124,7 +124,7 @@ fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
             _ => json!(true),
         };
         let mut proposal =
-            json!({"format":"traffic-policy/v2", "redis":{"keys":{"current":entry}}});
+            json!({"format":"traffic-policy/v3", "redis":{"keys":{"current":entry}}});
         assert!(
             validate_proposal(&proposal.to_string()).is_err(),
             "{behavior}"
@@ -140,7 +140,7 @@ fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
     }
     // Content formats do not grant an additional resource behavior.
     validate_proposal(
-        &json!({"format":"traffic-policy/v2", "redis":{"keys":{
+        &json!({"format":"traffic-policy/v3", "redis":{"keys":{
             "proof": {"kind":"identity","formats":["uuid"]}
         }}})
         .to_string(),
@@ -165,10 +165,10 @@ fn dependency_lifetime_plans_require_local_evidence_for_each_request() {
             ])
         };
         let mut proposal = if process {
-            json!({"format":"traffic-policy/v2", "source_revision":format!("sha256:{}", "1".repeat(64)),
+            json!({"format":"traffic-policy/v3", "source_revision":format!("sha256:{}", "1".repeat(64)),
                 "process_dependencies":{"tasks":{"refresh_keys":{"requests":requests}}}})
         } else {
-            json!({"format":"traffic-policy/v2", "localcache":{"requests":requests}})
+            json!({"format":"traffic-policy/v3", "localcache":{"requests":requests}})
         };
         assert!(validate_proposal(&proposal.to_string()).is_err());
         let requests = if process {
@@ -188,7 +188,7 @@ fn dependency_lifetime_plans_require_local_evidence_for_each_request() {
 
 #[test]
 fn named_api_signature_positions_require_own_plan_proof_without_runtime_evidence() {
-    let mut proposal = json!({"format":"traffic-policy/v2",
+    let mut proposal = json!({"format":"traffic-policy/v3",
         "signatures":{"default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}},
         "api":{"*":{"request":{"headers":{"authorization":{"scheme":"bearer"}}}}}
     });

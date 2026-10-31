@@ -1,4 +1,4 @@
-//! Ordinary interaction completion preserves the Source and the shared dependency window.
+//! Actual interaction I/O retains Case ownership through primary completion.
 
 use super::*;
 use base64::Engine as _;
@@ -386,7 +386,7 @@ async fn consecutive_cases(
             .config()
             .recording
             .case_dependency_post_response_window_ms,
-        100
+        0
     );
     let (dependency, server, capture, observed) = redis_capture(state.clone()).await;
     let source = tokio::spawn(async move {
@@ -442,7 +442,9 @@ async fn consecutive_cases(
                 assert_eq!(expected["interaction"]["end"]["clean"], true);
                 assert_eq!(expected["interaction"]["end"]["close"]["code"], code);
             }
-            let dependencies = std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap();
+            let dependencies =
+                crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl"))
+                    .unwrap();
             let exchanges: Vec<Value> = dependencies
                 .lines()
                 .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -454,7 +456,12 @@ async fn consecutive_cases(
                 .decode(exchanges[0]["args"][0]["data"].as_str().unwrap())
                 .unwrap();
             assert_eq!(key, format!("late-{turn}").as_bytes());
-            assert_eq!(exchanges[0]["case_dependency_matched_by"], "active_window");
+            assert_eq!(exchanges[0]["capture"]["attribution"]["kind"], "case");
+            assert_eq!(
+                exchanges[0]["capture"]["attribution"]["origin_case_id"],
+                case.file_name().unwrap().to_string_lossy().as_ref()
+            );
+            assert_eq!(exchanges[0]["capture"]["phase"], "runtime");
             seen.insert(case);
         }
         server.await.unwrap();

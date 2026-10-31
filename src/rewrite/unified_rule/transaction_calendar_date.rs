@@ -8,7 +8,7 @@ fn calendar_date_plan_apply_preserves_strict_counters_and_requires_fresh_replay(
             let fixture = Fixture::new();
             write(
                 &fixture.proposal,
-                json!({"format":"traffic-policy/v2","json":{"fields":{
+                json!({"format":"traffic-policy/v3","json":{"fields":{
                     "/members":{"kind":"unordered"},
                     "/lastActiveDate":{"kind":"time","formats":[{"format":"calendar_date","utc_offset":"+08:00"}]}
                 }}}),

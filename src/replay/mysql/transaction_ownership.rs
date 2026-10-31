@@ -28,12 +28,14 @@ pub(in crate::replay) struct Prepared {
 
 #[derive(Debug)]
 pub(in crate::replay) struct PromotedRecord {
+    pub source: ReplaySource,
     pub record: RecordedMysqlExchange,
     pub provenance: Provenance,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::replay) struct Provenance {
+    pub source_owner_kind: String,
     pub original_case_id: String,
     pub dependencies_path: PathBuf,
     pub line: usize,
@@ -44,9 +46,17 @@ pub(in crate::replay) struct Provenance {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Proof {
+    owner_kind: RunOwnerKind,
     connection: Uuid,
     start_sequence: u64,
     members: Vec<Locator>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RunOwnerKind {
+    Startup,
+    Process,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +69,11 @@ struct Locator {
 /// This is deliberately separate from configured API-origin ownership. A Global
 /// transaction needs no API trigger, and every original Case locator is retained.
 pub(in crate::replay) fn prepare(source: &Path) -> Result<Prepared> {
+    // Central scopes already carry independently frozen owners. Never let an
+    // unindexed legacy sidecar promote Case obligations out of those scopes.
+    if crate::dependency_index::recording::root(source).is_some() {
+        return Ok(Prepared::default());
+    }
     if !source
         .ancestors()
         .any(|path| path.join("recording-run.json").is_file())
@@ -141,6 +156,7 @@ fn prove(
             continue;
         };
         let mut valid = true;
+        let mut owner_kind = None;
         let mut savepoints = crate::mysql::savepoint::Names::default();
         let mut case_records = Vec::new();
         let mut members = Vec::new();
@@ -155,6 +171,13 @@ fn prove(
                     .context("Source transaction member has no sequence")?,
             };
             let record = read(root, binding, reader, &locator, connection)?;
+            if position == 0 {
+                owner_kind = read_owner(root, binding, reader, &locator)?;
+                if owner_kind.is_none() {
+                    valid = false;
+                    break;
+                }
+            }
             if !validation::member(&record, position, transaction.members.len(), &mut sql)
                 || record
                     .sql
@@ -174,6 +197,7 @@ fn prove(
             continue;
         }
         proofs.push(Proof {
+            owner_kind: owner_kind.context("transaction has no independently proven run owner")?,
             connection,
             start_sequence,
             members,
@@ -193,6 +217,10 @@ fn project(
     let mut prepared = Prepared::default();
     let mut sources = BTreeMap::new();
     for proof in proofs {
+        let (owner_source, source_owner_kind) = match proof.owner_kind {
+            RunOwnerKind::Startup => (ReplaySource::Startup, "startup"),
+            RunOwnerKind::Process => (ReplaySource::Process, "process"),
+        };
         for member in &proof.members {
             prepared.wires.insert((proof.connection, member.sequence));
             if member.file == Path::new("global-dependencies.jsonl") {
@@ -210,8 +238,10 @@ fn project(
             // read() has already detached rows and retained their original shape.
             record.response.evidence = Some(source.reference(member.location.clone()));
             prepared.promoted.push(PromotedRecord {
+                source: owner_source,
                 record,
                 provenance: Provenance {
+                    source_owner_kind: source_owner_kind.into(),
                     original_case_id: path
                         .parent()
                         .and_then(Path::file_name)
@@ -228,6 +258,39 @@ fn project(
         }
     }
     Ok(prepared)
+}
+
+fn read_owner(
+    root: &Path,
+    binding: &cache::Binding,
+    reader: &Reader,
+    first: &Locator,
+) -> Result<Option<RunOwnerKind>> {
+    let raw = reader
+        .lock()
+        .map_err(|_| anyhow!("MySQL transaction proof reader lock poisoned"))?
+        .read(
+            &root.join(&first.file),
+            binding.stamp(&first.file)?,
+            &first.location,
+        )?;
+    let original: Value = serde_json::from_slice(&raw)?;
+    // Immutable capture provenance, never the filename or current Target state.
+    let Ok(owner) = serde_json::from_value::<crate::dependency::attribution::DependencyOwner>(
+        original["capture"]["attribution"].clone(),
+    ) else {
+        return Ok(None);
+    };
+    owner.validate()?;
+    Ok(match owner {
+        crate::dependency::attribution::DependencyOwner::Startup { .. } => {
+            Some(RunOwnerKind::Startup)
+        }
+        crate::dependency::attribution::DependencyOwner::Process { .. } => {
+            Some(RunOwnerKind::Process)
+        }
+        _ => None,
+    })
 }
 
 fn is_global(facts: &Facts, member: &FactMember) -> bool {

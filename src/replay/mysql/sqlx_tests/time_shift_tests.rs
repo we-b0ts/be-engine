@@ -11,7 +11,7 @@ async fn mysql_time_shift_delivers_relative_expiry_through_tls_text_and_prepared
         ]),json!([[{"kind":"datetime","value":"2020-01-01 00:05:00.123456"},{"kind":"string","value":"stable"}]]));
         let records = [exchange(sql,response.clone()),exchange(sql,response.clone()),
             exchange("SELECT expires_at,owner FROM leases WHERE id=7",response)];
-        let policy = r#"format: traffic-policy/v2
+        let policy = r#"format: traffic-policy/v3
 mysql:
   tables:
     leases:

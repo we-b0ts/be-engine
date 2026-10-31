@@ -165,8 +165,7 @@ pub(super) async fn record_exchange(
             .map(|line| String::from_utf8_lossy(line).to_string())
             .unwrap_or_else(|| "incomplete".to_string())
     };
-    record_event(
-        state,
+    state.record_event_for_targets(
         RecorderEvent::MemcachedExchange(MemcachedExchangeEvent {
             id: Uuid::new_v4(),
             connection_id,
@@ -197,8 +196,9 @@ pub(super) async fn record_exchange(
             replay_safe: pending.replay_safe && captures_safe && prefix_safe,
             parse_warnings: pending.warnings,
         }),
-    )
-    .await
+        pending.targets,
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

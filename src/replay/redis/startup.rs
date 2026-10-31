@@ -1,0 +1,37 @@
+//! Protocol control and proven reusable snapshots do not become startup business debt.
+use super::*;
+impl RedisReplayState {
+    pub(in crate::replay) fn startup_counts(
+        &mut self,
+        close: bool,
+    ) -> crate::replay::startup::Counts {
+        let mut counts = crate::replay::startup::Counts::default();
+        for exchange in &mut self.exchanges {
+            let control = matches!(
+                exchange.record.command.as_str(),
+                "PING"
+                    | "QUIT"
+                    | "AUTH"
+                    | "HELLO"
+                    | "SELECT"
+                    | "CLIENT"
+                    | "READONLY"
+                    | "READWRITE"
+                    | "SUBSCRIBE"
+                    | "PSUBSCRIBE"
+                    | "SSUBSCRIBE"
+                    | "UNSUBSCRIBE"
+                    | "PUNSUBSCRIBE"
+                    | "SUNSUBSCRIBE"
+            );
+            counts.observe(
+                exchange.source,
+                &mut exchange.status,
+                !control && !exchange.reusable_snapshot,
+                close,
+            );
+        }
+        counts.merge(self.pubsub.startup_counts(close));
+        counts
+    }
+}

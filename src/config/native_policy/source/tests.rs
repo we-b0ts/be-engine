@@ -42,7 +42,7 @@ fn rule() -> CompiledNativeRule {
                 key_sequence: vec![],
                 arguments: vec![],
                 script: None,
-                initial_load_timeout_ms: Some(1000),
+                initial_load_timeout_ms: None,
                 fields: vec![],
             },
         }),
@@ -95,7 +95,7 @@ fn finite_process_get_reclassifies_original_evidence_without_acquiring_a_snapsho
     };
     assert_eq!(
         validate(&finite).unwrap().obligations,
-        BTreeSet::from([SourceObligation::Reclassify])
+        BTreeSet::from([SourceObligation::AttributionReview])
     );
     let n::NativeEffect::ProcessOwned(effect) = &mut get_rule.effect else {
         unreachable!()
@@ -162,7 +162,7 @@ fn source_scope_reenumerates_foreign_cases_and_global_members_and_binds_the_run_
     assert_eq!(before.rules["refresh-session"], 1);
     assert_eq!(
         before.obligations,
-        BTreeSet::from([SourceObligation::Reclassify])
+        BTreeSet::from([SourceObligation::AttributionReview])
     );
     case(&root, "case-b", &event());
     let after = validate("run-one").unwrap();

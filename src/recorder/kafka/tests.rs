@@ -102,7 +102,7 @@ async fn records_successful_produce_as_semantic_event() {
         .unwrap()
         .unwrap()
         .path();
-    let traffic = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
+    let traffic = crate::recorder::test_io::read_to_string(run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
     assert!(traffic.contains(r#""event_type":"kafka_produce""#));
@@ -216,7 +216,7 @@ async fn records_terminated_produce(server_ended: bool) {
         .unwrap()
         .unwrap()
         .path();
-    let traffic = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
+    let traffic = crate::recorder::test_io::read_to_string(run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
     let produce = traffic

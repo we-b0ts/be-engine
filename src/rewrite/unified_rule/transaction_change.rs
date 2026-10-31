@@ -12,7 +12,7 @@ fn fixture() -> Fixture {
     let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v2",
+            json!({"format":"traffic-policy/v3",
             "json":super::super::rule()["json"],
             "rules":[generated("generated", "GET /api"),generated("unrelated", "GET /other")]}),
         );
@@ -29,7 +29,7 @@ fn proposal(fixture: &Fixture) {
     write(
         &fixture.proposal,
         json!({"format":"traffic-policy-change/v1","replace_rules":["generated"],
-        "policy":{"format":"traffic-policy/v2","rules":[generated("generated-merged", "GET /api")]}}),
+        "policy":{"format":"traffic-policy/v3","rules":[generated("generated-merged", "GET /api")]}}),
     );
 }
 
@@ -119,7 +119,7 @@ fn public_capture_consolidation_validates_the_replacements_before_consuming_them
         fs::write(project_path, serde_yaml::to_string(&project).unwrap()).unwrap();
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v2","source_revision":revision,"json":super::super::rule()["json"],"rules":[
+            json!({"format":"traffic-policy/v3","source_revision":revision,"json":super::super::rule()["json"],"rules":[
                 capture("capture-a", json!(["/api"])),
                 capture("capture-b", json!(["/other/*"]))
             ]}),
@@ -160,7 +160,7 @@ fn public_capture_consolidation_validates_the_replacements_before_consuming_them
     write(
         &fixture.proposal,
         json!({"format":"traffic-policy-change/v1","replace_rules":["capture-a","capture-b"],
-        "policy":{"format":"traffic-policy/v2","source_revision":revision,"rules":[
+        "policy":{"format":"traffic-policy/v3","source_revision":revision,"rules":[
             capture("capture-merged", json!(["/other/*","/api"]))
         ]}}),
     );
@@ -191,7 +191,7 @@ fn public_capture_consolidation_validates_the_replacements_before_consuming_them
         updated.rules.iter().map(PolicyRule::id).collect::<Vec<_>>(),
         ["capture-merged"]
     );
-    assert!(fixture.state().recording_refresh.is_some());
+    assert_scoped_capture_pending(&fixture);
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn finalized_partial_replay_can_remove_read_back_without_granting_new_permission
         let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v2",
+                json!({"format":"traffic-policy/v3",
                 "json":super::super::rule()["json"],
                 "redis":{"keys":{"device:online:*":{"kind":"identity","formats":["string"],"read_back":true}}}}),
             );
@@ -216,7 +216,7 @@ fn finalized_partial_replay_can_remove_read_back_without_granting_new_permission
             .id()
             .to_owned();
         let mut proposal = json!({"format":"traffic-policy-change/v1","replace_rules":[owner],
-            "policy":{"format":"traffic-policy/v2","redis":{"keys":{"device:online:*":{"kind":"identity","formats":["string"]}}}}});
+            "policy":{"format":"traffic-policy/v3","redis":{"keys":{"device:online:*":{"kind":"identity","formats":["string"]}}}}});
         if scenario == "new-format" {
             proposal["policy"]["redis"]["keys"]["other:*"] =
                 json!({"kind":"identity","formats":["string"]});
@@ -277,7 +277,7 @@ fn finalized_partial_identity_format_revision_keeps_source_target_and_remainder_
         let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, _| {
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v2",
+                json!({"format":"traffic-policy/v3",
                 "json":{"fields":{"/socket_id":{"kind":"identity","formats":[{"base64url":20}]}}}}),
             );
             vec![]
@@ -291,7 +291,7 @@ fn finalized_partial_identity_format_revision_keeps_source_target_and_remainder_
             &serde_json::to_vec(&target).unwrap(),
         );
         let mut proposal = json!({"format":"traffic-policy-change/v1","replace_sections":["json"],
-            "policy":{"format":"traffic-policy/v2","json":{"fields":{"/socket_id":{"kind":"identity","formats":["string"]}}}}});
+            "policy":{"format":"traffic-policy/v3","json":{"fields":{"/socket_id":{"kind":"identity","formats":["string"]}}}}});
         match scenario {
             "new-field" => {
                 proposal["policy"]["json"]["fields"]["/new"] =

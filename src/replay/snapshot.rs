@@ -6,7 +6,24 @@ impl ReplayState {
         let unused_case_http_exchanges = self.unused_http_exchanges(ReplaySource::Case, false);
         let allowed_unused_case_http_exchanges =
             self.unused_http_exchanges(ReplaySource::Case, true);
-        ReplayReport {
+        let mut report = ReplayReport {
+            batch_reconciliation: None,
+            startup_phase: self.startup_phase.report(),
+            http_ingress: self.http_ingress.report(),
+            dependency_attribution_snapshot: self.dependency_attribution_snapshot.clone(),
+            dependency_hypothesis_attempts: self
+                .replay_policy
+                .as_ref()
+                .map(|p| p.request_contracts.hypothesis_attempts())
+                .unwrap_or_default(),
+            dependency_hypothesis_coverage_error: self
+                .replay_policy
+                .as_ref()
+                .and_then(|p| p.request_contracts.hypothesis_coverage_error()),
+            dependency_hypothesis_journal: self
+                .replay_policy
+                .as_ref()
+                .and_then(|p| p.request_contracts.hypothesis_journal_manifest()),
             dependency_pre_matches: self
                 .replay_policy
                 .as_ref()
@@ -14,12 +31,15 @@ impl ReplayState {
                 .unwrap_or_default(),
             case_execution_failures: self.dependency_tails.failures(),
             connect_failures: self.connect_failures.snapshot(),
-            policy_witnesses: self
-                .replay_policy
-                .as_ref()
-                .and_then(|policy| policy.request_contracts.witness_manifest()),
+            policy_witnesses: self.target_observations.manifest(),
+            target_observation_coverage_error: self.target_observations.coverage_error(),
+            target_observation_key_context: self.target_observations.key_context().to_owned(),
+            target_observation_policy_fingerprint: self
+                .target_observations
+                .policy_fingerprint()
+                .into(),
             egress_rejections: self.egress_rejections.values().cloned().collect(),
-            version: 6,
+            version: 7,
             mysql_transaction_semantics: MYSQL_TRANSACTION_SEMANTICS,
             session_id: self.session_id.to_string(),
             started_at: self.started_at,
@@ -59,7 +79,7 @@ impl ReplayState {
             unmatched_queries: self.mysql.events.unmatched_queries.clone(),
             unsupported_commands: self.mysql.events.unsupported_commands.clone(),
             metadata_warnings: self.mysql.events.metadata_warnings.clone(),
-            unused_global_exchanges: self.unused_exchanges(ReplaySource::Global),
+            unused_global_exchanges: self.unused_exchanges(ReplaySource::Startup),
             unused_global_exchange_count: self.global_mysql_unused_count(),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
             process_owned_mysql_exchanges: self.process_owned_mysql(),
@@ -77,7 +97,7 @@ impl ReplayState {
             http_request_header_mismatches: self.http_events.header_mismatches.clone(),
             http_request_header_observations: self.http_events.header_observations.clone(),
             http_request_header_observation_count: self.http_events.header_observation_count,
-            unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Global, false),
+            unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Startup, false),
             unused_global_http_exchange_count: self.global_http_unused_count(),
             unused_case_http_exchanges,
             allowed_unused_case_http_exchanges,
@@ -96,7 +116,24 @@ impl ReplayState {
                     hosts: config.hosts.iter().cloned().collect(),
                 }
             }),
+        };
+        if let Some(scope) = &self.batch_scope {
+            if scope.unlocated_inventory_gap {
+                for case in self.cases.keys() {
+                    report.case_execution_failures.push(serde_json::json!({"case_id":case,
+                        "kind":"source_inventory_gap","source":"sealed_source_inventory",
+                        "reason":"Source recording has an unlocated inventory gap; the retained Case cannot establish complete dependency coverage"}));
+                }
+            }
+            for (case, kinds) in &scope.inventory.unsupported_by_scope {
+                if self.cases.contains_key(case) {
+                    report.case_execution_failures.push(serde_json::json!({"case_id":case,"kind":"source_dependency_unsupported",
+                        "source":"sealed_source_inventory","event_counts":kinds,"reason":"recorded mandatory dependencies have no complete supported Replay contract"}));
+                }
+            }
+            report.batch_reconciliation = Some(scope.report(&report));
         }
+        report
     }
 
     pub(super) fn case_reports(&self) -> Vec<ReplayCaseReport> {

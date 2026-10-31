@@ -79,11 +79,7 @@ impl VerificationKey {
         };
         let selector = ResponseJwtKeySource::selector_tokens(sql, params)?;
         let path = case.join("dependencies.jsonl");
-        ensure!(
-            std::fs::metadata(&path)?.len() <= 64 * 1024 * 1024,
-            "JWT dependency evidence is oversized"
-        );
-        let bytes = std::fs::read(&path)?;
+        let bytes = crate::dependency_index::scoped::read_bytes(&path)?;
         ensure!(
             bytes.len() <= 64 * 1024 * 1024,
             "JWT dependency evidence is oversized"

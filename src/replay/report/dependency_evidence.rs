@@ -328,11 +328,30 @@ pub(crate) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
     }
 }
 
-pub(in crate::replay) fn report_has_case_dirty_events(report: &Value) -> bool {
-    report
-        .get("case_execution_failures")
-        .and_then(Value::as_array)
-        .is_some_and(|failures| !failures.is_empty())
+pub(crate) fn report_has_case_dirty_events(report: &Value) -> bool {
+    !report["target_observation_coverage_error"].is_null()
+        || report
+            .get("dependency_hypothesis_coverage_error")
+            .is_some_and(|v| !v.is_null())
+        || report.get("startup_phase").is_some_and(|phase| {
+            phase["status"] == "phase_unverified"
+                || phase["unstarted_business_dependencies"]
+                    .as_object()
+                    .is_some_and(|counts| counts.values().any(|v| v.as_u64().is_none_or(|n| n > 0)))
+        })
+        || report.get("http_ingress").is_some_and(|ingress| {
+            ingress["pending"].as_u64().is_none_or(|n| n > 0)
+                || ingress["omitted"].as_u64().is_none_or(|n| n > 0)
+                || ingress["observations"]
+                    .as_array()
+                    .is_none_or(|observations| {
+                        observations.iter().any(|o| o["status"] != "body_complete")
+                    })
+        })
+        || report
+            .get("case_execution_failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| !failures.is_empty())
         || report
             .get("unrecorded_targets")
             .and_then(Value::as_array)

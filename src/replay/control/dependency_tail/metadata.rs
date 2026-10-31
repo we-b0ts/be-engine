@@ -15,11 +15,12 @@ pub(super) use references::reference;
 const MAX_METADATA_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(super) struct Metadata {
+    pub business_complete: bool,
     pub request_timeout_ms: u64,
     pub interaction_post_input_ms: Option<u64>,
     pub references: Vec<RecordedReference>,
     pub strict_references: BTreeSet<RecordedReference>,
-    pub process_owned_exemptions: bool,
+
     pub source_stop_required: bool,
     pub source_stop_after_ms: Option<u64>,
     pub cleanup_refs: BTreeSet<RecordedReference>,
@@ -50,7 +51,9 @@ struct AsyncObservation {
     version: u32,
     request_timeout_ms: u64,
     end_reason: String,
-    complete: bool,
+    capture_complete: bool,
+    business_complete: bool,
+    business_completion: String,
     inventory_complete: bool,
     completed_refs: Vec<RecordedReference>,
     #[serde(default)]
@@ -89,11 +92,12 @@ pub(super) async fn load(
                 "dependency-tail exchange inventory is incomplete"
             );
             Some(Metadata {
+                business_complete: true,
                 request_timeout_ms: observation.request_timeout_ms,
                 interaction_post_input_ms: None,
                 references: observation.completed_refs,
                 strict_references: BTreeSet::new(),
-                process_owned_exemptions: true,
+
                 source_stop_required: false,
                 source_stop_after_ms: None,
                 cleanup_refs: BTreeSet::new(),
@@ -153,15 +157,73 @@ pub(super) async fn load(
     Ok(metadata)
 }
 
+pub(super) async fn load_effective(
+    case_dir: &Path,
+    dependencies: &Path,
+    async_rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
+    request_timeout: Duration,
+) -> Result<Option<Metadata>> {
+    let original = crate::dependency_index::scoped::case_path(case_dir);
+    let derived = crate::dependency_index::scoped::view_path(dependencies).is_some()
+        && dependencies != original
+        && dependencies != case_dir.join("dependencies.jsonl");
+    let empty = BTreeMap::new();
+    let mut metadata = load(
+        case_dir,
+        if derived { &empty } else { async_rules },
+        request_timeout,
+    )
+    .await?;
+    if !derived {
+        return Ok(metadata);
+    }
+    if let Some(mut effective) =
+        async_inventory::from_scope(case_dir, dependencies, async_rules, request_timeout).await?
+    {
+        if let Some(captured) = metadata {
+            effective.source_stop_required |= captured.source_stop_required;
+            effective.source_stop_after_ms = captured.source_stop_after_ms;
+            effective.cleanup_refs = captured.cleanup_refs;
+        }
+        validate(&effective)?;
+        return Ok(Some(effective));
+    }
+    if let Some(tail) = &mut metadata {
+        let path = dependencies.to_owned();
+        let references =
+            tokio::task::spawn_blocking(move || -> Result<BTreeSet<RecordedReference>> {
+                let mut input = crate::dependency_index::RecordStream::open(&path)?;
+                let mut references = BTreeSet::new();
+                while let Some((_, raw)) = input.next()? {
+                    if raw.iter().all(u8::is_ascii_whitespace) {
+                        continue;
+                    }
+                    if let Some(item) = reference(&serde_json::from_slice(raw)?)? {
+                        references.insert(item);
+                    }
+                }
+                Ok(references)
+            })
+            .await
+            .context("effective tail inventory task failed")??;
+        tail.strict_references
+            .retain(|item| references.contains(item));
+        tail.cleanup_refs.retain(|item| references.contains(item));
+        tail.references = references.into_iter().collect();
+        validate(tail)?;
+    }
+    Ok(metadata)
+}
+
 fn async_metadata(raw: &[u8]) -> Result<Metadata> {
     let observation: AsyncObservation =
         serde_json::from_slice(raw).context("invalid async API observation metadata")?;
     ensure!(
-        observation.version == 1,
+        observation.version == 2,
         "unsupported async API observation version"
     );
     ensure!(
-        observation.complete && observation.inventory_complete,
+        observation.capture_complete && observation.inventory_complete,
         "async API exchange inventory is incomplete"
     );
     ensure!(
@@ -170,6 +232,16 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
             "resource" | "dependency_failure" | "timeout"
         ),
         "async API observation has an unknown completion reason"
+    );
+    ensure!(
+        observation.business_complete == (observation.end_reason == "resource")
+            && observation.business_completion
+                == if observation.business_complete {
+                    "observed"
+                } else {
+                    "unobserved"
+                },
+        "async API business completion facts are inconsistent"
     );
     let failure_end = observation.end_reason != "resource";
     let source_stop_required = observation.source_stop_required.unwrap_or(failure_end);
@@ -206,11 +278,12 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
         "async failure/deadline completion cannot reuse the stopped Source process"
     );
     let metadata = Metadata {
+        business_complete: observation.business_complete,
         request_timeout_ms: observation.request_timeout_ms,
         interaction_post_input_ms: None,
         strict_references: references,
         references: observation.completed_refs,
-        process_owned_exemptions: false,
+
         source_stop_required,
         source_stop_after_ms: observation.source_stop_after_ms,
         cleanup_refs: cleanup,
@@ -247,6 +320,7 @@ fn legacy(raw: &[u8]) -> Result<Metadata> {
         "legacy dependency observation exchange inventory is incomplete"
     );
     let metadata = Metadata {
+        business_complete: true,
         request_timeout_ms: observation.request_timeout_ms,
         interaction_post_input_ms: None,
         strict_references: observation
@@ -255,7 +329,7 @@ fn legacy(raw: &[u8]) -> Result<Metadata> {
             .copied()
             .collect(),
         references: observation.selected_completed_refs,
-        process_owned_exemptions: false,
+
         source_stop_required: false,
         source_stop_after_ms: None,
         cleanup_refs: BTreeSet::new(),
@@ -355,8 +429,8 @@ mod cleanup_tests {
     use serde_json::{Value, json};
     fn observation() -> Value {
         let reference = json!({"protocol":"http","exchange_id":uuid::Uuid::nil()});
-        json!({"version":1,"request_timeout_ms":100,"end_reason":"timeout",
-            "complete":true,"inventory_complete":true,"source_stop_required":true,
+        json!({"version":2,"request_timeout_ms":100,"end_reason":"timeout",
+            "capture_complete":true,"business_complete":false,"business_completion":"unobserved","inventory_complete":true,"source_stop_required":true,
             "source_stop_after_ms":100,"completed_refs":[reference],"cleanup_refs":[reference]})
     }
     #[test]
@@ -366,7 +440,7 @@ mod cleanup_tests {
         assert!(metadata.source_stop_required);
         assert_eq!(metadata.source_stop_after_ms, Some(100));
         assert_eq!(metadata.cleanup_refs, metadata.strict_references);
-        for change in 0..7 {
+        for change in 0..10 {
             let mut invalid = valid.clone();
             match change {
                 0 => invalid["source_stop_required"] = json!(false),
@@ -376,9 +450,12 @@ mod cleanup_tests {
                     .unwrap()
                     .push(valid["cleanup_refs"][0].clone()),
                 3 => invalid["inventory_complete"] = json!(false),
-                4 => invalid["complete"] = json!(false),
+                4 => invalid["capture_complete"] = json!(false),
                 5 => invalid["source_stop_after_ms"] = Value::Null,
-                _ => invalid["source_stop_after_ms"] = json!(-1),
+                6 => invalid["source_stop_after_ms"] = json!(-1),
+                7 => invalid["business_complete"] = json!(true),
+                8 => invalid["business_completion"] = json!("observed"),
+                _ => invalid["version"] = json!(1),
             }
             assert!(
                 async_metadata(&serde_json::to_vec(&invalid).unwrap()).is_err(),
@@ -387,6 +464,8 @@ mod cleanup_tests {
         }
         let mut resource = valid;
         resource["end_reason"] = json!("resource");
+        resource["business_complete"] = json!(true);
+        resource["business_completion"] = json!("observed");
         assert!(
             async_metadata(&serde_json::to_vec(&resource).unwrap())
                 .unwrap()

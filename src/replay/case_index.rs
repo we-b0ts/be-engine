@@ -48,7 +48,7 @@ mod tests {
         }
         index.register(ReplaySource::Case, Some("selected"), 10_000);
         index.register(ReplaySource::Case, Some("selected"), 10_001);
-        index.register(ReplaySource::Global, Some("selected"), 10_002);
+        index.register(ReplaySource::Startup, Some("selected"), 10_002);
 
         let mut visited = Vec::new();
         assert!(!index.any("selected", |position| {

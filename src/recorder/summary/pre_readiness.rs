@@ -121,7 +121,6 @@ pub(crate) fn load_or_build(dir: &Path) -> Result<Option<PreReadinessTrafficSumm
 }
 
 fn build_file(path: &Path) -> Result<Option<PreReadinessTrafficSummary>> {
-    use std::io::{BufRead, BufReader};
     let stamp = match crate::dependency_index::FileStamp::read(path) {
         Ok(stamp) => stamp,
         Err(error)
@@ -134,18 +133,14 @@ fn build_file(path: &Path) -> Result<Option<PreReadinessTrafficSummary>> {
         Err(error) => return Err(error),
     };
     let summary = build_with(|visit| {
-        let mut input = BufReader::new(std::fs::File::open(path)?);
-        let mut line = String::new();
-        while input.read_line(&mut line)? != 0 {
+        let mut input = crate::dependency_index::RecordStream::open(path)?;
+        while let Some((_, raw)) = input.next()? {
+            let line = std::str::from_utf8(raw)?;
             if !line.trim().is_empty() {
                 visit(line.trim());
             }
-            line.clear();
         }
-        anyhow::ensure!(
-            crate::dependency_index::FileStamp::read(path)? == stamp,
-            "Global evidence changed while building pre-readiness summary"
-        );
+        crate::dependency_index::scoped::validate_stamp(path, &stamp)?;
         Ok(())
     })?;
     Ok(Some(summary))
@@ -190,7 +185,7 @@ fn build_with(
                 return;
             }
         };
-        if value.get("global_dependency_phase").and_then(Value::as_str) != Some("bootstrap") {
+        if value["capture"]["phase"].as_str() != Some("startup") {
             return;
         }
         bootstrap_events += 1;
@@ -266,7 +261,7 @@ fn discover_candidates(
                 return;
             }
         };
-        if value.get("global_dependency_phase").and_then(Value::as_str) != Some("bootstrap") {
+        if value["capture"]["phase"].as_str() != Some("startup") {
             return;
         }
         let event_type = value
@@ -399,17 +394,17 @@ mod tests {
 
     #[test]
     fn summarizes_only_bootstrap_semantic_activity_by_endpoint() {
-        let raw = r#"{"event_type":"http_exchange","global_dependency_phase":"bootstrap","scheme":"https","authority":"config.internal"}
-{"event_type":"redis_connection","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379}
-{"event_type":"tcp_gateway_connection","global_dependency_phase":"bootstrap","domain":"rpc.internal","upstream_addr":"10.0.0.7:8888"}
-{"event_type":"proxy_error","global_dependency_phase":"bootstrap","target":"broken.internal:9000"}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379,"command":"PING"}
-{"event_type":"memcached_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":11211,"command":"version"}
-{"event_type":"motan_exchange","global_dependency_phase":"bootstrap","target_host":"rpc.internal","target_port":8888,"heartbeat":true}
-{"event_type":"mysql_exchange","global_dependency_phase":"bootstrap","target_host":"db.internal","target_port":3306,"command":"COM_PING","response":{"status":"ok"}}
-{"event_type":"redis_exchange","global_dependency_phase":"runtime","target_host":"cache.internal","target_port":6379}"#;
+        let raw = r#"{"event_type":"http_exchange","capture":{"phase":"startup"},"scheme":"https","authority":"config.internal"}
+{"event_type":"redis_connection","capture":{"phase":"startup"},"target_host":"cache.internal","target_port":6379}
+{"event_type":"redis_exchange","capture":{"phase":"startup"},"target_host":"cache.internal","target_port":6379}
+{"event_type":"redis_exchange","capture":{"phase":"startup"},"target_host":"cache.internal","target_port":6379}
+{"event_type":"tcp_gateway_connection","capture":{"phase":"startup"},"domain":"rpc.internal","upstream_addr":"10.0.0.7:8888"}
+{"event_type":"proxy_error","capture":{"phase":"startup"},"target":"broken.internal:9000"}
+{"event_type":"redis_exchange","capture":{"phase":"startup"},"target_host":"cache.internal","target_port":6379,"command":"PING"}
+{"event_type":"memcached_exchange","capture":{"phase":"startup"},"target_host":"cache.internal","target_port":11211,"command":"version"}
+{"event_type":"motan_exchange","capture":{"phase":"startup"},"target_host":"rpc.internal","target_port":8888,"heartbeat":true}
+{"event_type":"mysql_exchange","capture":{"phase":"startup"},"target_host":"db.internal","target_port":3306,"command":"COM_PING","response":{"status":"ok"}}
+{"event_type":"redis_exchange","capture":{"phase":"runtime"},"target_host":"cache.internal","target_port":6379}"#;
 
         let summary = build(raw);
 
@@ -429,12 +424,12 @@ mod tests {
         let mut lines = (0..(MAX_ENDPOINT_CANDIDATES + 32))
             .map(|index| {
                 format!(
-                    r#"{{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache-{index}.internal","target_port":6379}}"#
+                    r#"{{"event_type":"redis_exchange","capture":{{"phase":"startup"}},"target_host":"cache-{index}.internal","target_port":6379}}"#
                 )
             })
             .collect::<Vec<_>>();
         lines.extend(std::iter::repeat_n(
-            r#"{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"hot.internal","target_port":6379}"#.to_string(),
+            r#"{"event_type":"redis_exchange","capture":{"phase":"startup"},"target_host":"hot.internal","target_port":6379}"#.to_string(),
             200,
         ));
 

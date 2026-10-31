@@ -11,7 +11,7 @@ fn fixture(
     let temp = tempfile::tempdir().unwrap();
     let case = temp
         .path()
-        .join(".traffic-e2e/local/artifacts/run/api/case-a");
+        .join(".traffic-e2e/local/artifacts/run/api/00000000-0000-0000-0000-000000000003");
     std::fs::create_dir_all(&case).unwrap();
     let connection = uuid::Uuid::new_v4();
     let events = (0..8).map(|sequence| {
@@ -27,7 +27,7 @@ fn fixture(
                 "response":{"status":"resultset","row_count":0,"rows":[],"columns":[]},"outcome":"response"})
         }
     }).map(|event|event.to_string()).collect::<Vec<_>>().join("\n");
-    std::fs::write(case.join("dependencies.jsonl"), events).unwrap();
+    publish(&case, &events);
     let mut options = RewriteCaseDependenciesOptions {
         target_root: temp.path().into(),
         case_dir: case,
@@ -41,7 +41,13 @@ fn fixture(
 #[test]
 fn exact_source_reference_reads_a_redis_blocker_outside_the_representative_window() {
     let (_temp, options, connection) = fixture("redis");
-    let file = options.case_dir.join("dependencies.jsonl");
+    let file = options
+        .case_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("dependencies.jsonl");
     let before = std::fs::read(&file).unwrap();
     let ordinary = serde_json::to_value(query(options.clone()).unwrap()).unwrap();
     assert_eq!(
@@ -89,8 +95,11 @@ fn mysql_source_references_use_query_sequence_and_reject_missing_or_ambiguous_ma
     no_target.target_id = None;
     assert!(query_exchange(no_target, connection, 0).is_err());
     let file = options.case_dir.join("dependencies.jsonl");
-    let bytes = std::fs::read_to_string(&file).unwrap();
-    std::fs::write(&file, format!("{bytes}\n{}", bytes.lines().next().unwrap())).unwrap();
+    let bytes = crate::recorder::test_io::read_to_string_sync(&file).unwrap();
+    publish(
+        &options.case_dir,
+        &format!("{bytes}\n{}", bytes.lines().next().unwrap()),
+    );
     let error = query_exchange(options, connection, 0)
         .unwrap_err()
         .to_string();

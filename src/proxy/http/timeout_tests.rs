@@ -172,10 +172,11 @@ async fn capture_timeout(tls: bool, half_close: bool) {
     );
     state.recorder().publish_case(&case).await.unwrap();
     state.recorder().flush_traffic().await.unwrap();
-    let raw =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     let events: Vec<serde_json::Value> = raw
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -191,9 +192,10 @@ async fn capture_timeout(tls: bool, half_close: bool) {
     assert_eq!(events[0]["request_body"]["data"], "Ym9keQ==");
     assert_eq!(events[0]["response_status"].is_null(), !half_close);
     assert!(events[0]["error"].is_null());
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     assert!(traffic.lines().any(|line| {
         let event: serde_json::Value = serde_json::from_str(line).unwrap();
         event["event_type"] == "http_exchange"

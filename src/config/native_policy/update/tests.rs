@@ -12,7 +12,7 @@ fn revision() -> String {
 }
 fn base() -> TrafficPolicy {
     let mut document = crate::policy::parse_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /members: {kind: unordered}

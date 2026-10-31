@@ -57,6 +57,47 @@ struct State {
 }
 
 impl WitnessStore {
+    pub(crate) fn hypothesis_journal(&self) -> Result<super::hypotheses::Journal> {
+        let state = self.state.lock().expect("policy witness lock");
+        super::hypotheses::Journal::create(
+            state.path.with_extension("hypotheses.jsonl"),
+            state.key.clone(),
+        )
+    }
+    /// A compact recovery record for one genuine Target; payload bytes stay encrypted.
+    pub(crate) fn hypothesis_checkpoint(
+        &self,
+        id: &str,
+    ) -> Result<(serde_json::Value, Vec<PathBuf>)> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("policy witness lock poisoned"))?;
+        let index = *state
+            .targets
+            .get(id)
+            .context("hypothesis Target observation is missing")?;
+        let target = &state.graph.targets[index];
+        let blob = &state.graph.blobs[target.blob];
+        ensure!(
+            !state.graph.key_envelope.is_empty(),
+            "hypothesis witness key envelope is missing"
+        );
+        let files = if blob.chunks.is_empty() {
+            vec![state.path.clone()]
+        } else {
+            blob.chunks
+                .iter()
+                .map(|chunk| state.path.with_file_name(&chunk.artifact))
+                .collect()
+        };
+        Ok((
+            serde_json::json!({"session_id":state.graph.session_id,"replay":state.graph.replay,
+            "key_envelope":state.graph.key_envelope,"target":target,"blob":blob}),
+            files,
+        ))
+    }
+
     pub(crate) fn register_source_record(
         &self,
         identity: &SourceIdentity,
@@ -581,6 +622,14 @@ impl State {
         payload: &[u8],
     ) -> Result<Option<usize>> {
         metadata.validate()?;
+        ensure!(
+            metadata.run_owner.as_ref().is_none_or(|owner| self
+                .graph
+                .replay
+                .as_ref()
+                .is_some_and(|binding| owner.session_id == binding.session_id)),
+            "Target Run owner belongs to another Replay session"
+        );
         ensure!(
             !id.is_empty(),
             "Target observation requires a request identity"

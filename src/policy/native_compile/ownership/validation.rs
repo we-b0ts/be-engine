@@ -549,7 +549,7 @@ fn sql_slots_overlap(
             candidates.is_empty()
                 || candidates
                     .iter()
-                    .any(|(_, field)| field.as_ref().is_none_or(&matches))
+                    .any(|(_, field)| field.as_ref().is_none_or(matches))
         }),
         _ => true,
     }

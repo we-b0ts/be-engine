@@ -9,6 +9,7 @@ struct TerminationTransport {
     observation: ClientTermination,
     delivery: crate::http::termination::DeliveryProgress,
     closed: tokio::sync::watch::Sender<bool>,
+    io_finished: tokio::sync::watch::Receiver<bool>,
 }
 
 pub(in crate::replay) async fn handle_http_replay_connection(
@@ -55,18 +56,23 @@ where
     }
     let mut client_events = termination.subscribe();
     let (closed, mut server_closed) = tokio::sync::watch::channel(false);
+    let (io_finished, finished) = tokio::sync::watch::channel(false);
     let transport = TerminationTransport {
         control,
         observation: termination.clone(),
         delivery: termination.delivery(),
         closed,
+        io_finished: finished,
     };
     let io = ObservedClientIo::new(io, termination.clone());
     let (deadline_tx, deadline_rx) = tokio::sync::watch::channel(None);
     let pending = Arc::new(std::sync::Mutex::new(None));
     let service_pending = pending.clone();
     let service_state = state.clone();
+    let ingress = state.lock().await.http_ingress.handle();
     let service = service_fn(move |request| {
+        // Synchronous service admission precedes any await on Replay state.
+        let admission = ingress.admit();
         handle_http_request(
             request,
             target.clone(),
@@ -74,6 +80,7 @@ where
             service_pending.clone(),
             deadline_tx.clone(),
             transport.clone(),
+            admission,
         )
     });
     let result = {
@@ -142,6 +149,7 @@ where
             }
         }
     };
+    io_finished.send_replace(true);
     let exchange = pending
         .lock()
         .expect("HTTP pending termination poisoned")
@@ -194,21 +202,10 @@ async fn handle_http_request(
     pending_exchange: Arc<std::sync::Mutex<Option<termination::PendingHttpTermination>>>,
     deadline: tokio::sync::watch::Sender<Option<tokio::time::Instant>>,
     transport: TerminationTransport,
+    mut admission: ingress::Admission,
 ) -> Result<Response<stream_delivery::DeliveryBody>, Infallible> {
-    let stopping = {
-        let state = state.lock().await;
-        state.async_case_quiescing()
-    };
-    if stopping {
-        transport
-            .observation
-            .connection_observation()
-            .observe_engine_stop();
-        let _ = transport.control.reset();
-        return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
-    }
-    let started = tokio::time::Instant::now();
-    let request_started_at = Utc::now();
+    let started = admission.started();
+    let request_started_at = admission.started_at();
     let method = request.method().clone();
     let uri = request.uri().clone();
     let host = request
@@ -217,9 +214,38 @@ async fn handle_http_request(
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned);
     let headers = request_headers::capture(request.headers());
+    let scheme = match target.protocol {
+        ReplayProtocol::Https => HttpReplayScheme::Https,
+        _ => HttpReplayScheme::Http,
+    };
+    let target_key = TargetKey {
+        host: target.host,
+        port: target.port,
+    };
+    {
+        let state = state.lock().await;
+        if state.async_case_quiescing() {
+            drop(state);
+            transport
+                .observation
+                .connection_observation()
+                .observe_engine_stop();
+            let _ = transport.control.reset();
+            return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
+        }
+        state.http_ingress.configure_head(
+            &mut admission,
+            scheme,
+            &target_key,
+            &method,
+            &uri,
+            host.as_deref(),
+        );
+    }
     let body = match request.into_body().collect().await {
         Ok(body) => body.to_bytes(),
         Err(error) => {
+            admission.body_error();
             let state_guard = state.lock().await;
             if state_guard.async_case_quiescing() {
                 drop(state_guard);
@@ -238,19 +264,12 @@ async fn handle_http_request(
             )));
         }
     };
-    let scheme = match target.protocol {
-        ReplayProtocol::Https => HttpReplayScheme::Https,
-        _ => HttpReplayScheme::Http,
-    };
-    let target_key = TargetKey {
-        host: target.host,
-        port: target.port,
-    };
     let matched = {
         let mut state = state.lock().await;
         // Body collection can overlap prepare-stop. Close admission under the
         // same lock as request matching so cleanup traffic cannot claim slots.
         if state.async_case_quiescing() {
+            admission.complete();
             drop(state);
             transport
                 .observation
@@ -260,7 +279,7 @@ async fn handle_http_request(
             return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
         }
         let unmatched_before = state.http_events.unmatched.len();
-        let result = state.match_http_request(
+        let result = state.match_http_request_admitted(
             scheme,
             &target_key,
             &method,
@@ -269,7 +288,11 @@ async fn handle_http_request(
             &body,
             &headers,
             request_started_at,
+            Some(&admission),
         );
+        // Matching and the handoff from ingress to claimed response happen
+        // under the same Replay lock observed by final Case release.
+        admission.complete();
         if state.http_events.unmatched.len() > unmatched_before
             && let Some(event) = state.http_events.unmatched.last_mut()
         {
@@ -281,6 +304,20 @@ async fn handle_http_request(
         }
         result
     };
+    if let Err(error) =
+        crate::replay::policy::request_contract::hypotheses::await_durable(&state).await
+    {
+        state.lock().await.record_unmatched_http(
+            scheme,
+            &target_key,
+            &method,
+            &uri,
+            "hypothesis evidence persistence failed".into(),
+        );
+        let _ = transport.control.reset();
+        tracing::warn!(error=%error, "HTTP hypothesis evidence could not be persisted before delivery");
+        return pending::<Result<Response<stream_delivery::DeliveryBody>, Infallible>>().await;
+    }
     let record = match matched {
         Ok(record) => record,
         Err(HttpReplayMatchError::ClientTerminated(mut exchange)) => {
@@ -327,6 +364,10 @@ async fn handle_http_request(
         }
     };
     let mut record = record;
+    let ordinary_delivery = stream_delivery::full_delivery::Transport {
+        progress: transport.delivery.clone(),
+        finished: transport.io_finished.clone(),
+    };
     let mut server_close = None;
     let client_prefix = if record.lifecycle_stop.is_some()
         || record.outcome.is_client_terminated()
@@ -370,10 +411,17 @@ async fn handle_http_request(
     } else {
         None
     };
-    let response = stream_delivery::response(record, started, state, client_prefix, server_close)
-        .await
-        .unwrap_or_else(|error| {
-            stream_delivery::ordinary(error_response(StatusCode::BAD_GATEWAY, &error.to_string()))
-        });
+    let response = stream_delivery::response(
+        record,
+        started,
+        state,
+        client_prefix,
+        server_close,
+        ordinary_delivery,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        stream_delivery::ordinary(error_response(StatusCode::BAD_GATEWAY, &error.to_string()))
+    });
     Ok(response)
 }

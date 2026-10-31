@@ -63,7 +63,7 @@ fn protected_unselected_numeric_string_predicates_keep_native_permutation_proof(
 
 fn policy() -> CompiledPolicy {
     crate::policy::parse_and_compile_policy(&json!({
-        "format":"traffic-policy/v2",
+        "format":"traffic-policy/v3",
         "json":{"fields":{"/item_id":{"kind":"identity","formats":["uuid"]}}},
         "mysql":{"tables":{"tasks":{"pattern":"tasks","fields":{"id":{"kind":"identity","formats":["uuid"]}}}}}
     }).to_string()).unwrap()
@@ -383,7 +383,7 @@ fn equal_native_times_need_no_clock_and_historical_delivery_retains_original_val
 #[test]
 fn text_insert_matches_prepared_generated_fields() {
     let document = json!({
-        "format":"traffic-policy/v2",
+        "format":"traffic-policy/v3",
         "json":{"fields":{"/created_at":{"kind":"time","formats":["sql_datetime"]}}},
         "mysql":{"tables":{"tasks":{"pattern":"tasks_*","fields":{"name":{"kind":"identity","formats":[{"prefix":"task-pending-","hex":32}]}}}}}
     });
@@ -503,7 +503,7 @@ fn native_result_times_do_not_relate_distinct_columns_or_rows() {
 
 #[test]
 fn explicit_sql_clock_group_still_checks_the_column_relationship() {
-    let document = json!({"format":"traffic-policy/v2","rules":[{
+    let document = json!({"format":"traffic-policy/v3","rules":[{
         "id":"linked-times",
         "match":{"resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":"INSERT INTO tasks(created_at,updated_at) VALUES(?,?)"},
         "effect":{"kind":"mysql_values","values":{

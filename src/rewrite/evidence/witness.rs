@@ -3,7 +3,6 @@ use super::*;
 use crate::policy::{Protocol, Surface};
 use crate::policy_evidence::{SourceIdentity, TargetRole, WitnessManifest};
 use crate::rewrite::{RewriteContext, store::RewriteStore};
-use std::io::{BufRead, BufReader};
 mod mysql;
 
 pub fn query_rewrite_witness_for_scope(
@@ -252,20 +251,16 @@ fn source_event(directory: &Path, identity: &SourceIdentity, protocol: Protocol)
         Protocol::Memcached => "memcached_exchange",
     };
     let path = directory.join("dependencies.jsonl");
-    anyhow::ensure!(
-        std::fs::metadata(&path)?.len() <= 64 * 1024 * 1024,
-        "witness Source inventory exceeds supported bounds"
-    );
-    for line in BufReader::new(std::fs::File::open(path)?).lines() {
-        let line = line?;
+    let mut reader = crate::dependency_index::RecordStream::open(&path)?;
+    while let Some((_, line)) = reader.next()? {
         anyhow::ensure!(
             line.len() <= crate::dependency::http_limits::MAX_RECORD_BYTES,
             "witness Source record exceeds supported bounds"
         );
-        if line.trim().is_empty() {
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let event: Value = serde_json::from_str(&line)?;
+        let event: Value = serde_json::from_slice(line)?;
         if event["event_type"] != event_type {
             continue;
         }

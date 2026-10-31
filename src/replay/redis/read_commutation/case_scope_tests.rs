@@ -24,7 +24,7 @@ fn case_fixture(own: &[Value], other: &[Value]) -> (tempfile::TempDir, RedisRepl
     let policy = root.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        json!({"format":"traffic-policy/v2","rules":[global_rule()]}).to_string(),
+        json!({"format":"traffic-policy/v3","rules":[global_rule()]}).to_string(),
     )
     .unwrap();
     let mut cases = BTreeMap::new();

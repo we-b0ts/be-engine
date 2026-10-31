@@ -345,7 +345,17 @@ pub(in crate::replay) fn initialize(
             continue;
         }
         let identity = Identity {
-            source_sha256: index.sha256.clone(),
+            source_sha256: if let Some(root) =
+                crate::dependency_index::recording::root(&state.root_dir)
+            {
+                let (_, manifest) = crate::dependency_index::recording::manifest(&root)?;
+                crate::policy_evidence::digest(&serde_json::to_vec(&(
+                    manifest.files,
+                    state.dependency_attribution_snapshot.as_ref(),
+                ))?)
+            } else {
+                index.sha256.clone()
+            },
             source_bytes: index.stamp.size,
             policy: policy.into(),
             protocol: protocol.into(),

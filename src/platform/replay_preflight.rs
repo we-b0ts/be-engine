@@ -602,7 +602,7 @@ fn ensure_global_match(report: &Value, fake_ip: Ipv4Addr) -> Result<()> {
     );
     let matched = &matches[0];
     ensure!(
-        matched.get("source").and_then(Value::as_str) == Some("global")
+        matched.get("source").and_then(Value::as_str) == Some("startup")
             && matched.pointer("/target/host").and_then(Value::as_str)
                 == Some(crate::network_probe::POSITIVE_AUTHORITY)
             && matched.pointer("/target/port").and_then(Value::as_u64) == Some(443)

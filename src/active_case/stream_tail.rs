@@ -38,6 +38,12 @@ enum CompletedRef {
     Http { exchange_id: Uuid },
     Mysql { connection_id: Uuid, sequence: u64 },
     Redis { connection_id: Uuid, sequence: u64 },
+    RedisRpcPush { connection_id: Uuid, sequence: u64 },
+    Memcached { connection_id: Uuid, sequence: u64 },
+    Motan { connection_id: Uuid, sequence: u64 },
+    KafkaProduce { connection_id: Uuid, sequence: u64 },
+    KafkaFetch { connection_id: Uuid, sequence: u64 },
+    KafkaDelivery { connection_id: Uuid, sequence: u64 },
 }
 
 impl CompletedRef {
@@ -65,6 +71,33 @@ impl CompletedRef {
                 }
             }
             RecorderEvent::RedisExchange(exchange) => Self::Redis {
+                connection_id: exchange.connection_id,
+                sequence: exchange.sequence,
+            },
+            RecorderEvent::RedisPubSubPush(push) => {
+                let publisher = push.rpc_request.as_ref()?;
+                Self::RedisRpcPush {
+                    connection_id: publisher.connection_id,
+                    sequence: publisher.sequence,
+                }
+            }
+            RecorderEvent::MemcachedExchange(exchange) => Self::Memcached {
+                connection_id: exchange.connection_id,
+                sequence: exchange.sequence,
+            },
+            RecorderEvent::MotanExchange(exchange) if !exchange.heartbeat => Self::Motan {
+                connection_id: exchange.connection_id,
+                sequence: exchange.sequence,
+            },
+            RecorderEvent::KafkaProduce(exchange) => Self::KafkaProduce {
+                connection_id: exchange.connection_id,
+                sequence: exchange.sequence,
+            },
+            RecorderEvent::KafkaFetch(exchange) => Self::KafkaFetch {
+                connection_id: exchange.connection_id,
+                sequence: exchange.sequence,
+            },
+            RecorderEvent::KafkaDelivery(exchange) => Self::KafkaDelivery {
                 connection_id: exchange.connection_id,
                 sequence: exchange.sequence,
             },
@@ -126,11 +159,11 @@ impl StreamTail {
 
 impl DependencyTargets {
     pub(crate) fn into_process_owned(mut self, rule_name: String) -> Self {
+        self.process_rule_ids = vec![rule_name.clone()];
         self.process_owned_rule = Some(rule_name);
         if !self.cases.is_empty() {
             self.cases.clear();
             self._reservations.clear();
-            self.selected.clear();
             self.stream_tail.clear();
         }
         self
@@ -229,16 +262,8 @@ impl ActiveCaseRegistry {
                             completed.cleanup_refs.insert(reference.clone());
                         }
                     }
-                } else if case.async_api.is_some()
-                    && matches!(
-                        event,
-                        RecorderEvent::MemcachedExchange(_)
-                            | RecorderEvent::MotanExchange(_)
-                            | RecorderEvent::KafkaProduce(_)
-                            | RecorderEvent::KafkaFetch(_)
-                            | RecorderEvent::KafkaDelivery(_)
-                            | RecorderEvent::UdpDatagram(_)
-                    )
+                } else if matches!(event, RecorderEvent::UdpDatagram(_))
+                    || matches!(event, RecorderEvent::RedisPubSubPush(push) if push.rpc_request.is_none())
                 {
                     completed.unsupported = true;
                 }

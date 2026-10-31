@@ -152,7 +152,7 @@ fn scan_continuations_rotate_surfaces_and_reject_stale_issue_ids() {
 fn a_failed_case_late_in_inventory_is_examined_before_passing_cases() {
     let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |_, source| {
         (2..=300).map(|index| {
-            let case = source.join(format!("apis/api/case-{index}"));
+            let case = source.join(format!("apis/api/00000000-0000-4000-8000-{index:012x}"));
             fs::create_dir_all(&case).unwrap();
             write(&case.join("request.json"), json!({"timestamp":"2026-10-16T00:00:00Z","method":"GET","uri":"/api","body":body(json!({}))}));
             fs::write(case.join("dependencies.jsonl"), "").unwrap();
@@ -160,11 +160,12 @@ fn a_failed_case_late_in_inventory_is_examined_before_passing_cases() {
         }).collect()
     });
     fixture.confirm();
-    fixture.replace_case_responses("case-300", json!({"status":200,"body":body(json!({"late":START}))}), json!({"version":1,"status":200,"body":body(json!({"late":START+60})),"request_sent_at":"2026-10-16T00:01:00Z"}));
+    fixture.replace_case_responses("00000000-0000-4000-8000-00000000012c", json!({"status":200,"body":body(json!({"late":START}))}), json!({"version":1,"status":200,"body":body(json!({"late":START+60})),"request_sent_at":"2026-10-16T00:01:00Z"}));
     let mut assertions: Value =
         serde_json::from_slice(&fs::read(&fixture.paths.assertions).unwrap()).unwrap();
     for case in assertions["cases"].as_array_mut().unwrap() {
-        case["response"]["passed"] = json!(case["case_id"] != "case-300");
+        case["response"]["passed"] =
+            json!(case["case_id"] != "00000000-0000-4000-8000-00000000012c");
     }
     write(&fixture.paths.assertions, assertions);
     let mut state = fixture.state();
@@ -179,10 +180,12 @@ fn a_failed_case_late_in_inventory_is_examined_before_passing_cases() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|candidate| candidate["witness_id"] == "case-300"
-                && candidate["draft_policy"]["json"]["fields"]
-                    .get("/late")
-                    .is_some())
+            .any(
+                |candidate| candidate["witness_id"] == "00000000-0000-4000-8000-00000000012c"
+                    && candidate["draft_policy"]["json"]["fields"]
+                        .get("/late")
+                        .is_some()
+            )
     );
     assert_eq!(facts["pagination"]["scan_remaining"], true);
 }
@@ -229,7 +232,7 @@ fn mysql_resultset_binding_survives_an_earlier_ok_response_and_exposes_read_back
         };
         store.record(WitnessMetadata {
             surface:Surface::DependencyResponse, source_role:SourceRole::DependencyResponse, target_role:TargetRole::Unavailable,
-            source:SourceIdentity {case_id:"case-1".into(),exchange_id:None,connection_id:Some(uuid::Uuid::nil().to_string()),sequence:Some(sequence)},
+            source:SourceIdentity {case_id:"00000000-0000-4000-8000-000000000001".into(),exchange_id:None,connection_id:Some(uuid::Uuid::nil().to_string()),sequence:Some(sequence)},
             resource:Some(serde_json::from_value(json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app","username":"writer"})).unwrap()),
             operation:"COM_QUERY".into(),slot:Slot::SqlColumn("unconfigured".into()),
             clocks:WitnessClocks {case:clock.clone(),dependency:clock.clone(),delivery:clock},
@@ -290,7 +293,7 @@ fn continuation_evidence_plans_reject_tampering_and_preserve_policy_freshness() 
     install(&fixture, frames(25, false, true), frames(25, true, true));
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","json":{"fields":{
+        json!({"format":"traffic-policy/v3","json":{"fields":{
             "/created_at":{"kind":"time","formats":["unix_seconds"]}
         }}}),
     );

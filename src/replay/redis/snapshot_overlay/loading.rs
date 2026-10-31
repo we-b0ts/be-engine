@@ -54,7 +54,7 @@ pub(super) fn read_snapshot_evidence(
     rule: &BackgroundDependencyRuleConfig,
     evidence: &mut EvidenceCollector,
 ) -> Result<()> {
-    if source == ReplaySource::Global {
+    if source.is_run_owned() {
         return read_global(path, rule, evidence);
     }
     let mut input = RecordStream::open(path)?;
@@ -99,9 +99,9 @@ fn read_global(
                 let original = source
                     .reference(entry.location)
                     .load::<RecordedExchange>()?;
-                evidence.push(evidence_from_record(None, ReplaySource::Global, original)?)?;
+                evidence.push(evidence_from_record(None, ReplaySource::Startup, original)?)?;
             } else {
-                observe(record, ReplaySource::Global, rule, evidence)?;
+                observe(record, ReplaySource::Startup, rule, evidence)?;
             }
         }
     }

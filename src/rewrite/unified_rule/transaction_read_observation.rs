@@ -17,7 +17,7 @@ fn absent_read_observation_plan_apply_freezes_boundaries_and_requires_fresh_repl
             if scenario == "replace" {
                 write(
                     &root.join(".traffic-e2e/policy.yaml"),
-                    json!({"format":"traffic-policy/v2",
+                    json!({"format":"traffic-policy/v3",
                     "rules":[{"id":"finite-poll","match":{"api":"GET /api",
                         "resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},
                         "operation":"GET","key":{"kind":"affix","prefix":"cancel:"}},
@@ -36,7 +36,7 @@ fn absent_read_observation_plan_apply_freezes_boundaries_and_requires_fresh_repl
                 events.pop();
             }
             fs::write(
-                source.join("apis/api/case-1/dependencies.jsonl"),
+                source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
                 events
                     .iter()
                     .map(|event| format!("{event}\n"))
@@ -45,7 +45,7 @@ fn absent_read_observation_plan_apply_freezes_boundaries_and_requires_fresh_repl
             .unwrap();
             vec![]
         });
-        let policy = json!({"format":"traffic-policy/v2", "redis":{"keys":{
+        let policy = json!({"format":"traffic-policy/v3", "redis":{"keys":{
             "cancel:*":{"read_observation":true,"proof":{"source":"session.py:10-40",
                 "fact":"Independent cancellation polling reads nil between successful registration and cleanup deletions; the full Source lifetime is captured"}}
         }}});
@@ -61,7 +61,7 @@ fn absent_read_observation_plan_apply_freezes_boundaries_and_requires_fresh_repl
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1/dependencies.jsonl");
+            .join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl");
         let original = fs::read(&dependencies).unwrap();
         let plan = fixture.plan();
         if matches!(scenario, "non_nil" | "unbounded") {

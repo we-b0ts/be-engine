@@ -223,7 +223,7 @@ fn ids_exclude_evidence_and_revision_but_include_actual_task_and_resolved_resour
     let fingerprints = |revision: &str| {
         let revision = format!("sha256:{:x}", Sha256::digest(revision.as_bytes()));
         crate::policy::parse_and_compile_policy(&format!(
-            "format: traffic-policy/v2\nsource_revision: {revision}\nprocess_dependencies:\n  tasks:\n    refresh:\n      requests:\n        - http: {{host: api.example.com, method: GET, path: /keys}}\n"
+            "format: traffic-policy/v3\nsource_revision: {revision}\nprocess_dependencies:\n  tasks:\n    refresh:\n      requests:\n        - http: {{host: api.example.com, method: GET, path: /keys}}\n"
         ))
         .unwrap()
         .fingerprints

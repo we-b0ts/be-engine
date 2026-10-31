@@ -73,7 +73,7 @@ live under `recorder` in `.traffic-e2e/project.yaml`; dynamic feedback lives in
 the unified policy named by `project.policy`, normally `.traffic-e2e/policy.yaml`:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 rules:
   - id: example-route
     match: {}

@@ -297,7 +297,7 @@ async fn unrelated_redis_heartbeats_do_not_extend_the_absolute_tail_budget() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn recordings_without_observation_metadata_keep_the_existing_end_window() {
+async fn ordinary_cases_without_tail_metadata_finish_without_a_fixed_sleep() {
     let fixture = fixture(None, 1).await;
     let state = fixture.runtime.state.clone();
     assert_eq!(
@@ -308,7 +308,7 @@ async fn recordings_without_observation_metadata_keep_the_existing_end_window() 
     let ended = end_case(&command("end"), state.clone()).await;
     assert_eq!(ended["ok"], true);
     assert_eq!(ended["dirty"], true);
-    assert_eq!(started.elapsed(), Duration::from_millis(10));
+    assert_eq!(started.elapsed(), Duration::ZERO);
     assert_eq!(state.lock().await.active_case_id, None);
 }
 
@@ -413,7 +413,7 @@ async fn explicit_dependency_failure_finishes_dirty_after_actual_cleanup() {
     end.fail_on_dirty = true;
     let ended = end_case(&end, state.clone()).await;
     assert_eq!(ended["ok"], false);
-    assert_eq!(started.elapsed(), Duration::from_millis(10));
+    assert_eq!(started.elapsed(), Duration::ZERO);
     assert_eq!(state.lock().await.active_case_id, None);
     assert_eq!(
         state.lock().await.cases["case-a"].status,

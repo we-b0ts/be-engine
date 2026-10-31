@@ -73,6 +73,7 @@ impl ActiveCaseRegistry {
         let deadline = Instant::now() + timeout;
         loop {
             if !dependencies.wait_until_quiet_until(quiet, deadline).await {
+                self.begin_quiescing();
                 return DependencyDrainResult::TimedOut;
             }
             let mut state = self.state.lock().expect("active case registry poisoned");
@@ -131,7 +132,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_is_idempotent_and_late_dependencies_restart_quiet() {
+    async fn recovery_is_idempotent_and_waits_for_real_inflight_requests() {
         let registry = ActiveCaseRegistry::default();
         let old = case();
         let guard = registry.try_reserve(old.clone()).unwrap();
@@ -152,7 +153,7 @@ mod tests {
         drop(ownership);
         let released = Instant::now();
         assert_eq!(drain.await.unwrap(), DependencyDrainResult::Drained);
-        assert!(released.elapsed() >= Duration::from_millis(40));
+        assert!(released.elapsed() < Duration::from_millis(40));
         drop(guard);
         let next = case();
         let next_guard = registry.try_reserve(next.clone()).unwrap();

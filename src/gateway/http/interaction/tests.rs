@@ -78,7 +78,6 @@ fn config(temp: &Path, upstream: SocketAddr) -> AppConfig {
     });
     config.mysql.enabled = false;
     config.recording.output_dir = temp.join(".traffic-e2e/local/artifacts/recordings");
-    config.recording.api_origin_dependency_idle_ms = 30;
     config.tls.ca_cert_path = temp.join("ca.pem");
     config.tls.ca_key_path = temp.join("ca-key.pem");
     config

@@ -30,7 +30,16 @@ impl Fixture {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let raw = events
             .iter()
-            .map(|value| value.to_string() + "\n")
+            .map(|value| {
+                let mut value = value.clone();
+                if relative == "global-dependencies.jsonl" && value.get("capture").is_none() {
+                    value["capture"] = serde_json::to_value(
+                        crate::dependency::observation::fixture_capture("process"),
+                    )
+                    .unwrap();
+                }
+                value.to_string() + "\n"
+            })
             .collect::<String>();
         fs::write(path, raw).unwrap();
     }
@@ -99,6 +108,26 @@ fn cross_case_global_transaction_preserves_all_wires_and_original_locators() {
     assert!(!first.record.response.no_rows());
     assert_eq!(first.record.response.materialize().unwrap().rows.len(), 1);
     assert_eq!(prepared.promoted[1].provenance.original_case_id, "case-b");
+}
+
+#[test]
+fn central_scope_never_borrows_an_extra_legacy_global_transaction_file() {
+    let fixture = Fixture::new();
+    fixture.ordinary();
+    assert!(!prepare(&fixture.root).unwrap().promoted.is_empty());
+    // The recording loader authenticates the real manifest. This adapter must
+    // not even inspect unindexed old paths once central scope authority exists.
+    fs::write(
+        fixture
+            .root
+            .join(crate::dependency::observation::MANIFEST_FILE),
+        r#"{"schema":"traffic-recording/v3"}"#,
+    )
+    .unwrap();
+    let closed = prepare(&fixture.root).unwrap();
+    assert!(closed.promoted.is_empty());
+    assert!(closed.wires.is_empty());
+    assert_eq!(closed.source_bytes, 0);
 }
 
 #[test]
@@ -345,4 +374,40 @@ fn global_savepoint_lifetimes_are_complete_and_reusable_from_warm_cache() {
         assert!(warm.cache_reused);
         assert_eq!(warm.promoted.len(), expected);
     }
+}
+
+#[test]
+fn physical_transaction_promotion_requires_a_proven_run_owner_kind() {
+    let fixture = Fixture::new();
+    fixture.ordinary();
+    let prepared = prepare(&fixture.root.join("case-a")).unwrap();
+    assert!(
+        prepared
+            .promoted
+            .iter()
+            .all(|record| record.source == ReplaySource::Process
+                && record.provenance.source_owner_kind == "process")
+    );
+    let path = fixture.root.join("global-dependencies.jsonl");
+    let raw = fs::read_to_string(&path).unwrap();
+    let mut rows = raw
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    for row in &mut rows {
+        row.as_object_mut().unwrap().remove("capture");
+    }
+    fs::write(
+        path,
+        rows.iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let unknown = prepare(&fixture.root.join("case-a")).unwrap();
+    assert!(
+        unknown.promoted.is_empty(),
+        "a former Global filename cannot invent Startup or Process provenance"
+    );
+    assert!(unknown.wires.is_empty());
 }

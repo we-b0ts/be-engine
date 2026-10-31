@@ -83,7 +83,7 @@ fn isolation_profiles_require_the_original_baseline_closed_scope_and_complete_wi
             if scenario == "pooled-future-probe" {
                 base["timestamp"] = json!("2020-01-01T00:00:02Z");
             }
-            registry.prepare(&decoded(vec![base]), ReplaySource::Global, None);
+            registry.prepare(&decoded(vec![base]), ReplaySource::Startup, None);
         }
         let mut rows = records();
         if scenario.starts_with("pooled") {

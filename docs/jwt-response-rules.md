@@ -1,12 +1,12 @@
 # Signed JWT response rules
 
 Current authoring uses one self-contained `response_jwt` effect in
-`traffic-policy/v2`. The same signature, stable-claim, nonce and time contract
+`traffic-policy/v3`. The same signature, stable-claim, nonce and time contract
 supports a JSON body pointer or one HTTP response header. For a signed OIDC
 authorization redirect with an echoed nonce:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 rules:
   - id: oidc-login-state
     match: {api: GET /api/auth/oidc/login}

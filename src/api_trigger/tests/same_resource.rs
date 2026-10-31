@@ -10,6 +10,7 @@ fn persisted(f: &Fixture, rules: Vec<crate::BackgroundDependencyRuleConfig>) -> 
 }
 
 fn overlay(f: &Fixture) -> Value {
+    let before = fs::read(&f.report).unwrap();
     crate::replay::reclassify_background_dependencies(
         &f.policy,
         &f.report,
@@ -19,7 +20,12 @@ fn overlay(f: &Fixture) -> Value {
         ]),
     )
     .unwrap();
-    serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap()
+    let after = fs::read(&f.report).unwrap();
+    assert_eq!(
+        before, after,
+        "selector proof cannot change actual Replay facts"
+    );
+    serde_json::from_slice(&after).unwrap()
 }
 
 #[test]
@@ -36,20 +42,8 @@ fn same_resource_redis_reads_reuse_rules_and_preserve_trigger_and_recording() {
         plan.apply().unwrap();
         for _ in 0..2 {
             let report = overlay(&f);
-            assert_eq!(report["redis"]["unused_case"].as_array().unwrap().len(), 1);
-            assert_eq!(report["redis"]["unused_case"][0]["case_id"], "origin");
-            assert_eq!(
-                report["redis"]["unused_global"].as_array().unwrap().len(),
-                1
-            );
-            assert_eq!(
-                report["redis"]["unused_global"][0]["api_trigger_source"]["case_id"],
-                "origin"
-            );
-            assert_eq!(
-                report["redis"]["unused_global"][0]["api_trigger_source"]["same_resource_read"],
-                true
-            );
+            assert_eq!(report["redis"]["unused_case"].as_array().unwrap().len(), 2);
+            assert!(report["redis"]["unused_global"].is_null());
         }
         assert_eq!(fs::read_to_string(&f.policy).unwrap(), original_policy);
         fs::write(
@@ -59,12 +53,7 @@ fn same_resource_redis_reads_reuse_rules_and_preserve_trigger_and_recording() {
         .unwrap();
         let report = overlay(&f);
         assert_eq!(report["redis"]["unused_case"].as_array().unwrap().len(), 2);
-        assert!(
-            report["redis"]["unused_global"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(report["redis"]["unused_global"].is_null());
         assert_eq!(
             fs::read(f.victim.join("dependencies.jsonl")).unwrap(),
             original
@@ -123,18 +112,17 @@ fn same_resource_mysql_unused_counts_follow_each_recording_not_a_fixed_allowance
         );
         fs::write(&f.report, report.to_string()).unwrap();
         let report = f.mysql_overlay();
-        assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 1);
-        assert_eq!(report["unused_case_exchanges"][0]["case_id"], "origin");
         assert_eq!(
-            report["unused_global_exchanges"].as_array().unwrap().len(),
-            count as usize
+            report["unused_case_exchanges"].as_array().unwrap().len(),
+            count as usize + 1
         );
+        assert_eq!(report["unused_global_exchanges"], json!([]));
         assert_eq!(fs::read_to_string(&f.policy).unwrap(), original_policy);
     }
 }
 
 #[test]
-fn same_resource_mysql_reclassifies_only_the_leftover_of_identical_reads() {
+fn same_resource_mysql_discovery_preserves_leftover_and_actual_matches() {
     let f = Fixture::mysql();
     f.change_request(&f.victim, json!({}), "/jobs/resp_12");
     let events: Vec<_> = (1..=3)
@@ -164,11 +152,9 @@ fn same_resource_mysql_reclassifies_only_the_leftover_of_identical_reads() {
     // Target-side failures still reject planning and remain in the report overlay.
     assert!(f.mysql_plan().is_err());
     let report = f.mysql_overlay();
-    assert_eq!(
-        report["unused_global_exchanges"].as_array().unwrap().len(),
-        1
-    );
-    assert_eq!(report["unused_global_exchanges"][0]["query_sequence"], 3);
+    assert_eq!(report["unused_global_exchanges"], json!([]));
+    assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 2);
+    assert_eq!(report["unused_case_exchanges"][1]["query_sequence"], 3);
     assert_eq!(report["matched_queries"], matched);
     assert_eq!(report["unmatched_queries"].as_array().unwrap().len(), 1);
     assert_eq!(report["response_comparison"], json!({"passed":true}));
@@ -291,12 +277,9 @@ fn mixed_wire_and_historical_summaries_share_one_immutable_inventory() {
     fs::write(&f.report, report.to_string()).unwrap();
     assert!(f.mysql_plan().is_err());
     let updated = f.mysql_overlay();
-    assert_eq!(
-        updated["unused_global_exchanges"].as_array().unwrap().len(),
-        1
-    );
+    assert_eq!(updated["unused_global_exchanges"], json!([]));
     assert_eq!(
         updated["unused_case_exchanges"].as_array().unwrap().len(),
-        2
+        3
     );
 }

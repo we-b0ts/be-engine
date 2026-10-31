@@ -7,6 +7,15 @@ mod client;
 mod source;
 pub(crate) use client::connect;
 
+#[derive(Debug)]
+struct SourcePlanUnavailable;
+
+impl std::fmt::Display for SourcePlanUnavailable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("input timing Source evidence could not be prepared")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::replay) enum DeliveryReference {
     RedisResponse(RecordedReference),
@@ -93,7 +102,10 @@ pub(super) async fn accept(
                     .context("input timing case missing")?
                     .clone()
             };
-            let plan = tokio::task::spawn_blocking(move || source::load(&recording)).await??;
+            let plan = tokio::task::spawn_blocking(move || source::load(&recording))
+                .await
+                .context(SourcePlanUnavailable)?
+                .context(SourcePlanUnavailable)?;
             let mut state = shared.lock().await;
             ensure_live(&state, case)?;
             ensure!(
@@ -248,7 +260,14 @@ pub(super) async fn accept(
         )
     }
     .await;
-    result.unwrap_or_else(|error| serde_json::json!({"ok":false,"error":error.to_string()}))
+    result.unwrap_or_else(|error| {
+        let reason = if error.is::<SourcePlanUnavailable>() {
+            "input_timing_source_unavailable"
+        } else {
+            "input_timing_rejected"
+        };
+        serde_json::json!({"ok":false,"reason":reason,"error":error.to_string()})
+    })
 }
 
 fn ensure_live(state: &ReplayState, case: &str) -> Result<()> {

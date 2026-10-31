@@ -42,6 +42,7 @@ pub(crate) struct ConnectionContext {
 
 #[derive(Debug)]
 struct PendingMemcachedExchange {
+    targets: crate::active_case::DependencyTargets,
     sequence: u64,
     request: MemcachedRequest,
     response_frames: Vec<Vec<u8>>,
@@ -259,6 +260,13 @@ async fn proxy_text(
                 vec!["Memcached Meta Text is unsupported".to_string()]
             };
             let pending_exchange = PendingMemcachedExchange {
+                targets: c2s_state.capture_memcached_dependency(
+                    connection_id,
+                    sequence,
+                    c2s_context.target_port,
+                    &request.command,
+                    request.key.as_deref(),
+                ),
                 sequence,
                 request,
                 response_frames: Vec::new(),
@@ -691,6 +699,13 @@ async fn proxy_binary(
                 .lock()
                 .await
                 .push_back(PendingMemcachedExchange {
+                    targets: c2s_state.capture_memcached_dependency(
+                        connection_id,
+                        sequence,
+                        c2s_context.target_port,
+                        &request.command,
+                        request.key.as_deref(),
+                    ),
                     sequence,
                     request,
                     response_frames: Vec::new(),

@@ -188,7 +188,7 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
     );
     assert_eq!(state.mysql.events.matched_query_count, 2);
     // A Global candidate remains available across cases, and is still finite.
-    state.mysql.exchanges[0].source = ReplaySource::Global;
+    state.mysql.exchanges[0].source = ReplaySource::Startup;
     state.mysql.exchanges[0].case_id = None;
     state.mysql.invalidate_scope_index();
     state.mysql.exchanges[0].status = ReplayExchangeStatus::Available;
@@ -196,7 +196,7 @@ async fn projection_keeps_scope_identity_exact_precedence_and_single_consumption
     let global = state
         .match_exchange(&identity, "COM_QUERY", Some(sql), None)
         .unwrap();
-    assert_eq!(global.source, ReplaySource::Global);
+    assert_eq!(global.source, ReplaySource::Startup);
     state.complete_exchange(&global);
     assert!(
         state

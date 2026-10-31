@@ -22,7 +22,7 @@ async fn mysql_calendar_date_over_tls_keeps_state_and_finite_consumption() {
             event["connection_id"] = json!(connection);
             event["query_sequence"] = json!(i+1);
         }
-        let policy = format!(r#"format: traffic-policy/v2
+        let policy = format!(r#"format: traffic-policy/v3
 json:
   fields:
     /spec/lastActiveDate: {{kind: time, formats: [{{format: calendar_date, utc_offset: '+08:00'}}]}}

@@ -10,12 +10,21 @@ pub(super) use reader::{read, verify};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct TargetMetadata {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub case_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_owner: Option<RunWitnessOwner>,
     pub surface: Surface,
     pub role: TargetRole,
     pub resource: Option<Resource>,
     pub operation: String,
     pub clocks: WitnessClocks,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RunWitnessOwner {
+    pub session_id: String,
 }
 impl TargetMetadata {
     pub(crate) fn from_pair(metadata: &WitnessMetadata) -> Self {
@@ -29,6 +38,7 @@ impl TargetMetadata {
         }
         Self {
             case_id: metadata.source.case_id.clone(),
+            run_owner: None,
             surface: metadata.surface,
             role: metadata.target_role,
             resource: metadata.resource.clone(),
@@ -37,10 +47,20 @@ impl TargetMetadata {
         }
     }
     pub(super) fn validate(&self) -> Result<()> {
-        ensure!(
-            !self.case_id.is_empty(),
-            "Target observation requires a Case identity"
-        );
+        match &self.run_owner {
+            Some(owner) => ensure!(
+                self.case_id.is_empty()
+                    && owner.session_id.parse::<uuid::Uuid>().is_ok()
+                    && self.surface == Surface::DependencyRequest
+                    && self.clocks.case.source.is_none()
+                    && self.clocks.case.target.is_none(),
+                "run Target observation requires a real session and no primary Case clock"
+            ),
+            None => ensure!(
+                !self.case_id.is_empty(),
+                "Target observation requires an actual Case or Run owner"
+            ),
+        }
         let valid = if self.surface == Surface::DependencyResponse {
             matches!(
                 self.role,
@@ -215,7 +235,10 @@ pub(super) fn source_key(metadata: &WitnessMetadata) -> Result<Option<String>> {
 }
 
 pub(super) fn compatible(source: &WitnessMetadata, target: &TargetMetadata) -> bool {
-    if source.source.case_id != target.case_id || source.surface != target.surface {
+    if target.run_owner.is_some()
+        || source.source.case_id != target.case_id
+        || source.surface != target.surface
+    {
         return false;
     }
     let resource = match (&source.resource, &target.resource) {

@@ -161,7 +161,7 @@ fn script_plan_apply_preserves_finite_responses_and_unmatched_calls() {
     ]);
     let result =
         crate::replay::reclassify_background_dependencies(&f.policy, &f.report, &cases).unwrap();
-    assert_eq!(result.matched_unused_case, 2);
+    assert_eq!(result.matched_unused_case, 0);
     assert!(result.remaining_dirty_case_ids.contains("victim"));
     assert!(
         plan_api_triggered_redis(

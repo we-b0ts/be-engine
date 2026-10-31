@@ -1,4 +1,6 @@
+pub(crate) mod attribution;
 pub(crate) mod execution;
+pub(crate) mod observation;
 use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};

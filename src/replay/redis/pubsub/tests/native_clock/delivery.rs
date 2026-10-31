@@ -64,7 +64,7 @@ async fn failed_primary_cleanup_waits_for_partial_native_input_and_retains_case(
     let (runtime, mut subscriber, task, raw) = partial_input(temp.path()).await;
     // Failed primary cleanup also has to drain inputs already admitted to TCP.
     assert_eq!(
-        guards::control(&runtime, json!({"command":"case_failed","case_id":"case"})).await["ok"],
+        guards::control(&runtime, json!({"command":"case_failed","case_id":CASE})).await["ok"],
         true
     );
     runtime
@@ -74,13 +74,13 @@ async fn failed_primary_cleanup_waits_for_partial_native_input_and_retains_case(
         .case_dependency_post_response_window = Duration::ZERO;
     let shared = runtime.clone();
     let ending = tokio::spawn(async move {
-        guards::control(&shared, json!({"command":"end","case_id":"case"})).await
+        guards::control(&shared, json!({"command":"end","case_id":CASE})).await
     });
     tokio::time::sleep(Duration::from_millis(35)).await;
     assert!(!ending.is_finished());
     assert_eq!(
         runtime.state.lock().await.active_case_id.as_deref(),
-        Some("case")
+        Some(CASE)
     );
     assert_eq!(read(&mut subscriber).await, raw);
     let ended = tokio::time::timeout(Duration::from_secs(2), ending)
@@ -96,9 +96,9 @@ async fn failed_primary_cleanup_waits_for_partial_native_input_and_retains_case(
     );
     let state = runtime.state.lock().await;
     // A failed native primary still requires Target shutdown before release.
-    assert_eq!(state.active_case_id.as_deref(), Some("case"));
+    assert_eq!(state.active_case_id.as_deref(), Some(CASE));
     assert!(!state.redis.has_case_in_flight());
-    assert!(!state.redis.case_has_runtime_failure("case"));
+    assert!(!state.redis.case_has_runtime_failure(CASE));
     assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
     task.abort();
 }
@@ -117,12 +117,12 @@ async fn a_closed_subscriber_leaves_partial_native_input_failed_and_case_dirty()
     );
     let state = runtime.state.lock().await;
     assert!(!state.redis.has_case_in_flight());
-    assert!(state.redis.case_has_runtime_failure("case"));
+    assert!(state.redis.case_has_runtime_failure(CASE));
     assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 0);
     assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 1);
     assert_eq!(
         state.redis.events.unsafe_events[0].case_id.as_deref(),
-        Some("case")
+        Some(CASE)
     );
 }
 
@@ -138,7 +138,7 @@ async fn closing_a_case_prevents_future_native_input_admission() {
     );
     let epoch = guards::begin(&runtime).await;
     assert_eq!(
-        guards::control(&runtime, json!({"command":"case_failed","case_id":"case"})).await["ok"],
+        guards::control(&runtime, json!({"command":"case_failed","case_id":CASE})).await["ok"],
         true
     );
     assert_eq!(
@@ -148,7 +148,7 @@ async fn closing_a_case_prevents_future_native_input_admission() {
     assert_eq!(
         guards::control(
             &runtime,
-            json!({"command":"native_event_begin","case_id":"case"})
+            json!({"command":"native_event_begin","case_id":CASE})
         )
         .await["enabled"],
         false

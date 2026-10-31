@@ -26,7 +26,7 @@ fn global_format_trace_failure_identifies_original_record_without_payloads() {
 
 fn policy() -> CompiledPolicy {
     crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /id: {kind: identity, formats: [decimal]}
@@ -204,7 +204,7 @@ fn missing_fields_and_opaque_values_are_unavailable_but_paired_null_is_exact() {
 
 #[test]
 fn native_key_shapes_keep_global_content_checks_and_require_native_replay() {
-    let policy=crate::policy::parse_and_compile_policy(r#"format: traffic-policy/v2
+    let policy=crate::policy::parse_and_compile_policy(r#"format: traffic-policy/v3
 json:
   fields:
     /id: {kind: identity, formats: [decimal]}
@@ -288,7 +288,7 @@ rules:
 #[test]
 fn redis_scalar_formats_compose_with_json_and_protocol_expiration_without_old_rule_scopes() {
     let policy = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 redis:
   keys:
     as-of: {kind: time, formats: [unix_seconds]}
@@ -377,7 +377,7 @@ json:
 
 #[test]
 fn scalar_key_identity_cannot_bypass_json_scalar_protocol_checks() {
-    let policy = crate::policy::parse_and_compile_policy("format: traffic-policy/v2\njson:\n  fields:\n    '': {kind: url, formats: [aws_sigv4]}\nredis:\n  keys:\n    key: {kind: identity, formats: [string]}\n").unwrap();
+    let policy = crate::policy::parse_and_compile_policy("format: traffic-policy/v3\njson:\n  fields:\n    '': {kind: url, formats: [aws_sigv4]}\nredis:\n  keys:\n    key: {kind: identity, formats: [string]}\n").unwrap();
     let payload = r#""https://source.test/download?X-Amz-Date=20200101T000000Z&X-Amz-Credential=ak%2F20200101%2Fr%2Fs3%2Faws4_request&X-Amz-Signature=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa""#;
     let source = args(&["key", payload]);
     let target = args(&["key", &payload.replace("source.test", "wrong.test")]);

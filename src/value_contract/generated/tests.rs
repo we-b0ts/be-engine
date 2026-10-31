@@ -404,7 +404,7 @@ fn encrypted_iv_bindings_survive_unordered_pairing_without_committing_failed_can
 fn decoded_cipher_uses_global_formats_and_preserves_plaintext_and_iv_relationships() {
     let key = [8u8; 32];
     let plan = crate::policy::parse_and_compile_policy(
-        "format: traffic-policy/v2\njson:\n  fields:\n    /expire_at: {kind: time, formats: [unix_seconds]}\n    /id: {kind: identity, formats: [uuid]}\n",
+        "format: traffic-policy/v3\njson:\n  fields:\n    /expire_at: {kind: time, formats: [unix_seconds]}\n    /id: {kind: identity, formats: [uuid]}\n",
     ).unwrap().global_json.unwrap();
     let clocks = AnchorClocks {
         dependency: super::super::time::ClockPair {
@@ -471,7 +471,7 @@ fn decoded_cipher_uses_global_formats_and_preserves_plaintext_and_iv_relationshi
 fn decoded_cipher_occurrences_keep_independent_times_and_atomic_shared_identities() {
     let key = [8u8; 32];
     let plan = crate::policy::parse_and_compile_policy(
-        "format: traffic-policy/v2\njson:\n  fields:\n    /items: {kind: unordered}\n    /expire_at: {kind: time, formats: [unix_seconds]}\n    /id: {kind: identity, formats: [uuid]}\n",
+        "format: traffic-policy/v3\njson:\n  fields:\n    /items: {kind: unordered}\n    /expire_at: {kind: time, formats: [unix_seconds]}\n    /id: {kind: identity, formats: [uuid]}\n",
     ).unwrap().global_json.unwrap();
     let clocks = AnchorClocks {
         dependency: super::super::time::ClockPair {

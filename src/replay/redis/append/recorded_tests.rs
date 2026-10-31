@@ -72,7 +72,7 @@ fn recorded_append_source_traces_validate_without_changing_recordings() {
     }
     assert!(!rules.is_empty());
     let document =
-        json!({"format":"traffic-policy/v2","rules":rules.into_values().collect::<Vec<_>>()});
+        json!({"format":"traffic-policy/v3","rules":rules.into_values().collect::<Vec<_>>()});
     let compiled =
         crate::policy::compile_policy(&crate::policy::parse_policy(&document.to_string()).unwrap())
             .unwrap();

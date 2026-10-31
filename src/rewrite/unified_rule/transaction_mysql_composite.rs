@@ -7,7 +7,7 @@ fn mysql_global_json_composes_identity_time_and_unordered_fields_without_capture
         let fixture = Fixture::new();
         write(
             &fixture.proposal,
-            json!({"format":"traffic-policy/v2","json":{"fields":{
+            json!({"format":"traffic-policy/v3","json":{"fields":{
                 "/members":{"kind":"unordered"},
                 "/blocks/*/id":{"kind":"identity","formats":["uuid"]},
                 "/blocks/*/timestamp":{"kind":"time","formats":["unix_seconds"]}

@@ -110,7 +110,7 @@ mod tests {
 
     fn compile(redis: Value) -> CompiledPolicy {
         crate::policy::parse_and_compile_policy(
-            &json!({"format":"traffic-policy/v2","redis":{"keys":redis}}).to_string(),
+            &json!({"format":"traffic-policy/v3","redis":{"keys":redis}}).to_string(),
         )
         .unwrap()
     }
@@ -157,7 +157,7 @@ mod tests {
                 "control-key" => keys["new:\n*"] = keys["old:*"].clone(),
                 _ => keys["new:*"] = json!({"kind":"identity","formats":[{"hex":32}]}),
             }
-            let mut document = json!({"format":"traffic-policy/v2","redis":{"keys":keys}});
+            let mut document = json!({"format":"traffic-policy/v3","redis":{"keys":keys}});
             if scenario == "new-json" {
                 document["json"] = json!({"fields":{"/id":{"kind":"identity","formats":["uuid"]}}});
             }
@@ -172,7 +172,7 @@ mod tests {
                 "{scenario}"
             );
         }
-        let empty = crate::policy::parse_and_compile_policy("format: traffic-policy/v2").unwrap();
+        let empty = crate::policy::parse_and_compile_policy("format: traffic-policy/v3").unwrap();
         let first = compile(json!({"new:*":{"kind":"identity","formats":[{"hex":32}]}}));
         assert!(allows_partial(&empty, &first));
         let all = compile(json!({"*":{"kind":"identity","formats":[{"hex":32}]}}));

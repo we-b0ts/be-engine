@@ -295,7 +295,7 @@ fn matches_process_owned_hscan_by_numeric_key_shape_without_fields() {
 }
 
 #[test]
-fn hscan_rejects_initial_load_timeout_and_fields() {
+fn explicit_hscan_initial_load_requires_exact_keys_and_finite_scan_rejects_fields() {
     let mut rule = BackgroundDependencyRuleConfig::Redis {
         key_sequence: Vec::new(),
         script: None,
@@ -315,10 +315,7 @@ fn hscan_rejects_initial_load_timeout_and_fields() {
         source_evidence: "CardActionInbox.list_pending scans process-owned recovery work"
             .to_string(),
     };
-    let error = validate(std::slice::from_ref(&rule))
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("must not use initial_load_timeout_ms"));
+    validate(std::slice::from_ref(&rule)).unwrap();
 
     let BackgroundDependencyRuleConfig::Redis {
         initial_load_timeout_ms,
@@ -392,4 +389,19 @@ fn finite_process_get_requires_exact_keys_without_a_ready_probe() {
     };
     keys.clear();
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn process_owner_does_not_implicitly_authorize_reusable_redis_reads() {
+    let mut rule = rule();
+    assert!(!rule.uses_redis_snapshot());
+    let BackgroundDependencyRuleConfig::Redis {
+        initial_load_timeout_ms,
+        ..
+    } = &mut rule
+    else {
+        unreachable!()
+    };
+    *initial_load_timeout_ms = Some(1_000);
+    assert!(rule.uses_redis_snapshot());
 }

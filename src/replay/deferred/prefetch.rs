@@ -13,7 +13,7 @@ pub(in crate::replay) async fn enqueue(
     let case = state.cases.get(id).context("unknown prefetch case")?;
     let inventory = deferred.files.get(id).context("prefetch index missing")?;
     if case.status != ReplayCaseStatus::Pending
-        || inventory.index.stamp.size > deferred.cache_bytes as u64
+        || inventory.source_bytes > deferred.cache_bytes as u64
         || deferred.cache_bytes == 0
     {
         return Ok(false);
@@ -32,16 +32,7 @@ pub(in crate::replay) async fn run(state: Arc<Mutex<ReplayState>>) -> Result<()>
     while let Some((path, index)) = receiver.recv().await {
         let reader = deferred.reader.clone();
         let result = tokio::task::spawn_blocking(move || -> Result<()> {
-            let location = RecordLocation {
-                line: 1,
-                offset: 0,
-                length: index.stamp.size,
-                sha256: index.sha256,
-            };
-            reader
-                .lock()
-                .map_err(|_| anyhow!("dependency cache lock poisoned"))?
-                .read(&path, &index.stamp, &location)?;
+            scoped_read::read(&path, &index, &reader)?;
             Ok(())
         })
         .await

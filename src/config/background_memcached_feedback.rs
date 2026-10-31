@@ -265,8 +265,8 @@ fn parse_replay_evidence(
         crate::replay::report::parse_background_dependency_evidence(raw)
             .with_context(|| format!("failed to parse replay report {}", report_path.display()))?;
     ensure!(
-        report.version == 6,
-        "Memcached process-owned dependency evidence requires replay report version 6"
+        report.version == 7,
+        "Memcached process-owned dependency evidence requires replay report version 7"
     );
     ensure!(
         report.finalized,

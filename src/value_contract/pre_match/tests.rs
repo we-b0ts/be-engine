@@ -45,7 +45,7 @@ fn structural_changes_business_scalars_unknown_bytes_and_declared_failures_stay_
     ] {
         assert!(preview("case", a, b, &plan(), Default::default()).is_none());
     }
-    let strict = crate::policy::parse_and_compile_policy("format: traffic-policy/v2\njson:\n  fields:\n    /id: {kind: identity, formats: [{hex: 12}]}\n").unwrap();
+    let strict = crate::policy::parse_and_compile_policy("format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [{hex: 12}]}\n").unwrap();
     assert!(
         preview(
             "case",

@@ -31,7 +31,7 @@ async fn combined_capture_from_real_unmatched_insert_then_fresh_replay_is_finite
             policy_path:temp.path().join("policy.yaml"),rule,replay_report,
         },time).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(),original);
-        let policy = std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap();
+        let policy = crate::recorder::test_io::read_to_string_sync(temp.path().join("policy.yaml")).unwrap();
         task.abort();
         let (fresh,addr,runtime,task) = fixture_with_policy(&[source],Some(&policy)).await;
         let mut client = connect(addr,&fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
@@ -80,7 +80,7 @@ async fn combined_table_capture_replays_two_shards_without_cross_table_consumpti
         let time = serde_json::from_value(json!({"id":"sharded-created-at","time_values":[{"value_index":1}],"source_evidence":"ItemModel:created_at defaults to datetime.utcnow()"})).unwrap();
         crate::replay::policy::test_fixture::install_joint_mysql(crate::DynamicValueRuleFeedback{policy_path:temp.path().join("policy.yaml"),rule,replay_report},time).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(),original);
-        let policy = std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap();
+        let policy = crate::recorder::test_io::read_to_string_sync(temp.path().join("policy.yaml")).unwrap();
         task.abort();
         let (fresh,addr,runtime,task) = fixture_with_policy(&sources,Some(&policy)).await;
         let mut client = connect(addr,&fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;

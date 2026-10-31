@@ -203,13 +203,16 @@ async fn redis_joint_time_plans_from_failure_then_replays_nil_capture_references
         }
         task.abort();
     }
-    assert_eq!(std::fs::read_to_string(dependencies).unwrap(), immutable);
+    assert_eq!(
+        crate::recorder::test_io::read_to_string_sync(dependencies).unwrap(),
+        immutable
+    );
 }
 
 #[tokio::test]
 async fn conditional_redis_capture_replays_mixed_blocks_times_references_and_finite_consumption() {
     let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
-    let case = temp.path().join(".traffic-e2e/local/recordings/run/case");
+    let case = temp.path().join("recordings/run/case");
     std::fs::create_dir_all(&case).unwrap();
     std::fs::write(case.join("request.json"), inbound("generated")).unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
@@ -265,10 +268,10 @@ async fn conditional_redis_capture_replays_mixed_blocks_times_references_and_fin
     let time = json!({"id":"clock","match":{"api":"POST /items","resource":resource,"key":{"kind":"exact","value":"blocks:7"}},
         "effect":{"kind":"redis_sequence","commands":[{"operation":"RPUSH","arguments":{"1":{"kind":"json","fields":{
             "/timestamp":{"kind":"time","format":"unix_milliseconds","relation":"preserve_offset"}}}}}]},"proof":proof});
-    let policy = temp.path().join(".traffic-e2e/policy.yaml");
+    let policy = temp.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        serde_yaml::to_string(&json!({"format":"traffic-policy/v2","rules":[identity,time]}))
+        serde_yaml::to_string(&json!({"format":"traffic-policy/v3","rules":[identity,time]}))
             .unwrap(),
     )
     .unwrap();
@@ -335,7 +338,7 @@ async fn conditional_redis_capture_replays_mixed_blocks_times_references_and_fin
     );
     task.abort();
     assert_eq!(
-        std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+        crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap(),
         original
     );
 }

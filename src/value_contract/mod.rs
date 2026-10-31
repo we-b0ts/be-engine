@@ -5,6 +5,7 @@ pub(crate) mod generated;
 pub(crate) mod global;
 pub(crate) mod global_protocol;
 pub(crate) mod http_headers;
+pub(crate) mod hypothesis;
 pub(crate) mod identities;
 pub(crate) mod json;
 pub(crate) mod pre_match;

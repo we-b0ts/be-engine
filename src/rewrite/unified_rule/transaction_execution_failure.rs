@@ -17,7 +17,7 @@ fn overview_prioritizes_dependency_cause_without_replacing_the_retained_issue() 
     let mut focused: serde_json::Value =
         serde_yaml::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
     focused["cases"][0]["execution_failure"] = json!({
-        "kind":"dependency_unmatched","case_id":"case-1","request_completed":false,
+        "kind":"dependency_unmatched","case_id":"00000000-0000-4000-8000-000000000001","request_completed":false,
         "failures":[{"protocol":"redis","command":"SET","target_event_index":1}]
     });
     fs::write(&state_path, serde_yaml::to_string(&focused).unwrap()).unwrap();
@@ -52,7 +52,7 @@ fn overview_prioritizes_dependency_cause_without_replacing_the_retained_issue() 
 
     // Historical no-progress evidence retains its waiting details while leading with unused calls.
     focused["cases"][0]["execution_failure"] = json!({
-        "kind":"case_no_progress","case_id":"case-1","request_completed":false,
+        "kind":"case_no_progress","case_id":"00000000-0000-4000-8000-000000000001","request_completed":false,
         "failures":[{"kind":"case_no_progress","waiting":{
             "no_progress_timeout_ms":5000,"pending_source_dependencies":7,
             "references":[{"reference":{"protocol":"mysql","sequence":1127},"state":"Available"}]

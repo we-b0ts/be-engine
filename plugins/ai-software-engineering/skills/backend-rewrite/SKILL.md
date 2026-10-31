@@ -24,7 +24,7 @@ workflow agent role and is never workflow authority.
 | --- | --- | --- | --- |
 | Rewrite engine | `backend-rewrite` and `traffic-e2e` | Workflow state, legal action selection, evidence identity, traffic serialization, verification, and terminal eligibility | Invent task-runtime state or perform source diagnosis |
 | Rewrite coordinator | Main/root `coordinator` task | Execute engine actions, dispatch and reconcile agents, apply coordinator-owned inputs, publish reviewed integration candidates, invoke acceptance, and deliver | Diagnose business source, edit target code, or mark work complete from an agent report |
-| Repository analyst | `repository-analyst` assignment | Analyze source routes and module relationships read-only, distinguish static/dynamic routes, and incrementally assign new APIs to persistent groups | Edit code or configuration, bind an implementer, run Replay, or mutate workflow state |
+| Repository analyst | `repository-analyst` assignment | Analyze source routes, modules and cross-API/task dependency attribution read-only; return independent Source ownership proofs | Edit code or configuration, bind an implementer, run Replay, or mutate workflow state |
 | API implementer | Fixed `api-implementer-N` slot | Process assigned same-group API batches one API at a time, run per-API local review, and return reviewed subsets that may span assigned groups | Mutate workflow state, publish to the canonical target, or accept its own work |
 | Code integrator | `code-integrator` assignment | Prepare one retained integration/review candidate, resolve assigned conflicts and routine quality issues, run candidate review, and return a version-bound result | Act as an API implementer, mutate engine state, or report implementation-worker activity |
 | API expert | Engine-requested `api-expert` assignment | Investigate one reserved API read-only and return evidence-backed findings for its existing API implementer | Edit code, own the API, mutate workflow state, or satisfy implementation/acceptance gates |
@@ -71,6 +71,12 @@ failure batch; per-API results remain independent. After dispatch, prioritize
 never-attempted APIs at group boundaries before ordinary integration or acceptance.
 Preserve the user's scope and execute returned commands unchanged.
 
+After ordinary acceptance and final candidate review, formal final revalidation
+uses one complete actual batch session. Its method results are projections of
+that session. The sealed Source run must be complete and cover every required
+workflow method; focused receipts and historical Source runs cannot be combined
+into a final batch pass.
+
 New workflows use `max_implementers: 16` from local `regression.yaml`, fixed for
 that workflow. Slot names and paths are `api-implementer-0` through the configured
 limit under `.traffic-e2e/local/rewrite-worktrees/`. New groups are mapped to slots
@@ -91,7 +97,7 @@ or API-expert instructions into one operating guide.
 | Role | Always read | Read only when routed by the entrypoint or current action |
 | --- | --- | --- |
 | Rewrite coordinator | [coordinator.md](references/coordinator.md) | `coordinator-*.md` matching the current action, including [analysis](references/coordinator-repository-analysis.md) and [fixed implementers](references/coordinator-implementers.md) |
-| Repository analyst | [repository-analyst.md](references/repository-analyst.md) | Assigned source route declarations, mount registrations and module relationships |
+| Repository analyst | [repository-analyst.md](references/repository-analyst.md) | Assigned source route declarations, module relationships, or `dependency_attribution` Source ownership context |
 | API implementer | [api-implementer.md](references/api-implementer.md) | `api-implementer-*.md`, [target-code-rules.md](references/target-code-rules.md), and shared review rules as directed |
 | Code integrator | [code-integrator.md](references/code-integrator.md) | [target-code-rules.md](references/target-code-rules.md), [source-review-rules.md](references/source-review-rules.md), and `code-integrator-*.md` as directed |
 | API expert | [api-expert.md](references/api-expert.md) | Relevant read-only diagnostic methods in [api-implementer-diagnosis.md](references/api-implementer-diagnosis.md) and its routed specialty documents as directed; never code-repair or delivery instructions |

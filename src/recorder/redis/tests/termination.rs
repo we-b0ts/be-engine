@@ -7,7 +7,7 @@ const GET: &[u8] = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
 
 async fn records(state: &AppState) -> Vec<serde_json::Value> {
     state.recorder().flush_traffic().await.unwrap();
-    tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+    crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
         .await
         .unwrap()
         .lines()

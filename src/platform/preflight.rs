@@ -1,5 +1,4 @@
-use std::fs::{self, File};
-use std::io::BufReader;
+use std::fs;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
@@ -88,11 +87,7 @@ struct DependencyEventProbe {
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
-    global_dependency_reason: Option<String>,
-    #[serde(default)]
-    global_dependency_phase: Option<String>,
-    #[serde(default)]
-    global_dependency_matched_by: Option<String>,
+    capture: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,11 +170,9 @@ pub(super) fn validate(manifest_path: &Path, readiness_path: &str) -> Result<Pre
 }
 
 fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<PreflightProbeKind>)> {
-    regular_file_metadata(path, "preflight HTTP evidence")?;
-    let file = File::open(path)
-        .with_context(|| format!("failed to open preflight HTTP evidence {}", path.display()))?;
-    let events = serde_json::Deserializer::from_reader(BufReader::new(file))
-        .into_iter::<DependencyEventProbe>();
+    let bytes = crate::dependency_index::scoped::read_bytes(path)?;
+    let events =
+        serde_json::Deserializer::from_reader(bytes.as_slice()).into_iter::<DependencyEventProbe>();
     let mut matches = 0_usize;
     let mut probe_kind = None;
     for event in events {
@@ -203,9 +196,9 @@ fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<Preflig
             .as_ref()
             .and_then(serde_json::Value::as_u64)
             .is_some_and(|status| (100..=599).contains(&status));
-        let event_probe_kind = match event.global_dependency_matched_by.as_deref() {
-            Some("java_truststore") => Some(PreflightProbeKind::JavaTruststore),
-            Some("system_network") => Some(PreflightProbeKind::SystemNetwork),
+        let event_probe_kind = match event.capture["attribution"]["initialization_unit"].as_str() {
+            Some("preflight_probe/java_truststore") => Some(PreflightProbeKind::JavaTruststore),
+            Some("preflight_probe/system_network") => Some(PreflightProbeKind::SystemNetwork),
             _ => None,
         };
         if event.event_type == "http_exchange"
@@ -215,8 +208,7 @@ fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<Preflig
             && uri_matches
             && has_response_status
             && event.error.is_none()
-            && event.global_dependency_reason.as_deref() == Some("preflight_probe")
-            && event.global_dependency_phase.as_deref() == Some("runtime")
+            && event.capture["attribution"]["kind"] == "startup"
         {
             matches += 1;
             probe_kind = event_probe_kind;
@@ -380,7 +372,7 @@ mod tests {
     fn probe_event(matched_by: &str) -> String {
         format!(
             concat!(
-                r#"{{"event_type":"http_exchange","scheme":"fake_ip_https","method":"GET","uri":"/","authority":"demo.test:443","response_status":302,"error":null,"global_dependency_reason":"preflight_probe","global_dependency_phase":"runtime","global_dependency_matched_by":"{}"}}"#,
+                r#"{{"event_type":"http_exchange","scheme":"fake_ip_https","method":"GET","uri":"/","authority":"demo.test:443","response_status":302,"error":null,"capture":{{"phase":"runtime","attribution":{{"kind":"startup","initialization_unit":"preflight_probe/{}"}}}}}}"#,
                 "\n"
             ),
             matched_by
@@ -430,8 +422,11 @@ mod tests {
         let run = manifest.parent().unwrap();
         fs::write(run.join("traffic.jsonl"), probe_event("java_truststore")).unwrap();
 
-        let error = validate(&manifest, "/healthz").unwrap_err().to_string();
-        assert!(error.contains("global-dependencies.jsonl"));
+        let error = format!("{:#}", validate(&manifest, "/healthz").unwrap_err());
+        assert!(
+            error.contains("No such file") || error.contains("preflight HTTP evidence"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -201,19 +201,8 @@ fn complete_origin_transactions_include_only_explicit_members_and_boundaries() {
     assert_eq!(plan.report().matched_unused_exchanges, 4);
     plan.apply().unwrap();
     let report = f.mysql_overlay();
-    assert_eq!(
-        report["unused_global_exchanges"].as_array().unwrap().len(),
-        5
-    );
-    assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 1);
-    assert_eq!(report["unused_case_exchanges"][0]["case_id"], "origin");
-    assert_eq!(
-        f.mysql_overlay()["unused_global_exchanges"]
-            .as_array()
-            .unwrap()
-            .len(),
-        5
-    );
+    assert_eq!(report["unused_global_exchanges"], json!([]));
+    assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 6);
 }
 
 #[test]
@@ -233,11 +222,8 @@ fn same_route_transactions_require_a_distinct_captured_resource() {
         if foreign {
             plan.unwrap().apply().unwrap();
             let report = f.mysql_overlay();
-            assert_eq!(
-                report["unused_global_exchanges"].as_array().unwrap().len(),
-                5
-            );
-            assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 1);
+            assert_eq!(report["unused_global_exchanges"], json!([]));
+            assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 6);
         } else {
             assert!(plan.is_err());
             assert_eq!(
@@ -245,7 +231,7 @@ fn same_route_transactions_require_a_distinct_captured_resource() {
                     .as_array()
                     .unwrap()
                     .len(),
-                5
+                6
             );
         }
     }
@@ -526,12 +512,9 @@ fn wire_summaries_disambiguate_owned_and_unrelated_identical_commits() {
     plan.apply().unwrap();
     let after = f.mysql_overlay();
     let unused = after["unused_case_exchanges"].as_array().unwrap();
-    assert_eq!(unused.len(), 2);
+    assert_eq!(unused.len(), 7);
     assert!(unused.iter().any(|e| e["connection_id"] == "unrelated"));
-    assert_eq!(
-        after["unused_global_exchanges"].as_array().unwrap().len(),
-        5
-    );
+    assert_eq!(after["unused_global_exchanges"], json!([]));
 }
 
 #[test]

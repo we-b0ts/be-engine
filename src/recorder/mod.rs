@@ -16,7 +16,6 @@ use crate::recording_completion::ExplicitApiCaseLimits;
 use crate::recording_network::RecordedEndpoint;
 use crate::request_headers::RequestHeaderCapture;
 
-pub(crate) mod api_origin_observation;
 pub(crate) mod async_api;
 pub(crate) mod background;
 mod capture;
@@ -27,19 +26,25 @@ pub(crate) mod connections;
 mod dependencies;
 mod event;
 pub(crate) mod http;
+mod identity;
 mod jsonl;
 pub(crate) mod kafka;
+pub(crate) mod ledger;
 pub(crate) mod memcached;
 pub(crate) mod motan;
 pub(crate) mod mysql;
 mod network;
 mod preparation;
+pub(crate) mod process_classification;
 pub(crate) mod readiness;
 pub(crate) mod redis;
+pub(crate) mod request;
 mod run;
 mod shutdown;
 mod storage;
 mod summary;
+#[cfg(test)]
+pub(crate) mod test_io;
 mod writer;
 
 pub use crate::http::stream::ResponseStream as HttpResponseStream;
@@ -62,6 +67,7 @@ struct RecorderOptions {
     recording_api_limits: Vec<(String, usize)>,
     artifact_owner: Option<ArtifactOwner>,
     request_header_capture: RequestHeaderCapture,
+    capture_policy_identity: String,
 }
 
 #[derive(Clone)]
@@ -71,6 +77,7 @@ pub struct Recorder {
     artifact_owner: Option<ArtifactOwner>,
     traffic_jsonl: TrafficJsonlMode,
     writer: writer::RecorderWriter,
+    pub(crate) capture: ledger::CaptureRegistry,
     pub(crate) run_dir: Arc<PathBuf>,
     pub(crate) run_state: Arc<Mutex<RecorderRunState>>,
     pub(crate) dependency_write_lock: Arc<Mutex<()>>,
@@ -79,6 +86,7 @@ pub struct Recorder {
     pub(crate) access_policy: RecordingAccessPolicy,
     explicit_api_case_limits: ExplicitApiCaseLimits,
     request_header_capture: RequestHeaderCapture,
+    capture_policy_identity: String,
 }
 
 impl Recorder {
@@ -108,6 +116,10 @@ impl Recorder {
                     &defaults.encrypt_request_headers,
                     &defaults.redact_headers,
                 )?,
+                capture_policy_identity: crate::policy_evidence::digest(&serde_json::to_vec(&(
+                    &defaults,
+                    access_policy,
+                ))?),
             },
         )
         .await
@@ -146,6 +158,10 @@ impl Recorder {
                 },
                 writer_queue_capacity: config.writer_queue_capacity,
                 run_id,
+                capture_policy_identity: crate::policy_evidence::digest(&serde_json::to_vec(&(
+                    config,
+                    &recording_api_limits,
+                ))?),
                 recording_api_limits,
                 artifact_owner,
                 request_header_capture: RequestHeaderCapture::from_environment(
@@ -175,6 +191,7 @@ impl Recorder {
             recording_api_limits,
             artifact_owner,
             request_header_capture,
+            capture_policy_identity,
         } = options;
         let output_dir = output_dir.as_ref();
         tokio::fs::create_dir_all(output_dir)
@@ -183,12 +200,15 @@ impl Recorder {
         let (run_id, run_dir) = run::create_run_dir(output_dir, run_id).await?;
         let run_dir = Arc::new(run_dir);
         let finalized_cases = Arc::new(Mutex::new(HashSet::new()));
+        let process_epoch = Uuid::new_v4();
         let writer = writer::RecorderWriter::start(
             run_dir.clone(),
             traffic_jsonl,
             buffer_settings,
             writer_queue_capacity,
             finalized_cases.clone(),
+            process_epoch,
+            capture_policy_identity.clone(),
         )
         .await?;
         let recording_apis = recording_api_limits
@@ -200,6 +220,7 @@ impl Recorder {
             redis_rpc: Default::default(),
             artifact_owner,
             traffic_jsonl,
+            capture: ledger::CaptureRegistry::new(writer.clone(), process_epoch),
             writer,
             run_dir,
             run_state: Arc::new(Mutex::new(RecorderRunState {
@@ -213,6 +234,7 @@ impl Recorder {
             access_policy,
             explicit_api_case_limits: ExplicitApiCaseLimits::new(recording_api_limits),
             request_header_capture,
+            capture_policy_identity,
         };
         recorder.write_run_report("running").await?;
         Ok(recorder)
@@ -265,6 +287,19 @@ impl Recorder {
             tokio::fs::create_dir_all(parent).await.with_context(|| {
                 format!("failed to create case recording dir {}", parent.display())
             })?;
+        }
+        if filename == "admission.json" {
+            let directory = self.case_staging_dir(case);
+            self.writer
+                .register_input(
+                    case.id,
+                    directory
+                        .strip_prefix(self.run_dir.as_ref())?
+                        .to_string_lossy()
+                        .into(),
+                    false,
+                )
+                .await?;
         }
         let mut payload =
             serde_json::to_vec_pretty(value).context("failed to serialize case recording file")?;

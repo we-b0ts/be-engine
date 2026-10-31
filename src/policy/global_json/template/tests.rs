@@ -1,6 +1,6 @@
 use crate::policy::{compile_policy, parse_policy, render_policy};
 
-const POLICY: &str = r#"format: traffic-policy/v2
+const POLICY: &str = r#"format: traffic-policy/v3
 json:
   fields:
     /url:

@@ -26,7 +26,7 @@ impl DynamicValues {
             .filter(|line| !line.is_empty())
         {
             let event: Value = serde_json::from_slice(line)?;
-            if event["global_dependency_reason"].is_string() {
+            if !crate::dependency::observation::is_case_event(&event) {
                 continue;
             }
             for rule in self.rules.iter().filter(|rule| {
@@ -263,7 +263,7 @@ fn restore_bindings(
         .iter()
         .filter(|event| {
             before.is_none_or(|before| {
-                event["global_dependency_reason"].is_null()
+                crate::dependency::observation::is_case_event(event)
                     && event["timestamp"]
                         .as_str()
                         .and_then(|time| time.parse::<chrono::DateTime<chrono::Utc>>().ok())
@@ -398,7 +398,8 @@ fn binding_occurs_in_request(
     let strings = strings(values);
     let mut witnessed = false;
     for event in events.iter().filter(|event| {
-        event["global_dependency_reason"].is_null() && runtime.native_source_allowed(rule, event)
+        crate::dependency::observation::is_case_event(event)
+            && runtime.native_source_allowed(rule, event)
     }) {
         let value = if let DynamicValueCapture::Mysql {
             target,

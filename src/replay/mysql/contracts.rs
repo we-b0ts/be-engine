@@ -257,8 +257,8 @@ pub(in crate::replay) fn record_target(
     identity: &ReplaySessionIdentity,
     request: ObservedRequest<'_>,
 ) -> Result<crate::policy_evidence::ObservationRetention> {
-    if !owner.retains_value_witnesses() || owner.compiled_rules().is_none() {
-        return Ok(crate::policy_evidence::ObservationRetention::Retained);
+    if !owner.retains_value_witnesses() {
+        return Ok(crate::policy_evidence::ObservationRetention::Unavailable);
     }
     let resource = identity
         .target
@@ -277,6 +277,36 @@ pub(in crate::replay) fn record_target(
             .observation_id
             .context("SQL Target observation identity is missing")?
             .to_string(),
+        case,
+        resource,
+        request.command,
+        request.started_at,
+        &serde_json::to_vec(&RequestEnvelope::observed(request))?,
+    )
+}
+
+pub(in crate::replay) fn record_unanchored_target(
+    observations: &crate::replay::target_observation::TargetObservations,
+    case: Option<&str>,
+    identity: &ReplaySessionIdentity,
+    request: ObservedRequest<'_>,
+) -> Result<crate::policy_evidence::ObservationRetention> {
+    let resource = identity
+        .target
+        .as_ref()
+        .map(|target| crate::policy::Resource {
+            protocol: crate::policy::Protocol::Mysql,
+            endpoint: crate::policy::Endpoint {
+                host: target.host.clone(),
+                port: target.port,
+            },
+            database: identity.database.clone().map(crate::policy::Database::Name),
+            username: identity.username.clone(),
+        });
+    observations.record(
+        request
+            .observation_id
+            .context("SQL Target observation identity missing")?,
         case,
         resource,
         request.command,

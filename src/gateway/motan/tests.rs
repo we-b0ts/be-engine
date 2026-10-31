@@ -71,7 +71,7 @@ async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
             "motan2" => assert_eq!(response["status"], "normal"),
             version => panic!("unexpected Motan version {version}"),
         }
-        assert!(published.join("dependencies.jsonl").is_file());
+        assert!(published.join("dependency-scope.json").is_file());
     }
 
     drop(client);

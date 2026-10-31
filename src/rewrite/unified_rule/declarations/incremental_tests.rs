@@ -25,10 +25,10 @@ fn formats_append_in_original_order_and_reapplication_is_a_noop() {
         ),
     ] {
         let mut current = policy(
-            json!({"format":"traffic-policy/v2","json":{"fields":{"/value":first,"/retained":{"kind":"unordered"}}}}),
+            json!({"format":"traffic-policy/v3","json":{"fields":{"/value":first,"/retained":{"kind":"unordered"}}}}),
         );
         let proposed =
-            policy(json!({"format":"traffic-policy/v2","json":{"fields":{"/value":addition}}}));
+            policy(json!({"format":"traffic-policy/v3","json":{"fields":{"/value":addition}}}));
         assert!(merge(&mut current, &proposed).unwrap());
         assert_eq!(
             serde_json::to_value(&current.json.as_ref().unwrap().fields["/value"]).unwrap()["formats"],
@@ -52,12 +52,12 @@ fn additions_reuse_existing_single_protocol_format_limits() {
         ("url", "url", "aws_sigv4"),
         ("duration", "seconds", "milliseconds"),
     ] {
-        let mut current = policy(json!({"format":"traffic-policy/v2","json":{"fields":{
+        let mut current = policy(json!({"format":"traffic-policy/v3","json":{"fields":{
             "/value":{"kind":kind,"formats":[original]}
         }}}));
         let same = current.clone();
         assert!(!merge(&mut current, &same).unwrap());
-        let different = policy(json!({"format":"traffic-policy/v2","json":{"fields":{
+        let different = policy(json!({"format":"traffic-policy/v3","json":{"fields":{
             "/value":{"kind":kind,"formats":[addition]}
         }}}));
         assert!(merge(&mut current, &different).is_err());
@@ -67,13 +67,13 @@ fn additions_reuse_existing_single_protocol_format_limits() {
 
 #[test]
 fn physical_carriers_add_formats_without_replacing_other_fields_or_native_permissions() {
-    let mut current = policy(json!({"format":"traffic-policy/v2",
+    let mut current = policy(json!({"format":"traffic-policy/v3",
         "mysql":{"tables":{"tasks":{"pattern":"tasks_*","fields":{"ID":{"kind":"identity","formats":["decimal"]},"retained":{"kind":"time","formats":["unix_seconds"]}}}}},
         "redis":{"keys":{"id":{"kind":"identity","formats":["uuid"]},"stream:*":{"append_stream":true}}},
         "http":{"headers":{"x-id":{"kind":"identity","formats":["uuid"]},"x-retained":{"kind":"time","formats":["unix_seconds"]}}}
     }));
     let original_rules = current.rules.clone();
-    let proposed = policy(json!({"format":"traffic-policy/v2",
+    let proposed = policy(json!({"format":"traffic-policy/v3",
         "mysql":{"tables":{"tasks":{"pattern":"tasks_*","fields":{"id":{"kind":"identity","formats":["uuid"]}}}}},
         "redis":{"keys":{"id":{"kind":"identity","formats":["decimal"]}}},
         "http":{"headers":{"X-ID":{"kind":"identity","formats":["decimal"]}}}
@@ -118,16 +118,16 @@ fn physical_carriers_add_formats_without_replacing_other_fields_or_native_permis
 
 #[test]
 fn additive_conflicts_are_atomic_and_mysql_empty_presence_still_enables_native_inference() {
-    let original = policy(json!({"format":"traffic-policy/v2",
+    let original = policy(json!({"format":"traffic-policy/v3",
         "json":{"fields":{"/id":{"kind":"identity","formats":["uuid"]}}},
         "mysql":{"tables":{"t":{"pattern":"tasks_*","fields":{"id":{"kind":"identity","formats":["decimal"]}}}}}
     }));
     for proposed in [
         policy(
-            json!({"format":"traffic-policy/v2","json":{"fields":{"/id":{"kind":"time","formats":["unix_seconds"]}}}}),
+            json!({"format":"traffic-policy/v3","json":{"fields":{"/id":{"kind":"time","formats":["unix_seconds"]}}}}),
         ),
         policy(
-            json!({"format":"traffic-policy/v2","mysql":{"tables":{"t":{"pattern":"other_*","fields":{"id":{"kind":"identity","formats":["decimal"]}}}}}}),
+            json!({"format":"traffic-policy/v3","mysql":{"tables":{"t":{"pattern":"other_*","fields":{"id":{"kind":"identity","formats":["decimal"]}}}}}}),
         ),
     ] {
         let mut current = original.clone();
@@ -135,7 +135,7 @@ fn additive_conflicts_are_atomic_and_mysql_empty_presence_still_enables_native_i
         assert_eq!(current, original);
     }
     let mut current = TrafficPolicy::default();
-    let empty = policy(json!({"format":"traffic-policy/v2","mysql":{}}));
+    let empty = policy(json!({"format":"traffic-policy/v3","mysql":{}}));
     assert!(merge(&mut current, &empty).unwrap());
     assert!(
         crate::policy::compile_policy(&current)
@@ -152,7 +152,7 @@ fn additive_conflicts_are_atomic_and_mysql_empty_presence_still_enables_native_i
 #[test]
 fn async_api_additions_keep_existing_completion_contracts() {
     let declaration = |api: &str, key: &str| {
-        policy(json!({"format":"traffic-policy/v2","async_api":{
+        policy(json!({"format":"traffic-policy/v3","async_api":{
             api:{"when":{"/background":true},"end":[{"redis":{"operation":"DEL","key":key}}]}
         }}))
     };

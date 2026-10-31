@@ -34,7 +34,7 @@ fn check_plan_apply(operation: &str) {
     for stream in [true, false] {
         let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, source| {
             crate::platform::encryption_key::load_or_create(root).unwrap();
-            let case = source.join("apis/api/case-1");
+            let case = source.join("apis/api/00000000-0000-4000-8000-000000000001");
             let path = case.join("request.json");
             let mut request: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             request["body"] = body(json!({"stream":stream}));
@@ -79,7 +79,7 @@ fn check_plan_apply(operation: &str) {
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1");
+            .join("apis/api/00000000-0000-4000-8000-000000000001");
         let originals = [case.join("request.json"), case.join("dependencies.jsonl")]
             .map(|p| (p.clone(), fs::read(p).unwrap()));
         // The resource's local text discriminator applies regardless of the

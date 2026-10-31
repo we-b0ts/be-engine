@@ -7,6 +7,14 @@ use serde_json::{Value, json};
 use super::{RewriteContext, action, inventory, model::RewriteState, store::RewriteStore};
 
 pub(super) fn evidence_unusable(target_root: &Path, state: &RewriteState) -> Result<bool> {
+    if let Some(plan) = state
+        .rule_plan
+        .as_ref()
+        .and_then(|plan| plan.unified.as_ref())
+        .filter(|plan| plan.is_batch())
+    {
+        return Ok(super::unified_rule::stale(target_root, state, plan));
+    }
     if let Some(plan) = &state.rule_plan
         && plan.unified.is_some()
         && state.active_issue.as_ref().map(|issue| issue.id.as_str())
@@ -100,7 +108,13 @@ pub fn recover_rewrite_rule_plan(context: RewriteContext, plan_id: &str) -> Resu
     // Retiring an already-proven, superseded plan grants no new rule or
     // verification permit. Do not require dispatching a worker for a new issue
     // merely to discard the old transaction.
-    if !superseded {
+    if !superseded
+        && !scoped
+            .rule_plan
+            .as_ref()
+            .and_then(|plan| plan.unified.as_ref())
+            .is_some_and(|plan| plan.is_batch())
+    {
         super::worker::ensure_api_confirmed(&state, &api, "recovering a traffic rule")?;
     }
     let report = inventory::with_slice_mut(&mut state, &api, |state| {

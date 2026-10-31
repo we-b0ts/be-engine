@@ -4,7 +4,7 @@ use super::*;
 fn setup(lazy_reader: bool) -> (tempfile::TempDir, RedisReplayState) {
     let root = tempfile::tempdir().unwrap();
     let policy = root.path().join("policy.yaml");
-    std::fs::write(&policy,json!({"format":"traffic-policy/v2","redis":{"keys":{"current:*":{
+    std::fs::write(&policy,json!({"format":"traffic-policy/v3","redis":{"keys":{"current:*":{
         "kind":"identity","formats":["string"],"read_back":true,
         "proof":{"source":"state.py:1","fact":"Each owned key is set by one Case; other Cases only read its historical state"}
     }}}}).to_string()).unwrap();

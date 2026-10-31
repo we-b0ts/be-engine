@@ -72,6 +72,27 @@ pub(super) async fn drain_started(
     Ok(())
 }
 
+/// Close header admission at the same linearization point as the final empty
+/// observation. A header queued for Replay state already owns its atomic guard.
+pub(super) async fn lock_for_release<'a>(
+    shared: &'a Arc<Mutex<ReplayState>>,
+    case: &str,
+    deadline: Option<TokioInstant>,
+) -> Result<tokio::sync::MutexGuard<'a, ReplayState>> {
+    let deadline = Some(
+        deadline
+            .unwrap_or_else(|| TokioInstant::now() + dependency_tail::TARGET_STOP_CLEANUP_GRACE),
+    );
+    loop {
+        let state = lock_drained(shared, case, deadline).await?;
+        dependency_tail::ensure_interaction_not_failed(&state, case)?;
+        if state.http_ingress.try_close_case(case) {
+            return Ok(state);
+        }
+        drop(state);
+    }
+}
+
 /// Keep the final empty-I/O observation locked through Case ownership release.
 pub(super) async fn lock_drained<'a>(
     state: &'a Arc<Mutex<ReplayState>>,
@@ -81,6 +102,12 @@ pub(super) async fn lock_drained<'a>(
     let deadline = deadline
         .unwrap_or_else(|| TokioInstant::now() + dependency_tail::TARGET_STOP_CLEANUP_GRACE);
     loop {
+        let changed = { state.lock().await.http_ingress.changed.clone() };
+        // Register before the empty check so a synchronous RAII release cannot
+        // be lost between inspecting the counter and awaiting the notification.
+        let notified = changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         let state = state.lock().await;
         ensure!(
             state.active_case_id.as_deref() == Some(case),
@@ -96,7 +123,9 @@ pub(super) async fn lock_drained<'a>(
             pending::snapshot(&state)
         );
         drop(state);
-        tokio::time::sleep(Duration::from_millis(25).min(deadline.saturating_duration_since(now)))
-            .await;
+        tokio::select! {
+            _ = &mut notified => {},
+            _ = tokio::time::sleep(Duration::from_millis(25).min(deadline.saturating_duration_since(now))) => {},
+        }
     }
 }

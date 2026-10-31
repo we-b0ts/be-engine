@@ -15,7 +15,7 @@ async fn sql_value_table_series_conditions_and_native_times_keep_strict_state_ov
             event["connection_id"] = json!(connection);event["query_sequence"] = json!(i+1);
             event["params"] = json!([{"kind":"string","value":body(status,completed).to_string()},{"kind":"string","value":"2026-10-16 00:00:00"},{"kind":"integer","value":7}]);events.push(event);
         }
-        let policy = r#"format: traffic-policy/v2
+        let policy = r#"format: traffic-policy/v3
 json:
   fields:
     /status/completedAt: {kind: time, formats: [iso8601_naive]}

@@ -385,6 +385,7 @@ async fn retain_after_server_end(
             state.redis.events.dirty_case_ids.insert(case.clone());
         }
         state.redis.events.unsafe_events.push(CommandRequestReport {
+            target_observation_id: None,
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: "POST_TERMINATION_BYTES".into(),

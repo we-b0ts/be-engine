@@ -6,7 +6,7 @@ use serde_json::Value;
 const PRIVATE_EVENT: &str = "synthetic-private-stream-event";
 
 fn proposal(_conditional: bool) -> Value {
-    json!({"format":"traffic-policy/v2","json":{"fields":{
+    json!({"format":"traffic-policy/v3","json":{"fields":{
         "/created_at":{"kind":"time","formats":["unix_seconds"]},
         "/id":{"kind":"identity","formats":["uuid"]}
     }}})
@@ -44,11 +44,11 @@ fn stream(target: bool) -> Value {
 fn mixed(scenario: &str) -> Fixture {
     let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, source| {
         crate::platform::encryption_key::load_or_create(root).unwrap();
-        let ordinary = source.join("apis/api/case-1/request.json");
+        let ordinary = source.join("apis/api/00000000-0000-4000-8000-000000000001/request.json");
         let mut request: Value = serde_json::from_slice(&fs::read(&ordinary).unwrap()).unwrap();
         request["body"] = body(json!({"stream":false}));
         write(&ordinary, request);
-        let case = source.join("apis/api/case-2");
+        let case = source.join("apis/api/00000000-0000-4000-8000-000000000002");
         fs::create_dir_all(&case).unwrap();
         fs::write(case.join("dependencies.jsonl"), "").unwrap();
         let path = case.join("request.json");
@@ -71,8 +71,13 @@ fn mixed(scenario: &str) -> Fixture {
         .case_source
         .clone()
         .unwrap()
-        .join("apis/api/case-2");
-    let target_path = fixture.paths.replay.parent().unwrap().join("case-2.json");
+        .join("apis/api/00000000-0000-4000-8000-000000000002");
+    let target_path = fixture
+        .paths
+        .replay
+        .parent()
+        .unwrap()
+        .join("00000000-0000-4000-8000-000000000002.json");
     let mut source = stream(false);
     let mut target = stream(true);
     crate::interaction::private::protect_output(&mut source, &case.join("expected-response.json"))
@@ -84,7 +89,7 @@ fn mixed(scenario: &str) -> Fixture {
     if scenario == "bad-target" {
         tamper(&mut target["interaction"]["events"][0]["message"]["data"]);
     }
-    fixture.replace_case_responses("case-2", source, target);
+    fixture.replace_case_responses("00000000-0000-4000-8000-000000000002", source, target);
     write(&fixture.proposal, proposal(false));
     fixture.confirm();
     fixture
@@ -117,17 +122,20 @@ fn interaction_rules_plan_apply_mixed_encrypted_evidence_without_claiming_stream
     for conditional in [false, true] {
         let fixture = mixed("");
         write(&fixture.proposal, proposal(conditional));
-        let paths = ["case-1", "case-2"]
-            .into_iter()
-            .flat_map(|case| {
-                let options = options(&fixture, case);
-                [
-                    options.request,
-                    options.expected_response,
-                    options.actual_response,
-                ]
-            })
-            .collect::<Vec<_>>();
+        let paths = [
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+        ]
+        .into_iter()
+        .flat_map(|case| {
+            let options = options(&fixture, case);
+            [
+                options.request,
+                options.expected_response,
+                options.actual_response,
+            ]
+        })
+        .collect::<Vec<_>>();
         let original = paths
             .iter()
             .map(|path| fs::read(path).unwrap())
@@ -145,10 +153,16 @@ fn interaction_rules_plan_apply_mixed_encrypted_evidence_without_claiming_stream
         );
         apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
         assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
-        for case in ["case-1", "case-2"] {
+        for case in [
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+        ] {
             let checked = crate::assert_recorded_response(options(&fixture, case)).unwrap();
             assert!(checked.passed, "{:?}", checked.differences);
-            assert_eq!(checked.applied_body_rule_ids.is_empty(), case == "case-2");
+            assert_eq!(
+                checked.applied_body_rule_ids.is_empty(),
+                case == "00000000-0000-4000-8000-000000000002"
+            );
         }
         for (path, bytes) in paths.iter().zip(original) {
             assert_eq!(fs::read(path).unwrap(), bytes);
@@ -171,7 +185,7 @@ fn interaction_rules_keep_events_order_closure_headers_and_carriers_strict() {
         ("headers", "$headers/content-type"),
         ("carrier", "$interaction"),
     ] {
-        let options = options(&fixture, "case-2");
+        let options = options(&fixture, "00000000-0000-4000-8000-000000000002");
         let mut target = stream(true);
         match scenario {
             "value" => target["interaction"]["events"][0]["message"]["data"] = json!("changed"),
@@ -250,7 +264,7 @@ fn interaction_rules_require_a_positive_ordinary_body_witness() {
     let fixture = mixed("");
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","json":{"fields":{"/absent":{"kind":"unordered"}}}}),
+        json!({"format":"traffic-policy/v3","json":{"fields":{"/absent":{"kind":"unordered"}}}}),
     );
     let error = format!("{:#}", fixture.plan().unwrap_err());
     assert!(
@@ -282,7 +296,7 @@ fn interaction_rules_preserve_private_header_date_and_jwt_contracts() {
                 "signing_key":{"kind":"startup","source":{"kind":"target_env","name":"SECRET_KEY"}}},"proof":proof}),
     ]);
     write(&fixture.proposal, rules);
-    let response_paths = options(&fixture, "case-2");
+    let response_paths = options(&fixture, "00000000-0000-4000-8000-000000000002");
     let mut source = stream(false);
     let mut target = stream(true);
     for (response, time) in [
@@ -307,7 +321,11 @@ fn interaction_rules_preserve_private_header_date_and_jwt_contracts() {
         &response_paths.actual_response,
     )
     .unwrap();
-    fixture.replace_case_responses("case-2", encrypted_source, encrypted_target);
+    fixture.replace_case_responses(
+        "00000000-0000-4000-8000-000000000002",
+        encrypted_source,
+        encrypted_target,
+    );
     let planned = fixture.plan().unwrap();
     assert_eq!(
         planned.traffic_e2e_report["preflight"]["source_validations"],
@@ -334,7 +352,7 @@ fn interaction_rules_preserve_private_header_date_and_jwt_contracts() {
         );
     }
     for bad_jwt in [false, true] {
-        let options = options(&fixture, "case-2");
+        let options = options(&fixture, "00000000-0000-4000-8000-000000000002");
         let mut changed = target.clone();
         if bad_jwt {
             changed["headers"]["x-state"] = json!([crate::request_rules::tests::token(

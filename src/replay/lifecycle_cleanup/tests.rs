@@ -92,7 +92,7 @@ async fn fixture_with_reason(
         Vec::new()
     };
     tokio::fs::write(root.join("case-a/async-api-observation.json"),json!({
-        "version":1,"complete":true,"inventory_complete":true,"end_reason":reason,"request_timeout_ms":3000,
+        "version":2,"capture_complete":true,"business_complete":reason=="resource","business_completion":if reason=="resource" {"observed"}else{"unobserved"},"inventory_complete":true,"end_reason":reason,"request_timeout_ms":3000,
         "source_stop_required":true,"source_stop_after_ms":0,"completed_refs":references,
         "cleanup_refs":cleanup
     }).to_string()).await?;

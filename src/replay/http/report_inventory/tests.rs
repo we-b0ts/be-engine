@@ -120,14 +120,19 @@ fn consume(state: &mut ReplayState, uri: &str, expected: &str) -> usize {
         &HeaderSnapshot::new(),
         Utc::now(),
     );
-    let Ok(response) = response else {
+    let Ok(mut response) = response else {
         panic!("native HTTP request must match {uri}");
     };
     assert_eq!(
         decode_body(response.response_body.as_ref().unwrap()).unwrap(),
         expected.as_bytes()
     );
-    state.http_events.matched.last().unwrap().index
+    // This projection fixture explicitly supplies the transport completion;
+    // selecting native bytes alone must never count as delivered traffic.
+    let detail = response.stream_delivery.take().unwrap();
+    let index = detail.index;
+    state.finish_http_response(detail, Ok(()));
+    index
 }
 
 async fn publish_and_compare(runtime: &ReplayRuntime, report: &Path) -> Value {

@@ -34,7 +34,7 @@ pub(crate) struct NativeSourceInventory {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SourceObligation {
     FreshRecording,
-    Reclassify,
+    AttributionReview,
     Replay,
 }
 #[derive(Debug, Clone, Serialize)]
@@ -70,11 +70,16 @@ pub(crate) fn validate_source(
                 capture::validate(&scope, rule, &files, &mut inventory.artifact_paths)?
             }
             n::NativeEffect::ProcessOwned(effect) => {
-                obligations.insert(SourceObligation::Reclassify);
-                // Initial-load GET changes bootstrap acquisition. A finite GET
-                // only reclassifies complete original single-use exchanges.
-                if matches!(&effect.selector, n::ProcessSelector::Redis { operation, initial_load_timeout_ms: Some(_), .. } if operation == "GET")
-                {
+                obligations.insert(SourceObligation::AttributionReview);
+                // Explicit initial loads change bootstrap acquisition. Finite
+                // process ownership preserves the original single-use exchanges.
+                if matches!(
+                    &effect.selector,
+                    n::ProcessSelector::Redis {
+                        initial_load_timeout_ms: Some(_),
+                        ..
+                    }
+                ) {
                     obligations.insert(SourceObligation::FreshRecording);
                 }
                 classification::validate(&scope, compiled, &files, &mut inventory.artifact_paths)?

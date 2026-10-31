@@ -84,6 +84,8 @@ pub(super) fn report(
         .collect::<Vec<_>>();
     let mut facts = json!({ "work_scope": scope, "issue": issue, "method_apis": methods,
         "method_issues": method_issues,"rule_discovery":rule_discovery });
+    facts["api_information"] =
+        super::super::dependency_review::api_information(target_root, state, &state.api, 0)?;
     if matches!(
         issue.kind,
         crate::rewrite::RewriteIssueKind::Response

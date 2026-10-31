@@ -125,6 +125,26 @@ pub(crate) fn compare_logical_with_time_copies(
     )
 }
 
+/// Reuse the ordinary strict remainder and authored owners with independently
+/// checked diagnostic leaves, without serializing or cloning the payload.
+pub(crate) fn compare_logical_with_verified(
+    source: &Value,
+    target: &Value,
+    plan: &CompiledJsonPolicy,
+    clocks: AnchorClocks,
+    additional: &[json::VerifiedField<'_>],
+) -> Result<Comparison> {
+    let selected = plan.comparison_fields(source, target, clocks)?;
+    let protocols = super::global_protocol::checks(plan, source)?;
+    let mut verified = protocols.fields();
+    verified.extend(additional.iter().map(|field| json::VerifiedField {
+        rule_id: field.rule_id,
+        pointer: field.pointer,
+        verifier: field.verifier,
+    }));
+    compare_selected_with_time_copies(source, target, &selected, &[], clocks, &[], &verified)
+}
+
 fn compare_selected(
     source: &Value,
     target: &Value,

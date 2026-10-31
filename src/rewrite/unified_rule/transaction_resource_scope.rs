@@ -7,7 +7,7 @@ use crate::policy_evidence::{
 };
 
 fn rule() -> serde_json::Value {
-    json!({"format":"traffic-policy/v2","json":{"fields":{
+    json!({"format":"traffic-policy/v3","json":{"fields":{
         "/members":{"kind":"unordered"},
         "/lastActiveDate":{"kind":"time","formats":[{"format":"calendar_date","utc_offset":"+08:00"}]}
     }}})
@@ -35,7 +35,7 @@ fn fixture() -> Fixture {
 
 fn foreign(fixture: &Fixture, event: &serde_json::Value) -> PathBuf {
     let source = fixture.state().case_source.clone().unwrap();
-    let case = source.join("apis/other/case-2");
+    let case = source.join("apis/other/00000000-0000-4000-8000-000000000002");
     fs::create_dir_all(&case).unwrap();
     write(
         &case.join("request.json"),
@@ -47,6 +47,7 @@ fn foreign(fixture: &Fixture, event: &serde_json::Value) -> PathBuf {
         json!({"status":200,"body":body(json!({}))}),
     );
     fs::write(case.join("dependencies.jsonl"), format!("{event}\n")).unwrap();
+    recording_fixture::seal(&source);
     case
 }
 
@@ -62,6 +63,7 @@ fn foreign_execution(fixture: &Fixture, event: &serde_json::Value, date: &str) -
         time,
         "POST /other",
     );
+    recording_fixture::seal(&source);
     let run = fixture
         .paths
         .replay
@@ -103,7 +105,7 @@ fn foreign_execution(fixture: &Fixture, event: &serde_json::Value, date: &str) -
                 source_role: SourceRole::DependencyRequest,
                 target_role: TargetRole::IndependentTargetObservation,
                 source: SourceIdentity {
-                    case_id: "case-2".into(),
+                    case_id: "00000000-0000-4000-8000-000000000002".into(),
                     exchange_id: None,
                     connection_id: event["connection_id"].as_str().map(str::to_owned),
                     sequence: Some(1),
@@ -124,9 +126,9 @@ fn foreign_execution(fixture: &Fixture, event: &serde_json::Value, date: &str) -
         .unwrap();
     write(
         &evidence.replay,
-        json!({"finalized":true,"session_id":"foreign",
+        json!({"version":7,"finalized":true,"session_id":"foreign",
         "replay_policy":{"fingerprint":policy},"policy_witnesses":store.sealed_manifest().unwrap(),
-        "cases":[{"case_id":"case-2","case_dir":case,"source_request_started_at":"2026-10-16T00:00:00Z",
+        "cases":[{"case_id":"00000000-0000-4000-8000-000000000002","case_dir":case,"source_request_started_at":"2026-10-16T00:00:00Z",
             "target_request_started_at":time}]}),
     );
     write(
@@ -136,7 +138,7 @@ fn foreign_execution(fixture: &Fixture, event: &serde_json::Value, date: &str) -
     );
     write(
         &evidence.aggregate,
-        json!({"case_source":source,"complete":true,"selected_case_ids":["case-2"]}),
+        json!({"case_source":source,"complete":true,"selected_case_ids":["00000000-0000-4000-8000-000000000002"]}),
     );
     evidence.replay
 }
@@ -364,7 +366,7 @@ fn resource_scope_checks_native_http_source_on_other_apis() {
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1");
+            .join("apis/api/00000000-0000-4000-8000-000000000001");
         fs::write(case.join("dependencies.jsonl"), format!("{event}\n")).unwrap();
         if scenario != "valid" {
             event["request_body"]["truncated"] = json!(true);

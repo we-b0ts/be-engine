@@ -3,7 +3,7 @@
 Declare array ordering in the global JSON strategy:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 json:
   fields:
     /department_ids: {kind: unordered}

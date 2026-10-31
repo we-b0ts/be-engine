@@ -18,7 +18,7 @@ fn explicit(start: &str, end: &str, autocommit: u16) -> Vec<Value> {
 }
 
 fn classify_global(records: &[Value]) -> BTreeMap<usize, OptionalSessionExchange> {
-    classify_with_global(&[], records, ReplaySource::Global)
+    classify_with_global(&[], records, ReplaySource::Startup)
 }
 
 fn classify_with_global(
@@ -34,7 +34,7 @@ fn classify_with_global(
             .collect::<Vec<_>>()
     };
     let mut prefixes = ReadPrefixes::default();
-    classify(&decode(global), ReplaySource::Global, &mut prefixes);
+    classify(&decode(global), ReplaySource::Startup, &mut prefixes);
     classify(&decode(records), source, &mut prefixes)
 }
 

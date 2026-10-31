@@ -19,7 +19,7 @@ fn connection_failure_inventory_survives_summary_and_dependency_evidence() {
     ] {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("recording");
-        let mut report = report_value(6, &source.join("api"), &[("case-a", "ended")], 0);
+        let mut report = report_value(7, &source.join("api"), &[("case-a", "ended")], 0);
         report["connect_failures"] = json!({"matched_count":2,"unused_case":[],"failed_case":[]});
         if dirty {
             report["connect_failures"][field] = json!([{"case_id":"case-a","id":uuid::Uuid::new_v4(),"target":{"host":"cache.test","port":6379}}]);
@@ -53,7 +53,7 @@ fn mysql_transaction_semantics_are_reported_without_relabeling_historical_report
     for semantics in [None, Some("first_write_through_end_v1")] {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("recording");
-        let mut report = report_value(6, &source.join("api"), &[("case-a", "ended")], 0);
+        let mut report = report_value(7, &source.join("api"), &[("case-a", "ended")], 0);
         if let Some(semantics) = semantics {
             report["mysql_transaction_semantics"] = json!(semantics);
         }
@@ -80,7 +80,7 @@ fn rejects_pre_global_report_versions() {
 
     let error = aggregate_replay_reports(&source).unwrap_err();
 
-    assert!(error.to_string().contains("supported version is 6"));
+    assert!(error.to_string().contains("supported version is 7"));
 }
 
 #[test]
@@ -90,12 +90,12 @@ fn rejects_duplicate_case_ids_in_case_source() {
     write_report(
         &source,
         "api-one",
-        report_value(6, &source.join("api-one"), &[("same", "ended")], 0),
+        report_value(7, &source.join("api-one"), &[("same", "ended")], 0),
     );
     write_report(
         &source,
         "api-two",
-        report_value(6, &source.join("api-two"), &[("same", "ended")], 0),
+        report_value(7, &source.join("api-two"), &[("same", "ended")], 0),
     );
 
     let error = aggregate_replay_reports(&source).unwrap_err();
@@ -128,7 +128,7 @@ fn reports_published_cases_without_replay_output() {
 fn marks_pending_and_unused_evidence_in_summary() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value(6, &source.join("api"), &[("case-a", "pending")], 0);
+    let mut report = report_value(7, &source.join("api"), &[("case-a", "pending")], 0);
     report["unused_case_http_exchanges"] = json!([{"case_id":"case-a"}]);
     write_report(&source, "api", report);
 
@@ -143,7 +143,7 @@ fn marks_pending_and_unused_evidence_in_summary() {
 fn matched_header_mismatch_is_dirty_and_observations_only_are_clean() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value(6, &source.join("api"), &[("case-a", "ended")], 0);
+    let mut report = report_value(7, &source.join("api"), &[("case-a", "ended")], 0);
     let event = json!({"case_id": "case-a", "header": "tenant-id"});
     report["http_request_header_mismatches"] = json!([event]);
     report["http_request_header_observations"] = json!([event]);
@@ -162,7 +162,7 @@ fn matched_header_mismatch_is_dirty_and_observations_only_are_clean() {
 fn retains_unused_global_as_diagnostic_without_marking_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000088",
@@ -192,7 +192,7 @@ fn retains_unused_global_as_diagnostic_without_marking_dirty() {
 fn unscoped_target_activity_is_counted_but_does_not_mark_cases_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000086",
@@ -224,7 +224,7 @@ fn unscoped_target_activity_is_counted_but_does_not_mark_cases_dirty() {
 fn unrecorded_endpoint_is_counted_and_marks_replay_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000085",
@@ -248,7 +248,7 @@ fn unrecorded_endpoint_is_counted_and_marks_replay_dirty() {
 fn aggregates_motan_counts_and_marks_unused_case_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000087",
@@ -271,7 +271,7 @@ fn aggregates_motan_counts_and_marks_unused_case_dirty() {
 fn retains_allowed_unused_case_http_as_diagnostic_without_marking_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000089",
@@ -296,7 +296,7 @@ fn retains_allowed_unused_case_http_as_diagnostic_without_marking_dirty() {
 fn marks_unused_applicable_replay_policy_rule_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000099",
@@ -327,7 +327,7 @@ fn marks_unused_applicable_replay_policy_rule_dirty() {
 fn rejects_replay_policy_that_does_not_declare_assertion_only_expected_response() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000098",
@@ -358,7 +358,7 @@ fn selects_exact_cases_and_final_sessions() {
         &source,
         "api",
         "attempt-a",
-        report_value_v6(
+        report_value_v7(
             &source.join("api"),
             &[("case-a", "ended"), ("case-b", "ended")],
             session_a,
@@ -369,7 +369,7 @@ fn selects_exact_cases_and_final_sessions() {
         &source,
         "api",
         "attempt-b",
-        report_value_v6(&source.join("api"), &[("case-b", "ended")], session_b, true),
+        report_value_v7(&source.join("api"), &[("case-b", "ended")], session_b, true),
     );
     let options = ReplayAggregateOptions {
         case_ids: BTreeSet::from(["case-b".to_string()]),
@@ -395,7 +395,7 @@ fn exact_report_aggregation_ignores_unrelated_historical_reports() {
         &source,
         "api",
         "selected",
-        report_value_v6(&source.join("api"), &[("case-a", "ended")], session, true),
+        report_value_v7(&source.join("api"), &[("case-a", "ended")], session, true),
     );
     let unrelated = source
         .join("api")
@@ -423,7 +423,7 @@ fn runner_snapshot_aggregates_shared_session_and_preserves_sibling_dirty_evidenc
     let source = temp.path().join("recording");
     let snapshot = temp.path().join("runtime/focused/latest");
     fs::create_dir_all(&snapshot).unwrap();
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source,
         &[("case-a", "ended"), ("case-b", "ended")],
         "session",
@@ -476,7 +476,7 @@ fn runner_report_path_must_stay_in_recording_or_selected_snapshot() {
     let source = temp.path().join("recording");
     let snapshot = temp.path().join("snapshot");
     fs::create_dir(&snapshot).unwrap();
-    let report = report_value_v6(&source, &[("case-a", "ended")], "session", true);
+    let report = report_value_v7(&source, &[("case-a", "ended")], "session", true);
     write_case(&source.join("case-a"), true);
     let outside = temp.path().join("replay-report.json");
     fs::write(&outside, report.to_string()).unwrap();
@@ -502,7 +502,7 @@ fn loaded_runner_report_preserves_shared_session_evidence_without_reading_anothe
     fs::create_dir(&snapshot).unwrap();
     write_case(&source.join("case-a"), true);
     write_case(&source.join("case-b"), true);
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source,
         &[("case-a", "ended"), ("case-b", "ended")],
         "session",
@@ -581,13 +581,13 @@ fn rerun_requires_an_explicit_session_selection() {
         &source,
         "api",
         "attempt-one",
-        report_value_v6(&source.join("api"), &[("case-a", "ended")], first, true),
+        report_value_v7(&source.join("api"), &[("case-a", "ended")], first, true),
     );
     write_session_report(
         &source,
         "api",
         "attempt-two",
-        report_value_v6(&source.join("api"), &[("case-a", "ended")], second, true),
+        report_value_v7(&source.join("api"), &[("case-a", "ended")], second, true),
     );
 
     let error = aggregate_replay_reports(&source).unwrap_err();
@@ -610,7 +610,7 @@ fn unfinalized_report_is_not_complete() {
         &source,
         "api",
         "unfinished",
-        report_value_v6(
+        report_value_v7(
             &source.join("api"),
             &[("case-a", "ended")],
             "00000000-0000-4000-8000-000000000021",
@@ -625,10 +625,10 @@ fn unfinalized_report_is_not_complete() {
 }
 
 #[test]
-fn version_six_uses_total_success_counts_beyond_retained_details() {
+fn version_seven_uses_total_success_counts_beyond_retained_details() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000051",
@@ -658,10 +658,10 @@ fn version_six_uses_total_success_counts_beyond_retained_details() {
 }
 
 #[test]
-fn version_six_accepts_success_details_bounded_per_case() {
+fn version_seven_accepts_success_details_bounded_per_case() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v6(
+    let mut report = report_value_v7(
         &source.join("api"),
         &[("case-a", "ended"), ("case-b", "ended")],
         "00000000-0000-4000-8000-000000000052",
@@ -692,7 +692,7 @@ fn selected_session_must_cover_the_selected_cases() {
         &source,
         "api",
         "other-case",
-        report_value_v6(&source.join("api"), &[("case-a", "ended")], session, true),
+        report_value_v7(&source.join("api"), &[("case-a", "ended")], session, true),
     );
     write_case(&source.join("api").join("case-b"), true);
     let options = ReplayAggregateOptions {
@@ -794,13 +794,13 @@ fn report_value(
     report
 }
 
-fn report_value_v6(
+fn report_value_v7(
     case_dir: &Path,
     cases: &[(&str, &str)],
     session_id: &str,
     finalized: bool,
 ) -> Value {
-    let mut report = report_value(6, case_dir, cases, 0);
+    let mut report = report_value(7, case_dir, cases, 0);
     report["session_id"] = json!(session_id);
     report["started_at"] = json!("2026-07-14T00:00:00Z");
     report["finalized"] = json!(finalized);

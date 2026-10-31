@@ -83,7 +83,7 @@ target repair, migration route, blocker status, or completion state.
 
 ## Unified Policy Boundary
 
-`project.policy` names one `traffic-policy/v2` document, normally
+`project.policy` names one `traffic-policy/v3` document, normally
 `.traffic-e2e/policy.yaml`. Declare one global JSON field-format map under
 `json.fields`, independent of APIs, SSE events, database columns and cache keys.
 JSON-valued columns are recognized automatically; native MySQL time types use

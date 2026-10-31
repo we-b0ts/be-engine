@@ -17,6 +17,8 @@ const CLIENT_TERMINATION_LATE_TOLERANCE: Duration = Duration::from_secs(1);
 pub(super) enum ReplayExchangeStatus {
     #[default]
     Available,
+    /// Unclaimed initialization traffic cannot be borrowed after the first primary input.
+    StartupBlocked,
     Responding,
     AwaitingClientTermination,
     Consumed,

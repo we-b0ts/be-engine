@@ -7,7 +7,7 @@ fn one_global_strategy_compares_unrelated_api_responses_and_preserves_identity_r
     let policy = temp.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /created_at: {kind: time, formats: [unix_seconds]}

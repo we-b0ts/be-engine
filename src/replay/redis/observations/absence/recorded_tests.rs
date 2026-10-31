@@ -35,7 +35,7 @@ fn recorded_absent_reads_validate_without_editing_source() {
     }
     assert!(!inventory.is_empty());
     let policy = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2",
+        &json!({"format":"traffic-policy/v3",
         "redis":{"keys":{format!("{prefix}*"):{"read_observation":true}}}})
         .to_string(),
     )

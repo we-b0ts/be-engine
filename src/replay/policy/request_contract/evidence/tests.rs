@@ -51,6 +51,7 @@ impl Fixture {
                 recorded: Some(DateTime::from_timestamp(1000, 0).unwrap()),
                 actual: Some(DateTime::from_timestamp(2000, 0).unwrap()),
                 dir: case.clone(),
+                dependencies_path: case.join("dependencies.jsonl"),
             },
         );
         Self {
@@ -234,7 +235,12 @@ fn planning_requires_all_selected_commands_from_same_key_and_endpoint_source() {
                 "other_key" => later["args"][0]["data"] = json!("presence:2"),
                 "other_database" => later["database"] = json!(1),
                 "other_target" => later["target_host"] = json!("other.test"),
-                "global" => later["global_dependency_reason"] = json!("background_rule"),
+                "global" => {
+                    later["capture"] = serde_json::to_value(
+                        crate::dependency::observation::fixture_capture("process"),
+                    )
+                    .unwrap()
+                }
                 _ => unreachable!(),
             }
             fixture.events.push(later);
@@ -346,7 +352,7 @@ fn protected_publish_witnesses_use_global_identity_and_time_formats() {
         let mut fixture = Fixture::new();
         fs::write(
             &fixture.policy,
-            r#"format: traffic-policy/v2
+            r#"format: traffic-policy/v3
 json:
   fields:
     /host_id: {kind: identity, formats: [{hex: 32}]}

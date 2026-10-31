@@ -300,6 +300,8 @@ pub(super) fn admit(
         "final review scope is stale"
     );
     let path = accepted_path(root);
+    let case_source = state.case_source.clone();
+    let source_revision = state.source_revision.clone();
     let receipt_identity = receipt_identity(report)?;
     write_json(&path, report)?;
     if state.phase == RewritePhase::SystemRepairRequired
@@ -338,6 +340,8 @@ pub(super) fn admit(
     {
         crate::rewrite::inventory::resume_at(state, index)?;
     }
+    state.case_source = case_source;
+    state.source_revision = source_revision;
     state.bump();
     Ok(())
 }

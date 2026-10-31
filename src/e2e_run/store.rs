@@ -278,7 +278,20 @@ pub(super) fn publish_snapshot(
     remove_decrypted_request_views(active_dir)?;
     let published_state =
         super::assertion_publication::prepare(state, active_dir, active_dir, latest_dir)?;
-    write_yaml(&active_dir.join("state.yaml"), &published_state)?;
+    publish_reference_snapshot(active_dir, latest_dir, &published_state)
+}
+
+/// Atomic state-only projection whose artifacts already live in a sealed session archive.
+pub(super) fn publish_reference_snapshot(
+    active_dir: &Path,
+    latest_dir: &Path,
+    state: &ActiveRunState,
+) -> Result<()> {
+    ensure!(
+        state.status.is_terminal(),
+        "cannot publish a non-terminal actual session projection"
+    );
+    write_yaml(&active_dir.join("state.yaml"), state)?;
     let parent = latest_dir
         .parent()
         .context("latest directory has no parent")?;

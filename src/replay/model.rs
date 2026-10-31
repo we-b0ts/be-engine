@@ -3,8 +3,18 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ReplaySource {
-    Global,
+    Startup,
+    Process,
     Case,
+}
+
+impl ReplaySource {
+    pub(super) fn is_run_owned(self) -> bool {
+        self != Self::Case
+    }
+    pub(super) fn matches_scope(self, requested: Self) -> bool {
+        self == requested || self.is_run_owned() && requested.is_run_owned()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -130,87 +140,142 @@ pub(super) async fn discover_replay_cases(
     root_dir: &Path,
     selected_case_ids: &BTreeSet<String>,
 ) -> Result<(ReplayMode, BTreeMap<String, ReplayCase>, Option<String>)> {
-    let direct_dependencies = root_dir.join("dependencies.jsonl");
-    if direct_dependencies.is_file() {
-        let case_id = path_file_name(root_dir).unwrap_or_else(|| "case".to_string());
+    if crate::dependency_index::recording::root(root_dir).is_some() {
+        let (_, files) = crate::dependency_index::recording::cases(root_dir)?;
         let mut cases = BTreeMap::new();
-        cases.insert(
-            case_id.clone(),
-            ReplayCase {
-                id: case_id.clone(),
-                dir: root_dir.to_path_buf(),
-                dependencies_path: direct_dependencies,
-                status: ReplayCaseStatus::Pending,
-            },
+        for dependencies_path in files {
+            let dir = dependencies_path
+                .parent()
+                .context("Case scope has no directory")?
+                .to_path_buf();
+            let id = path_file_name(&dir).context("Case directory has no identity")?;
+            ensure!(
+                cases
+                    .insert(
+                        id.clone(),
+                        ReplayCase {
+                            id,
+                            dir,
+                            dependencies_path,
+                            status: ReplayCaseStatus::Pending
+                        }
+                    )
+                    .is_none(),
+                "duplicate manifest Case"
+            );
+        }
+        ensure!(
+            !cases.is_empty(),
+            "selected recording scope contains no complete Cases"
         );
         ensure_selected_cases_exist(root_dir, &cases, selected_case_ids)?;
         cases.retain(|id, _| selected_case_ids.is_empty() || selected_case_ids.contains(id));
-        return Ok((ReplayMode::Single, cases, Some(case_id)));
+        let single = root_dir
+            .join(crate::dependency_index::scoped::CASE_SCOPE)
+            .is_file();
+        let active = if single {
+            cases.keys().next().cloned()
+        } else {
+            None
+        };
+        return Ok((
+            if single {
+                ReplayMode::Single
+            } else {
+                ReplayMode::Collection
+            },
+            cases,
+            active,
+        ));
     }
-
-    let mut cases = BTreeMap::new();
-    let mut pending = vec![root_dir.to_path_buf()];
-    while let Some(scan_dir) = pending.pop() {
-        let dependencies_path = scan_dir.join("dependencies.jsonl");
-        if !dependencies_path.is_file() {
-            let mut entries = tokio::fs::read_dir(&scan_dir).await.with_context(|| {
-                format!(
-                    "failed to read replay case collection {}",
-                    scan_dir.display()
-                )
-            })?;
-            while let Some(entry) = entries.next_entry().await.with_context(|| {
-                format!(
-                    "failed to scan replay case collection {}",
-                    scan_dir.display()
-                )
-            })? {
-                let file_type = entry.file_type().await.with_context(|| {
-                    format!(
-                        "failed to inspect replay case entry {}",
-                        entry.path().display()
-                    )
-                })?;
-                if !file_type.is_dir() {
-                    continue;
-                }
-                let child = entry.path();
-                if should_skip_replay_scan_dir(&child) {
-                    continue;
-                }
-                pending.push(child);
-            }
-            continue;
+    #[cfg(not(test))]
+    anyhow::bail!(
+        "recording requires the current central dependency manifest; old recording semantics are unsupported"
+    );
+    #[cfg(test)]
+    {
+        let direct_dependencies = root_dir.join("dependencies.jsonl");
+        if direct_dependencies.is_file() {
+            let case_id = path_file_name(root_dir).unwrap_or_else(|| "case".to_string());
+            let mut cases = BTreeMap::new();
+            cases.insert(
+                case_id.clone(),
+                ReplayCase {
+                    id: case_id.clone(),
+                    dir: root_dir.to_path_buf(),
+                    dependencies_path: direct_dependencies,
+                    status: ReplayCaseStatus::Pending,
+                },
+            );
+            ensure_selected_cases_exist(root_dir, &cases, selected_case_ids)?;
+            cases.retain(|id, _| selected_case_ids.is_empty() || selected_case_ids.contains(id));
+            return Ok((ReplayMode::Single, cases, Some(case_id)));
         }
 
-        let Some(case_id) = path_file_name(&scan_dir) else {
-            continue;
-        };
-        if cases.contains_key(&case_id) {
+        let mut cases = BTreeMap::new();
+        let mut pending = vec![root_dir.to_path_buf()];
+        while let Some(scan_dir) = pending.pop() {
+            let dependencies_path = scan_dir.join("dependencies.jsonl");
+            if !dependencies_path.is_file() {
+                let mut entries = tokio::fs::read_dir(&scan_dir).await.with_context(|| {
+                    format!(
+                        "failed to read replay case collection {}",
+                        scan_dir.display()
+                    )
+                })?;
+                while let Some(entry) = entries.next_entry().await.with_context(|| {
+                    format!(
+                        "failed to scan replay case collection {}",
+                        scan_dir.display()
+                    )
+                })? {
+                    let file_type = entry.file_type().await.with_context(|| {
+                        format!(
+                            "failed to inspect replay case entry {}",
+                            entry.path().display()
+                        )
+                    })?;
+                    if !file_type.is_dir() {
+                        continue;
+                    }
+                    let child = entry.path();
+                    if should_skip_replay_scan_dir(&child) {
+                        continue;
+                    }
+                    pending.push(child);
+                }
+                continue;
+            }
+
+            let Some(case_id) = path_file_name(&scan_dir) else {
+                continue;
+            };
+            if cases.contains_key(&case_id) {
+                return Err(anyhow!(
+                    "duplicate replay case id {case_id:?} under {}; pass a narrower case collection or re-record with unique case ids",
+                    root_dir.display()
+                ));
+            }
+            cases.insert(
+                case_id.clone(),
+                ReplayCase {
+                    id: case_id,
+                    dir: scan_dir,
+                    dependencies_path,
+                    status: ReplayCaseStatus::Pending,
+                },
+            );
+        }
+        if cases.is_empty() {
             return Err(anyhow!(
-                "duplicate replay case id {case_id:?} under {}; pass a narrower case collection or re-record with unique case ids",
+                "replay path {} is neither a case directory nor a collection/run directory with dependencies.jsonl case files",
                 root_dir.display()
             ));
         }
-        cases.insert(
-            case_id.clone(),
-            ReplayCase {
-                id: case_id,
-                dir: scan_dir,
-                dependencies_path,
-                status: ReplayCaseStatus::Pending,
-            },
-        );
+        ensure_selected_cases_exist(root_dir, &cases, selected_case_ids)?;
+        cases.retain(|id, _| selected_case_ids.is_empty() || selected_case_ids.contains(id));
+        Ok((ReplayMode::Collection, cases, None))
     }
-    if cases.is_empty() {
-        return Err(anyhow!(
-            "replay path {} is neither a case directory nor a collection/run directory with dependencies.jsonl case files",
-            root_dir.display()
-        ));
-    }
-    ensure_selected_cases_exist(root_dir, &cases, selected_case_ids)?;
-    cases.retain(|id, _| selected_case_ids.is_empty() || selected_case_ids.contains(id));
-    Ok((ReplayMode::Collection, cases, None))
 }
 
 fn ensure_selected_cases_exist(
@@ -232,6 +297,7 @@ fn ensure_selected_cases_exist(
     Ok(())
 }
 
+#[cfg(test)]
 fn should_skip_replay_scan_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())

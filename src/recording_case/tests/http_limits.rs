@@ -53,7 +53,7 @@ async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
         config.http_gateway.case_path_patterns =
             vec!["/record/default/*".into(), "/record/override/*".into()];
         config.recording.output_dir = temp.path().join("recordings");
-        config.recording.case_dependency_post_response_window_ms = 5;
+        config.recording.case_dependency_post_response_window_ms = 0;
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
         let state = AppState::new(config).await.unwrap();

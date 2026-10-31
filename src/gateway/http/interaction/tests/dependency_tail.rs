@@ -64,6 +64,12 @@ impl Fixture {
                     source_evidence: "fixture/worker.rs:1 periodic synthetic stream".into(),
                 }];
         }
+        settings.process_dependency_tasks.extend(
+            settings
+                .process_owned_dependencies
+                .iter()
+                .map(|rule| (rule.name().to_string(), rule.name().to_string())),
+        );
         let state = AppState::new(settings).await.unwrap();
         let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy_address = proxy.local_addr().unwrap();
@@ -197,9 +203,10 @@ impl Fixture {
 }
 
 async fn recorded_dependency(directory: &Path) -> Value {
-    let dependencies = tokio::fs::read_to_string(directory.join("dependencies.jsonl"))
-        .await
-        .unwrap();
+    let dependencies =
+        crate::recorder::test_io::read_to_string(directory.join("dependencies.jsonl"))
+            .await
+            .unwrap();
     let events: Vec<Value> = dependencies
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -535,9 +542,10 @@ async fn proven_process_http_stream_does_not_hold_primary_case_and_records_late_
         .unwrap();
         assert_eq!(report["outcome"], "quiet");
         assert!(report["completed_refs"].as_array().unwrap().is_empty());
-        let dependencies = tokio::fs::read_to_string(directory.join("dependencies.jsonl"))
-            .await
-            .unwrap();
+        let dependencies =
+            crate::recorder::test_io::read_to_string(directory.join("dependencies.jsonl"))
+                .await
+                .unwrap();
         assert!(dependencies.trim().is_empty());
         assert_eq!(fixture.state.recording_lifecycle_phase(), "running");
         assert!(!*fixture.state.inner.interactions.source_stop.borrow());
@@ -550,12 +558,12 @@ async fn proven_process_http_stream_does_not_hold_primary_case_and_records_late_
                 .await
                 .unwrap()
         );
-        let global = tokio::fs::read_to_string(
+        let global = crate::recorder::test_io::read_to_string(
             fixture
                 .state
                 .recorder()
                 .run_dir
-                .join("global-dependencies.jsonl"),
+                .join("indexes/process-scope.json"),
         )
         .await
         .unwrap();
@@ -565,12 +573,12 @@ async fn proven_process_http_stream_does_not_hold_primary_case_and_records_late_
             .collect();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event_type"], "http_exchange");
-        assert_eq!(events[0]["global_dependency_reason"], "background_rule");
+        assert_eq!(events[0]["capture"]["attribution"]["kind"], "process");
         assert_eq!(events[0]["response_stream"]["complete"], true);
         assert_eq!(events[0]["response_body"]["data"], "b25ldHdv");
         assert!(events[0]["error"].is_null());
         assert!(
-            tokio::fs::read_to_string(directory.join("dependencies.jsonl"))
+            crate::recorder::test_io::read_to_string(directory.join("dependencies.jsonl"))
                 .await
                 .unwrap()
                 .trim()

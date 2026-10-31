@@ -388,8 +388,9 @@ fn pending_plan_for_apply(state: &RewriteState, plan_id: &str) -> Result<Rewrite
         "rule plan is stale or belongs to another issue"
     );
     ensure!(
-        state.active_issue.as_ref().map(|issue| issue.id.as_str())
-            == Some(record.issue_id.as_str()),
+        record.unified.as_ref().is_some_and(|plan| plan.is_batch())
+            || state.active_issue.as_ref().map(|issue| issue.id.as_str())
+                == Some(record.issue_id.as_str()),
         "active rewrite issue changed after rule planning"
     );
     Ok(record)

@@ -220,7 +220,10 @@ fn status_is_compact_and_overview_preserves_diagnostics_and_confirmation() {
         serde_json::to_value(status_rewrite_for_api(context(target.path()), Some(&api)).unwrap())
             .unwrap();
     assert_eq!(status, scoped);
-    assert_eq!(status["schema_version"], 39);
+    assert_eq!(
+        status["schema_version"],
+        crate::rewrite::model::ACTION_SCHEMA_VERSION
+    );
     assert_eq!(status["action"]["kind"], "implementation_required");
     assert_eq!(status["api_inventory"]["active"], 1);
     assert_eq!(status["api_inventory"]["total"], 1);

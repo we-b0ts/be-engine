@@ -50,11 +50,34 @@ async fn step(mut options: RewriteNextOptions) -> Result<AdvanceResult> {
     if let Some(envelope) = configuration_commit::pending(&target_root)? {
         return Ok(AdvanceResult::without_replay(envelope));
     }
+    if options.api.is_some()
+        && options.source_route.is_none()
+        && let Some(state) = super::store::RewriteStore::new(&target_root)?.load()?
+        && super::review::pre_revalidation::current(&target_root, &state)
+        && let Some(action) = super::dependency_review::batch_action(&target_root, &state)
+    {
+        return Ok(AdvanceResult::without_replay(super::action::envelope(
+            &target_root,
+            &state,
+            action,
+        )));
+    }
     if options.api.is_none() && options.source_route.is_none() {
         let status = super::status_rewrite(RewriteContext {
             target_root: target_root.clone(),
         })?;
         if status.initialized {
+            if matches!(
+                status.action,
+                RewriteAction::AdvanceRequired {
+                    kind: RewriteAdvanceKind::BatchReplay,
+                    ..
+                }
+            ) {
+                return Ok(AdvanceResult::without_replay(
+                    super::dependency_review::run_batch(&target_root).await?,
+                ));
+            }
             if matches!(status.action, RewriteAction::AdvanceRequired { .. }) {
                 options.api = selected_api(&status.action)?;
             } else {

@@ -241,7 +241,7 @@ mod tests {
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(
             root.join(".traffic-e2e/policy.yaml"),
-            "format: traffic-policy/v2\nrules: []\n",
+            "format: traffic-policy/v3\nrules: []\n",
         )
         .unwrap();
         fs::write(

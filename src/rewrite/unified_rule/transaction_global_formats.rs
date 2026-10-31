@@ -11,7 +11,7 @@ fn global_format_failure_identifies_primary_case_and_independent_target_phase() 
     fixture.confirm();
     let error = format!("{:#}", fixture.plan().err().unwrap());
     for expected in [
-        "case=case-1",
+        "case=00000000-0000-4000-8000-000000000001",
         "surface=api.response",
         "phase=independent_target_validation",
         "/client_ip",
@@ -28,7 +28,7 @@ fn global_json_formats_plan_and_apply_without_resource_api_or_binding_declaratio
     let fixture = Fixture::new();
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2", "json":{"fields":{"/members":{"kind":"unordered"}}}}),
+        json!({"format":"traffic-policy/v3", "json":{"fields":{"/members":{"kind":"unordered"}}}}),
     );
     fixture.confirm();
     let plan = fixture.plan().unwrap();
@@ -67,7 +67,7 @@ fn global_format_plan_rejects_a_changed_source_payload_before_apply() {
     let fixture = Fixture::new();
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2", "json":{"fields":{"/members":{"kind":"unordered"}}}}),
+        json!({"format":"traffic-policy/v3", "json":{"fields":{"/members":{"kind":"unordered"}}}}),
     );
     fixture.confirm();
     let plan = fixture.plan().unwrap();
@@ -76,7 +76,7 @@ fn global_format_plan_rejects_a_changed_source_payload_before_apply() {
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/api/case-1/expected-response.json");
+        .join("apis/api/00000000-0000-4000-8000-000000000001/expected-response.json");
     fs::write(&case, b"changed after sealed global plan").unwrap();
     assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
     assert!(
@@ -95,7 +95,7 @@ fn global_format_plan_composes_preexisting_script_times_with_protected_target_ev
             fs::write(
                 root.join(".traffic-e2e/policy.yaml"),
                 format!(
-                    r#"format: traffic-policy/v2
+                    r#"format: traffic-policy/v3
 redis:
   keys:
     'metrics:*':

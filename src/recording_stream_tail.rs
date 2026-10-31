@@ -1,13 +1,68 @@
-//! Request-side process classification affects waiting, never evidence ownership.
+//! Request-start selectors freeze whole-task capture ownership before forwarding.
 
 use hyper::{Method, Uri};
 
 use crate::AppState;
 use crate::active_case::DependencyTargets;
 use crate::config::BackgroundDependencyRuleConfig;
-use crate::recorder::api_origin_observation::DependencyRequest;
+use crate::recorder::request::DependencyRequest;
 
 impl AppState {
+    pub(crate) fn capture_memcached_dependency(
+        &self,
+        connection_id: uuid::Uuid,
+        sequence: u64,
+        port: u16,
+        command: &str,
+        key: Option<&[u8]>,
+    ) -> DependencyTargets {
+        let targets =
+            self.capture_dependency_start(crate::dependency::observation::ProtocolRef::Memcached {
+                connection_id,
+                sequence,
+            });
+        let rules = if command.eq_ignore_ascii_case("get") {
+            key.map(|key| {
+                self.inner
+                    .process_owned_dependencies
+                    .matching_memcached_requests(port, key)
+            })
+            .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        crate::recorder::process_classification::classify(
+            targets,
+            rules,
+            &self.config().process_dependency_tasks,
+        )
+    }
+
+    pub(crate) fn capture_motan_dependency(
+        &self,
+        connection_id: uuid::Uuid,
+        sequence: u64,
+        identity: &crate::motan::RequestIdentity,
+        group: Option<&str>,
+        heartbeat: bool,
+    ) -> DependencyTargets {
+        let targets =
+            self.capture_dependency_start(crate::dependency::observation::ProtocolRef::Motan {
+                connection_id,
+                sequence,
+            });
+        let rules = self.config().process_owned_dependencies.iter().filter(|rule|
+            !heartbeat && matches!(rule,BackgroundDependencyRuleConfig::Motan{group:expected,interface_name,method_name,..}
+                if group==Some(expected.as_str()) && identity.interface_name.as_deref()==Some(interface_name)
+                    && identity.method_name.as_deref()==Some(method_name)))
+            .map(|rule|rule.name().to_owned()).collect::<Vec<_>>();
+        crate::recorder::process_classification::classify(
+            targets,
+            rules,
+            &self.config().process_dependency_tasks,
+        )
+    }
+
     pub(crate) fn capture_http_dependency_request(
         &self,
         method: &Method,
@@ -18,22 +73,25 @@ impl AppState {
             .config()
             .process_owned_dependencies
             .iter()
-            .find(|rule| rule.matches_http_request(method.as_str(), uri, authority));
+            .filter(|rule| rule.matches_http_request(method.as_str(), uri, authority))
+            .map(|rule| rule.name().to_owned())
+            .collect::<Vec<_>>();
         let targets = self
             .inner
             .active_cases
-            .current_targets_for_http_request(process_owned.is_none());
-        match process_owned {
-            Some(rule) => targets.into_process_owned(rule.name().to_owned()),
-            None => targets,
-        }
+            .current_targets_for_http_request(process_owned.is_empty());
+        crate::recorder::process_classification::classify(
+            targets,
+            process_owned,
+            &self.config().process_dependency_tasks,
+        )
     }
 
     pub(crate) fn capture_typed_dependency_request(
         &self,
         request: DependencyRequest<'_>,
     ) -> DependencyTargets {
-        let process_owned = self.stream_tail_process_rule(&request);
+        let process_owned = self.stream_tail_process_rules(&request);
         let metadata_only = match &request {
             DependencyRequest::Mysql { command, .. } => {
                 crate::mysql::wire::is_no_response_command(command)
@@ -45,24 +103,19 @@ impl AppState {
         let targets = self
             .inner
             .active_cases
-            .current_targets_for_request_with_tail(
-                &request,
-                process_owned.is_none() && !metadata_only,
-            );
-        match process_owned {
-            Some(rule) => targets.into_process_owned(rule.name().to_owned()),
-            None => targets,
-        }
+            .current_targets_for_request_with_tail(process_owned.is_empty() && !metadata_only);
+        crate::recorder::process_classification::classify(
+            targets,
+            process_owned,
+            &self.config().process_dependency_tasks,
+        )
     }
 
-    fn stream_tail_process_rule(
-        &self,
-        request: &DependencyRequest<'_>,
-    ) -> Option<&BackgroundDependencyRuleConfig> {
+    fn stream_tail_process_rules(&self, request: &DependencyRequest<'_>) -> Vec<String> {
         self.config()
             .process_owned_dependencies
             .iter()
-            .find(|rule| {
+            .filter(|rule| {
                 if rule.trigger_source().is_some() {
                     return false;
                 }
@@ -102,5 +155,7 @@ impl AppState {
                     _ => false,
                 }
             })
+            .map(|rule| rule.name().to_owned())
+            .collect()
     }
 }

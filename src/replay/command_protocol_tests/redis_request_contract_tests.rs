@@ -86,7 +86,10 @@ async fn redis_rfc3339_time_rule_replays_finitely_and_rejects_changed_offsets() 
         )
         .await;
     }
-    assert_eq!(std::fs::read_to_string(path).unwrap(), immutable);
+    assert_eq!(
+        crate::recorder::test_io::read_to_string_sync(path).unwrap(),
+        immutable
+    );
     task.abort();
 }
 
@@ -262,7 +265,10 @@ async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fr
             b"-ERR no recorded Redis dependency matched\r\n",
         )
         .await;
-        assert_eq!(std::fs::read_to_string(&dependencies).unwrap(), immutable);
+        assert_eq!(
+            crate::recorder::test_io::read_to_string_sync(&dependencies).unwrap(),
+            immutable
+        );
         task.abort();
     }
 }
@@ -404,7 +410,7 @@ async fn script_and_rpush_contracts_plan_apply_and_replay_over_real_redis_client
         )
         .await;
         assert_eq!(
-            std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+            crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap(),
             immutable
         );
         task.abort();

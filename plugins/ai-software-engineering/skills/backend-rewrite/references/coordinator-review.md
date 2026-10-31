@@ -28,8 +28,8 @@ to the retained integrator in its assigned worktree. The integrator executes
 the configured tool on the final committed candidate and fixes findings. Only
 after success does it run `review check --pre-revalidation --quality-check TOOL
 --worktree ...` to report the successful check and obtain the Source/isolation
-receipt. The engine does not execute repository commands. This changes no
-workflow stages, publication steps or revalidation scheduling.
+receipt. The engine does not execute repository commands. Return the exact
+checked candidate and passing receipt for coordinator admission.
 
 Publish the exact passing candidate and invoke `review accept --report
 /absolute/final-report.json` through the
@@ -39,6 +39,12 @@ recording before it permits full revalidation. Ordinary worker or integration
 reports, failing reports and stale receipts cannot open the gate. Relevant
 changes require fresh final proof; progress-only publication can reuse an
 already admitted matching receipt. Check acceptance never repeats the suite.
+
+After admission, formal final revalidation is one actual complete batch session.
+Its method results come from that session; do not schedule separate final
+per-API runs followed by another sweep. The sealed Source run must cover its
+complete inventory and every required workflow method. Final review and committed
+progress do not certify missing traffic or create a batch receipt.
 
 ## Delegate Candidate Review And Admit The Report
 

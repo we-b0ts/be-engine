@@ -57,7 +57,7 @@ async fn exercise_buffering(source_refresh: bool) {
     let policy = root.path().join(".traffic-e2e/policy.yaml");
     std::fs::write(
         &policy,
-        json!({"format":"traffic-policy/v2",
+        json!({"format":"traffic-policy/v3",
         "rules":[read_rule(true), append_rule(), expiry]})
         .to_string(),
     )
@@ -174,7 +174,7 @@ async fn exercise_buffering(source_refresh: bool) {
         if source_refresh { 5 } else { 4 }
     );
     assert_eq!(
-        std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+        crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap(),
         original
     );
 }

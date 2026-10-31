@@ -91,9 +91,22 @@ pub(super) fn update_focused_index(
         return;
     }
     reconcile_baseline(index, state);
+    let fresh_apis = state
+        .apis
+        .iter()
+        .filter(|api| {
+            index
+                .latest_focused_sequences
+                .get(&api.api_key)
+                .is_none_or(|sequence| *sequence < state.sequence)
+        })
+        .collect::<Vec<_>>();
+    if fresh_apis.is_empty() {
+        return;
+    }
     index.inventory_complete = inventory_complete;
     count_current_run(index);
-    for api in &state.apis {
+    for api in &fresh_apis {
         index
             .latest_focused_sequences
             .insert(api.api_key.clone(), state.sequence);
@@ -116,7 +129,7 @@ pub(super) fn update_focused_index(
     reconcile_api_scope(index, current_apis.keys().cloned().collect());
     let global_evidence_clean =
         state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
-    for api in &state.apis {
+    for api in fresh_apis {
         let full_api_coverage = current_apis.get(&api.api_key) == Some(&api.total);
         update_api_progress(index, api, global_evidence_clean && full_api_coverage);
     }
@@ -154,58 +167,6 @@ pub(super) fn write_replay_progress(
     }
     if progress_path != legacy_progress_path && legacy_progress_path.exists() {
         remove_legacy_progress(legacy_progress_path)?;
-    }
-    Ok(())
-}
-
-pub(super) fn ensure_replay_progress_revisable(
-    progress_path: &Path,
-    index: &RunIndex,
-    state: &ActiveRunState,
-) -> Result<()> {
-    let report = load(progress_path, VerificationStage::Progress)?
-        .context("replay progress is missing for focused evidence revision")?;
-    let logical = report
-        .merge_logical_run_scope(logical_observation(index, state)?, index.inventory_complete)?;
-    if let Some(counted) = report.counted_observations.get(&logical.key) {
-        ensure!(
-            counted.observation.apis.len() == logical.apis.len()
-                && counted.observation.apis.iter().all(|(api, previous)| {
-                    logical.apis.get(api).is_some_and(|current| {
-                        previous.cases == current.cases && previous.passed == current.passed
-                    })
-                })
-                && counted.observation.passed == logical.passed,
-            "logical replay progress changed before focused evidence revision"
-        );
-        return Ok(());
-    }
-    report.ensure_revisable_observation(&legacy_attempt_observation(state, "focused")?)
-}
-
-pub(super) fn revise_replay_progress(
-    progress_path: &Path,
-    index: &RunIndex,
-    previous: &ActiveRunState,
-    current: &ActiveRunState,
-) -> Result<()> {
-    let mut report = load(progress_path, VerificationStage::Progress)?
-        .context("replay progress is missing for focused evidence revision")?;
-    let requires_persistence = report.requires_persistence();
-    let previous_attempt = legacy_attempt_observation(previous, "focused")?;
-    if report.counted_runs.contains_key(&previous_attempt.key) {
-        report.revise(
-            previous_attempt,
-            legacy_attempt_observation(current, "focused")?,
-        )?;
-    }
-    if report.upsert_logical_run(
-        logical_observation(index, current)?,
-        Some(&format!("{}|", current.run_key)),
-        index.inventory_complete,
-    )? || requires_persistence
-    {
-        write(progress_path, &report)?;
     }
     Ok(())
 }
@@ -274,91 +235,6 @@ fn logical_observation(index: &RunIndex, state: &ActiveRunState) -> Result<Progr
     })
 }
 
-fn legacy_attempt_observation(
-    state: &ActiveRunState,
-    kind: &'static str,
-) -> Result<ProgressObservation> {
-    ensure!(
-        state.status.is_terminal(),
-        "replay progress requires a terminal run"
-    );
-    ensure!(
-        !state.apis.is_empty(),
-        "replay progress requires at least one summarized API"
-    );
-    if kind == "focused" {
-        ensure!(
-            state.apis.len() == 1,
-            "focused replay progress requires exactly one API"
-        );
-    }
-    let evidence_clean =
-        state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
-    let apis = state
-        .apis
-        .iter()
-        .map(|api| {
-            (
-                api.api_key.clone(),
-                ApiObservation {
-                    cases: LatestCounts {
-                        executed: u64::from(api.total),
-                        passed: u64::from(api.passed),
-                    },
-                    finalized: true,
-                    passed: evidence_clean && api.complete_pass,
-                    success_streak: None,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let scope = state
-        .apis
-        .iter()
-        .map(|api| ReplayApiEvidence {
-            api: &api.api_key,
-            total: api.total,
-            passed: api.passed,
-            failed: api.failed,
-            incomplete: api.incomplete,
-            complete_pass: api.complete_pass,
-        })
-        .collect::<Vec<_>>();
-    let evidence = ReplayEvidence {
-        run_key: &state.run_key,
-        sequence: state.sequence,
-        kind,
-        source_revision: &state.source_revision,
-        case_inventory_id: &state.case_inventory_id,
-        replay_finalized: state.replay_finalized,
-        aggregate_complete: state.aggregate_complete,
-        aggregate_clean: state.aggregate_clean,
-        apis: scope,
-    };
-    let evidence_bytes = serde_json::to_vec(&evidence)?;
-    let scope_key = state
-        .apis
-        .iter()
-        .map(|api| api.api_key.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    Ok(ProgressObservation {
-        key: format!(
-            "{}|{}|{}|{}",
-            state.run_key, kind, scope_key, state.sequence
-        ),
-        evidence_fingerprint: fingerprint(&evidence_bytes),
-        finished_at: state
-            .finished_at
-            .context("terminal replay run is missing finished_at")?
-            .to_rfc3339(),
-        finalized: true,
-        passed: None,
-        success_streak: None,
-        apis,
-    })
-}
-
 #[derive(Serialize)]
 struct LogicalReplayEvidence<'a> {
     run_key: &'a str,
@@ -366,29 +242,6 @@ struct LogicalReplayEvidence<'a> {
     case_inventory_id: &'a str,
     inventory_complete: bool,
     current_run: &'a super::model::RunContribution,
-}
-
-#[derive(Serialize)]
-struct ReplayEvidence<'a> {
-    run_key: &'a str,
-    sequence: u64,
-    kind: &'a str,
-    source_revision: &'a str,
-    case_inventory_id: &'a str,
-    replay_finalized: bool,
-    aggregate_complete: bool,
-    aggregate_clean: bool,
-    apis: Vec<ReplayApiEvidence<'a>>,
-}
-
-#[derive(Serialize)]
-struct ReplayApiEvidence<'a> {
-    api: &'a str,
-    total: u32,
-    passed: u32,
-    failed: u32,
-    incomplete: u32,
-    complete_pass: bool,
 }
 
 fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {

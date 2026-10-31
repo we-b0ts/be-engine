@@ -31,6 +31,7 @@ impl RequestContracts {
                     recorded,
                     actual: recorded,
                     dir: dir.clone(),
+                    dependencies_path: dir.join("dependencies.jsonl"),
                     source_body,
                     conditions: super::super::case_condition::matching_rule_ids(
                         request,
@@ -43,6 +44,9 @@ impl RequestContracts {
         }
         Ok(Self {
             pre_match_enabled: false,
+            hypothesis_context: None,
+            hypothesis_journal: None,
+            mysql_hypothesis_projections: Arc::default(),
             compiled: None,
             witnesses: None,
             input_origin: Some(derived_inputs::InputOrigin::Root(target_root.to_owned())),

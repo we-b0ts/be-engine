@@ -20,7 +20,7 @@ impl RedisReplayState {
             port: exchange.record.target_port,
         };
         let context = crate::replay::policy::request_contract::RedisRequestContext {
-            observation_id: None,
+            observation_id: self.request_observation_id,
             case,
             target: &target,
             database: exchange.record.database,
@@ -58,8 +58,17 @@ impl RedisReplayState {
         };
         let actual = expiration.as_deref().unwrap_or(actual);
         let preview = |source: &[Vec<u8>], actual: &[Vec<u8>]| {
-            self.request_contracts
-                .preview_redis_context(&context, source, actual)
+            let owner = if self.request_contracts.pre_match_enabled() {
+                self.request_contracts
+                .with_hypothesis_context(crate::replay::policy::request_contract::HypothesisContext {
+                    carrier: "redis_args".into(),
+                    source_reference: serde_json::json!({"connection_id":exchange.record.connection_id,"sequence":exchange.record.sequence}),
+                    target_observation_id:self.request_observation_id.map(|id|id.to_string()),
+                })
+            } else {
+                self.request_contracts.clone()
+            };
+            owner.preview_redis_context(&context, source, actual)
         };
         preview(source, actual)
     }

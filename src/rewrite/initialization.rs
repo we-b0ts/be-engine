@@ -16,6 +16,10 @@ pub(super) fn new_state(
         version: STATE_VERSION,
         revision: 1,
         workflow_id: format!("rewrite-{}", uuid::Uuid::new_v4().simple()),
+        dependency_review: super::dependency_review::ReviewLedger {
+            required_method_apis: recording_apis.iter().cloned().collect(),
+            ..Default::default()
+        },
         regression: None,
         recording_apis,
         api_inventory: Vec::new(),

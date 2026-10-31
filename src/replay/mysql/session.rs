@@ -97,6 +97,16 @@ pub(super) async fn deliver_matched(
     mut matched: MatchedExchange,
     row_encoding: ResultRowEncoding,
 ) -> Result<SessionDirective> {
+    if let Some(owner) = &matched.hypothesis_owner
+        && let Err(error) = owner.await_hypotheses_durable().await
+    {
+        state.lock().await.fail_exchange(
+            &matched,
+            &session.identity(),
+            "hypothesis evidence persistence failed",
+        );
+        return Err(error);
+    }
     if matched.record.lifecycle_cleanup {
         match super::lifecycle::deliver(
             stream,
@@ -275,7 +285,7 @@ pub(in crate::replay) async fn handle_query(
     session: &mut ReplaySession,
     sql: &str,
 ) -> Result<SessionDirective> {
-    let (matched, case_id) = {
+    let (matched, case_id, observation_id) = {
         let mut state = state.lock().await;
         let identity = session.identity();
         let case = session.request_case(&state, Some(sql));
@@ -296,7 +306,7 @@ pub(in crate::replay) async fn handle_query(
                 connection: session.transaction_witness.connection(),
             }),
         );
-        (matched, case)
+        (matched, case, state.mysql.request_observation_id.clone())
     };
     if matched.is_none()
         && let Some(response) = builtin_response(sql, session.database.as_deref())
@@ -362,6 +372,9 @@ pub(in crate::replay) async fn handle_query(
                     None,
                     "no recorded semantic dependency matched this SQL",
                 );
+                if let Some(report) = state.mysql.events.unmatched_queries.last_mut() {
+                    report.target_observation_id = observation_id.clone();
+                }
             }
             write_packet_and_flush(
                 stream,
@@ -469,7 +482,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
         }
     }
 
-    let (matched, case_id) = {
+    let (matched, case_id, observation_id) = {
         let mut state = state.lock().await;
         let identity = session.identity();
         let case = session.request_case(&state, Some(&statement.sql));
@@ -490,7 +503,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                 connection: session.transaction_witness.connection(),
             }),
         );
-        (matched, case)
+        (matched, case, state.mysql.request_observation_id.clone())
     };
     if matched.is_none()
         && let Some(response) = builtin_response(&statement.sql, session.database.as_deref())
@@ -556,6 +569,9 @@ pub(in crate::replay) async fn handle_stmt_execute(
                     parsed.params.as_deref(),
                     "no recorded semantic dependency matched this prepared SQL and params",
                 );
+                if let Some(report) = state.mysql.events.unmatched_queries.last_mut() {
+                    report.target_observation_id = observation_id.clone();
+                }
             }
             write_packet_and_flush(
                 stream,

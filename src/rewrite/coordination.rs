@@ -26,18 +26,29 @@ pub(super) fn status_details(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteCoordinationDetails> {
+    let execution = super::execution::status_action(target_root)?;
+    status_details_with_execution(target_root, state, execution.as_ref())
+}
+
+pub(super) fn status_details_with_execution(
+    target_root: &Path,
+    state: &RewriteState,
+    execution: Option<&RewriteAction>,
+) -> Result<RewriteCoordinationDetails> {
     if state.revalidation_round.is_some() {
         let mut projected = state.clone();
         if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
-            return status_details(target_root, &projected);
+            return status_details_with_execution(target_root, &projected, execution);
         }
     }
-    let busy = resources_busy(target_root)?;
+    let busy = resources_busy(target_root)? || super::execution::snapshot_blocks_replay(execution);
     let base = super::action::status_base(target_root, state)?;
     if matches!(base, RewriteAction::RepositoryAnalysisRequired { .. }) {
         return Ok(single_ready("repository_analysis", 1));
     }
-    let execution = super::execution::status_action(target_root)?;
+    if matches!(base, RewriteAction::DependencyAttributionRequired { .. }) {
+        return Ok(single_ready("dependency_attribution", 1));
+    }
     let failed = matches!(execution, Some(RewriteAction::ExecutionFailed { .. }));
     let selected = if state.revalidation_round.is_none()
         && state.group_replay.is_none()
@@ -51,7 +62,7 @@ pub(super) fn status_details(
             None
         })
         .or_else(|| super::worker::scheduler::global_action(target_root, state, true))
-        .or(execution.clone())
+        .or_else(|| execution.cloned())
         .unwrap_or_else(|| base.clone())
     } else {
         super::action::select_action(target_root, state, base.clone())
@@ -230,14 +241,10 @@ pub(super) fn details(
         | RewriteAction::WorkerStatusRequired { .. }
         | RewriteAction::IntegrationRequired { .. } => {}
         RewriteAction::AdvanceRequired {
-            kind: super::model::RewriteAdvanceKind::ReclassifyDependencies,
+            kind: super::model::RewriteAdvanceKind::BatchReplay,
             ..
         } if !busy => {
-            replace_one(
-                &mut result.ready,
-                "resume_worker",
-                "refresh_dependency_evidence",
-            );
+            replace_one(&mut result.ready, "resume_worker", "reconcile_batch");
         }
         RewriteAction::AdvanceRequired { .. }
             if result.ready.contains_key("verify_api")

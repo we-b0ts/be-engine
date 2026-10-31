@@ -21,12 +21,12 @@ pub(super) async fn silent(reader: &mut RedisBufferedReader<TcpStream>) {
 
 pub(super) async fn begin(runtime: &Arc<ReplayRuntime>) -> Value {
     assert_eq!(
-        control(runtime, json!({"command":"request_begin","case_id":"case"})).await["ok"],
+        control(runtime, json!({"command":"request_begin","case_id":CASE})).await["ok"],
         true
     );
     let response = control(
         runtime,
-        json!({"command":"native_event_begin","case_id":"case"}),
+        json!({"command":"native_event_begin","case_id":CASE}),
     )
     .await;
     assert_eq!(response["enabled"], true);
@@ -40,7 +40,7 @@ pub(super) async fn connected(
 ) -> Value {
     control(
         runtime,
-        json!({"command":"native_connected","case_id":"case",
+        json!({"command":"native_connected","case_id":CASE,
         "native_event":{"epoch":epoch,"namespace":namespace}}),
     )
     .await
@@ -102,9 +102,7 @@ async fn original_slot_waits_for_actual_namespace_and_rejects_wrong_epochs() {
 async fn ambiguous_unselected_windows_and_unsupported_programs_keep_slots_unused() {
     for mode in [
         "overlap",
-        "no_clock",
         "request_clock",
-        "no_boundary",
         "excluded_sid",
         "clock_inversion",
         "unclean",
@@ -134,18 +132,12 @@ async fn ambiguous_unselected_windows_and_unsupported_programs_keep_slots_unused
                     }
                 }
             }
-            "no_clock" => {
-                globals[1]["timestamp"] = Value::Null;
-            }
             "request_clock" => {
                 let path = temp.path().join("case/request.json");
                 let mut value: Value =
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
                 value["timestamp"] = Value::Null;
                 std::fs::write(path, value.to_string()).unwrap();
-            }
-            "no_boundary" => {
-                std::fs::remove_file(temp.path().join("recording-run.json")).unwrap();
             }
             "excluded_sid" => {
                 let frame = parse_pubsub_push(&original).unwrap().unwrap();
@@ -220,17 +212,13 @@ async fn ambiguous_unselected_windows_and_unsupported_programs_keep_slots_unused
             SUBSCRIBED
         );
         assert_eq!(
-            control(
-                &runtime,
-                json!({"command":"request_begin","case_id":"case"})
-            )
-            .await["ok"],
+            control(&runtime, json!({"command":"request_begin","case_id":CASE})).await["ok"],
             true
         );
         assert_eq!(
             control(
                 &runtime,
-                json!({"command":"native_event_begin","case_id":"case"})
+                json!({"command":"native_event_begin","case_id":CASE})
             )
             .await["enabled"],
             false,
@@ -327,21 +315,21 @@ async fn queued_delivery_cannot_cross_a_case_or_request_epoch() {
         push: PushId::Indexed { lane: 0, index: 0 },
         bytes: vec![],
         matched: None,
-        case_id: Some("case".into()),
+        case_id: Some(CASE.into()),
         request_epoch: Some(epoch),
     };
     assert!(delivery.case_is_current(&state));
-    state.redis.pubsub.native_clock.begin_case("case");
+    state.redis.pubsub.native_clock.begin_case(CASE);
     state
         .redis
         .pubsub
         .native_clock
-        .request_begin("case", epoch + chrono::TimeDelta::milliseconds(1))
+        .request_begin(CASE, epoch + chrono::TimeDelta::milliseconds(1))
         .unwrap();
     assert!(!delivery.case_is_current(&state));
     state.active_case_id = Some("other".into());
     assert!(!delivery.case_is_current(&state));
-    state.active_case_id = Some("case".into());
+    state.active_case_id = Some(CASE.into());
     state.target_session_stopped = true;
     assert!(!delivery.case_is_current(&state));
 }

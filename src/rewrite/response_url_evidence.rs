@@ -48,7 +48,9 @@ pub(super) fn facts(target_root: &Path, state: &RewriteState) -> Result<Value> {
         case_dir.join("dependencies.jsonl"),
         root.join("global-dependencies.jsonl"),
     ] {
-        if path.is_file() && scan(&path, case_id, &endpoints, &mut candidates).is_err() {
+        if crate::dependency_index::scoped::exists(&path)
+            && scan(&path, case_id, &endpoints, &mut candidates).is_err()
+        {
             errors.push("recorded JSON response scan unavailable or exceeds bounds; inspect case dependencies");
         }
     }

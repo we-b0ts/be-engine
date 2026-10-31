@@ -1,4 +1,5 @@
 use chrono::Utc;
+use serde_json::Value;
 
 use super::*;
 
@@ -163,19 +164,35 @@ async fn preflight_probe_publishes_one_exact_global_dependency() {
     state.record_event(preflight_probe_dependency("ordinary-client"));
     state.recorder().finish_run().await.unwrap();
 
-    let global =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
-    assert_eq!(global.lines().count(), 2);
+    let global = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("global-dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
+    let events: Vec<Value> = global
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
     assert_eq!(
-        global
-            .matches("\"global_dependency_reason\":\"preflight_probe\"")
+        events.len(),
+        3,
+        "all physical observations remain in the ledger"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["capture"]["attribution"]["kind"] == "startup")
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(
+                |event| event["capture"]["attribution"]["initialization_unit"]
+                    == "preflight_probe/java_truststore"
+            )
             .count(),
         1
     );
-    assert!(global.contains("\"global_dependency_phase\":\"runtime\""));
-    assert!(global.contains("\"global_dependency_matched_by\":\"java_truststore\""));
 }
 
 fn motan_dependency(group: &str, interface_name: &str, method_name: &str) -> RecorderEvent {
@@ -281,7 +298,7 @@ async fn vintage_http_remains_a_structured_case_dependency_without_explicit_owne
     crate::config::SourceTrafficPolicyConfig::empty()
         .apply_to(&mut config)
         .unwrap();
-    let state = AppState::new(config).await.unwrap();
+    let state = AppState::new(fixture_process_tasks(config)).await.unwrap();
     let case = CaseContext {
         id: Uuid::new_v4(),
         rule_name: "api".into(),
@@ -313,10 +330,11 @@ async fn vintage_http_remains_a_structured_case_dependency_without_explicit_owne
     drop(guard);
     state.recorder().publish_case(&case).await.unwrap();
     state.recorder().finish_run().await.unwrap();
-    let data =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let data = crate::recorder::test_io::read_to_string(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     let records = data
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
@@ -338,7 +356,7 @@ async fn vintage_http_remains_a_structured_case_dependency_without_explicit_owne
     let global = state.recorder().run_dir.join("global-dependencies.jsonl");
     assert!(
         !global.exists()
-            || tokio::fs::read_to_string(global)
+            || crate::recorder::test_io::read_to_string(global)
                 .await
                 .unwrap()
                 .trim()
@@ -364,7 +382,7 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     config.dns_mock.registry_path = temp.path().join("fake-dns.json");
     config.http_gateway.ready.enabled = false;
-    let state = AppState::new(config).await.unwrap();
+    let state = AppState::new(fixture_process_tasks(config)).await.unwrap();
     let case = CaseContext {
         id: Uuid::new_v4(),
         rule_name: "api".to_string(),
@@ -382,24 +400,27 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
     state.recorder().publish_case(&case).await.unwrap();
     state.recorder().finish_run().await.unwrap();
 
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     assert!(traffic.contains("config.internal"));
     assert!(traffic.contains("\"stored_len\":314066"));
-    let dependencies =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let dependencies = crate::recorder::test_io::read_to_string(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     assert!(dependencies.is_empty());
-    let global =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
+    let global = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("indexes/process-scope.json"),
+    )
+    .await
+    .unwrap();
     assert_eq!(global.lines().count(), 1);
-    assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
-    assert!(global.contains("\"global_dependency_phase\":\"runtime\""));
-    assert!(global.contains("\"global_dependency_matched_by\":\"config-refresh\""));
+    assert!(global.contains("\"kind\":\"process\""));
+    assert!(global.contains("\"phase\":\"runtime\""));
+    assert!(global.contains("\"source_task\":\"config-refresh\""));
     assert!(!global.contains("global_dependency_response_role"));
 }
 
@@ -423,7 +444,7 @@ async fn background_motan_enters_global_pool_but_not_case_dependencies() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     config.dns_mock.registry_path = temp.path().join("fake-dns.json");
     config.http_gateway.ready.enabled = false;
-    let state = AppState::new(config).await.unwrap();
+    let state = AppState::new(fixture_process_tasks(config)).await.unwrap();
     let case = CaseContext {
         id: Uuid::new_v4(),
         rule_name: "api".to_string(),
@@ -437,20 +458,22 @@ async fn background_motan_enters_global_pool_but_not_case_dependencies() {
     state.recorder().publish_case(&case).await.unwrap();
     state.recorder().finish_run().await.unwrap();
 
-    let dependencies =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let dependencies = crate::recorder::test_io::read_to_string(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     assert!(dependencies.is_empty());
-    let global =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
+    let global = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("indexes/process-scope.json"),
+    )
+    .await
+    .unwrap();
     assert_eq!(global.lines().count(), 1);
     assert!(global.contains(&format!("\"group\":\"{group}\"")));
     assert!(global.contains(&format!("\"interface_name\":\"{interface_name}\"")));
-    assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
-    assert!(global.contains("\"global_dependency_matched_by\":\"kunpeng-refresh\""));
+    assert!(global.contains("\"kind\":\"process\""));
+    assert!(global.contains("\"source_task\":\"kunpeng-refresh\""));
 }
 
 #[tokio::test]
@@ -480,7 +503,7 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     config.dns_mock.registry_path = temp.path().join("fake-dns.json");
     config.http_gateway.ready.enabled = false;
-    let state = AppState::new(config).await.unwrap();
+    let state = AppState::new(fixture_process_tasks(config)).await.unwrap();
     let case = CaseContext {
         id: Uuid::new_v4(),
         rule_name: "api".to_string(),
@@ -498,23 +521,23 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
     state.recorder().publish_case(&case).await.unwrap();
     state.recorder().finish_run().await.unwrap();
 
-    let dependencies =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let dependencies = crate::recorder::test_io::read_to_string(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     assert!(dependencies.is_empty());
-    let global =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
+    let global = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("indexes/process-scope.json"),
+    )
+    .await
+    .unwrap();
     assert_eq!(global.lines().count(), 1);
     assert!(global.contains("\"target_host\":\"new-operations-domain.example\""));
     assert!(global.contains("\"target_port\":20918"));
-    assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
+    assert!(global.contains("\"kind\":\"process\""));
     assert!(!global.contains("global_dependency_response_role"));
-    assert!(
-        global.contains("\"global_dependency_matched_by\":\"interest-tag-mining-cache-refresh\"")
-    );
+    assert!(global.contains("\"source_task\":\"interest-tag-mining-cache-refresh\""));
 }
 
 #[tokio::test]
@@ -545,18 +568,19 @@ async fn redis_get_background_rule_records_without_response_role_metadata() {
     config.dns_mock.registry_path = temp.path().join("fake-dns.json");
     config.http_gateway.enabled = true;
     config.http_gateway.ready.enabled = true;
-    let state = AppState::new(config).await.unwrap();
+    let state = AppState::new(fixture_process_tasks(config)).await.unwrap();
 
     state.record_event(redis_get_dependency("cache.service", 20917, "cache:init:a"));
     state.recorder().finish_run().await.unwrap();
 
-    let global =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
+    let global = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("indexes/process-scope.json"),
+    )
+    .await
+    .unwrap();
     assert_eq!(global.lines().count(), 1);
-    assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
-    assert!(global.contains("\"global_dependency_matched_by\":\"startup-cache-warm\""));
+    assert!(global.contains("\"kind\":\"process\""));
+    assert!(global.contains("\"source_task\":\"startup-cache-warm\""));
     assert!(!global.contains("global_dependency_response_role"));
 }
 
@@ -590,7 +614,7 @@ async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned
         source_revision: "0123456789abcdef".into(),
         source_evidence: "src/recovery.py:run startup scan".into(),
     }];
-    let state = AppState::new(config).await.unwrap();
+    let state = AppState::new(fixture_process_tasks(config)).await.unwrap();
     let case = CaseContext {
         id: Uuid::new_v4(),
         rule_name: "devices".into(),
@@ -655,18 +679,31 @@ async fn background_mysql_scan_enters_global_while_user_query_remains_case_owned
     drop(guard);
     state.recorder().publish_case(&case).await.unwrap();
     state.recorder().finish_run().await.unwrap();
-    let global =
-        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-            .await
-            .unwrap();
-    let dependencies =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let global = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("indexes/process-scope.json"),
+    )
+    .await
+    .unwrap();
+    let dependencies = crate::recorder::test_io::read_to_string(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     assert_eq!(global.lines().count(), 1);
     assert!(global.contains("video_tasks_0509"));
-    assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
-    assert!(global.contains("\"global_dependency_matched_by\":\"task-recovery\""));
+    assert!(global.contains("\"kind\":\"process\""));
+    assert!(global.contains("\"source_task\":\"task-recovery\""));
     assert_eq!(dependencies.lines().count(), 1);
     assert!(dependencies.contains("FROM users"));
+}
+
+// These fixtures declare one independent Source task per named test rule.
+fn fixture_process_tasks(mut config: AppConfig) -> AppConfig {
+    config.process_dependency_tasks.extend(
+        config
+            .process_owned_dependencies
+            .iter()
+            .map(|rule| (rule.name().to_string(), rule.name().to_string())),
+    );
+    config
 }

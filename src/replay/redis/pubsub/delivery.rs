@@ -44,6 +44,7 @@ impl super::super::RedisReplayState {
         if let Some(case) = case {
             self.events.dirty_case_ids.insert(case.into());
             self.events.unsafe_events.push(CommandRequestReport {
+                target_observation_id: None,
                 case_id: Some(case.into()),
                 target,
                 command: "PUBSUB_PUSH".into(),

@@ -74,8 +74,12 @@ pub(super) async fn record_event(
 ) -> Result<()> {
     if let Some(ownership) = ownership {
         state.record_event_for_targets(event, ownership);
-    } else if let Err(error) = state.recorder().record(event).await {
-        tracing::warn!(%error, "failed to enqueue MySQL recorder event");
+    } else {
+        // Losing native request pairing must preserve the observation and
+        // invalidate coverage, never silently reduce it to the optional log.
+        state.recorder().capture.mark_inventory_gap();
+        let targets = state.inner.active_cases.unattributed_observation_targets();
+        state.record_event_for_targets(event, targets);
     }
     Ok(())
 }

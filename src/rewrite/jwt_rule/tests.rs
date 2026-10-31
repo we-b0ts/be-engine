@@ -22,7 +22,7 @@ fn fixture() -> Fixture {
     );
     fs::write(
         root.join(".traffic-e2e/policy.yaml"),
-        "format: traffic-policy/v2\nrules: []\n",
+        "format: traffic-policy/v3\nrules: []\n",
     )
     .unwrap();
     fs::write(
@@ -153,7 +153,7 @@ fn options() -> JwtRulePlanOptions {
 }
 
 fn install_input_fixture(root: &std::path::Path, location: Value, signing_key: Value) {
-    let policy = json!({"format":"traffic-policy/v2","rules":[{
+    let policy = json!({"format":"traffic-policy/v3","rules":[{
         "id":"session-jwt","match":{},"effect":{"kind":"input_jwt","location":location,
         "algorithm":"HS256","signing_key":signing_key,"time":"preserve_relative"},
         "proof":{"source":"fixture/auth.rs:1","fact":"Source verifies this signed JWT and its relative expiry"}}]});

@@ -127,9 +127,7 @@ fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
             service: Some("yf-rpc".to_string()),
             cluster: Some("user/service".to_string()),
         }],
-        global_dependency_reason: None,
-        global_dependency_phase: None,
-        global_dependency_matched_by: None,
+        capture: None,
         error: None,
     };
     let mut exchanges = Vec::new();
@@ -197,9 +195,7 @@ fn response_discovered_http_target_reserves_its_recorded_fake_ip() {
             service: Some("yf-rpc".to_string()),
             cluster: Some("user/service".to_string()),
         }],
-        global_dependency_reason: None,
-        global_dependency_phase: None,
-        global_dependency_matched_by: None,
+        capture: None,
         error: None,
     };
     let mut exchanges = Vec::new();
@@ -237,7 +233,7 @@ fn tcp_blackhole_requires_case_local_clean_zero_byte_connection() {
             Some("connect failed".to_string()),
             false,
         ),
-        (ReplaySource::Global, 0, 0, None, false),
+        (ReplaySource::Startup, 0, 0, None, false),
     ] {
         let record = RecordedTcpGatewayConnection {
             domain: Some("api.example.test".to_string()),
@@ -476,7 +472,7 @@ async fn searches_past_same_target_global_exchange_for_active_case_match() {
     assert!(state.http_events.unmatched.is_empty());
     assert_eq!(
         state
-            .unused_http_exchanges(ReplaySource::Global, false)
+            .unused_http_exchanges(ReplaySource::Startup, false)
             .len(),
         1
     );
@@ -485,14 +481,18 @@ async fn searches_past_same_target_global_exchange_for_active_case_match() {
             .unused_http_exchanges(ReplaySource::Case, false)
             .is_empty()
     );
-    assert!(!super::super::report_is_dirty(&state.snapshot_report()));
+    assert!(
+        super::super::report_is_dirty(&state.snapshot_report()),
+        "unobserved Startup business inventory remains formal batch debt"
+    );
+    assert_eq!(state.startup_phase.report().status, "phase_unverified");
     task.abort();
 }
 
 #[tokio::test]
 async fn preflight_probe_global_exchange_is_repeatable_for_system_and_target_checks() {
     let temp = tempdir().unwrap();
-    let dependency = serde_json::json!({
+    let mut dependency = serde_json::json!({
         "event_type": "http_exchange",
         "id": uuid::Uuid::new_v4(),
         "scheme": "fake_ip_http",
@@ -508,6 +508,12 @@ async fn preflight_probe_global_exchange_is_repeatable_for_system_and_target_che
         "global_dependency_matched_by": "system_network",
         "error": null
     });
+    let mut capture = crate::dependency::observation::fixture_capture("startup");
+    capture.attribution = crate::dependency::attribution::DependencyOwner::Startup {
+        process_epoch: capture.process_epoch,
+        initialization_unit: "preflight_probe/system_network".into(),
+    };
+    dependency["capture"] = serde_json::to_value(capture).unwrap();
     tokio::fs::write(
         temp.path().join("global-dependencies.jsonl"),
         format!("{}\n", serde_json::to_string(&dependency).unwrap()),
@@ -537,7 +543,7 @@ async fn preflight_probe_global_exchange_is_repeatable_for_system_and_target_che
     assert!(state.http_events.unmatched.is_empty());
     assert!(
         state
-            .unused_http_exchanges(ReplaySource::Global, false)
+            .unused_http_exchanges(ReplaySource::Startup, false)
             .is_empty()
     );
     task.abort();
@@ -588,7 +594,7 @@ async fn unmatched_http_outside_a_case_is_reference_context_not_dirty() {
     let stream = TcpStream::connect(addr).await.unwrap();
     let response = send_request(TokioIo::new(stream), "api.example.test", "/expected", "").await;
     assert_eq!(response.status(), StatusCode::OK);
-    runtime.state.lock().await.active_case_id = None;
+    runtime.state.lock().await.set_active_case(None);
 
     let stream = TcpStream::connect(addr).await.unwrap();
     let response = send_request(TokioIo::new(stream), "api.example.test", "/warmup", "").await;

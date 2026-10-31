@@ -36,9 +36,11 @@ async fn finite_process_get_forwards_changing_values_and_records_every_exchange(
         .flush_global_dependency_files()
         .await
         .unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
-        .await
-        .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        state.recorder().run_dir.join("indexes/process-scope.json"),
+    )
+    .await
+    .unwrap();
     let exchanges: Vec<serde_json::Value> = raw
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -48,7 +50,7 @@ async fn finite_process_get_forwards_changing_values_and_records_every_exchange(
     for event in &exchanges {
         assert!(event["cache_snapshot_rule"].is_null());
         assert!(event["cache_snapshot_hit"] != true);
-        assert_eq!(event["global_dependency_reason"], "background_rule");
+        assert_eq!(event["capture"]["attribution"]["kind"], "process");
     }
     assert_ne!(exchanges[0]["response"], exchanges[1]["response"]);
 }

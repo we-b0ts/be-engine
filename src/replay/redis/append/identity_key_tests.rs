@@ -21,7 +21,7 @@ fn runtime() -> (tempfile::TempDir, RedisReplayState) {
 }
 
 fn policy() -> serde_json::Value {
-    json!({"format":"traffic-policy/v2", "json":{"fields":{
+    json!({"format":"traffic-policy/v3", "json":{"fields":{
         "/_content_key":{"kind":"identity","formats":[{"prefix":"content:","format":"string"}]}
     }}, "redis":{"keys":{"content:*":{"append_stream":true}}}})
 }

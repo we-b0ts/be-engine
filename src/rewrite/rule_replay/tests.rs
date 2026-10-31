@@ -273,13 +273,7 @@ fn finalized_replay_consumes_the_request_for_passed_and_dirty_results() {
             progress: target.path().join("progress.yaml"),
             runtime_outputs: vec![],
         };
-        rewrite::transition::from_e2e_result(
-            target.path(),
-            &mut state,
-            &result,
-            rewrite::transition::AttemptTransition::Append,
-        )
-        .unwrap();
+        rewrite::transition::from_e2e_result(target.path(), &mut state, &result).unwrap();
         assert!(!state.rule_replay_pending);
         assert!(!any_ready(&state));
         assert_eq!(state.e2e_current, passed);

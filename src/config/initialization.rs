@@ -240,8 +240,7 @@ recording:
   cache_snapshot_fill_timeout_ms: 30000
   post_ready_settle_ms: 15000
   post_ready_max_wait_ms: 180000
-  case_dependency_post_response_window_ms: 100
-  api_origin_dependency_idle_ms: 60000
+  case_dependency_post_response_window_ms: 0
   case_dependency_drain_timeout_ms: 5000
   shutdown_case_drain_timeout_ms: 5000
   access_policy: unrestricted

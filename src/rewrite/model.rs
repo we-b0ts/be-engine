@@ -18,8 +18,8 @@ use crate::{
     E2eVerificationGates,
 };
 
-pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 39;
+pub(super) const STATE_VERSION: u32 = 2;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 40;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -403,6 +403,7 @@ pub(super) struct RewriteState {
     pub version: u32,
     pub revision: u64,
     pub workflow_id: String,
+    pub dependency_review: super::dependency_review::ReviewLedger,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regression: Option<super::regression::RegressionOrigin>,
     #[serde(default)]
@@ -599,7 +600,7 @@ pub struct RewriteTrafficOperationView {
 pub enum RewriteAdvanceKind {
     Replay,
     Workflow,
-    ReclassifyDependencies,
+    BatchReplay,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -612,6 +613,20 @@ pub enum RewriteExecutionMode {
 
 #[derive(Debug, Clone)]
 pub enum RewriteAction {
+    BatchDiagnosisRequired {
+        summary: String,
+        evidence: serde_json::Value,
+        inspect: RewriteCommandSpec,
+        retry: RewriteCommandSpec,
+    },
+    DependencyAttributionRequired {
+        summary: String,
+        assignment_id: String,
+        dispatch_generation: u64,
+        claim_kinds: BTreeMap<String, usize>,
+        context: RewriteCommandSpec,
+        apply: RewriteCommandSpec,
+    },
     RepositoryAnalysisRequired {
         summary: String,
         analysis: super::repository_analysis::RepositoryAnalysisContext,

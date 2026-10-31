@@ -42,8 +42,7 @@ impl ReplayState {
         completion: &[crate::policy::AsyncHttpEnd],
     ) -> bool {
         self.http_exchanges.get(index).is_some_and(|exchange| {
-            exchange.source == ReplaySource::Global
-                && exchange.shared_origin.is_some()
+            exchange.shared_origin.is_some()
                 && !completion.iter().any(|end| {
                     exchange.record.method.eq_ignore_ascii_case(&end.method)
                         && exchange.identity.target.host

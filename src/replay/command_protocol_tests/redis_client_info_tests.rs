@@ -78,7 +78,12 @@ async fn redis_client_info_is_optional_for_all_sdk_identities_and_server_results
                     "{field}: {report}"
                 );
             }
-            assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), raw);
+            assert_eq!(
+                crate::recorder::test_io::read_to_string(&path)
+                    .await
+                    .unwrap(),
+                raw
+            );
             task.abort();
         }
     }

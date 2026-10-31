@@ -24,9 +24,9 @@ fn source_fixture_with(_request: bool, codec: &str) -> (tempfile::TempDir, Repla
     std::fs::write(dir.join("dependencies.jsonl"), "").unwrap();
     let path = temp.path().join("policy.yaml");
     let raw = if codec.is_empty() {
-        "format: traffic-policy/v2\nrules: []\n"
+        "format: traffic-policy/v3\nrules: []\n"
     } else {
-        "format: traffic-policy/v2\njson:\n  fields:\n    /expires_at: {kind: time, formats: [unix_seconds]}\n"
+        "format: traffic-policy/v3\njson:\n  fields:\n    /expires_at: {kind: time, formats: [unix_seconds]}\n"
     };
     std::fs::write(&path, raw).unwrap();
     let cases = BTreeMap::from([(
@@ -439,7 +439,7 @@ fn source_event(frame: Option<&[u8]>) -> serde_json::Value {
 #[test]
 fn json_get_delivery_preserves_native_key_flags_cas_and_text_framing() {
     let source = serde_json::to_vec(&json!({"expires_at":1000,"stable":7})).unwrap();
-    let plan = crate::policy::parse_and_compile_policy("format: traffic-policy/v2\njson:\n  fields:\n    /expires_at: {kind: time, formats: [unix_seconds]}\n").unwrap().global_json.unwrap();
+    let plan = crate::policy::parse_and_compile_policy("format: traffic-policy/v3\njson:\n  fields:\n    /expires_at: {kind: time, formats: [unix_seconds]}\n").unwrap().global_json.unwrap();
     let target_at = DateTime::from_timestamp(2000, 0).unwrap();
     let delivery = crate::replay::contract_value::Delivery::prepare_global(
         &source,
