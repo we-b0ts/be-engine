@@ -76,6 +76,9 @@ is unclear.
   response-event clocks through `AnchorClocks`; explicit request and delivery
   provenance remain separate. Protocol adapters retain native value framing.
   Built-in validation never supplies positive coverage for an authored rule.
+  `replay/contract_value` renders stored time counterparts only with authenticated
+  preceding write/read proofs, including recognized textual times; recognition
+  alone still permits comparison without generating delivery translations.
 
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.

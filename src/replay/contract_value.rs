@@ -94,7 +94,7 @@ impl Delivery {
         )?;
         let selected = self
             .global
-            .selected_delivery_fields_with_clocks(&self.decoded.logical, clocks)?;
+            .selected_fields_with_clocks(&self.decoded.logical, clocks)?;
         let mut allowed = Vec::new();
         for selected in selected {
             let pointer = selected.pointer;
@@ -102,8 +102,16 @@ impl Delivery {
             let Some(time) = contract.time() else {
                 continue;
             };
+            let copy = self.copies.iter().find(|copy| copy.pointer == pointer);
+            // Recognition alone never translates a textual time. An exact
+            // counterpart from a proven preceding write/read is a stored copy,
+            // independent of whether its format was authored or recognized.
+            if selected.rule_id == crate::value_contract::time::automatic::RULE_ID && copy.is_none()
+            {
+                continue;
+            }
             allowed.push(pointer.clone());
-            if let Some(copy) = self.copies.iter().find(|copy| copy.pointer == pointer) {
+            if let Some(copy) = copy {
                 let source =
                     self.decoded.logical.pointer(&pointer).ok_or_else(|| {
                         anyhow::anyhow!("stored timestamp Source field disappeared")
