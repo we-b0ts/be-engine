@@ -84,7 +84,8 @@ async fn recorded_mysql_matching_benchmark() {
                     .match_exchange(&identity, command, Some(sql), params.as_deref())
                     .expect("every captured call must match its case evidence");
                 fingerprint.update(matched.index.to_le_bytes());
-                state.complete_exchange(&matched);
+                assert!(matched.claim.publish_wire());
+                assert!(state.complete_exchange(&matched));
             }
             durations.push(started.elapsed().as_secs_f64() * 1000.0);
             assert_eq!(state.mysql.events.matched_query_count, calls.len());

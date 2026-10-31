@@ -6,6 +6,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use std::sync::Arc;
+mod prepared;
 #[cfg(test)]
 mod tests;
 
@@ -25,13 +26,7 @@ pub(crate) fn merged_codec(rules: &[&CompiledRule]) -> Result<Codec> {
 /// Common carriers reuse their load-time plan without cloning PB schemas.
 /// Different overlapping PB declarations merge once for the selected group.
 pub(crate) fn prepared_codec(rules: &[&CompiledRule]) -> Result<Arc<CodecPlan>> {
-    let first = rules
-        .first()
-        .context("value comparison requires selected rules")?;
-    if rules.iter().all(|rule| rule.rule.codec == first.rule.codec) {
-        return Ok(Arc::clone(&first.codec_plan));
-    }
-    Ok(Arc::new(CodecPlan::compile(&merged_codec(rules)?)?))
+    prepared::codec(rules)
 }
 
 pub(crate) fn compare(
@@ -64,6 +59,10 @@ pub(crate) fn compare_decoded_with_time_copies(
     clocks: AnchorClocks,
     copies: &[json::VerifiedTimeCopy],
 ) -> Result<Comparison> {
+    ensure!(
+        source.view().kind() == target.view().kind(),
+        "compared values use different payload codecs"
+    );
     let fields = rules
         .iter()
         .flat_map(|rule| {
@@ -77,7 +76,7 @@ pub(crate) fn compare_decoded_with_time_copies(
                 })
         })
         .collect::<Vec<_>>();
-    let source_view = source.comparison_view(&comparison_paths(&source.logical, rules)?);
+    let source_view = source.comparison_view(&comparison_paths(source.view().logical(), rules)?);
     if std::ptr::eq(source, target) {
         return Ok(json::compare_with_time_copies(
             &source_view,
@@ -87,7 +86,7 @@ pub(crate) fn compare_decoded_with_time_copies(
             copies,
         ));
     }
-    let target_view = target.comparison_view(&comparison_paths(&target.logical, rules)?);
+    let target_view = target.comparison_view(&comparison_paths(target.view().logical(), rules)?);
     Ok(json::compare_with_time_copies(
         &source_view,
         &target_view,

@@ -40,6 +40,7 @@ impl ReplayState {
         request_started_at: chrono::DateTime<Utc>,
         admission: Option<&ingress::Admission>,
     ) -> std::result::Result<RecordedHttpExchange, HttpReplayMatchError> {
+        self.http_candidates.register(&self.http_exchanges);
         let active_case_id = admission.map_or_else(
             || self.active_case_id.clone(),
             |a| a.case_id().map(str::to_owned),
@@ -123,7 +124,31 @@ impl ReplayState {
             {
                 break;
             }
-            for (index, exchange) in self.http_exchanges.iter().enumerate() {
+            let exact = self.http_candidates.select(
+                source,
+                active_case_id.as_deref(),
+                scheme,
+                target,
+                method.as_str(),
+                uri.path(),
+            );
+            let variable_path = self
+                .replay_policy
+                .as_ref()
+                .is_some_and(|policy| policy.dynamic_values.enabled());
+            let candidates = if variable_path || exact.clone().next().is_none() {
+                self.http_candidates.select_coarse(
+                    source,
+                    active_case_id.as_deref(),
+                    scheme,
+                    target,
+                    method.as_str(),
+                )
+            } else {
+                exact
+            };
+            for index in candidates {
+                let exchange = &self.http_exchanges[index];
                 if !(exchange.status.is_available()
                     || exchange.is_repeatable_preflight_probe()
                     || exchange.source == ReplaySource::Startup

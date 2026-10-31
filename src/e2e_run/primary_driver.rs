@@ -1,56 +1,26 @@
+//! Primary input orchestration delegates protocol I/O to static native adapters.
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Method, Request};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
-use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 use super::active_artifact;
 use super::model::ResolvedProjectConfig;
 use super::result::E2eResponseUnavailableReason;
-use crate::motan::response_kind_status_code;
-use crate::recorded_request::{RecordedHttpClient, target_uri};
-use crate::recorder::HeaderMapSnapshot;
+use crate::primary_protocol::{
+    CaseExecutionContext, ExecutionSettings, NativePrimaryAdapter, PrimaryProtocol,
+};
+use crate::recorded_request::target_uri;
 use crate::request_rules::RequestRuleRuntime;
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
-
-#[derive(Debug, Serialize)]
-struct ActualResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    interaction_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    version: u8,
-    request_sent_at: chrono::DateTime<chrono::Utc>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    request_rules: Vec<crate::request_rules::RequestRuleObservation>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_headers: Option<HeaderMapSnapshot>,
-    status: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    headers: Option<HeaderMapSnapshot>,
-    body: CapturedBody,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sse_observation: Option<crate::http::sse::SseObservation>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    interaction: Option<crate::interaction::model::OutputObservation>,
-}
-
-#[derive(Debug, Serialize)]
-struct CapturedBody {
-    encoding: &'static str,
-    data: String,
-    truncated: bool,
-}
 
 pub(crate) async fn wait_until_ready(config: &ResolvedProjectConfig) -> Result<()> {
     let client = client();
@@ -142,18 +112,12 @@ pub(super) async fn capture_case(
     request_rules: Arc<RequestRuleRuntime>,
     input_registration: (&Path, &str),
 ) -> Result<Vec<u8>> {
-    let kind: RequestKind = serde_json::from_slice(request_bytes)?;
+    let input = PrimaryProtocol::from_recorded(request_bytes)?;
     let monitor =
         super::request_feedback::Monitor::start(input_registration.0, input_registration.1);
-    if kind.protocol_version.is_some() {
-        let mut failure = Some(monitor.receiver());
-        return tokio::select! {
-            biased;
-            _=crate::dependency::execution::rejected(&mut failure)=>Err(crate::dependency::execution::UnmatchedDependency {observed_status:None}.into()),
-            response=capture_motan_case(config,kind,actual_response_path)=>response,
-        };
-    }
-    let request_timeout = if kind.interaction.is_some() {
+    let request_timeout = if input.has_interaction()
+        || input.kind() == crate::protocol_contract::ProtocolKind::Motan
+    {
         config.target_request_timeout
     } else {
         super::source_response::request_timeout(
@@ -163,39 +127,27 @@ pub(super) async fn capture_case(
             config.target_request_timeout,
         )?
     };
-    let response = RecordedHttpClient::new(
-        config.target_http_origin.clone(),
-        request_timeout,
-        config.target_max_response_bytes,
-    )
-    .with_execution_failure(Some(monitor.receiver()))
-    .with_socketio_timing(config.replay_socketio_timing)
-    .with_request_rule_runtime(request_rules)
-    .with_input_registration(input_registration.0, input_registration.1)
-    .send_bytes(request_bytes, &request_path.display().to_string())
-    .await?;
-    let (encoding, data) = match std::str::from_utf8(&response.body) {
-        Ok(text) => ("utf8", text.to_owned()),
-        Err(_) => ("base64", STANDARD.encode(&response.body)),
-    };
-    let mut actual = serde_json::to_value(ActualResponse {
-        interaction_started_at: response.interaction_started_at,
-        version: 1,
-        request_sent_at: response.request_sent_at,
-        request_rules: response.request_rules,
-        request_headers: Some(response.request_headers),
-        status: response.status.as_u16(),
-        headers: Some(response.headers),
-        sse_observation: response.sse_observation,
-        interaction: response.interaction,
-        body: CapturedBody {
-            encoding,
-            data,
-            truncated: false,
+    let context = CaseExecutionContext {
+        case_id: input_registration.1,
+        session_path: input_registration.0,
+        request_path,
+        request_rules,
+        dependency_failure: Some(monitor.receiver()),
+        settings: ExecutionSettings {
+            http_origin: &config.target_http_origin,
+            motan_upstream: config.target_motan_upstream.as_deref(),
+            request_timeout,
+            max_response_bytes: config.target_max_response_bytes,
+            motan_limits: config.target_motan_limits,
+            socketio_timing: config.replay_socketio_timing,
         },
-    })?;
-    crate::interaction::private::protect_output(&mut actual, actual_response_path)?;
-    active_artifact::write_json(actual_response_path, &actual)
+        deadline: tokio::time::Instant::now() + request_timeout,
+    };
+    let output = input.execute(&context).await?;
+    active_artifact::write_json(
+        actual_response_path,
+        &output.artifact(actual_response_path)?,
+    )
 }
 
 pub(super) fn response_unavailable_reason(error: &anyhow::Error) -> E2eResponseUnavailableReason {
@@ -245,101 +197,6 @@ pub(super) fn response_unavailable_reason(error: &anyhow::Error) -> E2eResponseU
     E2eResponseUnavailableReason::HttpExecutionFailed
 }
 
-#[derive(Deserialize)]
-struct RequestKind {
-    #[serde(default)]
-    interaction: Option<serde_json::Value>,
-    #[serde(default)]
-    protocol_version: Option<String>,
-    #[serde(default)]
-    frame: Option<RecordedFrame>,
-}
-
-#[derive(Deserialize)]
-struct RecordedFrame {
-    encoding: String,
-    data: String,
-    truncated: bool,
-}
-
-async fn capture_motan_case(
-    config: &ResolvedProjectConfig,
-    request: RequestKind,
-    actual_response_path: &Path,
-) -> Result<Vec<u8>> {
-    let upstream = config
-        .target_motan_upstream
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("Motan case requires a configured target Motan endpoint"))?;
-    let frame = request
-        .frame
-        .ok_or_else(|| anyhow::anyhow!("Motan request has no frame"))?;
-    if frame.truncated {
-        bail!("Motan request frame is truncated");
-    }
-    let raw = match frame.encoding.as_str() {
-        "utf8" => frame.data.into_bytes(),
-        "base64" => STANDARD.decode(frame.data)?,
-        encoding => bail!("unsupported Motan request encoding {encoding:?}"),
-    };
-    let limits = motan_protocol::Limits::default();
-    let motan_protocol::DecodeStatus::Complete(request) =
-        motan_protocol::decode_frame(&raw, limits)?
-    else {
-        bail!("Motan request frame is incomplete");
-    };
-    let request_sent_at = chrono::Utc::now();
-    let operation = async {
-        let mut stream = TcpStream::connect(upstream).await?;
-        stream.set_nodelay(true)?;
-        stream.write_all(&raw).await?;
-        if request.flags.oneway() {
-            return Ok((204, Vec::new()));
-        }
-        let mut decoder = motan_protocol::FrameDecoder::new(limits)?;
-        let response = loop {
-            if let Some(frame) = decoder.decode()? {
-                break frame;
-            }
-            let read = stream.read_buf(decoder.buffer_mut()).await?;
-            if read == 0 {
-                bail!("target closed before returning a Motan response");
-            }
-        };
-        if response.request_id != request.request_id || response.version != request.version {
-            bail!("target returned a mismatched Motan response frame");
-        }
-        let status = response_kind_status_code(response.response_kind());
-        Ok::<_, anyhow::Error>((status, response.raw().to_vec()))
-    };
-    let (status, body) = tokio::time::timeout(config.target_request_timeout, operation)
-        .await
-        .map_err(|_| anyhow::anyhow!("target Motan request timed out"))??;
-    let (encoding, data) = match std::str::from_utf8(&body) {
-        Ok(text) => ("utf8", text.to_owned()),
-        Err(_) => ("base64", STANDARD.encode(&body)),
-    };
-    active_artifact::write_json(
-        actual_response_path,
-        &ActualResponse {
-            interaction_started_at: None,
-            version: 1,
-            request_sent_at,
-            request_rules: Vec::new(),
-            request_headers: None,
-            status,
-            headers: None,
-            sse_observation: None,
-            interaction: None,
-            body: CapturedBody {
-                encoding,
-                data,
-                truncated: false,
-            },
-        },
-    )
-}
-
 fn client() -> HttpClient {
     let mut connector = HttpConnector::new();
     connector.enforce_http(true);
@@ -352,6 +209,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use crate::recorded_request::RecordedHttpClient;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     use super::*;

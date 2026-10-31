@@ -300,7 +300,11 @@ fn install(
         targets.len() == deferred.known_targets.len(),
         "case preparation found an endpoint absent from its dependency index"
     );
-    state.http_case_exchange_index = http::case_exchange_index(&state.http_exchanges);
+    http::extend_case_exchange_index(
+        &mut state.http_case_exchange_index,
+        &state.http_exchanges,
+        http_start,
+    );
     state
         .http_ingress
         .register(&state.http_exchanges[http_start..]);
@@ -325,6 +329,13 @@ fn install(
         http::observe_recorded_policy_exchanges(policy, &state.http_exchanges[http_start..]);
         memcached::observe_recorded_policy_exchanges(policy, &state.memcached);
     }
+    state.install_case_execution_plan(
+        case_id,
+        execution_plan::SourceScopeIdentity {
+            sha256: inventory.index.sha256.clone(),
+            source_bytes: inventory.source_bytes,
+        },
+    )?;
     Ok(())
 }
 

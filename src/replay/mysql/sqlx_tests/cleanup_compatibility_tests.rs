@@ -192,7 +192,8 @@ async fn failed_noop_end_delivery_stays_dirty_after_other_successful_cleanup() {
         let second = state
             .match_exchange(&identity, "COM_QUERY", Some(sql), None)
             .unwrap();
-        state.complete_exchange(&second);
+        assert!(second.claim.publish_wire());
+        assert!(state.complete_exchange(&second));
         assert!(state.mysql.case_is_dirty("case-id"));
         let unused = state.unused_exchanges(ReplaySource::Case);
         assert_eq!(unused.len(), 1);

@@ -80,6 +80,19 @@ impl RequestContracts {
             };
             global.signatures.prepare(&root)?;
         }
+        self.native_dispatch = Arc::new(
+            compiled
+                .as_deref()
+                .map(rule_dispatch::NativeDispatch::prepare)
+                .transpose()?
+                .unwrap_or_default(),
+        );
+        self.rule_catalogue = Arc::new(
+            compiled
+                .as_deref()
+                .map(case_plan::RuleCatalogue::new)
+                .unwrap_or_default(),
+        );
         self.compiled = compiled;
         Ok(())
     }
@@ -114,6 +127,7 @@ impl RequestContracts {
                 {
                     let event: Value = serde_json::from_slice(line)?;
                     if crate::dependency::observation::is_case_event(&event) {
+                        self.observe_plan_fact(&id, &event);
                         self.observe_unified_source(&id, &event)?;
                     }
                 }

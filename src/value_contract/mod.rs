@@ -8,6 +8,7 @@ pub(crate) mod http_headers;
 pub(crate) mod hypothesis;
 pub(crate) mod identities;
 pub(crate) mod json;
+pub(crate) mod plan;
 pub(crate) mod pre_match;
 pub(crate) mod redis_scalar;
 pub(crate) mod time;

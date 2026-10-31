@@ -193,7 +193,8 @@ async fn predicate_cache_preserves_identity_case_precedence_and_finite_consumpti
         matched.index, 1,
         "exact candidate must precede semantic candidate"
     );
-    state.complete_exchange(&matched);
+    assert!(matched.claim.publish_wire());
+    assert!(state.complete_exchange(&matched));
     // Global exact matching must not outrank Case semantic matching.
     state.mysql.exchanges[1].source = ReplaySource::Startup;
     state.mysql.exchanges[1].case_id = None;
@@ -203,12 +204,14 @@ async fn predicate_cache_preserves_identity_case_precedence_and_finite_consumpti
         .match_exchange(&identity, "COM_QUERY", Some(exact), None)
         .unwrap();
     assert_eq!(matched.index, 0);
-    state.complete_exchange(&matched);
+    assert!(matched.claim.publish_wire());
+    assert!(state.complete_exchange(&matched));
     let matched = state
         .match_exchange(&identity, "COM_QUERY", Some(exact), None)
         .unwrap();
     assert_eq!(matched.source, ReplaySource::Startup);
-    state.complete_exchange(&matched);
+    assert!(matched.claim.publish_wire());
+    assert!(state.complete_exchange(&matched));
     assert!(
         state
             .match_exchange(&identity, "COM_QUERY", Some(exact), None)

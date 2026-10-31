@@ -379,8 +379,9 @@ async fn active_case_exchanges_precede_identical_global_exchanges() {
 #[tokio::test]
 async fn stmt_close_ignores_legacy_exchange_and_keeps_protocol_aligned() {
     let temp = tempdir().unwrap();
-    let case_dir = temp.path().join("case-id");
+    let case_dir = temp.path().join(".traffic-e2e/local/recordings/case-id");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    crate::platform::encryption_key::load_or_create(temp.path()).unwrap();
     tokio::fs::write(
         case_dir.join("dependencies.jsonl"),
         concat!(

@@ -105,16 +105,24 @@ async fn handle_connection_inner(
         match command.command_name.as_str() {
             "COM_QUIT" => break,
             "COM_PING" | "COM_INIT_DB" => {
-                let matched = {
-                    let mut state = state.lock().await;
-                    let case = session.request_case(&state, None);
-                    state.match_mysql_control(
-                        case.as_deref(),
-                        &session.identity(),
-                        &command.command_name,
-                        command.query.as_deref(),
-                    )
-                };
+                let super::admission::RequestSelection {
+                    matched,
+                    case_id,
+                    event_index,
+                    observation_id,
+                    terminal_reason,
+                    ..
+                } = super::admission::match_request(
+                    &state,
+                    &session,
+                    &command.command_name,
+                    command.query.as_deref(),
+                    None,
+                )
+                .await;
+                if let Some(reason) = terminal_reason {
+                    return Err(anyhow!(reason));
+                }
                 if let Some(matched) = matched {
                     let successful = matched.record.outcome
                         == crate::DependencyExchangeOutcome::Response
@@ -150,13 +158,14 @@ async fn handle_connection_inner(
                 {
                     let mut state = state.lock().await;
                     let identity = session.identity();
-                    let case = session.request_case(&state, None);
-                    state.record_builtin_in_case(
-                        case.as_deref(),
+                    state.record_builtin_observed_in_case(
+                        case_id.as_deref(),
                         &identity,
                         &command.command_name,
                         command.query.as_deref(),
                         "driver/session command handled by replay server",
+                        event_index,
+                        observation_id.as_deref(),
                     );
                 }
             }

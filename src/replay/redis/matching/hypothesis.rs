@@ -14,10 +14,19 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
     ) -> std::result::Result<PreferredMatch, CommandMatchDiagnostic> {
-        let mut selected = None;
+        let mut search = crate::replay::candidate_selection::UniqueCandidate::new(256);
         let mut blocked = None;
-        let mut visited = 0;
-        for (index, exchange) in self.exchanges.iter().enumerate() {
+        let candidates = self.candidates.select(
+            ReplaySource::Case,
+            case,
+            target,
+            resp_version,
+            database,
+            username,
+            command,
+        );
+        for index in candidates {
+            let exchange = &self.exchanges[index];
             if exchange.source != ReplaySource::Case
                 || exchange.case_id.as_deref() != case
                 || !exchange.status.is_available()
@@ -36,8 +45,7 @@ impl RedisReplayState {
             {
                 continue;
             }
-            visited += 1;
-            if visited > 256 {
+            if search.inspect().is_err() {
                 return Err(CommandMatchDiagnostic::EvidenceUnavailable {
                     reason: "Redis hypothesis candidate budget exhausted".into(),
                 });
@@ -45,12 +53,16 @@ impl RedisReplayState {
             if !self.arguments_match(exchange, args) {
                 continue;
             }
-            let admission = preferred_match(&self.exchanges, case, |candidate| {
-                std::ptr::eq(candidate, exchange)
-            });
+            let admission = self.candidates.lane_blocker(&self.exchanges, index).map_or(
+                PreferredMatch::Matched(index),
+                |blocker| PreferredMatch::LaneBlocked {
+                    candidate: index,
+                    blocker,
+                },
+            );
             match admission {
                 PreferredMatch::Matched(_) => {
-                    if selected.replace(index).is_some() {
+                    if search.accept(index, ()).is_err() {
                         return Err(CommandMatchDiagnostic::Mismatch {
                             fields: vec!["ambiguous_hypothesis".into()],
                         });
@@ -62,8 +74,9 @@ impl RedisReplayState {
                 PreferredMatch::NotFound => {}
             }
         }
-        Ok(selected
-            .map(PreferredMatch::Matched)
+        Ok(search
+            .finish()
+            .map(|(index, ())| PreferredMatch::Matched(index))
             .or(blocked)
             .unwrap_or(PreferredMatch::NotFound))
     }

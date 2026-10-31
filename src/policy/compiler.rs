@@ -35,6 +35,8 @@ pub struct CompiledRule {
     pub field_proofs: BTreeMap<String, Proof>,
     #[serde(skip)]
     pub(crate) codec_plan: std::sync::Arc<crate::value_codec::CodecPlan>,
+    #[serde(skip)]
+    pub(crate) execution_plan: std::sync::Arc<crate::value_contract::plan::RuleExecutionPlan>,
 }
 
 impl PartialEq for CompiledRule {
@@ -45,6 +47,7 @@ impl PartialEq for CompiledRule {
             && self.capabilities == other.capabilities
             && self.fingerprint == other.fingerprint
             && self.field_proofs == other.field_proofs
+            && self.execution_plan == other.execution_plan
     }
 }
 
@@ -400,6 +403,7 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
             .map(|path| (path.clone(), rule.proof.clone()))
             .collect(),
         codec_plan: std::sync::Arc::new(crate::value_codec::CodecPlan::compile(&rule.codec)?),
+        execution_plan: std::sync::Arc::new(super::validate_rule_coverage(rule)?),
     })
 }
 

@@ -54,7 +54,7 @@ impl super::super::RedisReplayState {
                 diagnostic: None,
             });
         }
-        self.delivery_changed.notify_waiters();
+        self.lifecycle.notify_waiters();
     }
     pub(in crate::replay::redis) fn finish_pubsub_client(&mut self, client: Uuid) {
         for (slot, case) in self.pubsub.pending_client(client) {
@@ -64,6 +64,6 @@ impl super::super::RedisReplayState {
                 "Case input subscription closed before wire delivery",
             );
         }
-        self.delivery_changed.notify_waiters();
+        self.lifecycle.notify_waiters();
     }
 }

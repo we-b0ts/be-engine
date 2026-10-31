@@ -23,6 +23,8 @@ pub struct CompiledNativeRule {
     pub rule: NativeRule,
     pub domain: NativeDomain,
     pub fingerprint: String,
+    #[serde(skip)]
+    pub(crate) execution_plan: std::sync::Arc<crate::value_contract::plan::RuleExecutionPlan>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -53,6 +55,14 @@ pub fn compile_native(rule: &NativeRule) -> Result<CompiledNativeRule> {
         rule: rule.clone(),
         domain: rule.effect.domain(),
         fingerprint: compiler::digest("traffic-policy/native-runtime/v1", &semantic_rule(rule)?)?,
+        execution_plan: std::sync::Arc::new(super::validate_native_coverage(rule).with_context(
+            || {
+                format!(
+                    "native rule {:?} has an unsupported adapter binding",
+                    rule.id
+                )
+            },
+        )?),
     };
     crate::replay::validate_native_adapter(&compiled).with_context(|| {
         format!(

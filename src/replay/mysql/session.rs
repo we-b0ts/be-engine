@@ -97,6 +97,7 @@ pub(super) async fn deliver_matched(
     mut matched: MatchedExchange,
     row_encoding: ResultRowEncoding,
 ) -> Result<SessionDirective> {
+    let _delivery = matched.claim.guard();
     if let Some(owner) = &matched.hypothesis_owner
         && let Err(error) = owner.await_hypotheses_durable().await
     {
@@ -118,7 +119,11 @@ pub(super) async fn deliver_matched(
         .await
         {
             Ok(()) => {
-                state.lock().await.complete_exchange(&matched);
+                matched.claim.publish_wire();
+                ensure!(
+                    state.lock().await.complete_exchange(&matched),
+                    "MySQL cleanup claim was cancelled before completion"
+                );
                 return Ok(SessionDirective::ClientTerminated);
             }
             Err(error) => {
@@ -143,7 +148,11 @@ pub(super) async fn deliver_matched(
         .await;
         match result {
             Ok(_) => {
-                state.lock().await.complete_exchange(&matched);
+                matched.claim.publish_wire();
+                ensure!(
+                    state.lock().await.complete_exchange(&matched),
+                    "MySQL termination claim was cancelled before completion"
+                );
                 if matched.timing.outcome().termination().is_some_and(|end| {
                     end.side == crate::dependency::TerminationSide::Server
                         && end.kind == crate::dependency::TerminationKind::Eof
@@ -151,9 +160,12 @@ pub(super) async fn deliver_matched(
                     let mut probe = [0_u8; 1];
                     if matches!(tokio::io::AsyncReadExt::read(stream, &mut probe).await, Ok(count) if count > 0)
                     {
-                        state.lock().await.fail_exchange(
-                            &matched,
+                        state.lock().await.record_unmatched_in_case(
+                            matched.report.case_id.as_deref(),
                             &session.identity(),
+                            &matched.report.command,
+                            matched.report.sql.as_deref(),
+                            matched.report.params.as_deref(),
                             "client sent another MySQL request after recorded server EOF",
                         );
                         super::super::exchange::retain_connection(stream).await;
@@ -225,38 +237,43 @@ pub(super) async fn deliver_matched(
         );
         return Err(error);
     }
-    if let Some(prepared) = &matched.time_copy_delivery
-        && let Err(error) = prepared.commit_after_wire(
+    matched.claim.publish_wire();
+    // These are facts about bytes already flushed to the native client. Another
+    // connection may immediately copy them while the async report mutex is held.
+    // Their success/error still enters the shared terminal transaction below.
+    let copy_commit = if let Some(prepared) = &matched.time_copy_delivery {
+        prepared.commit_after_wire(
             matched.report.case_id.as_deref(),
             &session.identity(),
             &matched.record.response,
             matched.report.sql.as_deref(),
         )
-    {
-        state.lock().await.fail_exchange(
-            &matched,
-            &session.identity(),
-            &format!("SQL time-copy provenance: {error:#}"),
-        );
-        return Err(error);
-    }
+    } else {
+        Ok(())
+    };
     let mut replay = state.lock().await;
-    if let (Some(prepared), Some(policy)) = (&matched.value_delivery, replay.replay_policy.as_ref())
-        && let Err(error) = prepared.commit(
-            &policy.request_contracts,
-            &matched.record.response,
-            rendered_at,
-            delivered_identities,
-        )
-    {
-        replay.fail_exchange(
-            &matched,
-            &session.identity(),
-            &format!("SQL response witness: {error:#}"),
-        );
-        return Err(error);
-    }
-    replay.complete_exchange(&matched);
+    let policy_owner = replay
+        .replay_policy
+        .as_ref()
+        .map(|policy| policy.request_contracts.clone());
+    let completed = replay.finish_mysql_exchange(&matched, || {
+        copy_commit?;
+        if let Some(prepared) = &matched.value_delivery {
+            prepared.commit(
+                policy_owner
+                    .as_ref()
+                    .context("MySQL response contract owner is unavailable")?,
+                &matched.record.response,
+                rendered_at,
+                delivered_identities,
+            )?;
+        }
+        Ok(())
+    })?;
+    ensure!(
+        completed,
+        "MySQL response claim was cancelled before completion"
+    );
     session.savepoints.observe(
         &matched.record,
         matched.report.sql.as_deref().unwrap_or_default(),
@@ -285,29 +302,20 @@ pub(in crate::replay) async fn handle_query(
     session: &mut ReplaySession,
     sql: &str,
 ) -> Result<SessionDirective> {
-    let (matched, case_id, observation_id) = {
-        let mut state = state.lock().await;
-        let identity = session.identity();
-        let case = session.request_case(&state, Some(sql));
-        let transaction_end = state
-            .mysql
-            .transaction_equivalence
-            .preferred_end(&session.transaction_witness, sql);
-        let matched = state.match_exchange_in_case_preferred(
-            case.as_deref(),
-            &identity,
-            "COM_QUERY",
-            Some(sql),
-            None,
-            Some(super::matcher::TransactionMatch {
-                savepoints: &session.savepoints,
-                preferred_end: transaction_end,
-                status_flags: session.status_flags,
-                connection: session.transaction_witness.connection(),
-            }),
-        );
-        (matched, case, state.mysql.request_observation_id.clone())
-    };
+    let super::admission::RequestSelection {
+        matched,
+        case_id,
+        observation_id,
+        event_index,
+        rejection_recorded,
+        terminal_reason,
+    } = super::admission::match_request(&state, session, "COM_QUERY", Some(sql), None).await;
+    if let Some(reason) = terminal_reason {
+        return Err(anyhow!(reason));
+    }
+    if rejection_recorded {
+        return Err(anyhow!("MySQL admitted request contract commit failed"));
+    }
     if matched.is_none()
         && let Some(response) = builtin_response(sql, session.database.as_deref())
     {
@@ -322,12 +330,14 @@ pub(in crate::replay) async fn handle_query(
         .await?;
         let mut state = state.lock().await;
         let identity = session.identity();
-        state.record_builtin_in_case(
+        state.record_builtin_observed_in_case(
             case_id.as_deref(),
             &identity,
             "COM_QUERY",
             Some(sql),
             "driver/session query handled by replay server",
+            event_index,
+            observation_id.as_deref(),
         );
         if matches!(
             normalize_sql(sql).as_str(),
@@ -374,6 +384,7 @@ pub(in crate::replay) async fn handle_query(
                 );
                 if let Some(report) = state.mysql.events.unmatched_queries.last_mut() {
                     report.target_observation_id = observation_id.clone();
+                    report.target_event_index = event_index;
                 }
             }
             write_packet_and_flush(
@@ -395,19 +406,19 @@ pub(in crate::replay) async fn handle_stmt_prepare(
     session: &mut ReplaySession,
     sql: &str,
 ) -> Result<SessionDirective> {
-    let (failed_prepare, case_id) = {
-        let mut state = state.lock().await;
-        let identity = session.identity();
-        let case = session.request_case(&state, None);
-        let matched = state.match_exchange_in_case(
-            case.as_deref(),
-            &identity,
-            "COM_STMT_PREPARE",
-            Some(sql),
-            None,
-        );
-        (matched, case)
-    };
+    let super::admission::RequestSelection {
+        matched: failed_prepare,
+        case_id,
+        rejection_recorded,
+        terminal_reason,
+        ..
+    } = super::admission::match_request(&state, session, "COM_STMT_PREPARE", Some(sql), None).await;
+    if let Some(reason) = terminal_reason {
+        return Err(anyhow!(reason));
+    }
+    if rejection_recorded {
+        return Err(anyhow!("MySQL admitted prepare contract commit failed"));
+    }
     if let Some(matched) = failed_prepare {
         return deliver_matched(stream, state, session, matched, ResultRowEncoding::Text).await;
     }
@@ -482,29 +493,27 @@ pub(in crate::replay) async fn handle_stmt_execute(
         }
     }
 
-    let (matched, case_id, observation_id) = {
-        let mut state = state.lock().await;
-        let identity = session.identity();
-        let case = session.request_case(&state, Some(&statement.sql));
-        let transaction_end = state
-            .mysql
-            .transaction_equivalence
-            .preferred_end(&session.transaction_witness, &statement.sql);
-        let matched = state.match_exchange_in_case_preferred(
-            case.as_deref(),
-            &identity,
-            "COM_STMT_EXECUTE",
-            Some(&statement.sql),
-            parsed.params.as_deref(),
-            Some(super::matcher::TransactionMatch {
-                savepoints: &session.savepoints,
-                preferred_end: transaction_end,
-                status_flags: session.status_flags,
-                connection: session.transaction_witness.connection(),
-            }),
-        );
-        (matched, case, state.mysql.request_observation_id.clone())
-    };
+    let super::admission::RequestSelection {
+        matched,
+        case_id,
+        observation_id,
+        event_index,
+        rejection_recorded,
+        terminal_reason,
+    } = super::admission::match_request(
+        &state,
+        session,
+        "COM_STMT_EXECUTE",
+        Some(&statement.sql),
+        parsed.params.as_deref(),
+    )
+    .await;
+    if let Some(reason) = terminal_reason {
+        return Err(anyhow!(reason));
+    }
+    if rejection_recorded {
+        return Err(anyhow!("MySQL admitted request contract commit failed"));
+    }
     if matched.is_none()
         && let Some(response) = builtin_response(&statement.sql, session.database.as_deref())
     {
@@ -519,12 +528,14 @@ pub(in crate::replay) async fn handle_stmt_execute(
         .await?;
         let mut state = state.lock().await;
         let identity = session.identity();
-        state.record_builtin_in_case(
+        state.record_builtin_observed_in_case(
             case_id.as_deref(),
             &identity,
             "COM_STMT_EXECUTE",
             Some(&statement.sql),
             "prepared driver/session query handled by replay server",
+            event_index,
+            observation_id.as_deref(),
         );
         if matches!(
             normalize_sql(&statement.sql).as_str(),
@@ -571,6 +582,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                 );
                 if let Some(report) = state.mysql.events.unmatched_queries.last_mut() {
                     report.target_observation_id = observation_id.clone();
+                    report.target_event_index = event_index;
                 }
             }
             write_packet_and_flush(

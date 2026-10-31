@@ -216,7 +216,8 @@ async fn optional_commit_delivery_failure_still_marks_case_dirty() {
     let read = state
         .match_exchange(&identity, "COM_QUERY", records[0]["sql"].as_str(), None)
         .unwrap();
-    state.complete_exchange(&read);
+    assert!(read.claim.publish_wire());
+    assert!(state.complete_exchange(&read));
     let commit = state
         .match_exchange(&identity, "COM_QUERY", Some("COMMIT"), None)
         .unwrap();

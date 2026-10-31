@@ -1,10 +1,12 @@
 //! Redis command selection with semantic value matching and source-lane order diagnostics.
 use super::*;
+mod builtin_failure;
 mod hypothesis;
 mod request;
+mod strict;
 use crate::replay::command_matching::{
     CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic, preferred_match,
-    preferred_match_with_priority, unmatched_diagnostic,
+    preferred_match_indexed_with_priority, unmatched_diagnostic,
 };
 use crate::replay::report::command::CommandMatchDiagnostic;
 
@@ -143,9 +145,35 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
+        self.observe_redis(active_case_id, target, database, username, command, args);
+        self.select_redis(
+            active_case_id,
+            target,
+            connection,
+            resp_version,
+            database,
+            username,
+            command,
+            args,
+        )
+        .map(|mut matched| {
+            matched.report.target_event_index = self.request_event_index;
+            matched
+        })
+    }
+
+    pub(super) fn observe_redis(
+        &mut self,
+        active_case_id: Option<&str>,
+        target: &TargetKey,
+        database: i64,
+        username: Option<&str>,
+        command: &str,
+        args: &[Vec<u8>],
+    ) {
         // Allocate before selection under the replay mutex. Delivery completion
         // and success-detail retention must never determine request ordering.
-        let index = self.events.request_order.reserve(active_case_id);
+        self.events.request_order.reserve(active_case_id);
         self.request_event_index = self.events.request_order.latest(active_case_id);
         self.request_observed_at = Some(chrono::Utc::now());
         self.request_observation_id = Some(uuid::Uuid::new_v4());
@@ -207,20 +235,6 @@ impl RedisReplayState {
                 "independent Redis Target observation unavailable; inspect target_observation_coverage_error"
             );
         }
-        self.select_redis(
-            active_case_id,
-            target,
-            connection,
-            resp_version,
-            database,
-            username,
-            command,
-            args,
-        )
-        .map(|mut matched| {
-            matched.report.target_event_index = Some(index);
-            matched
-        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -235,6 +249,7 @@ impl RedisReplayState {
         command: &str,
         args: &[Vec<u8>],
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
+        self.candidates.register(&self.exchanges);
         if let Some(case) = active_case_id {
             self.prepare_observations(case).map_err(|error| {
                 CommandMatchDiagnostic::EvidenceUnavailable {
@@ -326,32 +341,15 @@ impl RedisReplayState {
                 )?;
                 continue;
             }
-            matched = preferred_match_with_priority(
-                &self.exchanges,
+            matched = self.match_strict_redis(
                 active_case_id,
-                |exchange| {
-                    (exchange.status.is_available()
-                        || (exchange.reusable_snapshot
-                            && exchange.status != ReplayExchangeStatus::Failed))
-                        && self
-                            .connection_scopes
-                            .matches(exchange, active_case_id, connection)
-                        && target_matches(
-                            target,
-                            &exchange.record.target_host,
-                            exchange.record.target_port,
-                        )
-                        && exchange.record.resp_version == resp_version
-                        && exchange.record.database == database
-                        && normalize_optional(username)
-                            == normalize_optional(exchange.record.username.as_deref())
-                        && exchange.record.command.eq_ignore_ascii_case(command)
-                        && self.arguments_match(exchange, args)
-                },
-                |exchange| {
-                    !matches!(command, "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE")
-                        || self.pubsub.is_callback_subscription(exchange)
-                },
+                target,
+                connection,
+                resp_version,
+                database,
+                username,
+                command,
+                args,
             );
         }
         self.request_contracts
@@ -707,16 +705,29 @@ impl RedisReplayState {
             } else {
                 exchange.timing
             };
-        exchange.status = if exchange.reusable_snapshot || observation.is_some() {
-            exchange.status
-        } else if exchange.timing.outcome().is_client_terminated()
-            && !exchange.record.lifecycle_cleanup
-        {
-            ReplayExchangeStatus::AwaitingClientTermination
+        let claim = if exchange.reusable_snapshot {
+            Claim::Native(NativeClaimKind::ReusableSnapshot)
+        } else if observation.is_some() {
+            Claim::Native(NativeClaimKind::StateObservation)
         } else {
-            ReplayExchangeStatus::Responding
+            let kind = if exchange.timing.outcome().is_client_terminated()
+                && !exchange.record.lifecycle_cleanup
+            {
+                ClaimKind::ClientTermination
+            } else {
+                ClaimKind::Response
+            };
+            let ticket = self
+                .lifecycle
+                .claim(index, &mut exchange.status, kind)
+                .ok_or_else(|| CommandMatchDiagnostic::EvidenceUnavailable {
+                    reason: "finite Redis exchange was already claimed".into(),
+                })?;
+            exchange.claim = Some(ticket.observer());
+            Claim::Finite(ticket)
         };
         Ok(MatchedRedisExchange {
+            claim,
             refresh,
             observation,
             append: None,
@@ -756,87 +767,6 @@ impl RedisReplayState {
                     }
                 }),
                 target_event_index: None,
-            },
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn match_redis_builtin_failure(
-        &mut self,
-        active_case_id: Option<&str>,
-        target: &TargetKey,
-        connection: TargetConnection,
-        resp_version: u8,
-        database: i64,
-        username: Option<&str>,
-        command: &RedisCommand,
-    ) -> Option<MatchedRedisExchange> {
-        let index = match preferred_match(&self.exchanges, active_case_id, |exchange| {
-            exchange.status.is_available()
-                && (exchange.record.lifecycle_cleanup
-                    || exchange.record.response_kind == "error"
-                    || exchange.record.outcome.termination().is_some()
-                    || exchange.record.outcome.is_client_terminated())
-                && self
-                    .connection_scopes
-                    .matches(exchange, active_case_id, connection)
-                && target_matches(
-                    target,
-                    &exchange.record.target_host,
-                    exchange.record.target_port,
-                )
-                && exchange.record.resp_version == resp_version
-                && exchange.record.database == database
-                && normalize_optional(username)
-                    == normalize_optional(exchange.record.username.as_deref())
-                && exchange.record.command.eq_ignore_ascii_case(&command.name)
-                && (matches!(command.name.as_str(), "AUTH" | "HELLO")
-                    || exchange.args == command.args)
-        }) {
-            PreferredMatch::Matched(index) => index,
-            PreferredMatch::LaneBlocked { .. } | PreferredMatch::NotFound => return None,
-        };
-        let response = self.exchanges[index].response_bytes().ok()?;
-        let target_event_index = self.events.request_order.reserve(active_case_id);
-        let requires_binding =
-            self.connection_scopes
-                .claim(&self.exchanges[index], active_case_id, connection);
-        let exchange = &mut self.exchanges[index];
-        exchange.status = if exchange.timing.outcome().is_client_terminated()
-            && !exchange.record.lifecycle_cleanup
-        {
-            ReplayExchangeStatus::AwaitingClientTermination
-        } else {
-            ReplayExchangeStatus::Responding
-        };
-        Some(MatchedRedisExchange {
-            refresh: None,
-            observation: None,
-            append: None,
-            unified_delivery: None,
-            read_back: None,
-            time_read: None,
-            time_write: None,
-            rpc_push: None,
-            rpc_response: None,
-            adapter_echo: None,
-            publish_duration_ms: exchange.record.duration_ms,
-            rule_ids: Vec::new(),
-            index,
-            connection_id: exchange.record.connection_id,
-            response,
-            timing: exchange.timing,
-            requires_binding,
-            report: CommandMatchedReport {
-                case_id: active_case_id.map(ToOwned::to_owned),
-                source: exchange.source,
-                index,
-                target: target.clone(),
-                connection_id: exchange.record.connection_id,
-                sequence: exchange.record.sequence,
-                command: exchange.record.command.clone(),
-                shared_origin: None,
-                target_event_index: Some(target_event_index),
             },
         })
     }
@@ -882,8 +812,11 @@ impl CommandExchangeScope for ReplayExchange {
         // reach the client but before delivery bookkeeping reacquires the mutex.
         // Unclaimed, failed and client-termination exchanges remain blockers.
         self.is_consumed()
-            || (self.source == ReplaySource::Case
-                && self.status == ReplayExchangeStatus::Responding)
+            || if let Some(ticket) = &self.claim {
+                self.source == ReplaySource::Case && ticket.satisfies(Barrier::Admitted)
+            } else {
+                Lifecycle::satisfies(self.status, self.source, Barrier::Admitted)
+            }
     }
 
     fn preserves_connection_order(&self) -> bool {

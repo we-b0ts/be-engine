@@ -6,7 +6,8 @@ impl RedisReplayState {
         close: bool,
     ) -> crate::replay::startup::Counts {
         let mut counts = crate::replay::startup::Counts::default();
-        for exchange in &mut self.exchanges {
+        for (index, exchange) in self.exchanges.iter_mut().enumerate() {
+            self.lifecycle.synchronize(index, &mut exchange.status);
             let control = matches!(
                 exchange.record.command.as_str(),
                 "PING"

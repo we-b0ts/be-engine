@@ -138,7 +138,8 @@ async fn optional_rollback_stays_optional_during_delivery_but_failures_stay_dirt
         1,
         "in-flight business response is still required"
     );
-    state.complete_exchange(&read);
+    assert!(read.claim.publish_wire());
+    assert!(state.complete_exchange(&read));
     let rollback = state
         .match_exchange(&identity, "COM_QUERY", Some("ROLLBACK"), None)
         .unwrap();
@@ -165,7 +166,8 @@ async fn optional_rollback_stays_optional_during_delivery_but_failures_stay_dirt
     let last = state
         .match_exchange(&identity, "COM_QUERY", Some("ROLLBACK"), None)
         .unwrap();
-    state.complete_exchange(&last);
+    assert!(last.claim.publish_wire());
+    assert!(state.complete_exchange(&last));
     assert!(state.allowed_unused_rollbacks().is_empty());
     assert_eq!(
         state.unused_exchanges(ReplaySource::Case).len(),

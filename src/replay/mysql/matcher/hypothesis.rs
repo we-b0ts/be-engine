@@ -28,8 +28,7 @@ impl ReplayState {
             identity,
             Some(command),
         );
-        let mut selected = None;
-        let mut visited = 0;
+        let mut search = crate::replay::candidate_selection::UniqueCandidate::new(256);
         for index in candidates.iter().copied() {
             let exchange = &self.mysql.exchanges[index];
             if !exchange.status.is_available()
@@ -42,20 +41,15 @@ impl ReplayState {
             {
                 continue;
             }
-            if exchange.record.connection_id.is_some_and(|connection| {
-                self.mysql.exchanges.iter().any(|prior| {
-                    prior.source == exchange.source
-                        && prior.case_id == exchange.case_id
-                        && prior.record.connection_id == Some(connection)
-                        && prior.record.query_sequence < exchange.record.query_sequence
-                        && !prior.status.is_consumed()
-                        && prior.optional_session.is_none()
-                })
-            }) {
+            if self
+                .mysql
+                .candidates
+                .lane_blocker(&self.mysql.exchanges, index)
+                .is_some()
+            {
                 continue;
             }
-            visited += 1;
-            if visited > 256 {
+            if search.inspect().is_err() {
                 self.mysql
                     .events
                     .metadata_warnings
@@ -75,15 +69,14 @@ impl ReplayState {
             ) else {
                 continue;
             };
-            if selected.is_some() {
+            if search.accept(index, decision).is_err() {
                 self.mysql
                     .events
                     .metadata_warnings
                     .push("MySQL hypothesis has multiple eligible Source exchanges".into());
                 return None;
             }
-            selected = Some((index, decision));
         }
-        selected
+        search.finish()
     }
 }

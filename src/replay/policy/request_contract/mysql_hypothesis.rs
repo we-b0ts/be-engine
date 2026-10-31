@@ -158,13 +158,12 @@ impl RequestContracts {
             Ok(result)
         })())
     }
-    fn mysql_hypothesis_source(&self, record: &RecordedMysqlExchange) -> Result<Arc<Vec<Token>>> {
-        let key = record
-            .response
-            .evidence
-            .as_ref()
-            .map(|reference| reference.location.sha256.as_str());
-        if let Some(key) = key {
+    pub(super) fn mysql_hypothesis_source(
+        &self,
+        record: &RecordedMysqlExchange,
+    ) -> Result<Arc<Vec<Token>>> {
+        let key = mysql_projection_key(record);
+        if let Some(key) = key.as_deref() {
             let mut cache = self
                 .mysql_hypothesis_projections
                 .lock()
@@ -197,7 +196,7 @@ impl RequestContracts {
                     _ => 0,
                 })
                 .sum::<usize>();
-        if let Some(key) = key.filter(|_| charge <= 1024 * 1024) {
+        if let Some(key) = key.as_deref().filter(|_| charge <= 1024 * 1024) {
             let mut cache = self
                 .mysql_hypothesis_projections
                 .lock()
@@ -219,6 +218,26 @@ impl RequestContracts {
         }
         Ok(tokens)
     }
+}
+
+/// Bind cached syntax to the exact immutable projection as well as its physical
+/// Source reference. A native comparison copy can retain the same evidence
+/// location while projecting different SQL/parameters; it must get a new key.
+fn mysql_projection_key(record: &RecordedMysqlExchange) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let reference = record.response.evidence.as_ref()?;
+    let mut hash = Sha256::new();
+    hash.update(b"mysql-value-projection/v2\0");
+    hash.update(record.command.as_bytes());
+    let sql = record.sql.as_deref().unwrap_or_default();
+    hash.update((sql.len() as u64).to_le_bytes());
+    hash.update(sql.as_bytes());
+    hash.update(serde_json::to_vec(&record.params).ok()?);
+    Some(format!(
+        "{}:{:x}",
+        reference.location.sha256,
+        hash.finalize()
+    ))
 }
 
 fn sql_value(token: &Token) -> Result<Value> {
@@ -254,4 +273,46 @@ fn sql_location(
             &serde_json::to_vec(&candidate.draft_policy).expect("SQL hypothesis draft")
         )[..16]
     );
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    #[test]
+    fn source_syntax_cache_distinguishes_authorized_native_comparison_copies() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("dependencies.jsonl");
+        let event = serde_json::json!({
+            "event_type":"mysql_exchange", "target_host":"mysql.test", "target_port":3306,
+            "command":"COM_STMT_EXECUTE", "sql":"UPDATE entries SET stamp=? WHERE id=7",
+            "params":[{"kind":"integer","value":1000}],
+            "query_sequence":1, "duration_ms":0,
+            "response":{"status":"ok","affected_rows":1,"last_insert_id":0},
+        });
+        let raw = serde_json::to_vec(&event).unwrap();
+        std::fs::write(&path, &raw).unwrap();
+        let source = crate::dependency_index::RecordSource::new(
+            &path,
+            crate::dependency_index::FileStamp::read_native(&path).unwrap(),
+            Arc::new(Mutex::new(crate::dependency_index::RecordReader::new(4096))),
+        );
+        let mut record: RecordedMysqlExchange = serde_json::from_value(event).unwrap();
+        record.response.evidence =
+            Some(source.reference(crate::dependency_index::RecordLocation {
+                line: 1,
+                offset: 0,
+                length: raw.len() as u64,
+                sha256: crate::policy_evidence::digest(&raw),
+            }));
+        let owner = RequestContracts::default();
+        let first = owner.mysql_hypothesis_source(&record).unwrap();
+        let repeated = owner.mysql_hypothesis_source(&record.clone()).unwrap();
+        assert!(Arc::ptr_eq(&first, &repeated));
+        let mut projected = record.clone();
+        projected.params.as_mut().unwrap()[0].value = Some(serde_json::json!(2000));
+        let changed = owner.mysql_hypothesis_source(&projected).unwrap();
+        assert_ne!(first, changed);
+        assert_eq!(std::fs::read(&path).unwrap(), raw);
+    }
 }

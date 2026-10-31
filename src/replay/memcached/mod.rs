@@ -22,7 +22,9 @@ use crate::memcached::{
     BufferedReader as MemcachedBufferedReader, MemcachedRequest, MemcachedWireProtocol,
     read_binary_frame, read_text_request,
 };
+use crate::replay::admission::{Barrier, ClaimKind, ClaimTicket, Finish, Lifecycle, RequestOrder};
 
+mod admission;
 mod builtins;
 mod case_status;
 pub(in crate::replay) mod contracts;
@@ -30,6 +32,8 @@ mod delivery;
 mod evidence;
 mod expiration;
 mod finite_inventory;
+mod lifecycle;
+mod matching;
 mod report_inventory;
 #[cfg(test)]
 mod termination_tests;
@@ -41,6 +45,7 @@ use super::report::command::{
     CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
     CommandUnusedReport,
 };
+use admission::match_memcached_request;
 use builtins::{
     adapt_binary_get_responses, binary_error, binary_get_opcodes_match, memcached_is_unsupported,
 };
@@ -109,6 +114,7 @@ struct ReplayExchange {
     extras: Option<Vec<u8>>,
     response_frames: Vec<Vec<u8>>,
     status: ReplayExchangeStatus,
+    claim: Option<ClaimTicket>,
     timing: ReplayExchangeTiming,
     connection_independent: bool,
 }
@@ -116,6 +122,7 @@ struct ReplayExchange {
 #[derive(Debug, Clone)]
 struct MatchedMemcachedExchange {
     index: usize,
+    claim: ClaimTicket,
     response_frames: Vec<Vec<u8>>,
     response_frame_offsets_ms: Vec<u64>,
     timing: ReplayExchangeTiming,
@@ -126,6 +133,7 @@ struct MatchedMemcachedExchange {
     report: CommandMatchedReport,
 }
 
+#[derive(Clone, Copy)]
 struct MemcachedMatchContext<'a> {
     active_case_id: Option<&'a str>,
     target: &'a TargetKey,
@@ -139,11 +147,13 @@ struct MemcachedMatchContext<'a> {
 pub(super) struct MemcachedReplayState {
     exchanges: Vec<ReplayExchange>,
     case_exchange_index: CaseExchangeIndex,
+    lifecycle: Lifecycle,
     pub(super) events: MemcachedReplayEvents,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct MemcachedReplayEvents {
+    request_order: RequestOrder,
     global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     dirty_case_ids: BTreeSet<String>,
     pub(super) connections: usize,
@@ -156,26 +166,6 @@ pub(super) struct MemcachedReplayEvents {
 }
 
 impl MemcachedReplayState {
-    pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
-        self.exchanges.iter().any(|e| {
-            e.source == ReplaySource::Case
-                && matches!(
-                    e.status,
-                    ReplayExchangeStatus::Responding
-                        | ReplayExchangeStatus::AwaitingClientTermination
-                )
-        })
-    }
-
-    pub(in crate::replay) fn has_in_flight(&self) -> bool {
-        self.exchanges.iter().any(|e| {
-            matches!(
-                e.status,
-                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
-            )
-        })
-    }
-
     pub(super) fn register_connection(
         &mut self,
         record: RecordedConnection,
@@ -287,190 +277,11 @@ impl MemcachedReplayState {
             extras,
             response_frames,
             status: ReplayExchangeStatus::Available,
+            claim: None,
             timing,
             connection_independent,
         });
         Ok(())
-    }
-
-    fn match_memcached(
-        &mut self,
-        context: MemcachedMatchContext<'_>,
-    ) -> std::result::Result<MatchedMemcachedExchange, CommandMatchDiagnostic> {
-        let MemcachedMatchContext {
-            active_case_id,
-            target,
-            wire_protocol,
-            request,
-            policy,
-            observed_at,
-        } = context;
-        let wire = wire_protocol.as_str();
-        let request_id = uuid::Uuid::new_v4();
-        let mut observation_id = Some(request_id);
-        if let (Some(policy), Some(case)) = (policy, active_case_id) {
-            match contracts::record_target(
-                policy,
-                case,
-                target,
-                wire,
-                request,
-                (request_id, observed_at),
-            ) {
-                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
-                    observation_id = None
-                }
-                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
-                Err(error) => {
-                    tracing::warn!(%error, "failed to preserve independent Memcached Target observation")
-                }
-            }
-        }
-        let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
-            exchange.status.is_available()
-                && target_matches(
-                    target,
-                    &exchange.record.target_host,
-                    exchange.record.target_port,
-                )
-                && exchange.record.wire_protocol == wire
-                && exchange
-                    .record
-                    .command
-                    .eq_ignore_ascii_case(&request.command)
-                && binary_get_opcodes_match(exchange.record.opcode, request.opcode)
-                && exchange.key == request.key
-                && policy.is_none_or(|policy| {
-                    if let Err(error) = contracts::record_request(
-                        policy,
-                        exchange,
-                        request,
-                        observed_at,
-                        observation_id,
-                    ) {
-                        tracing::warn!(%error, "failed to preserve Memcached request witness");
-                        return false;
-                    }
-                    true
-                })
-                && contracts::request_arguments_match(
-                    policy,
-                    exchange,
-                    target,
-                    wire_protocol,
-                    request,
-                    observed_at,
-                )
-                && memcached_value_matches_policy(policy, exchange, target, request, observed_at)
-                && exchange.record.cas == request.cas
-                && (exchange.record.quiet == request.quiet
-                    || binary_get_opcodes_match(exchange.record.opcode, request.opcode))
-                && exchange.record.noreply == request.noreply
-        });
-        let index = match matched {
-            PreferredMatch::Matched(index) => index,
-            PreferredMatch::LaneBlocked { candidate, blocker } => {
-                return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
-            }
-            PreferredMatch::NotFound => {
-                return Err(unmatched_diagnostic(
-                    &self.exchanges,
-                    active_case_id,
-                    |exchange| {
-                        memcached_mismatch_fields(
-                            exchange,
-                            target,
-                            wire_protocol,
-                            request,
-                            observed_at,
-                        )
-                    },
-                ));
-            }
-        };
-        let response_frames = self.exchanges[index].response_bytes().map_err(|error| {
-            CommandMatchDiagnostic::EvidenceUnavailable {
-                reason: format!("response evidence unavailable: {error:#}"),
-            }
-        })?;
-        let exchange = &mut self.exchanges[index];
-        let policy_decision = policy
-            .map(|policy| {
-                policy
-                    .preview_memcached(&memcached_policy_context(
-                        exchange,
-                        target,
-                        request,
-                        observed_at,
-                    ))
-                    .expect("matched Memcached policy preview must remain stable")
-            })
-            .unwrap_or_default();
-        exchange.status = if exchange.timing.outcome().is_client_terminated() {
-            ReplayExchangeStatus::AwaitingClientTermination
-        } else {
-            ReplayExchangeStatus::Responding
-        };
-        Ok(MatchedMemcachedExchange {
-            response_frame_offsets_ms: exchange.record.response_frame_offsets_ms.clone(),
-            index,
-            response_frames,
-            timing: exchange.timing,
-            request_observed_at: observed_at,
-            request_opcode: request.opcode,
-            request_opaque: request.opaque,
-            policy_decision,
-            report: CommandMatchedReport {
-                case_id: active_case_id.map(ToOwned::to_owned),
-                source: exchange.source,
-                index,
-                target: target.clone(),
-                connection_id: exchange.record.connection_id,
-                sequence: exchange.record.sequence,
-                command: exchange.record.command.clone(),
-                shared_origin: None,
-                target_event_index: None,
-            },
-        })
-    }
-
-    fn complete_exchange(&mut self, matched: &MatchedMemcachedExchange) {
-        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
-            exchange.status = ReplayExchangeStatus::Consumed;
-        }
-        self.refresh_global_report(matched.index);
-        let case_id = matched.report.case_id.clone();
-        push_success_detail(
-            &mut self.events.matched_count,
-            &mut self.events.matched,
-            &mut self.events.matched_details,
-            case_id.as_deref(),
-            |target_event_index| {
-                let mut report = matched.report.clone();
-                report.target_event_index = Some(target_event_index);
-                report
-            },
-        );
-    }
-
-    fn fail_exchange(&mut self, matched: &MatchedMemcachedExchange, reason: String) {
-        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
-            exchange.status = ReplayExchangeStatus::Failed;
-        }
-        self.refresh_global_report(matched.index);
-        if let Some(case_id) = &matched.report.case_id {
-            self.events.dirty_case_ids.insert(case_id.clone());
-        }
-        self.events.unsafe_events.push(CommandRequestReport {
-            target_observation_id: None,
-            case_id: matched.report.case_id.clone(),
-            target: matched.report.target.clone(),
-            command: matched.report.command.clone(),
-            target_event_index: None,
-            request_fingerprint: None,
-            reason,
-            diagnostic: None,
-        });
     }
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
@@ -659,86 +470,6 @@ async fn record_runtime_unsafe(
     state.memcached.events.unsafe_events.push(request);
 }
 
-async fn match_memcached_request(
-    state: &Arc<Mutex<ReplayState>>,
-    target: &TargetKey,
-    wire: MemcachedWireProtocol,
-    request: &MemcachedRequest,
-) -> Option<MatchedMemcachedExchange> {
-    let mut state = state.lock().await;
-    let active_case_id = state.active_case_id.clone();
-    let observed_at = Utc::now();
-    if memcached_is_unsupported(request) {
-        if let Some(case_id) = &active_case_id {
-            state
-                .memcached
-                .events
-                .dirty_case_ids
-                .insert(case_id.clone());
-        }
-        state
-            .memcached
-            .events
-            .unsupported
-            .push(CommandRequestReport {
-                target_observation_id: None,
-                case_id: active_case_id,
-                target: target.clone(),
-                command: request.command.clone(),
-                target_event_index: None,
-                request_fingerprint: None,
-                reason: "Memcached command mode is unsupported for replay".to_string(),
-                diagnostic: None,
-            });
-        return None;
-    }
-    let ReplayState {
-        memcached,
-        replay_policy,
-        ..
-    } = &mut *state;
-    match memcached.match_memcached(MemcachedMatchContext {
-        active_case_id: active_case_id.as_deref(),
-        target,
-        wire_protocol: wire,
-        request,
-        policy: replay_policy.as_ref(),
-        observed_at,
-    }) {
-        Ok(matched) => {
-            if let Some(policy) = replay_policy
-                && policy
-                    .commit(active_case_id.as_deref(), matched.policy_decision.clone())
-                    .is_err()
-            {
-                return None;
-            }
-            Some(matched)
-        }
-        Err(diagnostic) => {
-            if let Some(case_id) = &active_case_id {
-                state
-                    .memcached
-                    .events
-                    .dirty_case_ids
-                    .insert(case_id.clone());
-            }
-            state.memcached.events.unmatched.push(CommandRequestReport {
-                target_observation_id: None,
-                case_id: active_case_id,
-                target: target.clone(),
-                command: request.command.clone(),
-                target_event_index: None,
-                request_fingerprint: None,
-                reason: "no recorded Memcached exchange matched target/protocol/arguments"
-                    .to_string(),
-                diagnostic: Some(diagnostic),
-            });
-            None
-        }
-    }
-}
-
 pub(super) fn observe_recorded_policy_exchanges(
     policy: &mut ReplayPolicyRuntime,
     state: &MemcachedReplayState,
@@ -874,6 +605,23 @@ impl CommandExchangeScope for ReplayExchange {
 
     fn is_consumed(&self) -> bool {
         self.status.is_consumed()
+    }
+
+    fn satisfies_lane_order(&self) -> bool {
+        let barrier = if self.source == ReplaySource::Case
+            && self.timing.outcome() == DependencyExchangeOutcome::Response
+            && !self.record.quiet
+            && !self.record.noreply
+        {
+            Barrier::Admitted
+        } else {
+            Barrier::Delivered
+        };
+        Lifecycle::satisfies(self.status, self.source, barrier)
+            && self
+                .claim
+                .as_ref()
+                .is_none_or(|claim| claim.satisfies(barrier))
     }
 
     fn preserves_connection_order(&self) -> bool {

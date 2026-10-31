@@ -79,6 +79,33 @@ fn scope_reads_only_selected_original_locations_and_reuses_immutable_projection(
 }
 
 #[test]
+fn eager_stream_and_lazy_index_freeze_identical_empty_and_noncontiguous_scopes() {
+    use sha2::{Digest, Sha256};
+    for empty in [false, true] {
+        let (_temp, scope, _) = fixture();
+        if empty {
+            let mut selected: ScopeIndex =
+                serde_json::from_slice(&fs::read(&scope).unwrap()).unwrap();
+            selected.locations.clear();
+            fs::write(&scope, serde_json::to_vec(&selected).unwrap()).unwrap();
+        }
+        let mut stream = super::super::RecordStream::open(&scope).unwrap();
+        let mut hash = Sha256::new();
+        let mut bytes = 0_u64;
+        while let Some((_, raw)) = stream.next().unwrap() {
+            hash.update(raw);
+            bytes += raw.len() as u64;
+        }
+        let indexed =
+            super::super::build::build_file(&scope, &std::sync::atomic::AtomicBool::new(false))
+                .unwrap();
+        assert_eq!(indexed.sha256, format!("{:x}", hash.finalize()));
+        assert_eq!(bytes, selected_bytes(&scope).unwrap());
+        assert_eq!(bytes == 0, empty);
+    }
+}
+
+#[test]
 fn empty_scope_and_mutated_payload_do_not_borrow_other_inventory() {
     let (temp, scope, _) = fixture();
     let mut index: ScopeIndex = serde_json::from_slice(&fs::read(&scope).unwrap()).unwrap();

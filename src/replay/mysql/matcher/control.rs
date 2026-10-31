@@ -25,14 +25,20 @@ impl ReplayState {
                 continue;
             };
             let exchange = &mut self.mysql.exchanges[index];
-            exchange.status = if exchange.record.outcome.is_client_terminated()
+            let kind = if exchange.record.outcome.is_client_terminated()
                 && !exchange.record.lifecycle_cleanup
             {
-                ReplayExchangeStatus::AwaitingClientTermination
+                crate::replay::admission::ClaimKind::ClientTermination
             } else {
-                ReplayExchangeStatus::Responding
+                crate::replay::admission::ClaimKind::Response
             };
+            let claim = self
+                .mysql
+                .lifecycle
+                .claim(index, &mut exchange.status, kind)?;
             let matched = MatchedExchange {
+                target_observation_id: self.mysql.request_observation_id.clone(),
+                claim,
                 hypothesis_owner: self
                     .replay_policy
                     .as_ref()
@@ -40,7 +46,7 @@ impl ReplayState {
                 transaction_owner: None,
                 value_delivery: None,
                 time_copy_delivery: None,
-                source,
+                source: exchange.source,
                 index,
                 record: exchange.record.clone(),
                 timing: exchange.timing,
@@ -51,13 +57,13 @@ impl ReplayState {
                     target: Some(exchange.identity.target.clone()),
                     database: exchange.identity.database.clone(),
                     username: exchange.identity.username.clone(),
-                    source,
+                    source: exchange.source,
                     index,
                     command: command.into(),
                     sql: argument.map(str::to_owned),
                     params: None,
                     status: exchange.record.response.status.clone(),
-                    target_event_index: None,
+                    target_event_index: self.mysql.events.request_order.latest(case),
                 },
             };
             self.refresh_mysql_global_report(index);

@@ -89,6 +89,17 @@ impl RedisReplayState {
     }
 
     pub(in crate::replay::redis) fn complete_activity(&mut self, prepared: &Prepared) {
+        self.complete_activity_delivery(prepared, None);
+    }
+
+    /// Creation/deletion remain ordinary finite claims. The shared transaction
+    /// has just consumed this witness, while the native lifetime still needs
+    /// its pending token and original delivery coverage accounted for.
+    pub(in crate::replay::redis) fn complete_finite_activity(&mut self, prepared: &Prepared) {
+        self.complete_activity_delivery(prepared, Some(prepared.witness));
+    }
+
+    fn complete_activity_delivery(&mut self, prepared: &Prepared, newly_consumed: Option<usize>) {
         if self
             .activity_refresh
             .pending
@@ -111,7 +122,7 @@ impl RedisReplayState {
         };
         let covered = indices
             .iter()
-            .filter(|&&i| !self.exchanges[i].status.is_consumed())
+            .filter(|&&i| newly_consumed == Some(i) || !self.exchanges[i].status.is_consumed())
             .count();
         let audit = ActivityAudit {
             rule_id: p.rule.clone(),

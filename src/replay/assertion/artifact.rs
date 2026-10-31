@@ -26,18 +26,20 @@ pub(super) struct RecordedRequest {
 
 impl RecordedRequest {
     pub(super) fn has_motan_frame(&self) -> bool {
-        self.method.eq_ignore_ascii_case("MOTAN")
-            && matches!(self.protocol_version.as_deref(), Some("motan1" | "motan2"))
+        matches!(
+            crate::protocol_contract::primary_version(self.protocol_version.as_deref()),
+            Ok(crate::protocol_contract::NativeProtocolVersion::Motan1
+                | crate::protocol_contract::NativeProtocolVersion::Motan2)
+        )
     }
 
     pub(super) fn gateway_protocol(&self) -> Result<ResponseGatewayProtocol> {
-        if !self.method.eq_ignore_ascii_case("MOTAN") {
-            return Ok(ResponseGatewayProtocol::Http);
-        }
-        match self.protocol_version.as_deref() {
-            Some("motan1") => Ok(ResponseGatewayProtocol::Motan1),
-            Some("motan2") => Ok(ResponseGatewayProtocol::Motan2),
-            value => anyhow::bail!("MOTAN request uses unsupported protocol version {value:?}"),
+        use crate::protocol_contract::{NativeProtocolVersion, primary_version};
+        match primary_version(self.protocol_version.as_deref())? {
+            NativeProtocolVersion::Http => Ok(ResponseGatewayProtocol::Http),
+            NativeProtocolVersion::Motan1 => Ok(ResponseGatewayProtocol::Motan1),
+            NativeProtocolVersion::Motan2 => Ok(ResponseGatewayProtocol::Motan2),
+            _ => anyhow::bail!("primary protocol has no response assertion adapter"),
         }
     }
 }
@@ -104,6 +106,8 @@ impl RecordedStatus {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ActualResponse {
+    #[serde(default)]
+    pub(super) primary: Option<crate::primary_protocol::PrimaryMetadata>,
     #[serde(default)]
     pub(super) interaction_started_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]

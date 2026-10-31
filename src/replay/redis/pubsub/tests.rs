@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 mod adapter_echo;
 mod broadcast;
+mod cancellation;
 mod compact_evidence;
 mod echo_preparation;
 mod input_timing;

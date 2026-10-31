@@ -62,6 +62,9 @@ impl RequestContracts {
         let anchor = CaseAnchor::from_request(directory, &request, &self.rules);
         let mut state = self.state.lock().expect("request contracts");
         state
+            .primary_protocols
+            .insert(case.into(), case_plan::input_protocol(&raw));
+        state
             .source_request_digests
             .insert(case.into(), crate::policy_evidence::digest(&raw));
         state.cases.entry(case.into()).or_insert(anchor);

@@ -1,3 +1,4 @@
+mod admission;
 mod broker;
 mod candidates;
 mod cleanup_selection;

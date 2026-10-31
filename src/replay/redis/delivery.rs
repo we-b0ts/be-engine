@@ -11,6 +11,10 @@ pub(super) async fn deliver_redis_exchange(
     started: tokio::time::Instant,
     client_id: Uuid,
 ) -> Result<bool> {
+    let mut claim_guard = match &matched.claim {
+        Claim::Finite(ticket) => Some(ticket.guard()),
+        Claim::Native(_) => None,
+    };
     let (lifecycle, timing_scope) = {
         let state = state.lock().await;
         (
@@ -163,19 +167,37 @@ pub(super) async fn deliver_redis_exchange(
         return Err(error.into());
     }
     let delivered_at = chrono::Utc::now();
-    if let Some(read) = &matched.time_read
-        && let Err(error) = read.publish(response, delivered_at)
+    // Preserve publication before reacquiring ReplayState: a pooled successor
+    // may already be comparing this successfully delivered value.
+    let published = (|| {
+        if let Some(read) = &matched.time_read {
+            read.publish(response, delivered_at)?;
+        }
+        if let Some(write) = &matched.time_write {
+            write.publish(delivered_at)?;
+        }
+        Ok(())
+    })();
+    if matches!(matched.claim, Claim::Finite(_))
+        && matched.rpc_push.is_none()
+        && matched.adapter_echo.is_none()
     {
-        state
-            .lock()
-            .await
-            .redis
-            .fail_exchange(matched, error.to_string());
-        return Err(error);
+        // Actual wire progress is visible before waiting for ReplayState's
+        // mutex; the common transaction owns every subsequent commit/failure.
+        matched.publish_wire();
+        let mut replay = state.lock().await;
+        replay.redis.finish_delivery(
+            matched,
+            response,
+            unified_rendered_at,
+            delivered_at,
+            published,
+        )?;
+        super::input_timing::response_delivered(&mut replay, matched, timing_scope.as_ref());
+        return Ok(false);
     }
-    if let Some(write) = &matched.time_write
-        && let Err(error) = write.publish(delivered_at)
-    {
+    matched.publish_wire();
+    if let Err(error) = published {
         state
             .lock()
             .await
@@ -240,6 +262,9 @@ pub(super) async fn deliver_redis_exchange(
                 }
                 drop(state);
                 pubsub::schedule(state_ref.clone(), delay, delivery, None);
+                if !detached && let Some(guard) = claim_guard.take() {
+                    guard.handoff();
+                }
             }
             Err(error) => {
                 state.redis.pubsub.fail(pubsub::PushId::Inline(push));

@@ -5,6 +5,7 @@ use crate::DependencyExchangeOutcome;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct ReplayEvents {
+    pub(super) request_order: crate::replay::admission::RequestOrder,
     pub(in crate::replay) global_report:
         crate::replay::report::global_evidence::regular_usage::Usage,
     pub(in crate::replay) dirty_case_ids: BTreeSet<String>,
@@ -43,6 +44,8 @@ pub(in crate::replay) enum OptionalSessionExchange {
 
 #[derive(Debug, Clone)]
 pub(in crate::replay) struct MatchedExchange {
+    pub(super) target_observation_id: Option<String>,
+    pub(in crate::replay) claim: crate::replay::admission::ClaimTicket,
     pub(in crate::replay) hypothesis_owner:
         Option<crate::replay::policy::request_contract::RequestContracts>,
     pub(in crate::replay) transaction_owner: Option<Option<String>>,

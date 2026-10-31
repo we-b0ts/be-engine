@@ -1,11 +1,13 @@
 use super::*;
 mod control;
 mod hypothesis;
+mod observation;
 mod request;
 pub(super) use request::TransactionMatch;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct MysqlReplayState {
+    pub(super) lifecycle: crate::replay::admission::Lifecycle,
     pub(in crate::replay) request_observation_id: Option<String>,
     #[cfg(test)]
     pub(in crate::replay) observed_at_for_test: Option<DateTime<Utc>>,
@@ -27,6 +29,39 @@ pub(in crate::replay) struct MysqlReplayState {
 }
 
 impl MysqlReplayState {
+    pub(in crate::replay) fn exchange_status(&self, index: usize) -> Option<ReplayExchangeStatus> {
+        self.exchanges
+            .get(index)
+            .map(|exchange| self.lifecycle.live_status(index, exchange.status))
+    }
+
+    pub(in crate::replay) fn has_in_flight(&self) -> bool {
+        self.exchanges.iter().enumerate().any(|(index, exchange)| {
+            matches!(
+                self.lifecycle.live_status(index, exchange.status),
+                ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
+            )
+        })
+    }
+
+    pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
+        self.exchanges.iter().enumerate().any(|(index, exchange)| {
+            exchange.source == ReplaySource::Case
+                && matches!(
+                    self.lifecycle.live_status(index, exchange.status),
+                    ReplayExchangeStatus::Responding
+                        | ReplayExchangeStatus::AwaitingClientTermination
+                )
+        })
+    }
+    pub(in crate::replay) fn prepare_candidates(&mut self) {
+        self.candidates.register(&self.exchanges);
+    }
+
+    pub(in crate::replay) fn prepared_case_members(&self, case: &str) -> Arc<[usize]> {
+        self.candidates.case_members(case)
+    }
+
     #[cfg(test)]
     pub(in crate::replay) fn invalidate_scope_index(&mut self) {
         self.candidates = candidates::Candidates::default();
@@ -64,14 +99,15 @@ impl MysqlReplayState {
         self.events.dirty_case_ids.contains(case_id)
             || self.case_exchange_index.any(case_id, |index| {
                 self.exchanges.get(index).is_some_and(|exchange| {
+                    let status = self.lifecycle.live_status(index, exchange.status);
                     let optional = exchange.optional_session.filter(|kind| {
-                        exchange.status.is_available()
+                        status.is_available()
                             || matches!(
                                 kind,
                                 OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
-                            ) && exchange.status == ReplayExchangeStatus::Responding
+                            ) && status == ReplayExchangeStatus::Responding
                     });
-                    !exchange.status.is_consumed()
+                    !status.is_consumed()
                         && optional.is_none()
                         && !self.foreign.contains_key(&index)
                 })
@@ -118,6 +154,29 @@ impl ReplayState {
         sql: Option<&str>,
         reason: &str,
     ) {
+        let event_index = self.mysql.events.request_order.reserve(case);
+        self.record_builtin_observed_in_case(
+            case,
+            identity,
+            command,
+            sql,
+            reason,
+            Some(event_index),
+            None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_builtin_observed_in_case(
+        &mut self,
+        case: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+        reason: &str,
+        event_index: Option<usize>,
+        observation_id: Option<&str>,
+    ) {
         // Plain ends already tried ordinary finite matching. An end rejected
         // there must not consume a business boundary through the fallback.
         let plain_end =
@@ -132,8 +191,8 @@ impl ReplayState {
             &mut self.mysql.events.builtin_queries,
             &mut self.mysql.events.builtin_query_details,
             budget_case_id.as_deref(),
-            |target_event_index| QueryReport {
-                target_observation_id: None,
+            |_| QueryReport {
+                target_observation_id: observation_id.map(str::to_owned),
                 diagnostic: None,
                 case_id,
                 target: identity.target.clone(),
@@ -145,7 +204,7 @@ impl ReplayState {
                 reason: reason.to_string(),
                 recorded_source: recorded_match.map(|(source, _)| source),
                 recorded_index: recorded_match.map(|(_, index)| index),
-                target_event_index: Some(target_event_index),
+                target_event_index: event_index,
             },
         );
     }
@@ -268,7 +327,17 @@ impl ReplayState {
                 if recorded_sql != normalized_sql {
                     continue;
                 }
-                exchange.status = ReplayExchangeStatus::Consumed;
+                let Some(ticket) = self.mysql.lifecycle.claim(
+                    index,
+                    &mut exchange.status,
+                    crate::replay::admission::ClaimKind::Response,
+                ) else {
+                    continue;
+                };
+                ticket.publish_wire();
+                if !self.mysql.lifecycle.complete(&ticket, &mut exchange.status) {
+                    continue;
+                }
                 if exchange.source.is_run_owned() {
                     self.mysql.events.global_report.observe(
                         0,
@@ -480,18 +549,17 @@ impl ReplayState {
         allowed: Option<OptionalSessionExchange>,
     ) -> bool {
         let exchange = &self.mysql.exchanges[index];
+        let status = self.mysql.lifecycle.live_status(index, exchange.status);
         let optional = exchange.optional_session.filter(|kind| {
             // Successful cleanup stays optional during delivery. Failed
             // delivery still reports an error and stays required.
-            exchange.status.is_available()
+            status.is_available()
                 || matches!(
                     kind,
                     OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
-                ) && exchange.status == ReplayExchangeStatus::Responding
+                ) && status == ReplayExchangeStatus::Responding
         });
-        exchange.source.matches_scope(source)
-            && !exchange.status.is_consumed()
-            && optional == allowed
+        exchange.source.matches_scope(source) && !status.is_consumed() && optional == allowed
     }
 
     pub(super) fn mysql_summary(&self, index: usize) -> RecordedExchangeSummary {
@@ -512,11 +580,48 @@ impl ReplayState {
         }
     }
 
-    pub(in crate::replay) fn complete_exchange(&mut self, matched: &MatchedExchange) {
+    pub(in crate::replay) fn complete_exchange(&mut self, matched: &MatchedExchange) -> bool {
+        self.finish_mysql_exchange(matched, || Ok(()))
+            .unwrap_or(false)
+    }
+
+    pub(in crate::replay::mysql) fn finish_mysql_exchange(
+        &mut self,
+        matched: &MatchedExchange,
+        commit: impl FnOnce() -> Result<()>,
+    ) -> Result<bool> {
         let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) else {
-            return;
+            return Ok(false);
         };
-        exchange.status = ReplayExchangeStatus::Consumed;
+        match self
+            .mysql
+            .lifecycle
+            .finish(&matched.claim, &mut exchange.status, commit)
+        {
+            crate::replay::admission::Finish::Committed(()) => {}
+            crate::replay::admission::Finish::Unchanged => return Ok(false),
+            crate::replay::admission::Finish::Failed(error) => {
+                self.refresh_mysql_global_report(matched.index);
+                let identity = ReplaySessionIdentity {
+                    target: matched.report.target.clone(),
+                    database: matched.report.database.clone(),
+                    username: matched.report.username.clone(),
+                };
+                self.record_unmatched_in_case(
+                    matched.report.case_id.as_deref(),
+                    &identity,
+                    &matched.report.command,
+                    matched.report.sql.as_deref(),
+                    matched.report.params.as_deref(),
+                    "MySQL delivery contract commit failed",
+                );
+                if let Some(report) = self.mysql.events.unmatched_queries.last_mut() {
+                    report.target_event_index = matched.report.target_event_index;
+                    report.target_observation_id = matched.target_observation_id.clone();
+                }
+                return Err(error);
+            }
+        }
         self.refresh_mysql_global_report(matched.index);
         let case_id = matched.report.case_id.clone();
         push_success_detail(
@@ -524,12 +629,9 @@ impl ReplayState {
             &mut self.mysql.events.matched_queries,
             &mut self.mysql.events.matched_query_details,
             case_id.as_deref(),
-            |target_event_index| {
-                let mut report = matched.report.clone();
-                report.target_event_index = Some(target_event_index);
-                report
-            },
+            |_| matched.report.clone(),
         );
+        Ok(true)
     }
 
     pub(in crate::replay) fn fail_exchange(
@@ -538,8 +640,15 @@ impl ReplayState {
         identity: &ReplaySessionIdentity,
         reason: &str,
     ) {
-        if let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) {
-            exchange.status = ReplayExchangeStatus::Failed;
+        let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) else {
+            return;
+        };
+        if !self
+            .mysql
+            .lifecycle
+            .fail(&matched.claim, &mut exchange.status)
+        {
+            return;
         }
         self.refresh_mysql_global_report(matched.index);
         self.record_unmatched_in_case(
@@ -550,5 +659,9 @@ impl ReplayState {
             matched.record.params.as_deref(),
             reason,
         );
+        if let Some(report) = self.mysql.events.unmatched_queries.last_mut() {
+            report.target_event_index = matched.report.target_event_index;
+            report.target_observation_id = matched.target_observation_id.clone();
+        }
     }
 }

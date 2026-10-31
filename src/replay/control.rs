@@ -229,7 +229,10 @@ pub(super) async fn handle_control_request(
                             .target
                             .unwrap_or_else(Utc::now);
                         match state.redis.pubsub.native_clock.request_begin(case, epoch) {
-                            Ok(()) => serde_json::json!({"ok":true}),
+                            Ok(()) => {
+                                state.advance_admission_epoch();
+                                serde_json::json!({"ok":true})
+                            }
                             Err(error) => serde_json::json!({"ok":false,"error":error.to_string()}),
                         }
                     }
@@ -379,12 +382,8 @@ async fn finalize_replay(
         tracing::warn!(error=%error,"finalizing incomplete hypothesis evidence");
     }
     let mut state = state.lock().await;
-    if state.mysql.exchanges.iter().any(|e| {
-        matches!(
-            e.status,
-            ReplayExchangeStatus::Responding | ReplayExchangeStatus::AwaitingClientTermination
-        )
-    }) || state.redis.has_in_flight()
+    if state.mysql.has_in_flight()
+        || state.redis.has_in_flight()
         || state.kafka.has_in_flight()
         || state.connect_failures.has_in_flight()
         || state.memcached.has_in_flight()
@@ -516,6 +515,19 @@ pub(super) async fn begin_case(
             "error": format!("replay case {active_case_id} is already active")
         });
     }
+    let prepared_scope = match state.prepared_case(case_id) {
+        Ok(plan) => serde_json::json!({
+            "source_sha256": plan.source.sha256,
+            "source_bytes": plan.source.source_bytes,
+            "indexed_native_counts": {
+                "http": plan.native.http.len(),
+                "redis": plan.native.redis.len(),
+                "mysql": plan.native.mysql.len(),
+            },
+            "rules":plan.rules.summary(),
+        }),
+        Err(error) => return serde_json::json!({"ok":false,"error":format!("{error:#}")}),
+    };
     if let Some(sample) = counter_start {
         state
             .egress_counter_starts
@@ -526,6 +538,7 @@ pub(super) async fn begin_case(
     if let Err(error) = dependency_tail::activate(&mut state, case_id) {
         return serde_json::json!({"ok": false, "error": format!("dependency-tail dependency activation failed: {error:#}")});
     }
+    state.advance_admission_epoch();
     state.set_active_case(Some(case_id.to_string()));
     state.input_timing = None;
     state.redis.pubsub.native_clock.begin_case(case_id);
@@ -539,6 +552,7 @@ pub(super) async fn begin_case(
     serde_json::json!({
         "ok": true,
         "target_stop_required": target_stop_required,
+        "prepared_scope": prepared_scope,
         "active_case_id": case_id,
         "case": state.cases.get(case_id).map(|case| ReplayCaseReport {
             case_id: case.id.clone(),

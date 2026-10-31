@@ -1,3 +1,4 @@
+pub(in crate::replay) mod candidates;
 pub(in crate::replay) mod contracts;
 pub(crate) mod diagnosis;
 mod matching;
@@ -185,10 +186,18 @@ impl HttpReplayEvents {
 
 pub(super) fn case_exchange_index(exchanges: &[ReplayHttpExchange]) -> CaseExchangeIndex {
     let mut index = CaseExchangeIndex::default();
-    for (position, exchange) in exchanges.iter().enumerate() {
+    extend_case_exchange_index(&mut index, exchanges, 0);
+    index
+}
+
+pub(super) fn extend_case_exchange_index(
+    index: &mut CaseExchangeIndex,
+    exchanges: &[ReplayHttpExchange],
+    start: usize,
+) {
+    for (position, exchange) in exchanges.iter().enumerate().skip(start) {
         index.register(exchange.source, exchange.case_id.as_deref(), position);
     }
-    index
 }
 
 #[derive(Debug, Clone, Serialize)]
