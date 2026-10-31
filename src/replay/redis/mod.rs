@@ -421,10 +421,24 @@ impl RedisReplayState {
             record.target_port,
             ReplayProtocol::Redis,
         )?;
-        // Older recordings retained rejected SDK identity announcements. Neither
-        // success nor failure makes these a business dependency or lane barrier.
+        // Central ledgers retain successful protocol controls as observations.
+        // Builtins still own Target session context; these observations cannot
+        // add finite slots or bind otherwise ordinary data lanes to a socket.
+        let control_observation = record
+            .capture
+            .as_ref()
+            .is_some_and(|capture| !capture.semantic_required)
+            && !record.lifecycle_cleanup
+            && record.replay_safe
+            && record.response_kind != "error"
+            && redis_is_builtin(&record.command.to_ascii_uppercase())
+            && (record.session_setup
+                || record.command.eq_ignore_ascii_case("PING")
+                || record.command.eq_ignore_ascii_case("QUIT"));
+        // Rejected SDK identity announcements are observations as well. Other
+        // recorded session errors and termination keep their native witnesses.
         if record.outcome == DependencyExchangeOutcome::Response
-            && crate::redis::is_client_library_info(&record.command, &args)
+            && (control_observation || crate::redis::is_client_library_info(&record.command, &args))
         {
             return Ok(());
         }

@@ -5,6 +5,11 @@ use serde_json::Value;
 pub(in crate::replay::control::dependency_tail) fn reference(
     event: &Value,
 ) -> Result<Option<RecordedReference>> {
+    // The central ledger retains protocol observations without creating finite
+    // business obligations. Missing legacy metadata keeps the ordinary guards.
+    if event["capture"]["semantic_required"] == false {
+        return Ok(None);
+    }
     let uuid = |field| {
         event[field]
             .as_str()
@@ -85,6 +90,27 @@ mod tests {
     use super::*;
     use serde_json::json;
     use uuid::Uuid;
+
+    #[test]
+    fn central_redis_control_observations_are_not_finite_tail_obligations() {
+        let connection = Uuid::new_v4();
+        let mut event = json!({
+            "event_type":"redis_exchange", "connection_id":connection,
+            "sequence":7, "command":"AUTH",
+            "capture":{"semantic_required":false}
+        });
+        assert!(reference(&event).unwrap().is_none());
+        event["capture"]["semantic_required"] = true.into();
+        assert_eq!(
+            reference(&event).unwrap(),
+            Some(RecordedReference::Redis {
+                connection_id: connection,
+                sequence: 7
+            })
+        );
+        event.as_object_mut().unwrap().remove("capture");
+        assert!(reference(&event).unwrap().is_some());
+    }
 
     #[test]
     fn native_finite_inventory_preserves_kafka_effects_and_excludes_only_heartbeats() {

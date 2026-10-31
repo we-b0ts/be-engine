@@ -74,6 +74,26 @@ async fn clean_native_interactions_retain_original_case_refs_without_a_sidecar()
 }
 
 #[tokio::test]
+async fn redis_protocol_observations_do_not_become_interaction_business_tails() {
+    let temp = tempfile::tempdir().unwrap();
+    let references = files(temp.path(), Protocol::SocketIo).await;
+    let path = temp.path().join("dependencies.jsonl");
+    let original = tokio::fs::read_to_string(&path).await.unwrap();
+    let control = json!({
+        "event_type":"redis_exchange", "command":"CLIENT",
+        "capture":{"semantic_required":false}
+    });
+    tokio::fs::write(&path, format!("{control}\n{original}"))
+        .await
+        .unwrap();
+    let tail = from_complete_source(temp.path(), Duration::from_secs(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tail.references, references);
+}
+
+#[tokio::test]
 async fn source_post_input_allowance_uses_offsets_without_reading_message_bodies() {
     let temp = tempfile::tempdir().unwrap();
     files(temp.path(), Protocol::SocketIo).await;

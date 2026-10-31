@@ -74,6 +74,74 @@ fn ordinary_pool_matching_keeps_case_and_endpoint_boundaries() {
 }
 
 #[test]
+fn central_protocol_observations_do_not_bind_ordinary_pool_connections() {
+    for source in [ReplaySource::Startup, ReplaySource::Case] {
+        let mut state = RedisReplayState::default();
+        let connection = Uuid::new_v4();
+        let mut control = record(connection, 1, "AUTH");
+        control.args = vec![capture("<redacted>")];
+        control.response_kind = "simple_string".into();
+        control.response = capture("+OK\r\n");
+        control.session_setup = true;
+        let mut metadata =
+            crate::dependency::observation::fixture_capture(if source == ReplaySource::Startup {
+                "startup"
+            } else {
+                "case"
+            });
+        metadata.semantic_required = false;
+        control.capture = Some(metadata);
+        let mut targets = BTreeMap::new();
+        state
+            .register_exchange(control.clone(), source, Some("case"), &mut targets, &[])
+            .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(state.exchanges.is_empty());
+        register(&mut state, record(connection, 2, "GET"), "case");
+        register(&mut state, record(connection, 3, "GET"), "case");
+        let target = TargetKey {
+            host: "redis.test".into(),
+            port: 6379,
+        };
+        for _ in 0..2 {
+            let read = matched(
+                &mut state,
+                "case",
+                &target,
+                TargetConnection::default(),
+                "GET",
+            )
+            .unwrap();
+            assert!(!read.requires_binding);
+            state.complete_exchange(&read);
+        }
+        assert!(state.snapshot().unused_case.is_empty());
+        assert!(
+            matched(
+                &mut state,
+                "case",
+                &target,
+                TargetConnection::default(),
+                "GET"
+            )
+            .is_err()
+        );
+
+        control.response_kind = "error".into();
+        control.response = capture("-ERR authentication failed\r\n");
+        let mut failures = RedisReplayState::default();
+        failures
+            .register_exchange(control, source, Some("case"), &mut BTreeMap::new(), &[])
+            .unwrap();
+        assert_eq!(
+            failures.exchanges.len(),
+            1,
+            "recorded auth errors stay finite"
+        );
+    }
+}
+
+#[test]
 fn stateful_ownership_is_exclusive_within_each_case() {
     let mut state = RedisReplayState::default();
     let source = Uuid::new_v4();

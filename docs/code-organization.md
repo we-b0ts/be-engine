@@ -284,6 +284,10 @@ is unclear.
   Case. Actual native Replay rejections retain that fence through the final
   locked ownership release; recorded dependency errors remain ordinary replies.
   `metadata/references` owns the shared semantic exchange identities.
+  Central observations with `semantic_required: false` do not create finite tail
+  obligations. Redis protocol controls retain native Target session context,
+  without creating business slots or ordinary-pool socket bindings; recorded
+  session failures and actual stateful operations keep their native contracts.
   `dependency/execution` owns the protocol-independent rejection signal and typed error.
   `e2e_run/execution_failure` retains the incomplete execution cause and independent
   primary status observations for public diagnosis and evidence queries.
