@@ -1,5 +1,5 @@
-//! Final whole-run traffic action after independent API acceptance.
-use super::{batch_verification, model::SCHEMA, source};
+//! One final session covers every current workflow method contract.
+use super::{batch_verification, model::SCHEMA, source, workflow_verification};
 use crate::rewrite::model::{
     RewriteAction, RewriteActionEnvelope, RewriteAdvanceKind, RewriteApiStatus,
     RewriteInputRequiredReason, RewritePhase, RewriteState,
@@ -58,13 +58,29 @@ fn input(summary: String, required: Vec<String>) -> RewriteAction {
     }
 }
 
-fn source_block(state: &RewriteState) -> Option<RewriteAction> {
+fn source_block(root: &Path, state: &RewriteState) -> Option<RewriteAction> {
+    let methods = match workflow_verification::required_scope_methods(root, state) {
+        Ok(methods) => methods,
+        Err(error) => {
+            return Some(input(
+                format!("cannot resolve current workflow method scope: {error:#}"),
+                vec!["provide valid current only/skip regression selectors".into()],
+            ));
+        }
+    };
+    let current_methods = workflow_verification::methods(state);
     let capture = state
         .dependency_review
         .obligations
         .values()
         .filter(|obligation| {
             obligation.pending()
+                && methods.iter().any(|method| {
+                    crate::rewrite::verification_obligations::scope_matches_api(
+                        &obligation.scope,
+                        method,
+                    )
+                })
                 && obligation.requirement == crate::rewrite::VerificationRequirement::Capture
                 && obligation.baseline_recording_run_id == state.recording_run_id
         })
@@ -80,19 +96,22 @@ fn source_block(state: &RewriteState) -> Option<RewriteAction> {
         return Some(input("origin Source capture remains required; accepted unrelated APIs retain their independent conclusions".into(),capture));
     }
     let source=match source::load(state) {Ok(source)=>source,Err(error)=>return Some(input(format!("a current sealed Source run is required for final reconciliation: {error:#}"),vec!["provide one current sealed Source run containing every required workflow method API".into()]))};
-    let missing = batch_verification::required_methods(state)
+    let missing = methods
         .into_iter()
-        .filter(|api| !batch_verification::covers_method(&source, api).unwrap_or(false))
+        .filter(|api| {
+            !current_methods.contains(api)
+                || !batch_verification::covers_method(&source, api).unwrap_or(false)
+        })
         .collect::<Vec<_>>();
     (!missing.is_empty()).then(||input("the current sealed Source run omits required workflow methods; historical focused API snapshots cannot form one full session".into(),
-        missing.into_iter().map(|api|format!("include complete Source inputs for {api} in the final run; scoped capture does not erase other workflow API requirements")).collect()))
+        missing.into_iter().map(|api|format!("restore {api} in the current workflow inventory with complete Source inputs; recapture does not erase selected methods, only explicit only/skip can narrow scope")).collect()))
 }
 
 pub(in crate::rewrite) fn required_action(
     root: &Path,
     state: &RewriteState,
 ) -> Option<RewriteAction> {
-    if !apis_ready(state) || batch_verification::current(root, state).unwrap_or(false) {
+    if !apis_ready(state) || workflow_verification::current(root, state).unwrap_or(false) {
         return None;
     }
     if state.pre_revalidation_review.is_some()
@@ -107,12 +126,12 @@ pub(in crate::rewrite) fn required_action(
             vec!["provide the current complete sealed Source run".into()],
         ));
     }
-    if let Some(block) = source_block(&source_state) {
+    if let Some(block) = source_block(root, &source_state) {
         return Some(block);
     }
     if let Some(failure) = state
         .dependency_review
-        .batch_failure
+        .workflow_failure
         .as_ref()
         .filter(|failure| {
             failure.recording_run_id == state.recording_run_id
@@ -126,13 +145,18 @@ pub(in crate::rewrite) fn required_action(
                         &state.recording_run_id,
                     )
                     .unwrap_or_default()
+                && failure.method_apis == workflow_verification::methods(state)
+                && failure.policy_fingerprint
+                    == super::rules::load(root)
+                        .map(|policy| policy.fingerprints.full)
+                        .unwrap_or_default()
         })
     {
-        return Some(RewriteAction::BatchDiagnosisRequired{summary:"the complete actual session has unresolved dependency or response failures; diagnose its evidence and repair the concrete cause before retrying".into(),
-            evidence:json!({"batch_verified":false,"actual_round":failure.result,"owner":"coordinator","required":"Separate Source attribution, approved value rules and Target implementation defects; unmatched alone does not establish async ownership."}),
+        return Some(RewriteAction::BatchDiagnosisRequired{summary:"the actual workflow-contract session has unresolved API dependency, response or coverage failures; diagnose its evidence before retrying".into(),
+            evidence:json!({"completion_scope":"workflow_contracts","workflow_verified":false,"batch_verified":false,"method_results":failure.results,"evidence_error":failure.evidence_error,"owner":"coordinator","required":"Separate Source attribution, approved value rules and Target implementation defects; unmatched alone does not establish async ownership."}),
             inspect:crate::rewrite::action::command(root,vec!["dependency-attribution".into(),"batch".into()],vec![]),retry:crate::rewrite::action::command(root,vec!["dependency-attribution".into(),"retry-batch".into(),"--reason".into(),"<factual-repair>".into()],vec![])});
     }
-    Some(RewriteAction::AdvanceRequired{summary:"execute one actual complete Source-run session to reconcile all Case, startup and process occurrences; API results alone do not certify the batch".into(),
+    Some(RewriteAction::AdvanceRequired{summary:"execute every Case of every non-skipped workflow API method in one actual final session; startup and process debt remain independently visible".into(),
         command:crate::rewrite::action::next_command(root),api:None,kind:RewriteAdvanceKind::BatchReplay})
 }
 
@@ -155,10 +179,12 @@ pub(in crate::rewrite) async fn run(root: &Path) -> Result<RewriteActionEnvelope
     if let Some(action) = crate::rewrite::review::required_action(&root, &state)? {
         return Ok(crate::rewrite::action::envelope(&root, &state, action));
     }
-    if let Some(action) = super::required_action(&root, &state).or_else(|| source_block(&state)) {
+    if let Some(action) =
+        super::required_action(&root, &state).or_else(|| source_block(&root, &state))
+    {
         return Ok(crate::rewrite::action::envelope(&root, &state, action));
     }
-    if batch_verification::current(&root, &state)? {
+    if workflow_verification::current(&root, &state)? {
         return crate::rewrite::action::for_status(&root, &state);
     }
     let _plans = crate::rewrite::rule_plans::events::lock(&root)?;
@@ -188,29 +214,30 @@ pub(in crate::rewrite) async fn run(root: &Path) -> Result<RewriteActionEnvelope
     };
     drop(_plans);
     let original = source::load(&state)?;
+    let policy_fingerprint = super::rules::load(&root)?.fingerprints.full;
     let case_source = state.case_source.clone().context("Source absent")?;
     let context = crate::E2eRunContext {
         target_root: root.clone(),
         case_source: case_source.clone(),
         run_key: None,
     };
-    let methods = crate::rewrite::artifacts::standard_recording_apis_for_scope(
-        &root,
-        &state.recording_run_id,
-        vec![],
-    )?;
-    for method_api in methods {
+    let methods = workflow_verification::methods(&state);
+    ensure!(
+        !methods.is_empty(),
+        "final workflow scope has no selected API methods"
+    );
+    for method_api in &methods {
         let api: crate::RecordingApi = method_api.parse()?;
         let seed = crate::case_group::resolve_recording_api_seed_member(&case_source, &api)?;
         let route = state
             .source_route_bindings
-            .get(&method_api)
+            .get(method_api)
             .cloned()
             .or_else(|| {
                 state
                     .api_inventory
                     .iter()
-                    .find(|item| item.api == method_api)
+                    .find(|item| item.api == *method_api)
                     .and_then(|item| item.source_route.clone())
             })
             .unwrap_or_else(|| api.path_pattern().into());
@@ -226,20 +253,23 @@ pub(in crate::rewrite) async fn run(root: &Path) -> Result<RewriteActionEnvelope
                 .context("Source revision absent")?,
         })?;
     }
-    state.dependency_review.batch_receipt = None;
-    state.dependency_review.batch_failure = None;
+    state.dependency_review.workflow_receipt = None;
+    state.dependency_review.workflow_failure = None;
     state.bump();
     store.save(&state)?;
-    let result = crate::run_e2e_round(context.clone()).await?;
-    let results = crate::e2e_run::latest_batch_api_results(context)?
-        .into_iter()
-        .filter(|result| {
-            state
-                .api_inventory
-                .iter()
-                .any(|item| item.api == result.api && item.status != RewriteApiStatus::Skipped)
-        })
-        .collect::<Vec<_>>();
+    let results = crate::e2e_run::run_e2e_apis(
+        context,
+        &methods.iter().cloned().collect::<Vec<_>>(),
+        Some(&crate::e2e_run::ReplayIteration {
+            workflow_id: state.workflow_id.clone(),
+            final_round: true,
+        }),
+    )
+    .await?;
+    ensure!(
+        super::rules::load(&root)?.fingerprints.full == policy_fingerprint,
+        "workflow policy changed during final execution; inspect the genuine session and run the current final contracts again"
+    );
     if !results.is_empty() {
         let mut prepared = crate::rewrite::api_batch::PreparedRoute {
             apis: vec![],
@@ -256,10 +286,15 @@ pub(in crate::rewrite) async fn run(root: &Path) -> Result<RewriteActionEnvelope
         }
         crate::rewrite::api_batch::apply_results(&root, &mut state, &results, Some(&prepared))?;
     }
-    if result.passed {
-        batch_verification::accept(&root, &mut state)?;
+    let evidence_error = if results.iter().all(|result| result.passed) {
+        workflow_verification::accept(&root, &mut state)
+            .err()
+            .map(|error| format!("{error:#}"))
     } else {
-        state.dependency_review.batch_failure = Some(super::model::BatchFailure {
+        Some("one or more current workflow methods failed actual verification".into())
+    };
+    if let Some(error) = evidence_error {
+        state.dependency_review.workflow_failure = Some(super::model::WorkflowFailure {
             recording_run_id: state.recording_run_id.clone(),
             source_inventory_id: original.identity,
             replay_identity: crate::rewrite::batch_execution_identity(&root)?,
@@ -267,11 +302,15 @@ pub(in crate::rewrite) async fn run(root: &Path) -> Result<RewriteActionEnvelope
                 &root,
                 &state.recording_run_id,
             )?,
-            result: result.clone(),
+            policy_fingerprint: super::rules::load(&root)?.fingerprints.full,
+            method_apis: methods,
+            results,
+            evidence_error: Some(error),
         });
     }
     state.bump();
     store.save(&state)?;
+    drop(_traffic);
     Ok(crate::rewrite::action::envelope(
         &root,
         &state,
@@ -288,12 +327,15 @@ pub fn dependency_attribution_batch_information(
     let state = store.load()?.context("rewrite workflow absent")?;
     let verified = batch_verification::current(&root, &state)? && !super::batch_pending(&state);
     Ok(
-        json!({"schema":SCHEMA,"batch_verified":verified,"verification_unit":"one current sealed Source run, covering every required workflow method API",
+        json!({"schema":SCHEMA,"batch_verified":verified,"verification_unit":"whole_source",
+        "completion_scope":"workflow_contracts","workflow_verified":workflow_verification::current(&root,&state)? && !workflow_verification::pending(&state),
+        "workflow_method_apis":workflow_verification::methods(&state),"workflow_receipt":state.dependency_review.workflow_receipt,
+        "last_failed_workflow_round":state.dependency_review.workflow_failure,
         "required_method_apis":batch_verification::required_methods(&state),"api_acceptance_ready":apis_ready(&state),
         "receipt":state.dependency_review.batch_receipt,"last_failed_actual_round":state.dependency_review.batch_failure,"next_action":required_action(&root,&state),
         "actual_requests":super::target_query::inventory(&root,&state,offset).unwrap_or_else(|error|json!({"available":false,"reason":format!("{error:#}")})),
         "rule_analysis":crate::rewrite::unified_rule::batch::information(&root,&state).unwrap_or_else(|error|json!({"available":false,"reason":format!("{error:#}")})),
-        "boundary":"Independent API conclusions do not stitch historical sessions or Source runs into a whole-batch receipt."}),
+        "boundary":"Workflow completion covers all current non-skipped methods in one real session. WholeSource batch_verified separately requires every Source Case, startup and process obligation; no historical sessions are stitched."}),
     )
 }
 
@@ -308,6 +350,15 @@ pub fn retry_dependency_batch(
     let (root, store) = super::open(&context.target_root)?;
     let _lock = store.lock()?;
     let mut state = store.load()?.context("rewrite workflow absent")?;
+    if let Some(previous) = state.dependency_review.workflow_failure.take() {
+        state.bump();
+        store.save(&state)?;
+        return Ok(
+            json!({"schema":SCHEMA,"retry_reason":reason,"completion_scope":"workflow_contracts",
+            "previous_method_results":previous.results,"workflow_verified":false,"batch_verified":false,
+            "next_command":crate::rewrite::action::next_command(&root),"verification":"retry requires one new complete workflow-contract session; no selected API failure is waived"}),
+        );
+    }
     let previous = state
         .dependency_review
         .batch_failure

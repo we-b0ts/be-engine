@@ -155,11 +155,13 @@ Before the first Replay, use the context's exact `rule_planning` evidence token
 and plan command for Source-only owner rules; no fabricated Target attempt is
 needed. Source-only ownership planning cannot authorize value differences or
 successful consumption.
-New named process-owner rules bind the current workflow Source revision explicitly.
-An older document-level `source_revision` remains the default for existing rules;
-it neither changes those proofs nor overrides a newly reviewed owner's revision.
-The native rule retains that explicit revision when it cannot use the compact
-task declaration under the older header.
+Independent task declarations do not bind to a Source version. They describe
+`process_dependencies.tasks.<task>.requests` using ordinary dependency commands;
+for example, a Redis `SUBSCRIBE` command and its exact resource and arguments
+anchor the receive stream without moving the original Startup handshake or a
+Case's `PUBLISH`. Proof retains its actual Source origin and immutable recording
+inventory. An older document header does not rewrite that evidence or couple the
+continuing task declaration to a particular Source image.
 The analyst submission echoes `assignment_id`, `expected_revision`,
 `recording_run_id`, `source_revision`, `source_inventory_id` and contains:
 
@@ -211,7 +213,7 @@ Original run-level evidence remains available on demand through the issue's
 preparation. A real effect on the
 API still fails its response or Case dependency checks. Unstarted initialization
 for other APIs or process tasks does not become a Case failure or a consumed
-occurrence; the final actual batch still checks startup and process closure.
+occurrence. Independent WholeSource verification still checks startup and process closure.
 
 After a genuine required origin execution, use
 `dependency-attribution verify <obligation-id>`. API verification checks the actual
@@ -220,22 +222,36 @@ execution. Process/startup obligations close through actual complete batch
 execution. Focused attempts cannot be stitched together into a fictitious batch
 session, and one physical occurrence is never consumed twice.
 
-## Final whole-batch verification
+## Final workflow and WholeSource verification
 
-After ordinary implementation and API acceptance, the integrator's final quality
-review admits the exact candidate. The engine then executes one complete actual
-batch session for formal revalidation. Method results are projections of that
-same session; the final stage does not run a separate per-API round followed by
-another sweep and another batch. First-pass and repair acceptance Replay retain
-their existing diagnostic purpose before this final stage.
+After ordinary API acceptance, the integrator's final quality review admits the
+exact candidate. The engine then executes every Case of every current non-skipped
+workflow method in one actual session. This `workflow_contracts` scope comes from
+the workflow inventory and existing `only`/`skip` selection; a command's `--api`
+cannot narrow it. All methods must pass their responses and Case-owned dependency
+contracts. A final session does not reuse historical passes or repair subsets.
+The workflow retains methods discovered in earlier batches. Recapture cannot
+silently erase a still-selected method when it replaces the current inventory;
+restore that method's complete inputs and inventory, or explicitly exclude its
+route through the existing `only`/`skip` policy. An explicit `only: [/api]` can
+exclude an earlier `/other` requirement without deleting its history.
+The sealed Source recording must still be complete, including all original input
+captures; failed recordings cannot be hidden by selecting their published Cases.
 
-Final coverage has two requirements. The session must execute the complete
-current sealed Source run, including its Case, startup and process obligations.
-That run must also contain complete inputs for every required workflow method
-API. The durable workflow method set survives scoped recapture; explicit workflow
-skips affect that method requirement. A new recording containing only the repaired
-origin cannot silently erase other required methods. Historical focused attempts,
-receipts and separate Source runs cannot fill missing coverage in the final run.
+`terminal_allowed` additionally requires that current workflow receipt, the
+existing final review, expert closure and committed progress publication. Pending
+Startup/Process verification debt remains diagnostic and uncompleted. It cannot
+turn an otherwise passing workflow API into a failure. API-origin obligations
+within the current workflow must still be verified; debt for an excluded known
+owner remains with that owner. Unknown or disputed Source ownership still needs
+resolution before formal Replay.
+
+WholeSource acceptance is stronger and remains independent. Its `batch_receipt`
+and `batch_verified` require one actual complete Source session and strict
+reconciliation of every Case, Startup and Process occurrence. A workflow receipt
+does not manufacture that receipt, consume background traffic or finish its
+obligations. Old states without a workflow receipt need genuine final execution;
+no receipt is synthesized from historical API statuses.
 
 Use `dependency-attribution batch --offset N` for the current batch result and
 paginated actual Target request metadata, including run-owned requests. Follow

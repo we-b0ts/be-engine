@@ -428,5 +428,37 @@ async fn a_scoped_new_source_run_cannot_erase_another_required_workflow_method()
     assert!(!batch_verification::current(target.path(), &state).unwrap());
 }
 
+#[tokio::test]
+async fn explicit_only_can_exclude_a_previous_workflow_method_from_final_scope() {
+    let (target, mut state, _) = ready_batch_fixture().await;
+    state
+        .dependency_review
+        .required_method_apis
+        .insert("POST /other".into());
+    fs::write(
+        target.path().join(".traffic-e2e/regression.yaml"),
+        "only: [/api]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        workflow_verification::required_scope_methods(target.path(), &state).unwrap(),
+        BTreeSet::from(["GET /api".into()])
+    );
+    assert!(matches!(
+        batch::required_action(target.path(), &state),
+        Some(crate::rewrite::RewriteAction::AdvanceRequired {
+            kind: crate::rewrite::RewriteAdvanceKind::BatchReplay,
+            ..
+        })
+    ));
+    assert!(
+        state
+            .dependency_review
+            .required_method_apis
+            .contains("POST /other")
+    );
+    assert!(!batch_verification::current(target.path(), &state).unwrap());
+}
+
 #[path = "tests/ownership.rs"]
 mod ownership;

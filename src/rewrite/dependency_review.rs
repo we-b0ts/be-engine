@@ -15,6 +15,7 @@ mod target_query;
 #[cfg(test)]
 mod tests;
 mod verification;
+mod workflow_verification;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -51,6 +52,7 @@ pub use projection::dependency_attribution_hypotheses;
 pub(super) use projection::information as api_information;
 pub use queries::{dependency_attribution_candidates, dependency_attribution_rules};
 pub use target_query::dependency_attribution_target;
+pub(super) use workflow_verification::{current as workflow_current, pending as workflow_pending};
 
 fn open(root: &Path) -> Result<(std::path::PathBuf, RewriteStore)> {
     let (root, _) = crate::e2e_run::resolve_project(root)?;
@@ -643,6 +645,10 @@ pub fn verify_dependency_obligation(context: super::RewriteContext, id: &str) ->
     let _lock = store.lock()?;
     let mut state = store.load()?.context("rewrite workflow absent")?;
     let session = verification::verify_obligation(&root, &mut state, id)?;
+    // This explicit verification command can retain a stronger WholeSource
+    // receipt only when its independent strict full-session validator passes.
+    // Workflow finalization never calls this path for run-owned obligations.
+    let _ = batch_verification::accept(&root, &mut state);
     state.dependency_review.revision += 1;
     state.bump();
     store.save(&state)?;

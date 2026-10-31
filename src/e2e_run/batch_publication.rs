@@ -108,41 +108,6 @@ pub(super) fn publish(layout: &RunLayout, inventory: &CaseGroupInventory) -> Res
     Ok(())
 }
 
-pub(crate) fn latest_batch_api_results(
-    context: E2eRunContext,
-) -> Result<Vec<super::E2eApiRunResult>> {
-    let (_, layout) = super::config::resolve_layout(
-        &context.target_root,
-        &context.case_source,
-        context.run_key.as_deref(),
-    )?;
-    let batch: ActiveRunState = store::read_yaml(&layout.latest_dir.join("state.yaml"))?;
-    if !batch.replay_finalized || batch.session_id.is_none() {
-        return Ok(vec![]);
-    }
-    batch
-        .apis
-        .iter()
-        .map(|api| {
-            let (state, latest) =
-                super::evidence::finalized_focused_evidence(context.clone(), &api.group_id)?;
-            ensure!(
-                state.session_id == batch.session_id
-                    && state.executed_replay_identity == batch.executed_replay_identity,
-                "method evidence is not a projection of the latest actual batch session"
-            );
-            let mut method_layout = layout.clone();
-            method_layout.latest_dir = latest;
-            Ok(super::result::api_result(
-                &method_layout,
-                &state,
-                &api.group_id,
-                state.sequence,
-            ))
-        })
-        .collect()
-}
-
 pub(crate) struct DiagnosticBatchReport {
     pub path: std::path::PathBuf,
     pub key_context: std::path::PathBuf,

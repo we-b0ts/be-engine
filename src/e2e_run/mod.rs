@@ -7,7 +7,7 @@ mod batch_evidence;
 mod batch_planning;
 pub(crate) use batch_planning::{BatchRuleEvidence, batch_rule_evidence};
 mod batch_publication;
-pub(crate) use batch_publication::{batch_diagnostic_report, latest_batch_api_results};
+pub(crate) use batch_publication::batch_diagnostic_report;
 mod branch;
 mod case_progress;
 mod case_selection;
@@ -40,6 +40,7 @@ mod support;
 mod target_stop;
 #[cfg(test)]
 pub(crate) mod test_session;
+mod workflow_evidence;
 
 use std::path::PathBuf;
 
@@ -92,6 +93,7 @@ pub use startup_inputs::{
     StartupMountChange, StartupMountChangeStatus, StartupMountEntry, StartupMountList,
     StartupMountPresence, ensure_startup_mount, list_startup_mounts, startup_mount_exists,
 };
+pub(crate) use workflow_evidence::completed_workflow_evidence;
 
 #[derive(Debug, Clone)]
 pub struct E2eRunInitOptions {

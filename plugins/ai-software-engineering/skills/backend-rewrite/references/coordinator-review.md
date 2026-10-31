@@ -40,11 +40,14 @@ reports, failing reports and stale receipts cannot open the gate. Relevant
 changes require fresh final proof; progress-only publication can reuse an
 already admitted matching receipt. Check acceptance never repeats the suite.
 
-After admission, formal final revalidation is one actual complete batch session.
-Its method results come from that session; do not schedule separate final
-per-API runs followed by another sweep. The sealed Source run must cover its
-complete inventory and every required workflow method. Final review and committed
-progress do not certify missing traffic or create a batch receipt.
+After admission, formal final revalidation is one actual `workflow_contracts`
+session covering every Case of every non-skipped workflow method. Its method
+results come from that session; do not schedule separate final per-API runs
+followed by another sweep. The sealed Source capture must be complete and retain
+every still-selected method required by earlier batches. Startup/Process debt
+remains independently visible; the workflow receipt cannot certify WholeSource
+consumption. Final review and committed progress do not certify missing traffic
+or create either execution receipt.
 
 ## Delegate Candidate Review And Admit The Report
 

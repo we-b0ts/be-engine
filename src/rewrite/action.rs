@@ -426,8 +426,8 @@ pub(super) fn envelope(
         api_inventory: Some(inventory::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: super::expert::counts(state).2 == 0
-            && super::dependency_review::batch_current(target_root, state).unwrap_or(false)
-            && !super::dependency_review::batch_pending(state)
+            && super::dependency_review::workflow_current(target_root, state).unwrap_or(false)
+            && !super::dependency_review::workflow_pending(state)
             && !super::rule_plans::pending(state)
             && super::review::admission_current(target_root, state)
             && super::review::pre_revalidation::completion_current(target_root, state)

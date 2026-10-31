@@ -141,64 +141,98 @@ fn validate_scope(
             _ => false,
         }
     });
-    if let VerificationScope::Api {
-        api,
-        method,
-        scenario,
-    } = &obligation.scope
-    {
-        let method = method
-            .as_ref()
-            .context("origin obligation requires a concrete method contract")?;
-        let method_api = format!("{method} {api}");
-        let selected = source
-            .apis
-            .iter()
-            .filter(|(_, actual)| **actual == method_api)
-            .map(|(id, _)| *id)
-            .collect::<BTreeSet<_>>();
-        ensure!(
-            !selected.is_empty()
-                && selected
-                    .iter()
-                    .all(|id| evidence.selected_case_ids.contains(&id.to_string())),
-            "actual full batch omits the required origin method inputs"
-        );
-        if let Some(index) = scenario {
-            let policy = rules::load(root)?;
-            let rule = policy
-                .async_api
-                .get(&method_api)
-                .and_then(|rules| rules.get(*index))
-                .context("origin async scenario is no longer effective; obtain new Source proof")?;
-            let mut matched = false;
-            for id in selected {
-                let directory = source.inputs.get(&id).context("origin input absent")?;
-                let request: serde_json::Value =
-                    serde_json::from_slice(&source.read_input(&directory.join("request.json"))?)?;
-                let response: serde_json::Value = serde_json::from_slice(
-                    &source.read_input(&directory.join("expected-response.json"))?,
-                )?;
-                matched |= crate::policy::async_api_matches(
-                    &method_api,
-                    rule,
-                    method,
-                    request["uri"].as_str().context("origin URI absent")?,
-                    crate::replay::native_source_request_body(&request).as_ref(),
-                ) && crate::policy::async_response_matches(
-                    rule,
-                    crate::replay::native_source_request_body(&response).as_ref(),
-                );
-            }
-            ensure!(
-                matched,
-                "current Source has no input selecting the required original async scenario"
-            );
-        }
+    if matches!(obligation.scope, VerificationScope::Api { .. }) {
+        validate_api_scope(
+            root,
+            state,
+            source,
+            &evidence.selected_case_ids,
+            &evidence.recording_run_id,
+            obligation,
+        )?;
     } else {
         ensure!(
             has_owner,
             "the actual effective Source scope contains no complete occurrence of this process task or initialization unit"
+        );
+    }
+    Ok(())
+}
+
+/// The same Source-origin contract applies to workflow and WholeSource proofs.
+/// Callers independently authenticate the actual execution at their own scope.
+pub(super) fn validate_api_scope(
+    root: &Path,
+    state: &RewriteState,
+    source: &source::SourceSnapshot,
+    selected_case_ids: &BTreeSet<String>,
+    recording_run_id: &str,
+    obligation: &ScopeObligation,
+) -> Result<()> {
+    ensure!(
+        Some(obligation.source_revision.as_str()) == state.source_revision.as_deref(),
+        "origin proof belongs to another Source image revision"
+    );
+    if obligation.requirement == VerificationRequirement::Capture {
+        ensure!(
+            recording_run_id != obligation.baseline_recording_run_id,
+            "capture obligation requires genuinely new Source evidence for its origin"
+        );
+    }
+    let VerificationScope::Api {
+        api,
+        method,
+        scenario,
+    } = &obligation.scope
+    else {
+        anyhow::bail!("workflow verification cannot complete a run-owned obligation");
+    };
+    let method = method
+        .as_ref()
+        .context("origin obligation requires a concrete method contract")?;
+    let method_api = format!("{method} {api}");
+    let selected = source
+        .apis
+        .iter()
+        .filter(|(_, actual)| **actual == method_api)
+        .map(|(id, _)| *id)
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        !selected.is_empty()
+            && selected
+                .iter()
+                .all(|id| selected_case_ids.contains(&id.to_string())),
+        "actual full batch omits the required origin method inputs"
+    );
+    if let Some(index) = scenario {
+        let policy = rules::load(root)?;
+        let rule = policy
+            .async_api
+            .get(&method_api)
+            .and_then(|rules| rules.get(*index))
+            .context("origin async scenario is no longer effective; obtain new Source proof")?;
+        let mut matched = false;
+        for id in selected {
+            let directory = source.inputs.get(&id).context("origin input absent")?;
+            let request: serde_json::Value =
+                serde_json::from_slice(&source.read_input(&directory.join("request.json"))?)?;
+            let response: serde_json::Value = serde_json::from_slice(
+                &source.read_input(&directory.join("expected-response.json"))?,
+            )?;
+            matched |= crate::policy::async_api_matches(
+                &method_api,
+                rule,
+                method,
+                request["uri"].as_str().context("origin URI absent")?,
+                crate::replay::native_source_request_body(&request).as_ref(),
+            ) && crate::policy::async_response_matches(
+                rule,
+                crate::replay::native_source_request_body(&response).as_ref(),
+            );
+        }
+        ensure!(
+            matched,
+            "current Source has no input selecting the required original async scenario"
         );
     }
     Ok(())

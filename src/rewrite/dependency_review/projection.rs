@@ -34,7 +34,9 @@ pub fn dependency_attribution_api_information(
     });
     Ok(
         json!({"schema":"target-api-information/v3","api":route,"work_scope":{"kind":"api","api":route},
-        "accepted":accepted,"batch_verified":super::batch_verification::current(&root,&state)?,"method_results":results}),
+        "accepted":accepted,"batch_verified":super::batch_current(&root,&state)?,
+        "completion_scope":"workflow_contracts","workflow_verified":super::workflow_verification::current(&root,&state)? && !super::workflow_verification::pending(&state),
+        "workflow_method_apis":super::workflow_verification::methods(&state),"method_results":results}),
     )
 }
 
@@ -174,6 +176,7 @@ pub(in crate::rewrite) fn information(
         "recording_run_id":state.recording_run_id,"source_revision":state.source_revision,
         "actual_attempt":last,"actual_session_id":report["session_id"],"actual_evidence_available":!report.is_null(),
         "unavailable_reason":unavailable_reason,"acceptance":{"verdict":verdict,"scope":"method_contract",
+            "completion_scope":"workflow_contracts","workflow_verified":super::workflow_verification::current(root,state)? && !super::workflow_verification::pending(state),
             "actual_attempt":last.map(|attempt|attempt.attempt),"receipt":receipt_current.then(||state.dependency_review.receipts.get(api)),
             "batch_verified":batch_current,"complete_batch_receipt":batch_current.then_some(&state.dependency_review.batch_receipt)},
         "gates":last.map(|attempt|&attempt.gates),"response_counts":last.map(|attempt|&attempt.counts),

@@ -27,7 +27,49 @@ pub(in crate::rewrite) struct ReviewLedger {
     pub receipts: BTreeMap<String, AcceptanceReceipt>,
     pub batch_receipt: Option<BatchAcceptanceReceipt>,
     pub batch_failure: Option<BatchFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_receipt: Option<WorkflowAcceptanceReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_failure: Option<WorkflowFailure>,
     pub required_method_apis: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct WorkflowAcceptanceReceipt {
+    pub completion_scope: WorkflowCompletionScope,
+    pub workflow_id: String,
+    pub policy_fingerprint: String,
+    pub review_context: String,
+    pub review_receipt_identity: String,
+    pub projections: BTreeMap<PathBuf, WorkflowArtifactIdentity>,
+    pub actual: BatchAcceptanceReceipt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct WorkflowArtifactIdentity {
+    pub sha256: String,
+    pub stamp: crate::dependency_index::FileStamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::rewrite) enum WorkflowCompletionScope {
+    WorkflowContracts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct WorkflowFailure {
+    pub recording_run_id: String,
+    pub source_inventory_id: String,
+    pub replay_identity: String,
+    pub attribution_snapshot: String,
+    pub policy_fingerprint: String,
+    pub method_apis: BTreeSet<String>,
+    pub results: Vec<crate::E2eApiRunResult>,
+    pub evidence_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

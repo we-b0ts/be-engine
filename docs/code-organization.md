@@ -295,6 +295,12 @@ is unclear.
   `e2e_run/batch_evidence` binds final verification to one latest complete-round
   execution, its immutable Source manifest, whole input inventory, current owner
   snapshot and actual session receipt. It never joins focused method attempts.
+  `e2e_run/workflow_evidence` independently authenticates one final session for
+  every current workflow method and its complete Case inventory. Its validation
+  child checks original response, dependency and Target-stop evidence without
+  certifying startup or process consumption. `rewrite/dependency_review/workflow_verification`
+  owns that scope's receipt, freshness and API obligations; WholeSource receipts
+  and run-owned obligations retain their stricter, separate verification.
   Execution freezes a fresh Target/runtime-policy identity before startup and
   checks it again after execution; the cold evidence reader revalidates that
   identity, Source image revision and engine build before returning receipt refs.

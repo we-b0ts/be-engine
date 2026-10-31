@@ -312,12 +312,13 @@ positive ownership proof. It does not close original-owner obligations or the
 whole batch. Do not re-record an unrelated API merely because an async rule was
 added elsewhere. Close an origin obligation with `dependency-attribution verify`
 only after its actual required execution/capture; process/startup closure belongs
-to complete batch execution. A `claim_rejections` result withdraws only a mistaken
+to strict WholeSource execution. A workflow-contract receipt leaves that debt
+pending. A `claim_rejections` result withdraws only a mistaken
 claim; its negative Source proof leaves original dirty execution facts and cannot
 authorize a pass.
 
 After final candidate review, follow `BatchReplay` for one actual complete final
-session. Method results come from that same session. The current sealed Source
+workflow-contract session. Method results come from that same session. The current sealed Source
 run must be complete and must contain every required workflow method; scoped
 recapture cannot erase the durable method requirement. Inspect actual batch
 requests through `dependency-attribution batch` pages and explicit session-bound,
