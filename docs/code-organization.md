@@ -1095,6 +1095,9 @@ is unclear.
   on both load and save. These modules never manufacture task-runtime
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
+  `store/replacement` owns purpose-entry archival and rollback of obsolete
+  snapshots. It reads only their version and workflow identity, preserves their
+  original bytes and never loads old assignments or receipts into a new workflow.
   `recording_api/scope` owns exact route/canonical pattern selector grammar and
   identity shared by coordinator commands and local regression configuration. `api_selector`
   owns executable route-to-method inventory selection and worker scope projection.
