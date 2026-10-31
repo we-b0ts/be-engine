@@ -48,6 +48,9 @@ impl Metadata {
         identity: &ReplaySessionIdentity,
         record: &RecordedMysqlExchange,
     ) {
+        if record.response.columns.is_empty() {
+            return;
+        }
         let Some(target) = &identity.target else {
             return;
         };
