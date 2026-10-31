@@ -1,6 +1,9 @@
 use super::*;
-use crate::dependency_index::global::{GLOBAL_FRAGMENT, GlobalBuilder, GlobalIndex};
-use crate::dependency_index::{Builder, FRAGMENT, FileStamp};
+use crate::dependency_index::global::{GLOBAL_FRAGMENT, GlobalBuilder};
+use crate::dependency_index::{Builder, FRAGMENT};
+
+mod ownership;
+pub(crate) use ownership::refresh_owned_dependency_indexes;
 
 pub(super) async fn write_dependency_summary(
     dir: &Path,
@@ -75,67 +78,4 @@ pub(super) async fn write_dependency_summary(
     .await
     .context("dependency summary/index writer failed")??;
     super::super::storage::write(&dir.join(summary_filename), &payload).await
-}
-
-/// Recorder owns the completed bytes across this metadata-only ownership change.
-/// Refresh ctime only when size, inode and modification time are still identical.
-pub(crate) async fn refresh_owned_dependency_indexes(
-    root: &Path,
-    owner: crate::artifact_owner::ArtifactOwner,
-) -> Result<()> {
-    let root = root.to_path_buf();
-    let fragments = tokio::task::spawn_blocking(move || -> Result<Vec<std::path::PathBuf>> {
-        let mut pending = vec![root];
-        let mut refreshed = Vec::new();
-        while let Some(dir) = pending.pop() {
-            for (dependency, fragment) in [
-                ("dependencies.jsonl", FRAGMENT),
-                ("global-dependencies.jsonl", ".global-dependency-index.json"),
-            ] {
-                let fragment = dir.join(fragment);
-                if !fragment.is_file() {
-                    continue;
-                }
-                let mut index: crate::dependency_index::FileIndex =
-                    crate::dependency_index::store::read_json(&fragment)?;
-                let stamp = FileStamp::read(&dir.join(dependency))?;
-                let mut previous = index.stamp.clone();
-                previous.changed = stamp.changed;
-                anyhow::ensure!(
-                    previous == stamp,
-                    "dependency bytes changed during artifact ownership assignment"
-                );
-                index.stamp = stamp;
-                crate::dependency_index::store::write_json(&fragment, &index)?;
-                refreshed.push(fragment);
-            }
-            let fragment = dir.join(GLOBAL_FRAGMENT);
-            if fragment.is_file() {
-                let mut index: GlobalIndex = crate::dependency_index::store::read_json(&fragment)?;
-                let stamp = FileStamp::read(&dir.join("global-dependencies.jsonl"))?;
-                let mut previous = index.stamp.clone();
-                previous.changed = stamp.changed;
-                anyhow::ensure!(
-                    previous == stamp,
-                    "Global dependency bytes changed during artifact ownership assignment"
-                );
-                index.stamp = stamp;
-                crate::dependency_index::store::write_json(&fragment, &index)?;
-                refreshed.push(fragment);
-            }
-            for entry in std::fs::read_dir(&dir)? {
-                let entry = entry?;
-                if entry.file_type()?.is_dir() {
-                    pending.push(entry.path());
-                }
-            }
-        }
-        Ok(refreshed)
-    })
-    .await
-    .context("dependency fragment ownership refresh failed")??;
-    for fragment in fragments {
-        owner.assign_to(&fragment).await?;
-    }
-    Ok(())
 }

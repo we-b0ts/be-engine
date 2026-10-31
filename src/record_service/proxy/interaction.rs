@@ -12,6 +12,8 @@ use super::*;
 use crate::recorder::CaseInvalidation;
 use transport::{TransportTasks, WeakTransportTasks};
 
+mod tunnel;
+
 #[derive(Clone)]
 pub(super) struct InteractionRelay {
     state: crate::AppState,
@@ -235,11 +237,7 @@ impl<R: Redis + Clone + 'static> Relay<R> {
                 let transfer = async {
                     let (downstream, upstream) =
                         tokio::try_join!(downstream_upgrade, upstream_upgrade)?;
-                    tokio::io::copy_bidirectional(
-                        &mut TokioIo::new(downstream),
-                        &mut TokioIo::new(upstream),
-                    )
-                    .await?;
+                    tunnel::forward(downstream, upstream).await?;
                     Ok::<(), RelayError>(())
                 };
                 if let Some(mut cancel) = cancel {

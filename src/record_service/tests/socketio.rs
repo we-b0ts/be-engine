@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 const OPEN: &str = r#"0{"sid":"source-session","upgrades":[],"pingInterval":25000,"pingTimeout":20000,"maxPayload":1000000}"#;
 
 mod large_frames;
+mod transport_end;
 
 struct BodylessHandshake;
 
