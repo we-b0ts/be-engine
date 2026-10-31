@@ -30,7 +30,7 @@ impl Bindings {
         if let Some(request) = &record.rpc_request {
             let scope = if let Some(origin) = &request.case_id {
                 ensure!(
-                    source.is_run_owned() || case_id == Some(origin.as_str()),
+                    source.is_run_level() || case_id == Some(origin.as_str()),
                     "RPC callback original case differs from its Case storage"
                 );
                 (true, Some(origin.clone()))
@@ -415,7 +415,7 @@ impl PubSubState {
         // Target may issue a Global request while any API happens to be active.
         matched
             .rpc_push
-            .is_some_and(|index| self.pushes[index].source.is_run_owned())
+            .is_some_and(|index| self.pushes[index].source.is_run_level())
     }
 
     pub(in crate::replay::redis) fn rpc_delivery(

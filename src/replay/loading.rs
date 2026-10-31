@@ -135,6 +135,9 @@ impl ReplayRuntime {
             )
             .await?;
         }
+        if let Some(path) = attribution.unattributed {
+            global::load_unattributed_notifications(&path, &mut redis, reader.clone()).await?;
+        }
         // Source-owned Global slots are stable across selected APIs. Later
         // Case-derived Global aliases remain small session-specific evidence.
         global_source::freeze(

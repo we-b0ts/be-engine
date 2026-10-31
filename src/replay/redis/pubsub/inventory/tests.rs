@@ -44,7 +44,12 @@ fn untouched_million_notification_inventory_has_no_per_record_session_allocation
     // There are intentionally no page files: restoring immutable metadata and
     // the default Available state must never materialize a million entries.
     indexed
-        .restore(lanes.clone(), root.path(), source.clone())
+        .restore(
+            lanes.clone(),
+            root.path(),
+            source.clone(),
+            ReplaySource::Startup,
+        )
         .unwrap();
     assert_eq!(indexed.total, 1_000_001);
     assert!(indexed.lanes[0].statuses.is_empty());
@@ -64,7 +69,9 @@ fn untouched_million_notification_inventory_has_no_per_record_session_allocation
     assert_eq!(indexed.lanes[0].statuses.len(), 3);
     indexed.seal().unwrap();
     let mut fresh = IndexedNotifications::default();
-    fresh.restore(lanes, root.path(), source).unwrap();
+    fresh
+        .restore(lanes, root.path(), source, ReplaySource::Startup)
+        .unwrap();
     assert!(fresh.available(0, 1_000_000));
     assert!(fresh.lanes[0].statuses.is_empty());
     assert_eq!((fresh.delivered, fresh.failed), (0, 0));

@@ -206,6 +206,7 @@ where
     match source {
         ReplaySource::Startup | ReplaySource::Process => exchange.available_in_global_scope(),
         ReplaySource::Case => exchange.source() == source && exchange.case_id() == case_id,
+        ReplaySource::Unattributed => false,
     }
 }
 

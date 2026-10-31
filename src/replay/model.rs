@@ -6,10 +6,15 @@ pub(super) enum ReplaySource {
     Startup,
     Process,
     Case,
+    /// Original ambient input evidence has no proven business owner.
+    Unattributed,
 }
 
 impl ReplaySource {
     pub(super) fn is_run_owned(self) -> bool {
+        matches!(self, Self::Startup | Self::Process)
+    }
+    pub(super) fn is_run_level(self) -> bool {
         self != Self::Case
     }
     pub(super) fn matches_scope(self, requested: Self) -> bool {

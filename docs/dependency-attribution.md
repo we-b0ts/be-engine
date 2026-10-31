@@ -140,8 +140,10 @@ unrelated API. A matching/delivery change needs fresh Replay of the affected sco
 against the same Source. Only concrete absent Source evidence opens capture debt.
 
 Startup-phase dirty evidence does not decide independent API acceptance. The
-aggregate retains the original startup phase and its unstarted dependency counts
-for diagnosis, including missing local-cache preparation. A real effect on the
+API aggregate does not enumerate startup dirt or initialization inventories.
+Original run-level evidence remains available on demand through the issue's
+`source-process-traffic` query for diagnosis, including missing local-cache
+preparation. A real effect on the
 API still fails its response or Case dependency checks. Unstarted initialization
 for other APIs or process tasks does not become a Case failure or a consumed
 occurrence; the final actual batch still checks startup and process closure.

@@ -31,7 +31,7 @@ impl PubSubState {
         }
         let mut entries = Vec::new();
         for (index, push) in self.pushes.iter().enumerate() {
-            if !push.source.is_run_owned() || push.record.rpc_request.is_some() {
+            if !push.source.is_run_level() || push.record.rpc_request.is_some() {
                 continue;
             }
             let raw = push.bytes()?;
@@ -46,7 +46,9 @@ impl PubSubState {
                 &push.record,
                 PushId::Inline(index),
                 push.record.timestamp,
-                index,
+                push.evidence
+                    .as_ref()
+                    .map_or(index, |reference| reference.location.line),
                 rpc::echo_digest(&frame.channel, &frame.payload),
                 namespace.as_deref(),
                 push.evidence.clone(),
@@ -76,7 +78,7 @@ impl PubSubState {
                             index: pages.page_start(page) + offset,
                         },
                         entry.timestamp,
-                        entry.ordinal,
+                        entry.location.line,
                         entry.adapter_echo,
                         entry.adapter_namespace.as_deref(),
                         Some(lane.source.reference(entry.location)),

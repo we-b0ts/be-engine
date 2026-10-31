@@ -27,7 +27,13 @@ fn startup_debt_is_diagnostic_during_independent_api_acceptance() {
         let aggregate = aggregate_replay_reports(&source).unwrap();
         assert!(aggregate.is_complete());
         assert!(!aggregate.is_dirty(), "{status}");
-        assert_eq!(aggregate.reports[0].startup_phase, Some(startup));
+        assert!(
+            serde_json::to_value(&aggregate.reports[0])
+                .unwrap()
+                .get("startup_phase")
+                .is_none()
+        );
+        assert_eq!(report["startup_phase"], startup);
 
         report["unused_case_exchanges"] = json!([{"case_id":"case-a"}]);
         write_report(&source, "api", report);

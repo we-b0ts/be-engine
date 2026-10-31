@@ -11,6 +11,25 @@ pub(super) async fn runtime(
     globals: &[Value],
     lazy: bool,
 ) -> Result<Arc<ReplayRuntime>> {
+    capture_and_load(root, cases, globals, lazy, false).await
+}
+
+pub(super) async fn ambient_runtime(
+    root: &Path,
+    cases: &[Value],
+    globals: &[Value],
+    lazy: bool,
+) -> Result<Arc<ReplayRuntime>> {
+    capture_and_load(root, cases, globals, lazy, true).await
+}
+
+async fn capture_and_load(
+    root: &Path,
+    cases: &[Value],
+    globals: &[Value],
+    lazy: bool,
+    ambient: bool,
+) -> Result<Arc<ReplayRuntime>> {
     let mut config = crate::AppConfig::default();
     config.process_dependency_tasks.insert(
         "native-notification-selector".into(),
@@ -35,12 +54,24 @@ pub(super) async fn runtime(
         .await?;
     for event in globals {
         observe_endpoint(&recorder, event).await?;
+        let unowned = ambient
+            && (event["event_type"] == "redis_pub_sub_push"
+                || event["fixture_unattributed"] == true)
+            && event["fixture_process_owned"] != true;
         recorder
             .append_global_dependency(
                 &native_event(event),
-                "background_rule",
+                if unowned {
+                    "outside_admission"
+                } else {
+                    "background_rule"
+                },
                 "runtime",
-                "native-notification-selector",
+                if unowned {
+                    ""
+                } else {
+                    "native-notification-selector"
+                },
             )
             .await?;
     }

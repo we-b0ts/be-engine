@@ -6,6 +6,7 @@ use crate::interaction::model::{
 use crate::interaction::policy::InteractionPolicy;
 use std::time::Duration;
 mod active;
+mod ambient;
 mod delivery;
 mod encryption;
 mod guards;

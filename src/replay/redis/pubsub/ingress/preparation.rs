@@ -42,7 +42,7 @@ impl PubSubState {
             .collect::<HashSet<_>>();
         let mut candidates = HashMap::<Key, Vec<Candidate>>::new();
         for (index, push) in self.pushes.iter().enumerate() {
-            if !push.source.is_run_owned() || push.record.rpc_request.is_some() {
+            if !push.source.is_run_level() || push.record.rpc_request.is_some() {
                 continue;
             }
             let raw = push.bytes()?;
@@ -62,7 +62,10 @@ impl PubSubState {
                         inline: push.raw.clone(),
                     },
                     timestamp: push.record.timestamp,
-                    ordinal: index,
+                    ordinal: push
+                        .evidence
+                        .as_ref()
+                        .map_or(index, |reference| reference.location.line),
                 });
             }
         }
@@ -78,6 +81,7 @@ impl PubSubState {
                     };
                     let key = (endpoint(&lane.record), channel, identity);
                     if wanted.contains(&key) {
+                        let ordinal = entry.location.line;
                         candidates.entry(key).or_default().push(Candidate {
                             slot: PushId::Indexed {
                                 lane: lane_index,
@@ -89,7 +93,7 @@ impl PubSubState {
                                 inline: vec![],
                             },
                             timestamp: entry.timestamp,
-                            ordinal: entry.ordinal,
+                            ordinal,
                         });
                     }
                 }

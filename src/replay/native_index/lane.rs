@@ -9,6 +9,7 @@ pub(in crate::replay) enum LaneOwner {
     Case,
     Startup,
     Process,
+    Unattributed,
 }
 
 impl LaneOwner {
@@ -17,6 +18,7 @@ impl LaneOwner {
             ReplaySource::Case => Self::Case,
             ReplaySource::Startup => Self::Startup,
             ReplaySource::Process => Self::Process,
+            ReplaySource::Unattributed => Self::Unattributed,
         }
     }
 }

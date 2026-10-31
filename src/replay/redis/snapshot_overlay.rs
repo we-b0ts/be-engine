@@ -248,6 +248,7 @@ fn analyze_snapshot_evidence(
         match exchange.source {
             ReplaySource::Startup | ReplaySource::Process => matching_global_exchanges += 1,
             ReplaySource::Case => matching_case_exchanges += 1,
+            ReplaySource::Unattributed => continue,
         }
         let identity = snapshot_identity(exchange);
         groups.entry(identity).or_default().push(exchange);
@@ -447,6 +448,7 @@ fn evidence_fingerprint(
                 source: match entry.source {
                     ReplaySource::Startup | ReplaySource::Process => "global",
                     ReplaySource::Case => "case",
+                    ReplaySource::Unattributed => "unattributed",
                 },
                 connection_id: entry.connection_id.to_string(),
                 sequence: entry.sequence,

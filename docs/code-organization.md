@@ -97,6 +97,10 @@ is unclear.
   `interaction/replay/feedback` carries that observation interface separately
   from protocol parsing and control transport. No expected output enters the
   input executor, and recorded ACK payloads retain their existing references.
+  `replay/global/notifications` exposes authenticated Unattributed notification
+  slots to these native input proofs without admitting unowned outgoing commands
+  or changing Source ownership. Such slots have no subscription-age timer fallback;
+  physical record order is retained across separate Source ownership views.
   Ordinary native notification clocks also admit bounded same-namespace client
   events with ACK IDs. `interaction/replay/socketio/native_receipts` correlates
   actual sent inputs and received ACK metadata independently of business
@@ -240,8 +244,9 @@ is unclear.
   An implicit low-level session with startup business inventory reports its phase
   as unverified until a real boundary is observed. Frozen Case views retain
   their complete mandatory inventory; process selectors cannot waive Case debt.
-  Independent API aggregates retain startup-phase evidence for diagnosis without
-  making run-level startup debt a Case failure. Actual API response and dependency
+  Independent API aggregates omit startup inventories and do not make run-level
+  startup debt a Case failure. The on-demand Source process evidence query retains
+  the diagnostic entry point. Actual API response and dependency
   checks remain strict; the final batch receipt still requires startup closure.
   `replay/http/ingress` owns genuine parsed-header admission before request-body
   collection. A bounded metadata ledger freezes observation identity, observed

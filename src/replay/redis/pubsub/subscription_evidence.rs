@@ -56,7 +56,7 @@ impl PubSubState {
         for (record, kind, subject, global) in self
             .pushes
             .iter()
-            .map(|p| (&p.record, p.kind, &p.subject, p.source.is_run_owned()))
+            .map(|p| (&p.record, p.kind, &p.subject, p.source.is_run_level()))
             .chain(
                 self.indexed
                     .lanes

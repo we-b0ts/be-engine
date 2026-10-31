@@ -13,6 +13,7 @@ pub(super) struct Frozen {
     pub snapshot: Option<String>,
     pub startup: Option<PathBuf>,
     pub process: Option<PathBuf>,
+    pub unattributed: Option<PathBuf>,
     pub batch_scope: Option<super::reconciliation::BatchScope>,
 }
 
@@ -26,6 +27,7 @@ pub(super) fn freeze(
             snapshot: None,
             startup: super::find_run_level_dependencies(source).0,
             process: None,
+            unattributed: None,
             batch_scope: None,
         });
     };
@@ -42,6 +44,7 @@ pub(super) fn freeze(
         snapshot: Some(digest.clone()),
         startup: Some(root.join("indexes/startup-scope.json")),
         process: Some(root.join("indexes/process-scope.json")),
+        unattributed: Some(root.join("indexes/unattributed-scope.json")),
         batch_scope: Some(super::reconciliation::BatchScope::new(
             &root, &manifest, cases,
         )?),
@@ -172,6 +175,7 @@ pub(super) fn freeze(
         match key.as_str() {
             "startup" => frozen.startup = Some(path),
             "process" => frozen.process = Some(path),
+            "unattributed" => frozen.unattributed = Some(path),
             _ => {}
         }
     }
