@@ -67,6 +67,11 @@ encryption/header positions and default multipart comparison.
 
 ## Rust Tooling
 
+[Protocol and execution contracts](protocol-rule-execution-design.md) describe
+shared request admission, codecs, native constraints and prepared rule/index
+requirements. [Per-Case performance](replay-protocol-performance.md) records the
+fixed-revision comparison and reproducible synthetic HTTP-to-Redis/MySQL benchmark.
+
 [Rule candidate pre-matching](replay-pre-matching.md) collects supported value
 differences without certifying them; managed streaming Replay can also skip
 recorded idle gaps while preserving framing and termination.
