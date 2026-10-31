@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::super::verification_obligations::{
     ScopeObligation, VerificationImpact, VerificationScope,
 };
-use crate::dependency::attribution::{AttributionDecision, AttributionProof, DependencyOwner};
+use crate::dependency::attribution::{AttributionProof, DependencyOwner};
 
 pub const SCHEMA: &str = "dependency-attribution/v3";
 
@@ -21,8 +21,8 @@ pub(in crate::rewrite) struct ReviewLedger {
     pub unresolved_source_exchange_ids: BTreeSet<Uuid>,
     pub claims: BTreeMap<String, ForeignUnusedClaim>,
     pub investigations: BTreeMap<String, super::investigations::TargetInvestigation>,
-    pub decisions: BTreeMap<Uuid, AttributionDecision>,
-    pub decision_history: Vec<AttributionDecision>,
+    pub decisions: super::decisions::DecisionSet,
+    pub decision_history: super::decisions::DecisionHistory,
     pub obligations: BTreeMap<String, ScopeObligation>,
     pub receipts: BTreeMap<String, AcceptanceReceipt>,
     pub batch_receipt: Option<BatchAcceptanceReceipt>,

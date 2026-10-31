@@ -203,6 +203,44 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inven
 }
 
 #[tokio::test]
+async fn recording_prewarm_uses_sealed_source_without_reading_a_target_workflow() {
+    let temp = tempfile::tempdir().unwrap();
+    let (recorder, _, _) = recorded(temp.path(), &records()).await;
+    let workflow = temp
+        .path()
+        .join(".traffic-e2e/local/runtime/rewrite/state.json");
+    fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+    fs::write(&workflow, b"unrelated invalid Target workflow").unwrap();
+    recorder.finish_run().await.unwrap();
+    let status: Preparation = store::read_json(&recorder.run_dir.join(MARKER)).unwrap();
+    assert_eq!(status.status, "ready", "{:?}", status.reason);
+    let (_, manifest) = crate::dependency_index::recording::manifest(&recorder.run_dir).unwrap();
+    assert!(manifest.capture_complete);
+    // The frozen identity retains the run and sealed inventory binding even
+    // when there is no overlay. It must not revert to the old hash of `[]`.
+    let (decisions, snapshot) =
+        crate::rewrite::freeze_dependency_attribution(None, &recorder.run_dir, &manifest.run_id)
+            .unwrap();
+    assert!(decisions.is_empty());
+    assert_ne!(snapshot, crate::policy_evidence::digest(b"[]"));
+    assert_eq!(
+        status.source_sha256,
+        Some(crate::policy_evidence::digest(
+            &serde_json::to_vec(&(manifest.files, Some(snapshot))).unwrap()
+        ))
+    );
+    assert!(
+        crate::rewrite::freeze_dependency_attribution(
+            Some(temp.path()),
+            &recorder.run_dir,
+            &manifest.run_id,
+        )
+        .is_err(),
+        "fixture must reject attempts to read the unrelated workflow"
+    );
+}
+
+#[tokio::test]
 async fn mysql_cleanup_prewarm_imports_the_current_hidden_noop_commit_inventory() {
     let temp = tempfile::tempdir().unwrap();
     let (recorder, config, policy) = recorded(temp.path(), &[noop_commit()]).await;

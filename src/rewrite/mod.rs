@@ -36,7 +36,9 @@ pub use worker::runtime::{RewriteWorkerReportOptions, report as report_rewrite_w
 mod dependency_review;
 mod dependency_rule;
 mod verification_obligations;
-pub(crate) use dependency_review::dependency_attribution_overlay;
+pub(crate) use dependency_review::{
+    dependency_attribution_identity_for_source, freeze_dependency_attribution,
+};
 pub(crate) fn batch_execution_identity(root: &std::path::Path) -> anyhow::Result<String> {
     fingerprint::fresh_replay_identity(root)
 }
@@ -44,9 +46,7 @@ pub(crate) fn dependency_attribution_snapshot(
     root: &std::path::Path,
     run: &str,
 ) -> anyhow::Result<String> {
-    Ok(crate::policy_evidence::digest(&serde_json::to_vec(
-        &dependency_review::dependency_attribution_overlay(root, run)?,
-    )?))
+    dependency_review::dependency_attribution_identity(root, run)
 }
 pub use dependency_review::{
     AttributionCommandOptions, AttributionReviewContext, AttributionRuleBinding,

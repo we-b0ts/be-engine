@@ -2,12 +2,14 @@
 mod analysis;
 mod batch;
 mod batch_verification;
+mod decisions;
 mod investigations;
 mod model;
 mod ownership_impact;
 mod projection;
 mod queries;
 mod rules;
+mod snapshot;
 mod source;
 mod target_query;
 #[cfg(test)]
@@ -66,24 +68,17 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
             .transpose()?;
         let inventory_changed =
             state.dependency_review.source_inventory_id.as_deref() != inventory.as_deref();
-        let expired = state
-            .dependency_review
-            .decisions
-            .iter()
-            .filter(|(_, decision)| {
-                inventory_changed
-                    || !rules::current(decision, &active)
-                    || Some(decision.proof.source_revision.as_str())
-                        != state.source_revision.as_deref()
-            })
-            .map(|(id, _)| *id)
-            .collect::<BTreeSet<_>>();
+        let source_revision = state.source_revision.clone();
+        let expired = state.dependency_review.decisions.retain_groups(|decision| {
+            !inventory_changed
+                && rules::current(decision, &active)
+                && Some(decision.proof.source_revision.as_str()) == source_revision.as_deref()
+        });
         if !expired.is_empty() {
             let expired_proofs = expired
                 .iter()
-                .filter_map(|id| state.dependency_review.decisions.get(id))
-                .filter(|decision| !rules::current(decision, &active))
-                .map(|decision| decision.proof_id.clone())
+                .filter(|group| !rules::current(&group.template, &active))
+                .map(|group| group.template.proof_id.clone())
                 .collect::<BTreeSet<_>>();
             for obligation in
                 state
@@ -96,13 +91,12 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
             {
                 obligation.retired_reason=Some("ownership proof lost its effective rule binding; original Source ownership is restored and must still reconcile".into());
             }
-            state
-                .dependency_review
-                .decisions
-                .retain(|id, _| !expired.contains(id));
             for claim in state.dependency_review.claims.values_mut() {
                 if claim.recording_run_id == state.recording_run_id
-                    && !claim.source_exchange_ids.is_disjoint(&expired)
+                    && claim
+                        .source_exchange_ids
+                        .iter()
+                        .any(|id| expired.iter().any(|group| group.contains(id)))
                 {
                     claim.status = ClaimStatus::Pending;
                 }
@@ -354,21 +348,21 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
             &proposal,
         ))?);
         ownership_impact::observe(&state, &original, &proposal, &mut moved_case_scopes);
-        for id in &proposal.source_exchange_ids {
-            let decision = AttributionDecision {
-                exchange_id: *id,
+        let group = std::sync::Arc::new(decisions::DecisionGroup {
+            template: decisions::DecisionTemplate {
                 owner: proposal.owner.clone(),
                 proof_id: proof_id.clone(),
                 proof_revision: next_revision,
                 proof: proposal.proof.clone(),
-                rule_bindings: rule_bindings.clone(),
-            };
-            state
-                .dependency_review
-                .decision_history
-                .push(decision.clone());
-            state.dependency_review.decisions.insert(*id, decision);
-        }
+                rule_bindings,
+            },
+            exchange_ids: proposal.source_exchange_ids.iter().copied().collect(),
+        });
+        state
+            .dependency_review
+            .decisions
+            .insert_group(group.clone())?;
+        state.dependency_review.decision_history.push_group(group);
         {
             let requirement = proposal
                 .impact
@@ -576,35 +570,32 @@ fn validate_proposal(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn dependency_attribution_overlay(
     root: &Path,
     recording_run: &str,
 ) -> Result<Vec<AttributionDecision>> {
-    let Some(state) = RewriteStore::new(root)?.load_snapshot()? else {
-        return Ok(vec![]);
-    };
-    if state.recording_run_id != recording_run {
-        return Ok(vec![]);
-    }
-    if state.dependency_review.recording_run_id.as_deref() != Some(recording_run) {
-        return Ok(vec![]);
-    }
-    ensure!(
-        state.dependency_review.source_inventory_id.as_deref()
-            == Some(source::inventory_identity(&state)?.as_str()),
-        "attribution overlay belongs to a changed sealed Source inventory; obtain fresh independent proof"
-    );
-    let active = rules::fingerprints(&rules::load(root)?)?;
-    Ok(state
-        .dependency_review
-        .decisions
-        .values()
-        .filter(|decision| {
-            Some(decision.proof.source_revision.as_str()) == state.source_revision.as_deref()
-                && rules::current(decision, &active)
-        })
-        .cloned()
-        .collect())
+    snapshot::overlay(root, recording_run)
+}
+
+pub(crate) fn dependency_attribution_identity(root: &Path, recording_run: &str) -> Result<String> {
+    snapshot::identity(root, recording_run)
+}
+
+pub(crate) fn dependency_attribution_identity_for_source(
+    root: &Path,
+    source: &Path,
+    recording_run: &str,
+) -> Result<String> {
+    snapshot::identity_for_source(root, source, recording_run)
+}
+
+pub(crate) fn freeze_dependency_attribution(
+    target: Option<&Path>,
+    source: &Path,
+    recording_run: &str,
+) -> Result<(Vec<AttributionDecision>, String)> {
+    snapshot::frozen(target, source, recording_run)
 }
 
 pub(super) fn batch_pending(state: &RewriteState) -> bool {
@@ -702,7 +693,7 @@ pub fn dependency_attribution_source_information(
     Ok(
         json!({"schema":SCHEMA,"recording_run_id":state.recording_run_id,"source_inventory_id":inventory.identity,
         "source_exchange_id":id,"capture":event.capture,"capture_complete":event.complete,
-        "effective_attribution":state.dependency_review.decisions.get(&id),
+        "effective_attribution":state.dependency_review.decisions.get(&id).map(|decision|decision.decision(id)),
         "request_shape":{"event_type":metadata["event_type"],"operation":metadata["command"].as_str().or_else(||metadata["method"].as_str()),
             "endpoint":{"host":metadata["target_host"],"port":metadata["target_port"]},
             "args_count":metadata["args"].as_array().map(Vec::len),"params_count":metadata["params"].as_array().map(Vec::len),

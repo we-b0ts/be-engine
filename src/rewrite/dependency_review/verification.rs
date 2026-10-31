@@ -424,9 +424,8 @@ pub(super) fn verify_obligation(root: &Path, state: &mut RewriteState, id: &str)
             "new recording has no complete origin input"
         );
     } else {
-        let overlay =
-            crate::rewrite::dependency_attribution_overlay(root, &state.recording_run_id)?;
-        let snapshot = source::digest(&serde_json::to_vec(&overlay)?);
+        let snapshot =
+            crate::rewrite::dependency_attribution_snapshot(root, &state.recording_run_id)?;
         ensure!(
             report["dependency_attribution_snapshot"].as_str() == Some(&snapshot),
             "origin Replay did not execute the current frozen attribution scope"

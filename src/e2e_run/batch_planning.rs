@@ -123,8 +123,11 @@ pub(crate) fn batch_rule_evidence(context: E2eRunContext) -> Result<BatchRuleEvi
     let source_inventory_id = crate::policy_evidence::digest(&fs::read(
         recording.join(crate::dependency::observation::MANIFEST_FILE),
     )?);
-    let snapshot =
-        crate::rewrite::dependency_attribution_snapshot(&layout.target_root, &manifest.run_id)?;
+    let snapshot = crate::rewrite::dependency_attribution_identity_for_source(
+        &layout.target_root,
+        &layout.case_source,
+        &manifest.run_id,
+    )?;
     let receipt = &report["batch_reconciliation"];
     let selected: BTreeSet<String> = serde_json::from_value(receipt["selected_cases"].clone())?;
     let recorded: BTreeSet<String> = serde_json::from_value(receipt["required_cases"].clone())?;

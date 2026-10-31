@@ -8,6 +8,8 @@ use crate::dependency::{
 use crate::dependency_index::{recording, scoped};
 
 mod inventory;
+#[cfg(test)]
+mod tests;
 
 pub(super) struct Frozen {
     pub run_value_scopes: BTreeMap<Uuid, Arc<str>>,
@@ -37,11 +39,8 @@ pub(super) fn freeze(
     let target = root
         .ancestors()
         .find(|path| path.join(".traffic-e2e").is_dir());
-    let decisions = target
-        .map(|target| crate::rewrite::dependency_attribution_overlay(target, &manifest.run_id))
-        .transpose()?
-        .unwrap_or_default();
-    let digest = crate::policy_evidence::digest(&serde_json::to_vec(&decisions)?);
+    let (decisions, digest) =
+        crate::rewrite::freeze_dependency_attribution(target, &root, &manifest.run_id)?;
     let mut frozen = Frozen {
         run_value_scopes: BTreeMap::new(),
         snapshot: Some(digest.clone()),

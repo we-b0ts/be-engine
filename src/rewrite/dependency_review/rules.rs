@@ -43,10 +43,29 @@ pub(super) fn fingerprints(policy: &CompiledPolicy) -> Result<BTreeMap<String, S
     Ok(values)
 }
 
-pub(super) fn current(decision: &AttributionDecision, active: &BTreeMap<String, String>) -> bool {
-    !decision.rule_bindings.is_empty()
+pub(super) trait RuleBound {
+    fn rule_bindings(&self) -> &BTreeMap<String, String>;
+}
+impl RuleBound for AttributionDecision {
+    fn rule_bindings(&self) -> &BTreeMap<String, String> {
+        &self.rule_bindings
+    }
+}
+impl RuleBound for super::decisions::DecisionTemplate {
+    fn rule_bindings(&self) -> &BTreeMap<String, String> {
+        &self.rule_bindings
+    }
+}
+impl<T: RuleBound + ?Sized> RuleBound for &T {
+    fn rule_bindings(&self) -> &BTreeMap<String, String> {
+        T::rule_bindings(*self)
+    }
+}
+
+pub(super) fn current(decision: &impl RuleBound, active: &BTreeMap<String, String>) -> bool {
+    !decision.rule_bindings().is_empty()
         && decision
-            .rule_bindings
+            .rule_bindings()
             .iter()
             .all(|(id, fingerprint)| active.get(id) == Some(fingerprint))
 }
@@ -58,8 +77,10 @@ pub(super) fn groups(policy: &CompiledPolicy) -> Result<Vec<Value>> {
             && effect.origin.is_none()
             && let Some(task) = &effect.task_name
         {
-            tasks.entry(task.clone()).or_default().push(json!({"rule_id":rule.rule.id,"fingerprint":rule.fingerprint,
-                "selector_digest":source::digest(&serde_json::to_vec(&effect.selector)?),"source_revision":effect.source_revision}));
+            tasks.entry(task.clone()).or_default().push(
+                json!({"rule_id":rule.rule.id,"fingerprint":rule.fingerprint,
+                "selector_digest":source::digest(&serde_json::to_vec(&effect.selector)?)}),
+            );
         }
     }
     let mut groups = tasks.into_iter().map(|(task,rules)|json!({"kind":"process_task","source_task":task,
@@ -114,13 +135,6 @@ pub(super) fn bind(
             ensure!(
                 !ids.is_empty() && ids == proposal.rule_binding.rule_ids,
                 "process proof must bind the complete effective Source task selector group"
-            );
-            ensure!(
-                task_rules.iter().all(
-                    |rule| matches!(&rule.rule.effect,NativeEffect::ProcessOwned(effect)
-                if Some(effect.source_revision.as_str()) == state.source_revision.as_deref())
-                ),
-                "process task policy belongs to another Source revision"
             );
             let covered = process_matches(source, &task_rules, Some(*process_epoch))?;
             let other_tasks=policy.native.iter().filter(|rule|matches!(&rule.rule.effect,NativeEffect::ProcessOwned(effect)

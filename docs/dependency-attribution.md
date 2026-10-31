@@ -18,6 +18,20 @@ or an ownership proof cannot substitute for successful delivery. A later proof
 changes the effective ownership view while retaining the original capture and
 actual execution facts.
 
+Workflow state stores one shared owner/proof/rule template per finite occurrence
+group, with every original Source UUID retained. Active ownership has unique
+membership; history preserves the complete sequence of prior decisions and
+revisions. This avoids duplicating large Source call-chain proofs hundreds of
+thousands of times during ordinary status reads and state clones. Public
+per-occurrence evidence remains the same typed projection.
+
+The store reads the prior per-occurrence map and history array and writes compact
+groups on the next ordinary coordinator mutation. It rejects duplicate active
+UUIDs, mismatched legacy keys and contradictory templates for one proof revision.
+It does not rewrite recordings, discard history, reduce required Source coverage
+or change consumption. Rule, Source revision and sealed-inventory expiry checks
+remain mandatory and operate on the shared groups.
+
 `dependency-attribution show --api /route` returns one canonical API view with all
 method contracts. It includes real attempt/session identity, response gates,
 dependency failures, all attempted hypotheses (including rejected probes), original

@@ -36,10 +36,16 @@ fn ownerless(root: &Path, state: &RewriteState) -> Result<u64> {
     }
     if !state.dependency_review.decisions.is_empty() {
         let active = super::rules::fingerprints(&super::rules::load(root)?)?;
-        if state.dependency_review.decisions.values().any(|decision| {
-            !super::rules::current(decision, &active)
-                || Some(decision.proof.source_revision.as_str()) != state.source_revision.as_deref()
-        }) {
+        if state
+            .dependency_review
+            .decisions
+            .templates()
+            .any(|decision| {
+                !super::rules::current(decision, &active)
+                    || Some(decision.proof.source_revision.as_str())
+                        != state.source_revision.as_deref()
+            })
+        {
             // A read-only caller may hold a pre-refresh state. Never let cached
             // unresolved IDs authorize Replay after the rules lost their proof.
             return Ok(captured);
