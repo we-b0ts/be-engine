@@ -115,8 +115,10 @@ is unclear.
   termination time and explicit transport FIN/RST control. Recorder connection
   registration marks engine-owned cleanup before socket shutdown. Protocol
   adapters retain framing, session/request correlation and timed response-prefix
-  materialization. `replay/exchange` owns shared termination timing and validation;
-  protocol delivery owns claims, consumption and dirty reporting. See
+  materialization. `replay/exchange` owns shared termination timing and validation.
+  Redis's ordered recording writer mirrors peer closes only before authenticated
+  recorder cleanup; pending exchanges still retain their incomplete-capture facts.
+  Protocol delivery owns claims, consumption and dirty reporting. See
   [dependency termination](dependency-termination.md).
   `replay/mysql/wire_diagnostics` owns opt-in connection-local protocol envelopes
   and request counters. It exposes packet lengths, sequence numbers and leading
