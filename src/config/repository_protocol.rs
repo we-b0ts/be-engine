@@ -49,6 +49,11 @@ pub fn enable_repository_motan_protocol(
     validate_ports(native_port, options.gateway_port)?;
 
     recorder.motan_gateway.enabled = true;
+    if let Some(capture) = &mut recorder.capture
+        && !capture.ingress.contains(&super::CaptureProtocol::Motan)
+    {
+        capture.ingress.push(super::CaptureProtocol::Motan);
+    }
     recorder.motan_gateway.listen = format!("0.0.0.0:{}", options.gateway_port)
         .parse()
         .context("failed to construct Motan gateway listen address")?;
@@ -224,6 +229,44 @@ mod tests {
         let second = enable_repository_motan_protocol(options()).unwrap();
         assert_eq!(second.status, "unchanged");
         assert_eq!(fs::read(&second.project_config).unwrap(), before);
+    }
+
+    #[test]
+    fn adding_motan_to_business_capture_keeps_the_saved_configuration_concise() {
+        let target = initialized_target();
+        let path = target.path().join(".traffic-e2e/project.yaml");
+        let mut document: Value =
+            serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        document["recorder"] = serde_yaml::from_str(
+            "capture: {ingress: [http], dependencies: [http]}\nhttp_gateway: {ready: {enabled: true, path: /healthz}}\nmotan_gateway: {matched_upstream: '127.0.0.1:8080'}\n",
+        )
+        .unwrap();
+        fs::write(&path, serde_yaml::to_string(&document).unwrap()).unwrap();
+
+        let options = || MotanProtocolConfigOptions {
+            target_root: target.path().to_path_buf(),
+            gateway_port: 18_081,
+        };
+        enable_repository_motan_protocol(options()).unwrap();
+        let saved: Value = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        for implementation in ["dns_mock", "tcp_gateway", "udp_gateway", "mysql", "tls"] {
+            assert!(saved["recorder"].get(implementation).is_none());
+        }
+        let config = AppConfig::load(&path).unwrap();
+        assert_eq!(
+            config.capture.as_ref().unwrap().ingress,
+            [
+                super::super::CaptureProtocol::Http,
+                super::super::CaptureProtocol::Motan
+            ]
+        );
+        assert!(config.http_gateway.enabled);
+        assert!(config.motan_gateway.enabled);
+        assert!(config.tcp_gateway.enabled);
+        assert_eq!(
+            enable_repository_motan_protocol(options()).unwrap().status,
+            "unchanged"
+        );
     }
 
     fn initialized_target() -> TempDir {
