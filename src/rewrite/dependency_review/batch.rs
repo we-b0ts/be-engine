@@ -6,7 +6,10 @@ use crate::rewrite::model::{
 };
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
+
+#[cfg(test)]
+mod tests;
 
 pub(super) fn apis_ready(state: &RewriteState) -> bool {
     let reviewed_round = state
@@ -58,6 +61,54 @@ fn input(summary: String, required: Vec<String>) -> RewriteAction {
     }
 }
 
+/// Coverage is an input-metadata question. Native Source attribution and actual
+/// consumption remain cold checks when executing and accepting the final round.
+fn validate_source_coverage(state: &RewriteState, methods: &BTreeSet<String>) -> Result<()> {
+    let case_source = state
+        .case_source
+        .as_deref()
+        .context("workflow has no Source recording")?;
+    let (recording, manifest) = crate::dependency_index::recording::manifest(case_source)?;
+    ensure!(
+        manifest.run_id == state.recording_run_id,
+        "Source recording identity differs from the current workflow"
+    );
+    ensure!(
+        manifest.capture_complete
+            && !manifest.coverage.inventory_gaps
+            && manifest.coverage.capture_failures == 0
+            && manifest.coverage.pending.is_empty()
+            && !manifest.inputs.is_empty()
+            && manifest.inputs.iter().all(|input| input.complete),
+        "final workflow reconciliation requires every sealed Source input to be complete"
+    );
+    let selectors = methods
+        .iter()
+        .map(|method| {
+            let api = method.parse::<crate::RecordingApi>()?;
+            if let Some(route) = state
+                .source_route_bindings
+                .get(method)
+                .map(String::as_str)
+                .or_else(|| {
+                    state
+                        .api_inventory
+                        .iter()
+                        .find(|item| item.api == *method)
+                        .and_then(|item| item.source_route.as_deref())
+                })
+            {
+                crate::rewrite::inventory::validate_source_route(&api, route)?;
+            }
+            Ok(api)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // The existing seal authentication cache uses native file stamps. A warm
+    // status only stats sealed files; it never rebuilds the dependency Catalog.
+    crate::dependency_index::recording::authenticate(&recording)?;
+    crate::case_group::validate_recording_api_cases(case_source, &selectors)
+}
+
 fn source_block(root: &Path, state: &RewriteState) -> Option<RewriteAction> {
     let methods = match workflow_verification::required_scope_methods(root, state) {
         Ok(methods) => methods,
@@ -95,16 +146,18 @@ fn source_block(root: &Path, state: &RewriteState) -> Option<RewriteAction> {
     if !capture.is_empty() {
         return Some(input("origin Source capture remains required; accepted unrelated APIs retain their independent conclusions".into(),capture));
     }
-    let source=match source::load(state) {Ok(source)=>source,Err(error)=>return Some(input(format!("a current sealed Source run is required for final reconciliation: {error:#}"),vec!["provide one current sealed Source run containing every required workflow method API".into()]))};
     let missing = methods
-        .into_iter()
-        .filter(|api| {
-            !current_methods.contains(api)
-                || !batch_verification::covers_method(&source, api).unwrap_or(false)
-        })
+        .difference(&current_methods)
+        .cloned()
         .collect::<Vec<_>>();
-    (!missing.is_empty()).then(||input("the current sealed Source run omits required workflow methods; historical focused API snapshots cannot form one full session".into(),
-        missing.into_iter().map(|api|format!("restore {api} in the current workflow inventory with complete Source inputs; recapture does not erase selected methods, only explicit only/skip can narrow scope")).collect()))
+    if !missing.is_empty() {
+        return Some(input("the current sealed Source run omits required workflow methods; historical focused API snapshots cannot form one full session".into(),
+            missing.into_iter().map(|api|format!("restore {api} in the current workflow inventory with complete Source inputs; recapture does not erase selected methods, only explicit only/skip can narrow scope")).collect()));
+    }
+    validate_source_coverage(state, &methods).err().map(|error| input(
+        format!("a current sealed Source run is required for final reconciliation: {error:#}"),
+        vec!["provide one current sealed Source run containing complete inputs for every required workflow method API".into()],
+    ))
 }
 
 pub(in crate::rewrite) fn required_action(

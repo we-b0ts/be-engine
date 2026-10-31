@@ -455,12 +455,12 @@ fn process_matches(
             )? {
                 if let crate::config::process_owned_dependencies::BackgroundDependencyRuleConfig::RedisPubsub { selector: input, .. } = rule {
                     let anchor = crate::config::process_owned_dependencies::pubsub::anchor(selector).context("Source Pub/Sub input anchor is invalid")?;
-                    if !subscriptions.contains_key(&anchor) {
+                    if let std::collections::btree_map::Entry::Vacant(entry) = subscriptions.entry(anchor) {
                         let ids = source.native.get(&("redis".into(), anchor.0.to_string(), anchor.1))
                             .context("Source Pub/Sub input lacks its original subscription")?;
                         ensure!(ids.len() == 1, "Source Pub/Sub subscription identity is ambiguous");
                         let subscription = source.original_selector(ids.first().expect("one original subscription"), &mut reader)?;
-                        subscriptions.insert(anchor, subscription);
+                        entry.insert(subscription);
                     }
                     crate::config::process_owned_dependencies::pubsub::validate_subscription(input, selector, &subscriptions[&anchor])?;
                 }

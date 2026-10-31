@@ -58,12 +58,12 @@ fn active_groups<E: de::Error>(groups: Vec<DecisionGroup>) -> Result<Vec<Arc<Dec
     for group in &groups {
         group.validate_active().map_err(E::custom)?;
         let key = (&group.template.proof_id, group.template.proof_revision);
-        if let Some(previous) = templates.insert(key, &group.template) {
-            if previous != &group.template {
-                return Err(E::custom(
-                    "contradictory ownership templates for one proof revision",
-                ));
-            }
+        if let Some(previous) = templates.insert(key, &group.template)
+            && previous != &group.template
+        {
+            return Err(E::custom(
+                "contradictory ownership templates for one proof revision",
+            ));
         }
         all.extend_from_slice(&group.exchange_ids);
     }
