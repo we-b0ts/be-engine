@@ -1117,7 +1117,9 @@ is unclear.
   `case_patterns.rs` owns the low-frequency post-recording pattern
   identification gate, persistent canonical API catalog, and add-only policy
   application; it does not mutate recorded cases or delegate this gate to API
-  workers. `work_scope.rs` owns the API worker scope identity.
+  workers. Recognizing static routes or repeating existing patterns advances the
+  catalog while preserving capture policy bytes, identities and proofs.
+  `work_scope.rs` owns the API worker scope identity.
   `revalidation.rs` owns the coordinator's explicit verification request
   boundary and projection for deferred API status. Requests and scoped Next obey
   the same round gate and cannot turn stale successes into first-pass work.
