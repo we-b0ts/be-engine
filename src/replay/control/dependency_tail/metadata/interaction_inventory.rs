@@ -1,6 +1,6 @@
 //! A clean original interaction proves its finite Case dependency obligations.
 use super::*;
-use crate::interaction::model::{EndReason, Protocol};
+use crate::interaction::model::{ClientTransportEnd, EndReason, Protocol};
 use crate::interaction::policy::InteractionPolicy;
 use serde_json::Value;
 use std::fs::File;
@@ -26,6 +26,19 @@ struct Input {
 #[derive(Deserialize)]
 struct InputOffset {
     offset_ms: u64,
+    #[serde(default)]
+    action: Option<InputKind>,
+}
+
+/// Only the termination tag is needed; message payloads remain unread.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum InputKind {
+    TransportEnd {
+        end: ClientTransportEnd,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Deserialize)]
@@ -128,10 +141,21 @@ fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadat
     let (Some(clean), Some(reason)) = (end.clean, end.reason) else {
         return Ok(None);
     };
+    let transport_end = input
+        .actions
+        .last()
+        .and_then(|action| match &action.action {
+            Some(InputKind::TransportEnd { end }) => Some(*end),
+            _ => None,
+        });
     if !clean
+        || (reason == EndReason::ClientTransportEnd) != transport_end.is_some()
         || !matches!(
             reason,
-            EndReason::ServerEof | EndReason::ClientClose | EndReason::BusinessIdle
+            EndReason::ServerEof
+                | EndReason::ClientClose
+                | EndReason::BusinessIdle
+                | EndReason::ClientTransportEnd
         )
     {
         // Incomplete captures retain the existing transport/started-I/O

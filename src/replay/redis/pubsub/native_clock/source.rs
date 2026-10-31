@@ -90,7 +90,15 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
         let elapsed = end
             .and_then(|end| end.offset_ms)
             .or_else(|| response.as_ref().and_then(|r| r.duration_ms));
-        let closed_at = elapsed
+        let transport_end = input
+            .as_ref()
+            .and_then(|input| input.actions.last())
+            .filter(|action| matches!(action.action, InputActionKind::TransportEnd { .. }))
+            .map(|action| action.offset_ms);
+        // Source cleanup can finish after a real client FIN/RST. That cleanup
+        // is dependency evidence, not a longer external input delivery window.
+        let window_elapsed = elapsed.map(|end| transport_end.map_or(end, |at| at.min(end)));
+        let closed_at = window_elapsed
             .and_then(|ms| i64::try_from(ms).ok())
             .and_then(|ms| {
                 start
@@ -107,9 +115,12 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
                         crate::interaction::model::EndReason::BusinessIdle
                             | crate::interaction::model::EndReason::ClientClose
                             | crate::interaction::model::EndReason::ServerEof
+                            | crate::interaction::model::EndReason::ClientTransportEnd
                     )
                 )
-        });
+        }) && ((end.and_then(|end| end.reason)
+            == Some(crate::interaction::model::EndReason::ClientTransportEnd))
+            == transport_end.is_some());
         // Heartbeats do not create business prerequisites. Multi-input business
         // projection is limited to one CONNECT and ACK-tracked client events;
         // every preceding event still requires its actual Target ACK.
@@ -121,11 +132,10 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
                 inputs.is_some()
                     && namespaces.len() == 1
                     && elapsed.is_some_and(|end| {
-                        input
-                            .actions
-                            .last()
-                            .is_some_and(|action| action.offset_ms < end)
-                            && end <= input.policy.max_duration_ms
+                        input.actions.last().is_some_and(|action| {
+                            action.offset_ms < end
+                                || action.offset_ms == end && transport_end.is_some()
+                        }) && end <= input.policy.max_duration_ms
                     })
             });
         let connected_after = input
@@ -178,6 +188,11 @@ fn tracked_inputs(input: &InputTranscript) -> Option<Vec<(u64, u64)>> {
     let mut ids = BTreeSet::new();
     let mut inputs = Vec::new();
     for action in input.actions.iter().skip(1) {
+        if matches!(action.action, InputActionKind::TransportEnd { .. }) {
+            // InputTranscript::validate confines this independent physical end
+            // to the final action. It carries no business completion barrier.
+            continue;
+        }
         let event = match packet(action)? {
             EngineIoPacket::Pong(_) if action.after.is_empty() && !action.compressible_gap => {
                 // Both legacy recorded PONG actions and explicit heartbeat

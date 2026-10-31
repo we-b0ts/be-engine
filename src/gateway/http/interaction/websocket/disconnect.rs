@@ -1,7 +1,63 @@
-//! Archive lost-client captures only after proving Source application teardown.
+//! Retain real peer transport ends through Source teardown and dependency drain.
 use super::*;
+use crate::dependency::termination::ConnectionControl;
+use crate::interaction::{model::ClientTransportEnd, websocket_transport::FrameObservation};
 use crate::recorder::CaseInvalidation;
 use std::sync::atomic::Ordering;
+
+pub(super) async fn observed<S>(
+    session: &SessionRef,
+    upstream: &mut WebSocketStream<S>,
+    control: &ConnectionControl,
+    observed: &FrameObservation,
+    error: &anyhow::Error,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let Some((end, at)) = observed
+        .termination()
+        .filter(|_| observed.complete_boundary())
+    else {
+        // An EOF inside a frame is still incomplete capture. Keep the existing
+        // failed-case cleanup without converting it into a valid terminal input.
+        return cleanup(session, upstream, error).await;
+    };
+    let offset = at
+        .saturating_duration_since(session.started)
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    session
+        .observation
+        .lock()
+        .expect("interaction observation poisoned")
+        .client_transport_end(end, offset)?;
+    session.request_close(EndReason::ClientTransportEnd);
+    let completion = closing::ApplicationClose::prepare(session)
+        .await?
+        .context("client transport end requires supported application disconnect confirmation")?;
+    match end {
+        ClientTransportEnd::Eof => control.shutdown_write()?,
+        ClientTransportEnd::Reset => control.reset()?,
+    }
+    completion.wait_after_close(session).await?;
+    // Never send a synthetic Engine.IO or WS CLOSE for a TCP terminal input.
+    // The exact live SID's awaited cleanup is the application completion proof;
+    // keep the transport owner until its peer read also ends.
+    while let Some(Ok(message)) = upstream.next().await {
+        if matches!(message, Message::Close(_)) {
+            break;
+        }
+    }
+    session
+        .client_disconnect_confirmed
+        .store(true, Ordering::SeqCst);
+    tracing::info!(case_id = %session.case.id, ?end,
+        source_disconnect_confirmed = true,
+        "recorded client transport end; retaining case through dependency drain");
+    Ok(())
+}
 
 pub(super) async fn cleanup<S>(
     session: &SessionRef,

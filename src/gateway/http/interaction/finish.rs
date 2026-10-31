@@ -378,18 +378,21 @@ async fn run(
     )
     .await?;
     super::diagnostics::phase(session.case.id, protocol, "publication_completed");
-    if continue_after_failure {
-        // Publication owns the final lease-loss ordering. A loss observed before
-        // its commit still requires Source isolation, even after a quiet drain.
+    {
+        // Publication owns lease-loss ordering even when the primary transport
+        // ended cleanly. A loss before its commit fails publication and requires
+        // Source isolation; a loss after that commit cannot revoke it.
         let commit = publication.begin().await;
-        if commit.invalidation.is_none()
-            && super::recovery::can_continue(session, invalidation.as_ref())
-        {
-            tracing::warn!(case_id = %session.case.id,
+        if commit.invalidation.is_some() {
+            stop_failed_recording(session);
+        } else if continue_after_failure {
+            if super::recovery::can_continue(session, invalidation.as_ref()) {
+                tracing::warn!(case_id = %session.case.id,
                 reason = invalidation.as_ref().map(|failure| failure.reason.as_str()),
                 "failed streaming case finalized; continuing recording after dependency drain");
-        } else {
-            stop_failed_recording(session);
+            } else {
+                stop_failed_recording(session);
+            }
         }
     }
     let mut sessions = session

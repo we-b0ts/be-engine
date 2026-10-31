@@ -127,7 +127,7 @@ impl InputTranscript {
             seen.insert(0);
         }
         let mut offset = 0;
-        for action in &self.actions {
+        for (index, action) in self.actions.iter().enumerate() {
             ensure!(
                 self.http_stream_mode != HttpStreamMode::Subscription || action.after.is_empty(),
                 "HTTP subscription close cannot depend on a response completion"
@@ -165,6 +165,27 @@ impl InputTranscript {
                 ensure!(
                     message.decode()?.len() <= self.policy.max_message_bytes,
                     "interaction input message exceeds configured limit"
+                );
+            }
+            if matches!(action.action, InputActionKind::TransportEnd { .. }) {
+                ensure!(
+                    matches!(self.protocol, Protocol::WebSocket | Protocol::SocketIo),
+                    "client transport termination requires a WebSocket interaction"
+                );
+                ensure!(
+                    index + 1 == self.actions.len(),
+                    "client transport termination must be the final input"
+                );
+                ensure!(
+                    action.after.is_empty()
+                        && !action.compressible_gap
+                        && action.gap_start_ms.is_none()
+                        && action.ack_ref.is_none(),
+                    "client transport termination cannot depend on business completion, ACKs or compressed gaps"
+                );
+                ensure!(
+                    self.protocol != Protocol::SocketIo || self.socket_io_heartbeat.is_some(),
+                    "client transport termination requires explicit recorded Socket.IO heartbeat behavior"
                 );
             }
             previous = Some(action.sequence);
@@ -234,6 +255,17 @@ pub enum InputActionKind {
         code: Option<u16>,
         reason: String,
     },
+    /// Actual client TCP termination; it does not encode a WebSocket Close.
+    TransportEnd {
+        end: ClientTransportEnd,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientTransportEnd {
+    Eof,
+    Reset,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -286,6 +318,7 @@ pub struct CloseObservation {
 pub enum EndReason {
     ServerEof,
     ClientClose,
+    ClientTransportEnd,
     BusinessIdle,
     RequestTimeout,
     DependencyFailure,

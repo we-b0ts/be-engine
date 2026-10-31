@@ -128,7 +128,7 @@ recorder:
             else:
                 raise AssertionError('recording readiness timed out')
             modes = ['1000', 'eof', '1001', 'reset', 'engineio', 'partial_frame'] * 2
-            failed_modes = {'eof', 'reset', 'partial_frame'}
+            failed_modes = {'partial_frame'}
             published_count = failed_count = 0
             for turn, mode in enumerate(modes, start=1):
                 docker('exec', name, 'python3', '-c', CLIENT, mode, timeout=15)
@@ -167,6 +167,17 @@ recorder:
                     assert expected['interaction']['end']['reason'] == 'transport_error'
                     assert expected['interaction']['end'].get('close') is None
                     assert not (case / 'expected-response.json').exists()
+                elif mode in ('eof', 'reset'):
+                    request = json.loads((case / 'request.json').read_text())
+                    terminal = request['interaction']['actions'][-1]
+                    assert terminal['action'] == {'kind': 'transport_end', 'end': mode}, terminal
+                    assert terminal['after'] == [] and not terminal['compressible_gap'], terminal
+                    assert terminal.get('ack_ref') is None and terminal.get('gap_start_ms') is None
+                    assert request['interaction']['socket_io_heartbeat'] == {'responses': []}
+                    assert expected['interaction']['end']['reason'] == 'client_transport_end'
+                    assert expected['interaction']['end'].get('close') is None
+                    assert expected['interaction']['end']['offset_ms'] >= terminal['offset_ms'] + 150
+                    assert not (case / 'recording-error.json').exists()
                 elif mode != 'engineio':
                     assert expected['interaction']['end']['close']['code'] == int(mode)
                 exchanges = [row for row in map(json.loads, (case / 'dependencies.jsonl').read_text().splitlines()) if row['event_type'] == 'redis_exchange']
@@ -175,7 +186,7 @@ recorder:
             versions = docker('run', '--rm', '--pull=never', '--network=none', '--read-only',
                               '--entrypoint=python3', image, '-c',
                               "from importlib.metadata import version; print({k:version(k) for k in ['python-engineio','python-socketio','uvicorn']})").stdout.strip()
-            print(f'{len(modes)} cases verified: {published_count} clean WS/Engine.IO closes, {failed_count} retained EOF/reset/partial-frame failures, delayed Redis ownership, Source reuse and truthful final failed-case status; {versions}')
+            print(f'{len(modes)} cases verified: {published_count} clean WS/Engine.IO/TCP ends, {failed_count} retained partial-frame failures, delayed Redis ownership, Source reuse and truthful final failed-case status; {versions}')
         except Exception:
             if started:
                 logs = docker('logs', name, check=False)

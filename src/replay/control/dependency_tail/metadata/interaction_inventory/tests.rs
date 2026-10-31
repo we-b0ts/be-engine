@@ -124,6 +124,45 @@ async fn source_post_input_allowance_uses_offsets_without_reading_message_bodies
 }
 
 #[tokio::test]
+async fn a_client_transport_end_retains_its_finite_cleanup_inventory_and_allowance() {
+    for protocol in [Protocol::SocketIo, Protocol::WebSocket] {
+        let temp = tempfile::tempdir().unwrap();
+        let references = files(temp.path(), protocol).await;
+        let path = temp.path().join("request.json");
+        let mut request: Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        request["interaction"]["actions"] = json!([
+            {"offset_ms":10,"action":{"kind":"message","message":{"data":"unread"}}},
+            {"offset_ms":400,"action":{"kind":"transport_end","end":"reset"}}
+        ]);
+        tokio::fs::write(&path, request.to_string()).await.unwrap();
+        let path = temp.path().join("expected-response.json");
+        let mut response: Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        response["interaction"]["end"]["reason"] = "client_transport_end".into();
+        tokio::fs::write(&path, response.to_string()).await.unwrap();
+        let metadata = from_complete_source(temp.path(), Duration::from_millis(100))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(metadata.references, references);
+        assert_eq!(metadata.interaction_post_input_ms, Some(100));
+        assert_eq!(metadata.request_timeout_ms, 600);
+        // A bare normal-looking end reason cannot invent a terminating input.
+        request["interaction"]["actions"][1]["action"] = json!({"kind":"close"});
+        tokio::fs::write(temp.path().join("request.json"), request.to_string())
+            .await
+            .unwrap();
+        assert!(
+            from_complete_source(temp.path(), Duration::from_millis(100))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
 async fn incomplete_or_non_session_sources_do_not_prove_an_interaction_tail() {
     let temp = tempfile::tempdir().unwrap();
     files(temp.path(), Protocol::SocketIo).await;

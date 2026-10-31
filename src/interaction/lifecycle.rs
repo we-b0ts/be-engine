@@ -122,7 +122,10 @@ impl InteractionLifecycle {
     ) -> EndObservation {
         let success_reason = matches!(
             reason,
-            EndReason::BusinessIdle | EndReason::ServerEof | EndReason::ClientClose
+            EndReason::BusinessIdle
+                | EndReason::ServerEof
+                | EndReason::ClientClose
+                | EndReason::ClientTransportEnd
         );
         EndObservation {
             reason,
@@ -130,7 +133,11 @@ impl InteractionLifecycle {
             pending: self.pending(),
             clean: transport_clean
                 && success_reason
-                && (self.pending.is_empty() || reason == EndReason::ClientClose),
+                && (self.pending.is_empty()
+                    || matches!(
+                        reason,
+                        EndReason::ClientClose | EndReason::ClientTransportEnd
+                    )),
             partial_message: None,
             close: None,
         }

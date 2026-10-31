@@ -2,6 +2,9 @@
 use super::*;
 use crate::interaction::replay::NativeEvent;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug)]
 pub(super) struct Prerequisite {
     wire: Wire,
@@ -168,14 +171,17 @@ impl Ingress {
             live.case == case && live.epoch == epoch,
             "native event observer epoch changed"
         );
+        // The number of observations does not grow this inventory: each live
+        // namespace retains one ordinal, and event counts below retain only
+        // immutable Source prerequisite names. Bound that metadata rather than
+        // rejecting a valid long-lived stream after a fixed number of events.
         ensure!(
-            event.ordinal <= 8192
-                && (live.ordinals.contains_key(&event.namespace) || live.ordinals.len() < 64),
+            live.ordinals.contains_key(&event.namespace) || live.ordinals.len() < 64,
             "native event observation exceeds bound"
         );
         let previous = live.ordinals.entry(event.namespace.clone()).or_default();
         ensure!(
-            event.ordinal == *previous + 1,
+            Some(event.ordinal) == previous.checked_add(1),
             "native event observation is not sequential"
         );
         *previous = event.ordinal;
@@ -188,10 +194,13 @@ impl Ingress {
                     .iter()
                     .any(|prior| prior.event == event.event)
         }) {
-            *live
+            let count = live
                 .counts
                 .entry((event.namespace.clone(), event.event.clone()))
-                .or_default() += 1;
+                .or_default();
+            *count = count
+                .checked_add(1)
+                .context("native event prerequisite count exceeds range")?;
         }
         Ok(())
     }

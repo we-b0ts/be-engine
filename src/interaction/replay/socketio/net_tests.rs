@@ -13,6 +13,7 @@ mod close_completion;
 mod fast_execution;
 mod heartbeat_behavior;
 mod namespace_admission;
+mod transport_end;
 
 fn policy() -> InteractionPolicy {
     InteractionPolicy {

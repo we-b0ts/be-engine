@@ -20,6 +20,8 @@ use super::{
     stream::{StreamDecoder, StreamMessage},
 };
 
+mod client_end;
+
 const CLIENT_BINARY_PENDING: u64 = u64::MAX - 1;
 const SERVER_BINARY_PENDING: u64 = u64::MAX - 2;
 
@@ -132,6 +134,7 @@ impl Observation {
     }
 
     pub fn input(&mut self, message: WireMessage, now_ms: u64) -> Result<InputAction> {
+        self.ensure_client_transport_open()?;
         ensure!(
             matches!(self.protocol, Protocol::SocketIo | Protocol::WebSocket),
             "HTTP stream inputs are carried by the primary HTTP request"
@@ -335,6 +338,7 @@ impl Observation {
         headers: BTreeMap<String, Vec<String>>,
         now_ms: u64,
     ) -> Result<InputAction> {
+        self.ensure_client_transport_open()?;
         ensure!(
             self.protocol == Protocol::SocketIo,
             "only Socket.IO sessions support polling upgrade actions"
@@ -360,39 +364,6 @@ impl Observation {
         Ok(action)
     }
 
-    pub fn client_close(
-        &mut self,
-        code: Option<u16>,
-        reason: String,
-        now_ms: u64,
-    ) -> Result<InputAction> {
-        let completed = self
-            .close_barrier
-            .as_ref()
-            .filter(|_| self.lifecycle.pending().is_empty());
-        self.close = Some(CloseObservation {
-            code,
-            reason: reason.clone(),
-        });
-        let action = InputAction {
-            sequence: self.next_input,
-            offset_ms: now_ms,
-            after: completed.map_or_else(Vec::new, |(ids, _)| ids.clone()),
-            compressible_gap: false,
-            gap_start_ms: completed.map(|(_, at)| *at),
-            ack_ref: None,
-            action: InputActionKind::Close { code, reason },
-        };
-        self.next_input += 1;
-        self.input.actions.push(action.clone());
-        Ok(action)
-    }
-
-    pub fn server_close(&mut self, code: Option<u16>, reason: String) {
-        self.server_end_observed = true;
-        self.close = Some(CloseObservation { code, reason });
-    }
-
     pub fn pending(&self) -> Vec<u64> {
         self.lifecycle.pending()
     }
@@ -411,6 +382,14 @@ impl Observation {
     ) -> Result<(InputTranscript, OutputObservation)> {
         self.client_decoder.finish()?;
         self.server_decoder.finish()?;
+        let client_transport_end =
+            self.input.actions.last().is_some_and(|action| {
+                matches!(action.action, InputActionKind::TransportEnd { .. })
+            });
+        ensure!(
+            reason != EndReason::ClientTransportEnd || client_transport_end,
+            "client transport termination requires its actual recorded input"
+        );
         ensure!(
             self.tracker
                 .pending()
@@ -453,7 +432,7 @@ impl Observation {
             && self.server_end_observed
             && matches!(self.protocol, Protocol::SocketIo | Protocol::WebSocket);
         let mut input = self.input.clone();
-        if server_close && self.protocol == Protocol::SocketIo {
+        if (server_close || client_transport_end) && self.protocol == Protocol::SocketIo {
             input.socket_io_heartbeat = Some(self.heartbeats.program());
         }
         input.validate()?;
@@ -462,6 +441,9 @@ impl Observation {
             .end_observation(reason, now_ms, transport_clean);
         if server_close && transport_clean {
             end.clean = true;
+        }
+        if client_transport_end && reason != EndReason::ClientTransportEnd {
+            end.clean = false;
         }
         end.partial_message = partial_message;
         if reason != EndReason::BusinessIdle {

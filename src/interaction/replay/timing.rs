@@ -62,7 +62,7 @@ impl Clock {
 
 pub(crate) fn cancellation(action: &InputAction) -> bool {
     match &action.action {
-        InputActionKind::Close { .. } => true,
+        InputActionKind::Close { .. } | InputActionKind::TransportEnd { .. } => true,
         InputActionKind::Message { message } if message.kind == MessageKind::Text => {
             matches!(
                 decode_engine_io_text(&message.data, usize::MAX),
@@ -81,8 +81,10 @@ pub(crate) fn cancellation(action: &InputAction) -> bool {
 
 pub(crate) fn transport_cancellation(action: &InputAction) -> bool {
     action.after.is_empty()
-        && (matches!(action.action, InputActionKind::Close { .. })
-            || matches!(&action.action, InputActionKind::Message { message }
+        && (matches!(
+            action.action,
+            InputActionKind::Close { .. } | InputActionKind::TransportEnd { .. }
+        ) || matches!(&action.action, InputActionKind::Message { message }
             if message.kind == MessageKind::Text && message.data == "1"))
 }
 

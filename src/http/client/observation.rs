@@ -1,7 +1,7 @@
 //! Bind each pooled physical connection to independent upstream observations.
 use crate::dependency::{
     TerminationSide,
-    termination::{ConnectionTermination, ObservedIo, ObservedTermination},
+    termination::{ConnectionControl, ConnectionTermination, ObservedIo, ObservedTermination},
 };
 use anyhow::{Context as _, Result};
 use bytes::Bytes;
@@ -50,6 +50,18 @@ type UpstreamIo = MaybeHttpsStream<TokioIo<TcpStream>>;
 pub(crate) struct ObservedUpstream {
     io: ObservedIo<TokioIo<UpstreamIo>>,
     observation: UpstreamTermination,
+}
+
+impl ObservedUpstream {
+    /// Retain control of the actual upgraded TCP transport through the HTTP/TLS
+    /// adapters. A captured peer FIN/RST is not a WebSocket close handshake.
+    pub(crate) fn connection_control(&self) -> io::Result<ConnectionControl> {
+        let tcp = match self.io.get_ref().inner() {
+            MaybeHttpsStream::Http(io) => io.inner(),
+            MaybeHttpsStream::Https(io) => io.inner().get_ref().0.inner().inner(),
+        };
+        ConnectionControl::new(tcp)
+    }
 }
 
 impl Connection for ObservedUpstream {

@@ -7,7 +7,7 @@ use crate::ProxyClient;
 
 mod observation;
 pub(crate) use observation::{
-    ObservedConnector, UpstreamTermination, send_https_observed, send_observed,
+    ObservedConnector, ObservedUpstream, UpstreamTermination, send_https_observed, send_observed,
 };
 
 pub(crate) fn new_proxy_client() -> ProxyClient {
