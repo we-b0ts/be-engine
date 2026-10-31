@@ -17,7 +17,7 @@ fn clock(source: i64, target: i64) -> ClockPair {
 
 fn policy() -> CompiledPolicy {
     crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /timestamp: {kind: time, formats: [unix_seconds]}

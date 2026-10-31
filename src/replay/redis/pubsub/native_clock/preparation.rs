@@ -31,7 +31,7 @@ impl PubSubState {
         }
         let mut entries = Vec::new();
         for (index, push) in self.pushes.iter().enumerate() {
-            if push.source != ReplaySource::Global || push.record.rpc_request.is_some() {
+            if !push.source.is_run_owned() || push.record.rpc_request.is_some() {
                 continue;
             }
             let raw = push.bytes()?;

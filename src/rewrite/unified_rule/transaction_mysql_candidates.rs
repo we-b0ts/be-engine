@@ -24,7 +24,7 @@ fn install_rows(fixture: &Fixture, ids: &[i64], targets: &[Value]) {
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/api/case-1");
+        .join("apis/api/00000000-0000-4000-8000-000000000001");
     let events = ids.iter().enumerate().map(|(index, id)| json!({"event_type":"mysql_exchange","connection_id":uuid::Uuid::nil(),"query_sequence":index + 1,
         "target_host":"db.test","target_port":3306,"database":"app","command":"COM_QUERY",
         "sql":format!("UPDATE events SET updated_at='2026-10-16 00:00:00' WHERE id={id}"),
@@ -64,7 +64,7 @@ fn install_rows(fixture: &Fixture, ids: &[i64], targets: &[Value]) {
         source_role: SourceRole::DependencyRequest,
         target_role: TargetRole::IndependentTargetObservation,
         source: SourceIdentity {
-            case_id: "case-1".into(),
+            case_id: "00000000-0000-4000-8000-000000000001".into(),
             exchange_id: None,
             connection_id: Some(uuid::Uuid::nil().to_string()),
             sequence: Some(1),
@@ -118,7 +118,7 @@ fn target(sql: &str) -> Value {
 }
 
 fn global_mysql_proposal() -> Value {
-    json!({"format":"traffic-policy/v2","mysql":{"tables":{"events":{
+    json!({"format":"traffic-policy/v3","mysql":{"tables":{"events":{
         "pattern":"events","fields":{"updated_at":{
             "kind":"time","formats":[{"format":"sql_datetime","utc_offset":"+00:00"}]
         }}

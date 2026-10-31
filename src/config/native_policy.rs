@@ -59,6 +59,7 @@ pub(crate) fn project_source_policy(
         http_response_rewrite: vec![],
         breeze_capture: vec![],
         process_owned_dependencies: vec![],
+        process_dependency_tasks: Default::default(),
         async_api: Default::default(),
     };
     for compiled in rules {
@@ -87,9 +88,18 @@ pub(crate) fn project_source_policy(
             n::NativeEffect::CaptureHttpResponse(effect) => output
                 .http_response_rewrite
                 .push(capture_response(rule, effect)),
-            n::NativeEffect::ProcessOwned(effect) => output
-                .process_owned_dependencies
-                .push(process_owned(rule, effect)?),
+            n::NativeEffect::ProcessOwned(effect) => {
+                output
+                    .process_owned_dependencies
+                    .push(process_owned(rule, effect)?);
+                if effect.origin.is_none()
+                    && let Some(task) = &effect.task_name
+                {
+                    output
+                        .process_dependency_tasks
+                        .insert(rule.id.clone(), task.clone());
+                }
+            }
             _ => (),
         }
     }

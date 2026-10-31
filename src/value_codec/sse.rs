@@ -246,7 +246,7 @@ mod tests {
             crate::json_value::parse(target.events[0].data.as_bytes()).unwrap()["created_at"],
             2005
         );
-        let plan = crate::policy::parse_and_compile_policy("format: traffic-policy/v2\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n").unwrap().global_json.unwrap();
+        let plan = crate::policy::parse_and_compile_policy("format: traffic-policy/v3\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n").unwrap().global_json.unwrap();
         let clocks = crate::value_contract::json::AnchorClocks {
             dependency: crate::value_contract::time::ClockPair {
                 source: chrono::DateTime::from_timestamp(1000, 0),

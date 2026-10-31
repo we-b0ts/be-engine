@@ -20,11 +20,24 @@ pub(in crate::policy_evidence) fn verify(
             .context("bound policy observations require their original Replay report")?;
         ensure!(
             report["session_id"].as_str() == Some(binding.session_id.as_str())
-                && report["replay_policy"]["fingerprint"].as_str()
+                && report["replay_policy"]["fingerprint"]
+                    .as_str()
+                    .or_else(|| report["target_observation_policy_fingerprint"].as_str())
                     == Some(binding.policy_fingerprint.as_str()),
             "policy observation inventory belongs to another Replay session or policy"
         );
         for target in &graph.targets {
+            if let Some(owner) = &target.metadata.run_owner {
+                target.metadata.validate()?;
+                ensure!(
+                    graph
+                        .replay
+                        .as_ref()
+                        .is_some_and(|binding| owner.session_id == binding.session_id),
+                    "Target Run observation belongs to another session"
+                );
+                continue;
+            }
             let case = report["cases"]
                 .as_array()
                 .and_then(|cases| {
@@ -83,11 +96,7 @@ pub(in crate::policy_evidence) fn verify(
                     blob.length == 0 && blob.offset == 0 && ids.insert((blob.id.clone(), true)),
                     "invalid or duplicate Source payload reference"
                 );
-                ensure!(
-                    crate::dependency_index::FileStamp::read(&source.record.path)?
-                        == source.record.stamp,
-                    "referenced Source evidence changed after Replay"
-                );
+                source.record.validate()?;
                 continue;
             }
             ensure!(
@@ -127,6 +136,9 @@ pub(in crate::policy_evidence) fn verify(
     // case directories retain the existing managed-key resolution context.
     let context = report_value
         .and_then(|value| {
+            if let Some(context) = value["target_observation_key_context"].as_str() {
+                return Some(PathBuf::from(context));
+            }
             value["cases"]
                 .as_array()?
                 .iter()
@@ -272,6 +284,13 @@ pub(crate) fn read_target(
         .get(index)
         .context("Target observation is missing")?;
     target.metadata.validate()?;
+    ensure!(
+        target.metadata.run_owner.as_ref().is_none_or(|owner| graph
+            .replay
+            .as_ref()
+            .is_some_and(|binding| owner.session_id == binding.session_id)),
+        "Target Run observation belongs to another session"
+    );
     let blob = graph
         .blobs
         .get(target.blob)

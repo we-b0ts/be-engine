@@ -83,7 +83,7 @@ fn compare(
 
 fn prefixed_global_runtime() -> RequestContracts {
     let compiled = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 resources:
   cache: {protocol: redis, endpoint: 'cache.test:6379', database: 0}
 json:

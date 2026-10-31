@@ -14,8 +14,8 @@ use crate::dependency::DependencyExchangeOutcome;
 use crate::kafka::{decode_request, read_frame, replay_supports, write_frame};
 
 pub(super) use matcher::{
-    KafkaReplayState, RecordedKafkaConnection, RecordedKafkaDelivery, RecordedKafkaFetch,
-    RecordedKafkaProduce,
+    FiniteExchange, KafkaReplayState, RecordedKafkaConnection, RecordedKafkaDelivery,
+    RecordedKafkaFetch, RecordedKafkaProduce,
 };
 pub(super) use report::KafkaProtocolReport;
 

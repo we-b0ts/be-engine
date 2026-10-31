@@ -19,6 +19,13 @@ fn command(target: &std::path::Path, args: &[&str]) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+fn review_ledger() -> Value {
+    serde_json::json!({"revision":0,"recording_run_id":null,"source_inventory_id":null,
+        "unresolved_source_exchange_ids":[],"claims":{},"investigations":{},"decisions":{},
+        "decision_history":[],"obligations":{},"receipts":{},"batch_receipt":null,
+        "batch_failure":null,"required_method_apis":[]})
+}
+
 fn configured_target() -> tempfile::TempDir {
     let target = tempfile::tempdir().unwrap();
     fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
@@ -71,7 +78,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
     fs::write(
         runtime.join("state.json"),
         serde_json::to_vec(&serde_json::json!({
-            "version": 1, "revision": 1, "workflow_id": "rewrite-route-fixture",
+            "version": 2, "dependency_review": review_ledger(), "revision": 1, "workflow_id": "rewrite-route-fixture",
             "recording_run_id": "recording-fixture", "phase": "api_pending",
             "api": "GET /api", "source_route": "/api", "attempts": [],
             "e2e_current": false,
@@ -96,7 +103,7 @@ fn detached_cli_operation_publishes_failure_and_status_does_not_restart_it() {
     if launched["action"]["kind"] == "wait_required" {
         assert_eq!(launched["action"]["details"]["execution_mode"], "single");
     }
-    assert_eq!(launched["schema_version"], 39);
+    assert_eq!(launched["schema_version"], 40);
     assert_eq!(
         launched["pending"],
         if launched["action"]["kind"] == "wait_required" {
@@ -157,7 +164,7 @@ fn assert_detached_idle_revalidation(auto_next: bool) {
     // source-route binding. Activation must adopt the pattern and proceed until
     // the deliberately absent recording fixture stops execution.
     let state = serde_json::json!({
-        "version": 1, "revision": 1, "workflow_id": "rewrite-idle-fixture",
+        "version": 2, "dependency_review": review_ledger(), "revision": 1, "workflow_id": "rewrite-idle-fixture",
         "recording_run_id": "recording-fixture", "phase": "system_repair_required",
         "api": "GET /repair", "source_route": "/repair", "attempts": [],
         "e2e_current": false,

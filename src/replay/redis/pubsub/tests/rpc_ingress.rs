@@ -33,7 +33,7 @@ fn fixture(root: &Path) -> (Vec<Value>, Vec<Value>) {
     .unwrap();
     std::fs::write(root.join("case/expected-response.json"), "{}").unwrap();
     std::fs::write(root.join(".traffic-e2e/policy.yaml"),
-        "format: traffic-policy/v2\njson:\n  fields:\n    /socket_id: {kind: identity, formats: [string]}\n").unwrap();
+        "format: traffic-policy/v3\njson:\n  fields:\n    /socket_id: {kind: identity, formats: [string]}\n").unwrap();
     let publisher = Uuid::new_v4();
     let subscriber = Uuid::new_v4();
     let mut set = exchange(

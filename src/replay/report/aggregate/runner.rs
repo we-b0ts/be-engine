@@ -13,6 +13,7 @@ pub(crate) fn aggregate_runner_replay_report(
 
 /// Aggregate the caller's loaded report with exactly the same confinement,
 /// session membership and immutable recording checks as the file entry point.
+#[cfg(test)]
 pub(crate) fn aggregate_runner_replay_report_value(
     case_source: &Path,
     report_path: &Path,

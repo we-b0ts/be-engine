@@ -35,6 +35,7 @@ mod time_copies;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Preflight {
+    pub capture_scopes: BTreeMap<String, String>,
     pub source_validations: usize,
     pub independent_target_validations: usize,
     pub derived_delivery_validations: usize,
@@ -71,7 +72,7 @@ impl Preflight {
     }
 
     pub(super) fn needs_recording(&self) -> bool {
-        source::needs_recording(&self.obligations)
+        !self.capture_scopes.is_empty() || source::needs_recording(&self.obligations)
     }
 
     pub(super) fn ensure_current(&self, root: &Path, policy: &CompiledPolicy) -> Result<()> {
@@ -129,6 +130,7 @@ pub(super) fn verify(
     }
     result.resource_scope = scope;
     async_api::verify(
+        state,
         bundle,
         policy,
         selected,

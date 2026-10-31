@@ -126,7 +126,7 @@ fn method_publication_retains_separate_readable_snapshots() {
     fs::create_dir_all(primary.active_dir.join("reports")).unwrap();
     store::write_json(
         &state.replay_report,
-        &serde_json::json!({"version":6,"finalized":true,"cases":[]}),
+        &serde_json::json!({"version":7,"finalized":true,"cases":[]}),
     )
     .unwrap();
     fs::create_dir_all(primary.active_dir.join("tmp")).unwrap();

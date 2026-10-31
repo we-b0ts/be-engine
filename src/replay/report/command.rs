@@ -27,6 +27,8 @@ pub(in crate::replay) struct SharedCommandOrigin {
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct CommandRequestReport {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) target_observation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) target_event_index: Option<usize>,
     pub(in crate::replay) case_id: Option<String>,
     pub(in crate::replay) target: TargetKey,

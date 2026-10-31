@@ -6,7 +6,7 @@ use crate::policy_evidence::{
 };
 
 fn proposal() -> serde_json::Value {
-    json!({"format":"traffic-policy/v2","redis":{"keys":{"as-of":{"kind":"time","formats":["unix_seconds"]}}}})
+    json!({"format":"traffic-policy/v3","redis":{"keys":{"as-of":{"kind":"time","formats":["unix_seconds"]}}}})
 }
 
 fn resource() -> Resource {
@@ -29,7 +29,7 @@ fn redis_candidates_exclude_other_keys_but_preserve_same_key_options_and_missing
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1");
+            .join("apis/api/00000000-0000-4000-8000-000000000001");
         let source_time = chrono::DateTime::parse_from_rfc3339("2026-10-16T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -62,7 +62,7 @@ fn redis_candidates_exclude_other_keys_but_preserve_same_key_options_and_missing
             source_role: SourceRole::DependencyRequest,
             target_role: TargetRole::IndependentTargetObservation,
             source: SourceIdentity {
-                case_id: "case-1".into(),
+                case_id: "00000000-0000-4000-8000-000000000001".into(),
                 exchange_id: None,
                 connection_id: Some(uuid::Uuid::nil().to_string()),
                 sequence: Some(1),

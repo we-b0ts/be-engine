@@ -1,29 +1,25 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 
 use super::model::{RewriteAttemptDelta, RewriteAttemptSummary, RewritePhase, RewriteState};
 use super::{fingerprint, issue};
 use crate::E2eApiRunResult;
 
-#[derive(Debug, Clone, Copy)]
-pub(super) enum AttemptTransition {
-    Append,
-    ReclassifyCurrent,
-    /// Legacy evidence can restore diagnosis, never an unproven execution identity.
-    RestoreReclassified,
-}
-
 pub(super) fn from_e2e_result(
     target_root: &Path,
     state: &mut RewriteState,
     result: &E2eApiRunResult,
-    transition: AttemptTransition,
 ) -> Result<()> {
+    ensure!(
+        state
+            .attempts
+            .last()
+            .is_none_or(|attempt| result.attempt > attempt.attempt),
+        "a new actual Replay attempt is required; a revised historical report cannot promote acceptance"
+    );
     let target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     let replay_identity = fingerprint::replay_identity(target_root)?;
-    let reused = !matches!(transition, AttemptTransition::Append);
-    let current = !reused || state.replay_identity.as_ref() == Some(&replay_identity);
     let summary = RewriteAttemptSummary {
         engine_fingerprint: result.engine_fingerprint.clone(),
         attempt: result.attempt,
@@ -31,42 +27,19 @@ pub(super) fn from_e2e_result(
         gates: result.gates.clone(),
         counts: result.diagnosis.counts.clone(),
     };
-    match transition {
-        AttemptTransition::Append | AttemptTransition::RestoreReclassified => {
-            state.attempts.push(summary)
-        }
-        AttemptTransition::ReclassifyCurrent => {
-            let current = state
-                .attempts
-                .last_mut()
-                .context("rewrite workflow has no focused attempt to reclassify")?;
-            ensure!(
-                current.attempt == summary.attempt,
-                "focused evidence attempt changed before process-owned-rule reclassification"
-            );
-            *current = summary;
-        }
-    }
+    state.attempts.push(summary);
     state.attempt_delta = current_attempt_delta(&state.attempts);
-    if !reused {
-        state.replay_identity = Some(replay_identity);
-    }
-    if current {
-        state.target_fingerprint = Some(target_fingerprint.clone());
-    }
-    state.e2e_current = result.passed && current;
+    state.replay_identity = Some(replay_identity);
+    state.target_fingerprint = Some(target_fingerprint.clone());
+    state.e2e_current = result.passed;
     state.engine_retry_running = false;
     state.route = None;
     state.system_repair_accepted = false;
-    // Reclassifying an old failed report does not consume a real Replay request.
-    state.rule_replay_pending &= reused && current && !result.passed;
+    state.rule_replay_pending = false;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;
-    if !current {
-        state.active_issue = None;
-        state.phase = RewritePhase::ApiPending;
-    } else if result.passed {
+    if result.passed {
         state.active_issue = None;
         state.phase = RewritePhase::SliceComplete;
     } else {

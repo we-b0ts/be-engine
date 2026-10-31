@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 fn recorded_tasks_delete_validates_per_call_redis_clocks_without_changing_evidence() {
     let root = std::path::PathBuf::from(std::env::var_os("TRAFFIC_E2E_SKIP_PROJECT").unwrap());
     let mut document = crate::policy::parse_policy(
-        &std::fs::read_to_string(root.join(".traffic-e2e/policy.yaml")).unwrap(),
+        &crate::recorder::test_io::read_to_string_sync(root.join(".traffic-e2e/policy.yaml"))
+            .unwrap(),
     )
     .unwrap();
     document

@@ -201,7 +201,8 @@ async fn redis_generated_keys_plan_in_stages_and_replay_with_consistent_json_ref
             );
         }
         assert_eq!(
-            std::fs::read_to_string(f.case.join("dependencies.jsonl")).unwrap(),
+            crate::recorder::test_io::read_to_string_sync(f.case.join("dependencies.jsonl"))
+                .unwrap(),
             f.immutable
         );
     }
@@ -264,7 +265,7 @@ async fn redis_key_window_preserves_multi_exec_order_and_finite_command_consumpt
         }
     }
     assert_eq!(
-        std::fs::read_to_string(f.case.join("dependencies.jsonl")).unwrap(),
+        crate::recorder::test_io::read_to_string_sync(f.case.join("dependencies.jsonl")).unwrap(),
         f.immutable
     );
 }

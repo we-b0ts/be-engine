@@ -215,7 +215,7 @@ fn foreign_inventory_unknown_writers_and_late_additions_cannot_extend_the_proof(
     let mut overlap = base.to_vec();
     overlap.push(event(3, "GET", &[b"current:1"], b"$3\r\nold\r\n"));
     let (_root, mut s) = state(&overlap, vec![read_rule(true)]);
-    s.exchanges[2].source = ReplaySource::Global;
+    s.exchanges[2].source = ReplaySource::Startup;
     assert!(s.prepare_observations("case").is_err());
     assert!(s.exchanges.iter().all(|e| e.observation_rule.is_none()));
     let mut events = base.to_vec();
@@ -282,7 +282,7 @@ fn a_nil_only_case_key_cannot_gain_a_write_or_a_future_identity() {
 #[test]
 fn state_observation_schema_is_closed_and_plan_proof_is_separate_from_runtime() {
     let compile = |r: Value| {
-        crate::policy::parse_policy(&json!({"format":"traffic-policy/v2","rules":[r]}).to_string())
+        crate::policy::parse_policy(&json!({"format":"traffic-policy/v3","rules":[r]}).to_string())
             .and_then(|p| crate::policy::compile_policy(&p))
     };
     let mut read = read_rule(true);
@@ -311,7 +311,7 @@ fn state_observation_schema_is_closed_and_plan_proof_is_separate_from_runtime() 
     no_proof.as_object_mut().unwrap().remove("proof");
     assert!(compile(no_proof.clone()).is_ok());
     let document = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2","rules":[no_proof]}).to_string(),
+        &json!({"format":"traffic-policy/v3","rules":[no_proof]}).to_string(),
     )
     .unwrap();
     assert!(crate::policy::require_source_proofs(&document).is_err());

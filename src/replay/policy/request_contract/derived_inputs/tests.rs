@@ -27,7 +27,7 @@ fn fixture(
     std::fs::create_dir(&directory).unwrap();
     let raw = serde_json::to_vec(&source).unwrap();
     std::fs::write(directory.join("request.json"), &raw).unwrap();
-    let compiled=Arc::new(crate::policy::parse_and_compile_policy(&json!({"format":"traffic-policy/v2","json":{"fields":{"/access_token":{"kind":"identity","formats":["string"]}}},"rules":[{
+    let compiled=Arc::new(crate::policy::parse_and_compile_policy(&json!({"format":"traffic-policy/v3","json":{"fields":{"/access_token":{"kind":"identity","formats":["string"]}}},"rules":[{
         "id":"input-token","match":{"api":"GET /api"},"effect":{"kind":"input_jwt","location":{"kind":"query","name":"download_token"},"algorithm":"HS256","time":"preserve_relative","signing_key":{"kind":"target_env","name":"SECRET"}},"proof":{"source":"auth.py:1-20","fact":"Source verifies the signed query token and uses relative expiry"}
     }]}).to_string()).unwrap());
     let mut owner = RequestContracts::from_source_policy(

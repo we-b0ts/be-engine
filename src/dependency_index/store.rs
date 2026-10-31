@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -12,47 +13,57 @@ use super::model::*;
 
 /// The same completed standard-run boundary for all indexed protocol queries.
 pub(crate) fn recording_files(source: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
-    let source = fs::canonicalize(source)?;
-    let root = source
-        .ancestors()
-        .find(|p| p.join("recording-run.json").is_file())
-        .context("cross-case requires a recording-run.json boundary")?
-        .to_path_buf();
-    let manifest: Value = serde_json::from_slice(&fs::read(root.join("recording-run.json"))?)?;
-    ensure!(
-        manifest["status"] == "completed",
-        "cross-case requires a completed standard recording run"
+    if let Some(root) = super::recording::root(source) {
+        return super::recording::cases(&root);
+    }
+    #[cfg(not(test))]
+    anyhow::bail!(
+        "recording requires the current central dependency manifest; old recording semantics are unsupported"
     );
-    let mut pending = vec![root.clone()];
-    let mut files = Vec::new();
-    while let Some(dir) = pending.pop() {
-        if dir != root && dir.join("recording-run.json").exists() {
-            continue;
-        }
-        let file = dir.join("dependencies.jsonl");
-        if file.is_file() {
-            FileStamp::read(&file)?;
-            files.push(file);
-            continue;
-        }
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+    #[cfg(test)]
+    {
+        let source = fs::canonicalize(source)?;
+        let root = source
+            .ancestors()
+            .find(|p| p.join("recording-run.json").is_file())
+            .context("cross-case requires a recording-run.json boundary")?
+            .to_path_buf();
+        let manifest: Value = serde_json::from_slice(&fs::read(root.join("recording-run.json"))?)?;
+        ensure!(
+            manifest["status"] == "completed",
+            "cross-case requires a completed standard recording run"
+        );
+        let mut pending = vec![root.clone()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            if dir != root && dir.join("recording-run.json").exists() {
                 continue;
             }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if !name.starts_with('.') && !matches!(&*name, "failed" | "staging") {
-                pending.push(entry.path());
+            let file = dir.join("dependencies.jsonl");
+            if file.is_file() {
+                FileStamp::read(&file)?;
+                files.push(file);
+                continue;
+            }
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !name.starts_with('.') && !matches!(&*name, "failed" | "staging") {
+                    pending.push(entry.path());
+                }
             }
         }
+        files.sort();
+        let mut ids = BTreeSet::new();
+        for file in &files {
+            ensure!(ids.insert(case_id(file)?), "duplicate cross-case case id");
+        }
+        Ok((root, files))
     }
-    files.sort();
-    let mut ids = BTreeSet::new();
-    for file in &files {
-        ensure!(ids.insert(case_id(file)?), "duplicate cross-case case id");
-    }
-    Ok((root, files))
 }
 
 fn case_id(path: &Path) -> Result<String> {
@@ -77,7 +88,13 @@ pub(crate) fn cache_directory(root: &Path) -> PathBuf {
                 libc::geteuid()
             }))
         });
-    storage.join(digest(root.as_os_str().as_encoded_bytes()))
+    let mut identity = root.as_os_str().as_encoded_bytes().to_vec();
+    if let Some(view) = super::scoped::view_path(root)
+        && let Ok(stamp) = FileStamp::read_native(&view)
+    {
+        identity.extend(serde_json::to_vec(&stamp).expect("file stamp serializes"));
+    }
+    storage.join(digest(&identity))
 }
 
 pub(crate) fn load_file(path: &Path) -> Result<FileIndex> {
@@ -94,7 +111,8 @@ fn load_file_cancellable(
         .parent()
         .context("dependency file has no parent")?
         .join(FRAGMENT);
-    if let Ok(index) = read_json::<FileIndex>(&fragment)
+    if super::scoped::view_path(path).is_none()
+        && let Ok(index) = read_json::<FileIndex>(&fragment)
         && index.version == VERSION
         && index.stamp == stamp
     {
@@ -157,7 +175,7 @@ fn prepare_cancellable(
     check_cancelled(cancelled)?;
     let (root, files) = recording_files(source)?;
     let global = root.join("global-dependencies.jsonl");
-    let global_bytes = if global.is_file() {
+    let global_bytes = if super::scoped::exists(&global) {
         super::global::load_global_index_cancellable(&global, validate, cancelled)?
             .0
             .stamp
@@ -181,7 +199,7 @@ fn prepare_cancellable(
     let started = Instant::now();
     let total_bytes = files
         .iter()
-        .map(|p| FileStamp::read(p).map(|m| m.size))
+        .map(|p| super::scoped::selected_bytes(p))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .sum::<u64>();
@@ -189,6 +207,7 @@ fn prepare_cancellable(
         version: VERSION,
         run_id,
         files: Vec::new(),
+        source_bytes: total_bytes,
     };
     let mut read_bytes = 0;
     tracing::info!(
@@ -230,7 +249,7 @@ fn report(status: &'static str, path: &Path, index: &RunIndex) -> DependencyInde
     DependencyIndexReport {
         status,
         files: index.files.len(),
-        source_bytes: index.files.iter().map(|f| f.index.stamp.size).sum(),
+        source_bytes: index.source_bytes,
         index_path: path.into(),
         global_source_bytes: 0,
     }
@@ -267,26 +286,39 @@ pub(crate) fn private_directory(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    #[derive(serde::Deserialize)]
+    struct Document<'a> {
+        #[serde(default)]
+        format: Option<&'a str>,
+        sha256: &'a str,
+        #[serde(borrow)]
+        payload: &'a serde_json::value::RawValue,
+    }
     FileStamp::read(path)?;
     let bytes = fs::read(path)?;
-    let document: Value = serde_json::from_slice(&bytes)?;
-    let payload = document
-        .get("payload")
-        .context("dependency index payload missing")?;
+    let document: Document<'_> = serde_json::from_slice(&bytes)?;
+    let actual = match document.format {
+        Some("dependency-index/v2") => digest(document.payload.get().as_bytes()),
+        None => {
+            let payload: Value = serde_json::from_str(document.payload.get())?;
+            digest(&serde_json::to_vec(&payload)?)
+        }
+        Some(_) => anyhow::bail!("unsupported dependency index envelope"),
+    };
     ensure!(
-        document["sha256"] == digest(&serde_json::to_vec(payload)?),
+        document.sha256 == actual,
         "dependency index checksum mismatch"
     );
-    Ok(serde_json::from_value(payload.clone())?)
+    Ok(serde_json::from_str(document.payload.get())?)
 }
 
 pub(crate) fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    let value = serde_json::to_value(value)?;
-    let document =
-        serde_json::json!({"sha256": digest(&serde_json::to_vec(&value)?), "payload": value});
-    let bytes = serde_json::to_vec(&document)?;
+    // Hash the exact serialized payload. Large typed indexes and bounded pages
+    // need no second complete JSON tree or cloned deserialization payload.
+    let payload = serde_json::to_vec(value)?;
+    let sha256 = digest(&payload);
     let parent = path.parent().context("dependency index has no parent")?;
     let temporary = parent.join(format!(".dependency-index-{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> Result<()> {
@@ -295,7 +327,12 @@ pub(crate) fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<
             .write(true)
             .mode(0o600)
             .open(&temporary)?;
-        file.write_all(&bytes)?;
+        write!(
+            file,
+            "{{\"format\":\"dependency-index/v2\",\"sha256\":\"{sha256}\",\"payload\":"
+        )?;
+        file.write_all(&payload)?;
+        file.write_all(b"}")?;
         file.sync_all()?;
         drop(file);
         fs::rename(&temporary, path)?;

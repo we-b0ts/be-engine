@@ -178,7 +178,7 @@ async fn close_delimited_eof(engine_cleanup: bool) {
         .flush_case_dependency_files(&state.recorder().case_staging_dir(&case))
         .await
         .unwrap();
-    let raw = tokio::fs::read_to_string(
+    let raw = crate::recorder::test_io::read_to_string(
         state
             .recorder()
             .case_staging_dir(&case)
@@ -295,7 +295,7 @@ async fn cancellation_with_backpressure(flushed: bool) {
         .case_dependency_safety_issue(&case)
         .await
         .unwrap();
-    let raw = tokio::fs::read_to_string(
+    let raw = crate::recorder::test_io::read_to_string(
         state
             .recorder()
             .case_staging_dir(&case)
@@ -365,7 +365,7 @@ async fn async_source_stop_retains_only_flushed_prefix_without_certifying_respon
             .flush_case_dependency_files(&state.recorder().case_staging_dir(&case))
             .await
             .unwrap();
-        let raw = tokio::fs::read_to_string(
+        let raw = crate::recorder::test_io::read_to_string(
             state
                 .recorder()
                 .case_staging_dir(&case)

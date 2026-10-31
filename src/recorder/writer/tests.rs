@@ -8,9 +8,18 @@ use crate::recorder::{
 };
 
 #[tokio::test]
-async fn summary_counts_snapshot_hits_filtered_from_global_dependencies() {
+async fn summary_counts_snapshot_reuse_without_creating_another_consumption_slot() {
     let temp = tempfile::tempdir().unwrap();
-    let recorder = Recorder::new(temp.path()).await.unwrap();
+    let mut config = crate::AppConfig::default();
+    config
+        .process_dependency_tasks
+        .insert("startup-cache-warm".into(), "cache_refresh".into());
+    let recorder = Recorder::new(temp.path())
+        .await
+        .unwrap()
+        .with_global_preparation(&config)
+        .await
+        .unwrap();
     let registry = ActiveCaseRegistry::default();
 
     for hit in [false, true] {
@@ -29,9 +38,14 @@ async fn summary_counts_snapshot_hits_filtered_from_global_dependencies() {
     }
     recorder.finish_run().await.unwrap();
 
-    let global =
-        std::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl")).unwrap();
-    assert_eq!(global.lines().count(), 1);
+    let global = crate::recorder::test_io::read_to_string_sync(
+        recorder.run_dir.join("indexes/process-scope.json"),
+    )
+    .unwrap();
+    assert_eq!(global.lines().count(), 2);
+    assert_eq!(global.lines().filter(|line| {
+        serde_json::from_str::<serde_json::Value>(line).unwrap()["capture"]["semantic_required"] == true
+    }).count(), 1);
     let summary: serde_json::Value = serde_json::from_slice(
         &std::fs::read(recorder.run_dir.join("source-process-traffic-summary.json")).unwrap(),
     )

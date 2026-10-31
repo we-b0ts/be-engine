@@ -4,7 +4,7 @@ use serde_json::json;
 #[test]
 fn global_sse_strategy_does_not_require_event_or_json_type_selectors() {
     let compiled = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /item_id: {kind: identity, formats: [{prefix: msg_, hex: 2}]}
@@ -57,7 +57,7 @@ fn primary_sse_reuses_delivered_times_without_rebasing_local_times_or_future_rea
         time_copies::{TimeCopyPosition, TimeCopyRecord, TimeCopyStore},
     };
     let compiled = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /block/timestamp: {kind: time, formats: [unix_milliseconds]}

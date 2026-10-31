@@ -37,7 +37,7 @@ fn typed_protobuf_rules_preserve_members_and_retire_legacy_authoring() {
     let detail = temp.path().join("assertion-detail.json");
     let assertions = temp.path().join("assertions.json");
     let aggregate = temp.path().join("aggregate.json");
-    fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
+    fs::write(&policy, "format: traffic-policy/v3\nrules: []\n").unwrap();
     fs::write(
         &request,
         serde_json::to_vec(&json!({"method": "POST", "uri": "/rpc/example"})).unwrap(),
@@ -231,7 +231,7 @@ fn typed_docx_timestamp_rule_preserves_relative_time_and_retires_legacy_authorin
     let detail = temp.path().join("assertion-detail.json");
     let assertions = temp.path().join("assertions.json");
     let aggregate = temp.path().join("aggregate.json");
-    fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
+    fs::write(&policy, "format: traffic-policy/v3\nrules: []\n").unwrap();
     fs::write(
         &request,
         serde_json::to_vec(&json!({
@@ -352,7 +352,7 @@ fn docx_codec_only_ignores_zip_metadata_but_compares_part_contents() {
     let request = temp.path().join("request.json");
     let expected = temp.path().join("expected-response.json");
     let actual = temp.path().join("actual-response.json");
-    fs::write(&policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
+    fs::write(&policy, "format: traffic-policy/v3\nrules: []\n").unwrap();
     fs::write(
         &request,
         serde_json::to_vec(&json!({"method":"GET","uri":"/export"})).unwrap(),
@@ -394,7 +394,7 @@ fn write_body_policy(
     codec: &str,
     fields: Vec<serde_json::Value>,
 ) {
-    fs::write(path, serde_json::to_vec(&json!({"format":"traffic-policy/v2", "rules":[{
+    fs::write(path, serde_json::to_vec(&json!({"format":"traffic-policy/v3", "rules":[{
         "id":"response-body", "match":{"api":api}, "effect":{"kind":"response_body","codec":codec,"fields":fields}, "proof":source_proof()
     }]})).unwrap()).unwrap();
 }

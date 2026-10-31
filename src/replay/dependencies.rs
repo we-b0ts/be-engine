@@ -70,16 +70,25 @@ pub(super) async fn load_dependency_file(
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
 ) -> Result<()> {
-    let raw = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| format!("failed to read dependency replay file {}", path.display()))?;
-    let records = parse_dependency_records(path, &raw)?;
+    let original = path.to_owned();
+    let records = tokio::task::spawn_blocking(move || -> Result<Vec<(usize, DependencyRecord)>> {
+        let mut input = crate::dependency_index::RecordStream::open(&original)?;
+        let mut records = Vec::new();
+        while let Some((location, raw)) = input.next()? {
+            if raw.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            let value: Value = serde_json::from_slice(raw)?;
+            validate_outcome(&value)?;
+            records.push((location.line, serde_json::from_value(value)?));
+        }
+        Ok(records)
+    })
+    .await
+    .context("dependency scope read task failed")??;
     let cleanup = if source == ReplaySource::Case {
-        lifecycle_cleanup::load_refs(
-            path.parent()
-                .context("Case dependency file has no parent")?,
-        )
-        .await?
+        lifecycle_cleanup::load_refs(&crate::dependency_index::scoped::case_directory(path)?)
+            .await?
     } else {
         BTreeSet::new()
     };
@@ -388,7 +397,7 @@ pub(super) async fn load_motan_debug_file(
 
 pub(super) fn active_case_matches(active_case_id: Option<&str>, exchange: &ReplayExchange) -> bool {
     match exchange.source {
-        ReplaySource::Global => true,
+        ReplaySource::Startup | ReplaySource::Process => true,
         ReplaySource::Case => exchange.case_id.as_deref() == active_case_id,
     }
 }

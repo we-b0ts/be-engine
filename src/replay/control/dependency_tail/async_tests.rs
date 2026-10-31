@@ -30,7 +30,7 @@ async fn primary_failure_skips_success_work_but_preserves_the_target_stop_receip
     tokio::fs::write(
         fixture.root.join("case-a/async-api-observation.json"),
         json!({
-            "version":1,"complete":true,"inventory_complete":true,
+            "version":2,"capture_complete":true,"business_complete":false,"business_completion":"unobserved","inventory_complete":true,
             "end_reason":"timeout","request_timeout_ms":900_000,
             "source_stop_required":true,"source_stop_after_ms":800_000,"cleanup_refs":[],
             "completed_refs":legacy["selected_completed_refs"]
@@ -101,7 +101,7 @@ async fn async_observation_retains_case_until_real_target_consumes_its_finite_ta
         tokio::fs::write(
             fixture.root.join("case-a/async-api-observation.json"),
             json!({
-                "version":1,"complete":true,"inventory_complete":true,
+                "version":2,"capture_complete":true,"business_complete":reason=="resource","business_completion":if reason=="resource" {"observed"}else{"unobserved"},"inventory_complete":true,
                 "end_reason":reason,"request_timeout_ms":1000,
                 "source_stop_required":reason!="resource",
                 "source_stop_after_ms":(reason!="resource").then_some(0),"cleanup_refs":[],
@@ -176,6 +176,20 @@ async fn async_observation_retains_case_until_real_target_consumes_its_finite_ta
                 .unwrap()["ok"],
             true
         );
+        let report = state.lock().await.snapshot_report();
+        assert_eq!(
+            report
+                .case_execution_failures
+                .iter()
+                .any(|failure| failure["kind"] == "source_business_incomplete"),
+            requires_stop
+        );
+        if requires_stop {
+            assert!(
+                report.is_dirty(),
+                "a captured Source timeout/failure cannot certify declared business completion"
+            );
+        }
         if requires_stop {
             let mut next = command("begin");
             next.case_id = Some("case-b".into());
@@ -244,7 +258,7 @@ async fn incomplete_async_inventory_rejects_activation_for_all_end_reasons() {
         tokio::fs::write(
             fixture.root.join("case-a/async-api-observation.json"),
             json!({
-                "version":1,"complete":true,"inventory_complete":false,"end_reason":reason,
+                "version":2,"capture_complete":true,"business_complete":reason=="resource","business_completion":if reason=="resource" {"observed"}else{"unobserved"},"inventory_complete":false,"end_reason":reason,
                 "request_timeout_ms":1000,"completed_refs":[]
             })
             .to_string(),
@@ -265,7 +279,7 @@ async fn only_deadline_completion_waits_for_the_source_stop_clock() {
         tokio::fs::write(
             fixture.root.join("case-a/async-api-observation.json"),
             json!({
-                "version":1,"complete":true,"inventory_complete":true,"end_reason":reason,
+                "version":2,"capture_complete":true,"business_complete":reason=="resource","business_completion":if reason=="resource" {"observed"}else{"unobserved"},"inventory_complete":true,"end_reason":reason,
                 "request_timeout_ms":100,"source_stop_required":true,
                 "source_stop_after_ms":100,"cleanup_refs":[],"completed_refs":[]
             })
@@ -322,7 +336,7 @@ async fn confirmed_target_stop_skips_attribution_idle_for_plain_and_interaction_
         }
         tokio::fs::write(
             fixture.root.join("case-a/async-api-observation.json"),
-            json!({"version":1,"complete":true,"inventory_complete":true,"end_reason":"resource",
+            json!({"version":2,"capture_complete":true,"business_complete":true,"business_completion":"observed","inventory_complete":true,"end_reason":"resource",
                 "request_timeout_ms":1000,"source_stop_required":true,"source_stop_after_ms":0,
                 "cleanup_refs":[],"completed_refs":[]})
             .to_string(),

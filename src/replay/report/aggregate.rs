@@ -13,10 +13,12 @@ mod counts;
 mod policy;
 mod runner;
 
-pub(crate) use runner::{aggregate_runner_replay_report, aggregate_runner_replay_report_value};
+pub(crate) use runner::aggregate_runner_replay_report;
+#[cfg(test)]
+pub(crate) use runner::aggregate_runner_replay_report_value;
 
 const AGGREGATE_VERSION: u8 = 1;
-const REPLAY_REPORT_VERSION: u64 = 6;
+const REPLAY_REPORT_VERSION: u64 = 7;
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplayAggregateOptions {

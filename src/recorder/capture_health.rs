@@ -233,7 +233,7 @@ mod tests {
                 .flush_case_dependency_files(&state.recorder().case_staging_dir(case))
                 .await
                 .unwrap();
-            let raw = tokio::fs::read_to_string(
+            let raw = crate::recorder::test_io::read_to_string(
                 state
                     .recorder()
                     .case_staging_dir(case)

@@ -221,6 +221,7 @@ pub(super) async fn handle_control_request(
                     .transpose()
                 {
                     Ok(_) => {
+                        state.close_startup_phase(case);
                         let epoch = state
                             .redis
                             .request_contracts
@@ -374,6 +375,9 @@ async fn finalize_replay(
     request: &ReplayControlRequest,
     state: Arc<Mutex<ReplayState>>,
 ) -> (Value, Option<Value>) {
+    if let Err(error) = policy::request_contract::hypotheses::await_durable(&state).await {
+        tracing::warn!(error=%error,"finalizing incomplete hypothesis evidence");
+    }
     let mut state = state.lock().await;
     if state.mysql.exchanges.iter().any(|e| {
         matches!(
@@ -417,9 +421,9 @@ async fn finalize_replay(
             None,
         );
     }
-    if let Some(policy) = state.replay_policy.as_ref() {
-        match policy.request_contracts.seal_witnesses() {
-            Ok(()) => report.policy_witnesses = policy.request_contracts.witness_manifest(),
+    {
+        match state.target_observations.seal() {
+            Ok(manifest) => report.policy_witnesses = Some(manifest),
             Err(error) => {
                 return (
                     serde_json::json!({"ok":false,"error":format!("failed to seal policy witnesses: {error:#}")}),
@@ -432,6 +436,10 @@ async fn finalize_replay(
     state.finalized_at = Some(finalized_at);
     report.finalized_at = Some(finalized_at);
     report.finalized = true;
+    report.batch_reconciliation = state
+        .batch_scope
+        .as_ref()
+        .map(|scope| scope.report(&report));
     let mut value = serde_json::to_value(report).expect("replay report must serialize");
     // Rule planners (for example MySQL response time shift) require the
     // persisted report to carry the finalized completeness verdict, so persist
@@ -518,7 +526,7 @@ pub(super) async fn begin_case(
     if let Err(error) = dependency_tail::activate(&mut state, case_id) {
         return serde_json::json!({"ok": false, "error": format!("dependency-tail dependency activation failed: {error:#}")});
     }
-    state.active_case_id = Some(case_id.to_string());
+    state.set_active_case(Some(case_id.to_string()));
     state.input_timing = None;
     state.redis.pubsub.native_clock.begin_case(case_id);
     if let Some(policy) = &mut state.replay_policy {
@@ -616,7 +624,7 @@ pub(super) async fn end_case(
     }
 
     let counter_sample = {
-        let mut state = match case_cleanup::lock_drained(&state, case_id, deadline).await {
+        let mut state = match case_cleanup::lock_for_release(&state, case_id, deadline).await {
             Ok(state) => state,
             Err(error) => {
                 let error = case_cleanup::failure_description(&state, &error).await;
@@ -630,7 +638,7 @@ pub(super) async fn end_case(
             .egress_counter_starts
             .remove(case_id)
             .zip(state.egress_counter_reader.clone());
-        state.active_case_id = None;
+        state.set_active_case(None);
         state.target_stop_prepared.remove(case_id);
         dependency_tail::end(&mut state, case_id);
         state.case_cleanup.end(case_id);

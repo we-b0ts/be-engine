@@ -6,7 +6,7 @@ const SQL: &str = "UPDATE tasks SET deleted=?, updated_at=?, payload=? WHERE id=
 
 fn policy() -> String {
     format!(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 rules:
 - id: write-clock
   match:

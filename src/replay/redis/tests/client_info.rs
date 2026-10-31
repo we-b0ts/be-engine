@@ -71,7 +71,7 @@ fn client_info_exemption_keeps_other_session_errors_and_incomplete_exchanges() {
                 .is_err()
         );
     }
-    for source in [ReplaySource::Case, ReplaySource::Global] {
+    for source in [ReplaySource::Case, ReplaySource::Startup] {
         let mut state = RedisReplayState::default();
         let mut targets = BTreeMap::new();
         state

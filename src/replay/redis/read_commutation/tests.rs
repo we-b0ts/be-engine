@@ -34,7 +34,7 @@ fn state(events: &[Value], rules: Vec<Value>) -> (tempfile::TempDir, RedisReplay
     let policy = root.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
+        json!({"format":"traffic-policy/v3","rules":rules}).to_string(),
     )
     .unwrap();
     let runtime = crate::replay::ReplayPolicyRuntime::load(
@@ -190,7 +190,7 @@ fn missing_rule_other_api_and_other_resource_keep_lane_order() {
 
 #[test]
 fn ordinary_cases_are_independent_but_global_transactional_and_late_own_inventory_stay_guarded() {
-    for foreign in [ReplaySource::Case, ReplaySource::Global] {
+    for foreign in [ReplaySource::Case, ReplaySource::Startup] {
         let (_root, mut state) =
             state(&[event(1, "GET", &[b"cancel:1"], b"$-1\r\n")], vec![rule()]);
         state
@@ -204,7 +204,7 @@ fn ordinary_cases_are_independent_but_global_transactional_and_late_own_inventor
             .unwrap();
         assert_eq!(
             state.prepare_read_commutation("case").is_err(),
-            foreign == ReplaySource::Global
+            foreign.is_run_owned()
         );
         assert!(state.exchanges[1].read_commutation_rule.is_none());
     }
@@ -232,7 +232,7 @@ fn ordinary_cases_are_independent_but_global_transactional_and_late_own_inventor
             .register_exchange(
                 serde_json::from_value(event(3, "SET", &[b"cancel:1", b"true"], b"+OK\r\n"))
                     .unwrap(),
-                ReplaySource::Global,
+                ReplaySource::Startup,
                 None,
                 &mut BTreeMap::new(),
                 &[]

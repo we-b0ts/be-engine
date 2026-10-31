@@ -28,7 +28,7 @@ fn read_back_public_plan_apply_requires_source_read_proof_and_fresh_target_repla
             prior["effect"].as_object_mut().unwrap().remove("read_back");
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v2","rules":[prior]}),
+                json!({"format":"traffic-policy/v3","rules":[prior]}),
             );
             let mut events = vec![event(1, "SET", &["current:7", "old"], b"+OK\r\n")];
             if positive_read {
@@ -36,7 +36,7 @@ fn read_back_public_plan_apply_requires_source_read_proof_and_fresh_target_repla
             }
             events.push(event(3, "APPEND", &["content:old", "x"], b":1\r\n"));
             fs::write(
-                source.join("apis/api/case-1/dependencies.jsonl"),
+                source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
                 events.iter().map(|e| format!("{e}\n")).collect::<String>(),
             )
             .unwrap();
@@ -49,7 +49,7 @@ fn read_back_public_plan_apply_requires_source_read_proof_and_fresh_target_repla
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1");
+            .join("apis/api/00000000-0000-4000-8000-000000000001");
         let path = case.join("dependencies.jsonl");
         let original = fs::read(&path).unwrap();
         let planned = fixture.plan();
@@ -93,7 +93,7 @@ fn finite_read_back_state_epoch_upgrade_uses_complete_source_and_normal_plan_app
             crate::platform::encryption_key::load_or_create(root).unwrap();
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v2","rules":[prior.clone()]}),
+                json!({"format":"traffic-policy/v3","rules":[prior.clone()]}),
             );
             let mut events = vec![
                 event(1, "GET", &["current:7"], b"$-1\r\n"),
@@ -117,7 +117,7 @@ fn finite_read_back_state_epoch_upgrade_uses_complete_source_and_normal_plan_app
                 events.push(event(8, "TTL", &["current:7"], b":-2\r\n"));
             }
             fs::write(
-                source.join("apis/api/case-1/dependencies.jsonl"),
+                source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
                 events.iter().map(|e| format!("{e}\n")).collect::<String>(),
             )
             .unwrap();
@@ -136,7 +136,7 @@ fn finite_read_back_state_epoch_upgrade_uses_complete_source_and_normal_plan_app
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1/dependencies.jsonl");
+            .join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl");
         let original_dependencies = fs::read(&dependencies).unwrap();
         let original_policy = fs::read(fixture.policy()).unwrap();
         let planned = fixture.plan();
@@ -165,8 +165,13 @@ fn finite_read_back_state_epoch_upgrade_uses_complete_source_and_normal_plan_app
         assert_eq!(plan.traffic_e2e_report["verified"], false);
         if scenario == "stale" {
             fs::write(
-                &dependencies,
-                format!("{}\n", std::str::from_utf8(&original_dependencies).unwrap()),
+                fixture
+                    .state()
+                    .case_source
+                    .as_ref()
+                    .unwrap()
+                    .join("dependencies.jsonl"),
+                "tampered authoritative Source occurrence",
             )
             .unwrap();
             assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());

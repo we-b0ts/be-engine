@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 use super::super::{fingerprint, model::RewriteState};
 
+mod batch;
 mod eligibility;
 mod primary;
 pub(super) use primary::PrimaryResponse;
@@ -26,6 +27,23 @@ pub struct Artifact {
 
 impl Artifact {
     pub(super) fn capture(path: &Path) -> Result<Self> {
+        ensure!(
+            !path.components().any(|c| c.as_os_str() == ".active"),
+            "rule evidence must be finalized and published"
+        );
+        if let Some(view) = crate::dependency_index::scoped::view_path(path) {
+            let metadata = fs::symlink_metadata(&view)?;
+            ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "rule scope evidence requires a regular immutable view"
+            );
+            let bytes = crate::dependency_index::scoped::read_bytes(path)?;
+            return Ok(Self {
+                path: path.into(),
+                sha256: crate::policy_evidence::digest(&bytes),
+                length: bytes.len() as u64,
+            });
+        }
         let metadata = fs::symlink_metadata(path)?;
         ensure!(
             metadata.is_file() && !metadata.file_type().is_symlink(),
@@ -68,7 +86,7 @@ impl Artifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ExecutionIdentity {
+pub(super) struct ApiExecutionIdentity {
     workflow: String,
     recording_run: String,
     api: String,
@@ -85,7 +103,44 @@ pub struct ExecutionIdentity {
     recorded_engine: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct BatchExecutionIdentity {
+    workflow: String,
+    proof_revision: u64,
+    pub(super) evidence: crate::e2e_run::BatchRuleEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "scope", content = "identity", rename_all = "snake_case")]
+pub(super) enum ExecutionIdentity {
+    ApiIssue(ApiExecutionIdentity),
+    Batch(BatchExecutionIdentity),
+}
+
 impl ExecutionIdentity {
+    pub(super) fn method_api(&self) -> Option<&str> {
+        match self {
+            Self::ApiIssue(identity) => Some(&identity.api),
+            Self::Batch(_) => None,
+        }
+    }
+    pub(super) fn is_batch(&self) -> bool {
+        matches!(self, Self::Batch(_))
+    }
+    pub(super) fn revalidate(&self, root: &Path, state: &RewriteState) -> Result<Self> {
+        if self.is_batch() {
+            Self::batch_current(root, state)
+        } else {
+            Self::current(root, state)
+        }
+    }
+    pub(super) fn batch_current(root: &Path, state: &RewriteState) -> Result<Self> {
+        Ok(Self::Batch(BatchExecutionIdentity {
+            workflow: state.workflow_id.clone(),
+            proof_revision: state.dependency_review.revision,
+            evidence: super::batch::evidence(root, state)?,
+        }))
+    }
     pub(super) fn current(root: &Path, state: &RewriteState) -> Result<Self> {
         let context = crate::E2eRunContext {
             target_root: root.into(),
@@ -111,7 +166,7 @@ impl ExecutionIdentity {
             state.case_inventory_id.as_deref() == Some(summary.case_inventory_id.as_str()),
             "rule evidence belongs to a different prepared inventory"
         );
-        Ok(Self {
+        Ok(Self::ApiIssue(ApiExecutionIdentity {
             workflow: state.workflow_id.clone(),
             recording_run: state.recording_run_id.clone(),
             api: state.api.clone(),
@@ -130,7 +185,7 @@ impl ExecutionIdentity {
                 .attempts
                 .last()
                 .and_then(|a| a.engine_fingerprint.clone()),
-        })
+        }))
     }
 }
 
@@ -259,14 +314,14 @@ impl Bundle {
                     "Replay report omits a selected Source case"
                 );
             }
-            for name in ["request.json", "dependencies.jsonl"] {
-                output.freeze(&case.case_dir.join(name))?;
-            }
+            output.freeze(&case.case_dir.join("request.json"))?;
+            output.freeze(&output.dependency_path(&case.case_dir)?)?;
             output.primary_response(&case.case_id, &case.case_dir)?;
             output.cases.insert(case.case_id, case.case_dir);
         }
         let (recording, _) = crate::dependency_index::recording_files(&case_source)?;
         output.freeze(&recording.join("recording-run.json"))?;
+        output.freeze(&recording.join(crate::dependency::observation::MANIFEST_FILE))?;
         Ok(output)
     }
 
@@ -275,6 +330,31 @@ impl Bundle {
             self.artifacts.insert(path.into(), Artifact::capture(path)?);
         }
         Ok(())
+    }
+
+    pub(in crate::rewrite::unified_rule) fn dependency_path(
+        &self,
+        directory: &Path,
+    ) -> Result<PathBuf> {
+        if let Some(path) = self.replay["cases"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|case| {
+                case["case_dir"]
+                    .as_str()
+                    .is_some_and(|path| Path::new(path) == directory)
+            })
+            .and_then(|case| case["dependencies_path"].as_str())
+        {
+            let path = PathBuf::from(path);
+            ensure!(
+                crate::dependency_index::scoped::view_path(&path).is_some(),
+                "Replay Source dependency view is not a new-format scope"
+            );
+            return Ok(path);
+        }
+        Ok(crate::dependency_index::scoped::case_path(directory))
     }
 
     pub(super) fn json(&mut self, path: &Path) -> Result<Value> {

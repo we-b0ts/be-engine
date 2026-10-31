@@ -35,6 +35,9 @@ struct Catalog {
 }
 
 pub(crate) fn prepare(root: &Path) -> Result<Snapshot> {
+    if super::recording::root(root).is_some() {
+        return prepare_central(root);
+    }
     let (root, dependencies) = store::recording_files(root)?;
     let run: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("recording-run.json"))?)?;
@@ -132,6 +135,46 @@ pub(crate) fn prepare(root: &Path) -> Result<Snapshot> {
         run_id,
         files: contents,
     };
+    store::write_json(&output, &catalog)?;
+    snapshot(&output, &catalog)
+}
+
+fn prepare_central(path: &Path) -> Result<Snapshot> {
+    let (root, manifest) = super::recording::manifest(path)?;
+    super::recording::authenticate(&root)?;
+    let directory = store::cache_directory(&root);
+    store::private_directory(&directory)?;
+    let output = directory.join("source-proof-central-v3.json");
+    let mut contents = BTreeMap::new();
+    for identity in &manifest.files {
+        let relative = PathBuf::from(&identity.path);
+        contents.insert(
+            relative.clone(),
+            Content {
+                stamp: FileStamp::read_native(&root.join(&relative))?,
+                sha256: identity.sha256.trim_start_matches("sha256:").into(),
+            },
+        );
+    }
+    let path = root.join(crate::dependency::observation::MANIFEST_FILE);
+    let stamp = FileStamp::read_native(&path)?;
+    contents.insert(
+        PathBuf::from(crate::dependency::observation::MANIFEST_FILE),
+        Content {
+            sha256: hash_file(&path, &stamp)?,
+            stamp,
+        },
+    );
+    let catalog = Catalog {
+        version: VERSION,
+        run_id: manifest.run_id,
+        files: contents,
+    };
+    if store::read_json::<Catalog>(&output).is_ok_and(|old| {
+        old.version == catalog.version && old.run_id == catalog.run_id && old.files == catalog.files
+    }) {
+        return snapshot(&output, &catalog);
+    }
     store::write_json(&output, &catalog)?;
     snapshot(&output, &catalog)
 }

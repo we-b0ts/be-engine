@@ -67,7 +67,8 @@ pub(super) async fn prepare(inventory: &mut Inventory, case: &str, path: &Path) 
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let mut lines = tokio::io::BufReader::new(tokio::fs::File::open(path).await?).lines();
+    let bytes = crate::dependency_index::scoped::read_bytes(path)?;
+    let mut lines = tokio::io::BufReader::new(bytes.as_slice()).lines();
     let mut normal_count = 0usize;
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {

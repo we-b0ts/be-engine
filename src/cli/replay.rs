@@ -572,30 +572,81 @@ mod tests {
         );
     }
 
-    #[test]
-    fn api_selection_resolves_cases_across_recording_members() {
+    #[tokio::test]
+    async fn api_selection_resolves_cases_across_recording_members() {
         let directory = tempfile::tempdir().unwrap();
-        write_case(
-            &directory.path().join("apis/widgets-alpha/case-a"),
-            "GET",
-            "/api/widgets/alpha",
+        let recordings = directory.path().join("recordings");
+        let recorder = traffic_e2e::Recorder::new(&recordings).await.unwrap();
+        for (id, member, uri) in [
+            (1, "widgets-alpha", "/api/widgets/alpha"),
+            (2, "widgets-beta", "/api/widgets/beta"),
+            (3, "other", "/api/other"),
+        ] {
+            let case = traffic_e2e::CaseContext {
+                id: uuid::Uuid::from_u128(id),
+                rule_name: member.into(),
+                uri_group: None,
+            };
+            recorder
+                .write_case_json(
+                    &case,
+                    "admission.json",
+                    &serde_json::json!({"fixture":true}),
+                )
+                .await
+                .unwrap();
+            recorder
+                .write_case_json(
+                    &case,
+                    "request.json",
+                    &serde_json::json!({"method":"GET","uri":uri,"api_pattern":uri}),
+                )
+                .await
+                .unwrap();
+            recorder
+                .write_case_json(&case, "expected-response.json", &serde_json::json!({}))
+                .await
+                .unwrap();
+            recorder.publish_case(&case).await.unwrap();
+        }
+        let has_failed_cases = recorder.finish_run().await.unwrap();
+        assert!(
+            !has_failed_cases,
+            "the fixture must publish every Case successfully"
         );
-        write_case(
-            &directory.path().join("apis/widgets-beta/case-b"),
-            "GET",
-            "/api/widgets/beta",
-        );
-        write_case(
-            &directory.path().join("apis/other/case-other"),
-            "GET",
-            "/api/other",
-        );
-        let mut args = replay_args(Some(directory.path().to_path_buf()), None);
+        let mut runs = std::fs::read_dir(&recordings)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(runs.len(), 1);
+        let run = runs.remove(0);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(run.join("dependency-manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["schema"], "traffic-recording/v3");
+        assert_eq!(manifest["sealed"], true);
+        assert_eq!(manifest["capture_complete"], true);
+        let inputs = manifest["inputs"].as_array().unwrap();
+        assert_eq!(inputs.len(), 3);
+        assert!(inputs.iter().all(|input| input["complete"] == true));
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(run.join("recording-run.json")).unwrap())
+                .unwrap();
+        assert_eq!(report["status"], "completed");
+        assert_eq!(report["published_cases"], 3);
+        assert_eq!(report["failed_cases"], 0);
+        let mut args = replay_args(Some(run), None);
         args.apis = vec!["GET /api/widgets/*".parse().unwrap()];
 
         let resolved = resolve(args).unwrap();
 
-        assert_eq!(resolved.case_ids, ["case-a", "case-b"]);
+        assert_eq!(
+            resolved.case_ids,
+            [
+                uuid::Uuid::from_u128(1).to_string(),
+                uuid::Uuid::from_u128(2).to_string()
+            ]
+        );
     }
 
     #[test]
@@ -667,7 +718,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             directory.path().join(".traffic-e2e/policy.yaml"),
-            "format: traffic-policy/v2\nrules: []\n",
+            "format: traffic-policy/v3\nrules: []\n",
         )
         .unwrap();
         let mut args = replay_args(Some(directory.path().to_path_buf()), None);
@@ -707,16 +758,5 @@ mod tests {
             dependency_cache_bytes: None,
             case_prepare_timeout_seconds: None,
         }
-    }
-
-    fn write_case(directory: &Path, method: &str, uri: &str) {
-        std::fs::create_dir_all(directory).unwrap();
-        std::fs::write(
-            directory.join("request.json"),
-            serde_json::to_vec(&serde_json::json!({"method": method, "uri": uri})).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(directory.join("expected-response.json"), b"{}\n").unwrap();
-        std::fs::write(directory.join("dependencies.jsonl"), b"").unwrap();
     }
 }

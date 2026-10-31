@@ -3,12 +3,12 @@
 # Source behavior, plan/apply with immutable evidence, then run genuine Replay.
 # Source references and facts remain in the plan evidence, outside this runtime
 # file. Rendering an annotated rule proposal writes only its declared behavior.
-format: traffic-policy/v2
+format: traffic-policy/v3
 resources: {}
 rules: []
 
 # Example replacement for the empty document above:
-# format: traffic-policy/v2
+# format: traffic-policy/v3
 # signatures:
 #   default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
 # json:

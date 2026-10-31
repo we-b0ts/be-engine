@@ -1,7 +1,7 @@
 //! Compact HTTP declarations retain their explicit provenance-bound API scope.
 use super::*;
 
-const DOCUMENT: &str = r#"format: traffic-policy/v2
+const DOCUMENT: &str = r#"format: traffic-policy/v3
 resources:
   storage: {protocol: http, endpoint: 'storage.test:9100'}
 http:
@@ -120,7 +120,7 @@ fn canonical_http_api_scope_cannot_be_submitted_for_a_different_issue() {
 #[test]
 fn shared_docx_codec_bindings_still_require_the_current_api_issue() {
     let mut document = crate::policy::parse_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 docx:
   fields:
     - {kind: timestamp, part: docProps/core.xml, element: 'dcterms:created', format: rfc3339}

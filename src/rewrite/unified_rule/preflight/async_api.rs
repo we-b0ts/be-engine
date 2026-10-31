@@ -2,28 +2,35 @@
 use super::*;
 
 pub(super) fn verify(
+    state: &RewriteState,
     bundle: &mut Bundle,
     policy: &CompiledPolicy,
     selected: &BTreeSet<String>,
-    requires_recording: bool,
+    _capture_changed: bool,
     result: &mut Preflight,
 ) -> Result<()> {
     if !selected.contains(crate::policy::ASYNC_API_ID) {
         return Ok(());
     }
-    if requires_recording {
-        result
-            .obligations
-            .insert(crate::config::native_policy::SourceObligation::FreshRecording);
-        result
-            .pending_effect_evidence
-            .insert(crate::policy::ASYNC_API_ID.into());
-    }
     if policy.async_api.is_empty() {
         return Ok(());
     }
     let mut observed = BTreeMap::<String, usize>::new();
-    for directory in bundle.cases.clone().into_values() {
+    let (recording, manifest) = crate::dependency_index::recording::manifest(
+        state
+            .case_source
+            .as_deref()
+            .context("async rule requires sealed Source inventory")?,
+    )?;
+    let mut directories = bundle.cases.values().cloned().collect::<BTreeSet<_>>();
+    directories.extend(
+        manifest
+            .inputs
+            .into_iter()
+            .filter(|input| input.complete)
+            .map(|input| recording.join(input.path)),
+    );
+    for directory in directories {
         let request = bundle.request(&directory.join("request.json"))?;
         let method = request["method"]
             .as_str()
@@ -46,14 +53,84 @@ pub(super) fn verify(
                     && crate::policy::async_response_matches(rule, response_body.as_ref())
             }) {
                 *observed.entry(api.clone()).or_default() += 1;
+                let scope = crate::recorder::async_api::AsyncScope::for_primary(
+                    &policy.async_api,
+                    &method.parse()?,
+                    &uri.parse()?,
+                    &body
+                        .as_ref()
+                        .map(serde_json::to_vec)
+                        .transpose()?
+                        .unwrap_or_default(),
+                )
+                .context("matching async Source scenario unavailable")?;
+                scope.select_response(response_body.as_ref());
+                let path = bundle.dependency_path(&directory)?;
+                bundle.freeze(&path)?;
+                let bytes = crate::dependency_index::scoped::read_bytes(&path)?;
+                let mut completed = false;
+                for line in bytes
+                    .split(|byte| *byte == b'\n')
+                    .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+                {
+                    let event: Value = serde_json::from_slice(line)?;
+                    completed |= scope.observe_recorded(&event)?.is_some_and(|signal| {
+                        signal.end_reason == crate::recorder::async_api::AsyncEndReason::Resource
+                    });
+                }
+                if !completed {
+                    let potential = crate::recorder::async_api::AsyncScope::for_primary(
+                        &policy.async_api,
+                        &method.parse()?,
+                        &uri.parse()?,
+                        &body
+                            .as_ref()
+                            .map(serde_json::to_vec)
+                            .transpose()?
+                            .unwrap_or_default(),
+                    )
+                    .context("async investigation scope absent")?;
+                    potential.select_response(response_body.as_ref());
+                    let central = recording.join("dependencies.jsonl");
+                    bundle.freeze(&central)?;
+                    let mut elsewhere = false;
+                    crate::dependency_index::proof::visit(
+                        &central,
+                        |event| {
+                            Ok(matches!(
+                                event["event_type"].as_str(),
+                                Some("mysql_exchange" | "redis_exchange" | "http_exchange")
+                            ))
+                        },
+                        |event| {
+                            elsewhere |= potential.observe_recorded(event)?.is_some_and(|signal| {
+                                signal.end_reason
+                                    == crate::recorder::async_api::AsyncEndReason::Resource
+                            });
+                            Ok(())
+                        },
+                    )?;
+                    if elsewhere {
+                        result.obligations.insert(
+                            crate::config::native_policy::SourceObligation::AttributionReview,
+                        );
+                        result
+                            .pending_effect_evidence
+                            .insert(format!("async-attribution:{api}"));
+                    } else {
+                        result.capture_scopes.insert(api.clone(),"Source inventory does not contain the declared successful asynchronous completion resource".into());
+                    }
+                }
             }
         }
     }
     for api in policy.async_api.keys() {
-        ensure!(
-            observed.get(api).is_some_and(|count| *count > 0),
-            "async API {api:?} has no complete Source request/response satisfying its scenario conditions"
-        );
+        if !observed.get(api).is_some_and(|count| *count > 0) {
+            result.capture_scopes.insert(
+                api.clone(),
+                "Source has no complete input/response selecting this asynchronous scenario".into(),
+            );
+        }
     }
     let count = observed.values().sum::<usize>();
     result.source_validations += count;

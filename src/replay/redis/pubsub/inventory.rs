@@ -16,9 +16,11 @@ pub(super) struct IndexedLane {
     pub(super) kind: RedisSubscriptionKind,
     pub(super) subject: Vec<u8>,
     pub(super) source: Arc<RecordSource>,
+    pub(super) source_kind: ReplaySource,
     pub(super) pages: Option<Paged<NotificationEntry>>,
     writer: Option<PageWriter<NotificationEntry>>,
     count: usize,
+    startup_closed: bool,
     // Available is implicit. A notification costs session memory only after an
     // actual Target subscription attempts its delivery.
     statuses: BTreeMap<usize, ReplayExchangeStatus>,
@@ -41,10 +43,6 @@ impl IndexedNotifications {
         root: &Path,
         source: Arc<RecordSource>,
     ) -> Result<()> {
-        ensure!(
-            self.total == 0 && self.lanes.is_empty(),
-            "notification inventory already initialized"
-        );
         for lane in lanes {
             let record: RecordedPush = serde_json::from_value(lane.record)?;
             ensure!(
@@ -72,9 +70,11 @@ impl IndexedNotifications {
                 kind,
                 subject: lane.subject,
                 source: source.clone(),
+                source_kind: ReplaySource::Startup,
                 pages: Some(pages),
                 writer: None,
                 count,
+                startup_closed: false,
                 statuses: BTreeMap::new(),
                 echoes: Arc::default(),
             });
@@ -121,9 +121,11 @@ impl IndexedNotifications {
                     kind: frame.subscription_kind,
                     subject: frame.subject.clone(),
                     source: reference.source.clone(),
+                    source_kind: ReplaySource::Startup,
                     pages: None,
                     writer: Some(PageWriter::new(reference.source.path())?),
                     count: 0,
+                    startup_closed: false,
                     statuses: BTreeMap::new(),
                     echoes: Arc::default(),
                 });
@@ -190,9 +192,11 @@ impl IndexedNotifications {
     pub(super) fn available(&self, lane: usize, index: usize) -> bool {
         let lane = &self.lanes[lane];
         assert!(index < lane.count);
-        lane.statuses
-            .get(&index)
-            .is_none_or(|status| status.is_available())
+        !lane.startup_closed
+            && lane
+                .statuses
+                .get(&index)
+                .is_none_or(|status| status.is_available())
     }
     pub(super) fn responding(&mut self, lane: usize, index: usize) {
         assert!(index < self.lanes[lane].count);
@@ -256,7 +260,7 @@ impl IndexedNotifications {
                 result.push(CommandUnusedReport {
                     index: entries[index - pages.page_start(page)].location.line - 1,
                     case_id: None,
-                    source: ReplaySource::Global,
+                    source: lane.source_kind,
                     target: TargetKey {
                         host: normalize_host(&lane.record.target_host),
                         port: lane.record.target_port,
@@ -268,5 +272,26 @@ impl IndexedNotifications {
             }
         }
         result
+    }
+}
+
+impl IndexedNotifications {
+    pub(in crate::replay) fn startup_counts(
+        &mut self,
+        close: bool,
+    ) -> crate::replay::startup::Counts {
+        let mut counts = crate::replay::startup::Counts::default();
+        for lane in &mut self.lanes {
+            if lane.source_kind != ReplaySource::Startup {
+                continue;
+            }
+            counts.required += lane.count;
+            counts.unstarted += lane.count - lane.statuses.len()
+                + lane.statuses.values().filter(|s| s.is_available()).count();
+            if close {
+                lane.startup_closed = true;
+            }
+        }
+        counts
     }
 }

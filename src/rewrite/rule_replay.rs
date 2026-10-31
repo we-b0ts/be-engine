@@ -9,8 +9,8 @@ pub(super) fn request(state: &mut RewriteState) {
     state.e2e_current = false;
 }
 
-/// A changed process rule first reclassifies existing evidence. If only
-/// dependencies remain dirty, request one real Replay for affected route methods.
+/// A changed process rule requests one real Replay for affected route methods.
+/// Source ownership proof remains an independent analyst obligation.
 /// Unchanged/idempotent application cannot renew a consumed request.
 pub(super) fn after_process_rule(state: &mut RewriteState, api: &str, changed: bool) {
     if !changed {

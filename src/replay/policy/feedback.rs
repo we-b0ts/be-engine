@@ -615,6 +615,9 @@ pub(in crate::replay::policy) fn read_published_report(
     path: &Path,
     label: &str,
 ) -> Result<Vec<u8>> {
+    if crate::dependency_index::scoped::view_path(path).is_some() {
+        return crate::dependency_index::scoped::read_bytes(path);
+    }
     let resolved = resolve_published_report_path(path);
     read_regular_at(&resolved, path, label)
 }

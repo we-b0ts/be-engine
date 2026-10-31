@@ -14,7 +14,7 @@ impl RedisReplayState {
             .global_report
             .rows(0, &self.exchanges, true)
             .filter(|(_, exchange)| {
-                exchange.source == ReplaySource::Global
+                exchange.source.is_run_owned()
                     && if exchange.reusable_snapshot {
                         !exchange.matched_once
                     } else {
@@ -63,7 +63,7 @@ impl RedisReplayState {
         let Some(exchange) = self
             .exchanges
             .get(index)
-            .filter(|exchange| exchange.source == ReplaySource::Global)
+            .filter(|exchange| exchange.source.is_run_owned())
         else {
             return;
         };
@@ -95,7 +95,7 @@ impl RedisReplayState {
             .events
             .global_report
             .rows(0, &self.exchanges, extras)
-            .filter(|(_, exchange)| exchange.source == ReplaySource::Global)
+            .filter(|(_, exchange)| exchange.source.is_run_owned())
         {
             visitor(Row {
                 position: Position { section: 0, index },
@@ -103,7 +103,7 @@ impl RedisReplayState {
                 value: serde_json::to_value(CommandUnusedReport {
                     index,
                     case_id: exchange.case_id.clone(),
-                    source: ReplaySource::Global,
+                    source: exchange.source,
                     target: TargetKey {
                         host: normalize_host(&exchange.record.target_host),
                         port: exchange.record.target_port,

@@ -67,7 +67,7 @@ async fn scalar_formats_share_complete_values_with_script_argv_without_special_l
     let policy = temp.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 redis:
   keys:
     'lock:item:*': {kind: identity, formats: [{hex: 32}]}

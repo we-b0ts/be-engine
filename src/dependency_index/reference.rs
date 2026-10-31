@@ -12,6 +12,8 @@ pub(crate) struct RecordSource {
     path: PathBuf,
     stamp: FileStamp,
     reader: Arc<Mutex<RecordReader>>,
+    view: Option<(PathBuf, FileStamp)>,
+    resolution_error: Option<String>,
 }
 
 impl RecordSource {
@@ -19,6 +21,17 @@ impl RecordSource {
         &self.path
     }
     pub(crate) fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.resolution_error.is_none(),
+            "cannot resolve dependency view: {:?}",
+            self.resolution_error
+        );
+        if let Some((path, stamp)) = &self.view {
+            anyhow::ensure!(
+                FileStamp::read_native(path)? == *stamp,
+                "dependency view changed after admission"
+            );
+        }
         anyhow::ensure!(
             FileStamp::read(&self.path)? == self.stamp,
             "indexed dependency evidence changed: {}",
@@ -31,10 +44,17 @@ impl RecordSource {
         stamp: FileStamp,
         reader: Arc<Mutex<RecordReader>>,
     ) -> Arc<Self> {
+        let source = super::scoped::resolve(path);
+        let (path, view, resolution_error) = match source {
+            Ok(source) => (source.path, source.view, None),
+            Err(error) => (path.to_owned(), None, Some(error.to_string())),
+        };
         Arc::new(Self {
-            path: path.to_owned(),
+            path,
             stamp,
             reader,
+            view,
+            resolution_error,
         })
     }
 
@@ -54,6 +74,7 @@ pub(crate) struct RecordRef {
 
 impl RecordRef {
     pub(crate) fn load<T: DeserializeOwned>(&self) -> Result<T> {
+        self.source.validate()?;
         let raw = self
             .source
             .reader

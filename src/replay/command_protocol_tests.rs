@@ -126,6 +126,7 @@ async fn background_redis_gets_are_connection_independent() {
     tokio::fs::write(case_dir.join("global-dependencies.jsonl"), global)
         .await
         .unwrap();
+    let case_dir = crate::replay::test_support::recording::centralize(&case_dir, &[1, 2]).await;
     let report_path = temp.path().join("report.json");
     let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
@@ -195,6 +196,7 @@ async fn configured_bootstrap_hget_is_connection_independent() {
         source_revision: String::new(),
         source_evidence: "src/bootstrap.rs:load experiment cache".to_string(),
     };
+    let case_dir = crate::replay::test_support::recording::centralize(&case_dir, &[]).await;
     let report_path = temp.path().join("report.json");
     let (addr, task) =
         spawn_replay_with_background(&case_dir, Some(report_path.clone()), vec![rule]).await;
@@ -342,7 +344,7 @@ async fn replays_memcached_set_with_opaque_protobuf_bytes_exactly() {
     .await
     .unwrap();
     let policy_path = temp.path().join("policy.yaml");
-    std::fs::write(&policy_path,"format: traffic-policy/v2\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n").unwrap();
+    std::fs::write(&policy_path,"format: traffic-policy/v3\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n").unwrap();
 
     let report_path = temp.path().join("report.json");
     let (addr, task) =
@@ -391,6 +393,7 @@ async fn background_memcached_gets_are_connection_independent() {
     tokio::fs::write(case_dir.join("global-dependencies.jsonl"), global)
         .await
         .unwrap();
+    let case_dir = crate::replay::test_support::recording::centralize(&case_dir, &[1, 2]).await;
     let report_path = temp.path().join("report.json");
     let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
@@ -933,7 +936,7 @@ fn motan_frame(request_id: u64, request: bool, inner_flag: u8, body: &[u8]) -> V
 
 async fn wait_for_matched_count(path: &Path, protocol: &str, expected: usize) -> Value {
     for _ in 0..150 {
-        if let Ok(raw) = tokio::fs::read_to_string(path).await
+        if let Ok(raw) = crate::recorder::test_io::read_to_string(path).await
             && let Ok(report) = serde_json::from_str::<Value>(&raw)
             && report[protocol]["matched"]
                 .as_array()
@@ -948,7 +951,7 @@ async fn wait_for_matched_count(path: &Path, protocol: &str, expected: usize) ->
 
 async fn wait_for_unmatched_count(path: &Path, protocol: &str, expected: usize) -> Value {
     for _ in 0..150 {
-        if let Ok(raw) = tokio::fs::read_to_string(path).await
+        if let Ok(raw) = crate::recorder::test_io::read_to_string(path).await
             && let Ok(report) = serde_json::from_str::<Value>(&raw)
             && report[protocol]["unmatched"]
                 .as_array()

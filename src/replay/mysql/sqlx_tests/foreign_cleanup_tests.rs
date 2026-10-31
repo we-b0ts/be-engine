@@ -83,7 +83,7 @@ async fn foreign_rollback_can_be_omitted_while_current_business_rollback_stays_r
                 if consume_foreign_first { 0 } else { 2 }
             );
             assert_eq!(
-                state.unused_exchanges(ReplaySource::Global).len(),
+                state.unused_exchanges(ReplaySource::Startup).len(),
                 2,
                 "global reads are still evidence"
             );

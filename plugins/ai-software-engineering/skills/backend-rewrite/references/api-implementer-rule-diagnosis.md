@@ -1,7 +1,7 @@
 # Rule Diagnosis
 
 Read this after tracing Source and Target behavior. The authored
-`traffic-policy/v2` document lives at `project.policy`. Workers return Source
+`traffic-policy/v3` document lives at `project.policy`. Workers return Source
 conclusions and a proposed declaration/rule document; the coordinator plans/applies it.
 Follow the [shared rule evidence contract](rule-policy.md) for API-driven hints,
 evidence, additive proposals, explicit replacement and verification boundaries. The complete technical
@@ -126,3 +126,21 @@ from a worker report or edit workflow state.
 Memcached `SET` exptime retains native protocol comparison: relative TTL and zero
 stay exact, absolute expirations compare remaining TTL within the fixed engine
 window. A value codec rule does not change exptime/CAS/noreply behavior.
+
+## Foreign Dependencies And Batched Hypotheses
+
+Read `facts.api_information` or `dependency-attribution show --api <route>`
+on passing and failing attempts. It preserves every attempted time/identity
+hypothesis, including rejected probes, and groups actionable Source questions
+without treating a successful speculative match as proof. Prove value rules
+for your API and return one combined proposal after the completed diagnostic
+attempt. Exact request matching and finite occurrences remain mandatory.
+
+For unused Source occurrences, submit your API's concrete exclusion evidence
+with `dependency-attribution claim --file <foreign-unused.json>`. This is a
+claim for independent repository analysis, not permission to ignore a call. You
+do not need to search every other API. For unmatched requests, use the real
+protected `target_observation_id` and `dependency-attribution investigate`; do
+not invent a Source UUID or infer async behavior from a missing candidate.
+The repository analyst owns process-task and foreign-API attribution. Return
+its independent work to the coordinator; do not apply ownership or acceptance.

@@ -1,6 +1,6 @@
 # Unified Traffic Rules
 
-Use one `traffic-policy/v2` policy for acquisition, classification, input
+Use one `traffic-policy/v3` policy for acquisition, classification, input
 adaptation and all comparisons. Managed project configuration contains:
 
 ```yaml
@@ -10,7 +10,7 @@ project:
 
 The path is relative to the target repository root. Initialization creates an
 empty policy with endpoint aliases and `rules: []`; it supplies
-no project-specific exceptions. Only `traffic-policy/v2` is accepted; former
+no project-specific exceptions. Only `traffic-policy/v3` is accepted; former
 version-numbered verification documents, v1 and separate Source policies reject.
 
 ## Discover, Plan, Apply
@@ -130,7 +130,7 @@ still match. Native SQL
 origin mapping remains conservative and does not guess units from a column name.
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 json:
   fields:
     /written_at: {kind: time, formats: [unix_milliseconds]}

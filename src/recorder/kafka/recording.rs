@@ -15,6 +15,7 @@ use crate::recorder::{
 };
 
 pub(super) struct ProduceCompletion {
+    pub(super) targets: crate::active_case::DependencyTargets,
     pub(super) request_sequence: u64,
     pub(super) record_sequence: u64,
     pub(super) api_version: i16,
@@ -26,6 +27,7 @@ pub(super) struct ProduceCompletion {
 }
 
 pub(super) struct FetchCompletion {
+    pub(super) targets: crate::active_case::DependencyTargets,
     pub(super) sequence: u64,
     pub(super) api_version: i16,
     pub(super) started: Instant,
@@ -33,6 +35,14 @@ pub(super) struct FetchCompletion {
     pub(super) records: Vec<KafkaRecord>,
     pub(super) outcome: DependencyExchangeOutcome,
     pub(super) duration_ms: Option<u128>,
+}
+
+struct DeliveryCompletion<'a> {
+    sequence: u64,
+    fetch_sequence: u64,
+    api_version: i16,
+    record: KafkaRecord,
+    targets: &'a crate::active_case::DependencyTargets,
 }
 
 pub(super) async fn record_produce_completion(
@@ -56,6 +66,9 @@ pub(super) async fn record_produce_completion(
         }
         (_, _) => None,
     };
+    completion
+        .targets
+        .finish_capture_metadata(completion.outcome.label());
     for (index, record) in completion.records.into_iter().enumerate() {
         let error_code = response.as_ref().and_then(|response| {
             response
@@ -91,8 +104,7 @@ pub(super) async fn record_produce_completion(
             )]
         };
         let captured = capture_record(record, state.config().recording.max_body_bytes);
-        record_event(
-            state,
+        state.record_event_for_targets(
             RecorderEvent::KafkaProduce(KafkaProduceEvent {
                 id: Uuid::new_v4(),
                 connection_id,
@@ -115,8 +127,8 @@ pub(super) async fn record_produce_completion(
                 replay_safe: response_replay_safe && captured.replay_safe,
                 parse_warnings: warnings,
             }),
-        )
-        .await?;
+            completion.targets.clone(),
+        );
     }
     Ok(())
 }
@@ -128,11 +140,13 @@ pub(super) async fn record_fetch_completion(
     context: &KafkaConnectionContext,
     completion: FetchCompletion,
 ) -> Result<()> {
+    completion
+        .targets
+        .finish_capture_metadata(completion.outcome.label());
     let duration_ms = completion
         .duration_ms
         .unwrap_or_else(|| completion.started.elapsed().as_millis());
-    record_event(
-        state,
+    state.record_event_for_targets(
         RecorderEvent::KafkaFetch(KafkaFetchEvent {
             id: Uuid::new_v4(),
             connection_id,
@@ -150,8 +164,8 @@ pub(super) async fn record_fetch_completion(
             replay_safe: true,
             parse_warnings: Vec::new(),
         }),
-    )
-    .await?;
+        completion.targets.clone(),
+    );
     if completion.outcome != DependencyExchangeOutcome::Response {
         return Ok(());
     }
@@ -160,11 +174,14 @@ pub(super) async fn record_fetch_completion(
         record_delivery(
             state,
             connection_id,
-            *delivery_sequence,
-            completion.sequence,
             context,
-            completion.api_version,
-            record,
+            DeliveryCompletion {
+                sequence: *delivery_sequence,
+                fetch_sequence: completion.sequence,
+                api_version: completion.api_version,
+                record,
+                targets: &completion.targets,
+            },
         )
         .await?;
     }
@@ -174,28 +191,24 @@ pub(super) async fn record_fetch_completion(
 async fn record_delivery(
     state: &AppState,
     connection_id: Uuid,
-    sequence: u64,
-    fetch_sequence: u64,
     context: &KafkaConnectionContext,
-    api_version: i16,
-    record: KafkaRecord,
+    completion: DeliveryCompletion<'_>,
 ) -> Result<()> {
-    let timestamp = record.timestamp_ms;
-    let captured = capture_record(record, state.config().recording.max_body_bytes);
-    record_event(
-        state,
+    let timestamp = completion.record.timestamp_ms;
+    let captured = capture_record(completion.record, state.config().recording.max_body_bytes);
+    state.record_event_for_targets(
         RecorderEvent::KafkaDelivery(KafkaDeliveryEvent {
             id: Uuid::new_v4(),
             connection_id,
-            sequence,
-            fetch_sequence,
+            sequence: completion.sequence,
+            fetch_sequence: completion.fetch_sequence,
             timestamp: Utc::now(),
             client_addr: context.client_addr.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,
             target_addr: context.target_addr.clone(),
             upstream_addr: context.upstream_addr.clone(),
-            api_version,
+            api_version: completion.api_version,
             topic: captured.topic,
             key: captured.key,
             headers: captured.headers,
@@ -204,8 +217,9 @@ async fn record_delivery(
             replay_safe: captured.replay_safe,
             parse_warnings: Vec::new(),
         }),
-    )
-    .await
+        completion.targets.clone(),
+    );
+    Ok(())
 }
 
 struct CapturedRecord {
@@ -243,9 +257,4 @@ fn capture_record(record: KafkaRecord, max_body_bytes: usize) -> CapturedRecord 
         value,
         replay_safe,
     }
-}
-
-async fn record_event(state: &AppState, event: RecorderEvent) -> Result<()> {
-    state.record_event(event);
-    Ok(())
 }

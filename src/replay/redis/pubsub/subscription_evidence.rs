@@ -51,33 +51,12 @@ impl Requirement {
 }
 
 impl PubSubState {
-    pub(in crate::replay) fn retain_subscription_mirror(
-        &mut self,
-        record: RecordedExchange,
-    ) -> Result<()> {
-        validate_confirmation(&record)?;
-        ensure!(
-            self.subscription_mirrors
-                .insert((record.connection_id, record.sequence), record)
-                .is_none(),
-            "ambiguous recorded Redis subscription mirror identity"
-        );
-        Ok(())
-    }
-
     fn requirements(&self) -> Result<BTreeMap<Anchor, Requirement>> {
         let mut requirements: BTreeMap<Anchor, Requirement> = BTreeMap::new();
         for (record, kind, subject, global) in self
             .pushes
             .iter()
-            .map(|p| {
-                (
-                    &p.record,
-                    p.kind,
-                    &p.subject,
-                    p.source == ReplaySource::Global,
-                )
-            })
+            .map(|p| (&p.record, p.kind, &p.subject, p.source.is_run_owned()))
             .chain(
                 self.indexed
                     .lanes
@@ -178,7 +157,7 @@ impl RedisReplayState {
                 "Redis Pub/Sub Case callback subscription is outside the selected command inventory"
             );
             let index = self.exchanges.len();
-            self.register_exchange(record.clone(), ReplaySource::Global, None, targets, rules)?;
+            self.register_exchange(record.clone(), ReplaySource::Startup, None, targets, rules)?;
             subscriptions.insert(anchor, (index, record));
         }
         self.pubsub.subscription_mirrors.clear();
@@ -241,7 +220,7 @@ pub(super) fn loaded_subscriptions(
 fn ensure_same_subscription(original: &RecordedExchange, mirror: &RecordedExchange) -> Result<()> {
     fn normalized(record: &RecordedExchange) -> Result<serde_json::Value> {
         let mut record = record.clone();
-        record.global_dependency_reason = None;
+        record.capture = None;
         for capture in record.args.iter_mut().chain([&mut record.response]) {
             capture.data = STANDARD.encode(capture.decode()?);
             capture.encoding = "base64".into();

@@ -89,6 +89,9 @@ impl RequestContracts {
         store: WitnessStore,
         observe_sources: bool,
     ) -> Result<()> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.hypothesis_journal = Some(store.hypothesis_journal()?);
+        }
         self.witnesses = Some(store);
         if !observe_sources {
             return Ok(());
@@ -99,19 +102,18 @@ impl RequestContracts {
             .expect("request contracts")
             .cases
             .iter()
-            .map(|(id, anchor)| (id.clone(), anchor.dir.clone()))
+            .map(|(id, anchor)| (id.clone(), anchor.dependencies_path.clone()))
             .collect::<Vec<_>>();
-        for (id, dir) in cases {
-            let path = dir.join("dependencies.jsonl");
-            if path.is_file() {
-                let bytes = std::fs::read(path)?;
+        for (id, path) in cases {
+            if crate::dependency_index::scoped::exists(&path) {
+                let bytes = crate::dependency_index::scoped::read_bytes(&path)?;
                 self.register_source_records(&id, &bytes)?;
                 for line in bytes
                     .split(|byte| *byte == b'\n')
                     .filter(|line| !line.is_empty())
                 {
                     let event: Value = serde_json::from_slice(line)?;
-                    if !event["global_dependency_reason"].is_string() {
+                    if crate::dependency::observation::is_case_event(&event) {
                         self.observe_unified_source(&id, &event)?;
                     }
                 }
@@ -120,6 +122,7 @@ impl RequestContracts {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn witness_manifest(
         &self,
     ) -> Option<crate::policy_evidence::WitnessManifest> {
@@ -128,6 +131,7 @@ impl RequestContracts {
             .and_then(|store| store.manifest().ok())
     }
 
+    #[cfg(test)]
     pub(in crate::replay) fn seal_witnesses(&self) -> Result<()> {
         if let Some(store) = &self.witnesses {
             store.sealed_manifest()?;
@@ -191,6 +195,7 @@ impl RequestContracts {
             id,
             crate::policy_evidence::TargetMetadata {
                 case_id: case.into(),
+                run_owner: None,
                 surface: Surface::DependencyRequest,
                 role: TargetRole::IndependentTargetObservation,
                 resource,
@@ -340,7 +345,12 @@ impl RequestContracts {
                 Err(error) => return Some(Err(error)),
             };
         let actual = keys.as_deref().unwrap_or(actual);
-        self.preview_unified_redis(context, source, actual)
+        let ordinary = self.preview_unified_redis(context, source, actual);
+        if ordinary.as_ref().is_some_and(Result::is_ok) {
+            return ordinary;
+        }
+        self.preview_redis_hypothesis(context, source, actual)
+            .or(ordinary)
             .or_else(|| {
                 keys.is_some().then(|| {
                     ensure!(
@@ -495,8 +505,8 @@ impl RequestContracts {
         context: &RedisRequestContext<'_>,
         args: &[Vec<u8>],
     ) -> Result<ObservationRetention> {
-        if self.compiled.is_none() || self.witnesses.is_none() {
-            return Ok(ObservationRetention::Retained);
+        if self.witnesses.is_none() {
+            return Ok(ObservationRetention::Unavailable);
         }
         let id = context
             .observation_id

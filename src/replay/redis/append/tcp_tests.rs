@@ -109,7 +109,7 @@ async fn replay_tcp_scope(
     }
     std::fs::write(
         root.join(".traffic-e2e/policy.yaml"),
-        json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
+        json!({"format":"traffic-policy/v3","rules":rules}).to_string(),
     )
     .unwrap();
     crate::replay::write_test_recording_network_manifest(root);
@@ -278,7 +278,7 @@ async fn replay_tcp_scope(
         chunks.len()
     );
     assert_eq!(
-        std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+        crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap(),
         original
     );
 }

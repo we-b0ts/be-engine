@@ -14,11 +14,16 @@ use super::model::{FileStamp, RecordLocation};
 pub(crate) struct RecordReader {
     capacity: usize,
     bytes: usize,
-    records: HashMap<(PathBuf, u64, String), Arc<Vec<u8>>>,
-    order: VecDeque<(PathBuf, u64, String)>,
+    records: HashMap<RecordKey, CachedRecord>,
+    order: VecDeque<(RecordKey, u64)>,
+    generation: u64,
+    source: Option<(PathBuf, super::scoped::Source)>,
     pub(crate) source_bytes: u64,
     pub(crate) hits: usize,
 }
+
+type RecordKey = (PathBuf, u64, String);
+type CachedRecord = (Arc<Vec<u8>>, u64);
 
 impl RecordReader {
     pub(crate) fn new(capacity: usize) -> Self {
@@ -27,6 +32,8 @@ impl RecordReader {
             bytes: 0,
             records: HashMap::new(),
             order: VecDeque::new(),
+            generation: 0,
+            source: None,
             source_bytes: 0,
             hits: 0,
         }
@@ -38,17 +45,51 @@ impl RecordReader {
         stamp: &FileStamp,
         location: &RecordLocation,
     ) -> Result<Arc<Vec<u8>>> {
+        let source = match &self.source {
+            Some((original, source)) if original == path => source.clone(),
+            _ => {
+                let mut source = super::scoped::resolve(path)?;
+                // Record offsets already come from the prepared index. Retain
+                // only the immutable file/view identity, never the full scope.
+                source.locations = None;
+                self.source = Some((path.to_owned(), source.clone()));
+                source
+            }
+        };
+        self.read_source(&source, stamp, location)
+    }
+
+    pub(crate) fn read_source(
+        &mut self,
+        source: &super::scoped::Source,
+        stamp: &FileStamp,
+        location: &RecordLocation,
+    ) -> Result<Arc<Vec<u8>>> {
+        source.validate()?;
+        let path = &source.path;
         ensure!(
-            FileStamp::read(path)? == *stamp,
+            FileStamp::read_native(path)? == *stamp,
             "indexed dependency file changed: {}",
             path.display()
         );
         let key = (path.to_path_buf(), location.offset, location.sha256.clone());
-        if let Some(bytes) = self.records.get(&key) {
+        self.generation = self.generation.wrapping_add(1);
+        if let Some((bytes, generation)) = self.records.get_mut(&key) {
             self.hits += 1;
-            self.order.retain(|entry| entry != &key);
-            self.order.push_back(key);
-            return Ok(bytes.clone());
+            *generation = self.generation;
+            let bytes = bytes.clone();
+            self.order.push_back((key, self.generation));
+            // Compact stale touches amortized, rather than linearly scanning
+            // the entire hot set on every cache hit. Repeated hits stay bounded.
+            if self.order.len() > self.records.len().saturating_mul(2) + 64 {
+                self.order.retain(|(key, generation)| {
+                    self.records
+                        .get(key)
+                        .is_some_and(|(_, current)| current == generation)
+                });
+            }
+            source.validate()?;
+            return Ok(bytes);
         }
         ensure!(
             location
@@ -66,23 +107,31 @@ impl RecordReader {
             "indexed dependency record checksum mismatch"
         );
         ensure!(
-            FileStamp::read(path)? == *stamp,
+            FileStamp::read_native(path)? == *stamp,
             "indexed dependency file changed during read"
         );
         self.source_bytes += location.length;
+        source.validate()?;
         let bytes = Arc::new(bytes);
         if bytes.len() <= self.capacity {
             while self.bytes + bytes.len() > self.capacity {
-                let Some(old) = self.order.pop_front() else {
+                let Some((old, generation)) = self.order.pop_front() else {
                     break;
                 };
-                if let Some(removed) = self.records.remove(&old) {
+                if self
+                    .records
+                    .get(&old)
+                    .is_none_or(|(_, current)| *current != generation)
+                {
+                    continue;
+                }
+                if let Some((removed, _)) = self.records.remove(&old) {
                     self.bytes -= removed.len();
                 }
             }
             self.bytes += bytes.len();
-            self.order.push_back(key.clone());
-            self.records.insert(key, bytes.clone());
+            self.order.push_back((key.clone(), self.generation));
+            self.records.insert(key, (bytes.clone(), self.generation));
         }
         Ok(bytes)
     }

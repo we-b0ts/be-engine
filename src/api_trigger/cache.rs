@@ -54,7 +54,7 @@ pub(crate) fn load(source: &Path, rules: &[BackgroundDependencyRuleConfig]) -> R
         stamps.insert(request.clone(), FileStamp::read(&request)?);
     }
     let global = root.join("global-dependencies.jsonl");
-    if global.try_exists()? {
+    if crate::dependency_index::scoped::exists(&global) {
         stamps.insert(global.clone(), FileStamp::read(&global)?);
     }
     let stamps: BTreeMap<_, _> = stamps

@@ -107,6 +107,10 @@ pub(super) fn with_repository_cache<T>(operation: impl FnOnce() -> T) -> T {
     cache::scope(operation)
 }
 
+pub(super) fn fresh_replay_identity(root: &Path) -> Result<String> {
+    cache::fresh(|| replay_identity(root))
+}
+
 fn directory_files_hash(target_root: &Path, review: bool, policy: &Path) -> Result<Fnv1a> {
     let mut paths_args = vec![
         "ls-files",

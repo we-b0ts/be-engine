@@ -75,7 +75,7 @@ async fn runtime() -> (tempfile::TempDir, ReplayRuntime) {
     events[3]["connection_id"] = json!(Uuid::from_u128(2));
     runtime_with_source(
         &events,
-        json!({"format":"traffic-policy/v2", "rules":[refresh_rule()]}),
+        json!({"format":"traffic-policy/v3", "rules":[refresh_rule()]}),
     )
     .await
 }

@@ -219,7 +219,7 @@ fn global_expiry_formats_compose_with_signed_jwt_companion_proofs() {
 fn protobuf_container_rule_and_generic_child_time_share_one_strict_codec() {
     let raw: serde_yaml::Value = serde_yaml::from_str(
         r#"
-format: traffic-policy/v2
+format: traffic-policy/v3
 rules:
 - id: child-time
   surface: api.response
@@ -251,7 +251,7 @@ rules:
     let child = crate::policy::compile_rule(&child).unwrap();
     let policy = crate::policy::parse_policy(
         &serde_yaml::to_string(&serde_json::json!({
-            "format":"traffic-policy/v2","rules":[raw["rules"][1].clone()]
+            "format":"traffic-policy/v3","rules":[raw["rules"][1].clone()]
         }))
         .unwrap(),
     )

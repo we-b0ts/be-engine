@@ -224,6 +224,7 @@ fn fail(replay: &mut ReplayState, id: PushId, reason: String) {
         .events
         .unsafe_events
         .push(CommandRequestReport {
+            target_observation_id: None,
             case_id: None,
             target,
             command: "PUBSUB_PUSH".into(),

@@ -74,8 +74,8 @@ async fn fixture(shared: bool, end_path: &str, captured_scope: bool) -> Fixture 
     .await
     .unwrap();
     let mut observation = json!({
-        "version":1,"request_timeout_ms":500,"end_reason":"resource",
-        "complete":true,"inventory_complete":true,"source_stop_required":false,
+        "version":2,"request_timeout_ms":500,"end_reason":"resource",
+        "capture_complete":true,"business_complete":true,"business_completion":"observed","inventory_complete":true,"source_stop_required":false,
         "cleanup_refs":[],"completed_refs":[
             {"protocol":"http","exchange_id":cache},
             {"protocol":"http","exchange_id":completed}
@@ -98,7 +98,7 @@ async fn fixture(shared: bool, end_path: &str, captured_scope: bool) -> Fixture 
         ""
     };
     let policy = temp.path().join("policy.yaml");
-    tokio::fs::write(&policy,format!("format: traffic-policy/v2\n{cache_rule}async_api:\n  POST /jobs:\n    - when_response: {{/status: queued}}\n      end:\n        - http: {{method: POST, endpoint: 'auth.test:80', path: {end_path}}}\n    - when_response: {{/status: other}}\n      end:\n        - http: {{method: POST, endpoint: 'auth.test:80', path: /cached}}\n  POST /refresh:\n    end:\n      - http: {{method: POST, endpoint: 'auth.test:80', path: /cached}}\n")).await.unwrap();
+    tokio::fs::write(&policy,format!("format: traffic-policy/v3\n{cache_rule}async_api:\n  POST /jobs:\n    - when_response: {{/status: queued}}\n      end:\n        - http: {{method: POST, endpoint: 'auth.test:80', path: {end_path}}}\n    - when_response: {{/status: other}}\n      end:\n        - http: {{method: POST, endpoint: 'auth.test:80', path: /cached}}\n  POST /refresh:\n    end:\n      - http: {{method: POST, endpoint: 'auth.test:80', path: /cached}}\n")).await.unwrap();
     crate::replay::write_test_recording_network_manifest(&root);
     let runtime = ReplayRuntime::load(
         MysqlReplayConfig {
@@ -153,7 +153,7 @@ fn index(state: &ReplayState, cache: Uuid) -> usize {
 }
 
 #[tokio::test]
-async fn shared_http_initialization_does_not_block_a_completed_case_or_fake_consumption() {
+async fn shared_http_permission_does_not_waive_the_case_actual_inventory() {
     let fixture = fixture(true, "/submit", true).await;
     let ended = tokio::time::timeout(
         Duration::from_secs(1),
@@ -161,24 +161,23 @@ async fn shared_http_initialization_does_not_block_a_completed_case_or_fake_cons
     )
     .await
     .unwrap();
-    assert_eq!(ended["ok"], true, "{ended}");
+    assert_eq!(ended["ok"], false, "{ended}");
     let state = fixture.runtime.state.lock().await;
     let exchange = &state.http_exchanges[index(&state, fixture.cache)];
-    assert_eq!(exchange.source, ReplaySource::Global);
+    assert_eq!(exchange.source, ReplaySource::Case);
     assert_eq!(exchange.status, ReplayExchangeStatus::Available);
     assert!(exchange.shared_origin.is_some());
-    assert!(
-        state
-            .unused_http_exchanges(ReplaySource::Case, false)
-            .is_empty()
+    assert_eq!(
+        state.unused_http_exchanges(ReplaySource::Case, false).len(),
+        1
     );
     assert_eq!(
         state
-            .unused_http_exchanges(ReplaySource::Global, false)
+            .unused_http_exchanges(ReplaySource::Startup, false)
             .len(),
         1
     );
-    assert_eq!(state.active_case_id, None);
+    assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
 }
 
 #[tokio::test]

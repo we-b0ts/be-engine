@@ -12,9 +12,9 @@ impl ReplayState {
         if !matches!(command, "COM_PING" | "COM_INIT_DB") {
             return None;
         }
-        for source in [ReplaySource::Case, ReplaySource::Global] {
+        for source in [ReplaySource::Case, ReplaySource::Startup] {
             let index = self.mysql.exchanges.iter().position(|exchange| {
-                exchange.source == source
+                exchange.source.matches_scope(source)
                     && exchange.status.is_available()
                     && exchange.record.command == command
                     && exchange.record.sql.as_deref() == argument
@@ -33,6 +33,10 @@ impl ReplayState {
                 ReplayExchangeStatus::Responding
             };
             let matched = MatchedExchange {
+                hypothesis_owner: self
+                    .replay_policy
+                    .as_ref()
+                    .map(|p| p.request_contracts.clone()),
                 transaction_owner: None,
                 value_delivery: None,
                 time_copy_delivery: None,

@@ -165,10 +165,9 @@ async fn terminal_waits_for_original_writer_reservations_and_no_idle_heuristic()
 }
 
 #[tokio::test]
-async fn default_dependency_failure_stops_source_and_finishes_without_invalidation() {
+async fn recoverable_dependency_failure_waits_for_retry_and_terminal_resource() {
     let (registry, _guard, id) = active(Duration::from_secs(2));
     let ordinary = registry.current_targets_for_http_request(true);
-    let pending = ordinary.clone();
     let process = registry
         .current_targets_for_http_request(false)
         .into_process_owned("known-process-resource".into());
@@ -177,28 +176,26 @@ async fn default_dependency_failure_stops_source_and_finishes_without_invalidati
     assert!(registry.async_api_report(id).is_none());
     registry.observe_async_dependency_event(&event(true), &ordinary, true);
     drop(ordinary);
-    let draining = drain(&registry, id, Duration::from_millis(5));
-    tokio::time::timeout(Duration::from_secs(1), registry.wait_for_quiescing())
-        .await
-        .unwrap();
+    let draining = drain(&registry, id, Duration::from_secs(1));
+    tokio::time::sleep(Duration::from_millis(10)).await;
     assert!(!draining.is_finished());
     assert_eq!(registry.invalidation_for(id), None);
+    assert!(!registry.is_quiescing());
+    let retry = registry.current_targets_for_http_request(true);
+    registry.observe_async_dependency_event(&event(false), &retry, true);
     assert!(
         registry
             .current_targets_for_http_request(true)
             .cases
             .is_empty()
     );
-    // Source shutdown/transport reset writes a termination observation against
-    // this original reservation before finally releasing it.
-    registry.observe_async_dependency_event(&event(true), &pending, true);
-    drop(pending);
+    drop(retry);
     drop(process);
     assert_eq!(draining.await.unwrap(), DependencyDrainResult::Drained);
     let report = registry.async_api_report(id).unwrap().1;
-    assert_eq!(report["end_reason"], "dependency_failure");
-    assert_eq!(report["complete"], true);
-    assert_eq!(report["source_stop_required"], true);
+    assert_eq!(report["end_reason"], "resource");
+    assert_eq!(report["business_complete"], true);
+    assert_eq!(report["source_stop_required"], false);
 }
 
 #[tokio::test]

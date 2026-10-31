@@ -52,6 +52,7 @@ impl ConnectionOwnership {
 }
 
 use crate::recorder::http::stream;
+mod network;
 #[cfg(test)]
 mod stream_tests;
 
@@ -362,6 +363,25 @@ async fn forward_and_record(
             .await;
         }
     };
+
+    if let Err(err) = network::observe_request_attempt(&state, outbound.uri()).await {
+        return record_http_error(HttpErrorContext {
+            targets: targets.clone(),
+            state,
+            id,
+            client_addr,
+            scheme: scheme.to_string(),
+            method,
+            original_uri,
+            authority,
+            request_headers: request_headers_for_record,
+            request_body,
+            started,
+            request_started_at,
+            err,
+        })
+        .await;
+    }
 
     let capture_event = HttpExchangeEvent {
         outcome: crate::DependencyExchangeOutcome::Response,

@@ -117,7 +117,8 @@ pub struct RewriteMysqlExchangeDetail {
     pub parse_warnings: Vec<RewriteCapturePreview>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted_parse_warnings: usize,
-    pub case_dependency_matched_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture: Option<RewriteDependencyCaptureDetail>,
     pub connection_id: Option<String>,
     pub query_sequence: Option<u64>,
     /// Captured wire flags, not inferred transaction or source-call ownership.
@@ -125,6 +126,25 @@ pub struct RewriteMysqlExchangeDetail {
     pub server_status_before: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_status_after: Option<u64>,
+}
+
+/// Bounded ownership facts from the immutable physical dependency observation.
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteDependencyCaptureDetail {
+    pub owner_kind: String,
+    pub phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_case_id: Option<uuid::Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_task: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unattributed_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_rule_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub matched_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted_matched_rule_ids: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

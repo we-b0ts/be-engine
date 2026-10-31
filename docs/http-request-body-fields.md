@@ -5,7 +5,7 @@ SQL JSON columns and Redis JSON values. Declare each path once, without an API,
 endpoint, request effect or business model. JWT fields reference named profiles:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 signatures:
   default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
 json:

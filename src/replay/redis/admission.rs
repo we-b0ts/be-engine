@@ -42,6 +42,7 @@ pub(super) async fn match_command(
     let event = state.redis.request_event_index;
     let observed_at = state.redis.request_observed_at;
     let observation = state.redis.request_observation_id;
+    let observation_retained = state.redis.request_observation_retained;
     let deadline = tokio::time::Instant::now() + REFRESH_WAIT;
     while let Err(diagnostic) = &result {
         if !pending_delivery(
@@ -105,6 +106,7 @@ pub(super) async fn match_command(
         state.redis.request_event_index = event;
         state.redis.request_observed_at = observed_at;
         state.redis.request_observation_id = observation;
+        state.redis.request_observation_retained = observation_retained;
         result = state.redis.select_redis(
             case.as_deref(),
             target,
@@ -135,6 +137,13 @@ pub(super) async fn match_command(
                 state.redis.events.dirty_case_ids.insert(case.clone());
             }
             state.redis.events.unmatched.push(CommandRequestReport {
+                target_observation_id: observation.filter(|_| observation_retained).map(|id| {
+                    crate::policy_evidence::target_observation_id(
+                        &id.to_string(),
+                        crate::policy::Surface::DependencyRequest,
+                        crate::policy_evidence::TargetRole::IndependentTargetObservation,
+                    )
+                }),
                 target_event_index: event,
                 case_id: case,
                 target: target.clone(),

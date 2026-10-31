@@ -144,7 +144,7 @@ async fn capture(httpx: bool) {
         .case_dependency_safety_issue(&case)
         .await
         .unwrap();
-    let raw = tokio::fs::read_to_string(staging.join("dependencies.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(staging.join("dependencies.jsonl"))
         .await
         .unwrap();
     let event: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();

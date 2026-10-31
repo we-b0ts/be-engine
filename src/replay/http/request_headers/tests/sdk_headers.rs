@@ -14,7 +14,7 @@ async fn run(actual: Value) -> Value {
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     let path = case.join("policy.yaml");
-    std::fs::write(&path, "format: traffic-policy/v2\nrules: []\n").unwrap();
+    std::fs::write(&path, "format: traffic-policy/v3\nrules: []\n").unwrap();
     let (address, runtime, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(path), None).await;
     send(address, "/business", actual).await;
@@ -109,7 +109,7 @@ async fn protected_http_witness_cannot_waive_sdk_headers_or_business_values() {
 
 #[test]
 fn policy_cannot_declare_an_sdk_header_presence_exemption() {
-    let proposal = json!({"format":"traffic-policy/v2","rules":[{
+    let proposal = json!({"format":"traffic-policy/v3","rules":[{
         "id":"sdk","match":{"resource":{"protocol":"http","endpoint":"api.example.test:80"},"operation":"POST","path":"/business"},
         "effect":{"kind":"http_client_metadata","headers":["x-stainless-lang"]},
         "proof":{"source":"client.py:headers","fact":"An SDK header description does not grant permission to omit it"}

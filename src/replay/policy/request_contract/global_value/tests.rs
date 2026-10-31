@@ -6,7 +6,7 @@ const Y: &str = "33333333-3333-4333-8333-333333333333";
 
 fn owner() -> RequestContracts {
     let compiled = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /item_id: {kind: identity, formats: [uuid]}
@@ -27,6 +27,7 @@ json:
             recorded: DateTime::from_timestamp(1000, 0),
             actual: DateTime::from_timestamp(2000, 0),
             dir: PathBuf::new(),
+            dependencies_path: PathBuf::new(),
             conditions: Default::default(),
             source_body: None,
         },
@@ -37,7 +38,7 @@ json:
 fn url_owner() -> RequestContracts {
     let mut owner = owner();
     let compiled = crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /session_id: {kind: identity, formats: [uuid]}

@@ -5,7 +5,7 @@ use serde_json::json;
 
 fn fixture(fields: serde_json::Value) -> CompiledJsonPolicy {
     crate::policy::parse_and_compile_policy(
-        &json!({"format":"traffic-policy/v2","json":{"fields":fields}}).to_string(),
+        &json!({"format":"traffic-policy/v3","json":{"fields":fields}}).to_string(),
     )
     .unwrap()
     .global_json

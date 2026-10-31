@@ -18,13 +18,13 @@ fn fixture() -> (KafkaReplayState, KafkaRecord) {
     let mut state = KafkaReplayState::default();
     let mut targets = BTreeMap::new();
     state
-        .register_produce(produce, ReplaySource::Global, None, &mut targets)
+        .register_produce(produce, ReplaySource::Startup, None, &mut targets)
         .unwrap();
     state.register_fetch(serde_json::from_value(json!({"connection_id":connection,"sequence":2,
-        "target_host":"kafka.test","target_port":9092,"topics":["items"],"outcome":"response","duration_ms":0,"replay_safe":true})).unwrap(), ReplaySource::Global, None, &mut targets).unwrap();
+        "target_host":"kafka.test","target_port":9092,"topics":["items"],"outcome":"response","duration_ms":0,"replay_safe":true})).unwrap(), ReplaySource::Startup, None, &mut targets).unwrap();
     state.register_delivery(serde_json::from_value(json!({"connection_id":connection,"fetch_sequence":2,
         "target_host":"kafka.test","target_port":9092,"topic":"items","key":capture("key"),"value":capture("delivered"),
-        "headers":[],"message_timestamp_ms":123,"replay_safe":true})).unwrap(), ReplaySource::Global, None, &mut targets).unwrap();
+        "headers":[],"message_timestamp_ms":123,"replay_safe":true})).unwrap(), ReplaySource::Startup, None, &mut targets).unwrap();
     state.freeze_global_report_layout();
     state.initialize_global_report_usage(3);
     (state, actual)

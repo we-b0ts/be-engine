@@ -6,7 +6,7 @@ use crate::{
 use serde_json::json;
 
 fn policy() -> crate::policy::CompiledPolicy {
-    let document = json!({"format":"traffic-policy/v2", "json":{"fields":{
+    let document = json!({"format":"traffic-policy/v3", "json":{"fields":{
         "/items/*/id":{"kind":"identity","formats":[{"prefix":"msg_","format":"decimal"}]}
     }}});
     compile_policy(&parse_policy(&document.to_string()).unwrap()).unwrap()

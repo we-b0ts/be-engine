@@ -29,7 +29,7 @@ fn write(path: &Path, values: &[Value]) {
 }
 
 #[tokio::test]
-async fn foreign_commit_is_exempt_and_cannot_steal_the_business_commit() {
+async fn selectors_never_create_foreign_ownership_or_steal_the_business_commit() {
     tokio::time::timeout(Duration::from_secs(30), async {
         for lazy in [false, true] {
             for commit_business in [false, true] {
@@ -159,7 +159,6 @@ async fn verify_business_commit(lazy: bool, commit_business: bool, known_global_
         std::mem::forget(tx);
     }
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.case_is_dirty("case-id"), !commit_business);
     let background = state
         .mysql
         .exchanges
@@ -181,17 +180,18 @@ async fn verify_business_commit(lazy: bool, commit_business: bool, known_global_
         state.mysql.exchanges[own].status.is_consumed(),
         commit_business
     );
-    assert_eq!(
-        state.process_owned_mysql().len(),
-        usize::from(!known_global_start)
+    assert!(
+        state.process_owned_mysql().is_empty(),
+        "a request selector is not independently proven ownership"
     );
-    assert_eq!(
-        state.global_mysql_transactions().len(),
-        usize::from(known_global_start)
+    assert!(
+        state.global_mysql_transactions().is_empty(),
+        "a raw global filename cannot prove a run owner kind"
     );
+    assert_eq!(state.mysql.exchanges[background].source, ReplaySource::Case);
     assert_eq!(
-        state.unused_exchanges(ReplaySource::Case).len(),
-        usize::from(!commit_business)
+        state.mysql.exchanges[background].case_id.as_deref(),
+        Some("case-id")
     );
     task.abort();
 }

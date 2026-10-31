@@ -1,22 +1,17 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use tokio::fs::OpenOptions;
 
-use super::summary::should_append_case_dependency;
 use crate::recorder::{CaseContext, Recorder, RecorderEvent};
 
 pub(super) async fn ensure_case_dependency_file(dir: &Path) -> Result<()> {
     tokio::fs::create_dir_all(dir)
         .await
         .with_context(|| format!("failed to create case recording dir {}", dir.display()))?;
-    let path = dir.join("dependencies.jsonl");
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .await
-        .with_context(|| format!("failed to create dependencies file {}", path.display()))?;
+    anyhow::ensure!(
+        dir.join("dependency-scope.json").is_file(),
+        "case has no immutable central dependency scope"
+    );
     Ok(())
 }
 
@@ -27,9 +22,6 @@ impl Recorder {
         event: &RecorderEvent,
         matched_by: &str,
     ) -> Result<()> {
-        if !should_append_case_dependency(event) {
-            return Ok(());
-        }
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         self.writer
@@ -44,9 +36,6 @@ impl Recorder {
         phase: &str,
         matched_by: &str,
     ) -> Result<()> {
-        if !should_append_case_dependency(event) {
-            return Ok(());
-        }
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         self.writer
@@ -64,7 +53,9 @@ impl Recorder {
         self.writer
             .flush_case(path.parent().expect("case dependency has a parent"))
             .await?;
-        let raw = match super::storage::read_to_string(&path).await {
+        let raw = match crate::dependency_index::scoped::read_bytes(&path)
+            .and_then(|bytes| String::from_utf8(bytes).map_err(anyhow::Error::from))
+        {
             Ok(raw) => raw,
             Err(err)
                 if err
@@ -172,49 +163,6 @@ impl Recorder {
     }
 }
 
-pub(super) fn dependency_line(
-    event: &RecorderEvent,
-    matched_by_field: &str,
-    matched_by: &str,
-) -> Result<Vec<u8>> {
-    let mut value = serde_json::to_value(event).context("failed to serialize dependency event")?;
-    if let serde_json::Value::Object(object) = &mut value {
-        object.insert(
-            matched_by_field.to_string(),
-            serde_json::Value::String(matched_by.to_string()),
-        );
-    }
-    let mut line = serde_json::to_vec(&value).context("failed to serialize dependency event")?;
-    line.push(b'\n');
-    Ok(line)
-}
-
-pub(super) fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
-    if is_debug_event(event) {
-        "dependencies-debug.jsonl"
-    } else {
-        "dependencies.jsonl"
-    }
-}
-
-pub(super) fn global_dependency_filename(event: &RecorderEvent) -> &'static str {
-    if is_debug_event(event) {
-        "global-dependencies-debug.jsonl"
-    } else {
-        "global-dependencies.jsonl"
-    }
-}
-
-fn is_debug_event(event: &RecorderEvent) -> bool {
-    matches!(
-        event,
-        RecorderEvent::MysqlQuery(_)
-            | RecorderEvent::MysqlResponse(_)
-            | RecorderEvent::MysqlPacket(_)
-    ) || matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "QUIT")
-        || matches!(event, RecorderEvent::MotanExchange(exchange) if exchange.heartbeat)
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -285,7 +233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mysql_ping_preserves_semantic_evidence_while_probe_queries_stay_debug_only() {
+    async fn mysql_probe_facts_are_preserved_without_business_consumption_slots() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();
         let case = CaseContext {
@@ -350,19 +298,21 @@ mod tests {
             .await
             .unwrap();
 
-        let semantic = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
-            .await
-            .unwrap();
-        assert_eq!(semantic.lines().count(), 2);
+        let semantic =
+            crate::recorder::test_io::read_to_string(case_dir.join("dependencies.jsonl"))
+                .await
+                .unwrap();
+        assert_eq!(semantic.lines().count(), 5);
         assert!(semantic.contains("SELECT 3"));
         assert!(semantic.contains("COM_PING"));
-        assert!(!semantic.contains("PROBABLYNOT"));
-        assert!(!semantic.contains("SELECT 1"));
-        assert!(!semantic.contains("SELECT 2"));
+        assert!(semantic.contains("PROBABLYNOT"));
+        assert!(semantic.contains("SELECT 1"));
+        assert!(semantic.contains("SELECT 2"));
 
-        let debug = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
-            .await
-            .unwrap();
+        let debug =
+            crate::recorder::test_io::read_to_string(case_dir.join("dependencies-debug.jsonl"))
+                .await
+                .unwrap();
         assert!(debug.contains("COM_PING"));
         assert!(debug.contains("PROBABLYNOT"));
         assert!(debug.contains("SELECT 1"));
@@ -371,9 +321,10 @@ mod tests {
         super::super::summary::write_case_dependency_summary(&case_dir)
             .await
             .unwrap();
-        let summary = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
-            .await
-            .unwrap();
+        let summary =
+            crate::recorder::test_io::read_to_string(case_dir.join("dependencies-summary.json"))
+                .await
+                .unwrap();
         assert!(!summary.contains("COM_PING"));
         assert!(!summary.contains("PROBABLYNOT"));
         assert!(!summary.contains("SELECT 1"));
@@ -420,21 +371,23 @@ mod tests {
             .unwrap();
         recorder.flush_global_dependency_files().await.unwrap();
 
-        let bootstrap_semantic =
-            tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
-                .await
-                .unwrap();
-        assert_eq!(bootstrap_semantic.lines().count(), 2);
+        let bootstrap_semantic = crate::recorder::test_io::read_to_string(
+            recorder.run_dir.join("global-dependencies.jsonl"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bootstrap_semantic.lines().count(), 5);
         assert!(bootstrap_semantic.contains("SELECT 3"));
         assert!(bootstrap_semantic.contains("COM_PING"));
-        assert!(!bootstrap_semantic.contains("PROBABLYNOT"));
-        assert!(!bootstrap_semantic.contains("SELECT 1"));
-        assert!(!bootstrap_semantic.contains("SELECT 2"));
+        assert!(bootstrap_semantic.contains("PROBABLYNOT"));
+        assert!(bootstrap_semantic.contains("SELECT 1"));
+        assert!(bootstrap_semantic.contains("SELECT 2"));
 
-        let bootstrap_debug =
-            tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies-debug.jsonl"))
-                .await
-                .unwrap();
+        let bootstrap_debug = crate::recorder::test_io::read_to_string(
+            recorder.run_dir.join("global-dependencies-debug.jsonl"),
+        )
+        .await
+        .unwrap();
         assert!(bootstrap_debug.contains("COM_PING"));
         assert!(bootstrap_debug.contains("PROBABLYNOT"));
         assert!(bootstrap_debug.contains("SELECT 1"));
@@ -442,7 +395,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn redis_quit_is_kept_in_debug_only() {
+    async fn redis_quit_is_retained_as_a_control_fact() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();
         let case = CaseContext {
@@ -476,23 +429,26 @@ mod tests {
             .await
             .unwrap();
 
-        let semantic = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
-            .await
-            .unwrap();
+        let semantic =
+            crate::recorder::test_io::read_to_string(case_dir.join("dependencies.jsonl"))
+                .await
+                .unwrap();
         assert!(semantic.contains("\"command\":\"GET\""));
-        assert!(!semantic.contains("\"command\":\"QUIT\""));
-        let debug = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
-            .await
+        assert!(semantic.contains("\"command\":\"QUIT\""));
+        let quit_fact = semantic
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|value| value["command"] == "QUIT")
             .unwrap();
-        assert!(debug.contains("\"command\":\"QUIT\""));
-        assert!(!debug.contains("\"command\":\"GET\""));
+        assert_eq!(quit_fact["capture"]["semantic_required"], false);
 
         super::super::summary::write_case_dependency_summary(&case_dir)
             .await
             .unwrap();
-        let summary = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
-            .await
-            .unwrap();
+        let summary =
+            crate::recorder::test_io::read_to_string(case_dir.join("dependencies-summary.json"))
+                .await
+                .unwrap();
         assert!(summary.contains("\"GET\""));
         assert!(!summary.contains("\"QUIT\""));
 
@@ -509,22 +465,23 @@ mod tests {
         }
         recorder.flush_global_dependency_files().await.unwrap();
 
-        let semantic =
-            tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
-                .await
-                .unwrap();
+        let semantic = crate::recorder::test_io::read_to_string(
+            recorder.run_dir.join("global-dependencies.jsonl"),
+        )
+        .await
+        .unwrap();
         assert!(semantic.contains("\"command\":\"GET\""));
-        assert!(!semantic.contains("\"command\":\"QUIT\""));
-        let debug =
-            tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies-debug.jsonl"))
-                .await
-                .unwrap();
-        assert!(debug.contains("\"command\":\"QUIT\""));
-        assert!(!debug.contains("\"command\":\"GET\""));
+        assert!(semantic.contains("\"command\":\"QUIT\""));
+        let quit_fact = semantic
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|value| value["command"] == "QUIT")
+            .unwrap();
+        assert_eq!(quit_fact["capture"]["semantic_required"], false);
     }
 
     #[tokio::test]
-    async fn motan_heartbeat_is_kept_in_debug_only() {
+    async fn motan_heartbeat_is_retained_as_a_control_fact() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();
         let case = CaseContext {
@@ -558,23 +515,26 @@ mod tests {
             .await
             .unwrap();
 
-        let semantic = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
-            .await
-            .unwrap();
+        let semantic =
+            crate::recorder::test_io::read_to_string(case_dir.join("dependencies.jsonl"))
+                .await
+                .unwrap();
         assert!(semantic.contains("SinaUserService#getUser"));
-        assert!(!semantic.contains("motan.rpc.heartbeat"));
-        let debug = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
-            .await
+        assert!(semantic.contains("motan.rpc.heartbeat"));
+        let heartbeat = semantic
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|value| value["heartbeat"] == true)
             .unwrap();
-        assert!(debug.contains("motan.rpc.heartbeat"));
-        assert!(!debug.contains("SinaUserService#getUser"));
+        assert_eq!(heartbeat["capture"]["semantic_required"], false);
 
         super::super::summary::write_case_dependency_summary(&case_dir)
             .await
             .unwrap();
-        let summary = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
-            .await
-            .unwrap();
+        let summary =
+            crate::recorder::test_io::read_to_string(case_dir.join("dependencies-summary.json"))
+                .await
+                .unwrap();
         assert!(summary.contains("SinaUserService#getUser"));
         assert!(!summary.contains("motan.rpc.heartbeat"));
     }

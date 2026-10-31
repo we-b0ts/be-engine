@@ -39,7 +39,7 @@ async fn queued(timing: Timing) {
             methods: vec!["POST".into()], paths: vec!["/jobs".into()], ..Default::default()
         }];
         config.recording.output_dir = temp.path().join("recordings");
-        config.recording.case_dependency_post_response_window_ms = 5;
+        config.recording.case_dependency_post_response_window_ms = 0;
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
         config.async_api.insert("POST /jobs".into(), serde_json::from_value(json!([
@@ -121,7 +121,7 @@ async fn queued(timing: Timing) {
         assert_eq!(report["inventory_complete"], true);
         assert_eq!(report["completed_refs"].as_array().unwrap().len(), 1);
         assert!(!state.inner.active_cases.is_quiescing());
-        let dependencies = tokio::fs::read_to_string(directory.join("dependencies.jsonl")).await.unwrap();
+        let dependencies = crate::recorder::test_io::read_to_string(directory.join("dependencies.jsonl")).await.unwrap();
         let dependencies = dependencies.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
         assert_eq!(dependencies.len(), 1);
         assert_eq!(dependencies[0]["method"], "POST");

@@ -36,9 +36,10 @@ async fn connected(
 
 async fn recorded_exchange(state: &AppState) -> serde_json::Value {
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     raw.lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
         .find(|event| event["event_type"] == "memcached_exchange")
@@ -212,9 +213,10 @@ async fn request_after_server_fin_is_forwarded_but_not_certified_by_the_old_fin(
         .unwrap()
         .unwrap();
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let exchanges: Vec<serde_json::Value> = raw
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())

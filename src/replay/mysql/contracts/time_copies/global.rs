@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn actual_historical_input_yields_copy_facts_without_new_relative_offset() {
-        let policy=crate::policy::parse_and_compile_policy("format: traffic-policy/v2\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n").unwrap();
+        let policy=crate::policy::parse_and_compile_policy("format: traffic-policy/v3\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n").unwrap();
         let response:RecordedMysqlResponse=serde_json::from_value(json!({"status":"resultset","columns":[
             {"name":"payload","database":"app","table":"tasks","column":"payload","sql_type":"JSON","family":"json"},
             {"name":"day","database":"app","table":"tasks","column":"day","sql_type":"DATE","family":"date"}

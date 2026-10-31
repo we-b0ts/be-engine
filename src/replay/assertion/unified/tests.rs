@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 fn mixed_native_response_preserves_private_identity_constraints_without_report_tokens() {
     let temp = tempfile::tempdir().unwrap();
     let policy = temp.path().join("policy.yaml");
-    std::fs::write(&policy, r#"format: traffic-policy/v2
+    std::fs::write(&policy, r#"format: traffic-policy/v3
 json:
   fields:
     /id: {kind: identity, formats: [uuid]}
@@ -51,7 +51,7 @@ fn new_policy_compares_json_without_weakening_status_or_stable_values() {
     let policy = temp.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /members: {kind: unordered}

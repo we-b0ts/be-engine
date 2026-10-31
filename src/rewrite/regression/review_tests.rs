@@ -53,7 +53,7 @@ fn both_purposes_ignore_old_receipts_at_entry() {
 }
 
 #[test]
-fn unchanged_purposes_require_final_review_and_sweep_before_progress_completion() {
+fn unchanged_purposes_require_final_review_and_actual_batch_before_progress_completion() {
     for record_new_traffic in [false, true] {
         let target = fixture();
         begin(RewriteRegressionBeginOptions {
@@ -63,7 +63,7 @@ fn unchanged_purposes_require_final_review_and_sweep_before_progress_completion(
         .unwrap();
         let store = RewriteStore::new(target.path()).unwrap();
         let mut state = store.load().unwrap().unwrap();
-        // Model the successful verification result; exercise final admission.
+        // Model first-pass API acceptance; this supplies no actual batch receipt.
         inventory::install(&mut state, vec!["GET /api".into()]).unwrap();
         state.phase = RewritePhase::SliceComplete;
         state.current_api_index = None;
@@ -104,34 +104,43 @@ fn unchanged_purposes_require_final_review_and_sweep_before_progress_completion(
         .unwrap();
         review::accept(target.path().into(), report.report_path).unwrap();
         state = store.load().unwrap().unwrap();
-        assert_eq!(state.phase, RewritePhase::ApiPending);
-        state.phase = RewritePhase::SliceComplete;
-        state.e2e_current = true;
-        state.target_fingerprint =
-            Some(fingerprint::repository_fingerprint(target.path()).unwrap());
-        inventory::complete_current_and_advance(&mut state).unwrap();
-        assert!(review::pre_revalidation::completion_current(
+        assert!(review::pre_revalidation::current(target.path(), &state));
+        assert!(!review::pre_revalidation::completion_current(
             target.path(),
             &state
         ));
+        assert!(state.dependency_review.batch_receipt.is_none());
         let before_commit = action::for_status(target.path(), &state).unwrap();
-        assert!(!before_commit.terminal_allowed);
-        assert!(matches!(
-            before_commit.action,
-            rewrite::RewriteAction::InputRequired { .. }
-        ));
+        assert_batch_pending(&before_commit);
         git(target.path(), &["add", ".traffic-e2e/progress.yaml"]);
         git(
             target.path(),
             &["commit", "-qm", "publish regression progress"],
         );
-        let completed = action::for_status(target.path(), &state).unwrap();
-        assert!(matches!(
-            completed.action,
-            rewrite::RewriteAction::Complete { .. }
-        ));
-        assert!(completed.terminal_allowed);
+        let state = store.load().unwrap().unwrap();
+        let pending = action::for_status(target.path(), &state).unwrap();
+        assert_batch_pending(&pending);
+        assert!(state.dependency_review.batch_receipt.is_none());
+        assert!(!crate::rewrite::dependency_review::batch_current(target.path(), &state).unwrap());
     }
+}
+
+fn assert_batch_pending(envelope: &rewrite::RewriteActionEnvelope) {
+    assert!(!envelope.terminal_allowed);
+    assert!(
+        matches!(
+            envelope.action,
+            rewrite::RewriteAction::AdvanceRequired {
+                kind: rewrite::RewriteAdvanceKind::BatchReplay,
+                ..
+            } | rewrite::RewriteAction::InputRequired {
+                reason: crate::rewrite::RewriteInputRequiredReason::RecordingEvidenceRequired,
+                ..
+            }
+        ),
+        "expected actual batch execution or missing sealed Source input, got {:?}",
+        envelope.action
+    );
 }
 
 #[tokio::test]

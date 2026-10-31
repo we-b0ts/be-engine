@@ -137,17 +137,7 @@ mod tests {
                 PUBLIC_PROGRESS.to_string()
             ]))
         );
-        let commit_action =
-            serde_json::to_value(publication_action(target.path(), &state)).unwrap();
-        assert_eq!(
-            commit_action.pointer("/action/kind"),
-            Some(&serde_json::json!("input_required"))
-        );
-        assert_eq!(
-            commit_action.pointer("/action/details/reason"),
-            Some(&serde_json::json!("verification_progress_commit_required"))
-        );
-        assert_eq!(commit_action["terminal_allowed"], false);
+        assert_missing_batch_evidence(target.path(), &state);
 
         git(target.path(), &["restore", ".traffic-e2e/progress.yaml"]);
         assert_eq!(
@@ -176,13 +166,11 @@ mod tests {
 
         git(target.path(), &["add", ".traffic-e2e/progress.yaml"]);
         git(target.path(), &["commit", "-m", "publish progress"]);
-        let published = publication_action(target.path(), &state);
-        // Publication alone cannot bypass the independent source review gate.
-        assert!(!published.terminal_allowed);
         assert_eq!(
-            serde_json::to_value(published).unwrap()["action"]["kind"],
-            "complete"
+            super::state(target.path(), &state),
+            Some(PublicationState::Published)
         );
+        assert_missing_batch_evidence(target.path(), &state);
     }
 
     #[test]
@@ -206,25 +194,41 @@ mod tests {
             Some(PublicationState::CommitRequired(expected.clone()))
         );
 
-        let action = serde_json::to_value(publication_action(target.path(), &state)).unwrap();
-        assert_eq!(
-            action.pointer("/action/details/required"),
-            Some(&serde_json::json!(expected))
-        );
-        assert_eq!(action["terminal_allowed"], false);
+        assert_missing_batch_evidence(target.path(), &state);
 
         git(target.path(), &["add", "."]);
         git(target.path(), &["commit", "-m", "publish delivery files"]);
-        assert!(!publication_action(target.path(), &state).terminal_allowed);
+        assert_eq!(
+            super::state(target.path(), &state),
+            Some(PublicationState::Published)
+        );
+        assert_missing_batch_evidence(target.path(), &state);
     }
 
-    // These tests isolate publication. Final review precedence is covered by
-    // the state-machine tests, while envelope still enforces terminal gates.
-    fn publication_action(
-        root: &Path,
-        state: &RewriteState,
-    ) -> super::super::model::RewriteActionEnvelope {
-        super::super::action::envelope(root, state, super::super::action::state_action(root, state))
+    // The publication state is independent of batch admission. A manually
+    // completed API and a committed progress file cannot replace a real batch.
+    fn assert_missing_batch_evidence(root: &Path, state: &RewriteState) {
+        let action = super::super::action::envelope(
+            root,
+            state,
+            super::super::action::state_action(root, state),
+        );
+        assert!(!action.terminal_allowed);
+        match action.action {
+            super::super::model::RewriteAction::InputRequired {
+                reason: super::super::model::RewriteInputRequiredReason::RecordingEvidenceRequired,
+                required,
+                ..
+            } => {
+                assert!(!required.is_empty());
+                assert!(
+                    required
+                        .iter()
+                        .any(|requirement| requirement.contains("sealed Source run"))
+                );
+            }
+            other => panic!("missing Source batch evidence must block publication: {other:?}"),
+        }
     }
 
     fn complete_state() -> RewriteState {

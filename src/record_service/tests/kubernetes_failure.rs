@@ -99,7 +99,8 @@ async fn exercise(unexpected_exit: bool) {
             .await
             .unwrap();
         wait_file(&temp.path().join("ready-1")).await;
-        let port = std::fs::read_to_string(temp.path().join("ready-1")).unwrap();
+        let port =
+            crate::recorder::test_io::read_to_string_sync(temp.path().join("ready-1")).unwrap();
         options
             .source_command
             .push(format!("127.0.0.1:{port}").into());
@@ -119,14 +120,17 @@ async fn exercise(unexpected_exit: bool) {
     let client = async {
         request(adapter, "/before").await;
         wait_count(&run, 1).await;
-        let pid = std::fs::read_to_string(work.join("identity")).unwrap();
+        let pid = crate::recorder::test_io::read_to_string_sync(work.join("identity")).unwrap();
         if unexpected_exit {
             std::fs::write(temp.path().join("exit-1"), "go").unwrap();
             return;
         }
         request(adapter, "/after").await;
         wait_count(&run, 2).await;
-        assert_eq!(std::fs::read_to_string(work.join("identity")).unwrap(), pid);
+        assert_eq!(
+            crate::recorder::test_io::read_to_string_sync(work.join("identity")).unwrap(),
+            pid
+        );
         assert_eq!(std::fs::read_dir(&recordings).unwrap().count(), 1);
         stop.take().unwrap().send(()).unwrap();
     };
@@ -153,7 +157,7 @@ async fn exercise(unexpected_exit: bool) {
     assert_eq!(manifest["failed_cases"], 0);
     assert_eq!(std::fs::read_dir(&recordings).unwrap().count(), 1);
     assert_eq!(
-        std::fs::read_to_string(temp.path().join("forwards")).unwrap(),
+        crate::recorder::test_io::read_to_string_sync(temp.path().join("forwards")).unwrap(),
         "1"
     );
     assert!(!cleanup.alive());
@@ -224,7 +228,7 @@ fn read_json(path: &Path) -> serde_json::Value {
 struct SourceCleanup(PathBuf);
 impl SourceCleanup {
     fn alive(&self) -> bool {
-        std::fs::read_to_string(&self.0).ok().and_then(|s| s.trim().parse::<i32>().ok())
+        crate::recorder::test_io::read_to_string_sync(&self.0).ok().and_then(|s| s.trim().parse::<i32>().ok())
             .is_some_and(|pid| unsafe { libc::kill(pid, 0) } == 0
                 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
     }
@@ -232,7 +236,7 @@ impl SourceCleanup {
 impl Drop for SourceCleanup {
     fn drop(&mut self) {
         if self.alive()
-            && let Ok(pid) = std::fs::read_to_string(&self.0)
+            && let Ok(pid) = crate::recorder::test_io::read_to_string_sync(&self.0)
         {
             let _ = std::process::Command::new("sudo")
                 .args(["-n", "--", "kill", "-KILL"])

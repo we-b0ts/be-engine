@@ -172,7 +172,6 @@ pub(in crate::replay) fn load(
                 case_id: exchange.case_id.clone().unwrap_or_default(),
                 request_fingerprint: recorded_fingerprint(&exchange.record)?,
             });
-            exchange.source = ReplaySource::Global;
         }
     }
     let keys = rules
@@ -193,7 +192,7 @@ pub(in crate::replay) fn load(
             let request_fingerprint = recorded_fingerprint(&record)?;
             register_http_exchange(
                 record,
-                ReplaySource::Global,
+                ReplaySource::Case,
                 Some(&case_id),
                 exchanges,
                 targets,

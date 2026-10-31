@@ -90,7 +90,7 @@ impl Fixture {
                             serde_json::to_value(CommandUnusedReport {
                                 index: entry.location.line - 1,
                                 case_id: None,
-                                source: ReplaySource::Global,
+                                source: ReplaySource::Startup,
                                 target: identity.target.clone(),
                                 connection_id: identity.connection_id,
                                 sequence: 1,
@@ -108,7 +108,7 @@ impl Fixture {
                 identity,
             });
         }
-        expected.push(json!({"index":9999,"case_id":null,"source":"global",
+        expected.push(json!({"index":9999,"case_id":null,"source":"startup",
             "background_original_case_id":"case-a","background_rule":"background"}));
         let report = owner.join("local/runs/first/reports/replay-report.json");
         fs::create_dir_all(report.parent().unwrap()).unwrap();

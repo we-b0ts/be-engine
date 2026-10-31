@@ -17,19 +17,19 @@ fn append_capability_requires_bounded_key_scope_and_exclusive_payload_ownership(
             .unwrap()
             .remove(key);
         let result = crate::policy::parse_policy(
-            &json!({"format":"traffic-policy/v2","rules":[rule]}).to_string(),
+            &json!({"format":"traffic-policy/v3","rules":[rule]}).to_string(),
         )
         .and_then(|p| crate::policy::compile_policy(&p));
         assert!(result.is_err(), "{path}");
     }
     let policy = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2","rules":[rule()]}).to_string(),
+        &json!({"format":"traffic-policy/v3","rules":[rule()]}).to_string(),
     )
     .unwrap();
     let mut missing_proof = rule();
     missing_proof.as_object_mut().unwrap().remove("proof");
     let runtime = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2","rules":[missing_proof]}).to_string(),
+        &json!({"format":"traffic-policy/v3","rules":[missing_proof]}).to_string(),
     )
     .unwrap();
     crate::policy::compile_policy(&runtime).unwrap();
@@ -42,7 +42,7 @@ fn append_capability_requires_bounded_key_scope_and_exclusive_payload_ownership(
     let mut other = rule();
     other["id"] = json!("other");
     let result = crate::policy::parse_policy(
-        &json!({"format":"traffic-policy/v2","rules":[rule(),other]}).to_string(),
+        &json!({"format":"traffic-policy/v3","rules":[rule(),other]}).to_string(),
     )
     .and_then(|policy| crate::policy::compile_policy(&policy));
     assert!(result.is_err());
@@ -51,14 +51,14 @@ fn append_capability_requires_bounded_key_scope_and_exclusive_payload_ownership(
         .as_object_mut()
         .unwrap()
         .remove("resource");
-    let key_only = json!({"format":"traffic-policy/v2","rules":[discovered.clone()]});
+    let key_only = json!({"format":"traffic-policy/v3","rules":[discovered.clone()]});
     assert!(crate::policy::parse_policy(&key_only.to_string()).is_ok());
     for field in ["path", "sql"] {
         let mut cross_protocol = discovered.clone();
         cross_protocol["match"][field] = json!("/other");
         assert!(
             crate::policy::parse_policy(
-                &json!({"format":"traffic-policy/v2","rules":[cross_protocol]}).to_string()
+                &json!({"format":"traffic-policy/v3","rules":[cross_protocol]}).to_string()
             )
             .is_err()
         );

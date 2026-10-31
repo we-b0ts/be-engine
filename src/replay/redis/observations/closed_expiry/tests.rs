@@ -235,6 +235,6 @@ fn source_expiry_observers_foreign_writers_or_inconsistent_reads_grant_no_omissi
     s.prepare_observations("case").unwrap();
     assert!(s.observations.profiles[0].closed_expiry.is_empty());
     let (_root, mut s) = state(&events(), vec![refresh_rule()]);
-    s.exchanges[1].source = ReplaySource::Global;
+    s.exchanges[1].source = ReplaySource::Startup;
     assert!(s.prepare_observations("case").is_err());
 }

@@ -35,6 +35,7 @@ async fn noop_response_confirms_preceding_quiet_success() {
 
 fn pending_binary_request(opaque: u32, opcode: u8, quiet: bool) -> PendingMemcachedExchange {
     PendingMemcachedExchange {
+        targets: crate::active_case::ActiveCaseRegistry::default().current_targets_for_event(),
         sequence: opaque as u64,
         request: MemcachedRequest {
             raw: Bytes::new(),
@@ -168,9 +169,10 @@ async fn pending_text_exchange_records_client_termination_as_replay_safe() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let raw =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let exchange = raw
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -250,9 +252,10 @@ async fn text_request_is_pending_before_upstream_write_completes() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     assert!(!traffic.contains("response has no pending request"));
 }
 
@@ -316,9 +319,10 @@ async fn text_connection_preserves_sequential_exchanges_across_an_idle_gap() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let events = traffic
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
@@ -430,7 +434,7 @@ async fn memcached_case_proxy_errors(
         .flush_case_dependency_files(&dir)
         .await
         .unwrap();
-    let raw = tokio::fs::read_to_string(dir.join("dependencies.jsonl"))
+    let raw = crate::recorder::test_io::read_to_string(dir.join("dependencies.jsonl"))
         .await
         .unwrap();
     raw.lines()

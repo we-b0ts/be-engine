@@ -23,13 +23,10 @@ pub(in crate::replay) fn load(
     source: &Path,
     rules: &[crate::BackgroundDependencyRuleConfig],
 ) -> Result<OriginIndex> {
-    let Some(root) = source
-        .ancestors()
-        .find(|path| path.join("recording-run.json").is_file())
-    else {
-        return Ok(OriginIndex::default());
-    };
-    crate::api_trigger::prepare(root, rules)
+    // Effective ownership is frozen from the independent attribution overlay.
+    // A native request selector is not authority to exempt another Case.
+    let _ = (source, rules);
+    Ok(OriginIndex::default())
 }
 
 impl MysqlReplayState {

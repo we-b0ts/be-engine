@@ -87,10 +87,11 @@ async fn capture_stream() {
     source.await.unwrap();
     state.recorder().publish_case(&case).await.unwrap();
     state.recorder().flush_traffic().await.unwrap();
-    let raw =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     let recorded: Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(recorded["response_stream"]["complete"], true);
     let timing: ResponseStream =
@@ -102,4 +103,21 @@ async fn capture_stream() {
     drop(case_guard);
     proxy.abort();
     connection.abort();
+    state.recorder().finish_run().await.unwrap();
+    let network = crate::recording_network::RecordingNetworkManifest::load(
+        &state
+            .recorder()
+            .run_dir
+            .join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+    )
+    .unwrap();
+    assert!(
+        network.accessed_endpoints.contains(
+            &crate::recording_network::RecordedEndpoint::new(
+                &authority.ip().to_string(),
+                authority.port()
+            )
+            .unwrap()
+        )
+    );
 }

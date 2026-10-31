@@ -133,6 +133,8 @@ pub struct AppConfig {
     #[serde(skip)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
     #[serde(skip)]
+    pub process_dependency_tasks: std::collections::BTreeMap<String, String>,
+    #[serde(skip)]
     pub async_api: std::collections::BTreeMap<String, crate::policy::AsyncApiRules>,
     /// Already admitted policy identity, used only for optional recording-time indexes.
     #[serde(skip)]
@@ -670,12 +672,8 @@ mod tests {
         assert_eq!(config.recording.post_ready_settle_ms, 15_000);
         assert_eq!(config.recording.post_ready_max_wait_ms, 180_000);
         assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);
-        assert_eq!(
-            config.recording.case_dependency_post_response_window_ms,
-            100
-        );
+        assert_eq!(config.recording.case_dependency_post_response_window_ms, 0);
         assert_eq!(config.recording.case_dependency_drain_timeout_ms, 5_000);
-        assert_eq!(config.recording.api_origin_dependency_idle_ms, 60_000);
         assert_eq!(
             config.recording.access_policy,
             RecordingAccessPolicy::Unrestricted

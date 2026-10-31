@@ -284,7 +284,7 @@ fn rejects_unsupported_rule_shapes_and_retired_section_authoring() {
     ] {
         assert!(serde_yaml::from_str::<RequestRules>(input).is_err());
     }
-    let original = "format: traffic-policy/v2\n# preserve this document\nrules: []\n";
+    let original = "format: traffic-policy/v3\n# preserve this document\nrules: []\n";
     let error = policy::add(original, &profile(), &rule()).unwrap_err();
     assert!(
         error
@@ -328,7 +328,7 @@ fn configured_source_does_not_require_a_local_binding() {
     let policy_path = root.path().join("policy.yaml");
     std::fs::write(
         &policy_path,
-        serde_yaml::to_string(&json!({"format":"traffic-policy/v2","rules":[{
+        serde_yaml::to_string(&json!({"format":"traffic-policy/v3","rules":[{
             "id":"bearer","match":{"api":"GET /api"},
             "effect":{"kind":"input_jwt","location":{"kind":"bearer_header","name":"authorization"},
                 "algorithm":"HS256","time":"preserve_relative","signing_key":{"kind":"target_env","name":"SECRET_KEY"}},

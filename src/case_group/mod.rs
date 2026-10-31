@@ -1,8 +1,5 @@
 mod discovery;
 mod index;
-mod snapshot;
-
-pub(crate) use snapshot::{PreparedGroupMembership, load_prepared_membership};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -301,7 +298,15 @@ pub(crate) fn published_case_dependency_paths(case_source: &Path) -> Result<Vec<
     cases
         .into_iter()
         .map(|case| {
-            let path = case.dir.join("dependencies.jsonl");
+            let path = if case
+                .dir
+                .join(crate::dependency_index::scoped::CASE_SCOPE)
+                .is_file()
+            {
+                crate::dependency_index::scoped::case_path(&case.dir)
+            } else {
+                case.dir.join("dependencies.jsonl")
+            };
             ensure!(
                 path.is_file(),
                 "published case {} has no dependencies.jsonl",

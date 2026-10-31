@@ -2,6 +2,7 @@
 
 mod api_policy;
 mod coordination;
+mod identity;
 mod kubernetes;
 mod options;
 mod proxy;
@@ -153,6 +154,7 @@ async fn run_prepared(
         }
         source::verify_sensitive_state_isolated(&options.data_root, &options.data_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT).join("recordings"), &config.tls.ca_key_path)?;
         let trust = process::prepare_source_trust(&runtime.path, &config.tls.ca_cert_path, &options.source_workdir, &program)?;
+        identity::register(&state, &program, &options.source_workdir).await?;
         source = Some(process::spawn_source(&program, &options.source_command[1..], &options.source_workdir, &trust)?);
         let source = source.as_mut().unwrap();
         tokio::select! {
@@ -235,6 +237,11 @@ async fn run_prepared(
         && result.is_ok()
     {
         result = Err(error);
+    }
+    if !state.close_dependency_capture().await && result.is_ok() {
+        result = Err(anyhow::anyhow!(
+            "run dependency capture did not drain after Source shutdown"
+        ));
     }
     let completion_reason = if normal_shutdown {
         RecordingCompletionReason::ShutdownSignal

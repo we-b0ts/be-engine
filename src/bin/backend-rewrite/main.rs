@@ -21,6 +21,7 @@ use traffic_e2e::{
 };
 
 mod config_protocol;
+mod dependency_attribution;
 mod evidence;
 mod expert;
 mod implementer;
@@ -126,6 +127,8 @@ enum RewriteCommand {
     CasePattern(CasePatternArgs),
     /// Inspect or apply incremental source-backed API grouping before Replay.
     RepositoryAnalysis(repository_analysis::RepositoryAnalysisArgs),
+    /// Review and apply Source-backed dependency ownership without fabricating consumption.
+    DependencyAttribution(dependency_attribution::DependencyAttributionArgs),
     /// Dispatch fixed implementers and report explicit batch activity or deliveries.
     Implementer(implementer::ImplementerArgs),
     /// Inspect an issue overview or execute one returned bounded evidence query.
@@ -545,6 +548,9 @@ async fn run(cli: Cli) -> Result<()> {
         },
         RewriteCommand::RepositoryAnalysis(args) => {
             repository_analysis::run(target_root, args, pretty)
+        }
+        RewriteCommand::DependencyAttribution(args) => {
+            dependency_attribution::run(target_root, args, pretty)
         }
         RewriteCommand::Implementer(args) => implementer::run(target_root, args, pretty),
         RewriteCommand::Evidence(args) => {

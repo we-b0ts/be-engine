@@ -170,11 +170,48 @@ is unclear.
   ownership through the existing case-end lifecycle. Its `control/dependency_tail` child resolves finite immutable
   exchange references, adapts legacy API-origin observation metadata, and waits
   for real Target consumption within the absolute case budget. Protocol modules
-  retain their own exchange identities and termination validation.
+  retain their own exchange identities and termination validation; native
+  `finite_inventory` adapters expose delivery state without consuming exchanges.
+  Kafka inventories retain each produce/delivery effect's semantic sequence in
+  addition to its physical request sequence. Async metadata version 2 separates
+  capture completeness from business completion; incomplete Source business
+  observations remain diagnostic and cannot pass formal verification.
   HTTP's `tail` adapter identifies explicitly shared initialization without
   changing its physical Source identity. Tail drain permits only unstarted
   initialization to remain unused; the captured scenario's HTTP completion
   selectors and all started delivery/termination obligations stay required.
+  `replay/startup` owns the first independently observed primary-input boundary.
+  It freezes startup business debt and closes only unclaimed initialization slots
+  with a typed admission state; it never consumes them or changes their owner.
+  Protocol control and explicitly reusable snapshots remain separate facts,
+  accepted resource I/O may finish, and Process inventory remains independent.
+  An implicit low-level session with startup business inventory reports its phase
+  as unverified until a real boundary is observed. Frozen Case views retain
+  their complete mandatory inventory; process selectors cannot waive Case debt.
+  `replay/http/ingress` owns genuine parsed-header admission before request-body
+  collection. A bounded metadata ledger freezes observation identity, observed
+  Case and startup phase; a RAII atomic guard retains actual unfinished body I/O
+  without claiming Source inventory. Native complete-body matching reuses that
+  identity and hands off to response ownership under the Case-release lock.
+  A static endpoint/method/path index permits a run-only guard only for a unique
+  Process head without a competing Case or Startup head. All other admissions
+  conservatively retain their observed Case. Header admission before the primary
+  boundary permits only that real request to finish selecting Startup inventory;
+  failed previews cannot discharge frozen startup debt. Cancellation and body
+  errors release the guard and retain dirty facts. Cleanup observes guard release
+  through notifications without introducing an attribution sleep.
+  Its synchronous registry admits headers before they can await Replay state.
+  The same small epoch lock fences the final empty-I/O observation and startup
+  boundary, so mutex contention cannot move an already observed request into a
+  later Case or erase its startup admission token. A proven Process head moves
+  its guard by incrementing the run counter before releasing the Case counter.
+  `replay/http/stream_delivery/full_delivery` retains ordinary response claims
+  through the final body frame and the existing HTTP/TLS writer flush signal.
+  Empty responses retain their header-flush obligation; dropped bodies and
+  transports that close before flush fail the original claim. Protocol matching
+  selects bytes without manufacturing delivery or committing time-copy facts.
+  Explicit HTTP sharing retains its original Case owner and separate permission;
+  membership in a shared request pool is not restart initialization ownership.
   `control/dependency_tail/progress` owns the Replay-only no-progress clock and
   bounded pending-reference observations. It excludes real resource I/O and
   unrelated process activity, and records only the stalling Case as incomplete.
@@ -187,6 +224,12 @@ is unclear.
   `control/case_execution` exposes actual dependency rejection separately from unused inventory;
   `e2e_run/request_feedback` interrupts one primary request across HTTP, streams and Motan.
   `e2e_run/case_sequence` owns chronological input admission on that same Target.
+  `e2e_run/batch_evidence` binds final verification to one latest complete-round
+  execution, its immutable Source manifest, whole input inventory, current owner
+  snapshot and actual session receipt. It never joins focused method attempts.
+  Execution freezes a fresh Target/runtime-policy identity before startup and
+  checks it again after execution; the cold evidence reader revalidates that
+  identity, Source image revision and engine build before returning receipt refs.
   An unclean Socket.IO/WebSocket session stops the attempt before another input;
   ordinary shutdown/finalization preserves the failed Case and pending inventory.
   Started-I/O drain alone cannot prove that sleeping disconnect hooks have ended.
@@ -250,7 +293,7 @@ is unclear.
   Private `replay/control/derived_input` admission anchors complete delivered
   token values before HTTP exposure. The global comparator retains pairing and
   staged identity decisions; protocol adapters retain wire delivery.
-- `policy/schema` and `policy/declarations` own the strict `traffic-policy/v2`
+- `policy/schema` and `policy/declarations` own the strict `traffic-policy/v3`
   authored document. `policy/global_json` owns the single global field-format
   map and its immutable Source-driven format selection; `policy/mysql_global`
   owns physical scalar-column patterns; `policy/redis_global` owns scalar-key patterns.
@@ -270,11 +313,22 @@ is unclear.
   `policy/compiler` owns typed capability validation, field ownership and
   semantic effect fingerprints, prepared endpoint indices, table matchers and codec
   plans; these modules neither read evidence nor change runtime state.
-  `value_contract/pre_match` owns bounded pure hypotheses for unowned JSON leaves;
-  request-contract decisions commit their candidate evidence alongside selected
-  identity mappings. Replay reports retain dirty candidates without publishing
-  policy or granting final verification. Stream delivery owns its explicit fast
-  versus recorded schedule, separately from immutable timing evidence.
+  `value_contract/hypothesis` owns bounded pure hypotheses over typed values;
+  JSON, physical SQL values and Redis arguments/key components reuse that kernel.
+  `request_contract/mysql_hypothesis` owns immutable Source SQL projection caching;
+  `redis_hypothesis` owns native key/value slot extraction and strict remainder.
+  Native HTTP/MySQL/Redis matchers own scope, ordering, unique selection and claims.
+  `request_contract/hypotheses` retains every attempted rule independently of
+  selection; staged identity decisions commit only after native admission.
+  `policy_evidence/hypotheses` owns the authenticated append journal, bounded
+  group commits and durable acknowledgement before delivery. One checkpoint per
+  genuine Target retains its encrypted key envelope and protected payload locators;
+  journal acknowledgement follows payload and directory synchronization, without
+  copying the payload or complete observation graph per candidate. Its publication
+  child verifies and copies only the acknowledged prefix. Rejected and selected
+  hypotheses remain available on every terminal outcome; used unproven rules
+  keep formal verification dirty. Stream delivery owns its explicit fast versus
+  recorded schedule, separately from immutable timing evidence.
   `policy/condition` owns Source self/sibling predicate validation, selection,
   Target discriminator equality and conservative disjointness shared by value
   fields and native Redis identity captures. `value_contract/time` owns exact timestamp arithmetic and trusted-clock
@@ -398,27 +452,12 @@ is unclear.
   owns rule-independent, Source-bound intervals across Global and Case records.
   `api_trigger/cache` owns versioned policy ownership and portable prewarm import;
   Global evidence has no fabricated primary request. MySQL literal
-  INSERT parsing belongs to `mysql/sql/insert`. The existing report overlay owns
-  unused-only reclassification and provenance, while Recorder retains idle
-  candidates without changing active case ownership or Redis snapshots. Status
-  remains a summary/fingerprint reader and never invokes origin discovery.
-  `replay/redis/api_origin` applies that same immutable proof to foreign-case
-  command ordering before listeners are ready; stateful lanes stay strict and
-  recording attribution and finite consumption remain unchanged.
-  `replay/mysql/ownership` projects only selected-Case ownership keys before
-  Target admission and classifies deferred exchanges without file reads.
-  `replay/mysql/matcher/request` uses those identities for candidate precedence;
-  native dirty/report accounting excludes proven foreign obligations and keeps
-  the reversible Source provenance separate from protocol consumption.
-  `replay/mysql/transaction_ownership` separately proves complete Global-started
-  transactions using immutable wire facts and bounded original-record reads.
-  Its disposable cache retains Source-bound locators and reuses them without
-  deserializing the complete transaction index on warm startup.
-  `transaction_projection` installs Case-derived Global exchanges once, outside
-  the native Global report layout, with original provenance. `transaction_scope`
-  retains Target connection ownership through case changes and resets it at
-  successful transaction boundaries. Protocol matching and errors accept this
-  explicit request scope without mutating the session-wide active HTTP case.
+  INSERT parsing belongs to `mysql/sql/insert`. Source selector kernels support
+  independent attribution proof; they never change a Replay report or consumption.
+  Current-format sessions freeze ownership in `replay/attribution`; legacy API-origin
+  discovery and transaction promotion cannot override central scope membership.
+  `replay/mysql/transaction_scope` retains physical Target connection and transaction
+  boundaries without moving later Case requests into another owner's inventory.
 
 - `mysql/savepoint` owns bounded savepoint command parsing and Source name
   lifetimes. `replay/mysql/savepoints` owns connection-local Source/Target name
@@ -502,10 +541,9 @@ is unclear.
   lookup. Recorder run finalization projects its existing observed API set into
   the recording manifest once; coordinator execution summaries only read it.
 
-- `verification_progress/revision` owns logical-run scope merging shared by
-  publication and revision preflight. Partial prepared inventories retain
-  unfinished recording coverage; `e2e_run/progress` compares that merged view
-  before permitting focused evidence revision.
+- `verification_progress/logical_run` merges actual recording coverage and strictly
+  newer focused attempts. Partial prepared inventories retain unfinished coverage.
+  One attempt cannot be rewritten into a later passing contribution.
 
 - `rewrite/engine_retry` owns per-method retry eligibility and durable consumption
   after an engine Git revision change, including an inventory-only final-route
@@ -559,12 +597,10 @@ is unclear.
   retain exact trailing/repeated separators without aliasing; wildcard matching
   and dynamic source-route grammar stay strict. Unrelated valid noncanonical
   requests cannot block inventory discovery or finalized recording adoption.
-  `case_group/snapshot` reads prepared membership and fingerprints for read-only projections
-  without discovering recording cases. `e2e_run/reclassify/status` owns the
-  query-scoped shared-session snapshot and compact report classification codec;
-  `reclassify/session` retains the common identity/membership checks and full
-  execution preflight. Both paths reuse `e2e_run/case_selection` to validate
-  selected/skipped case partitions. Coordinator status scopes snapshots to one query.
+  `e2e_run/case_selection` validates selected/skipped input partitions.
+  `e2e_run/batch_evidence` validates one current full session against the sealed
+  manifest, engine, Target execution identity and frozen attribution. It never
+  stitches focused snapshots or treats attribution receipts as actual delivery.
   `rewrite/case_patterns` canonicalizes persisted recording observations while
   pattern identification waits; `rewrite/regression_scope/recording` validates
   the pin and selectors against that adopted snapshot without rediscovery.
@@ -588,6 +624,11 @@ is unclear.
   matching and sharing eligibility remain in `replay/<protocol>`. Recorder summary
   persistence builds per-file fragments before publication. `replay/loading` owns
   startup inventories; `replay/deferred` owns case preparation and immutable reads;
+  its `scoped_read` child concatenates only selected physical records, validates
+  the selected digest and retains original line numbers. Prefetch budgets use
+  selected bytes, never the size of a shared central ledger. `RecordReader` and
+  protected `SourceRecord` witnesses freeze the physical file and view stamp at
+  preparation; per-record reads cannot reopen a whole scope after cache eviction.
   `replay/snapshot` projects session state into reports. E2E execution owns the
   separate index preparation deadline and phase publication.
   `dependency_index/evidence` owns complete Source file membership and reusable
@@ -716,20 +757,10 @@ is unclear.
   session identity and complete shared-session coverage while preserving the
   public recording report discovery boundary. `e2e_run/final_evidence` selects
   the prepared recording witnesses for every case in that session before
-  recomputing method evidence. `replay/report/background_overlay/original_evidence`
-  owns reversible overlay restoration shared by reclassification and ownership
-  planners, so interrupted applies can resume from original unused witnesses.
-  `request_contract/source_applicability` observes native request selectors and
-  retains complete Redis rule inventories by Case, connection and wire sequence.
-  `background_overlay/policy` reconciles MySQL and Redis rule applicability using
-  exact occurrence witnesses retained by their policy owners. Only unused
-  occurrences proven process-owned lose their Case obligation; actual rule use,
-  other Case occurrences and legacy reports without proof remain strict.
-  `e2e_run/reclassify/session` selects exact shared-session method projections and
-  owns revision checkpoints for snapshot, index, and progress publication.
-  `rewrite/background_reclassification` projects those results into matching
-  coordinator slices; `rewrite/fingerprint` separates executed behavior identity
-  from process-owned traffic classification when reusing Replay responses.
+  deriving method evidence. Original reports, Case outcomes and errors remain
+  immutable. `rewrite/dependency_review` owns independently proved attribution,
+  conditional API receipts and explicit owner verification debt. `rewrite/fingerprint`
+  separates executed behavior identity from pure classification changes.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
 - `replay/assertion/time` adapts response time configuration and diagnostics to
@@ -1650,5 +1681,5 @@ explicit repository-wide audit.
   retain genuine Replay obligations.
 - Historical feedback DTOs may remain as domain data or journal recovery inputs.
   Their old authoring entrypoints reject and production loaders accept only
-  `traffic-policy/v2`. Test-only explicit fixture migration is not a reader
+  `traffic-policy/v3`. Test-only explicit fixture migration is not a reader
   fallback and cannot produce project proof.

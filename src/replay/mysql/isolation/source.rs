@@ -73,7 +73,7 @@ impl Registry {
         scope: ReplaySource,
         case: Option<&str>,
     ) -> Vec<Plan> {
-        if scope == ReplaySource::Global {
+        if scope.is_run_owned() {
             for record in records {
                 let DependencyRecord::MysqlExchange(record) = record else {
                     continue;

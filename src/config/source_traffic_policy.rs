@@ -28,6 +28,8 @@ pub struct SourceTrafficPolicyConfig {
     pub breeze_capture: Vec<SourceTrafficBreezeCaptureConfig>,
     #[serde(default)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
+    #[serde(skip)]
+    pub process_dependency_tasks: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub async_api: BTreeMap<String, crate::policy::AsyncApiRules>,
 }
@@ -60,6 +62,7 @@ impl SourceTrafficPolicyConfig {
             http_response_rewrite: Vec::new(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: Vec::new(),
+            process_dependency_tasks: BTreeMap::new(),
             async_api: BTreeMap::new(),
         }
     }
@@ -158,6 +161,7 @@ impl SourceTrafficPolicyConfig {
             .extend(self.http_response_rewrite.iter().cloned());
         config.http_response_rewrite.validate()?;
         config.process_owned_dependencies = self.process_owned_dependencies.clone();
+        config.process_dependency_tasks = self.process_dependency_tasks.clone();
         config.async_api = self.async_api.clone();
         Ok(())
     }

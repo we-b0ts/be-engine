@@ -141,7 +141,7 @@ fn prepare(
                 && !e.record.cache_snapshot_hit
                 && e.record.cache_snapshot_rule.is_none()
                 && !e.record.session_setup
-                && e.record.global_dependency_reason.is_none()
+                && e.record.run_owner_kind().is_none()
                 && e.record.outcome == DependencyExchangeOutcome::Response
                 && e.record.resp_version == profile.resp_version
                 && normalize_optional(e.record.username.as_deref())

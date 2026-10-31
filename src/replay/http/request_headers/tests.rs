@@ -348,7 +348,7 @@ async fn global_exchange_header_mismatch_belongs_to_the_active_case() {
     let value = serde_json::to_value(report).unwrap();
     assert_eq!(
         value["http_request_header_mismatches"][0]["source"],
-        "global"
+        "startup"
     );
     assert_eq!(
         value["http_request_header_mismatches"][0]["case_id"],
@@ -423,11 +423,8 @@ async fn encrypted_dependency_headers_are_decrypted_before_audit_and_remain_prot
         "private-context",
         hyper::header::HeaderValue::from_static("source-private"),
     );
-    let (temp, case) = fixture(
-        serde_json::to_value(capture.capture(&source).unwrap()).unwrap(),
-        2,
-    )
-    .await;
+    let protected = capture.capture(&source).unwrap();
+    let (temp, case) = fixture(serde_json::to_value(&protected).unwrap(), 2).await;
     let local = temp.path().join(".traffic-e2e/local");
     let key_file = local.join(crate::repository::LOCAL_ENCRYPTION_KEY_FROM_LOCAL);
     std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
@@ -470,13 +467,31 @@ async fn encrypted_dependency_headers_are_decrypted_before_audit_and_remain_prot
     assert!(report.is_dirty());
     assert_eq!(report.http_request_header_mismatches.len(), 1);
     let value = serde_json::to_value(report).unwrap();
-    for secret in [
-        "source-token",
-        "source-private",
-        "target-private",
-        "traffic-e2e:enc:",
-    ] {
-        assert!(!value.to_string().contains(secret));
+    fn leaked_value_path(value: &Value, marker: &str, path: &str) -> Option<String> {
+        match value {
+            Value::String(value) if value.contains(marker) => Some(path.into()),
+            Value::Array(values) => values.iter().enumerate().find_map(|(index, value)| {
+                leaked_value_path(value, marker, &format!("{path}/{index}"))
+            }),
+            Value::Object(values) => values.iter().find_map(|(key, value)| {
+                let key = key.replace('~', "~0").replace('/', "~1");
+                leaked_value_path(value, marker, &format!("{path}/{key}"))
+            }),
+            _ => None,
+        }
+    }
+    for secret in ["source-token", "source-private", "target-private"] {
+        assert_eq!(
+            leaked_value_path(&value, secret, ""),
+            None,
+            "a public report string contains a protected header value"
+        );
+    }
+    for ciphertext in protected.values().flatten() {
+        assert!(
+            !value.to_string().contains(ciphertext),
+            "original credential ciphertext must not be echoed in public summaries"
+        );
     }
     task.abort();
 }

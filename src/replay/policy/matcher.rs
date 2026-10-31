@@ -257,7 +257,7 @@ impl ReplayPolicyRuntime {
             && (runtime.dynamic_values.enabled() || runtime.request_contracts.enabled())
         {
             for case in cases.values() {
-                let bytes = fs::read(case.dir.join("dependencies.jsonl"))?;
+                let bytes = crate::dependency_index::scoped::read_bytes(&case.dependencies_path)?;
                 runtime.dynamic_values.observe_source(&case.id, &bytes)?;
                 runtime.request_contracts.observe_source(&case.id, &bytes)?;
             }

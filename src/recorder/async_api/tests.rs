@@ -260,15 +260,75 @@ fn redis_terminal_uses_physical_scope_and_any_end_resource_can_finish() {
 }
 
 #[test]
-fn server_dependency_errors_end_even_when_they_are_not_terminal_resources() {
+fn recoverable_dependency_errors_do_not_end_observation() {
     let scope = scope(vec![end()]);
     let mut event = redis("GET", b"unrelated");
     if let RecorderEvent::RedisExchange(event) = &mut event {
         event.response_kind = "error".into();
     }
-    let signal = scope.observe(&event).unwrap();
-    assert_eq!(signal.end_reason, AsyncEndReason::DependencyFailure);
-    assert_eq!(signal.resource_index, None);
+    assert!(scope.observe(&event).is_none());
+}
+
+#[test]
+fn mysql_terminal_in_a_transaction_waits_for_the_real_commit() {
+    let live_scope = scope(vec![end()]);
+    let mut update = mysql("UPDATE tasks SET status='completed' WHERE id=42", None);
+    if let RecorderEvent::MysqlExchange(event) = &mut update {
+        event.query_sequence = 7;
+        event.server_status_before = Some(1);
+        event.response.server_status = Some(1);
+    }
+    assert!(live_scope.observe(&update).is_none());
+    let mut commit = update.clone();
+    if let RecorderEvent::MysqlExchange(event) = &mut commit {
+        event.query_sequence = 8;
+        event.sql = Some("COMMIT".into());
+        event.response.server_status = Some(2);
+    }
+    assert_eq!(
+        live_scope.observe(&commit).unwrap().end_reason,
+        AsyncEndReason::Resource
+    );
+    let scope = scope(vec![end()]);
+    assert!(
+        scope
+            .observe_recorded(&serde_json::to_value(&update).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        scope
+            .observe_recorded(&serde_json::to_value(&commit).unwrap())
+            .unwrap()
+            .unwrap()
+            .end_reason,
+        AsyncEndReason::Resource
+    );
+}
+
+#[test]
+fn rollback_and_failed_commit_cannot_confirm_an_earlier_terminal_write() {
+    for rollback in [true, false] {
+        let scope = scope(vec![end()]);
+        let mut update = mysql("UPDATE tasks SET status='completed' WHERE id=42", None);
+        if let RecorderEvent::MysqlExchange(event) = &mut update {
+            event.query_sequence = 1;
+            event.server_status_before = Some(1);
+            event.response.server_status = Some(1);
+        }
+        assert!(scope.observe(&update).is_none());
+        let mut boundary = update.clone();
+        if let RecorderEvent::MysqlExchange(event) = &mut boundary {
+            event.query_sequence = 2;
+            event.sql = Some(if rollback { "ROLLBACK" } else { "COMMIT" }.into());
+            event.response.server_status = Some(2);
+            if !rollback {
+                event.response.error_code = Some(1213);
+                event.response.status = "error".into();
+            }
+        }
+        assert!(scope.observe(&boundary).is_none());
+    }
 }
 
 fn client_info_error() -> RecorderEvent {
@@ -303,7 +363,7 @@ fn optional_redis_client_metadata_error_does_not_replace_two_del_completion() {
 }
 
 #[test]
-fn required_or_incomplete_redis_setup_errors_still_require_source_isolation() {
+fn complete_setup_errors_allow_retries_while_truncation_requires_isolation() {
     for variant in [
         "AUTH",
         "SELECT",
@@ -336,11 +396,14 @@ fn required_or_incomplete_redis_setup_errors_still_require_source_isolation() {
             crate::recorder::should_append_case_dependency(&event),
             variant != "snapshot_hit"
         );
-        assert_eq!(
-            scope.observe(&event).unwrap().end_reason,
-            AsyncEndReason::DependencyFailure,
-            "{variant}"
-        );
+        if variant == "truncated" {
+            assert_eq!(
+                scope.observe(&event).unwrap().end_reason,
+                AsyncEndReason::DependencyFailure
+            );
+        } else {
+            assert!(scope.observe(&event).is_none(), "{variant}");
+        }
     }
 }
 

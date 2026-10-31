@@ -21,7 +21,7 @@ async fn target_observation_io_failure_preserves_global_matching_and_rejects_cas
             } else {
                 &[]
             },
-            Some("format: traffic-policy/v2\nrules: []\n"),
+            Some("format: traffic-policy/v3\nrules: []\n"),
         )
         .await;
         let store =
@@ -196,7 +196,7 @@ async fn payload_evidence_budget_does_not_reject_a_valid_large_native_sql_match(
         );
         let write = exchange(&sql, json!({"status":"ok","affected_rows":1}));
         let (temp, addr, runtime, task) =
-            fixture_with_policy(&[write], Some("format: traffic-policy/v2\nrules: []\n")).await;
+            fixture_with_policy(&[write], Some("format: traffic-policy/v3\nrules: []\n")).await;
         let mut client = connect(
             addr,
             &temp

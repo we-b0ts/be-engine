@@ -166,6 +166,36 @@ fn concurrent_builders_publish_one_valid_inventory() {
     assert_eq!(prepare(dir.path()).unwrap().1.status, "reused");
 }
 
+#[test]
+fn typed_index_envelopes_hash_exact_payloads_and_read_prior_canonical_envelopes() {
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Fields {
+        z: usize,
+        a: String,
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("index.json");
+    let expected = Fields {
+        z: 3,
+        a: "source reference".into(),
+    };
+    super::store::write_json(&path, &expected).unwrap();
+    assert_eq!(super::store::read_json::<Fields>(&path).unwrap(), expected);
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(document["format"], "dependency-index/v2");
+    document["payload"]["z"] = 9.into();
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    assert!(super::store::read_json::<Fields>(&path).is_err());
+    let payload = serde_json::to_value(&expected).unwrap();
+    let previous = serde_json::json!({
+        "sha256": super::build::digest(&serde_json::to_vec(&payload).unwrap()),
+        "payload": payload,
+    });
+    fs::write(&path, serde_json::to_vec(&previous).unwrap()).unwrap();
+    assert_eq!(super::store::read_json::<Fields>(&path).unwrap(), expected);
+}
+
 #[tokio::test]
 async fn preparation_deadline_cancels_lock_wait_without_publication() {
     use std::os::fd::AsRawFd;

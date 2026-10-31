@@ -370,7 +370,7 @@ async fn running_implementation_defers_revalidation_and_preserves_its_binding() 
 }
 
 #[tokio::test]
-async fn failed_members_and_a_ready_handoff_do_not_interrupt_the_round() {
+async fn one_batch_publishes_all_failed_members_before_dispatching_a_ready_handoff() {
     let target = configured_target();
     enable(target.path());
     let mut state = test_state();
@@ -389,17 +389,36 @@ async fn failed_members_and_a_ready_handoff_do_not_interrupt_the_round() {
         RewriteExecutionMode::AutoNext,
         |options| {
             calls += 1;
-            std::future::ready(Ok(replay(options, calls == 3, |state| {
-                if calls == 1 {
-                    worker::confirm_current_for_test(state);
-                    ready(state);
-                }
-            })))
+            assert!(
+                options.api.is_none(),
+                "formal final execution owns the whole batch"
+            );
+            let mut state = store.load().unwrap().unwrap();
+            // Replace the one Docker/full-session execution at the boundary,
+            // then publish every method before any worker scheduling occurs.
+            api_batch::apply_results(
+                target.path(),
+                &mut state,
+                &[
+                    result("GET /api", false),
+                    result("GET /stale-a", false),
+                    result("GET /stale-b", true),
+                ],
+                None,
+            )
+            .unwrap();
+            worker::confirm_current_for_test(&mut state);
+            ready(&mut state);
+            store.save(&state).unwrap();
+            std::future::ready(Ok(AdvanceResult::without_replay(action::for_state(
+                target.path(),
+                &state,
+            ))))
         },
     )
     .await
     .unwrap();
-    assert_eq!(calls, 3);
+    assert_eq!(calls, 1);
     assert!(
         matches!(output.action, RewriteAction::ImplementationRequired { ref worker, .. } if worker.work_scope.binding_key() == "/stale-a"),
         "{:?}",
@@ -422,7 +441,7 @@ async fn failed_members_and_a_ready_handoff_do_not_interrupt_the_round() {
 }
 
 #[tokio::test]
-async fn changed_final_round_can_activate_the_integrated_failed_member() {
+async fn changed_final_batch_can_activate_the_integrated_failed_member() {
     for remaining_api in ["POST /other", "POST /api"] {
         let target = configured_target();
         let root = target.path();
@@ -436,25 +455,51 @@ async fn changed_final_round_can_activate_the_integrated_failed_member() {
         let store = RewriteStore::new(root).unwrap();
         store.save(&state).unwrap();
         admit_final(root);
-        replay(options(root), false, worker::integrate_current_for_test);
         let mut state = store.load().unwrap().unwrap();
+        // The real final stage publishes all methods from one actual session.
+        // Mock only its traffic result; retain both failures and no batch receipt.
+        api_batch::apply_results(
+            root,
+            &mut state,
+            &[result("GET /api", false), result(remaining_api, false)],
+            None,
+        )
+        .unwrap();
+        worker::integrate_current_for_test(&mut state);
+        assert!(state.revalidation_round.is_none());
+        assert!(state.dependency_review.batch_receipt.is_none());
         inventory::activate_requested(&mut state, Some(&remaining_api.parse().unwrap())).unwrap();
         store.save(&state).unwrap();
         fs::write(root.join("lib.rs"), "pub fn value() -> u8 { 2 }\n").unwrap();
 
         let mut projected = state.clone();
-        assert!(crate::rewrite::review::pre_revalidation::reconcile(root, &mut projected).unwrap());
-        assert_eq!(projected.phase, RewritePhase::SliceComplete);
-        assert!(projected.current_api_index.is_none());
+        assert!(
+            !crate::rewrite::review::pre_revalidation::reconcile(root, &mut projected).unwrap()
+        );
+        assert!(!crate::rewrite::review::pre_revalidation::current(
+            root, &projected
+        ));
         inventory::activate_requested(&mut projected, Some(&"GET /api".parse().unwrap())).unwrap();
         assert_eq!(projected.api, "GET /api");
 
         let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
         let global = next_rewrite(options(root)).await.unwrap();
-        assert!(matches!(
-            global.action,
-            RewriteAction::SourceReviewRequired { .. }
-        ));
+        if api_selector::public_api(remaining_api) != "/api" {
+            // A full batch also exposed this independent API's own failure.
+            // Its implementation dispatch may proceed while /api's integrated
+            // candidate awaits source review; it grants no Replay admission.
+            assert!(
+                matches!(&global.action,RewriteAction::ImplementationRequired{worker,..} if worker.work_scope.binding_key()==api_selector::public_api(remaining_api)),
+                "{:?}",
+                global.action
+            );
+        } else {
+            assert!(
+                matches!(global.action, RewriteAction::SourceReviewRequired { .. }),
+                "{:?}",
+                global.action
+            );
+        }
         assert_eq!(
             before,
             serde_json::to_value(store.load().unwrap().unwrap()).unwrap()
@@ -465,18 +510,41 @@ async fn changed_final_round_can_activate_the_integrated_failed_member() {
         let result = crate::rewrite::advance::advance_rewrite(invocation)
             .await
             .unwrap();
-        assert!(matches!(
-            result.envelope.action,
-            RewriteAction::SourceReviewRequired { .. }
-        ));
+        assert!(
+            matches!(
+                result.envelope.action,
+                RewriteAction::SourceReviewRequired { .. }
+            ),
+            "{:?}",
+            result.envelope.action
+        );
         assert!(!result.replay_can_continue);
         let saved = store.load().unwrap().unwrap();
-        assert_eq!(saved.api, "GET /api", "remaining method: {remaining_api}");
+        let same_route = api_selector::public_api(remaining_api) == "/api";
+        assert_eq!(
+            saved.api,
+            if same_route {
+                remaining_api
+            } else {
+                "GET /api"
+            },
+            "a public API selector retains its active failing method; remaining method: {remaining_api}"
+        );
         assert!(saved.revalidation_round.is_none());
         assert_eq!(saved.attempts.len(), 1);
+        assert_eq!(saved.phase, RewritePhase::ImplementationRequired);
+        assert!(saved.active_issue.is_some() && !saved.e2e_current);
         assert_eq!(
             saved.api_inventory[1].status,
-            RewriteApiStatus::RevalidationPending
+            if same_route {
+                RewriteApiStatus::Active
+            } else {
+                RewriteApiStatus::ImplementationRequired
+            }
+        );
+        assert_eq!(
+            saved.api_inventory[1].attempts, 1,
+            "the other method also executed in the same final batch"
         );
     }
 }

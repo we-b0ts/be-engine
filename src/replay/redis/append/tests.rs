@@ -27,7 +27,7 @@ pub(in crate::replay::redis) fn state(
     events: &[Value],
     rules: Vec<Value>,
 ) -> (tempfile::TempDir, RedisReplayState) {
-    state_with_policy(events, json!({"format":"traffic-policy/v2","rules":rules}))
+    state_with_policy(events, json!({"format":"traffic-policy/v3","rules":rules}))
 }
 
 pub(in crate::replay::redis) fn state_with_policy(
@@ -451,7 +451,7 @@ fn reset_preserves_literal_bytes_even_when_ordinary_set_would_compare_json_seman
 
 #[test]
 fn foreign_case_touches_are_independent_while_global_touches_remain_ownership_fences() {
-    for source in [ReplaySource::Case, ReplaySource::Global] {
+    for source in [ReplaySource::Case, ReplaySource::Startup] {
         let events = [event(1, "APPEND", &[b"content:1", b"ab"], b":2\r\n")];
         let (_root, mut state) = state(&events, vec![rule()]);
         let other = event(2, "GET", &[b"content:1"], b"$-1\r\n");
@@ -584,7 +584,7 @@ fn declared_script_keys_preserve_fences_and_unproven_key_inventories_stay_conser
 
 #[test]
 fn prepared_inventory_allows_other_cases_but_keeps_current_case_and_global_frozen() {
-    for source in [ReplaySource::Case, ReplaySource::Global] {
+    for source in [ReplaySource::Case, ReplaySource::Startup] {
         let events = [event(1, "APPEND", &[b"content:1", b"ab"], b":2\r\n")];
         let (_root, mut state) = state(&events, vec![rule()]);
         state.prepare_append_case("case").unwrap();

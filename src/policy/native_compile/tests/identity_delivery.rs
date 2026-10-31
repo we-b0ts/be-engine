@@ -18,7 +18,7 @@ fn native_key_reference_and_template_formats_never_accept_authored_binding() {
     let template = json!({"id":"url","match":{"api":"POST /sessions"},"effect":{"kind":"response_generated","fields":{"/url":{"kind":"template","template":"https://sessions.test/{token}","fields":{"token":{"format":"uuid"}}}}},"proof":proof});
     let compile = |rules: Vec<Value>| {
         crate::policy::parse_and_compile_policy(
-            &json!({"format":"traffic-policy/v2","rules":rules}).to_string(),
+            &json!({"format":"traffic-policy/v3","rules":rules}).to_string(),
         )
     };
     let compiled = compile(vec![key.clone(), template.clone()]).unwrap();
@@ -46,7 +46,7 @@ fn native_key_reference_and_template_formats_never_accept_authored_binding() {
 fn generated_scalar_formats_reject_named_binding_and_reference_authoring() {
     for kind in ["uuid", "uuid_v4", "non_empty"] {
         let document = |contract: Value| {
-            json!({"format":"traffic-policy/v2","rules":[{
+            json!({"format":"traffic-policy/v3","rules":[{
             "id":"generated","match":{"resource":mysql_resource(),"sql":"INSERT INTO events (id) VALUES (?)"},
             "effect":{"kind":"mysql_values","params":{"0":{"contract":contract,"proof":{
                 "source":"events.py:create","fact":"Source generates and reuses the event identity"}}}},
@@ -77,6 +77,6 @@ fn mysql_identity_reads_reject_retired_per_select_delivery_declarations() {
         "effect":{"kind":"identity","value_type":"string","capture":{"kind":"mysql_value","index":0},
             "references":[{"resource":mysql_resource()}],"mysql_read_back":[]},
         "proof":{"source":"events.py:1","fact":"Source generates an event identity"}});
-    let document = json!({"format":"traffic-policy/v2","rules":[rule]});
+    let document = json!({"format":"traffic-policy/v3","rules":[rule]});
     assert!(crate::policy::parse_policy(&document.to_string()).is_err());
 }

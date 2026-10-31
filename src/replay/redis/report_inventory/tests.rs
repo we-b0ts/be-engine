@@ -15,12 +15,14 @@ fn fixture() -> RedisReplayState {
             "response":{"encoding":"utf8","data":"$1\r\nx\r\n"},"replay_safe":true});
         if index == 0 {
             record["cache_snapshot_rule"] = "snapshot-seed".into();
-            record["global_dependency_reason"] = "background_rule".into();
+            record["capture"] =
+                serde_json::to_value(crate::dependency::observation::fixture_capture("process"))
+                    .unwrap();
         }
         state
             .register_exchange(
                 serde_json::from_value(record).unwrap(),
-                ReplaySource::Global,
+                ReplaySource::Process,
                 None,
                 &mut targets,
                 std::slice::from_ref(&rule),

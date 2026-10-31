@@ -4,7 +4,6 @@ mod advance;
 mod api_batch;
 mod api_selector;
 mod artifacts;
-mod background_reclassification;
 mod case_dependencies;
 mod case_group_rebuild;
 mod case_patterns;
@@ -34,7 +33,35 @@ pub use worker::model::{
     RewriteWorkerActivity, RewriteWorkerCoverageState, RewriteWorkerInventoryItem,
 };
 pub use worker::runtime::{RewriteWorkerReportOptions, report as report_rewrite_worker};
+mod dependency_review;
 mod dependency_rule;
+mod verification_obligations;
+pub(crate) use dependency_review::dependency_attribution_overlay;
+pub(crate) fn batch_execution_identity(root: &std::path::Path) -> anyhow::Result<String> {
+    fingerprint::fresh_replay_identity(root)
+}
+pub(crate) fn dependency_attribution_snapshot(
+    root: &std::path::Path,
+    run: &str,
+) -> anyhow::Result<String> {
+    Ok(crate::policy_evidence::digest(&serde_json::to_vec(
+        &dependency_review::dependency_attribution_overlay(root, run)?,
+    )?))
+}
+pub use dependency_review::{
+    AttributionCommandOptions, AttributionReviewContext, AttributionRuleBinding,
+    AttributionSubmission, ClaimRejection, ForeignUnusedClaim, ForeignUnusedSubmission,
+    InvestigationOutcome, InvestigationResolution, ProposedAttribution, TargetInvestigation,
+    TargetInvestigationSubmission, apply_dependency_attribution, claim_foreign_unused,
+    dependency_attribution_api_information, dependency_attribution_batch_information,
+    dependency_attribution_candidates, dependency_attribution_context,
+    dependency_attribution_hypotheses, dependency_attribution_rules,
+    dependency_attribution_source_information, dependency_attribution_target,
+    investigate_unmatched_dependency, retry_dependency_batch, verify_dependency_obligation,
+};
+pub use verification_obligations::{
+    VerificationImpact, VerificationRequirement, VerificationScope,
+};
 mod evidence;
 mod evidence_model;
 pub use evidence::{
@@ -129,9 +156,10 @@ pub use case_dependencies::{
     RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencySourceReference,
     RewriteCaseDependencyTarget, RewriteCaseDependencyTargetSummary,
-    RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail,
-    RewriteMysqlOperationDetail, RewriteMysqlParameterDetail, RewriteRedisExchangeDetail,
-    RewriteRedisOperationDetail, query as query_rewrite_case_dependencies,
+    RewriteDependencyCaptureDetail, RewriteMemcachedExchangeDetail,
+    RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail, RewriteMysqlOperationDetail,
+    RewriteMysqlParameterDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
+    query as query_rewrite_case_dependencies,
     query_exchange as query_rewrite_case_dependency_exchange,
 };
 pub use case_group_rebuild::{
@@ -276,13 +304,17 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
         "this plan uses a retired rule format; run `backend-rewrite rule recover {plan_id}`, obtain fresh evidence and use `rule plan --file <rule.yaml> --evidence <id>`"
     );
     let apply_intent = if unified {
-        worker::ensure_api_confirmed(&state, &api, "applying a unified traffic rule")?;
+        let batch = inventory::scoped(&state, Some(&api.parse()?))?
+            .rule_plan
+            .as_ref()
+            .and_then(|plan| plan.unified.as_ref())
+            .is_some_and(|plan| plan.is_batch());
+        if !batch {
+            worker::ensure_api_confirmed(&state, &api, "applying a unified traffic rule")?;
+        }
         let intent = inventory::with_slice_mut(&mut state, &api, |slice| {
             unified_rule::begin_apply(&target_root, slice)
         })?;
-        if intent.changed() {
-            unified_rule::invalidate_global(&mut state);
-        }
         store.save(&state)?;
         Some(intent)
     } else {
@@ -290,18 +322,14 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
     };
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         let report = rule::apply(&target_root, state, plan_id)?;
-        state.target_fingerprint = None;
         Ok(report)
     })?;
     if report.traffic_e2e_report["kind"] == "jwt" {
         jwt_rule::invalidate_global(&mut state);
     }
-    if report.traffic_e2e_report["kind"] == "unified"
-        && report.traffic_e2e_report["changed"] == true
+    if report.traffic_e2e_report["requires_fresh_recording"] == true
+        && report.traffic_e2e_report["kind"] != "unified"
     {
-        unified_rule::invalidate_global(&mut state);
-    }
-    if report.traffic_e2e_report["requires_fresh_recording"] == true {
         let runnable = inventory::mark_awaiting_recording_refresh(&mut state, &api)?;
         if !runnable {
             recording::begin_pending_capture_refresh(&target_root, &mut state)?;
@@ -431,11 +459,6 @@ pub fn apply_rewrite_dependency_rule(
             Ok((report, false, true))
         })?;
     if reclassify {
-        report.evidence_reclassification = Some(background_reclassification::apply(
-            &target_root,
-            &mut state,
-            &owner_api,
-        )?);
         rule_replay::after_process_rule(
             &mut state,
             &owner_api,

@@ -146,6 +146,7 @@ pub use config::{
     resolve_unified_policy_path,
 };
 pub use config::{KubernetesConfig, UpstreamRouteConfig, UpstreamTransportConfig};
+pub use dependency::attribution::{AttributionDecision, AttributionProof, DependencyOwner};
 pub use dependency::{
     DependencyExchangeOutcome, DependencyTermination, DiscoveredTcpTarget, TerminationKind,
     TerminationScope, TerminationSide,
@@ -200,6 +201,18 @@ pub use recording_api::RecordingApi;
 pub use recording_control::{
     RecordingReadiness, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
 };
+pub use rewrite::{
+    AttributionCommandOptions, AttributionReviewContext, AttributionRuleBinding,
+    AttributionSubmission, ClaimRejection, ForeignUnusedClaim, ForeignUnusedSubmission,
+    InvestigationOutcome, InvestigationResolution, ProposedAttribution, TargetInvestigation,
+    TargetInvestigationSubmission, VerificationImpact, VerificationRequirement, VerificationScope,
+    apply_dependency_attribution, claim_foreign_unused, dependency_attribution_api_information,
+    dependency_attribution_batch_information, dependency_attribution_candidates,
+    dependency_attribution_context, dependency_attribution_hypotheses,
+    dependency_attribution_rules, dependency_attribution_source_information,
+    dependency_attribution_target, investigate_unmatched_dependency, retry_dependency_batch,
+    verify_dependency_obligation,
+};
 
 pub use rewrite::{
     GroupReplayKind, GroupReplayResult, GroupReplayRound, GroupReplaySummary,
@@ -215,20 +228,21 @@ pub use rewrite::{
     RewriteCaseDependencySourceReference, RewriteCaseDependencyTarget,
     RewriteCaseDependencyTargetSummary, RewriteCaseGroupRebuildOptions,
     RewriteCaseGroupRebuildReport, RewriteCasePatternApplyOptions, RewriteCommandSpec,
-    RewriteContext, RewriteCoordinationDetails, RewriteDependencyOwnership,
-    RewriteDependencyPayloadRulePlanOptions, RewriteDependencyPayloadRulePlanReport,
-    RewriteDependencyRulePlanOptions, RewriteDependencyRulePlanReport, RewriteDependencyRuleReport,
-    RewriteDependencyRuleSelector, RewriteEvidenceCommand, RewriteEvidenceContext,
-    RewriteEvidenceReport, RewriteExecutionMode, RewriteExpertApiCommands, RewriteExpertApiView,
-    RewriteExpertCloseOptions, RewriteExpertCommands, RewriteExpertDeliveryOptions,
-    RewriteExpertInventoryItem, RewriteExpertOptions, RewriteExpertPrepareOptions,
-    RewriteExpertState, RewriteExpertView, RewriteFocusedE2eExecution,
-    RewriteFocusedE2eExecutionMode, RewriteHttpResponseCapturePlanOptions,
-    RewriteHttpResponseCaptureReport, RewriteInputRequiredReason, RewriteIntegrationBatchDelivery,
-    RewriteIntegrationBatchOptions, RewriteIntegrationBatchReport, RewriteInventoryReport,
-    RewriteIpCaptureReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
-    RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail,
-    RewriteMysqlOperationDetail, RewriteMysqlParameterDetail, RewriteNextOptions, RewritePhase,
+    RewriteContext, RewriteCoordinationDetails, RewriteDependencyCaptureDetail,
+    RewriteDependencyOwnership, RewriteDependencyPayloadRulePlanOptions,
+    RewriteDependencyPayloadRulePlanReport, RewriteDependencyRulePlanOptions,
+    RewriteDependencyRulePlanReport, RewriteDependencyRuleReport, RewriteDependencyRuleSelector,
+    RewriteEvidenceCommand, RewriteEvidenceContext, RewriteEvidenceReport, RewriteExecutionMode,
+    RewriteExpertApiCommands, RewriteExpertApiView, RewriteExpertCloseOptions,
+    RewriteExpertCommands, RewriteExpertDeliveryOptions, RewriteExpertInventoryItem,
+    RewriteExpertOptions, RewriteExpertPrepareOptions, RewriteExpertState, RewriteExpertView,
+    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode,
+    RewriteHttpResponseCapturePlanOptions, RewriteHttpResponseCaptureReport,
+    RewriteInputRequiredReason, RewriteIntegrationBatchDelivery, RewriteIntegrationBatchOptions,
+    RewriteIntegrationBatchReport, RewriteInventoryReport, RewriteIpCaptureReport, RewriteIssue,
+    RewriteIssueKind, RewriteIssueOwner, RewriteMemcachedExchangeDetail,
+    RewriteMemcachedOperationDetail, RewriteMysqlExchangeDetail, RewriteMysqlOperationDetail,
+    RewriteMysqlParameterDetail, RewriteNextOptions, RewritePhase,
     RewriteRecorderCapturePlanOptions, RewriteRecorderCaptureReport,
     RewriteRecordingInputCandidate, RewriteRecordingInputCandidateDisposition,
     RewriteRecordingInputDiagnosis, RewriteRecordingInputRejections, RewriteRecordingReason,
@@ -402,7 +416,8 @@ impl AppState {
         )
         .await
         .context("failed to initialize JSONL recorder")?
-        .with_global_preparation(&config);
+        .with_global_preparation(&config)
+        .await?;
         let dns_registry = FakeDnsRegistry::load_or_new(
             &config.dns_mock.fake_cidr,
             Some(&config.dns_mock.registry_path),
@@ -419,6 +434,7 @@ impl AppState {
             && config.http_gateway.ready.enabled
             || config.motan_gateway.enabled);
         let recording_lifecycle = RecordingLifecycle::from_config(&config);
+        let capture_registry = recorder.capture.clone();
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -431,7 +447,8 @@ impl AppState {
                 client,
                 forwarded_http_client,
                 upstream_tls_config,
-                active_cases: ActiveCaseRegistry::new(case_matching_ready),
+                active_cases: ActiveCaseRegistry::new(case_matching_ready)
+                    .with_capture(capture_registry),
                 interactions: gateway::http::interaction::Sessions::default(),
                 dependency_connections: DependencyConnections::default(),
                 kubectl_proxy_manager: KubectlProxyManager::default(),
@@ -654,8 +671,19 @@ impl AppState {
     pub(crate) fn record_event_for_targets(
         &self,
         event: RecorderEvent,
-        targets: DependencyTargets,
+        mut targets: DependencyTargets,
     ) {
+        if targets.process_rule_ids.is_empty() {
+            let rules = self
+                .inner
+                .process_owned_dependencies
+                .matching_capture_rules(&event);
+            targets = crate::recorder::process_classification::classify(
+                targets,
+                rules,
+                &self.config().process_dependency_tasks,
+            );
+        }
         let background_match = self.inner.process_owned_dependencies.matching_rule(&event);
         let (probe_attribution, suppress_default_global) = self.preflight_probe_attribution(&event);
         let background_attributed =
@@ -713,11 +741,6 @@ impl AppState {
         });
         let event_type = event.kind();
         self.inner.active_cases.observe_async_dependency_event(
-            &event,
-            &targets,
-            global_attribution.is_none(),
-        );
-        self.inner.active_cases.observe_dependency_event(
             &event,
             &targets,
             global_attribution.is_none(),

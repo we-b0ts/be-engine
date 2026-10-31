@@ -1,7 +1,7 @@
 use super::*;
 use std::path::Path;
 
-pub(super) const POLICY: &str = r#"format: traffic-policy/v2
+pub(super) const POLICY: &str = r#"format: traffic-policy/v3
 rules:
 - id: team-paths
   match: {}

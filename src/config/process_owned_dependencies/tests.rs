@@ -239,7 +239,7 @@ fn parses_and_validates_exact_motan_background_rules() {
     };
     *name = "duplicate-kunpeng-refresh".to_string();
     overlapping.process_owned_dependencies.push(duplicate);
-    assert!(overlapping.validate().is_err());
+    overlapping.validate().unwrap();
 
     let mut distinct_group = config.clone();
     let mut sandbox = distinct_group.process_owned_dependencies[0].clone();
@@ -324,7 +324,7 @@ fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
     *authorities = vec!["config.internal".to_string()];
     *path_prefixes = vec!["/health-cache".to_string()];
     config.process_owned_dependencies.push(overlapping);
-    assert!(config.validate().is_err());
+    config.validate().unwrap();
 
     let too_many = AppConfig {
         process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
@@ -454,10 +454,7 @@ fn process_http_host_scope_keeps_recorded_ports_and_explicit_port_selectors_dist
     };
     *name = "host-refresh".into();
     *authorities = vec!["auth.example.com".into()];
-    assert!(
-        validate(&[host_rule, rule.clone()]).is_err(),
-        "host wildcard and explicit port overlap"
-    );
+    validate(&[host_rule, rule.clone()]).unwrap();
     let mut other_port = rule.clone();
     let BackgroundDependencyRuleConfig::Http {
         name, authorities, ..

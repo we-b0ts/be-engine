@@ -3,6 +3,7 @@ use super::*;
 pub(super) mod prefetch;
 #[cfg(test)]
 mod recorded_skip_tests;
+mod scoped_read;
 #[cfg(test)]
 mod tests;
 use crate::dependency_index::{FileIndex, RecordLocation, RecordReader};
@@ -10,6 +11,7 @@ use crate::dependency_index::{FileIndex, RecordLocation, RecordReader};
 #[derive(Debug, Clone)]
 pub(super) struct CaseInventory {
     pub index: FileIndex,
+    pub source_bytes: u64,
     pub skip: BTreeSet<usize>,
     pub cleanup: BTreeSet<control::dependency_tail::RecordedReference>,
 }
@@ -190,22 +192,20 @@ pub(super) async fn prepare_case(state: Arc<Mutex<ReplayState>>, case_id: &str) 
     let started = std::time::Instant::now();
     info!(
         case_id,
-        source_bytes = inventory.index.stamp.size,
+        source_bytes = inventory.source_bytes,
         "preparing replay case dependencies"
     );
     let task = tokio::task::spawn_blocking(move || -> Result<_> {
-        let location = RecordLocation {
-            line: 1,
-            offset: 0,
-            length: inventory.index.stamp.size,
-            sha256: inventory.index.sha256.clone(),
-        };
-        let raw = reader
-            .lock()
-            .map_err(|_| anyhow!("dependency cache lock poisoned"))?
-            .read(&read_path, &inventory.index.stamp, &location)?;
+        let (raw, lines) = scoped_read::read(&read_path, &inventory.index, &reader)?;
         let text = std::str::from_utf8(&raw)?;
-        let records = dependencies::parse_dependency_records(&read_path, text)?;
+        let mut records = dependencies::parse_dependency_records(&read_path, text)?;
+        if let Some(lines) = lines {
+            for (line, _) in &mut records {
+                *line = *lines
+                    .get(*line - 1)
+                    .context("selected Source line identity absent")?;
+            }
+        }
         Ok((inventory, raw, records))
     });
     let prepared = match tokio::time::timeout(deferred.timeout, task).await {
@@ -301,6 +301,9 @@ fn install(
         "case preparation found an endpoint absent from its dependency index"
     );
     state.http_case_exchange_index = http::case_exchange_index(&state.http_exchanges);
+    state
+        .http_ingress
+        .register(&state.http_exchanges[http_start..]);
     if let Some(policy) = &mut state.replay_policy {
         policy.request_contracts.observe_source(case_id, raw)?;
         if policy.dynamic_values.enabled() {

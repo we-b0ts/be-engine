@@ -64,7 +64,7 @@ async fn fixture_with_predecessor(duration_ms: u64, predecessor: Option<Value>) 
     }
     tokio::fs::write(
         root.join("case-a/async-api-observation.json"),
-        json!({"version":1,"complete":true,"inventory_complete":true,
+        json!({"version":2,"capture_complete":true,"business_complete":false,"business_completion":"unobserved","inventory_complete":true,
             "end_reason":"dependency_failure","request_timeout_ms":1000,
             "completed_refs":references})
         .to_string(),

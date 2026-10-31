@@ -103,11 +103,11 @@ impl Inventory {
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     ) -> Result<()> {
         let cleanup = super::lifecycle_cleanup::load_refs(
-            path.parent()
-                .context("connection failure Case has no directory")?,
+            &crate::dependency_index::scoped::case_directory(path)?,
         )
         .await?;
-        let mut lines = tokio::io::BufReader::new(tokio::fs::File::open(path).await?).lines();
+        let bytes = crate::dependency_index::scoped::read_bytes(path)?;
+        let mut lines = tokio::io::BufReader::new(bytes.as_slice()).lines();
         while let Some(line) = lines.next_line().await? {
             if !line.contains("dependency_connect_failure") {
                 continue;

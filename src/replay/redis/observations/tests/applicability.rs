@@ -8,7 +8,7 @@ fn global_state(events: &[Value]) -> (tempfile::TempDir, RedisReplayState) {
     rule["effect"]["references"] = json!([]);
     state_with_policy(
         events,
-        json!({"format":"traffic-policy/v2","redis":{"keys":{
+        json!({"format":"traffic-policy/v3","redis":{"keys":{
         "current:*":{"kind":"identity","formats":["string"]}}},"rules":[rule]}),
     )
 }

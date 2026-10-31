@@ -165,9 +165,10 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
                 .iter()
                 .any(|action| action["action"]["kind"] == "close")
         );
-        let dependencies = tokio::fs::read_to_string(failed.join("dependencies.jsonl"))
-            .await
-            .unwrap();
+        let dependencies =
+            crate::recorder::test_io::read_to_string(failed.join("dependencies.jsonl"))
+                .await
+                .unwrap();
         let rows: Vec<Value> = dependencies
             .lines()
             .map(|row| serde_json::from_str::<Value>(row).unwrap())
@@ -193,7 +194,7 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
         let mut cases = Vec::new();
         find_cases(&state.recorder().run_dir.join("apis"), &mut cases);
         assert_eq!(cases.len(), 1);
-        let rows = tokio::fs::read_to_string(cases[0].join("dependencies.jsonl"))
+        let rows = crate::recorder::test_io::read_to_string(cases[0].join("dependencies.jsonl"))
             .await
             .unwrap();
         let rows: Vec<Value> = rows

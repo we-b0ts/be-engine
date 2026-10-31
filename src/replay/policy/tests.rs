@@ -174,7 +174,7 @@ fn rejects_removed_version_two_policy_contract() {
     .unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("traffic-policy/v2"));
+    assert!(format!("{error:#}").contains("traffic-policy/v3"));
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn rejects_legacy_rules_key() {
     .unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("traffic-policy/v2"));
+    assert!(format!("{error:#}").contains("traffic-policy/v3"));
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn rejects_policy_without_expected_response_contract() {
     fs::write(&path, "version: 1\ndependency_rules: []\n").unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(error.to_string().contains("traffic-policy/v2"));
+    assert!(error.to_string().contains("traffic-policy/v3"));
 }
 
 #[test]
@@ -437,7 +437,7 @@ fn rejects_changed_reference_and_out_of_window_time() {
 #[test]
 fn memcached_json_uses_global_formats_across_keys_and_resources_without_exposing_values() {
     let fixture = policy_fixture(
-        "format: traffic-policy/v2\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n",
+        "format: traffic-policy/v3\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n",
     );
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
     let source_at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
@@ -485,7 +485,7 @@ fn memcached_json_uses_global_formats_across_keys_and_resources_without_exposing
 #[test]
 fn unknown_memcached_bytes_remain_exact_and_value_presence_is_strict() {
     let fixture = policy_fixture(
-        "format: traffic-policy/v2\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n",
+        "format: traffic-policy/v3\njson: {fields: {/created_at: {kind: time, formats: [unix_seconds]}}}\n",
     );
     let runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
     let endpoint = TargetKey {

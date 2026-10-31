@@ -14,7 +14,7 @@ mod discovery_tests;
 
 fn proposal() -> Value {
     let identity = json!({"kind":"identity","formats":[{"prefix":"msg_","hex":12}]});
-    json!({"format":"traffic-policy/v2","json":{"fields":{
+    json!({"format":"traffic-policy/v3","json":{"fields":{
         "/response/created_at":{"kind":"time","formats":["unix_seconds"]},
         "/item/id":identity,"/item_id":identity,"/response/output/*/id":identity
     }}})
@@ -100,12 +100,17 @@ fn options(fixture: &Fixture) -> crate::ResponseAssertionOptions {
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/api/case-1");
+        .join("apis/api/00000000-0000-4000-8000-000000000001");
     crate::ResponseAssertionOptions {
-        case_id: "case-1".into(),
+        case_id: "00000000-0000-4000-8000-000000000001".into(),
         request: dir.join("request.json"),
         expected_response: dir.join("expected-response.json"),
-        actual_response: fixture.paths.replay.parent().unwrap().join("case-1.json"),
+        actual_response: fixture
+            .paths
+            .replay
+            .parent()
+            .unwrap()
+            .join("00000000-0000-4000-8000-000000000001.json"),
         policy: fixture.policy(),
     }
 }
@@ -120,7 +125,7 @@ fn install(fixture: &Fixture, mut source: Value, mut target: Value) {
 fn fixture() -> Fixture {
     let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, source| {
         crate::platform::encryption_key::load_or_create(root).unwrap();
-        let path = source.join("apis/api/case-1/request.json");
+        let path = source.join("apis/api/00000000-0000-4000-8000-000000000001/request.json");
         let mut request: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         request["body"] = body(json!({"stream":true}));
         request["interaction"] = json!(InputTranscript::new(

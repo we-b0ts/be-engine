@@ -36,7 +36,7 @@ impl MysqlReplayState {
             let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
             let index = self.exchanges.len();
             self.register_exchange(ReplayExchange {
-                source: ReplaySource::Global,
+                source: promoted.source,
                 case_id: None,
                 identity,
                 record,

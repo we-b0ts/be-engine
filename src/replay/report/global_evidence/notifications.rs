@@ -229,7 +229,7 @@ impl NotificationEvidence {
                     items.push(serde_json::to_value(CommandUnusedReport {
                         index: entry.location.line - 1,
                         case_id: None,
-                        source: ReplaySource::Global,
+                        source: ReplaySource::Startup,
                         target: lane.identity.target.clone(),
                         connection_id: lane.identity.connection_id,
                         sequence: lane.identity.subscription_sequence,

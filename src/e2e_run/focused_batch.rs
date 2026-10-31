@@ -90,8 +90,9 @@ pub(super) fn publish(
     Ok(())
 }
 
-fn copy_evidence(source: &Path, destination: &Path) -> Result<()> {
+pub(super) fn copy_evidence(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
+    fs::set_permissions(destination, fs::metadata(source)?.permissions())?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let kind = entry.file_type()?;

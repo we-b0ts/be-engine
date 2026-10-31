@@ -1,6 +1,6 @@
 //! Bounded working-set traversal of immutable JSONL evidence.
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -14,23 +14,44 @@ pub(crate) struct RecordStream {
     buffer: Vec<u8>,
     offset: u64,
     line: usize,
+    source: super::scoped::Source,
+    position: usize,
 }
 
 impl RecordStream {
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let stamp = FileStamp::read(path)?;
+        let source = super::scoped::resolve(path)?;
         Ok(Self {
             path: path.to_owned(),
             stamp,
-            reader: BufReader::new(File::open(path)?),
+            reader: BufReader::new(File::open(&source.path)?),
             buffer: Vec::new(),
             offset: 0,
             line: 0,
+            source,
+            position: 0,
         })
     }
 
     pub(crate) fn next(&mut self) -> Result<Option<(RecordLocation, &[u8])>> {
         self.buffer.clear();
+        if let Some(locations) = &self.source.locations {
+            let Some(location) = locations.get(self.position).cloned() else {
+                self.source.validate()?;
+                super::scoped::validate_stamp(&self.path, &self.stamp)?;
+                return Ok(None);
+            };
+            self.reader.seek(SeekFrom::Start(location.offset))?;
+            self.buffer.resize(usize::try_from(location.length)?, 0);
+            self.reader.read_exact(&mut self.buffer)?;
+            ensure!(
+                digest(&self.buffer) == location.sha256,
+                "central dependency record checksum mismatch"
+            );
+            self.position += 1;
+            return Ok(Some((location, &self.buffer)));
+        }
         let length = self
             .reader
             .read_until(b'\n', &mut self.buffer)

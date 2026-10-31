@@ -31,7 +31,7 @@ fn config(path: &Path, upstream: SocketAddr) -> AppConfig {
         path_prefixes: vec!["/record/".into()],
         ..Default::default()
     }];
-    config.recording.case_dependency_post_response_window_ms = 300;
+    config.recording.case_dependency_post_response_window_ms = 0;
     config.recording.output_dir = path.join("recordings");
     config.tls.ca_cert_path = path.join("ca.pem");
     config.tls.ca_key_path = path.join("ca-key.pem");
@@ -88,6 +88,61 @@ fn case(root: &Path, category: &str) -> std::path::PathBuf {
     cases[0].clone()
 }
 
+struct PendingDependency {
+    client: TcpStream,
+    release: oneshot::Sender<()>,
+    source: tokio::task::JoinHandle<()>,
+    proxy: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
+impl PendingDependency {
+    async fn start(state: AppState) -> Self {
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let authority = upstream.local_addr().unwrap();
+        let (release, released) = oneshot::channel();
+        let (started, request_started) = oneshot::channel();
+        let source = tokio::spawn(async move {
+            let (mut socket, _) = upstream.accept().await.unwrap();
+            head(&mut socket).await;
+            started.send(()).unwrap();
+            released.await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nxy")
+                .await
+                .unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let proxy = tokio::spawn(crate::proxy::http::run_with_listener(state, listener));
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(
+                format!("GET http://{authority}/dependency HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        request_started.await.unwrap();
+        Self {
+            client,
+            release,
+            source,
+            proxy,
+        }
+    }
+
+    async fn finish(mut self) {
+        self.release.send(()).unwrap();
+        assert!(head(&mut self.client).await.starts_with(b"HTTP/1.1 200"));
+        let mut body = Vec::new();
+        self.client.read_to_end(&mut body).await.unwrap();
+        assert_eq!(body, b"xy");
+        self.source.await.unwrap();
+        self.proxy.abort();
+    }
+}
+
 #[tokio::test]
 async fn ordinary_content_length_delivers_before_eof_and_keeps_tail_case_ownership() {
     incremental(false).await;
@@ -122,6 +177,7 @@ async fn incremental(chunked: bool) {
         if chunked { assert_eq!(chunk(&mut client).await, b"first"); }
         else { let mut first = [0; 5]; client.read_exact(&mut first).await.unwrap(); assert_eq!(&first, b"first"); }
         assert!(!source.is_finished(), "response delivery must precede Source EOF");
+        let dependency = PendingDependency::start(state.clone()).await;
         let mut other = connect(address).await;
         let mut busy = Vec::new();
         other.read_to_end(&mut busy).await.unwrap();
@@ -134,6 +190,12 @@ async fn incremental(chunked: bool) {
             assert!(rest.windows(6).any(|bytes| bytes == b"second"));
         } else { assert_eq!(rest, b"second"); }
         assert!(state.inner.active_cases.has_case(case_id), "HTTP EOF must retain case admission during tail");
+        timeout(Duration::from_secs(1), async {
+            while !state.capture_dependency_targets().cases.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("ordinary response completion must close dependency admission while accepted I/O remains active");
+        dependency.finish().await;
         assert!(state.inner.active_cases.wait_for_no_active_case(Duration::from_secs(2)).await);
         source.await.unwrap();
         let expected: Value = serde_json::from_slice(&std::fs::read(case(&state.recorder().run_dir, "apis").join("expected-response.json")).unwrap()).unwrap();
@@ -207,45 +269,58 @@ async fn ordinary_body_disconnect_preserves_source_and_fails_capture_after_sourc
 
 #[tokio::test]
 async fn ordinary_completed_response_keeps_publication_barrier_for_late_lease_loss() {
-    let temp = tempfile::tempdir().unwrap();
-    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let state = AppState::new(config(temp.path(), upstream.local_addr().unwrap()))
-        .await
-        .unwrap();
-    let source = tokio::spawn(async move {
-        let (mut socket, _) = upstream.accept().await.unwrap();
-        head(&mut socket).await;
-        socket
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+    timeout(Duration::from_secs(5), async {
+        let temp = tempfile::tempdir().unwrap();
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let state = AppState::new(config(temp.path(), upstream.local_addr().unwrap()))
             .await
             .unwrap();
-    });
-    let (address, server) = gateway(state.clone()).await;
-    let mut client = connect(address).await;
-    let mut response = Vec::new();
-    client.read_to_end(&mut response).await.unwrap();
-    assert!(response.ends_with(b"ok"));
-    let case_id = state.capture_dependency_targets().cases[0].0.id;
-    assert!(state.inner.active_cases.invalidate_interaction_reservation(
-        Some(case_id),
-        crate::recorder::CaseInvalidation::new(
-            "interaction_reservation_lost",
-            "lease lost during tail"
+        let (received, received_request) = oneshot::channel();
+        let (respond, response_allowed) = oneshot::channel();
+        let source = tokio::spawn(async move {
+            let (mut socket, _) = upstream.accept().await.unwrap();
+            head(&mut socket).await;
+            received.send(()).unwrap();
+            response_allowed.await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+        });
+        let (address, server) = gateway(state.clone()).await;
+        let mut client = connect(address).await;
+        received_request.await.unwrap();
+        let case_id = state.capture_dependency_targets().cases[0].0.id;
+        let dependency = PendingDependency::start(state.clone()).await;
+        respond.send(()).unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        assert!(response.ends_with(b"ok"));
+        assert!(state.inner.active_cases.has_case(case_id));
+        assert!(state.inner.active_cases.invalidate_interaction_reservation(
+            Some(case_id),
+            crate::recorder::CaseInvalidation::new(
+                "interaction_reservation_lost",
+                "lease lost during tail"
+            )
+        ));
+        dependency.finish().await;
+        assert!(
+            state
+                .inner
+                .active_cases
+                .wait_for_no_active_case(Duration::from_secs(2))
+                .await
+        );
+        let error: Value = serde_json::from_slice(
+            &std::fs::read(case(&state.recorder().run_dir, "failed").join("recording-error.json"))
+                .unwrap(),
         )
-    ));
-    assert!(
-        state
-            .inner
-            .active_cases
-            .wait_for_no_active_case(Duration::from_secs(2))
-            .await
-    );
-    let error: Value = serde_json::from_slice(
-        &std::fs::read(case(&state.recorder().run_dir, "failed").join("recording-error.json"))
-            .unwrap(),
-    )
+        .unwrap();
+        assert_eq!(error["reason"], "interaction_reservation_lost");
+        source.await.unwrap();
+        server.abort();
+    })
+    .await
     .unwrap();
-    assert_eq!(error["reason"], "interaction_reservation_lost");
-    source.await.unwrap();
-    server.abort();
 }

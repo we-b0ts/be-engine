@@ -4,7 +4,7 @@ use super::*;
 const HASH: &str = "75f75be3d11e483c99c83f8b0b8836c2e2c5923b";
 fn script_policy() -> CompiledPolicy {
     crate::policy::parse_and_compile_policy(&format!(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /at: {{kind: time, formats: [unix_seconds]}}

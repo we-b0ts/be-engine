@@ -24,7 +24,7 @@ async fn two_dependency_differences_continue_dirty_then_formal_rule_replay_is_cl
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(case.join("dependencies.jsonl"), &source).unwrap();
-        std::fs::write(&path, if tentative {"format: traffic-policy/v2\nrules: []\n"} else {"format: traffic-policy/v2\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n"}).unwrap();
+        std::fs::write(&path, if tentative {"format: traffic-policy/v3\nrules: []\n"} else {"format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n"}).unwrap();
         let (address, runtime, task) = super::super::super::tests::spawn_http_replay_with_policy(
             &case,
             vec![],
@@ -67,7 +67,7 @@ async fn two_dependency_differences_continue_dirty_then_formal_rule_replay_is_cl
             tentative
         );
         assert_eq!(
-            std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+            crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap(),
             source
         );
         task.abort();
@@ -144,6 +144,93 @@ async fn sdk_header_dirty_stays_an_observation_after_a_later_dependency_rejectio
             .snapshot_report()
             .http_request_header_mismatches
             .is_empty()
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn ambiguous_hypotheses_preserve_every_attempt_without_claiming_or_delivering() {
+    let (_temp, case, path, event) = fixture(false);
+    let source = [IDS[0], IDS[2]]
+        .into_iter()
+        .map(|id| {
+            let mut event = event.clone();
+            event["id"] = json!(uuid::Uuid::new_v4());
+            event["request_body"] = capture(&serde_json::to_vec(&json!({"id":id})).unwrap());
+            event.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(case.join("dependencies.jsonl"), source).unwrap();
+    std::fs::write(&path, "format: traffic-policy/v3\nrules: []\n").unwrap();
+    let (address, runtime, task) =
+        super::super::super::tests::spawn_http_replay_with_policy(&case, vec![], Some(path), None)
+            .await;
+    runtime
+        .state
+        .lock()
+        .await
+        .replay_policy
+        .as_mut()
+        .unwrap()
+        .request_contracts
+        .configure_pre_match(true);
+    let response = send(
+        address,
+        serde_json::to_vec(&json!({"id":IDS[1]})).unwrap(),
+        "7",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    response.into_body().collect().await.unwrap();
+    let state = runtime.state.lock().await;
+    let report = state.snapshot_report();
+    assert_eq!(report.matched_http_exchange_count, 0);
+    assert_eq!(report.unused_case_http_exchanges.len(), 2);
+    assert_eq!(report.dependency_hypothesis_attempts.len(), 2);
+    assert!(
+        report
+            .dependency_hypothesis_attempts
+            .iter()
+            .all(|attempt| attempt.status == "candidate_validated"
+                && attempt.target_observation_id.is_some())
+    );
+    assert!(
+        report.dependency_pre_matches.is_empty(),
+        "an unselected assumption never becomes used evidence"
+    );
+    assert!(
+        report
+            .dependency_hypothesis_journal
+            .as_ref()
+            .unwrap()
+            .complete
+    );
+    let journal = report.dependency_hypothesis_journal.as_ref().unwrap();
+    let rows = std::fs::read_to_string(case.join(".replay").join(&journal.path)).unwrap();
+    let checkpoints = rows
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|row| row["payload"]["kind"] == "hypothesis_witness")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        checkpoints.len(),
+        1,
+        "candidate scans share one protected Target checkpoint"
+    );
+    let checkpoint = &checkpoints[0]["payload"]["witness"];
+    assert!(!checkpoint["key_envelope"].as_str().unwrap().is_empty());
+    assert!(!checkpoint["blob"]["chunks"].as_array().unwrap().is_empty());
+    assert_eq!(
+        checkpoint["target"]["id"].as_str(),
+        report.dependency_hypothesis_attempts[0]
+            .target_observation_id
+            .as_deref()
+    );
+    assert!(
+        report.unmatched_http_requests[0]
+            .reason
+            .contains("multiple eligible")
     );
     task.abort();
 }

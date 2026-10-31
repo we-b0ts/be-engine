@@ -108,79 +108,8 @@ fn git_ok(repository: &Path, args: &[&str]) {
 }
 
 #[test]
-fn clean_reclassification_advances_without_replacing_standard_recording() {
-    let (target, mut state, result) = reclassification_fixture();
-    let mut failed = result.clone();
-    failed.passed = false;
-    failed.gates.dependencies = crate::E2eDependencyGate::Dirty;
-    state.attempts.clear();
-    transition::from_e2e_result(
-        target.path(),
-        &mut state,
-        &failed,
-        transition::AttemptTransition::Append,
-    )
-    .unwrap();
-
-    transition::from_e2e_result(
-        target.path(),
-        &mut state,
-        &result,
-        transition::AttemptTransition::ReclassifyCurrent,
-    )
-    .unwrap();
-    assert_eq!(state.phase, RewritePhase::SliceComplete);
-    assert_eq!(state.recording_run_id, "20260803023812");
-    assert_eq!(state.recording_request_reason, None);
-    assert_eq!(state.attempts.len(), 1);
-    assert!(state.attempts[0].passed);
-}
-
-#[test]
-fn reclassification_after_code_change_requests_replay_without_stamping_new_code() {
-    let (target, mut state, result) = reclassification_fixture();
-    let mut failed = result.clone();
-    failed.passed = false;
-    failed.gates.dependencies = crate::E2eDependencyGate::Dirty;
-    state.attempts.clear();
-    transition::from_e2e_result(
-        target.path(),
-        &mut state,
-        &failed,
-        transition::AttemptTransition::Append,
-    )
-    .unwrap();
-    let original = state.target_fingerprint.clone();
-    fs::write(
-        target.path().join("Cargo.toml"),
-        "[package]\nname='changed-target'\n",
-    )
-    .unwrap();
-    assert_ne!(
-        original.as_deref(),
-        Some(
-            fingerprint::repository_fingerprint(target.path())
-                .unwrap()
-                .as_str()
-        )
-    );
-    transition::from_e2e_result(
-        target.path(),
-        &mut state,
-        &result,
-        transition::AttemptTransition::ReclassifyCurrent,
-    )
-    .unwrap();
-    assert_eq!(state.target_fingerprint, original);
-    assert!(!state.e2e_current);
-    assert_eq!(state.phase, RewritePhase::ApiPending);
-    assert!(state.active_issue.is_none());
-    assert_eq!(state.attempts.len(), 1);
-}
-
-#[test]
 fn changed_retry_case_count_does_not_report_a_response_regression() {
-    let (target, mut state, mut result) = reclassification_fixture();
+    let (target, mut state, mut result) = execution_fixture();
     state.attempts.clear();
     for (selected, response_passed, response_nonpassing) in [(5, 2, 3), (3, 3, 0), (3, 1, 2)] {
         result.attempt += 1;
@@ -188,13 +117,7 @@ fn changed_retry_case_count_does_not_report_a_response_regression() {
         result.diagnosis.counts.executed = selected;
         result.diagnosis.counts.response_passed = response_passed;
         result.diagnosis.counts.response_nonpassing = response_nonpassing;
-        transition::from_e2e_result(
-            target.path(),
-            &mut state,
-            &result,
-            transition::AttemptTransition::Append,
-        )
-        .unwrap();
+        transition::from_e2e_result(target.path(), &mut state, &result).unwrap();
         if state.attempts.len() <= 2 {
             assert!(state.attempt_delta.is_none());
         }
@@ -203,97 +126,24 @@ fn changed_retry_case_count_does_not_report_a_response_regression() {
 }
 
 #[test]
-fn reclassification_reuses_only_classification_changes_and_never_upgrades_legacy_evidence() {
-    for change in [
-        "classification",
-        "verification",
-        "startup",
-        "environment",
-        "legacy",
-    ] {
-        let (target, mut state, result) = reclassification_fixture();
-        state.attempts.clear();
-        let mut failed = result.clone();
-        failed.passed = false;
-        failed.gates.dependencies = crate::E2eDependencyGate::Dirty;
-        transition::from_e2e_result(
-            target.path(),
-            &mut state,
-            &failed,
-            transition::AttemptTransition::Append,
-        )
-        .unwrap();
-        let original = state.target_fingerprint.clone();
-        match change {
-            "classification" => {
-                crate::e2e_run::test_session::classify_stream(target.path());
-            }
-            "verification" => {
-                let document = serde_json::json!({"format":"traffic-policy/v2","json":{"fields":{"/items":{"kind":"unordered"}}}});
-                crate::policy::compile_policy(&serde_json::from_value(document.clone()).unwrap())
-                    .unwrap();
-                fs::write(
-                    target.path().join(".traffic-e2e/policy.yaml"),
-                    serde_yaml::to_string(&document).unwrap(),
-                )
-                .unwrap();
-            }
-            "startup" => {
-                let path = target
-                    .path()
-                    .join(crate::repository::LOCAL_STARTUP_MANIFEST_PATH);
-                fs::create_dir_all(path.parent().unwrap()).unwrap();
-                fs::write(
-                    path,
-                    serde_json::to_vec(&serde_json::json!({
-                        "schema_version": 4,
-                        "snapshot_id": "new-snapshot",
-                        "content_revision": "new-content",
-                        "source_snapshot_id": "source",
-                        "source_image_id": "image",
-                        "mounts": []
-                    }))
-                    .unwrap(),
-                )
-                .unwrap();
-            }
-            "environment" => {
-                crate::startup::ensure_startup_environment(
-                    target.path(),
-                    "REGRESSION_MODE",
-                    "changed",
-                )
-                .unwrap();
-            }
-            _ => {
-                let mut encoded = serde_json::to_value(&state).unwrap();
-                encoded.as_object_mut().unwrap().remove("replay_identity");
-                state = serde_json::from_value(encoded).unwrap();
-            }
-        }
-        transition::from_e2e_result(
-            target.path(),
-            &mut state,
-            &result,
-            transition::AttemptTransition::ReclassifyCurrent,
-        )
-        .unwrap();
-        if change == "classification" {
-            assert!(state.e2e_current);
-            assert_eq!(state.phase, RewritePhase::SliceComplete);
-            assert_eq!(
-                state.target_fingerprint,
-                Some(fingerprint::repository_fingerprint(target.path()).unwrap())
-            );
-        } else {
-            assert!(!state.e2e_current);
-            assert_eq!(state.phase, RewritePhase::ApiPending);
-            assert_eq!(state.target_fingerprint, original);
-        }
-    }
+fn historical_report_cannot_promote_or_replace_a_real_failed_attempt() {
+    let (target, mut state, result) = execution_fixture();
+    state.attempts.clear();
+    let mut failed = result.clone();
+    failed.passed = false;
+    failed.gates.dependencies = crate::E2eDependencyGate::Dirty;
+    transition::from_e2e_result(target.path(), &mut state, &failed).unwrap();
+    let before = serde_json::to_value(&state).unwrap();
+    assert!(
+        transition::from_e2e_result(target.path(), &mut state, &result)
+            .unwrap_err()
+            .to_string()
+            .contains("new actual Replay")
+    );
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
 }
 
-fn reclassification_fixture() -> (
+fn execution_fixture() -> (
     tempfile::TempDir,
     model::RewriteState,
     crate::E2eApiRunResult,
@@ -307,7 +157,7 @@ fn reclassification_fixture() -> (
     fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
     fs::write(
         target.path().join(".traffic-e2e/policy.yaml"),
-        "format: traffic-policy/v2\nrules: []\n",
+        "format: traffic-policy/v3\nrules: []\n",
     )
     .unwrap();
     git_ok(target.path(), &["init"]);

@@ -10,7 +10,7 @@ fn records(values: &[Value]) -> Vec<DependencyRecord> {
 
 fn classify_case(global: &[Value], case: &[Value]) -> BTreeMap<usize, OptionalSessionExchange> {
     let mut prefixes = ReadPrefixes::default();
-    classify(&records(global), ReplaySource::Global, &mut prefixes);
+    classify(&records(global), ReplaySource::Startup, &mut prefixes);
     classify(&records(case), ReplaySource::Case, &mut prefixes)
 }
 

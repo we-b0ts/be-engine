@@ -25,7 +25,7 @@ async fn status_failure_notifies_cleanup_and_remains_primary_while_body_only_fai
     config.replay_loading.lazy_cases = false;
     std::fs::write(
         &config.replay_policy,
-        "format: traffic-policy/v2\nrules: []\n",
+        "format: traffic-policy/v3\nrules: []\n",
     )
     .unwrap();
     let runtime = CaseExecutionRuntime {
@@ -184,7 +184,7 @@ async fn successful_stream_cases_reuse_the_running_target_and_normal_case_contro
     config.replay_loading.lazy_cases = false;
     std::fs::write(
         &config.replay_policy,
-        "format: traffic-policy/v2\nrules: []\n",
+        "format: traffic-policy/v3\nrules: []\n",
     )
     .unwrap();
     let runtime = CaseExecutionRuntime {
@@ -319,7 +319,7 @@ async fn unmatched_dependency_interrupts_only_its_case_and_reports_execution_evi
     config.replay_loading.lazy_cases = false;
     std::fs::write(
         &config.replay_policy,
-        "format: traffic-policy/v2\nrules: []\n",
+        "format: traffic-policy/v3\nrules: []\n",
     )
     .unwrap();
     let runtime = CaseExecutionRuntime {

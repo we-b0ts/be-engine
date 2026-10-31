@@ -23,8 +23,7 @@ pub(super) fn validate(
         return Ok(false);
     };
     ensure!(
-        source == ReplaySource::Global
-            && record.global_dependency_reason.as_deref() == Some("background_rule"),
+        source.is_run_owned() && record.run_owner_kind() == Some("process"),
         "Redis cache snapshot seed must be a background Global dependency"
     );
     ensure!(

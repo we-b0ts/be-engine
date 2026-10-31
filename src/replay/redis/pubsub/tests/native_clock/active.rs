@@ -70,14 +70,14 @@ async fn completion_feedback_keeps_original_scope_and_request_epoch() {
             assert_eq!(
                 guards::control(
                     &runtime,
-                    json!({"command":"native_input_ack","case_id":"case","native_event":metadata})
+                    json!({"command":"native_input_ack","case_id":CASE,"native_event":metadata})
                 )
                 .await["ok"],
                 false
             );
         }
         guards::silent(&mut subscriber).await;
-        assert_eq!(guards::control(&runtime,json!({"command":"native_input_ack","case_id":"case","native_event":{"epoch":epoch,"acknowledged":2}})).await["ok"],true);
+        assert_eq!(guards::control(&runtime,json!({"command":"native_input_ack","case_id":CASE,"native_event":{"epoch":epoch,"acknowledged":2}})).await["ok"],true);
         assert_eq!(read(&mut subscriber).await, original);
         guards::silent(&mut subscriber).await;
         task.abort();
@@ -130,7 +130,7 @@ async fn active_native_delivery_waits_for_real_ack_and_not_a_future_input() {
         "version: 18\nproject:\n  policy: .traffic-e2e/policy.yaml\n",
     )
     .unwrap();
-    std::fs::write(&policy,"format: traffic-policy/v2\nsignatures:\n  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}\napi:\n  GET /socket.io/:\n    request:\n      query: {token: default}\n      socketio_connect:\n        /chat:\n          /token: default\n").unwrap();
+    std::fs::write(&policy,"format: traffic-policy/v3\nsignatures:\n  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}\napi:\n  GET /socket.io/:\n    request:\n      query: {token: default}\n      socketio_connect:\n        /chat:\n          /token: default\n").unwrap();
     let runtime = runtime(temp.path(), &[], &globals, true).await.unwrap();
     let socket_path = temp.path().join("control.sock");
     let session = temp.path().join("session.json");
@@ -146,11 +146,7 @@ async fn active_native_delivery_waits_for_real_ack_and_not_a_future_input() {
         }
     });
     assert_eq!(
-        guards::control(
-            &runtime,
-            json!({"command":"request_begin","case_id":"case"})
-        )
-        .await["ok"],
+        guards::control(&runtime, json!({"command":"request_begin","case_id":CASE})).await["ok"],
         true
     );
     let ws = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -234,7 +230,7 @@ async fn active_native_delivery_waits_for_real_ack_and_not_a_future_input() {
         Duration::from_secs(3),
         1024 * 1024,
     )
-    .with_input_registration(&session, "case")
+    .with_input_registration(&session, CASE)
     .with_request_rule_runtime(Arc::new(rules));
     let output = client
         .send_bytes(&serde_json::to_vec(&request).unwrap(), "active-native")

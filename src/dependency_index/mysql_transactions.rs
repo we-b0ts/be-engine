@@ -63,7 +63,7 @@ pub(crate) struct Facts {
 pub(crate) fn load(root: &Path, cases: &[PathBuf]) -> Result<Facts> {
     let mut paths = cases.to_vec();
     let global = root.join("global-dependencies.jsonl");
-    if global.try_exists()? {
+    if crate::dependency_index::scoped::exists(&global) {
         paths.push(global);
     }
     let mut stamps = BTreeMap::new();

@@ -68,7 +68,7 @@ impl OperationBuilder {
                 .map(|s| text_preview(s, MAX_PREVIEW_BYTES))
                 .collect(),
             omitted_parse_warnings: omitted(warnings, MAX_REPRESENTATIVES),
-            case_dependency_matched_by: identifier(event, "case_dependency_matched_by")?,
+            capture: None,
             connection_id: None,
             query_sequence: None,
             server_status_before: json_u64(event, "server_status_before"),
@@ -77,12 +77,69 @@ impl OperationBuilder {
         // Duplicate query/result facts should not crowd out other observations.
         // Add the original record locator after choosing a representative.
         if self.seen.insert(serde_json::to_string(&exchange)?) {
+            exchange.capture = capture_detail(event)?;
             exchange.connection_id = identifier(event, "connection_id")?;
             exchange.query_sequence = json_u64(event, "query_sequence");
             self.representatives.push(exchange);
         }
         Ok(())
     }
+}
+
+fn capture_detail(event: &Value) -> Result<Option<RewriteDependencyCaptureDetail>> {
+    use crate::dependency::{attribution::DependencyOwner, observation::CaptureMetadata};
+    let Some(value) = event.get("capture") else {
+        return Ok(None);
+    };
+    let metadata: CaptureMetadata = serde_json::from_value(value.clone())
+        .context("invalid dependency capture ownership metadata")?;
+    let bounded = |value: &str| -> Result<String> {
+        ensure!(
+            value.len() <= MAX_PREVIEW_BYTES,
+            "dependency capture identity exceeds its diagnostic bound"
+        );
+        Ok(value.to_owned())
+    };
+    let mut detail = RewriteDependencyCaptureDetail {
+        owner_kind: metadata.owner_kind().into(),
+        phase: match metadata.phase {
+            crate::dependency::observation::CapturePhase::Startup => "startup",
+            crate::dependency::observation::CapturePhase::Runtime => "runtime",
+            crate::dependency::observation::CapturePhase::Shutdown => "shutdown",
+        }
+        .into(),
+        origin_case_id: None,
+        process_task: None,
+        unattributed_reason: None,
+        matched_rule_id: metadata
+            .matched_rule_id
+            .as_deref()
+            .map(bounded)
+            .transpose()?,
+        matched_rule_ids: metadata
+            .matched_rule_ids
+            .iter()
+            .take(MAX_ARGUMENTS_PER_REPRESENTATIVE)
+            .map(|value| bounded(value))
+            .collect::<Result<_>>()?,
+        omitted_matched_rule_ids: metadata
+            .matched_rule_ids
+            .len()
+            .saturating_sub(MAX_ARGUMENTS_PER_REPRESENTATIVE),
+    };
+    match metadata.attribution {
+        DependencyOwner::Case { origin_case_id, .. } => {
+            detail.origin_case_id = Some(origin_case_id)
+        }
+        DependencyOwner::Process { source_task, .. } => {
+            detail.process_task = Some(bounded(&source_task)?)
+        }
+        DependencyOwner::Unattributed { reason } => {
+            detail.unattributed_reason = Some(bounded(&reason)?)
+        }
+        DependencyOwner::Startup { .. } => {}
+    }
+    Ok(Some(detail))
 }
 
 pub(super) fn finish(

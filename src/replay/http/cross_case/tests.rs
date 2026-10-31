@@ -196,7 +196,7 @@ async fn source_target_stream(
 
 async fn finalized_report(runtime: &super::super::ReplayRuntime, path: &Path) {
     let mut state = runtime.state.lock().await;
-    state.active_case_id = None;
+    state.set_active_case(None);
     state.finalized_at = Some(Utc::now());
     fs::write(path, serde_json::to_vec(&state.snapshot_report()).unwrap()).unwrap();
 }
@@ -291,7 +291,7 @@ async fn resource_free_http_sharing_keeps_endpoint_headers_and_finite_consumptio
     let path = temp.path().join("global-sharing.yaml");
     fs::write(
         &path,
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 rules:
 - id: shared-token
   match: {operation: POST, path: /token}
@@ -378,7 +378,7 @@ async fn a_host_only_http_cache_uses_source_ports_and_excludes_other_hosts() {
     }
     install_run_network_manifest(temp.path(), &consumer);
     let path = temp.path().join("host-cache.yaml");
-    fs::write(&path,format!("format: traffic-policy/v2\nrules:\n- id: host-token\n  match: {{host: {HOST}, operation: POST, path: /token}}\n  effect: {{kind: finite_sharing, protocol: http}}\n")).unwrap();
+    fs::write(&path,format!("format: traffic-policy/v3\nrules:\n- id: host-token\n  match: {{host: {HOST}, operation: POST, path: /token}}\n  effect: {{kind: finite_sharing, protocol: http}}\n")).unwrap();
     let (_addr, runtime, task) =
         spawn_http_replay_with_policy(&consumer, vec![], Some(path), None).await;
     assert_eq!(
@@ -496,14 +496,18 @@ async fn full_run_loads_shared_exchange_once_and_original_case_does_not_require_
     let (temp, _, _) = fixture().await;
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(temp.path(), vec![], Some(policy(temp.path())), None).await;
-    runtime.state.lock().await.active_case_id = Some("consumer".into());
+    runtime
+        .state
+        .lock()
+        .await
+        .set_active_case(Some("consumer".into()));
     assert_eq!(
         call(addr, "/token?audience=erp", BODY).await.status(),
         StatusCode::OK
     );
     assert_eq!(call(addr, "/membership", "").await.status(), StatusCode::OK);
     let mut state = runtime.state.lock().await;
-    state.active_case_id = Some("origin".into());
+    state.set_active_case(Some("origin".into()));
     assert!(
         state
             .unused_http_exchanges(ReplaySource::Case, false)

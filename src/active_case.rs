@@ -8,14 +8,13 @@ use crate::recorder::{CaseContext, CaseInvalidation};
 
 mod activity;
 mod async_api;
-mod observation;
+mod correlation;
 mod publication;
 mod recovery;
 mod shutdown;
 mod stream_tail;
 
 use activity::{DependencyActivity, DependencyReservation};
-use observation::{CaseObservation, SelectedRequest};
 pub(crate) use publication::CasePublication;
 use stream_tail::{StreamTail, StreamTailRequest};
 
@@ -24,6 +23,7 @@ pub(crate) struct ActiveCaseRegistry {
     state: Arc<Mutex<ActiveCaseState>>,
     active_count: watch::Sender<usize>,
     quiescing: watch::Sender<bool>,
+    capture: Option<crate::recorder::ledger::CaptureRegistry>,
 }
 
 struct ActiveCaseState {
@@ -45,7 +45,6 @@ struct ActiveCaseRegistration {
     dependencies: Arc<DependencyActivity>,
     recovering: bool,
     source_completed: bool,
-    observation: Option<Arc<CaseObservation>>,
     stream_tail: Option<Arc<StreamTail>>,
     async_api: Option<Arc<async_api::AsyncObservation>>,
 }
@@ -81,9 +80,22 @@ pub(crate) struct DependencyTargets {
     pub(crate) bootstrap_open: bool,
     pub(crate) ambiguous_active_cases: usize,
     pub(crate) process_owned_rule: Option<String>,
+    pub(crate) process_rule_ids: Vec<String>,
+    pub(crate) unattributed_reason: Option<&'static str>,
+    pub(crate) observed_case: Option<Uuid>,
+    pub(crate) phase: crate::dependency::observation::CapturePhase,
+    pub(crate) capture: Option<crate::recorder::ledger::CaptureReservation>,
     _reservations: Vec<DependencyReservation>,
-    selected: Vec<SelectedRequest>,
     stream_tail: Vec<StreamTailRequest>,
+}
+
+impl std::fmt::Debug for DependencyTargets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DependencyTargets")
+            .field("cases", &self.cases)
+            .field("capture", &self.capture)
+            .finish()
+    }
 }
 
 impl Drop for ActiveCaseGuard {
@@ -121,7 +133,16 @@ impl ActiveCaseRegistry {
             })),
             active_count,
             quiescing,
+            capture: None,
         }
+    }
+
+    pub(crate) fn with_capture(
+        mut self,
+        capture: crate::recorder::ledger::CaptureRegistry,
+    ) -> Self {
+        self.capture = Some(capture);
+        self
     }
 
     pub(crate) fn try_reserve(
@@ -146,7 +167,6 @@ impl ActiveCaseRegistry {
             dependencies: Arc::new(DependencyActivity::default()),
             recovering: false,
             source_completed: false,
-            observation: None,
             stream_tail: None,
             async_api: None,
         });
@@ -340,12 +360,12 @@ impl ActiveCaseRegistry {
     pub(crate) async fn drain_case_dependencies(
         &self,
         case_id: Uuid,
-        post_response_window: Duration,
+        _post_response_window: Duration,
         timeout: Duration,
     ) -> DependencyDrainResult {
         if self.is_recovering(case_id) {
             return self
-                .drain_recovering_case(case_id, post_response_window, timeout)
+                .drain_recovering_case(case_id, Duration::ZERO, timeout)
                 .await;
         }
         if let Some(result) = self.drain_async_api(case_id, timeout).await {
@@ -354,13 +374,6 @@ impl ActiveCaseRegistry {
         if let Some(result) = self.drain_stream_tail(case_id, timeout).await {
             return result;
         }
-        if let Some(result) = self.drain_observation(case_id, timeout).await {
-            return result;
-        }
-        if !post_response_window.is_zero() {
-            tokio::time::sleep(post_response_window).await;
-        }
-
         let started = Instant::now();
         let deadline = started.checked_add(timeout).unwrap_or(started);
         let dependencies = {
@@ -378,40 +391,36 @@ impl ActiveCaseRegistry {
         if dependencies.wait_until_idle_until(deadline).await {
             DependencyDrainResult::Drained
         } else {
+            self.begin_quiescing();
             DependencyDrainResult::TimedOut
         }
     }
 
     pub(crate) fn current_targets_for_event(&self) -> DependencyTargets {
-        self.targets_for_request(None, false)
-    }
-
-    #[cfg(test)]
-    #[cfg(test)]
-    pub(crate) fn current_targets_for_request(
-        &self,
-        request: &crate::recorder::api_origin_observation::DependencyRequest<'_>,
-    ) -> DependencyTargets {
-        self.targets_for_request(Some(request), true)
+        self.targets_for_request(false, false)
     }
 
     pub(crate) fn current_targets_for_request_with_tail(
         &self,
-        request: &crate::recorder::api_origin_observation::DependencyRequest<'_>,
         track_tail: bool,
     ) -> DependencyTargets {
-        self.targets_for_request(Some(request), track_tail)
+        self.targets_for_request(track_tail, true)
     }
 
     pub(crate) fn current_targets_for_http_request(&self, track_tail: bool) -> DependencyTargets {
-        self.targets_for_request(None, track_tail)
+        self.targets_for_request(track_tail, true)
     }
 
-    fn targets_for_request(
+    pub(crate) fn current_targets_for_start(
         &self,
-        request: Option<&crate::recorder::api_origin_observation::DependencyRequest<'_>>,
-        track_tail: bool,
+        protocol: crate::dependency::observation::ProtocolRef,
     ) -> DependencyTargets {
+        let targets = self.targets_for_request(true, true);
+        targets.bind_protocol(protocol);
+        targets
+    }
+
+    fn targets_for_request(&self, track_tail: bool, start_capture: bool) -> DependencyTargets {
         let state = self.state.lock().expect("active case registry poisoned");
         let active_count = state.active.len();
         let (cases, ambiguous_active_cases, mut reservations) = match state.active.as_slice() {
@@ -425,18 +434,24 @@ impl ActiveCaseRegistry {
             active => (Vec::new(), active.len(), Vec::new()),
         };
         let bootstrap_open = state.bootstrap_open && active_count == 0;
+        let observed_case = state.active.first().map(|r| r.case.id);
+        let phase = if state.quiescing || state.admission_closed {
+            crate::dependency::observation::CapturePhase::Shutdown
+        } else if bootstrap_open {
+            crate::dependency::observation::CapturePhase::Startup
+        } else {
+            crate::dependency::observation::CapturePhase::Runtime
+        };
+        let capture = start_capture
+            .then(|| {
+                self.capture.as_ref().and_then(|registry| {
+                    registry.begin(phase, observed_case, cases.first().map(|(case, _)| case.id))
+                })
+            })
+            .flatten();
         if bootstrap_open {
             reservations.push(state.bootstrap_dependencies.reserve());
         }
-        let selected = match (request, state.active.as_slice()) {
-            (Some(request), [case]) if case.accepting_dependencies => case
-                .observation
-                .as_ref()
-                .and_then(|observation| observation.select(request))
-                .into_iter()
-                .collect(),
-            _ => Vec::new(),
-        };
         let stream_tail = match state.active.as_slice() {
             [case] if track_tail && case.accepting_dependencies => case
                 .stream_tail
@@ -451,9 +466,27 @@ impl ActiveCaseRegistry {
             cases,
             ambiguous_active_cases,
             process_owned_rule: None,
+            process_rule_ids: Vec::new(),
+            unattributed_reason: None,
+            observed_case,
+            phase,
+            capture,
             _reservations: reservations,
-            selected,
             stream_tail,
+        }
+    }
+}
+
+impl DependencyTargets {
+    pub(crate) fn bind_protocol(&self, protocol: crate::dependency::observation::ProtocolRef) {
+        if let Some(capture) = &self.capture {
+            capture.bind_protocol(protocol);
+        }
+    }
+
+    pub(crate) fn finish_capture_metadata(&self, outcome: &str) {
+        if let Some(capture) = &self.capture {
+            capture.finish_metadata(outcome);
         }
     }
 }
@@ -649,7 +682,6 @@ mod tests {
                 dependencies: Arc::new(DependencyActivity::default()),
                 recovering: false,
                 source_completed: false,
-                observation: None,
                 stream_tail: None,
                 async_api: None,
             });
@@ -660,7 +692,6 @@ mod tests {
                 dependencies: Arc::new(DependencyActivity::default()),
                 recovering: false,
                 source_completed: false,
-                observation: None,
                 stream_tail: None,
                 async_api: None,
             });
@@ -718,7 +749,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_response_window_accepts_new_dependencies_until_it_closes() {
+    async fn ordinary_case_closes_admission_without_a_post_response_sleep() {
         let registry = ActiveCaseRegistry::default();
         let case = case();
         let _guard = activate_case(&registry, case.clone());
@@ -736,13 +767,14 @@ mod tests {
         });
         tokio::task::yield_now().await;
 
-        let during_window = registry.current_targets_for_event();
-        assert_eq!(during_window.cases, vec![(case, "active_window")]);
-        drop(during_window);
-
-        tokio::time::sleep(Duration::from_millis(120)).await;
         assert!(registry.current_targets_for_event().cases.is_empty());
-        assert_eq!(closing.await.unwrap(), DependencyDrainResult::Drained);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(30), closing)
+                .await
+                .unwrap()
+                .unwrap(),
+            DependencyDrainResult::Drained
+        );
     }
 
     #[tokio::test]

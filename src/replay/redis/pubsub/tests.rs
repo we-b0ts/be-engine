@@ -298,7 +298,7 @@ async fn generic_pubsub_replays_binary_message_pattern_and_shard_notifications()
                 .await
                 .redis
                 .pubsub
-                .unused(ReplaySource::Global)
+                .unused(ReplaySource::Startup)
                 .is_empty()
         );
         task.abort();
@@ -617,10 +617,29 @@ async fn rpc_subscriber_can_confirm_while_call_is_pending_before_ack_deadline() 
     )
     .await
     .unwrap();
+    crate::replay::deferred::prepare_case(runtime.state.clone(), "case")
+        .await
+        .unwrap();
+    use crate::replay::control::dependency_tail::{RecordedReference, references_consumed};
+    let references = [
+        RecordedReference::Redis {
+            connection_id: publisher,
+            sequence: 1,
+        },
+        RecordedReference::RedisRpcPush {
+            connection_id: publisher,
+            sequence: 1,
+        },
+    ];
+    assert!(!references_consumed(&*runtime.state.lock().await, "case", &references).unwrap());
     let (mut client, task) = connect(&runtime).await;
     assert_eq!(
         send(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await,
         b":1\r\n"
+    );
+    assert!(
+        !references_consumed(&*runtime.state.lock().await, "case", &references).unwrap(),
+        "publisher acknowledgement cannot discharge the independent callback delivery"
     );
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     let (mut subscriber, sub_task) = connect(&runtime).await;
@@ -631,6 +650,16 @@ async fn rpc_subscriber_can_confirm_while_call_is_pending_before_ack_deadline() 
     let raw = read(&mut subscriber).await;
     let payload = parse_pubsub_push(&raw).unwrap().unwrap().payload;
     assert_eq!(rpc::callback(&payload).unwrap().unwrap().0.host, TARGET);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if references_consumed(&*runtime.state.lock().await, "case", &references).unwrap() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     let state = runtime.state.lock().await;
     assert!(state.redis.snapshot().unused_case.is_empty());
     task.abort();

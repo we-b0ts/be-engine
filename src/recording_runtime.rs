@@ -209,9 +209,10 @@ impl AppState {
             }
         }
         self.kubectl_proxy_manager().shutdown().await;
+        let capture_complete = self.close_dependency_capture().await;
         let finish_run_result = self
             .recorder()
-            .finish_run_after_runtime(runtime_succeeded)
+            .finish_run_after_runtime(runtime_succeeded && capture_complete)
             .await
             .context("failed to finalize recording run");
         let registry_flush_result = self

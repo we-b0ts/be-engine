@@ -218,9 +218,14 @@ the receipt to code, canonical inputs, review policy, inventory and immutable
 recording. Relevant changes require a fresh final-stage check. Progress-only
 publication does not invalidate an already admitted matching receipt. When the
 engine reuses current final proof, do not run the quality tool or test suites
-again merely because another API in the same revalidation round is next.
+again merely because another method projection of the same final batch is shown.
 Retrying the identical successful candidate reuses the cached result and
 restores its report file if needed; the engine never executes the quality tool.
+
+Your final review admits the candidate for one complete actual batch session;
+the coordinator follows the engine's `BatchReplay` action. That same session
+supplies formal final method results. Do not add per-API final Replay runs or a
+second sweep, and do not infer a batch pass from an accepted quality receipt.
 
 ## Output
 

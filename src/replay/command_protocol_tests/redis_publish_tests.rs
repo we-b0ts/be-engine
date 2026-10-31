@@ -98,7 +98,7 @@ async fn global_publish_formats_preserve_order_stable_fields_and_cross_protocol_
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     let policy = temp.path().join("policy.yaml");
-    std::fs::write(&policy,"format: traffic-policy/v2\njson:\n  fields:\n    /host_id: {kind: identity, formats: [{hex: 32}]}\n").unwrap();
+    std::fs::write(&policy,"format: traffic-policy/v3\njson:\n  fields:\n    /host_id: {kind: identity, formats: [{hex: 32}]}\n").unwrap();
     let (_, state, task) = spawn(&case, Some(policy)).await;
     task.abort();
     // Each physical adapter receives the recorded endpoint selected by the
@@ -136,7 +136,7 @@ async fn global_publish_formats_preserve_order_stable_fields_and_cross_protocol_
             .is_empty()
     );
     assert_eq!(
-        std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+        crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap(),
         dependencies
     );
     redis_task.abort();
@@ -221,7 +221,7 @@ async fn unknown_pickle_payload_is_exact_bytes_without_publisher_substring_rewri
     .unwrap();
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     let policy = temp.path().join("policy.yaml");
-    std::fs::write(&policy,"format: traffic-policy/v2\njson:\n  fields:\n    /host_id: {kind: identity, formats: [{hex: 32}]}\n").unwrap();
+    std::fs::write(&policy,"format: traffic-policy/v3\njson:\n  fields:\n    /host_id: {kind: identity, formats: [{hex: 32}]}\n").unwrap();
     let (address, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(address).await.unwrap();
     publish(&mut client, "events", &binary(TARGET_A), ERROR).await;

@@ -6,7 +6,7 @@ fn check(headers: Value, body: Value) -> ResponseAssertionCaseReport {
     let policy = temp.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /id: {kind: identity, formats: [uuid]}

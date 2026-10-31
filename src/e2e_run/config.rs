@@ -493,7 +493,7 @@ mod tests {
         fs::create_dir_all(root.join("config")).unwrap();
         fs::write(
             root.join("config/replay.yaml"),
-            "format: traffic-policy/v2\nrules: []\n",
+            "format: traffic-policy/v3\nrules: []\n",
         )
         .unwrap();
         let mut recorder = crate::config::AppConfig::default();
@@ -509,7 +509,7 @@ mod tests {
         write_input_project(root, &recorder);
         fs::write(
             root.join("config/replay.yaml"),
-            "format: traffic-policy/v2\nrules: []\n",
+            "format: traffic-policy/v3\nrules: []\n",
         )
         .unwrap();
         assert!(

@@ -16,6 +16,8 @@ use crate::recording_completion::RecordingCompletionReason;
 
 #[derive(Debug, Serialize)]
 struct RecorderRunReport {
+    schema: &'static str,
+    dependency_manifest: &'static str,
     run_id: String,
     status: &'static str,
     output_dir: String,
@@ -124,6 +126,13 @@ impl Recorder {
                 })?;
         }
         self.finalized_cases.lock().await.insert(case.id);
+        self.writer
+            .register_input(
+                case.id,
+                path_relative_to(&published_dir, &self.run_dir),
+                true,
+            )
+            .await?;
 
         {
             let mut state = self.run_state.lock().await;
@@ -253,13 +262,27 @@ impl Recorder {
     }
 
     async fn finish_run_with_status(&self, status: &'static str) -> Result<bool> {
+        self.capture.close();
+        if !self.capture.drain(std::time::Duration::from_secs(5)).await {
+            // A request reservation also covers its queued writer. Finish that
+            // FIFO prefix before declaring genuinely unfinished requests; this
+            // cannot place a terminal receipt ahead of its already queued data.
+            let _ = self.writer.flush_all().await;
+            self.capture.finish_incomplete();
+        }
         {
             let mut state = self.run_state.lock().await;
             state.finishing = true;
         }
         let unfinished = {
             let _guard = self.dependency_write_lock.lock().await;
-            self.flush_all_dependency_files().await?;
+            if let Err(error) = self.flush_all_dependency_files().await {
+                self.writer.seal(self.capture.coverage()).await?;
+                self.write_run_report("failed").await?;
+                return Err(error).context(
+                    "recording inventory could not be completed; partial ledger was sealed",
+                );
+            }
             write_global_dependency_summary(&self.run_dir).await?;
             let mut unfinished = Vec::new();
             for case in self.unfinished_staging_cases().await? {
@@ -296,6 +319,7 @@ impl Recorder {
             state.failed_cases > 0
         };
         self.write_network_manifest().await?;
+        self.writer.seal(self.capture.coverage()).await?;
         self.prepare_global_report().await;
         self.write_run_report(status).await?;
         self.flush_traffic().await?;
@@ -382,6 +406,9 @@ impl Recorder {
                 })?;
         }
         self.finalized_cases.lock().await.insert(case.id);
+        self.writer
+            .register_input(case.id, path_relative_to(&failed_dir, &self.run_dir), false)
+            .await?;
         Ok(failed_dir)
     }
 
@@ -476,6 +503,8 @@ impl Recorder {
     pub(crate) async fn write_run_report(&self, status: &'static str) -> Result<()> {
         let state = self.run_state.lock().await;
         let report = RecorderRunReport {
+            schema: crate::dependency::observation::RECORDING_SCHEMA,
+            dependency_manifest: crate::dependency::observation::MANIFEST_FILE,
             run_id: state.run_id.clone(),
             status,
             output_dir: self.run_dir.display().to_string(),
@@ -642,9 +671,10 @@ mod tests {
         assert!(!recorder.run_dir.join("another-http-rule").exists());
         assert!(recorder.run_dir.join("apis").is_dir());
 
-        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
-            .await
-            .unwrap();
+        let report_raw =
+            crate::recorder::test_io::read_to_string(recorder.run_dir.join("recording-run.json"))
+                .await
+                .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
         assert_eq!(report["status"], "running");
         assert_eq!(report["published_cases"], 3);
@@ -761,9 +791,10 @@ mod tests {
             .await;
         assert!(recorder.finish_run().await.unwrap());
 
-        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
-            .await
-            .unwrap();
+        let report_raw =
+            crate::recorder::test_io::read_to_string(recorder.run_dir.join("recording-run.json"))
+                .await
+                .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
         assert_eq!(report["published_cases"], 2);
         assert_eq!(report["observed_api_count"], 1);
@@ -814,9 +845,10 @@ mod tests {
                 .exists()
         );
 
-        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
-            .await
-            .unwrap();
+        let report_raw =
+            crate::recorder::test_io::read_to_string(recorder.run_dir.join("recording-run.json"))
+                .await
+                .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
         assert_eq!(report["status"], "completed");
         assert_eq!(report["published_cases"], 0);
@@ -846,9 +878,10 @@ mod tests {
 
         assert!(!recorder.finish_run_after_runtime(false).await.unwrap());
 
-        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
-            .await
-            .unwrap();
+        let report_raw =
+            crate::recorder::test_io::read_to_string(recorder.run_dir.join("recording-run.json"))
+                .await
+                .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
         assert_eq!(report["status"], "failed");
         assert_eq!(report["failed_cases"], 0);

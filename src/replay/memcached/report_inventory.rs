@@ -11,7 +11,7 @@ impl MemcachedReplayState {
             .global_report
             .rows(0, &self.exchanges, true)
             .filter(|(_, exchange)| {
-                exchange.source == ReplaySource::Global && !exchange.status.is_consumed()
+                exchange.source.is_run_owned() && !exchange.status.is_consumed()
             })
             .count()
     }
@@ -30,7 +30,7 @@ impl MemcachedReplayState {
         let Some(exchange) = self
             .exchanges
             .get(index)
-            .filter(|exchange| exchange.source == ReplaySource::Global)
+            .filter(|exchange| exchange.source.is_run_owned())
         else {
             return;
         };
@@ -59,7 +59,7 @@ impl MemcachedReplayState {
             .events
             .global_report
             .rows(0, &self.exchanges, extras)
-            .filter(|(_, exchange)| exchange.source == ReplaySource::Global)
+            .filter(|(_, exchange)| exchange.source.is_run_owned())
         {
             visitor(Row {
                 position: Position { section: 0, index },
@@ -67,7 +67,7 @@ impl MemcachedReplayState {
                 value: serde_json::to_value(CommandUnusedReport {
                     index,
                     case_id: exchange.case_id.clone(),
-                    source: ReplaySource::Global,
+                    source: exchange.source,
                     target: TargetKey {
                         host: normalize_host(&exchange.record.target_host),
                         port: exchange.record.target_port,

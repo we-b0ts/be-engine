@@ -76,7 +76,7 @@ def verify(binary, image):
         data = root / 'data'
         data.mkdir()
         shutil.copyfile(Path(__file__).with_name('source.py'), fixtures / 'source.py')
-        (project / 'policy.yaml').write_text('format: traffic-policy/v2\nrules: []\n')
+        (project / 'policy.yaml').write_text('format: traffic-policy/v3\nrules: []\n')
         (project / 'project.yaml').write_text('''version: 18
 project:
   policy: .traffic-e2e/policy.yaml
@@ -100,7 +100,7 @@ recorder:
         path_prefixes: [/socket.io/]
   recording:
     post_ready_settle_ms: 0
-    case_dependency_post_response_window_ms: 100
+    case_dependency_post_response_window_ms: 0
 ''')
         started = False
         try:

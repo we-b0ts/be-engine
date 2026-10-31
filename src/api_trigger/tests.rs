@@ -141,7 +141,7 @@ impl Fixture {
         fixture
     }
     fn write_report(&self, command: &str) {
-        fs::write(&self.report,json!({"version":6,"finalized":true,
+        fs::write(&self.report,json!({"version":7,"finalized":true,
             "cases":[{"case_id":"origin","dependencies_path":self.origin.join("dependencies.jsonl")},
                 {"case_id":"victim","dependencies_path":self.victim.join("dependencies.jsonl")}],
             "redis":{"unmatched":[],"unsupported":[],"unsafe_events":[],"unused_case":[
@@ -336,7 +336,7 @@ fn rejects_target_failures_and_foreign_recording_membership() {
 }
 
 #[test]
-fn unused_only_overlay_is_reversible_and_preserves_genuine_failures() {
+fn ownership_discovery_and_policy_removal_preserve_all_actual_report_facts() {
     let f = Fixture::new("DEL");
     f.plan("DEL").apply().unwrap();
     let mut report: Value = serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap();
@@ -351,14 +351,12 @@ fn unused_only_overlay_is_reversible_and_preserves_genuine_failures() {
         let result =
             crate::replay::reclassify_background_dependencies(&f.policy, &f.report, &cases)
                 .unwrap();
-        assert_eq!(result.matched_unused_case, 1);
+        assert_eq!(result.matched_unused_case, 0);
         assert!(result.remaining_dirty_case_ids.contains("origin"));
         assert!(result.remaining_dirty_case_ids.contains("victim"));
         let report: Value = serde_json::from_slice(&fs::read(&f.report).unwrap()).unwrap();
-        assert_eq!(
-            report["redis"]["unused_global"][0]["api_trigger_source"]["case_id"],
-            "origin"
-        );
+        assert!(report["redis"]["unused_global"].is_null());
+        assert_eq!(report["redis"]["unused_case"].as_array().unwrap().len(), 2);
     }
     fs::write(
         &f.policy,
@@ -530,14 +528,21 @@ async fn recorder_keeps_active_case_calls_and_retains_idle_candidates_without_sn
     state.recorder().publish_case(&case).await.unwrap();
     state.record_event(event());
     state.recorder().finish_run().await.unwrap();
-    let own =
-        fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl")).unwrap();
-    let global =
-        fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl")).unwrap();
+    let own = crate::recorder::test_io::read_to_string_sync(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .unwrap();
+    let global = crate::recorder::test_io::read_to_string_sync(
+        state
+            .recorder()
+            .run_dir
+            .join("indexes/unattributed-scope.json"),
+    )
+    .unwrap();
     assert_eq!(own.lines().count(), 1);
     assert_eq!(global.lines().count(), 1);
-    assert!(own.contains("active_window"));
-    assert!(global.contains("api_trigger_candidate"));
+    assert!(own.contains("\"kind\":\"case\""));
+    assert!(global.contains("\"kind\":\"unattributed\""));
     assert!(!own.contains("cache_snapshot_rule"));
     assert!(!global.contains("cache_snapshot_rule"));
 }

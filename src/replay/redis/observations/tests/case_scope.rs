@@ -8,7 +8,7 @@ fn fixture(own: &[Value], other: &[Value]) -> (tempfile::TempDir, RedisReplaySta
     rule["match"].as_object_mut().unwrap().remove("api");
     std::fs::write(
         &policy,
-        json!({"format":"traffic-policy/v2","rules":[rule]}).to_string(),
+        json!({"format":"traffic-policy/v3","rules":[rule]}).to_string(),
     )
     .unwrap();
     let mut cases = BTreeMap::new();
@@ -478,7 +478,7 @@ fn explicit_shared_and_global_key_inventory_still_cannot_join_a_case_proof() {
         if shared {
             state.exchanges[1].shared_rule_id = Some("explicit-sharing".into());
         } else {
-            state.exchanges[1].source = ReplaySource::Global;
+            state.exchanges[1].source = ReplaySource::Startup;
         }
         assert!(state.prepare_observations("case").is_err());
         assert!(state.observations.profiles.is_empty());

@@ -90,7 +90,7 @@ async fn replay_tcp() {
         .collect::<String>();
     std::fs::write(case.join("dependencies.jsonl"), &original).unwrap();
     let path = root.join(".traffic-e2e/policy.yaml");
-    let raw = r#"format: traffic-policy/v2
+    let raw = r#"format: traffic-policy/v3
 json:
   fields:
     /id: {kind: identity, formats: [decimal]}
@@ -202,7 +202,7 @@ json:
     assert_eq!(report.matched.len(), 5);
     assert_eq!(report.unmatched.len(), 2);
     assert_eq!(
-        std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap(),
+        crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap(),
         original
     );
 }

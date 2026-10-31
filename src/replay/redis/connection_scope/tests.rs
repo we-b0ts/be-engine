@@ -84,7 +84,7 @@ fn same_case_stateful_commands_bind_the_whole_lane_without_binding_other_cases()
 
 #[test]
 fn explicit_session_setup_keeps_its_connection_wide_boundary_with_a_case_origin() {
-    for source in [ReplaySource::Global, ReplaySource::Case] {
+    for source in [ReplaySource::Startup, ReplaySource::Case] {
         let local = event(1, "GET", &[b"session"], b"$1\r\nx\r\n");
         let (_root, mut state) = state(std::slice::from_ref(&local), vec![]);
         let mut setup = state.exchanges[0].record.clone();

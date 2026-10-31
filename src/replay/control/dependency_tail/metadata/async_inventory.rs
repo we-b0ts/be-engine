@@ -1,4 +1,4 @@
-//! Old published cases may prove their finite async tail without a new capture.
+//! Prove a finite async tail from the effective immutable Source scope.
 use super::*;
 use serde_json::Value;
 
@@ -7,6 +7,21 @@ mod tests;
 
 pub(super) async fn from_complete_source(
     case_dir: &Path,
+    rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
+    request_timeout: Duration,
+) -> Result<Option<Metadata>> {
+    from_scope(
+        case_dir,
+        &case_dir.join("dependencies.jsonl"),
+        rules,
+        request_timeout,
+    )
+    .await
+}
+
+pub(super) async fn from_scope(
+    case_dir: &Path,
+    dependency_path: &Path,
     rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
     request_timeout: Duration,
 ) -> Result<Option<Metadata>> {
@@ -43,9 +58,11 @@ pub(super) async fn from_complete_source(
     if !scope.select_response(response_body.as_ref()).0 {
         return Ok(None);
     }
-    let raw = read(&case_dir.join("dependencies.jsonl"))
-        .await?
-        .context("async API replay requires a complete Source dependency inventory")?;
+    let path = dependency_path.to_owned();
+    let raw =
+        tokio::task::spawn_blocking(move || crate::dependency_index::scoped::read_bytes(&path))
+            .await
+            .context("async dependency scope read task failed")??;
     let (references, source_stop_required) =
         tokio::task::spawn_blocking(move || complete_inventory(&scope, &raw))
             .await
@@ -55,11 +72,12 @@ pub(super) async fn from_complete_source(
         .try_into()
         .context("async API request budget exceeds its bound")?;
     Ok(Some(Metadata {
+        business_complete: true,
         request_timeout_ms,
         interaction_post_input_ms: None,
         strict_references: references.clone(),
         references: references.into_iter().collect(),
-        process_owned_exemptions: false,
+
         source_stop_required,
         source_stop_after_ms: None,
         cleanup_refs: BTreeSet::new(),
@@ -99,7 +117,7 @@ fn complete_inventory(
     }
     ensure!(
         completed,
-        "async API Source inventory has no proven completion resource or dependency failure; record a complete async case"
+        "async API Source inventory has no proven completion resource; record a complete async case"
     );
     Ok((references, source_stop_required))
 }

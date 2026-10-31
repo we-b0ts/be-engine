@@ -4,7 +4,7 @@ use super::*;
 const SOURCE_START: i64 = 1_792_108_800;
 
 fn proposal(_compact: bool) -> serde_json::Value {
-    json!({"format":"traffic-policy/v2","json":{"fields":{
+    json!({"format":"traffic-policy/v3","json":{"fields":{
         "/expires_at":{"kind":"time","formats":["unix_seconds"]},
         "/created_at":{"kind":"time","formats":["unix_seconds"]}
     }}})

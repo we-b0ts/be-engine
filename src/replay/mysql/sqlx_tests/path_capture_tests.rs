@@ -93,7 +93,7 @@ fn records() -> Vec<Value> {
 #[tokio::test]
 async fn unchanged_historical_key_replays_http_and_tls_sql_without_extra_configuration() {
     tokio::time::timeout(Duration::from_secs(20), async {
-        let policy = r#"format: traffic-policy/v2
+        let policy = r#"format: traffic-policy/v3
 rules:
 - id: preserved-key
   match:
@@ -214,7 +214,8 @@ async fn retired_path_authoring_preserves_evidence_and_native_http_sql_replay_is
             immutable
         );
         crate::replay::policy::test_fixture::install_dynamic_value(feedback()).unwrap();
-        let policy = std::fs::read_to_string(temp.path().join("policy.yaml")).unwrap();
+        let policy =
+            crate::recorder::test_io::read_to_string_sync(temp.path().join("policy.yaml")).unwrap();
         let document = crate::policy::parse_policy(&policy).unwrap();
         assert!(
             document

@@ -1,6 +1,6 @@
 use crate::policy::{self, NativeEffect, native::*};
 
-const DOCUMENT: &str = r#"format: traffic-policy/v2
+const DOCUMENT: &str = r#"format: traffic-policy/v3
 json:
   fields:
     /expire_at: {kind: time, formats: [unix_seconds]}
@@ -103,8 +103,8 @@ fn bindings_reject_empty_unknown_ambiguous_or_unbound_declarations() {
             "parameter: filename, unrecognized: true",
         ),
         format!("{DOCUMENT}  GET /empty: {{response: {{json: {{}}}}}}\n"),
-        "format: traffic-policy/v2\ndocx: {fields: []}\n".into(),
-        "format: traffic-policy/v2\napi: {'GET /docx': {response: {body: {codec: docx}}}}\n".into(),
+        "format: traffic-policy/v3\ndocx: {fields: []}\n".into(),
+        "format: traffic-policy/v3\napi: {'GET /docx': {response: {body: {codec: docx}}}}\n".into(),
         DOCUMENT.replace("GET /runtime:", "'*':"),
     ] {
         assert!(policy::parse_policy(&bad).is_err(), "accepted {bad}");
@@ -138,7 +138,7 @@ fn root_docx_definition_renders_once_when_two_apis_bind_the_same_codec() {
 
 #[test]
 fn typed_api_positions_reject_nested_duplicate_keys_before_crypto_forwarding() {
-    let prefix = "format: traffic-policy/v2\nsignatures:\n  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: KEY}}\napi:\n  GET /api:\n";
+    let prefix = "format: traffic-policy/v3\nsignatures:\n  default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: KEY}}\napi:\n  GET /api:\n";
     for positions in [
         "    request:\n      query: {token: default, token: default}\n",
         "    request:\n      query: {token: {signature: default, signature: default}}\n",
@@ -170,7 +170,7 @@ fn canonical_response_header_aliases_and_docx_field_aliases_cannot_overlap() {
         "Content-Disposition: {kind: date, parameter: filename, format: '%Y-%m-%d'}\n        content-disposition: {signature: default}",
     ] {
         let document = format!(
-            "format: traffic-policy/v2\nsignatures:\n  default: {{kind: jwt, algorithm: HS256, key: {{kind: target_env, name: KEY}}}}\napi:\n  GET /api:\n    response:\n      headers:\n        {headers}\n"
+            "format: traffic-policy/v3\nsignatures:\n  default: {{kind: jwt, algorithm: HS256, key: {{kind: target_env, name: KEY}}}}\napi:\n  GET /api:\n    response:\n      headers:\n        {headers}\n"
         );
         assert!(
             policy::parse_policy(&document).is_err(),
@@ -220,7 +220,7 @@ fn signed_and_decoded_json_positions_share_one_api_without_weakening_either_shap
 fn docx_leaf_proof_does_not_authorize_an_unproven_api_codec_binding() {
     let proof = "{source: exporter.rs:10, fact: Source writes the generated creation date in this DOCX package}";
     let document = format!(
-        "format: traffic-policy/v2\ndocx:\n  fields:\n    - {{kind: timestamp, part: docProps/core.xml, element: 'dcterms:created', format: rfc3339, proof: {proof}}}\napi:\n  GET /docx:\n    response:\n      body: {{codec: docx}}\n"
+        "format: traffic-policy/v3\ndocx:\n  fields:\n    - {{kind: timestamp, part: docProps/core.xml, element: 'dcterms:created', format: rfc3339, proof: {proof}}}\napi:\n  GET /docx:\n    response:\n      body: {{codec: docx}}\n"
     );
     let parsed = policy::parse_policy(&document).unwrap();
     assert!(policy::require_source_proofs(&parsed).is_err());

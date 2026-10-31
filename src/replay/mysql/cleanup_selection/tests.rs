@@ -164,7 +164,7 @@ fn scope_identity_sequence_and_protocol_remain_constraints() {
             match changed {
                 0 => exchanges[0].case_id = Some("other".into()),
                 1 => exchanges[1].case_id = Some("other".into()),
-                2 => exchanges[1].source = ReplaySource::Global,
+                2 => exchanges[1].source = ReplaySource::Startup,
                 3 => exchanges[1].identity.target.host = "other.internal".into(),
                 4 => exchanges[1].identity.database = Some("other".into()),
                 5 => exchanges[1].identity.username = Some("other".into()),
@@ -176,8 +176,8 @@ fn scope_identity_sequence_and_protocol_remain_constraints() {
                 11 => exchanges[1].record.response.server_status = Some(1),
                 12 => exchanges[2].record.command = "COM_STMT_EXECUTE".into(),
                 13 => exchanges[2].record.sql = Some(format!("{end} AND CHAIN")),
-                14 => exchanges[0].source = ReplaySource::Global,
-                15 => exchanges[2].source = ReplaySource::Global,
+                14 => exchanges[0].source = ReplaySource::Startup,
+                15 => exchanges[2].source = ReplaySource::Startup,
                 _ => unreachable!(),
             }
             check(&mut Index::default(), &exchanges, end, None);

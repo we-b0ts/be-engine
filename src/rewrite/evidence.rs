@@ -742,7 +742,7 @@ pub(super) fn unified_rule_hint(
             .is_some_and(|issue| is_rule_discovery_query(state, issue, &q.query_id))
     })?;
     Some(super::evidence_model::RewriteRuleHint {
-        capability:"unified_value_contract".into(),rule:"traffic-policy/v2".into(),
+        capability:"unified_value_contract".into(),rule:"traffic-policy/v3".into(),
         hint:"Use the differences and Source locations to diagnose this issue. This query exposes supported content formats and carrier bindings, even when no draft exists. Rules require Source proof, complete plan validation and genuine Replay; equal/null observations do not authorize a rule.".into(),
         help:command.command,
     })

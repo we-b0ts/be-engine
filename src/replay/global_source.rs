@@ -34,6 +34,7 @@ impl GlobalSource {
         ));
         global::load(
             path,
+            ReplaySource::Startup,
             &mut source.mysql,
             &mut source.http,
             &mut blackholes,
@@ -47,6 +48,27 @@ impl GlobalSource {
             reader.clone(),
         )
         .await?;
+        if let Some(run) = crate::dependency_index::recording::root(path) {
+            let process = run.join("indexes/process-scope.json");
+            if process.is_file() {
+                global::load(
+                    &process,
+                    ReplaySource::Process,
+                    &mut source.mysql,
+                    &mut source.http,
+                    &mut blackholes,
+                    &mut source.redis,
+                    &mut source.memcached,
+                    &mut source.kafka,
+                    &mut source.motan,
+                    &mut targets,
+                    &mut identities,
+                    rules,
+                    reader.clone(),
+                )
+                .await?;
+            }
+        }
         freeze(
             &mut source.mysql,
             &mut source.http_events,
@@ -59,9 +81,10 @@ impl GlobalSource {
         // Subscription mirrors are native confirmation proofs. Legacy captures
         // may resolve their native subscription record from Case dependency files;
         // expected-response files and Case assertion identities are never read.
-        let root = path
+        let physical = crate::dependency_index::scoped::resolve(path)?.path;
+        let root = physical
             .parent()
-            .context("Global Source has no parent")?
+            .context("run-owned Source has no parent")?
             .to_owned();
         let rules = rules.to_vec();
         tokio::task::spawn_blocking(move || {

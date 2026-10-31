@@ -14,7 +14,7 @@ fn runtime() -> (tempfile::TempDir, ReplayPolicyRuntime) {
     std::fs::write(case_dir.join("expected-response.json"), "{}").unwrap();
     std::fs::write(case_dir.join("dependencies.jsonl"), "").unwrap();
     let policy_path = temp.path().join("policy.yaml");
-    std::fs::write(&policy_path,"format: traffic-policy/v2\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n    /members: {kind: unordered}\n").unwrap();
+    std::fs::write(&policy_path,"format: traffic-policy/v3\njson:\n  fields:\n    /created_at: {kind: time, formats: [unix_seconds]}\n    /members: {kind: unordered}\n").unwrap();
     let cases = BTreeMap::from([(
         "case".into(),
         ReplayCase {

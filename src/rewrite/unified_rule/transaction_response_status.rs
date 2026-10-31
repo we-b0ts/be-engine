@@ -3,10 +3,10 @@ use super::*;
 
 fn proposal(kind: &str) -> serde_json::Value {
     match kind {
-        "json" => json!({"format":"traffic-policy/v2","json":{"fields":{
+        "json" => json!({"format":"traffic-policy/v3","json":{"fields":{
             "/id":{"kind":"identity","formats":["uuid"]}
         }}}),
-        "http" => json!({"format":"traffic-policy/v2","http":{"headers":{
+        "http" => json!({"format":"traffic-policy/v3","http":{"headers":{
             "x-request-id":{"kind":"identity","formats":["uuid"]}
         }}}),
         "api" => json!({"id":"generated","match":{"api":"GET /api"},
@@ -55,7 +55,7 @@ fn response_status_differences_allow_plan_apply_without_claiming_target_validati
             assert_eq!(
                 report["preflight"]["unvalidated_target_witnesses"],
                 json!([{
-                    "case_id":"case-1","surface":"api.response","reason":"response_status_differs",
+                    "case_id":"00000000-0000-4000-8000-000000000001","surface":"api.response","reason":"response_status_differs",
                     "source_status":source_status,"target_status":target_status
                 }])
             );
@@ -75,12 +75,17 @@ fn response_status_differences_allow_plan_apply_without_claiming_target_validati
                 .case_source
                 .as_ref()
                 .unwrap()
-                .join("apis/api/case-1");
+                .join("apis/api/00000000-0000-4000-8000-000000000001");
             let assertion = crate::assert_recorded_response(crate::ResponseAssertionOptions {
-                case_id: "case-1".into(),
+                case_id: "00000000-0000-4000-8000-000000000001".into(),
                 request: dir.join("request.json"),
                 expected_response: dir.join("expected-response.json"),
-                actual_response: fixture.paths.replay.parent().unwrap().join("case-1.json"),
+                actual_response: fixture
+                    .paths
+                    .replay
+                    .parent()
+                    .unwrap()
+                    .join("00000000-0000-4000-8000-000000000001.json"),
                 policy: fixture.policy(),
             })
             .unwrap();
@@ -122,7 +127,12 @@ fn response_status_difference_does_not_waive_invalid_source_rules_or_target_arti
         fixture.replace_responses(source(200, true), after);
         write(&fixture.proposal, proposal("json"));
         fixture.confirm();
-        let actual = fixture.paths.replay.parent().unwrap().join("case-1.json");
+        let actual = fixture
+            .paths
+            .replay
+            .parent()
+            .unwrap()
+            .join("00000000-0000-4000-8000-000000000001.json");
         if scenario == "stale" {
             let plan = fixture.plan().unwrap();
             write(&actual, target(503));
@@ -172,7 +182,7 @@ fn equal_error_response_status_still_validates_selected_fields_strictly() {
 #[test]
 fn response_status_failure_in_another_case_does_not_block_proven_identity_rule() {
     let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |_, source| {
-        let case = source.join("apis/api/case-2");
+        let case = source.join("apis/api/00000000-0000-4000-8000-000000000002");
         fs::create_dir_all(&case).unwrap();
         write(
             &case.join("request.json"),
@@ -187,7 +197,11 @@ fn response_status_failure_in_another_case_does_not_block_proven_identity_rule()
     after["body"] = body(json!({"id":"22222222-2222-4222-8222-222222222222"}));
     after["request_sent_at"] = json!("2026-10-16T00:01:00Z");
     fixture.replace_responses(source(200, true), after);
-    fixture.replace_case_responses("case-2", source(200, true), target(500));
+    fixture.replace_case_responses(
+        "00000000-0000-4000-8000-000000000002",
+        source(200, true),
+        target(500),
+    );
     write(&fixture.proposal, proposal("json"));
     fixture.confirm();
     let plan = fixture.plan().unwrap();
@@ -197,7 +211,7 @@ fn response_status_failure_in_another_case_does_not_block_proven_identity_rule()
     assert_eq!(report["preflight"]["independent_target_validations"], 1);
     assert_eq!(
         report["preflight"]["unvalidated_target_witnesses"][0]["case_id"],
-        "case-2"
+        "00000000-0000-4000-8000-000000000002"
     );
     apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
     assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);

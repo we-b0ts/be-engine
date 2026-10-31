@@ -50,7 +50,7 @@ async fn a_global_prewrite_read_proves_single_write_commit_without_consuming_the
         {
             let state = runtime.state.lock().await;
             assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-            assert_eq!(state.unused_exchanges(ReplaySource::Global).len(), 1);
+            assert_eq!(state.unused_exchanges(ReplaySource::Startup).len(), 1);
             let end = state
                 .mysql
                 .exchanges
@@ -71,8 +71,12 @@ async fn a_global_prewrite_read_proves_single_write_commit_without_consuming_the
         read(&mut client, "teams", 2).await;
         let state = runtime.state.lock().await;
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-        assert!(state.unused_exchanges(ReplaySource::Global).is_empty());
-        assert!(!state.snapshot_report().is_dirty());
+        assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
+        assert!(
+            state.snapshot_report().is_dirty(),
+            "an implicit low-level run cannot certify the Startup phase"
+        );
+        assert_eq!(state.startup_phase.report().status, "phase_unverified");
         task.abort();
     })
     .await
@@ -105,7 +109,7 @@ async fn a_global_read_after_a_write_does_not_authorize_a_commit_omission() {
             proof["source_proof_rejection"]["missing_query_sequences"],
             json!([2])
         );
-        assert!(state.unused_exchanges(ReplaySource::Global).is_empty());
+        assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
         assert!(state.snapshot_report().is_dirty());
         task.abort();
     })

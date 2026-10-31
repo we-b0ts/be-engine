@@ -95,6 +95,58 @@ impl Default for InitialLoads {
 }
 
 impl BackgroundDependencyMatcher {
+    pub(crate) fn matching_memcached_requests(&self, port: u16, key: &[u8]) -> Vec<String> {
+        let select = || {
+            let rules = self.memcached.lock().expect("background rules poisoned");
+            rules
+                .by_port
+                .get(&port)
+                .into_iter()
+                .flatten()
+                .filter(|rule| rule.matches(key))
+                .map(|rule| rule.name.clone())
+                .collect::<Vec<_>>()
+        };
+        // Other resources may resolve onto this port too. Refresh before taking
+        // the full candidate set rather than accepting the first cached match.
+        let _ = self.refresh_pending_resources();
+        select()
+    }
+
+    pub(crate) fn matching_capture_rules(&self, event: &RecorderEvent) -> Vec<String> {
+        let mut rules = self
+            .rules
+            .iter()
+            .filter(|rule| rule.matches(event))
+            .map(|rule| rule.name().to_owned())
+            .collect::<BTreeSet<_>>();
+        match event {
+            RecorderEvent::MemcachedExchange(exchange)
+                if exchange.command.eq_ignore_ascii_case("get") =>
+            {
+                if let Some(key) = exchange.key.as_ref().and_then(decode_capture) {
+                    rules.extend(self.matching_memcached_requests(exchange.target_port, &key));
+                }
+            }
+            RecorderEvent::RedisExchange(exchange) if !exchange.session_setup => {
+                if let Some(key) = exchange.args.first().and_then(decode_capture) {
+                    rules.extend(
+                        self.redis_initial_load_rules
+                            .iter()
+                            .filter(|rule| {
+                                rule.ports.contains(&exchange.target_port)
+                                    && exchange.command.eq_ignore_ascii_case(&rule.command)
+                                    && matches_exact_redis_key(&key, &rule.keys)
+                            })
+                            .map(|rule| rule.name.clone()),
+                    );
+                }
+            }
+            _ => (),
+        }
+        rules.into_iter().collect()
+    }
+
     pub(crate) fn from_rules(rules: &[BackgroundDependencyRuleConfig]) -> Result<Self> {
         Self::from_rules_in(rules, Path::new(breeze::SOCKS_DIR))
     }
@@ -403,7 +455,7 @@ impl BackgroundDependencyMatcher {
         let previous =
             initial_load
                 .completed
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |completed| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |completed| {
                     (completed < initial_load.expected).then_some(completed + 1)
                 });
         if let Ok(previous) = previous {

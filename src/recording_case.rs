@@ -1,8 +1,8 @@
 //! Case admission, dependency observation and publication lifecycle wiring.
 
 use crate::active_case::{DependencyDrainResult, DependencyTargets};
-use crate::recorder::api_origin_observation::{ApiOriginScope, DependencyRequest};
 use crate::recorder::readiness::PostReadyWaitOutcome;
+use crate::recorder::request::DependencyRequest;
 use crate::recorder::{CaseContext, CaseInvalidation};
 use crate::recording_control::RecordingListener;
 use crate::{ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRejection, AppState};
@@ -57,35 +57,16 @@ impl AppState {
                 .active_cases
                 .configure_async_api(case_id, scope, started, request_timeout);
         }
-        let idle = Duration::from_millis(self.config().recording.api_origin_dependency_idle_ms);
         // Response headers may declare a stream only after dependencies have
         // started. Capture their request lifetimes from primary admission.
         // Explicit Accept and response-only adoption use the same HTTP budget;
         // interaction max_duration separately limits primary interaction I/O.
         self.inner.active_cases.configure_stream_tail(
             case_id,
-            idle,
+            Duration::ZERO,
             started,
             Duration::from_millis(self.config().http_gateway.request_timeout_ms),
         );
-        if idle.is_zero() {
-            return;
-        }
-        if let Some(scope) = ApiOriginScope::for_primary(
-            &self.config().process_owned_dependencies,
-            method,
-            uri,
-            body,
-        ) {
-            self.inner.active_cases.configure_observation(
-                case_id,
-                scope,
-                idle,
-                started,
-                request_timeout,
-            );
-            info!(%case_id, idle_ms = idle.as_millis(), "API-origin dependency observation enabled");
-        }
     }
 
     pub(crate) fn capture_dependency_request(
@@ -330,38 +311,6 @@ impl AppState {
                 ));
             }
         }
-        if let Some((case, mut report)) = self.inner.active_cases.observation_report(case_id) {
-            let inventory_complete = report["inventory_complete"] == true;
-            report["outcome"] = match result {
-                DependencyDrainResult::Drained => "quiet",
-                DependencyDrainResult::TimedOut => "dependency_drain_timeout",
-                DependencyDrainResult::ObservationTimedOut => "request_deadline",
-            }
-            .into();
-            if !inventory_complete {
-                report["outcome"] = "inventory_limit".into();
-            }
-            if has_stream_tail {
-                report["observation_mode"] = "primary_stream_tail".into();
-            }
-            if let Err(error) = self
-                .recorder()
-                .write_case_json(&case, "api-origin-observation.json", &report)
-                .await
-            {
-                return Some(CaseInvalidation::new(
-                    "recording_observation_failure",
-                    format!("failed to persist API-origin observation: {error}"),
-                ));
-            }
-            if !inventory_complete {
-                self.begin_case_quiescing();
-                return Some(CaseInvalidation::new(
-                    "api_origin_observation_limit",
-                    "API-origin selected dependency inventory exceeded 100000 exchanges; observation is incomplete",
-                ));
-            }
-        }
         if has_stream_tail {
             return match result {
                 DependencyDrainResult::Drained => None,
@@ -378,8 +327,8 @@ impl AppState {
         match result {
             DependencyDrainResult::Drained => None,
             DependencyDrainResult::ObservationTimedOut => Some(CaseInvalidation::new(
-                "api_origin_observation_timeout",
-                "API-origin dependency observation reached the absolute request deadline before selected traffic became quiet",
+                "dependency_observation_timeout",
+                "dependency observation reached its absolute request deadline",
             )),
             DependencyDrainResult::TimedOut => {
                 warn!(
@@ -402,6 +351,23 @@ impl AppState {
 
     pub(crate) fn capture_dependency_targets(&self) -> DependencyTargets {
         self.inner.active_cases.current_targets_for_event()
+    }
+
+    pub(crate) fn capture_dependency_start(
+        &self,
+        protocol: crate::dependency::observation::ProtocolRef,
+    ) -> DependencyTargets {
+        self.inner.active_cases.current_targets_for_start(protocol)
+    }
+
+    pub(crate) async fn close_dependency_capture(&self) -> bool {
+        self.recorder().capture.close();
+        self.recorder()
+            .capture
+            .drain(Duration::from_millis(
+                self.config().recording.shutdown_case_drain_timeout_ms,
+            ))
+            .await
     }
 }
 

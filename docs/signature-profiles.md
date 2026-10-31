@@ -5,7 +5,7 @@ content formats or API positions. Algorithms and private key provenance are not
 repeated in JSON field declarations:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 signatures:
   default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
   oidc: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: OIDC_STATE_SECRET_KEY}}

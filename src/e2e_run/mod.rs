@@ -3,6 +3,11 @@ mod active_progress;
 mod admin_source;
 mod admin_startup;
 mod assertion_publication;
+mod batch_evidence;
+mod batch_planning;
+pub(crate) use batch_planning::{BatchRuleEvidence, batch_rule_evidence};
+mod batch_publication;
+pub(crate) use batch_publication::{batch_diagnostic_report, latest_batch_api_results};
 mod branch;
 mod case_progress;
 mod case_selection;
@@ -23,7 +28,6 @@ pub(crate) mod jwt_evidence;
 mod model;
 mod progress;
 mod project_validation;
-mod reclassify;
 mod replay_publication;
 mod request_feedback;
 mod request_view;
@@ -52,6 +56,7 @@ pub use admin_startup::{
     StartupSnapshotRecaptureOptions, StartupSnapshotRecaptureResult, recapture_startup_snapshot,
 };
 
+pub(crate) use batch_evidence::{ActualBatchEvidence, completed_batch_evidence};
 pub(crate) use case_selection::ReplayIteration;
 pub(crate) use config::render_project_config;
 pub(crate) use config::resolve_project;
@@ -76,12 +81,6 @@ pub(crate) use http_driver::wait_until_ready;
 pub use model::DEFAULT_MAX_FAILED_CASES_PER_API;
 use model::{CaseStatus, RunStatus};
 pub(crate) use model::{ResolvedProjectConfig, TargetBuildContext};
-pub(crate) use reclassify::{
-    FocusedBackgroundReclassification, ensure_focused_background_reclassification_revisable,
-    focused_background_reclassification_pending,
-    focused_background_reclassification_recovery_required, latest_focused_api,
-    reclassify_focused_background_dependencies, with_background_reclassification_snapshot,
-};
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,
     E2eReplayGate, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,

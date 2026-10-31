@@ -55,11 +55,12 @@ mod report_inventory;
 mod request_order;
 pub(crate) mod shared_read;
 mod snapshot_seed;
+mod startup;
 pub(crate) mod value;
 use connection_scope::{ConnectionScopes, TargetConnection};
 use matching::redis_authentication_hint;
 pub(super) mod snapshot_overlay;
-use super::command_matching::{CaseConnectionBinding, is_connection_independent_background};
+use super::command_matching::{CaseConnectionBinding, is_process_lane};
 use super::report::command::{
     CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
 };
@@ -118,7 +119,7 @@ pub(super) struct RecordedExchange {
     #[serde(default)]
     session_setup: bool,
     #[serde(default)]
-    global_dependency_reason: Option<String>,
+    capture: Option<crate::dependency::observation::CaptureMetadata>,
 }
 
 impl RecordedExchange {
@@ -203,6 +204,9 @@ pub(super) struct RedisReplayState {
     delivery_changed: Arc<tokio::sync::Notify>,
     request_observed_at: Option<chrono::DateTime<chrono::Utc>>,
     request_observation_id: Option<uuid::Uuid>,
+    request_observation_retained: bool,
+    pub(in crate::replay) target_observations:
+        Option<crate::replay::target_observation::TargetObservations>,
     pub(in crate::replay) pubsub: pubsub::PubSubState,
     pub(super) request_contracts: super::policy::request_contract::RequestContracts,
     pub(super) dynamic_values: super::policy::dynamic_values::DynamicValues,
@@ -387,14 +391,12 @@ impl RedisReplayState {
         )?;
         self.activity_refresh
             .check_inventory_addition(&record, &args, source, case_id)?;
-        let connection_independent = is_connection_independent_background(
-            source,
-            record.global_dependency_reason.as_deref(),
-        ) || (source == ReplaySource::Global
-            && record.global_dependency_reason.as_deref() == Some("bootstrap_window")
-            && process_owned_dependencies
-                .iter()
-                .any(|rule| redis_rule_matches(rule, record.target_port, &record.command, &args)));
+        let connection_independent = is_process_lane(source)
+            || (source.is_run_owned()
+                && record.run_owner_kind() == Some("startup")
+                && process_owned_dependencies.iter().any(|rule| {
+                    redis_rule_matches(rule, record.target_port, &record.command, &args)
+                }));
         register_target(
             targets,
             &record.target_host,
@@ -481,6 +483,7 @@ impl RedisReplayState {
             self.events.dirty_case_ids.insert(case_id.clone());
         }
         self.events.unsafe_events.push(CommandRequestReport {
+            target_observation_id: None,
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
@@ -519,9 +522,9 @@ impl RedisReplayState {
                 .chain(self.pubsub.unused(ReplaySource::Case))
                 .collect(),
             unused_global_count: Some(self.global_unused_count()),
-            unused_global: unused(&self.exchanges, ReplaySource::Global)
+            unused_global: unused(&self.exchanges, ReplaySource::Startup)
                 .into_iter()
-                .chain(self.pubsub.unused(ReplaySource::Global))
+                .chain(self.pubsub.unused(ReplaySource::Startup))
                 .take(100)
                 .collect(),
             snapshot_overlays: self.snapshot_overlays.clone(),
@@ -672,6 +675,7 @@ async fn serve_connection(
                 .events
                 .unsupported
                 .push(CommandRequestReport {
+                    target_observation_id: None,
                     case_id,
                     target: target_key.clone(),
                     command: command.name.clone(),
@@ -747,6 +751,16 @@ async fn serve_connection(
         .await;
         match response {
             Ok(matched) => {
+                if let Err(error) =
+                    crate::replay::policy::request_contract::hypotheses::await_durable(&state).await
+                {
+                    state
+                        .lock()
+                        .await
+                        .redis
+                        .fail_exchange(&matched, "hypothesis evidence persistence failed".into());
+                    return Err(error);
+                }
                 let deliveries = state.lock().await.redis.pubsub.subscription(
                     client_id,
                     &target_key,
@@ -792,6 +806,7 @@ async fn record_runtime_unsafe(
 ) {
     let mut state = state.lock().await;
     let request = CommandRequestReport {
+        target_observation_id: None,
         case_id: state.active_case_id.clone(),
         target: target.clone(),
         command: command.to_string(),
@@ -914,7 +929,7 @@ fn unused_iter(
         .iter()
         .enumerate()
         .filter(move |(_, exchange)| {
-            exchange.source == source
+            exchange.source.matches_scope(source)
                 && if exchange.reusable_snapshot {
                     !exchange.matched_once
                 } else {
@@ -924,7 +939,7 @@ fn unused_iter(
         .map(move |(index, exchange)| CommandUnusedReport {
             index,
             case_id: exchange.case_id.clone(),
-            source,
+            source: exchange.source,
             target: TargetKey {
                 host: normalize_host(&exchange.record.target_host),
                 port: exchange.record.target_port,
@@ -937,7 +952,7 @@ fn unused_iter(
 
 fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
     unused_iter(exchanges, source)
-        .take(if source == ReplaySource::Global {
+        .take(if source.is_run_owned() {
             100
         } else {
             usize::MAX
@@ -947,3 +962,14 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
 
 #[cfg(test)]
 mod tests;
+
+impl RecordedExchange {
+    fn run_owner_kind(&self) -> Option<&'static str> {
+        self.capture
+            .as_ref()
+            .and_then(|capture| match capture.owner_kind() {
+                "case" => None,
+                kind => Some(kind),
+            })
+    }
+}

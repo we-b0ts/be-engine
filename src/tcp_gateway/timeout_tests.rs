@@ -165,10 +165,11 @@ async fn capture_timeout(tls: bool, cancel_engine: bool, half_close: bool) {
     assert!(drain.await.unwrap().is_none());
     state.recorder().flush_traffic().await.unwrap();
     state.recorder().publish_case(&case).await.unwrap();
-    let raw =
-        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
     let events: Vec<serde_json::Value> = raw
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())

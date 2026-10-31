@@ -12,6 +12,16 @@ impl Serialize for RewriteAction {
         S: Serializer,
     {
         match self {
+            Self::BatchDiagnosisRequired{summary,evidence,inspect,retry} => RewriteActionView {
+                kind:"batch_diagnosis_required",summary,details:evidence,
+                commands:serde_json::json!({"inspect":inspect,"retry_after_repair":retry}),
+            }.serialize(serializer),
+            Self::DependencyAttributionRequired { summary, context, apply,assignment_id,dispatch_generation,claim_kinds } => RewriteActionView {
+                kind:"dependency_attribution_required", summary,
+                details:serde_json::json!({"work_type":"dependency_attribution","owner":"repository_analyst",
+                    "assignment_id":assignment_id,"dispatch_generation":dispatch_generation,"claim_kinds":claim_kinds,"read_only_analysis":true}),
+                commands:serde_json::json!({"context":context,"apply":apply}),
+            }.serialize(serializer),
             Self::RepositoryAnalysisRequired { summary, analysis, context, apply } => RewriteActionView {
                 kind: "repository_analysis_required", summary,
                 details: analysis,

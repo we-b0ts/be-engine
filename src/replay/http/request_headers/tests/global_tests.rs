@@ -48,7 +48,7 @@ async fn global_request_header_time_is_case_insensitive_strict_in_count_and_has_
     record["request_started_at"] = json!(source);
     std::fs::write(&path, format!("{record}\n")).unwrap();
     let policy = temp.path().join("global-headers.yaml");
-    std::fs::write(&policy, "format: traffic-policy/v2\nhttp:\n  headers:\n    x-amz-date: {kind: time, formats: [amz_date]}\n").unwrap();
+    std::fs::write(&policy, "format: traffic-policy/v3\nhttp:\n  headers:\n    x-amz-date: {kind: time, formats: [amz_date]}\n").unwrap();
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
     let now = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
@@ -93,7 +93,7 @@ async fn header_and_body_identity_conflicts_leave_the_shared_case_map_uncommitte
         json!({"encoding":"utf8","data":json!({"id":A}).to_string(),"truncated":false});
     std::fs::write(&path, format!("{record}\n")).unwrap();
     let policy = temp.path().join("global-headers.yaml");
-    std::fs::write(&policy, "format: traffic-policy/v2\nhttp:\n  headers:\n    x-generated-id: {kind: identity, formats: [uuid]}\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n").unwrap();
+    std::fs::write(&policy, "format: traffic-policy/v3\nhttp:\n  headers:\n    x-generated-id: {kind: identity, formats: [uuid]}\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n").unwrap();
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
     assert_eq!(
@@ -151,7 +151,7 @@ async fn response_echoes_staged_request_header_and_body_identities_atomically() 
             json!([json!({"id":A}).to_string().len().to_string()]);
         std::fs::write(&path, format!("{record}\n")).unwrap();
         let policy = temp.path().join("global-headers.yaml");
-        std::fs::write(&policy, "format: traffic-policy/v2\nhttp:\n  headers:\n    x-generated-id: {kind: identity, formats: [uuid]}\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n").unwrap();
+        std::fs::write(&policy, "format: traffic-policy/v3\nhttp:\n  headers:\n    x-generated-id: {kind: identity, formats: [uuid]}\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n").unwrap();
         let (addr, runtime, task) =
             spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
         let (mut sender, connection) =

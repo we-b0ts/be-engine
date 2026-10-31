@@ -47,7 +47,7 @@ fn install_dependencies(fixture: &Fixture) {
                     source_role: SourceRole::DependencyRequest,
                     target_role: TargetRole::IndependentTargetObservation,
                     source: SourceIdentity {
-                        case_id: "case-1".into(),
+                        case_id: "00000000-0000-4000-8000-000000000001".into(),
                         exchange_id: None,
                         connection_id: Some(uuid::Uuid::nil().to_string()),
                         sequence: Some(sequence),

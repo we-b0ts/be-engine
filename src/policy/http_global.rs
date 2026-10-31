@@ -74,7 +74,7 @@ impl HttpPolicy {
 mod tests {
     #[test]
     fn header_formats_roundtrip_normalize_names_and_reject_ambiguous_or_non_scalar_declarations() {
-        let raw = "format: traffic-policy/v2\nhttp:\n  headers:\n    X-Amz-Date: {kind: time, formats: [amz_date]}\n";
+        let raw = "format: traffic-policy/v3\nhttp:\n  headers:\n    X-Amz-Date: {kind: time, formats: [amz_date]}\n";
         let policy = crate::policy::parse_policy(raw).unwrap();
         assert!(
             policy

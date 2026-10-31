@@ -116,9 +116,10 @@ async fn records_pipelined_query_and_ping_responses_in_fifo_order() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     let exchanges = traffic
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())

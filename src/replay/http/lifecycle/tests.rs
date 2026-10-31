@@ -50,7 +50,7 @@ async fn exercise(prefix: bool, early: bool) {
     tokio::fs::write(
         case.join("async-api-observation.json"),
         serde_json::json!({
-            "version":1,"complete":true,"inventory_complete":true,"end_reason":"timeout",
+            "version":2,"capture_complete":true,"business_complete":false,"business_completion":"unobserved","inventory_complete":true,"end_reason":"timeout",
             "request_timeout_ms":1000,"source_stop_required":true,"source_stop_after_ms":0,
             "completed_refs":[reference.clone()],"cleanup_refs":[reference]
         })
@@ -194,7 +194,7 @@ async fn cleanup_prefix_reuses_staged_request_identity_and_keeps_incomplete_sour
     tokio::fs::write(
         case.join("async-api-observation.json"),
         serde_json::json!({
-            "version":1,"complete":true,"inventory_complete":true,"end_reason":"timeout",
+            "version":2,"capture_complete":true,"business_complete":false,"business_completion":"unobserved","inventory_complete":true,"end_reason":"timeout",
             "request_timeout_ms":1000,"source_stop_required":true,"source_stop_after_ms":0,
             "completed_refs":[reference.clone()],"cleanup_refs":[reference]
         })
@@ -212,7 +212,7 @@ async fn cleanup_prefix_reuses_staged_request_identity_and_keeps_incomplete_sour
         .await
         .unwrap();
     let policy = temporary.path().join("policy.yaml");
-    tokio::fs::write(&policy,"format: traffic-policy/v2\njson:\n  fields:\n    /id: {kind: identity, formats: [{hex: 32}]}\n").await.unwrap();
+    tokio::fs::write(&policy,"format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [{hex: 32}]}\n").await.unwrap();
     let (address, runtime, task) = crate::replay::http::tests::spawn_http_replay_with_policy(
         &case,
         vec![],
@@ -306,7 +306,7 @@ async fn natural_failure_eof(unconsumed: bool) {
     tokio::fs::write(
         case.join("async-api-observation.json"),
         serde_json::json!({
-            "version":1,"complete":true,"inventory_complete":true,"end_reason":"dependency_failure",
+            "version":2,"capture_complete":true,"business_complete":false,"business_completion":"unobserved","inventory_complete":true,"end_reason":"dependency_failure",
             "request_timeout_ms":1000,"source_stop_required":true,"source_stop_after_ms":900,
             "completed_refs":references,"cleanup_refs":[cleanup]
         })

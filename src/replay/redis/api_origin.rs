@@ -9,6 +9,11 @@ impl RedisReplayState {
         source: &Path,
         rules: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
+        // A current-format session has already frozen independently proved
+        // ownership. Selector rediscovery cannot override its lane obligations.
+        if crate::dependency_index::recording::root(source).is_some() {
+            return Ok(());
+        }
         let rules: Vec<_> = rules
             .iter()
             .filter(|rule| {
@@ -43,8 +48,7 @@ impl RedisReplayState {
                 .witness(case_id, &event)
                 .is_some_and(|witness| !witness.same_resource_read)
             {
-                // Preserve original case attribution and finite consumption.
-                // The report overlay still owns unused-only reclassification.
+                // Low-level synthetic fixture ordering preserves finite inventory.
                 exchange.connection_independent = true;
                 independent += 1;
             }

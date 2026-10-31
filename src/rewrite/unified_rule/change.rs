@@ -185,7 +185,7 @@ mod tests {
 
     fn change(replace: serde_json::Value) -> serde_json::Value {
         json!({"format":CHANGE_FORMAT,"replace_rules":replace,
-            "policy":{"format":"traffic-policy/v2","rules":[rule("merged","GET /api")]}})
+            "policy":{"format":"traffic-policy/v3","rules":[rule("merged","GET /api")]}})
     }
 
     #[test]
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn section_replacement_requires_unique_supported_explicitly_provided_sections() {
         let valid = json!({"format":CHANGE_FORMAT,"replace_sections":["json"],
-            "policy":{"format":"traffic-policy/v2","json":{"fields":{}}}});
+            "policy":{"format":"traffic-policy/v3","json":{"fields":{}}}});
         let parsed = parse(&valid.to_string()).unwrap();
         assert!(parsed.replace_rules.is_empty());
         assert_eq!(parsed.replace_sections, BTreeSet::from(["json".into()]));
@@ -256,7 +256,7 @@ mod tests {
         }
         assert!(crate::policy::parse_policy(&valid.to_string()).is_err());
         let missing_headers = json!({"format":CHANGE_FORMAT,"replace_sections":["http"],
-            "policy":{"format":"traffic-policy/v2","http":{"requests":[]}}});
+            "policy":{"format":"traffic-policy/v3","http":{"requests":[]}}});
         assert!(
             parse(&missing_headers.to_string()).is_ok(),
             "an explicitly empty HTTP map remains a valid whole-format replacement"
@@ -280,7 +280,7 @@ mod tests {
         .unwrap();
         for paths in [json!(["/a/*", "/b/*"]), json!(["/a/*"]), json!(["/**"])] {
             let input = json!({"format":CHANGE_FORMAT,"replace_rules":["capture-a","capture-b"],
-                "policy":{"format":"traffic-policy/v2","rules":[capture("capture", paths.clone())]}});
+                "policy":{"format":"traffic-policy/v3","rules":[capture("capture", paths.clone())]}});
             let proposal = parse(&input.to_string()).unwrap();
             let mut document = original.clone();
             let result = proposal.remove_from(&mut document, "GET /api");

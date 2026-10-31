@@ -56,7 +56,7 @@ async fn failure_report(case: &Path, output: &Path) {
         StatusCode::BAD_GATEWAY
     );
     let mut state = runtime.state.lock().await;
-    state.active_case_id = None;
+    state.set_active_case(None);
     state.finalized_at = Some(Utc::now());
     fs::write(
         output,
@@ -83,7 +83,7 @@ async fn real_http_discovery_plan_apply_and_finite_replay() {
     }
     install(&policy, "/department_ids");
     let text = fs::read_to_string(&policy).unwrap();
-    assert!(text.contains("format: traffic-policy/v2"));
+    assert!(text.contains("format: traffic-policy/v3"));
     assert!(!text.contains("query:"));
     let (addr, runtime, task) =
         spawn_http_replay_with_policy(&case, vec![], Some(policy), None).await;
@@ -228,7 +228,7 @@ async fn schema_validation_rejects_unknown_formats_and_overlapping_global_paths(
     ] {
         fs::write(
             &policy,
-            json!({"format":"traffic-policy/v2","json":{"fields":fields}}).to_string(),
+            json!({"format":"traffic-policy/v3","json":{"fields":fields}}).to_string(),
         )
         .unwrap();
         assert!(crate::validate_replay_policy(&policy).is_err());
@@ -246,7 +246,7 @@ async fn a_rule_can_be_planned_for_one_path_while_another_unordered_path_still_b
         StatusCode::BAD_GATEWAY
     );
     let mut state = runtime.state.lock().await;
-    state.active_case_id = None;
+    state.set_active_case(None);
     state.finalized_at = Some(Utc::now());
     fs::write(
         &report,

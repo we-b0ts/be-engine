@@ -31,8 +31,10 @@ use super::{
 
 mod auth;
 mod evidence;
+mod finite_inventory;
 mod incoming;
 mod report_inventory;
+use report_inventory::{unused, unused_iter};
 mod termination;
 use termination::wait_for_connection_close;
 
@@ -461,6 +463,7 @@ impl MotanReplayState {
             self.events.dirty_case_ids.insert(case_id.clone());
         }
         self.events.unsafe_events.push(CommandRequestReport {
+            target_observation_id: None,
             case_id: matched.report.case_id.clone(),
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
@@ -481,7 +484,7 @@ impl MotanReplayState {
             unsafe_events: self.events.unsafe_events.clone(),
             unused_case: unused(&self.exchanges, ReplaySource::Case),
             unused_global_count: Some(self.global_unused_count()),
-            unused_global: unused(&self.exchanges, ReplaySource::Global),
+            unused_global: unused(&self.exchanges, ReplaySource::Startup),
             ..Default::default()
         }
     }
@@ -727,6 +730,7 @@ async fn enqueue_request(
                 replay.motan.events.dirty_case_ids.insert(case_id.clone());
             }
             replay.motan.events.unsupported.push(CommandRequestReport {
+                target_observation_id: None,
                 case_id,
                 target: target.clone(),
                 command: identity.command(),
@@ -785,6 +789,7 @@ async fn record_unmatched_request(
         state.motan.events.dirty_case_ids.insert(case_id.clone());
     }
     state.motan.events.unmatched.push(CommandRequestReport {
+        target_observation_id: None,
         case_id: active_case_id,
         target: target.clone(),
         command: identity.command(),
@@ -939,38 +944,6 @@ fn request_mismatch_fields(
     expected
         .authentication
         .mismatch_fields(&actual.authentication)
-}
-
-fn unused_iter(
-    exchanges: &[ReplayExchange],
-    source: ReplaySource,
-) -> impl Iterator<Item = CommandUnusedReport> + '_ {
-    exchanges
-        .iter()
-        .enumerate()
-        .filter(move |(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
-        .map(move |(index, exchange)| CommandUnusedReport {
-            index,
-            case_id: exchange.case_id.clone(),
-            source,
-            target: TargetKey {
-                host: normalize_host(&exchange.record.target_host),
-                port: exchange.record.target_port,
-            },
-            connection_id: exchange.record.connection_id,
-            sequence: exchange.record.sequence,
-            command: exchange.record.command.clone(),
-        })
-}
-
-fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
-    unused_iter(exchanges, source)
-        .take(if source == ReplaySource::Global {
-            100
-        } else {
-            usize::MAX
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # Traffic Policy
 
-The sole policy is a strict `traffic-policy/v2` document named by the managed
+The sole policy is a strict `traffic-policy/v3` document named by the managed
 project's `project.policy` path. The path is relative to the Target repository;
 the default is `.traffic-e2e/policy.yaml`.
 
@@ -14,7 +14,7 @@ project:
 An empty policy is:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 rules: []
 ```
 
@@ -61,7 +61,7 @@ See [unified rule contracts](unified-rule-contracts.md) for all three surfaces,
 JSON/PB reuse, native examples, module boundaries, precision, evidence and plan
 obligations. Domain-specific rule pages preserve historical semantic explanations;
 their old configuration/commands are retired. Production loaders and authoring
-APIs accept only `traffic-policy/v2`, not the former version-numbered verification
+APIs accept only `traffic-policy/v3`, not the former version-numbered verification
 documents, `traffic-policy/v1` or split file layouts.
 
 Workers discover bounded drafts and missing Source proof through current evidence.
@@ -104,7 +104,7 @@ the same `rule plan --file` command:
 format: traffic-policy-change/v1
 replace_rules: [old-clock-rule, old-identity-rule]
 policy:
-  format: traffic-policy/v2
+  format: traffic-policy/v3
   rules:
     # Complete replacement rules, with their own Source proof.
 ```

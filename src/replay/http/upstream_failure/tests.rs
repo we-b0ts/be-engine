@@ -34,7 +34,7 @@ async fn recorded_proxy_failure_replays_the_same_502_and_consumes_one_exact_requ
     let policy = temp.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        "format: traffic-policy/v2\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n",
+        "format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n",
     )
     .unwrap();
     let (address, runtime, task) =

@@ -356,6 +356,7 @@ pub(crate) async fn handle_connected_mysql(
                 Err(error) => return Err(error.into()),
             };
             bytes += packet.encoded_len() as u64;
+            let mut no_response_ownership = None;
             if c2s_authenticated.load(Ordering::SeqCst)
                 && let Some(command) = parse_client_command(&packet)
             {
@@ -371,8 +372,7 @@ pub(crate) async fn handle_connected_mysql(
                     (prepared_sql, tracker.database().map(ToOwned::to_owned))
                 };
                 let dependency_ownership = c2s_state.capture_dependency_request(
-                    crate::recorder::api_origin_observation::DependencyRequest::Mysql {
-                        connection_id: c2s_connection_id,
+                    crate::recorder::request::DependencyRequest::Mysql {
                         target_host: c2s_target_host.as_deref(),
                         target_port,
                         database: current_database.as_deref(),
@@ -406,6 +406,7 @@ pub(crate) async fn handle_connected_mysql(
                         .await;
                     let rejection = readonly_error_packet(packet.sequence_id.wrapping_add(1));
                     write_packet(&mut *c2s_client_write.lock().await, &rejection).await?;
+                    dependency_ownership.finish_capture_metadata("access_policy_rejected");
                     drop(dependency_ownership);
                     continue;
                 }
@@ -424,6 +425,12 @@ pub(crate) async fn handle_connected_mysql(
                         .await;
                 }
                 let sequence = c2s_query_sequence.fetch_add(1, Ordering::SeqCst) + 1;
+                dependency_ownership.bind_protocol(
+                    crate::dependency::observation::ProtocolRef::Mysql {
+                        connection_id: c2s_connection_id,
+                        sequence,
+                    },
+                );
                 c2s_dependency_ownerships.insert(sequence, dependency_ownership);
                 let expects_server_response = command.expects_server_response();
                 {
@@ -456,12 +463,15 @@ pub(crate) async fn handle_connected_mysql(
                     return Err(err);
                 }
                 if !expects_server_response {
-                    c2s_dependency_ownerships.take(sequence);
+                    no_response_ownership = c2s_dependency_ownerships.take(sequence);
                 }
             }
             // A command packet is a request boundary. The upstream writer may
             // be rustls, whose write completion does not imply TCP delivery.
             write_packet(&mut upstream_write, &packet).await?;
+            if let Some(ownership) = no_response_ownership {
+                ownership.finish_capture_metadata("no_response");
+            }
         }
         if c2s_termination
             .connection_end(TerminationSide::Client)

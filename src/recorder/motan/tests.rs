@@ -217,7 +217,7 @@ fn spawn_handler(
 
 async fn traffic_events(state: &AppState) -> Vec<serde_json::Value> {
     state.recorder().flush_traffic().await.unwrap();
-    tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+    crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
         .await
         .unwrap()
         .lines()

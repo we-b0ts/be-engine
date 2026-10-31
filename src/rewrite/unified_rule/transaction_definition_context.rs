@@ -15,7 +15,7 @@ fn partial_jwt_format_reuses_current_signature_and_freezes_its_private_input() {
             .unwrap();
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v2",
+                json!({"format":"traffic-policy/v3",
                 "signatures":{"default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}}}),
             );
             vec![]
@@ -29,7 +29,7 @@ fn partial_jwt_format_reuses_current_signature_and_freezes_its_private_input() {
         let response = json!({"token":token}).to_string();
         fixture.replace_response_bodies(response.as_bytes(), response.as_bytes());
         let partial =
-            json!({"format":"traffic-policy/v2","json":{"fields":{"/token":{"kind":"jwt"}}}});
+            json!({"format":"traffic-policy/v3","json":{"fields":{"/token":{"kind":"jwt"}}}});
         assert!(
             super::super::parse_proposal(&partial.to_string()).is_err(),
             "partial input cannot compile independently of its current profile"

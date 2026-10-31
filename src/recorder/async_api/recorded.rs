@@ -47,6 +47,9 @@ impl Parameter {
 
 #[derive(Deserialize)]
 struct Mysql {
+    connection_id: uuid::Uuid,
+    query_sequence: u64,
+    server_status_before: Option<u16>,
     command: String,
     sql: Option<String>,
     params: Option<Vec<Parameter>>,
@@ -58,6 +61,7 @@ struct Mysql {
 }
 #[derive(Deserialize)]
 struct MysqlResponse {
+    server_status: Option<u16>,
     status: String,
     error_code: Option<u16>,
 }
@@ -78,26 +82,30 @@ impl ResourceScope {
     pub(crate) fn observe_recorded(&self, event: &Value) -> Result<Option<AsyncSignal>> {
         let (index, kind) = match event["event_type"].as_str() {
             Some("dependency_connect_failure") => {
-                return Ok(Some(signal(
-                    AsyncEndReason::DependencyFailure,
-                    None,
-                    "dependency_connect_failure",
-                )));
+                return Ok(None);
             }
             Some("mysql_exchange") => {
                 let event: Mysql = serde_json::from_value(event.clone())
                     .context("invalid recorded async MySQL exchange")?;
-                if failed_outcome(event.outcome)
+                if event.outcome != DependencyExchangeOutcome::Response
                     || event.response.error_code.is_some()
                     || event.response.status == "error"
                 {
-                    return Ok(Some(signal(
-                        AsyncEndReason::DependencyFailure,
-                        None,
-                        "mysql_exchange",
-                    )));
-                }
-                if event.outcome != DependencyExchangeOutcome::Response {
+                    self.progress
+                        .lock()
+                        .expect("async progress poisoned")
+                        .mysql
+                        .observe(
+                            transaction::Facts {
+                                connection_id: event.connection_id,
+                                sequence: event.query_sequence,
+                                before: event.server_status_before,
+                                after: event.response.server_status,
+                                sql: event.sql.as_deref(),
+                                successful: false,
+                            },
+                            None,
+                        );
                     return Ok(None);
                 }
                 let params = event
@@ -126,19 +134,32 @@ impl ResourceScope {
                     }
                     _ => false,
                 });
-                (index, "mysql_exchange")
+                return Ok(self
+                    .progress
+                    .lock()
+                    .expect("async progress poisoned")
+                    .mysql
+                    .observe(
+                        transaction::Facts {
+                            connection_id: event.connection_id,
+                            sequence: event.query_sequence,
+                            before: event.server_status_before,
+                            after: event.response.server_status,
+                            sql: event.sql.as_deref(),
+                            successful: true,
+                        },
+                        index.map(|index| {
+                            signal(AsyncEndReason::Resource, Some(index), "mysql_exchange")
+                        }),
+                    ));
             }
             Some("redis_exchange") => {
                 let event: Redis = serde_json::from_value(event.clone())
                     .context("invalid recorded async Redis exchange")?;
-                if failed_outcome(event.outcome)
+                if event.outcome != DependencyExchangeOutcome::Response
                     || matches!(event.response_kind.as_str(), "error" | "blob_error")
                 {
-                    return Ok(Some(signal(
-                        AsyncEndReason::DependencyFailure,
-                        None,
-                        "redis_exchange",
-                    )));
+                    return Ok(None);
                 }
                 if event.outcome != DependencyExchangeOutcome::Response {
                     return Ok(None);
@@ -200,11 +221,7 @@ impl ResourceScope {
                         .as_u64()
                         .is_some_and(|status| status >= 400);
                 if failed {
-                    return Ok(Some(signal(
-                        AsyncEndReason::DependencyFailure,
-                        None,
-                        "http_exchange",
-                    )));
+                    return Ok(None);
                 }
                 let index = self.rule.end.iter().position(|end| match end {
                     AsyncEnd::Http(end) => {

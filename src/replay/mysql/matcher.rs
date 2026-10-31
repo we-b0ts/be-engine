@@ -1,10 +1,12 @@
 use super::*;
 mod control;
+mod hypothesis;
 mod request;
 pub(super) use request::TransactionMatch;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct MysqlReplayState {
+    pub(in crate::replay) request_observation_id: Option<String>,
     #[cfg(test)]
     pub(in crate::replay) observed_at_for_test: Option<DateTime<Utc>>,
     pub(in crate::replay) exchanges: Vec<ReplayExchange>,
@@ -40,7 +42,7 @@ impl MysqlReplayState {
         {
             return;
         }
-        self.has_global_transaction_start |= exchange.source == ReplaySource::Global
+        self.has_global_transaction_start |= exchange.source.is_run_owned()
             && exchange
                 .record
                 .server_status_before
@@ -131,6 +133,7 @@ impl ReplayState {
             &mut self.mysql.events.builtin_query_details,
             budget_case_id.as_deref(),
             |target_event_index| QueryReport {
+                target_observation_id: None,
                 diagnostic: None,
                 case_id,
                 target: identity.target.clone(),
@@ -160,6 +163,7 @@ impl ReplayState {
             self.mysql.events.dirty_case_ids.insert(case_id.to_owned());
         }
         self.mysql.events.unsupported_commands.push(QueryReport {
+            target_observation_id: None,
             diagnostic: None,
             case_id: case.map(ToOwned::to_owned),
             target: identity.target.clone(),
@@ -201,6 +205,7 @@ impl ReplayState {
             self.mysql.events.dirty_case_ids.insert(case_id.to_owned());
         }
         self.mysql.events.unmatched_queries.push(QueryReport {
+            target_observation_id: None,
             diagnostic: None,
             case_id: case.map(ToOwned::to_owned),
             target: identity.target.clone(),
@@ -240,9 +245,9 @@ impl ReplayState {
     ) -> Option<(ReplaySource, usize)> {
         let normalized_sql = sql.map(normalize_sql);
         let active_case_id = case.map(ToOwned::to_owned);
-        for source in [ReplaySource::Case, ReplaySource::Global] {
+        for source in [ReplaySource::Case, ReplaySource::Startup] {
             for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
-                if exchange.source != source
+                if !exchange.source.matches_scope(source)
                     || !exchange.status.is_available()
                     || exchange.record.command != command
                     || exchange.record.outcome != crate::DependencyExchangeOutcome::Response
@@ -264,7 +269,7 @@ impl ReplayState {
                     continue;
                 }
                 exchange.status = ReplayExchangeStatus::Consumed;
-                if exchange.source == ReplaySource::Global {
+                if exchange.source.is_run_owned() {
                     self.mysql.events.global_report.observe(
                         0,
                         index,
@@ -297,7 +302,7 @@ impl ReplayState {
         let normalized_sql = normalize_sql(sql);
         let param_count = count_sql_placeholders(sql);
         let mut semantic_target = None;
-        for source in [ReplaySource::Case, ReplaySource::Global] {
+        for source in [ReplaySource::Case, ReplaySource::Startup] {
             let candidates =
                 self.mysql
                     .candidates
@@ -305,7 +310,7 @@ impl ReplayState {
             for (project_columns, semantic) in [(false, false), (true, false), (false, true)] {
                 for index in candidates.iter().copied() {
                     let exchange = &self.mysql.exchanges[index];
-                    if exchange.source != source
+                    if !exchange.source.matches_scope(source)
                         || !active_case_matches(case, exchange)
                         || !identity_matches_exchange(identity, &exchange.identity)
                     {
@@ -415,7 +420,7 @@ impl ReplayState {
     ) -> Vec<RecordedExchangeSummary> {
         self.mysql_unused_iter(source, None)
             .filter(|exchange| !self.mysql.foreign.contains_key(&exchange.index))
-            .take(if source == ReplaySource::Global {
+            .take(if source.is_run_owned() {
                 100
             } else {
                 usize::MAX
@@ -445,11 +450,11 @@ impl ReplayState {
         &self,
         kind: OptionalSessionExchange,
     ) -> Vec<RecordedExchangeSummary> {
-        [ReplaySource::Case, ReplaySource::Global]
+        [ReplaySource::Case, ReplaySource::Startup]
             .into_iter()
             .flat_map(|source| {
                 self.mysql_unused_iter(source, Some(kind))
-                    .take(if source == ReplaySource::Global {
+                    .take(if source.is_run_owned() {
                         100
                     } else {
                         usize::MAX
@@ -484,7 +489,9 @@ impl ReplayState {
                     OptionalSessionExchange::Rollback | OptionalSessionExchange::Commit
                 ) && exchange.status == ReplayExchangeStatus::Responding
         });
-        exchange.source == source && !exchange.status.is_consumed() && optional == allowed
+        exchange.source.matches_scope(source)
+            && !exchange.status.is_consumed()
+            && optional == allowed
     }
 
     pub(super) fn mysql_summary(&self, index: usize) -> RecordedExchangeSummary {

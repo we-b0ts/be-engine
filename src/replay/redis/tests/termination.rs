@@ -381,7 +381,7 @@ async fn distinct_global_failures_keep_their_connection_identity(kind: Terminati
                 .redis
                 .register_exchange(
                     serde_json::from_value(record).unwrap(),
-                    ReplaySource::Global,
+                    ReplaySource::Process,
                     None,
                     &mut BTreeMap::new(),
                     &[],

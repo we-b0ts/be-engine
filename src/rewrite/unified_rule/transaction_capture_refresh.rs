@@ -22,14 +22,14 @@ fn fixture(existing_capture: bool) -> Fixture {
             "timestamp":"2026-10-16T00:00:00Z","request_started_at":"2026-10-16T00:00:00Z",
             "duration_ms":0,"outcome":"response","error":null});
         fs::write(
-            source.join("apis/api/case-1/dependencies.jsonl"),
+            source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
             format!("{event}\n"),
         )
         .unwrap();
         if existing_capture {
             write(
                 &root.join(".traffic-e2e/policy.yaml"),
-                json!({"format":"traffic-policy/v2",
+                json!({"format":"traffic-policy/v3",
                 "http":{"response_rewrite":[capture("sandbox-url", "/sandbox/1")]}}),
             );
         }
@@ -44,7 +44,7 @@ fn fixture(existing_capture: bool) -> Fixture {
 fn proposal(fixture: &Fixture, declaration: Value) {
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2",
+        json!({"format":"traffic-policy/v3",
         "json":super::super::rule()["json"],"http":{"response_rewrite":[declaration]}}),
     );
 }
@@ -71,8 +71,8 @@ fn unchanged_named_capture_keeps_inventory_proof_without_requiring_new_recording
         if stale {
             let source = fixture.state().case_source.clone().unwrap();
             fs::write(
-                source.join("apis/api/case-1/dependencies.jsonl"),
-                "changed after planning",
+                source.join("dependencies.jsonl"),
+                "changed authoritative Source after planning",
             )
             .unwrap();
             assert!(apply_rewrite_rule(fixture.context(), &planned.plan_id).is_err());
@@ -112,44 +112,40 @@ fn new_capture_and_expanded_capture_scope_keep_fresh_recording_obligations() {
             applied.traffic_e2e_report["status"],
             "applied_pending_recording"
         );
-        assert!(fixture.state().recording_refresh.is_some());
+        assert_scoped_capture_pending(&fixture);
     }
 }
 
 #[test]
-fn retained_capture_does_not_clear_an_earlier_unfinished_recording_refresh() {
+fn retained_capture_does_not_clear_an_earlier_unfinished_scoped_capture_obligation() {
     let fixture = fixture(true);
     let mut state = fixture.state();
-    state.recording_refresh = Some(crate::rewrite::model::RewriteRecordingRefreshState {
-        applied: vec![],
-        dependency_rules: vec![crate::rewrite::model::RewriteDependencyRuleAppliedRecord {
-            plan_id: "earlier-source-plan".into(),
-            issue_id: "earlier-issue".into(),
-            evidence_id: "earlier-evidence".into(),
-            api: state.api.clone(),
-            rule_name: "earlier-capture".into(),
-            source_evidence: "Source acquisition still awaits its requested recording".into(),
-        }],
-        baseline_case_source: state.case_source.clone(),
-        project_config_revision: fingerprint::project_config_revision(fixture.root()).unwrap(),
-        source_traffic_policy_revision: fingerprint::source_traffic_policy_revision(fixture.root())
-            .unwrap(),
-        recording_run_id: None,
-    });
+    crate::rewrite::verification_obligations::request_capture(
+        &mut state,
+        &std::collections::BTreeMap::from([(
+            "GET /api".into(),
+            "Earlier missing Source evidence".into(),
+        )]),
+        "earlier-source-plan",
+    )
+    .unwrap();
     fixture.store().save(&state).unwrap();
     proposal(&fixture, capture("sandbox-url", "/sandbox/1"));
     fixture.confirm();
     let planned = fixture.plan().unwrap();
-    assert_eq!(planned.traffic_e2e_report["requires_fresh_recording"], true);
+    assert_eq!(
+        planned.traffic_e2e_report["requires_fresh_recording"],
+        false
+    );
     apply_rewrite_rule(fixture.context(), &planned.plan_id).unwrap();
+    assert_scoped_capture_pending(&fixture);
     assert!(
         fixture
             .state()
-            .recording_refresh
-            .unwrap()
-            .dependency_rules
-            .iter()
-            .any(|record| record.plan_id == "earlier-source-plan")
+            .dependency_review
+            .obligations
+            .values()
+            .any(|obligation| obligation.proof_id == "earlier-source-plan" && obligation.pending())
     );
 }
 
@@ -168,7 +164,7 @@ fn equivalent_recording_case_paths_do_not_create_a_fresh_recording_obligation() 
         write(
             &root.join(".traffic-e2e/policy.yaml"),
             json!({
-                "format":"traffic-policy/v2","source_revision":revision,
+                "format":"traffic-policy/v3","source_revision":revision,
                 "rules":[{"id":"source-capture-http","match":{},"effect":{
                     "kind":"capture_http","case_paths":["/api"]},
                     "proof":{"source":"routes.py:12","fact":"Source owns this exact captured route"}}]
@@ -204,7 +200,7 @@ fn equivalent_recording_case_paths_do_not_create_a_fresh_recording_obligation() 
     write(
         &fixture.proposal,
         json!({
-            "format":"traffic-policy/v2","source_revision":revision,
+            "format":"traffic-policy/v3","source_revision":revision,
             "json":super::super::rule()["json"],
             "recording":{"case_paths":["/api"],"proof":{
                 "source":"routes.py:12","fact":"Source owns this exact captured route"}}
@@ -239,7 +235,7 @@ fn template_only_public_plan_reports_stateful_identity_replay_evidence() {
     );
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","json":{"fields":{
+        json!({"format":"traffic-policy/v3","json":{"fields":{
             "/url":{"kind":"template","formats":[{
                 "template":"https://example.test/session/{id}","fields":{"id":"uuid"}
             }]}

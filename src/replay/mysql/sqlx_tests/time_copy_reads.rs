@@ -3,7 +3,7 @@ use super::*;
 use sqlx::Executor;
 
 fn policy() -> &'static str {
-    r#"format: traffic-policy/v2
+    r#"format: traffic-policy/v3
 json:
   fields:
     /createdAt: {kind: time, formats: [iso8601_naive]}

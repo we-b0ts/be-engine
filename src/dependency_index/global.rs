@@ -71,6 +71,7 @@ pub(crate) struct GlobalBuilder {
     notification_count: usize,
     offset: u64,
     hash: Sha256,
+    scoped: bool,
 }
 
 impl GlobalBuilder {
@@ -83,6 +84,7 @@ impl GlobalBuilder {
             notification_count: 0,
             offset: 0,
             hash: Sha256::new(),
+            scoped: false,
         })
     }
 
@@ -257,9 +259,13 @@ impl GlobalBuilder {
         Ok(true)
     }
 
+    pub(crate) fn set_scoped(&mut self) {
+        self.scoped = true;
+    }
+
     pub(crate) fn finish(self) -> Result<GlobalIndex> {
         ensure!(
-            self.offset == self.stamp.size,
+            self.scoped || self.offset == self.stamp.size,
             "Global index did not traverse the complete source"
         );
         let mut notifications = Vec::new();
@@ -351,7 +357,9 @@ pub(crate) fn load_global_index_cancellable(
     let parent = path
         .parent()
         .context("Global dependency file has no parent")?;
-    if let Some(index) = load_sealed_index(path, parent, &stamp, cancelled)? {
+    if super::scoped::view_path(path).is_none()
+        && let Some(index) = load_sealed_index(path, parent, &stamp, cancelled)?
+    {
         return Ok((index, parent.to_owned()));
     }
     let root = store::cache_directory(path).join("global-v3");
@@ -366,6 +374,9 @@ pub(crate) fn load_global_index_cancellable(
     }
     let mut input = RecordStream::open(path)?;
     let mut builder = GlobalBuilder::new(&root, stamp.clone())?;
+    if super::scoped::view_path(path).is_some() {
+        builder.set_scoped();
+    }
     let started = Instant::now();
     let mut next_progress = 64 * 1024 * 1024;
     tracing::info!(
@@ -398,10 +409,7 @@ pub(crate) fn load_global_index_cancellable(
             next_progress = builder.offset + 64 * 1024 * 1024;
         }
     }
-    ensure!(
-        FileStamp::read(path)? == stamp,
-        "Global evidence changed during index construction"
-    );
+    super::scoped::validate_stamp(path, &stamp)?;
     store::check_cancelled(cancelled)?;
     let index = builder.finish()?;
     store::write_json(&fragment, &index)?;

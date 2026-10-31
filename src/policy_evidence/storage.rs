@@ -202,13 +202,10 @@ pub(super) fn verify(
         );
         if let Some(source) = &blob.source {
             ensure!(
-                blob.chunks.is_empty()
-                    && blob.length == 0
-                    && blob.offset == 0
-                    && crate::dependency_index::FileStamp::read(&source.record.path)?
-                        == source.record.stamp,
+                blob.chunks.is_empty() && blob.length == 0 && blob.offset == 0,
                 "referenced Source evidence changed"
             );
+            source.record.validate()?;
             continue;
         }
         ensure!(

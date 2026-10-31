@@ -16,7 +16,7 @@ impl RequestContracts {
         self.register_source_records(case, bytes)?;
         for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let event: Value = serde_json::from_slice(line)?;
-            if event["global_dependency_reason"].is_string() {
+            if !crate::dependency::observation::is_case_event(&event) {
                 continue;
             }
             self.observe_unified_source(case, &event)?;

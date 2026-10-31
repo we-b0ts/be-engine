@@ -82,6 +82,7 @@ impl RequestContracts {
     ) -> Comparison {
         if eligible
             && self.pre_match_enabled
+            && self.hypothesis_context.is_some()
             && !comparison.passed()
             && {
                 let state = self.state.lock().expect("request contracts");
@@ -93,10 +94,13 @@ impl RequestContracts {
                         .count()
                         < 256
             }
-            && let Some(candidate) =
-                crate::value_contract::pre_match::preview(case, source, target, global, clocks)
         {
-            return candidate;
+            let preview = crate::value_contract::hypothesis::preview_json(
+                case, source, target, global, clocks,
+            );
+            if let Some(candidate) = self.retain_hypothesis_preview(preview) {
+                return candidate;
+            }
         }
         comparison
     }

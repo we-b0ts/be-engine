@@ -105,22 +105,8 @@ fn status_rewrite_for_api_uncached(
             inventory::initialize_legacy(&mut state);
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
-            let pending = super::coordination::status_details(&target_root, &state)?.pending();
-            let envelope = api_envelope(&target_root, &state, api)?;
-            let skipped = api
-                .is_some_and(|api| super::regression_scope::is_skipped(&state, &api.to_string()));
-            let scoped = inventory::scoped(&state, api).unwrap_or(state);
-            RewriteStatusReport {
-                schema_version: envelope.schema_version,
-                pending,
-                initialized: true,
-                workflow: envelope.workflow,
-                api_inventory: envelope.api_inventory,
-                latest_focused_e2e: envelope.latest_focused_e2e,
-                e2e_current: !skipped && scoped.e2e_current,
-                terminal_allowed: envelope.terminal_allowed,
-                action: envelope.action,
-            }
+            let execution = super::execution::status_action(&target_root)?;
+            initialized_report(&target_root, state, api, execution.as_ref())?
         }
         None => {
             let mut envelope = match RewriteStore::new(&target_root)?.lock_state()? {
@@ -154,13 +140,37 @@ fn status_rewrite_for_api_uncached(
     })
 }
 
+fn initialized_report(
+    target_root: &std::path::Path,
+    state: super::model::RewriteState,
+    api: Option<&RecordingApi>,
+    execution: Option<&super::model::RewriteAction>,
+) -> Result<RewriteStatusReport> {
+    let pending =
+        super::coordination::status_details_with_execution(target_root, &state, execution)?
+            .pending();
+    let envelope = api_envelope(target_root, &state, api, execution)?;
+    let skipped =
+        api.is_some_and(|api| super::regression_scope::is_skipped(&state, &api.to_string()));
+    let scoped = inventory::scoped(&state, api).unwrap_or(state);
+    Ok(RewriteStatusReport {
+        schema_version: envelope.schema_version,
+        pending,
+        initialized: true,
+        workflow: envelope.workflow,
+        api_inventory: envelope.api_inventory,
+        latest_focused_e2e: envelope.latest_focused_e2e,
+        e2e_current: !skipped && scoped.e2e_current,
+        terminal_allowed: envelope.terminal_allowed,
+        action: envelope.action,
+    })
+}
+
 fn with_read_snapshot<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
     crate::repository::with_git_root_cache(|| {
         crate::e2e_run::with_project_resolution_cache(|| {
-            crate::e2e_run::with_background_reclassification_snapshot(|| {
-                super::source_diff::with_git_read_cache(|| {
-                    fingerprint::with_repository_cache(operation)
-                })
+            super::source_diff::with_git_read_cache(|| {
+                fingerprint::with_repository_cache(operation)
             })
         })
     })
@@ -188,8 +198,9 @@ fn api_envelope(
     target_root: &std::path::Path,
     state: &super::model::RewriteState,
     api: Option<&RecordingApi>,
+    execution: Option<&super::model::RewriteAction>,
 ) -> Result<super::model::RewriteActionEnvelope> {
-    let mut envelope = api_envelope_unannotated(target_root, state, api)?;
+    let mut envelope = api_envelope_unannotated(target_root, state, api, execution)?;
     super::execution::annotate_status(target_root, &mut envelope.action)?;
     Ok(envelope)
 }
@@ -198,6 +209,7 @@ fn api_envelope_unannotated(
     target_root: &std::path::Path,
     state: &super::model::RewriteState,
     api: Option<&RecordingApi>,
+    execution: Option<&super::model::RewriteAction>,
 ) -> Result<super::model::RewriteActionEnvelope> {
     if let Some(plan) = super::rule_plans::idle_action(target_root, state)? {
         return Ok(action::envelope(target_root, state, plan));
@@ -235,14 +247,17 @@ fn api_envelope_unannotated(
         return Ok(envelope);
     }
     let requested_api = api.map(ToString::to_string);
-    let envelope = if super::coordination::resources_busy(target_root)? {
+    let envelope = if super::coordination::resources_busy(target_root)?
+        || super::execution::snapshot_blocks_replay(execution)
+    {
         if let Some(envelope) = super::coordination::busy_workers(target_root, state, api)? {
             Some(envelope)
         } else {
-            super::execution::status_action(target_root)?
+            execution
+                .cloned()
                 .map(|selected| action::envelope(target_root, state, selected))
         }
-    } else if let Some(failed) = super::execution::status_action(target_root)? {
+    } else if let Some(failed) = execution.cloned() {
         let worker = if let Some(api) = api {
             let scope = super::RewriteWorkScope::Api {
                 api: api.to_string(),
@@ -304,3 +319,6 @@ fn api_envelope_unannotated(
     };
     Ok(envelope)
 }
+
+#[cfg(test)]
+mod tests;

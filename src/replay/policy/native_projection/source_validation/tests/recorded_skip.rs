@@ -9,7 +9,8 @@ fn recorded_skip_source_contracts_validate_preserved_keys_and_independent_sessio
     let root = std::path::PathBuf::from(std::env::var_os("TRAFFIC_E2E_SKIP_PROJECT").unwrap());
     let recording = root.join(".traffic-e2e/local/artifacts/recordings/20261016030056/apis");
     let mut document = crate::policy::parse_policy(
-        &std::fs::read_to_string(root.join(".traffic-e2e/policy.yaml")).unwrap(),
+        &crate::recorder::test_io::read_to_string_sync(root.join(".traffic-e2e/policy.yaml"))
+            .unwrap(),
     )
     .unwrap();
     document.rules.retain(|rule| {
@@ -75,7 +76,7 @@ fn recorded_skip_source_contracts_validate_preserved_keys_and_independent_sessio
                         "/expires_at":{"kind":"time","format":"unix_seconds","relation":"preserve_offset"}
                     }}}}]},"proof":{"source":"app/api/endpoints/wework_auth.py:308-333","fact":"Source creates a uuid4 key, an independent token_urlsafe(32), and creation/expiry clocks before SET EX 300"}});
                 let proposed = crate::policy::parse_policy(
-                    &json!({"format":"traffic-policy/v2","rules":[rule]}).to_string(),
+                    &json!({"format":"traffic-policy/v3","rules":[rule]}).to_string(),
                 )
                 .unwrap();
                 document.rules.extend(proposed.rules);

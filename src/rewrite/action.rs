@@ -47,6 +47,9 @@ pub(super) fn for_status(
 /// Native workflow gate, before choosing among worker actions. Counts consume this
 /// same gate regardless of which API's action the caller wants to inspect.
 pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<RewriteAction> {
+    if let Some(action) = super::dependency_review::required_action(target_root, state) {
+        return Ok(action);
+    }
     if let Some(plan) = super::rule_plans::idle_action(target_root, state)? {
         return Ok(plan);
     }
@@ -76,17 +79,16 @@ pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<Re
         return Ok(review);
     }
     let target_change = target_quality::status_action(target_root, state)?;
-    let reclassification = if target_change.is_none() {
-        super::background_reclassification::required_action(target_root, state)?
-    } else {
-        None
-    };
+    if target_change.is_none()
+        && let Some(batch) = super::dependency_review::batch_action(target_root, state)
+    {
+        return Ok(batch);
+    }
     Ok(match state.phase {
         RewritePhase::RecordingRequired if recording_status.is_some() => {
             recording_status.expect("recording status was checked")
         }
         _ if target_change.is_some() => target_change.expect("target change was checked"),
-        _ if reclassification.is_some() => reclassification.expect("reclassification was checked"),
         _ => state_action(target_root, state),
     })
 }
@@ -101,7 +103,9 @@ pub(super) fn select_action(
     }
     if matches!(
         base,
-        RewriteAction::PlanApplyRequired { .. } | RewriteAction::RepositoryAnalysisRequired { .. }
+        RewriteAction::PlanApplyRequired { .. }
+            | RewriteAction::RepositoryAnalysisRequired { .. }
+            | RewriteAction::BatchDiagnosisRequired { .. }
     ) {
         return base;
     }
@@ -123,10 +127,17 @@ pub(super) fn select_action(
     if matches!(
         base,
         RewriteAction::AdvanceRequired {
-            kind: RewriteAdvanceKind::ReclassifyDependencies,
+            kind: RewriteAdvanceKind::BatchReplay,
             ..
         }
-    ) {
+    ) || matches!(
+        base,
+        RewriteAction::InputRequired {
+            reason: RewriteInputRequiredReason::RecordingEvidenceRequired,
+            ..
+        }
+    ) && super::dependency_review::batch_action(target_root, state).is_some()
+    {
         return base;
     }
     if !matches!(
@@ -253,16 +264,6 @@ pub(super) fn for_scoped_status(
     }
     if let Some(review) = super::review::pre_revalidation::required_action(target_root, state)? {
         return Ok(envelope(target_root, state, review));
-    }
-    if let Some(refresh) = super::background_reclassification::required_action(target_root, state)?
-    {
-        if let Some(review) = super::review::required_action(target_root, state)? {
-            return Ok(envelope(target_root, state, review));
-        }
-        if let Some(quality) = target_quality::status_action(target_root, state)? {
-            return Ok(envelope(target_root, state, quality));
-        }
-        return Ok(envelope(target_root, state, refresh));
     }
     let method_scope = super::RewriteWorkScope::Api {
         api: state.api.clone(),
@@ -421,6 +422,8 @@ pub(super) fn envelope(
         api_inventory: Some(inventory::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: super::expert::counts(state).2 == 0
+            && super::dependency_review::batch_current(target_root, state).unwrap_or(false)
+            && !super::dependency_review::batch_pending(state)
             && !super::rule_plans::pending(state)
             && super::review::admission_current(target_root, state)
             && super::review::pre_revalidation::completion_current(target_root, state)
@@ -431,6 +434,12 @@ pub(super) fn envelope(
 }
 
 pub(super) fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
+    if let Some(action) = super::dependency_review::required_action(target_root, state) {
+        return action;
+    }
+    if let Some(action) = super::dependency_review::batch_action(target_root, state) {
+        return action;
+    }
     let selected_api = super::api_selector::work_scope(state, &state.api).binding_key();
     let display_api = super::api_selector::public_api(&state.api);
     if let Some(action) = case_patterns::state_action(target_root, state) {

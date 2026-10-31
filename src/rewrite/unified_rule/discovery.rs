@@ -127,7 +127,7 @@ pub(in crate::rewrite) fn facts(
     let total = drafts.seen.len();
     let candidates = drafts.candidates();
     Ok(
-        json!({"format":"traffic-policy/v2","api":state.api,"candidates":candidates,
+        json!({"format":"traffic-policy/v3","api":state.api,"candidates":candidates,
         "observations_examined":drafts.observations,"json_nodes_examined":drafts.examined,"candidate_count":total,"summary_omitted":total.saturating_sub(candidates.len()),
         "pagination":{"scope":"bounded_scan_window","summary_offset":cursor.summary,"summary_limit":LIMIT,"scan_remaining":!primary_done || !dependency_done,"next_page_cursor":next_page,"next_scan_cursor":next_scan},
         "bounded_analysis":{"scan_order":if cursor.primary_first { ["api.response", "dependency"] } else { ["dependency", "api.response"] },"limited":drafts.limited || drafts.summary_limited(),"summary_limited":drafts.summary_limited(),"observation_limit":OBSERVATION_LIMIT,"node_limit":NODE_LIMIT,"payload_limit_bytes":4 * 1024 * 1024,"source_cache_limit_bytes":SOURCE_CACHE_LIMIT,"complete_coverage":false,"nonresumable_limits":drafts.nonresumable_limits},
@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(drafts.values[0]["plan_ready"], false);
         assert_eq!(
             drafts.values[0]["draft_policy"]["format"],
-            "traffic-policy/v2"
+            "traffic-policy/v3"
         );
     }
 }

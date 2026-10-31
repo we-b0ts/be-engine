@@ -86,7 +86,7 @@ fn http_end_requires_complete_success_for_the_exact_method_endpoint_and_path() {
     assert_live_and_recorded(no_response, None);
     let mut failure = event();
     failure.response_status = Some(500);
-    assert_live_and_recorded(failure, Some(AsyncEndReason::DependencyFailure));
+    assert_live_and_recorded(failure, None);
 }
 
 #[test]

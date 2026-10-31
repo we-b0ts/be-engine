@@ -65,7 +65,18 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
         mark_unfinished_cases(&mut state);
         best_effort_stop(&config, &layout, &mut state).await;
     }
-    finish_and_publish(&config, &layout, &mut index, &mut state)
+    if state.status != RunStatus::Interrupted
+        && let Err(error) = super::batch_evidence::verify_actual_session(&state)
+    {
+        state.aggregate_clean = false;
+        state.status = RunStatus::Failed;
+        state.push_error(format!(
+            "batch dependency reconciliation remains pending: {error:#}"
+        ));
+    }
+    let result = finish_and_publish(&config, &layout, &mut index, &mut state)?;
+    super::batch_publication::publish(&layout, &inventory)?;
+    Ok(result)
 }
 
 pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
@@ -428,6 +439,10 @@ async fn run_active(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
 ) -> Result<()> {
+    state.executed_replay_identity = Some(crate::rewrite::batch_execution_identity(
+        &layout.target_root,
+    )?);
+    store::write_active(layout, state)?;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingIndex);
     let index_deadline = tokio::time::Instant::now()
         + std::time::Duration::from_secs(config.replay_loading.index_timeout_seconds);
@@ -543,6 +558,7 @@ async fn run_active_with_replay(
     wait_for_replay(replay).await?;
     state.replay_pid = None;
     build_final_evidence(config, layout, inventory, state)?;
+    super::batch_evidence::validate_executed_identity(&layout.target_root, state)?;
     if state.target_started {
         best_effort_stop(config, layout, state).await;
     }

@@ -81,7 +81,7 @@ pub struct RecordOptions {
     pub artifact_owner: Option<ArtifactOwner>,
     #[arg(long, env = "TRAFFIC_E2E_SOURCE_WORKDIR", default_value = "/app")]
     pub source_workdir: PathBuf,
-    /// Unified traffic-policy/v2; with --config it must name project.policy.
+    /// Unified traffic-policy/v3; with --config it must name project.policy.
     #[arg(long, env = "TRAFFIC_E2E_POLICY", value_name = "PATH")]
     pub policy: Option<PathBuf>,
     /// Publish gateway case-limit/includes/excludes JSON at startup (Redis only).

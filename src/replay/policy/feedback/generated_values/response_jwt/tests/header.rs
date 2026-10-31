@@ -25,7 +25,7 @@ fn install(options: &ResponseAssertionOptions, header: bool) {
         .as_object_mut()
         .unwrap()
         .extend(select.as_object().unwrap().clone());
-    let policy = json!({"format":"traffic-policy/v2","rules":[{"id":"oidc-state","match":{"api":"POST /connector/token"},"effect":effect,
+    let policy = json!({"format":"traffic-policy/v3","rules":[{"id":"oidc-state","match":{"api":"POST /connector/token"},"effect":effect,
         "proof":{"source":"oidc.py:login","fact":"Source signs state and repeats the signed nonce in the authorization URL"}}]});
     fs::write(&options.policy, serde_yaml::to_string(&policy).unwrap()).unwrap();
 }
@@ -131,7 +131,7 @@ fn body_url_reuses_nonce_echo_validation_and_header_candidates_are_payload_free(
     response(&options, true, &location(SOURCE, 1, KEY), false);
     response(&options, false, &location(TARGET, 2, KEY), false);
     assert!(assert_recorded_response(copy(&options)).unwrap().passed);
-    fs::write(&options.policy, "format: traffic-policy/v2\nrules: []\n").unwrap();
+    fs::write(&options.policy, "format: traffic-policy/v3\nrules: []\n").unwrap();
     response(&options, true, &location(SOURCE, 1, KEY), true);
     response(&options, false, &location(TARGET, 2, KEY), true);
     let report = assert_recorded_response(copy(&options)).unwrap();

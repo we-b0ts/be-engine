@@ -7,7 +7,7 @@ const TARGET: &str = "99999999-9999-4999-8999-999999999999";
 const HISTORICAL: &str = "22222222-2222-4222-8222-222222222222";
 const WRONG: &str = "44444444-4444-4444-8444-444444444444";
 
-const POLICY: &str = r#"format: traffic-policy/v2
+const POLICY: &str = r#"format: traffic-policy/v3
 mysql:
   tables:
     widgets:

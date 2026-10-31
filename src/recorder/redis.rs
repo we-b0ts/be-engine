@@ -297,12 +297,16 @@ pub(crate) async fn handle_connected(
                 redis_snapshot_key(rule, &current_session, &command.name, &command.args)
             });
             let targets = c2s_state.capture_dependency_request(
-                crate::recorder::api_origin_observation::DependencyRequest::Redis {
+                crate::recorder::request::DependencyRequest::Redis {
                     target_port: c2s_context.target_port,
                     command: &command.name,
                     args: &command.args,
                 },
             );
+            targets.bind_protocol(crate::dependency::observation::ProtocolRef::Redis {
+                connection_id,
+                sequence,
+            });
             if let Err(error) = rpc::observe(
                 &c2s_state,
                 &c2s_context,

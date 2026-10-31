@@ -25,7 +25,7 @@ async fn http_time_provenance_is_not_published_before_stream_eof() {
         "response_stream":{"version":1,"headers_ms":0,"chunks":[{"at_ms":10,"start":0,"end":body.len()}],"end_ms":300,"complete":true}});
     std::fs::write(case.join("dependencies.jsonl"), record.to_string()).unwrap();
     let policy = root.join("policy.yaml");
-    std::fs::write(&policy,"format: traffic-policy/v2\njson:\n  fields:\n    /block/timestamp: {kind: time, formats: [unix_milliseconds]}\n").unwrap();
+    std::fs::write(&policy,"format: traffic-policy/v3\njson:\n  fields:\n    /block/timestamp: {kind: time, formats: [unix_milliseconds]}\n").unwrap();
     let (address, runtime, task) = crate::replay::http::tests::spawn_http_replay_with_policy(
         &case,
         vec![],

@@ -151,7 +151,7 @@ fn shareable(
     _selector: &shared_read::RedisSharedReadSelector,
 ) -> Result<()> {
     ensure!(
-        record.global_dependency_reason.is_none()
+        record.run_owner_kind().is_none()
             && record.cache_snapshot_rule.is_none()
             && !record.cache_snapshot_hit,
         "Redis cross-case requires an ordinary case-owned read"
@@ -227,7 +227,7 @@ pub(in crate::replay) fn load(
             "Redis cross-case cannot split a recorded connection lane"
         );
         let exchange = &mut state.exchanges[index];
-        exchange.source = ReplaySource::Global;
+        exchange.source = ReplaySource::Startup;
         exchange.shared_rule_id = Some(rule_id.clone());
     }
 
@@ -294,7 +294,7 @@ pub(in crate::replay) fn load(
             );
             state.register_exchange(
                 record,
-                ReplaySource::Global,
+                ReplaySource::Startup,
                 Some(&origin),
                 targets,
                 process_owned_dependencies,

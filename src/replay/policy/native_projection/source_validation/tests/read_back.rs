@@ -171,7 +171,7 @@ fn key_only_read_back_source_preflight_requires_each_physical_endpoints_own_caus
 fn compact_read_back_source_preflight_isolates_ordinary_cases_but_rejects_shared_writers() {
     let policy = crate::policy::compile_policy(
         &crate::policy::parse_policy(
-            &json!({"format":"traffic-policy/v2","redis":{"keys":{"current:*":{
+            &json!({"format":"traffic-policy/v3","redis":{"keys":{"current:*":{
                 "kind":"identity","formats":["string"],"read_back":true,"proof":proof()
             }}}})
             .to_string(),
@@ -203,7 +203,9 @@ fn compact_read_back_source_preflight_isolates_ordinary_cases_but_rejects_shared
         }
         if shared {
             // Explicit Global ownership must remain visible to every Case's proof.
-            foreign["global_dependency_reason"] = json!("background_rule");
+            foreign["capture"] =
+                serde_json::to_value(crate::dependency::observation::fixture_capture("process"))
+                    .unwrap();
         }
         let foreign_events = [foreign];
         let mut cases = [

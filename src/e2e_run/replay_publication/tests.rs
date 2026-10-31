@@ -25,7 +25,7 @@ fn published_replay_and_sidecar_survive_removal_of_external_replay_tree() {
     let external = root.join("cases/.replay/attempt");
     fs::create_dir_all(&external).unwrap();
     state.replay_report = external.join("replay-report.json");
-    let bytes = serde_json::to_vec(&json!({"version":6,"finalized":true,"complete":true,"cases":[],"replay_policy":{"fingerprint":"policy"}})).unwrap();
+    let bytes = serde_json::to_vec(&json!({"version":7,"finalized":true,"complete":true,"cases":[],"replay_policy":{"fingerprint":"policy"}})).unwrap();
     fs::write(&state.replay_report, &bytes).unwrap();
     store::write_json(
         &state.aggregate_report,

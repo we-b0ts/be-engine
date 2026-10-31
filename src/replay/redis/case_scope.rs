@@ -11,7 +11,7 @@ pub(super) fn is_other_ordinary_case(
         && case.is_some_and(|case| case != owner)
         && record.cache_snapshot_rule.is_none()
         && !record.cache_snapshot_hit
-        && record.global_dependency_reason.is_none()
+        && record.run_owner_kind().is_none()
         && !record.session_setup
 }
 

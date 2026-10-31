@@ -1,0 +1,186 @@
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
+use uuid::Uuid;
+
+use super::super::verification_obligations::{
+    ScopeObligation, VerificationImpact, VerificationScope,
+};
+use crate::dependency::attribution::{AttributionDecision, AttributionProof, DependencyOwner};
+
+pub const SCHEMA: &str = "dependency-attribution/v3";
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct ReviewLedger {
+    pub revision: u64,
+    pub recording_run_id: Option<String>,
+    pub source_inventory_id: Option<String>,
+    pub unresolved_source_exchange_ids: BTreeSet<Uuid>,
+    pub claims: BTreeMap<String, ForeignUnusedClaim>,
+    pub investigations: BTreeMap<String, super::investigations::TargetInvestigation>,
+    pub decisions: BTreeMap<Uuid, AttributionDecision>,
+    pub decision_history: Vec<AttributionDecision>,
+    pub obligations: BTreeMap<String, ScopeObligation>,
+    pub receipts: BTreeMap<String, AcceptanceReceipt>,
+    pub batch_receipt: Option<BatchAcceptanceReceipt>,
+    pub batch_failure: Option<BatchFailure>,
+    pub required_method_apis: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct BatchAcceptanceReceipt {
+    pub engine_fingerprint: String,
+    pub recording_run_id: String,
+    pub source_revision: String,
+    pub source_inventory_id: String,
+    pub replay_identity: String,
+    pub attribution_snapshot: String,
+    pub session_id: String,
+    pub report_path: PathBuf,
+    pub report_sha256: String,
+    pub report_stamp: crate::dependency_index::FileStamp,
+    pub selected_case_ids: BTreeSet<String>,
+    pub covered_method_apis: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct BatchFailure {
+    pub recording_run_id: String,
+    pub source_inventory_id: String,
+    pub replay_identity: String,
+    pub attribution_snapshot: String,
+    pub result: crate::E2eRunResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForeignUnusedClaim {
+    pub id: String,
+    pub api: String,
+    pub method_api: String,
+    pub recording_run_id: String,
+    pub source_revision: String,
+    pub source_inventory_id: String,
+    pub attempt: u64,
+    pub execution_identity: String,
+    pub report_sha256: String,
+    pub source_exchange_ids: BTreeSet<Uuid>,
+    pub exclusion: AttributionProof,
+    pub status: ClaimStatus,
+    pub rejection: Option<ClaimRejection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimRejection {
+    pub claim_id: String,
+    pub proof: AttributionProof,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimStatus {
+    Pending,
+    Proved,
+    Rejected,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForeignUnusedSubmission {
+    pub schema: String,
+    pub api: String,
+    pub evidence_id: String,
+    pub source_exchange_ids: BTreeSet<Uuid>,
+    pub exclusion: AttributionProof,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AttributionReviewContext {
+    pub schema: &'static str,
+    pub work_type: &'static str,
+    pub workflow_id: String,
+    pub recording_run_id: String,
+    pub source_revision: String,
+    pub source_inventory_id: String,
+    pub revision: u64,
+    pub assignment_id: String,
+    pub claims: Vec<ForeignUnusedClaim>,
+    pub investigations: Vec<super::investigations::TargetInvestigation>,
+    pub task_groups: BTreeMap<String, Vec<String>>,
+    pub evidence_commands: Vec<crate::rewrite::RewriteCommandSpec>,
+    pub effective_policy_fingerprint: String,
+    pub rule_groups: Vec<serde_json::Value>,
+    pub unattributed_exchange_ids: BTreeSet<Uuid>,
+    pub obligations: Vec<ScopeObligation>,
+    pub next_step: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttributionSubmission {
+    pub schema: String,
+    pub assignment_id: String,
+    pub expected_revision: u64,
+    pub recording_run_id: String,
+    pub source_revision: String,
+    pub source_inventory_id: String,
+    pub decisions: Vec<ProposedAttribution>,
+    pub investigation_resolutions: Vec<super::investigations::InvestigationResolution>,
+    pub unresolved_claim_ids: BTreeSet<String>,
+    pub claim_rejections: Vec<ClaimRejection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposedAttribution {
+    pub claim_ids: BTreeSet<String>,
+    pub source_exchange_ids: BTreeSet<Uuid>,
+    pub source_task: String,
+    pub owner: DependencyOwner,
+    pub proof: AttributionProof,
+    pub impact: VerificationImpact,
+    /// Original API or task needing new evidence; never inferred from the victim.
+    pub obligation_scope: VerificationScope,
+    pub missing_evidence: Option<String>,
+    pub rule_binding: AttributionRuleBinding,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttributionRuleBinding {
+    pub policy_fingerprint: String,
+    pub rule_ids: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptanceReceipt {
+    pub engine_fingerprint: String,
+    pub verdict: String,
+    pub api: String,
+    pub method_api: String,
+    pub recording_run_id: String,
+    pub source_revision: String,
+    pub source_inventory_id: String,
+    pub attempt: u64,
+    pub session_id: String,
+    pub report_sha256: String,
+    pub execution_identity: String,
+    pub proof_ids: BTreeSet<String>,
+    pub excluded_unused: BTreeSet<Uuid>,
+    pub batch_verified: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttributionCommandOptions {
+    pub target_root: PathBuf,
+    pub file: PathBuf,
+}

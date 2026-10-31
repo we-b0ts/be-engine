@@ -58,7 +58,7 @@ impl ReplayState {
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
-        for item in self.mysql_unused_iter(ReplaySource::Global, None) {
+        for item in self.mysql_unused_iter(ReplaySource::Startup, None) {
             visitor(serde_json::to_value(item)?)?;
         }
         Ok(())
@@ -67,7 +67,7 @@ impl ReplayState {
         if let Some(count) = self.mysql.global_report_usage().count() {
             return count + self.global_mysql_extra_unused_count();
         }
-        self.mysql_unused_iter(ReplaySource::Global, None).count()
+        self.mysql_unused_iter(ReplaySource::Startup, None).count()
     }
 }
 

@@ -107,7 +107,6 @@ async fn exercise(tail_timeout: bool, async_api: bool) {
     config.http_gateway.ready.path = "/ready".into();
     config.http_gateway.ready.interval_ms = 5;
     config.recording.post_ready_settle_ms = 0;
-    config.recording.api_origin_dependency_idle_ms = 20;
     config.recording.case_dependency_post_response_window_ms = 0;
     config.recording.case_dependency_drain_timeout_ms = 100;
     config.recording.shutdown_case_drain_timeout_ms = 2_000;
@@ -196,7 +195,8 @@ async fn exercise(tail_timeout: bool, async_api: bool) {
         let case = observations[0].parent().unwrap();
         assert!(case.join("expected-response.json").exists());
         assert!(!case.join("recording-error.json").exists());
-        let dependencies = std::fs::read_to_string(case.join("dependencies.jsonl")).unwrap();
+        let dependencies =
+            crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap();
         let terminated = dependencies
             .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
@@ -252,7 +252,9 @@ async fn exercise(tail_timeout: bool, async_api: bool) {
     );
     assert_eq!(expected["interaction"]["end"]["clean"], false);
     if tail_timeout {
-        let dependencies = std::fs::read_to_string(failed.join("dependencies.jsonl")).unwrap();
+        let dependencies =
+            crate::recorder::test_io::read_to_string_sync(failed.join("dependencies.jsonl"))
+                .unwrap();
         assert!(dependencies.contains("http_exchange"));
         assert!(dependencies.contains("/never-replies"));
         let tail = read_json(&failed.join("dependency-tail-observation.json"));
@@ -290,7 +292,7 @@ struct SourceCleanup(PathBuf);
 
 impl SourceCleanup {
     fn alive(&self) -> bool {
-        std::fs::read_to_string(&self.0)
+        crate::recorder::test_io::read_to_string_sync(&self.0)
             .ok()
             .and_then(|identity| identity.split_whitespace().next()?.parse::<i32>().ok())
             .is_some_and(|pid| {
@@ -303,7 +305,7 @@ impl SourceCleanup {
 impl Drop for SourceCleanup {
     fn drop(&mut self) {
         if self.alive()
-            && let Ok(identity) = std::fs::read_to_string(&self.0)
+            && let Ok(identity) = crate::recorder::test_io::read_to_string_sync(&self.0)
             && let Some(group) = identity
                 .split_whitespace()
                 .nth(1)

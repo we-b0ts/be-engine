@@ -586,7 +586,7 @@ encrypt_request_headers = ["authorization"]
 ```
 
 JWT expiration between recording and Replay can be handled by an explicit
-`traffic-policy/v2` `input_jwt` rule. See [JWT request rules](jwt-request-rules.md)
+`traffic-policy/v3` `input_jwt` rule. See [JWT request rules](jwt-request-rules.md)
 for the coordinator evidence, plan/apply, target key sources, and replay-only
 revalidation flow. No new standard recording is required for this rule.
 
@@ -893,7 +893,7 @@ HTTP URL acquisition is a `capture_http_response` native effect in the unified
 policy named by `project.policy`:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 rules:
   - id: sandbox-url
     match: {}

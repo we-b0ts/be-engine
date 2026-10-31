@@ -29,7 +29,7 @@ fn prepare(fixture: &Fixture, invalid_token: Option<bool>) -> (PathBuf, Vec<u8>,
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/api/case-1");
+        .join("apis/api/00000000-0000-4000-8000-000000000001");
     let dependencies = case.join("dependencies.jsonl");
     let payload = json!({"model":"stable-model","metadata":{
         "request_id":"a1b2c3d4",
@@ -49,7 +49,7 @@ fn prepare(fixture: &Fixture, invalid_token: Option<bool>) -> (PathBuf, Vec<u8>,
     fs::write(&dependencies, format!("{event}\n")).unwrap();
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","signatures":{
+        json!({"format":"traffic-policy/v3","signatures":{
             "default":{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":"SECRET_KEY"}}
         },"json":{"fields":{
             "/metadata/request_id":{"kind":"identity","formats":[{"hex":8}]},

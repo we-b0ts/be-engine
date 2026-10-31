@@ -64,7 +64,7 @@ mod tests {
     fn template_only_formats_report_the_case_wide_identity_replay_obligation() {
         let policy = crate::policy::parse_and_compile_policy(
             &json!({
-                "format":"traffic-policy/v2", "json":{"fields":{
+                "format":"traffic-policy/v3", "json":{"fields":{
                     "/url":{"kind":"template","formats":[{
                         "template":"https://example.test/session/{id}",
                         "fields":{"id":"uuid"}
@@ -87,7 +87,7 @@ mod tests {
         let mut unselected = Preflight::default();
         require_replay(&policy, &BTreeSet::new(), &mut unselected);
         assert!(unselected.stateful_target_obligations.is_empty());
-        let time = crate::policy::parse_and_compile_policy("format: traffic-policy/v2\njson:\n  fields:\n    /time: {kind: time, formats: [unix_seconds]}\n").unwrap();
+        let time = crate::policy::parse_and_compile_policy("format: traffic-policy/v3\njson:\n  fields:\n    /time: {kind: time, formats: [unix_seconds]}\n").unwrap();
         let mut stateless = Preflight::default();
         require_replay(
             &time,

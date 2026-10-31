@@ -210,7 +210,7 @@ async fn consumes_timeout_only_after_client_close() {
 
 #[tokio::test]
 async fn maintenance_queries_use_builtin_responses_without_recorded_exchanges() {
-    let temp = tempdir().unwrap();
+    let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case-id");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
@@ -371,7 +371,7 @@ async fn active_case_exchanges_precede_identical_global_exchanges() {
         ReplaySource::Case
     );
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-    assert_eq!(state.unused_exchanges(ReplaySource::Global).len(), 2);
+    assert_eq!(state.unused_exchanges(ReplaySource::Startup).len(), 2);
     drop(state);
     task.abort();
 }

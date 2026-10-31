@@ -138,13 +138,9 @@ fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadat
         // cleanup behavior; they cannot prove an unstarted business tail.
         return Ok(None);
     }
-    let file = File::open(case_dir.join("dependencies.jsonl"))
+    let bytes = crate::dependency_index::scoped::read_bytes(&case_dir.join("dependencies.jsonl"))
         .context("interaction completion requires its original dependency inventory")?;
-    ensure!(
-        file.metadata()?.is_file(),
-        "interaction dependency inventory is not a file"
-    );
-    let Some(references) = inventory(BufReader::new(file))? else {
+    let Some(references) = inventory(bytes.as_slice())? else {
         return Ok(None);
     };
     let budget = execution_allowance
@@ -163,11 +159,12 @@ fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadat
         .transpose()?
         .unwrap_or(0);
     Ok(Some(Metadata {
+        business_complete: true,
         request_timeout_ms: budget.as_millis().try_into()?,
         interaction_post_input_ms: Some(post_input_ms),
         references: references.into_iter().collect(),
         strict_references: BTreeSet::new(),
-        process_owned_exemptions: true,
+
         source_stop_required: false,
         source_stop_after_ms: None,
         cleanup_refs: BTreeSet::new(),

@@ -32,7 +32,7 @@ fn append_public_plan_apply_validates_complete_source_and_preserves_stale_guards
                 events.clear();
             }
             fs::write(
-                source.join("apis/api/case-1/dependencies.jsonl"),
+                source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
                 events.iter().map(|e| format!("{e}\n")).collect::<String>(),
             )
             .unwrap();
@@ -45,7 +45,7 @@ fn append_public_plan_apply_validates_complete_source_and_preserves_stale_guards
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1/dependencies.jsonl");
+            .join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl");
         let original = fs::read(&dependencies).unwrap();
         let plan = fixture.plan();
         if matches!(scenario, "bad-length" | "absent") {

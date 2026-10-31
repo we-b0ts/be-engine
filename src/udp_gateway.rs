@@ -73,6 +73,12 @@ async fn handle_datagram(
     datagram: ReceivedDatagram,
 ) -> Result<()> {
     let started = Instant::now();
+    let id = Uuid::new_v4();
+    let targets =
+        state.capture_dependency_start(crate::dependency::observation::ProtocolRef::Observation {
+            event_id: id,
+            kind: "udp_datagram".into(),
+        });
     let fake_addr = datagram.original_dst.unwrap_or(listen_addr);
     let client_addr = Some(datagram.peer.to_string());
     let target = target_from_fake_addr(state, fake_addr).await;
@@ -131,7 +137,7 @@ async fn handle_datagram(
 
     let body = capture_body(payload, state.config().recording.max_body_bytes);
     let event = RecorderEvent::UdpDatagram(UdpDatagramEvent {
-        id: Uuid::new_v4(),
+        id,
         timestamp: Utc::now(),
         listen_addr: listen_addr.to_string(),
         client_addr,
@@ -150,7 +156,7 @@ async fn handle_datagram(
         duration_ms: started.elapsed().as_millis(),
         error,
     });
-    state.record_event(event);
+    state.record_event_for_targets(event, targets);
     Ok(())
 }
 
@@ -388,7 +394,9 @@ mod tests {
             .unwrap();
 
         let dependencies = state.recorder().run_dir.join("global-dependencies.jsonl");
-        let raw = tokio::fs::read_to_string(&dependencies).await.unwrap();
+        let raw = crate::recorder::test_io::read_to_string(&dependencies)
+            .await
+            .unwrap();
 
         assert!(raw.contains(r#""event_type":"udp_datagram""#), "{raw}");
         assert!(

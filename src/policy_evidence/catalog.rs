@@ -31,14 +31,10 @@ impl WitnessManifest {
             if let Some(source) = &blob.source {
                 let record = &source.record;
                 if let std::collections::btree_map::Entry::Vacant(entry) =
-                    sources.entry(&record.path)
+                    sources.entry((&record.path, record.view.as_ref().map(|(path, _)| path)))
                 {
-                    let stamp = crate::dependency_index::FileStamp::read(&record.path)?;
-                    ensure!(
-                        stamp == record.stamp,
-                        "referenced Source changed before sealing"
-                    );
-                    entry.insert(stamp);
+                    record.validate()?;
+                    entry.insert(());
                 }
             }
         }

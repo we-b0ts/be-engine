@@ -33,7 +33,7 @@ def verify(binary, image, mode):
         (fixtures / 'kubectl').write_text('#!/bin/sh\nexec python3 -S /fixtures/kubectl.py "$@"\n')
         (fixtures / 'kubectl').chmod(0o755)
         (fixtures / 'kubeconfig').write_text('synthetic credentials: no real cluster is contacted\n')
-        (project / 'policy.yaml').write_text('format: traffic-policy/v2\nrules: []\n')
+        (project / 'policy.yaml').write_text('format: traffic-policy/v3\nrules: []\n')
         (project / 'project.yaml').write_text('''version: 18
 project:
   policy: .traffic-e2e/policy.yaml

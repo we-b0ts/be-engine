@@ -20,7 +20,7 @@ fn optional(records: &[Value]) -> BTreeSet<usize> {
             .cloned()
             .map(|v| serde_json::from_value(v).unwrap())
             .collect::<Vec<_>>(),
-        ReplaySource::Global,
+        ReplaySource::Startup,
         &mut ReadPrefixes::default(),
     )
     .into_iter()

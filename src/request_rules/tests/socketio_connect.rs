@@ -58,7 +58,7 @@ fn compiled_connect_rule_uses_frozen_startup_key_and_matches_query_translation()
     std::fs::create_dir_all(&local).unwrap();
     std::fs::write(local.join("target.env"), "SECRET_KEY=test-key\n").unwrap();
     let document = crate::policy::parse_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 signatures:
   default: {kind: jwt, algorithm: HS256, key: {kind: target_env, name: SECRET_KEY}}
 api:

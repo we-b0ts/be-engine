@@ -30,11 +30,7 @@ async fn slow_native_namespace_admission_precedes_real_redis_input_and_ws_output
         }
     });
     assert_eq!(
-        guards::control(
-            &runtime,
-            json!({"command":"request_begin","case_id":"case"})
-        )
-        .await["ok"],
+        guards::control(&runtime, json!({"command":"request_begin","case_id":CASE})).await["ok"],
         true
     );
     let ws = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -83,7 +79,7 @@ async fn slow_native_namespace_admission_precedes_real_redis_input_and_ws_output
         Duration::from_secs(3),
         1024 * 1024,
     )
-    .with_input_registration(&session, "case");
+    .with_input_registration(&session, CASE);
     let response = client
         .send_bytes(&serde_json::to_vec(&request).unwrap(), "native-clock")
         .await

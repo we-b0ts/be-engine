@@ -1,5 +1,7 @@
 use super::*;
+use crate::replay::test_support::recording as fixtures;
 use crate::replay::{ReplayConfig, ReplayRuntime};
+use fixtures::case_path;
 use serde_json::{Value, json};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -58,12 +60,13 @@ async fn recorded(
     let recorder = crate::recorder::Recorder::new(owner.join("local/recordings"))
         .await
         .unwrap()
-        .with_global_preparation(&config);
-    fs::write(
-        recorder.run_dir.join("global-dependencies.jsonl"),
-        values.iter().map(|v| format!("{v}\n")).collect::<String>(),
-    )
-    .unwrap();
+        .with_global_preparation(&config)
+        .await
+        .unwrap();
+    for value in values {
+        fixtures::append(&recorder, value, false).await;
+    }
+    fixtures::publish_case(&recorder).await;
     (recorder, config, policy)
 }
 
@@ -73,18 +76,7 @@ async fn load(
     config: &crate::AppConfig,
     report: &Path,
 ) -> ReplayRuntime {
-    let case = run.join("case");
-    fs::create_dir_all(&case).unwrap();
-    fs::write(case.join("dependencies.jsonl"), "").unwrap();
-    fs::write(
-        case.join("request.json"),
-        json!({"method":"GET","uri":"/example","timestamp":"1970-01-01T00:16:40Z"}).to_string(),
-    )
-    .unwrap();
-    fs::write(case.join("expected-response.json"), "{}").unwrap();
-    // The fixture authored JSONL directly instead of opening proxy connections.
-    let _ = fs::remove_file(run.join(crate::recording_network::RECORDING_NETWORK_FILENAME));
-    crate::replay::write_test_recording_network_manifest(run);
+    let case = case_path(run);
     let addr = "127.0.0.1:0".parse().unwrap();
     ReplayRuntime::load(
         ReplayConfig {
@@ -157,9 +149,11 @@ async fn recorder_prewarms_the_exact_replay_policy_layout_and_notification_inven
         let (inventory, destination) = reference.load::<Inventory>(&report).unwrap();
         let expected = Identity {
             source_sha256: status.source_sha256.clone().unwrap(),
-            source_bytes: fs::metadata(recorder.run_dir.join("global-dependencies.jsonl"))
-                .unwrap()
-                .len(),
+            source_bytes: crate::dependency_index::FileStamp::read(
+                &recorder.run_dir.join("global-dependencies.jsonl"),
+            )
+            .unwrap()
+            .size,
             policy: runtime_identity.clone(),
             protocol: protocol.into(),
             layout: crate::replay::global_source::ProjectionView::from(&*state)
@@ -341,10 +335,13 @@ async fn unsupported_source_only_prewarm_preserves_recording_status_and_native_i
             .join(crate::dependency_index::global::GLOBAL_FRAGMENT)
             .is_file()
     );
-    assert_eq!(
-        fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl")).unwrap(),
-        format!("{unsafe_record}\n")
-    );
+    let raw = crate::dependency_index::scoped::read_bytes(
+        &recorder.run_dir.join("global-dependencies.jsonl"),
+    )
+    .unwrap();
+    let retained: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(retained["replay_safe"], false);
+    assert_eq!(retained["capture"]["attribution"]["kind"], "startup");
 }
 
 #[tokio::test]
@@ -410,7 +407,7 @@ async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_record
 
     // Carry a native Case index beside the native Global index and the optional
     // Source projections; none uses the old project's shared artifact anchor.
-    let case = recorder.run_dir.join("case");
+    let case = case_path(&recorder.run_dir);
     let native = crate::dependency_index::load_file(&case.join("dependencies.jsonl")).unwrap();
     store::write_json(&case.join(crate::dependency_index::FRAGMENT), &native).unwrap();
     let destination = tempfile::tempdir().unwrap();
@@ -426,7 +423,7 @@ async fn changed_policy_is_a_cold_projection_and_portable_indexes_survive_record
             .is_file()
     );
     assert!(
-        run.join("case")
+        case_path(&run)
             .join(crate::dependency_index::FRAGMENT)
             .is_file()
     );

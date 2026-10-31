@@ -27,7 +27,7 @@ fn foreign(fixture: &Fixture, token: &str) -> PathBuf {
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/other/case-2");
+        .join("apis/other/00000000-0000-4000-8000-000000000002");
     fs::create_dir_all(&case).unwrap();
     write(
         &case.join("request.json"),
@@ -60,7 +60,7 @@ fn partial_redis_identity_plan_validates_all_source_and_actual_target_before_app
         let fixture = Fixture::new();
         write(
             &fixture.proposal,
-            json!({"format":"traffic-policy/v2","redis":{"keys":{
+            json!({"format":"traffic-policy/v3","redis":{"keys":{
                 "lease:*":{"kind":"identity","formats":[{"hex":32}]}
             }}}),
         );

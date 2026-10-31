@@ -231,13 +231,7 @@ async fn run(
         .inner
         .active_cases
         .stream_tail_deadline(session.case.id);
-    let observation_deadline = stream_tail_deadline.or_else(|| {
-        session
-            .state
-            .inner
-            .active_cases
-            .observation_deadline(session.case.id)
-    });
+    let observation_deadline = stream_tail_deadline;
     // Transport cleanup keeps its own short budget. Dependency observation has
     // the primary request's absolute deadline and the same bounded writer drain.
     super::diagnostics::phase(session.case.id, protocol, "dependency_drain_started");

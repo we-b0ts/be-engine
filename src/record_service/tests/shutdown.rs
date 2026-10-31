@@ -100,7 +100,6 @@ async fn exercise(mode: &'static str) {
     config.http_gateway.ready.path = "/ready".into();
     config.http_gateway.ready.interval_ms = 5;
     config.recording.post_ready_settle_ms = 0;
-    config.recording.api_origin_dependency_idle_ms = 30;
     config.recording.case_dependency_post_response_window_ms = 0;
     config.recording.case_dependency_drain_timeout_ms = 100;
     config.recording.encrypt_request_headers.clear();
@@ -262,7 +261,7 @@ fn read_json(path: &Path) -> serde_json::Value {
 struct SourceCleanup(PathBuf);
 impl SourceCleanup {
     fn alive(&self) -> bool {
-        std::fs::read_to_string(&self.0)
+        crate::recorder::test_io::read_to_string_sync(&self.0)
             .ok()
             .and_then(|identity| identity.split_whitespace().next()?.parse::<i32>().ok())
             .is_some_and(|pid| {
@@ -276,7 +275,7 @@ impl Drop for SourceCleanup {
         if !self.alive() {
             return;
         }
-        if let Some(group) = std::fs::read_to_string(&self.0)
+        if let Some(group) = crate::recorder::test_io::read_to_string_sync(&self.0)
             .ok()
             .and_then(|identity| identity.split_whitespace().nth(1)?.parse::<i32>().ok())
         {

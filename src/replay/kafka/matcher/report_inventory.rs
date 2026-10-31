@@ -14,7 +14,7 @@ impl KafkaReplayState {
             .global_report
             .rows(0, &self.produces, true)
             .filter(|(_, exchange)| {
-                exchange.source == ReplaySource::Global && !exchange.status.is_consumed()
+                exchange.source.is_run_owned() && !exchange.status.is_consumed()
             })
             .count()
             + self
@@ -22,7 +22,7 @@ impl KafkaReplayState {
                 .global_report
                 .rows(1, &self.fetches, true)
                 .filter(|(_, exchange)| {
-                    exchange.source == ReplaySource::Global && !exchange.status.is_consumed()
+                    exchange.source.is_run_owned() && !exchange.status.is_consumed()
                 })
                 .count()
             + self
@@ -30,7 +30,7 @@ impl KafkaReplayState {
                 .global_report
                 .rows(2, &self.deliveries, true)
                 .filter(|(_, exchange)| {
-                    exchange.source == ReplaySource::Global && !exchange.status.is_consumed()
+                    exchange.source.is_run_owned() && !exchange.status.is_consumed()
                 })
                 .count()
     }
@@ -63,7 +63,7 @@ impl KafkaReplayState {
                 .map(|exchange| (exchange.source, exchange.status)),
             _ => None,
         };
-        if let Some((ReplaySource::Global, status)) = exchange {
+        if let Some((ReplaySource::Startup, status)) = exchange {
             self.events
                 .global_report
                 .observe(section, index, true, !status.is_consumed());
@@ -90,7 +90,7 @@ impl KafkaReplayState {
             .events
             .global_report
             .rows(0, &self.produces, extras)
-            .filter(|(_, exchange)| exchange.source == ReplaySource::Global)
+            .filter(|(_, exchange)| exchange.source.is_run_owned())
         {
             emit(
                 visitor,
@@ -99,7 +99,7 @@ impl KafkaReplayState {
                 KafkaUnusedReport {
                     index,
                     case_id: exchange.case_id.clone(),
-                    source: ReplaySource::Global,
+                    source: exchange.source,
                     target: exchange.target.clone(),
                     operation: "produce".into(),
                     topic: exchange.record.topic.clone(),
@@ -110,7 +110,7 @@ impl KafkaReplayState {
             .events
             .global_report
             .rows(1, &self.fetches, extras)
-            .filter(|(_, exchange)| exchange.source == ReplaySource::Global)
+            .filter(|(_, exchange)| exchange.source.is_run_owned())
         {
             emit(
                 visitor,
@@ -119,7 +119,7 @@ impl KafkaReplayState {
                 KafkaUnusedReport {
                     index,
                     case_id: exchange.case_id.clone(),
-                    source: ReplaySource::Global,
+                    source: exchange.source,
                     target: exchange.target.clone(),
                     operation: "fetch".into(),
                     topic: exchange
@@ -135,7 +135,7 @@ impl KafkaReplayState {
             .events
             .global_report
             .rows(2, &self.deliveries, extras)
-            .filter(|(_, exchange)| exchange.source == ReplaySource::Global)
+            .filter(|(_, exchange)| exchange.source.is_run_owned())
         {
             emit(
                 visitor,
@@ -144,7 +144,7 @@ impl KafkaReplayState {
                 KafkaUnusedReport {
                     index,
                     case_id: exchange.case_id.clone(),
-                    source: ReplaySource::Global,
+                    source: exchange.source,
                     target: exchange.target.clone(),
                     operation: "delivery".into(),
                     topic: exchange.record.topic.clone(),

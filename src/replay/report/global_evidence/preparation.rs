@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 const MARKER: &str = ".global-report-preparation.json";
-const VERSION: u32 = 1;
+const VERSION: u32 = 3;
 #[cfg(test)]
 mod tests;
 
@@ -18,10 +18,7 @@ pub(super) fn import_notifications(
     report: &Path,
     key: &str,
 ) -> Result<Option<super::shared::SharedReference>> {
-    let marker = source
-        .parent()
-        .context("Global Source has no parent")?
-        .join(MARKER);
+    let marker = marker_path(source)?;
     let status: Preparation = match store::read_json(&marker) {
         Ok(value) => value,
         Err(_) => return Ok(None),
@@ -45,6 +42,17 @@ pub(super) fn import_notifications(
             Ok(None)
         }
     }
+}
+
+fn marker_path(source: &Path) -> Result<std::path::PathBuf> {
+    Ok(crate::dependency_index::recording::root(source)
+        .unwrap_or(
+            source
+                .parent()
+                .context("Global Source has no parent")?
+                .to_owned(),
+        )
+        .join(MARKER))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -87,18 +95,10 @@ pub(crate) async fn prewarm(
         notifications: None,
         reason: None,
     };
-    match source.try_exists() {
-        Ok(false) => {
-            status.status = "not_needed".into();
-            status.reason = Some("recording has no Global dependency file".into());
-            return store::write_json(&run.join(MARKER), &status);
-        }
-        Err(error) => {
-            status.reason = Some(error.to_string());
-            tracing::warn!(error=%error, "optional Global prewarm could not inspect Source");
-            return store::write_json(&run.join(MARKER), &status);
-        }
-        Ok(true) => {}
+    if !crate::dependency_index::scoped::exists(&source) {
+        status.status = "not_needed".into();
+        status.reason = Some("recording has no Global dependency file".into());
+        return store::write_json(&run.join(MARKER), &status);
     }
     let result = async {
         let stamp = crate::dependency_index::FileStamp::read(&source)?;
@@ -113,12 +113,22 @@ pub(crate) async fn prewarm(
                 index.stamp == stamp,
                 "Global Source changed during recording preparation"
             );
+            let source_sha256 = if crate::dependency_index::recording::root(&source).is_some() {
+                let (_, manifest) = crate::dependency_index::recording::manifest(&source)?;
+                let empty_snapshot = Some(crate::policy_evidence::digest(b"[]"));
+                crate::policy_evidence::digest(&serde_json::to_vec(&(
+                    manifest.files,
+                    empty_snapshot,
+                ))?)
+            } else {
+                index.sha256.clone()
+            };
             let marker = run.join(MARKER);
             let view = prepared.view();
             let mut inventories = BTreeMap::new();
             for protocol in super::PROTOCOLS {
                 let identity = Identity {
-                    source_sha256: index.sha256.clone(),
+                    source_sha256: source_sha256.clone(),
                     source_bytes: index.stamp.size,
                     policy: policy.clone(),
                     protocol: protocol.into(),
@@ -150,7 +160,7 @@ pub(crate) async fn prewarm(
                 crate::dependency_index::FileStamp::read(&source)? == stamp,
                 "Global Source changed while preparing report projection"
             );
-            Ok((index.sha256, inventories, notifications))
+            Ok((source_sha256, inventories, notifications))
         })
         .await
         .context("recording Global projection task failed")?
@@ -180,10 +190,7 @@ pub(super) fn import(
 ) -> Result<Option<ArtifactReference>> {
     // The Source owner is passed explicitly by the initialize call; arbitrary
     // ancestor searches and external cache paths are intentionally unsupported.
-    let marker = source
-        .parent()
-        .context("Global Source has no parent")?
-        .join(MARKER);
+    let marker = marker_path(source)?;
     {
         let marker = marker.as_path();
         let status: Preparation = match store::read_json(marker) {

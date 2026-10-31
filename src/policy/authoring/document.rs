@@ -279,7 +279,7 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
     let document = expanded(document)?;
     ensure!(
         document.format == crate::policy::POLICY_FORMAT,
-        "policy format must be traffic-policy/v2"
+        "policy format must be traffic-policy/v3"
     );
     let mut root = Mapping::new();
     root.insert("format".into(), document.format.clone().into());

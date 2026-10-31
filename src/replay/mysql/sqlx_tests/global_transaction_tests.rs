@@ -15,6 +15,8 @@ fn statement(connection: Uuid, sequence: u64, sql: &str, before: u16, after: u16
     record["server_status_before"] = json!(before);
     record["outcome"] = json!("response");
     record["parse_warnings"] = json!([]);
+    record["capture"] =
+        serde_json::to_value(crate::dependency::observation::fixture_capture("process")).unwrap();
     if sql.starts_with("UPDATE") {
         record["response"]["affected_rows"] = json!(1);
     }
@@ -246,7 +248,14 @@ async fn unselected_case_members_are_global_once_and_cannot_steal_business_commi
                 assert!(!state.cases.contains_key("case-a"));
                 for sequence in [10, 11, 12] {
                     let index = wire_index(&state, fixture.background, sequence);
-                    assert_eq!(state.mysql.exchanges[index].source, ReplaySource::Global);
+                    assert_eq!(
+                        state.mysql.exchanges[index].source,
+                        if sequence == 10 {
+                            ReplaySource::Startup
+                        } else {
+                            ReplaySource::Process
+                        }
+                    );
                 }
                 assert_provenance(&state, &fixture);
             }
@@ -305,7 +314,7 @@ async fn unselected_case_members_are_global_once_and_cannot_steal_business_commi
                 assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
                 assert!(state.mysql.events.unmatched_queries[0].case_id.is_none());
                 assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-                assert!(state.unused_exchanges(ReplaySource::Global).is_empty());
+                assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
                 for sequence in [10, 11, 12] {
                     let index = wire_index(&state, fixture.background, sequence);
                     assert!(state.mysql.exchanges[index].status.is_consumed());
@@ -394,7 +403,7 @@ async fn global_transaction_errors_stay_global_and_pool_reuse_restores_case_owne
                     Some("case-b"),
                     "the next command on a pooled connection uses the active Case"
                 );
-                assert!(state.unused_exchanges(ReplaySource::Global).is_empty());
+                assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
                 assert_provenance(&state, &fixture);
             }
             fixture.assert_immutable();
@@ -472,7 +481,7 @@ async fn global_business_member_corrects_a_transaction_started_during_active_cas
             assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
             assert!(state.mysql.events.unmatched_queries[0].case_id.is_none());
             assert!(!state.mysql.case_is_dirty("case-b"));
-            assert!(state.unused_exchanges(ReplaySource::Global).is_empty());
+            assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
             assert_eq!(state.mysql.events.matched_query_count, 3);
             fixture.assert_immutable();
             task.abort();
@@ -501,7 +510,7 @@ async fn native_global_implicit_commit_ends_transaction_owner_before_connection_
             {
                 let state = runtime.state.lock().await;
                 let index = wire_index(&state, ddl_connection, 1);
-                assert_eq!(state.mysql.exchanges[index].source, ReplaySource::Global);
+                assert_eq!(state.mysql.exchanges[index].source, ReplaySource::Startup);
                 assert!(state.mysql.exchanges[index].status.is_consumed());
                 assert!(
                     state

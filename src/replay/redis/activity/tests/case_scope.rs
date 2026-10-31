@@ -151,7 +151,7 @@ fn other_cases_cannot_supply_a_missing_current_value_read_or_bypass_global_owner
     state
         .register_exchange(
             record,
-            ReplaySource::Global,
+            ReplaySource::Startup,
             None,
             &mut BTreeMap::new(),
             &[],

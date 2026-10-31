@@ -160,9 +160,10 @@ async fn delayed_http_client_is_still_routed_to_http_recorder() {
     upstream.await.unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     assert!(traffic.contains(r#""event_type":"http_exchange""#));
     assert!(traffic.contains(r#""uri":"/delayed""#));
     assert!(!traffic.contains(r#""event_type":"tcp_gateway_connection""#));
@@ -379,9 +380,10 @@ async fn idle_connection_detects_motan_when_the_first_request_arrives_later() {
         .unwrap();
 
     state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let traffic =
+        crate::recorder::test_io::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
     assert!(traffic.contains(r#""event_type":"motan_exchange""#));
     assert!(
         traffic

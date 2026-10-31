@@ -1,7 +1,7 @@
 use super::*;
 
 fn policy() -> String {
-    r#"format: traffic-policy/v2
+    r#"format: traffic-policy/v3
 json:
   fields:
     /spec/lastActiveDate: {kind: time, formats: [{format: calendar_date, utc_offset: '+08:00'}]}

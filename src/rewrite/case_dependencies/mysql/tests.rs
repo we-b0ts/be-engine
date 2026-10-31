@@ -5,8 +5,8 @@ fn event(sql: &str) -> Value {
     json!({
         "event_type":"mysql_exchange", "target_host":"db.internal", "target_port":3306,
         "database":"app", "username":"reader", "command":"COM_QUERY", "sql":sql,
-        "connection_id":"connection-1", "query_sequence":7,
-        "case_dependency_matched_by":"active_window", "outcome":"response", "parse_warnings":[],
+        "connection_id":"00000000-0000-0000-0000-000000000004", "query_sequence":7,
+        "outcome":"response", "parse_warnings":[],
         "response":{"status":"resultset", "row_count":1, "rows_truncated":false,
             "columns":[{"name":"id"}], "rows":[[{"kind":"string", "value":"row-payload-not-projected"}]]}
     })
@@ -17,7 +17,7 @@ fn returned_detail_command_exposes_mysql_rule_inputs_without_reading_raw_capture
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp
         .path()
-        .join(".traffic-e2e/local/artifacts/run/api/case-a");
+        .join(".traffic-e2e/local/artifacts/run/api/00000000-0000-0000-0000-000000000003");
     std::fs::create_dir_all(&case_dir).unwrap();
     let sql = format!(
         "SELECT {} FROM subtasks_0640 WHERE status='RUNNING' AND created_at>='2026-09-05'",
@@ -33,8 +33,8 @@ fn returned_detail_command_exposes_mysql_rule_inputs_without_reading_raw_capture
     let mut other = event("SELECT unrelated FROM other WHERE id=1");
     other["target_host"] = json!("other.internal");
     let raw = format!("{query_event}\n{other}\n");
-    let path = case_dir.join("dependencies.jsonl");
-    std::fs::write(&path, &raw).unwrap();
+    let path = super::super::tests::publish(&case_dir, &raw);
+    let original = std::fs::read(&path).unwrap();
     let summary = query(RewriteCaseDependenciesOptions {
         target_root: temp.path().to_path_buf(),
         case_dir: case_dir.clone(),
@@ -73,14 +73,23 @@ fn returned_detail_command_exposes_mysql_rule_inputs_without_reading_raw_capture
     assert_eq!(exchange["row_count"], 1);
     assert_eq!(exchange["rows_truncated"], false);
     assert_eq!(exchange["column_names"][0]["data"], "id");
-    assert_eq!(exchange["connection_id"], "connection-1");
+    assert_eq!(
+        exchange["connection_id"],
+        "00000000-0000-0000-0000-000000000004"
+    );
     assert_eq!(exchange["query_sequence"], 7);
     assert_eq!(exchange["server_status_before"], 0);
     assert_eq!(exchange["server_status_after"], 1);
-    assert_eq!(exchange["case_dependency_matched_by"], "active_window");
+    assert_eq!(exchange["capture"]["owner_kind"], "case");
+    assert_eq!(
+        exchange["capture"]["origin_case_id"],
+        "00000000-0000-0000-0000-000000000003"
+    );
+    assert_eq!(exchange["capture"]["phase"], "runtime");
+    assert!(exchange.get("case_dependency_matched_by").is_none());
     assert!(!detail.to_string().contains("row-payload-not-projected"));
     assert!(!detail.to_string().contains("unrelated"));
-    assert_eq!(std::fs::read_to_string(path).unwrap(), raw);
+    assert_eq!(std::fs::read(path).unwrap(), original);
 }
 
 #[test]
@@ -219,4 +228,33 @@ fn transaction_status_distinguishes_representatives_without_treating_zero_as_mis
     assert_eq!(op.representative_exchanges[0].server_status_after, Some(1));
     assert_eq!(op.representative_exchanges[1].server_status_before, Some(1));
     assert_eq!(op.representative_exchanges[1].query_sequence, Some(2));
+}
+
+#[test]
+fn capture_projection_preserves_task_and_bounds_rule_identities_without_changing_physical_refs() {
+    let mut capture = crate::dependency::observation::fixture_capture("process");
+    capture.matched_rule_id = Some("task-selector".into());
+    capture.matched_rule_ids = (0..20).map(|index| format!("selector-{index}")).collect();
+    let mut value = event("SELECT id FROM tasks WHERE status='RUNNING'");
+    value["capture"] = serde_json::to_value(capture).unwrap();
+    let mut builder = OperationBuilder::default();
+    builder.record(&value).unwrap();
+    let sample = &builder.representatives[0];
+    let detail = sample.capture.as_ref().unwrap();
+    assert_eq!(detail.owner_kind, "process");
+    assert_eq!(detail.phase, "runtime");
+    assert_eq!(detail.process_task.as_deref(), Some("fixture_task"));
+    assert_eq!(detail.matched_rule_id.as_deref(), Some("task-selector"));
+    assert_eq!(
+        detail.matched_rule_ids.len(),
+        MAX_ARGUMENTS_PER_REPRESENTATIVE
+    );
+    assert_eq!(detail.omitted_matched_rule_ids, 4);
+    assert_eq!(sample.query_sequence, Some(7));
+    assert_eq!(
+        sample.connection_id.as_deref(),
+        value["connection_id"].as_str()
+    );
+    value["capture"]["matched_rule_id"] = json!("x".repeat(MAX_PREVIEW_BYTES + 1));
+    assert!(OperationBuilder::default().record(&value).is_err());
 }

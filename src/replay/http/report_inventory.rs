@@ -14,7 +14,7 @@ impl ReplayState {
         // Those native indexes belong to this session; preserve them through
         // the existing complete visitor instead of reusing an unmodified core.
         !self.http_exchanges.iter().any(|exchange| {
-            exchange.source == ReplaySource::Global
+            exchange.available_in_run_pool()
                 && exchange.case_id.is_none()
                 && exchange.shared_origin.is_some()
         })
@@ -24,7 +24,7 @@ impl ReplayState {
             .global_report
             .rows(0, &self.http_exchanges, true)
             .filter(|(_, exchange)| {
-                exchange.source == ReplaySource::Global && !exchange.status.is_consumed()
+                exchange.available_in_run_pool() && !exchange.status.is_consumed()
             })
             .count()
     }
@@ -38,7 +38,7 @@ impl ReplayState {
         let Some(exchange) = self
             .http_exchanges
             .get(index)
-            .filter(|exchange| exchange.source == ReplaySource::Global)
+            .filter(|exchange| exchange.available_in_run_pool())
         else {
             return;
         };
@@ -67,12 +67,14 @@ pub(in crate::replay) fn visit_global_report_range(
 ) -> Result<()> {
     for (index, exchange) in usage
         .rows(0, exchanges, extras)
-        .filter(|(_, exchange)| exchange.source == ReplaySource::Global)
+        .filter(|(_, exchange)| exchange.available_in_run_pool())
     {
         visitor(Row {
             position: Position { section: 0, index },
             visible: true,
             value: serde_json::to_value(RecordedHttpExchangeSummary {
+                source: exchange.source,
+                source_http_id: exchange.record.id.clone(),
                 shared_origin: exchange.shared_origin.clone(),
                 index,
                 case_id: exchange.case_id.clone(),

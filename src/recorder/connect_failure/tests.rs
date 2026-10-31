@@ -95,7 +95,7 @@ async fn pending_real_connect_is_cancelled_by_source_stop_without_inventing_upst
             .unwrap()
             .is_none()
     );
-    let raw = tokio::fs::read_to_string(
+    let raw = crate::recorder::test_io::read_to_string(
         state
             .recorder()
             .case_staging_dir(&case)
@@ -176,8 +176,10 @@ async fn refused_upstream_is_a_complete_async_dependency_with_a_real_client_rese
         .async_api_report(case.id)
         .unwrap()
         .1;
-    assert_eq!(report["end_reason"], "dependency_failure");
-    assert_eq!(report["complete"], true);
+    assert_eq!(report["end_reason"], "timeout");
+    assert_eq!(report["capture_complete"], true);
+    assert_eq!(report["business_complete"], false);
+    assert_eq!(report["business_completion"], "unobserved");
     assert_eq!(report["inventory_complete"], true);
     assert_eq!(report["completed_refs"][0]["protocol"], "connect");
     assert!(
@@ -188,7 +190,7 @@ async fn refused_upstream_is_a_complete_async_dependency_with_a_real_client_rese
             .unwrap()
             .is_none()
     );
-    let raw = tokio::fs::read_to_string(
+    let raw = crate::recorder::test_io::read_to_string(
         state
             .recorder()
             .case_staging_dir(&case)

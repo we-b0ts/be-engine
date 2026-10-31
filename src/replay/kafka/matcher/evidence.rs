@@ -6,10 +6,11 @@ impl KafkaReplayState {
     pub(in crate::replay) fn register_global_produce(
         &mut self,
         record: RecordedKafkaProduce,
+        source_kind: ReplaySource,
         reference: RecordRef,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     ) -> Result<()> {
-        self.register_produce(record, ReplaySource::Global, None, targets)?;
+        self.register_produce(record, source_kind, None, targets)?;
         let exchange = self.produces.last_mut().expect("registered Kafka produce");
         exchange.evidence = Some(reference);
         exchange.record.key = None;
@@ -21,10 +22,11 @@ impl KafkaReplayState {
     pub(in crate::replay) fn register_global_delivery(
         &mut self,
         record: RecordedKafkaDelivery,
+        source_kind: ReplaySource,
         reference: RecordRef,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     ) -> Result<()> {
-        self.register_delivery(record, ReplaySource::Global, None, targets)?;
+        self.register_delivery(record, source_kind, None, targets)?;
         let exchange = self
             .deliveries
             .last_mut()
@@ -75,7 +77,7 @@ impl KafkaReplayState {
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
-        for item in self.unused_iter(ReplaySource::Global) {
+        for item in self.unused_iter(ReplaySource::Startup) {
             visitor(serde_json::to_value(item)?)?;
         }
         Ok(())
@@ -84,7 +86,7 @@ impl KafkaReplayState {
         if let Some(count) = self.global_report_usage().count() {
             return count + self.global_report_extra_count();
         }
-        self.unused_iter(ReplaySource::Global).count()
+        self.unused_iter(ReplaySource::Startup).count()
     }
 }
 
@@ -112,6 +114,7 @@ mod tests {
         state
             .register_global_produce(
                 serde_json::from_value(record).unwrap(),
+                ReplaySource::Startup,
                 reference,
                 &mut targets,
             )
@@ -120,7 +123,7 @@ mod tests {
         state
             .register_fetch(
                 serde_json::from_value(record).unwrap(),
-                ReplaySource::Global,
+                ReplaySource::Startup,
                 None,
                 &mut targets,
             )
@@ -129,6 +132,7 @@ mod tests {
         state
             .register_global_delivery(
                 serde_json::from_value(record).unwrap(),
+                ReplaySource::Startup,
                 reference,
                 &mut targets,
             )

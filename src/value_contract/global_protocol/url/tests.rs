@@ -7,7 +7,7 @@ const X: &str = "22222222-2222-4222-8222-222222222222";
 
 fn plan() -> CompiledJsonPolicy {
     crate::policy::parse_and_compile_policy(
-        r#"format: traffic-policy/v2
+        r#"format: traffic-policy/v3
 json:
   fields:
     /authorize_url: {kind: url, formats: [url]}

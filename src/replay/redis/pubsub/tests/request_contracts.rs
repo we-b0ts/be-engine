@@ -19,7 +19,7 @@ fn payload(host: &str, id: u64, now: chrono::DateTime<chrono::Utc>, signature: c
 }
 
 fn policy() -> Value {
-    json!({"format":"traffic-policy/v2","rules":[{
+    json!({"format":"traffic-policy/v3","rules":[{
         "id":"rpc-downloads","match":{"api":"POST /scenario","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"key":{"kind":"exact","value":"jobs"}},
         "effect":{"kind":"redis_sequence","commands":[{"operation":"PUBLISH","arguments":{"1":{"kind":"json","fields":{
             "/data/0/plugins/*/download_path":{"kind":"url","query":{

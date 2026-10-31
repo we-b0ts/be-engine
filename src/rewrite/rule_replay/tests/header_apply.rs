@@ -84,7 +84,7 @@ async fn global_header_formats_validate_real_replay_without_rewriting_source_evi
             .unwrap()
             .is_empty()
     );
-    let document = json!({"format":"traffic-policy/v2","http":{"headers":{
+    let document = json!({"format":"traffic-policy/v3","http":{"headers":{
         "x-amz-date":{"kind":"time","formats":["amz_date"]}
     }}});
     crate::policy::compile_policy(&serde_json::from_value(document.clone()).unwrap()).unwrap();

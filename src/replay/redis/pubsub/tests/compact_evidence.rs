@@ -1,14 +1,14 @@
 use super::*;
 
 #[tokio::test]
-async fn runtime_finalization_keeps_global_exemption_and_actual_delivery_in_compact_evidence() {
+async fn runtime_finalization_keeps_process_inventory_and_actual_delivery_in_compact_evidence() {
     for lazy in [false, true] {
         for subscribed in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let connection = Uuid::new_v4();
             let confirmation = b"*3\r\n$9\r\nsubscribe\r\n$4\r\njobs\r\n:1\r\n";
             let raw = crate::redis::encode_array(&[b"message", b"jobs", b"opaque"]);
-            let runtime = runtime(
+            let runtime = super::native_clock::runtime(
                 temp.path(),
                 &[],
                 &[

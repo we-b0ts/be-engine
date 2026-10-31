@@ -7,7 +7,7 @@ impl RedisReplayState {
         rules: &[crate::BackgroundDependencyRuleConfig],
     ) {
         for exchange in &mut self.exchanges {
-            if exchange.source != ReplaySource::Case
+            if exchange.source != ReplaySource::Process
                 || exchange.record.command != "GET"
                 || exchange.record.outcome != DependencyExchangeOutcome::Response
                 || exchange.record.session_setup
@@ -24,7 +24,7 @@ impl RedisReplayState {
                     && redis_rule_matches(rule, exchange.record.target_port, "GET", &exchange.args)
             }) {
                 // A proven process selector removes pooled-lane ordering only.
-                // Original case attribution, response and consumption stay finite.
+                // The independently attributed task retains finite responses and consumption.
                 exchange.connection_independent = true;
             }
         }

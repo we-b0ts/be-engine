@@ -5,7 +5,7 @@ fn fixture() -> Fixture {
     let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, source| {
         write(
             &root.join(".traffic-e2e/policy.yaml"),
-            json!({"format":"traffic-policy/v2","json":{"fields":{
+            json!({"format":"traffic-policy/v3","json":{"fields":{
                 "/last_activity_at":{"kind":"time","formats":["rfc3339"]}
             }}}),
         );
@@ -39,7 +39,7 @@ fn fixture() -> Fixture {
             "args":args.into_iter().map(raw_body).collect::<Vec<_>>(),"response":raw_body(response),
             "response_kind":"bulk_string","replay_safe":true})).collect::<Vec<_>>();
         fs::write(
-            source.join("apis/api/case-1/dependencies.jsonl"),
+            source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
             events.iter().map(|e| format!("{e}\n")).collect::<String>(),
         )
         .unwrap();
@@ -47,7 +47,7 @@ fn fixture() -> Fixture {
     });
     write(
         &fixture.proposal,
-        json!({"format":"traffic-policy/v2","redis":{"keys":{
+        json!({"format":"traffic-policy/v3","redis":{"keys":{
             "activity:*":{"activity_refresh":{"fields":["/last_activity_at"]},
                 "proof":{"source":"session.py:touch","fact":"Source reads current metadata, refreshes only its timestamp and preserves fixed TTL inside an owned lifetime"}}
         }}}),
@@ -85,7 +85,7 @@ fn activity_refresh_public_plan_apply_requires_source_proof_and_fresh_replay() {
                 .case_source
                 .as_ref()
                 .unwrap()
-                .join("apis/api/case-1/dependencies.jsonl");
+                .join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl");
             fs::write(trace, b"changed synthetic Source after plan").unwrap();
             assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
             assert_eq!(fs::read(fixture.policy()).unwrap(), before);

@@ -1,7 +1,7 @@
 use super::*;
 use crate::policy::{compile_policy, parse_policy, render_policy};
 
-const POLICY: &str = "format: traffic-policy/v2\nasync_api:\n  'POST /api/v1/responses':\n    when: {'/background': true}\n    end:\n      - redis: {operation: del, key: 'chat:cancel:*', occurrence: 2, database: 3}\n      - mysql: {sql: 'UPDATE tasks SET status = ? WHERE id = ?', database: task_manager}\n";
+const POLICY: &str = "format: traffic-policy/v3\nasync_api:\n  'POST /api/v1/responses':\n    when: {'/background': true}\n    end:\n      - redis: {operation: del, key: 'chat:cancel:*', occurrence: 2, database: 3}\n      - mysql: {sql: 'UPDATE tasks SET status = ? WHERE id = ?', database: task_manager}\n";
 
 #[test]
 fn completion_formats_preserve_explicit_databases_and_refresh_capture_and_replay_identity() {
@@ -67,9 +67,9 @@ fn redis_default_occurrence_is_one_and_empty_async_map_clears_without_capture_pe
     assert_eq!(end.occurrence, 1);
     assert!(!render_policy(&document).unwrap().contains("occurrence:"));
     let empty =
-        compile_policy(&parse_policy("format: traffic-policy/v2\nasync_api: {}\n").unwrap())
+        compile_policy(&parse_policy("format: traffic-policy/v3\nasync_api: {}\n").unwrap())
             .unwrap();
-    let absent = compile_policy(&parse_policy("format: traffic-policy/v2\n").unwrap()).unwrap();
+    let absent = compile_policy(&parse_policy("format: traffic-policy/v3\n").unwrap()).unwrap();
     assert!(empty.async_api.is_empty());
     assert_eq!(empty.fingerprints.capture, absent.fingerprints.capture);
 }

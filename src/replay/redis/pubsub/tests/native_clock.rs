@@ -9,15 +9,16 @@ mod active;
 mod delivery;
 mod encryption;
 mod guards;
+mod recording;
 mod routing;
 mod wire;
 
+const CASE: &str = "00000000-0000-0000-0000-000000000123";
 const START: &str = "2020-01-01T00:10:00Z";
 const SUBSCRIBED: &[u8] = b"*3\r\n$9\r\nsubscribe\r\n$4\r\njobs\r\n:1\r\n";
 
 fn fixture(root: &Path) -> (Vec<Value>, Vec<u8>) {
     std::fs::create_dir_all(root.join("case")).unwrap();
-    std::fs::write(root.join("recording-run.json"), r#"{"status":"completed"}"#).unwrap();
     let mut input = InputTranscript::new(Protocol::SocketIo, InteractionPolicy::default());
     input.actions.push(InputAction {
         sequence: 1,
@@ -59,6 +60,15 @@ fn fixture(root: &Path) -> (Vec<Value>, Vec<u8>) {
     )
 }
 
+pub(super) async fn runtime(
+    root: &Path,
+    cases: &[Value],
+    globals: &[Value],
+    lazy: bool,
+) -> Result<Arc<ReplayRuntime>> {
+    recording::runtime(root, cases, globals, lazy).await
+}
+
 #[tokio::test]
 async fn external_broadcast_uses_native_request_clock_instead_of_subscription_age() {
     for lazy in [false, true] {
@@ -69,7 +79,7 @@ async fn external_broadcast_uses_native_request_clock_instead_of_subscription_ag
                 std::fs::create_dir_all(temp.path().join(".traffic-e2e")).unwrap();
                 std::fs::write(
                     temp.path().join(".traffic-e2e/policy.yaml"),
-                    "format: traffic-policy/v2\n",
+                    "format: traffic-policy/v3\n",
                 )
                 .unwrap();
             }
@@ -79,8 +89,8 @@ async fn external_broadcast_uses_native_request_clock_instead_of_subscription_ag
                 send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
                 SUBSCRIBED
             );
-            let begin = serde_json::from_value(json!({"command":"request_begin","case_id":"case"}))
-                .unwrap();
+            let begin =
+                serde_json::from_value(json!({"command":"request_begin","case_id":CASE})).unwrap();
             let (reply, _) = crate::replay::control::handle_control_request(
                 begin,
                 runtime.state.clone(),
@@ -90,7 +100,7 @@ async fn external_broadcast_uses_native_request_clock_instead_of_subscription_ag
             .await;
             assert_eq!(reply["ok"], true);
             let observe =
-                serde_json::from_value(json!({"command":"native_event_begin","case_id":"case"}))
+                serde_json::from_value(json!({"command":"native_event_begin","case_id":CASE}))
                     .unwrap();
             let (reply, _) = crate::replay::control::handle_control_request(
                 observe,
@@ -101,7 +111,7 @@ async fn external_broadcast_uses_native_request_clock_instead_of_subscription_ag
             .await;
             assert_eq!(reply["enabled"], true);
             let connected =
-                serde_json::from_value(json!({"command":"native_connected","case_id":"case",
+                serde_json::from_value(json!({"command":"native_connected","case_id":CASE,
         "native_event":{"epoch":reply["epoch"],"namespace":"/chat"}}))
                 .unwrap();
             let (reply, _) = crate::replay::control::handle_control_request(

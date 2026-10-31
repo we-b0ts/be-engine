@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::policy::{Resource, Slot, Surface};
 
 mod catalog;
+pub(crate) mod hypotheses;
 mod limits;
 mod source;
 mod storage;
@@ -22,7 +23,7 @@ mod publication;
 pub(crate) use publication::stage;
 mod v2;
 pub(crate) use v2::read_target;
-pub(crate) use v2::{ObservationGraph, TargetMetadata};
+pub(crate) use v2::{ObservationGraph, RunWitnessOwner, TargetMetadata};
 mod witnesses;
 pub(crate) use witnesses::{WitnessEntries, WitnessEntry};
 

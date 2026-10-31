@@ -1,6 +1,7 @@
 //! Deliver dependency streams with recorded timing or compressed successful gaps.
 
 use super::*;
+pub(super) mod full_delivery;
 use crate::http::stream::ResponseStream;
 use crate::http::termination::PrefixDelivery;
 use http_body::{Body, Frame};
@@ -23,13 +24,18 @@ pub(super) async fn response(
     state: Arc<Mutex<ReplayState>>,
     client_prefix: Option<Arc<PrefixDelivery>>,
     server_close: Option<termination::ServerClose>,
+    ordinary_delivery: full_delivery::Transport,
 ) -> Result<Response<DeliveryBody>> {
     let completion = DeliveryCompletion {
         state: state.clone(),
         detail: record.stream_delivery.take(),
     };
     let Some(stream) = &record.response_stream else {
-        return Ok(ordinary(response_from_record(record)?));
+        return Ok(full_delivery::response(
+            response_from_record(record)?,
+            completion,
+            ordinary_delivery,
+        ));
     };
     let payload = Bytes::from(decode_body(
         record
@@ -221,6 +227,11 @@ struct DeliveryCompletion {
 }
 
 impl DeliveryCompletion {
+    async fn apply(&mut self, result: Result<()>) {
+        if let Some(detail) = self.detail.take() {
+            self.state.lock().await.finish_http_response(detail, result);
+        }
+    }
     fn finish(&mut self, result: Result<()>) {
         let Some(detail) = self.detail.take() else {
             return;
@@ -235,7 +246,7 @@ impl DeliveryCompletion {
 impl Drop for DeliveryCompletion {
     fn drop(&mut self) {
         self.finish(Err(anyhow!(
-            "Target HTTP dependency stream was dropped before its recorded EOF"
+            "Target HTTP dependency body was dropped before complete delivery"
         )));
     }
 }

@@ -111,7 +111,7 @@ mod tests {
         std::fs::write(directory.join("expected-response.json"), "{}").unwrap();
         let proof = json!({"source":"source.py:save","fact":"Source mints a UUID, keeps it for later updates, and stores the request-relative creation instant"});
         let resource = json!({"protocol":"mysql","endpoint":"db.test:3306","database":"app"});
-        let document = json!({"format":"traffic-policy/v2","rules":[
+        let document = json!({"format":"traffic-policy/v3","rules":[
             {"id":"created","match":{"api":"POST /events","resource":resource,"sql":"INSERT INTO events (id,created) VALUES (?,?)"},"effect":{"kind":"mysql_values","params":{"0":{"contract":{"kind":"uuid_v4"},"proof":proof}},"values":{"1":{"contract":{"kind":"time","format":"sql_datetime","relation":"preserve_offset","utc_offset":"+00:00"},"proof":proof}}},"proof":proof},
             {"id":"updated","match":{"api":"POST /events","resource":resource,"sql":"UPDATE events SET label=? WHERE id=?"},"effect":{"kind":"mysql_values","params":{"1":{"contract":{"kind":"uuid_v4"},"proof":proof}}},"proof":proof}
         ]});

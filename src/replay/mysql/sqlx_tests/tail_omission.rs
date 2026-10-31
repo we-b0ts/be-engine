@@ -11,6 +11,7 @@ async fn prepare_tail(temp: &tempfile::TempDir, runtime: &ReplayRuntime, records
     let case = temp.path().join(".traffic-e2e/local/recordings/case-id");
     let references = records
         .iter()
+        .filter(|record| record["command"] != "COM_STMT_PREPARE")
         .map(|record| {
             json!({
                 "protocol":"mysql", "connection_id":record["connection_id"],
@@ -20,8 +21,8 @@ async fn prepare_tail(temp: &tempfile::TempDir, runtime: &ReplayRuntime, records
         .collect::<Vec<_>>();
     std::fs::write(
         case.join("async-api-observation.json"),
-        json!({"version":1,"request_timeout_ms":2000,"end_reason":"resource",
-            "complete":true,"inventory_complete":true,"completed_refs":references})
+        json!({"version":2,"request_timeout_ms":2000,"end_reason":"resource",
+            "capture_complete":true,"business_complete":true,"business_completion":"observed","inventory_complete":true,"completed_refs":references})
         .to_string(),
     )
     .unwrap();
@@ -41,23 +42,29 @@ fn ca(temp: &tempfile::TempDir) -> PathBuf {
 }
 
 #[tokio::test]
-async fn permitted_source_setup_and_readonly_rollback_do_not_stall_async_tail() {
+async fn finite_inventory_requires_recorded_setup_and_readonly_cleanup() {
     let records = super::autocommit_tests::cold_records();
     let (temp, address, runtime, serving) = fixture(&records, false).await;
     prepare_tail(&temp, &runtime, &records).await;
     let mut client = connect(address, &ca(&temp)).await;
+    sqlx::query("SET AUTOCOMMIT=0")
+        .execute(&mut client)
+        .await
+        .unwrap();
     sqlx::query("SELECT id FROM users WHERE id=?")
         .bind(1_i32)
         .fetch_one(&mut client)
         .await
         .unwrap();
+    sqlx::query("ROLLBACK").execute(&mut client).await.unwrap();
+    sqlx::query("ROLLBACK").execute(&mut client).await.unwrap();
     let ended = end_case(&command("end"), runtime.state.clone()).await;
     assert_eq!(ended["ok"], true, "{ended}");
     let state = runtime.state.lock().await;
     assert!(state.dependency_tails.failures().is_empty());
-    assert_eq!(state.mysql.events.matched_query_count, 1);
-    assert_eq!(state.allowed_unused_autocommit().len(), 1);
-    assert_eq!(state.allowed_unused_rollbacks().len(), 2);
+    assert_eq!(state.mysql.events.matched_query_count, 4);
+    assert_eq!(state.allowed_unused_autocommit().len(), 0);
+    assert_eq!(state.allowed_unused_rollbacks().len(), 0);
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
     assert_eq!(
         state
@@ -66,7 +73,7 @@ async fn permitted_source_setup_and_readonly_rollback_do_not_stall_async_tail() 
             .iter()
             .filter(|exchange| exchange.status.is_consumed())
             .count(),
-        1
+        4
     );
     assert_eq!(
         std::fs::read(case_dependencies(&temp)).unwrap(),
@@ -99,11 +106,11 @@ async fn missing_business_read_stays_dirty_and_is_the_only_pending_reference() {
         failures[0]["reason"]
             .as_str()
             .unwrap()
-            .starts_with("recorded dependencies remain unconsumed (pending: 1)")
+            .starts_with("recorded dependencies remain unconsumed (pending: 4)")
     );
     let waiting = &failures[0]["waiting"];
-    assert_eq!(waiting["pending_source_dependencies"], 1);
-    assert_eq!(waiting["references"][0]["reference"]["sequence"], 5);
+    assert_eq!(waiting["pending_source_dependencies"], 4);
+    assert_eq!(waiting["references"][0]["reference"]["sequence"], 3);
     assert_eq!(state.unused_exchanges(ReplaySource::Case).len(), 1);
     serving.abort();
 }
@@ -115,12 +122,17 @@ async fn a_started_optional_rollback_retains_real_io_until_delivery_finishes() {
     let (temp, address, runtime, serving) = fixture(&records, false).await;
     prepare_tail(&temp, &runtime, &records).await;
     let mut client = connect(address, &ca(&temp)).await;
+    sqlx::query("SET AUTOCOMMIT=0")
+        .execute(&mut client)
+        .await
+        .unwrap();
     sqlx::query("SELECT id FROM users WHERE id=?")
         .bind(1_i32)
         .fetch_one(&mut client)
         .await
         .unwrap();
     let delivery = tokio::spawn(async move {
+        sqlx::query("ROLLBACK").execute(&mut client).await.unwrap();
         sqlx::query("ROLLBACK").execute(&mut client).await.unwrap();
         client
     });
@@ -163,16 +175,29 @@ async fn a_started_optional_rollback_retains_real_io_until_delivery_finishes() {
 }
 
 #[tokio::test]
-async fn single_write_commit_omission_requires_actual_successful_target_delivery() {
+async fn finite_inventory_requires_the_actual_write_and_commit_delivery() {
     let mut records = super::autocommit_tests::cold_records();
     records[2]["sql"] = json!("UPDATE users SET active=1 WHERE id=1");
     records[2]["response"] =
         json!({"status":"ok","server_status":1,"affected_rows":1,"last_insert_id":0});
     records[3]["sql"] = json!("COMMIT");
     records[3]["server_status_before"] = json!(1);
+    // COM_STMT_PREPARE occupies native sequence 4 without executing SQL.
+    // Its real control fact closes Source continuity; it is not a tail effect.
+    let mut prepare = records[1].clone();
+    prepare["command"] = json!("COM_STMT_PREPARE");
+    prepare["query_sequence"] = json!(4);
+    prepare["statement_id"] = json!(1);
+    prepare["sql"] = json!("SELECT id FROM users WHERE id=?");
+    prepare["response"] = json!({"status":"stmt_prepare","server_status":0,"columns":[],"rows":[],"rows_truncated":false});
+    records.insert(1, prepare);
     let (temp, address, runtime, serving) = fixture(&records, false).await;
     prepare_tail(&temp, &runtime, &records).await;
     let mut client = connect(address, &ca(&temp)).await;
+    sqlx::query("SET AUTOCOMMIT=0")
+        .execute(&mut client)
+        .await
+        .unwrap();
     sqlx::query("SELECT id FROM users WHERE id=?")
         .bind(1_i32)
         .fetch_one(&mut client)
@@ -194,12 +219,25 @@ async fn single_write_commit_omission_requires_actual_successful_target_delivery
         .execute(&mut client)
         .await
         .unwrap();
+    sqlx::query("COMMIT").execute(&mut client).await.unwrap();
     let ended = end_case(&command("end"), runtime.state.clone()).await;
-    assert_eq!(ended["ok"], true, "{ended}");
+    let diagnostic = {
+        let state = runtime.state.lock().await;
+        (
+            state
+                .mysql
+                .exchanges
+                .iter()
+                .map(|e| (e.record.query_sequence, e.status))
+                .collect::<Vec<_>>(),
+            state.dependency_tails.failures(),
+        )
+    };
+    assert_eq!(ended["ok"], true, "{ended}; diagnostic={diagnostic:?}");
     let state = runtime.state.lock().await;
-    assert_eq!(state.allowed_unused_commits().len(), 1);
-    assert_eq!(state.transaction_equivalent_autocommit().len(), 1);
-    assert_eq!(state.mysql.events.matched_query_count, 2);
+    assert_eq!(state.allowed_unused_commits().len(), 0);
+    assert_eq!(state.transaction_equivalent_autocommit().len(), 0);
+    assert_eq!(state.mysql.events.matched_query_count, 4);
     assert!(state.dependency_tails.failures().is_empty());
     serving.abort();
 }

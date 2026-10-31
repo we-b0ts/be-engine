@@ -126,7 +126,7 @@ async fn multipart_protocol_comparison_precedes_unrelated_global_json_formats() 
     let policy = temp.path().join("policy.yaml");
     std::fs::write(
         &policy,
-        "format: traffic-policy/v2\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n",
+        "format: traffic-policy/v3\njson:\n  fields:\n    /id: {kind: identity, formats: [uuid]}\n",
     )
     .unwrap();
     let (address, runtime, task) =

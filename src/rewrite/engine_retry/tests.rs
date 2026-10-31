@@ -418,13 +418,7 @@ fn new_pass_and_runtime_failure_keep_the_actual_executor_identity_and_consume_th
                 "representative": null, "lifecycle_errors": if passed { vec![] } else { vec!["runner failed"] } },
             "progress": "unused.yaml"
         })).unwrap();
-        rewrite::transition::from_e2e_result(
-            target.path(),
-            &mut state,
-            &result,
-            rewrite::transition::AttemptTransition::Append,
-        )
-        .unwrap();
+        rewrite::transition::from_e2e_result(target.path(), &mut state, &result).unwrap();
         assert_eq!(state.attempts.len(), 2);
         assert_eq!(
             state.attempts[1].engine_fingerprint.as_deref(),

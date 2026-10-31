@@ -1,4 +1,5 @@
-//! Async APIs close on declared completion, ordinary dependency failure or the shared deadline.
+//! Async APIs close on declared completion, capture failure or the shared deadline.
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,7 @@ pub(super) struct AsyncObservation {
     deadline: Instant,
     ended: watch::Sender<Option<AsyncSignal>>,
     stop_requested_at: Mutex<Option<SourceStopMoment>>,
+    primary_complete: AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -90,9 +92,11 @@ impl ActiveCaseRegistry {
             return;
         };
         let (selected, signal) = observation.scope.select_response(body);
+        observation.primary_complete.store(true, Ordering::Release);
         if !selected {
             case.async_api = None;
         } else if let Some(signal) = signal {
+            case.accepting_dependencies = false;
             observation.finish(signal);
         }
     }
@@ -123,6 +127,7 @@ impl ActiveCaseRegistry {
                 deadline: started.checked_add(timeout).unwrap_or(started),
                 ended: watch::channel(None).0,
                 stop_requested_at: Mutex::new(None),
+                primary_complete: AtomicBool::new(false),
             }));
         }
     }
@@ -136,21 +141,48 @@ impl ActiveCaseRegistry {
         if !recorded_in_case || targets.process_owned_rule.is_some() {
             return;
         }
-        let state = self.state.lock().expect("active case registry poisoned");
+        let mut state = self.state.lock().expect("active case registry poisoned");
+        let mut capture_failed = false;
         for (target, _) in &targets.cases {
-            let Some(observation) = state
+            let Some(case) = state
                 .active
-                .iter()
+                .iter_mut()
                 .find(|case| case.case.id == target.id)
-                .and_then(|case| case.async_api.as_ref())
             else {
                 continue;
             };
+            let Some(observation) = case.async_api.as_ref() else {
+                continue;
+            };
+            if !event.capture_complete() {
+                case.invalidation.get_or_insert_with(|| {
+                    crate::recorder::CaseInvalidation::new(
+                        "dependency_capture_incomplete",
+                        "asynchronous dependency capture is incomplete",
+                    )
+                });
+                case.accepting_dependencies = false;
+                observation.mark_source_stop();
+                observation.finish(AsyncSignal {
+                    end_reason: AsyncEndReason::DependencyFailure,
+                    resource_index: None,
+                    event_type: Some(event.kind()),
+                });
+                capture_failed = true;
+                continue;
+            }
             if Instant::now() >= observation.deadline {
                 observation.timeout();
             } else if let Some(signal) = observation.scope.observe(event) {
+                if observation.primary_complete.load(Ordering::Acquire) {
+                    case.accepting_dependencies = false;
+                }
                 observation.finish(signal);
             }
+        }
+        drop(state);
+        if capture_failed {
+            self.begin_quiescing();
         }
     }
 
@@ -159,15 +191,19 @@ impl ActiveCaseRegistry {
         case_id: Uuid,
         cleanup: Duration,
     ) -> Option<DependencyDrainResult> {
-        let observation = self
-            .state
-            .lock()
-            .expect("active case registry poisoned")
-            .active
-            .iter()
-            .find(|case| case.case.id == case_id)?
-            .async_api
-            .clone()?;
+        let observation = {
+            let mut state = self.state.lock().expect("active case registry poisoned");
+            let case = state
+                .active
+                .iter_mut()
+                .find(|case| case.case.id == case_id)?;
+            let observation = case.async_api.clone()?;
+            observation.primary_complete.store(true, Ordering::Release);
+            if observation.ended.borrow().is_some() {
+                case.accepting_dependencies = false;
+            }
+            observation
+        };
         // A fast worker may finish before the primary response. Its signal is
         // retained, while this method is called only after primary capture ends.
         let signal = observation.wait().await;
@@ -229,12 +265,15 @@ impl ActiveCaseRegistry {
         Some((
             case.case.clone(),
             serde_json::json!({
-                "version":1,"api":observation.scope.api,"scenario_index":observation.scope.scenario_index(),"end_reason":signal.end_reason,
+                "version":2,"api":observation.scope.api,"scenario_index":observation.scope.scenario_index(),"end_reason":signal.end_reason,
                 "resource_index":signal.resource_index,"event_type":signal.event_type,
                 "elapsed_ms":observation.started.elapsed().as_millis(),
                 "request_timeout_ms":observation.deadline.saturating_duration_since(observation.started).as_millis(),
                 "inventory_complete":inventory_complete,"completed_refs":completed_refs,
-                "complete":true,"source_stop_required":*self.quiescing.borrow(),
+                "capture_complete":inventory_complete && !case.invalidation.as_ref().is_some_and(|failure| failure.reason == "dependency_capture_incomplete"),
+                "business_complete":signal.end_reason == AsyncEndReason::Resource,
+                "business_completion":if signal.end_reason == AsyncEndReason::Resource { "observed" } else { "unobserved" },
+                "source_stop_required":*self.quiescing.borrow(),
                 "source_stop_after_ms":source_stop_after_ms,
                 "cleanup_refs":cleanup_refs,
             }),

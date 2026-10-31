@@ -83,13 +83,16 @@ pub(super) fn apply_results(
     results: &[crate::E2eApiRunResult],
     prepared: Option<&PreparedRoute>,
 ) -> Result<()> {
+    state.dependency_review.batch_receipt = None;
+    for result in results {
+        state.dependency_review.receipts.remove(&result.api);
+    }
     if results.len() == 1 {
-        transition::from_e2e_result(
-            target_root,
-            state,
-            &results[0],
-            transition::AttemptTransition::Append,
-        )?;
+        if let Some(slice) = prepared.and_then(|batch| batch.slices.get(&results[0].api)) {
+            state.active_slice = slice.clone();
+        }
+        transition::from_e2e_result(target_root, state, &results[0])?;
+        super::dependency_review::verify_completed_api_obligations(target_root, state, results);
         transition::complete_replay_if_ready(target_root, state)?;
         return Ok(());
     }
@@ -99,12 +102,7 @@ pub(super) fn apply_results(
         if let Some(slice) = prepared.and_then(|batch| batch.slices.get(&result.api)) {
             selected.active_slice = slice.clone();
         }
-        transition::from_e2e_result(
-            target_root,
-            &mut selected,
-            result,
-            transition::AttemptTransition::Append,
-        )?;
+        transition::from_e2e_result(target_root, &mut selected, result)?;
         slices.push(selected.active_slice);
     }
     // Publish every method before choosing the next slice so a route worker sees
@@ -130,6 +128,7 @@ pub(super) fn apply_results(
     for result in results {
         inventory::revalidation_round::finish(state, &result.api);
     }
+    super::dependency_review::verify_completed_api_obligations(target_root, state, results);
     let path = api_selector::route(&state.api).to_string();
     let next = inventory::revalidation_round::next(state)
         .and_then(|api| state.api_inventory.iter().position(|item| item.api == api))

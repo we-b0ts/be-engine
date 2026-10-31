@@ -169,7 +169,7 @@ mod tests {
     fn named_signature_changes_cannot_silently_rebind_existing_api_permissions() {
         let parse = |name: &str, variable: &str| {
             crate::policy::parse_policy(&json!({
-            "format":"traffic-policy/v2", "signatures":{
+            "format":"traffic-policy/v3", "signatures":{
                 name:{"kind":"jwt","algorithm":"HS256","key":{"kind":"target_env","name":variable}}
             }
         }).to_string()).unwrap()
@@ -187,7 +187,7 @@ mod tests {
     fn global_sections_add_fields_and_empty_maps_do_not_clear_existing_strategies() {
         let parse = |fields: Value| {
             crate::policy::parse_policy(
-                &json!({"format":"traffic-policy/v2","json":{"fields":fields}}).to_string(),
+                &json!({"format":"traffic-policy/v3","json":{"fields":fields}}).to_string(),
             )
             .unwrap()
         };
@@ -212,7 +212,7 @@ mod tests {
     fn redis_section_adds_scalar_formats_and_explicit_replacement_can_clear_them() {
         let parse = |keys: Value| {
             crate::policy::parse_policy(
-                &json!({"format":"traffic-policy/v2","redis":{"keys":keys}}).to_string(),
+                &json!({"format":"traffic-policy/v3","redis":{"keys":keys}}).to_string(),
             )
             .unwrap()
         };
@@ -237,7 +237,7 @@ mod tests {
         let parse = |endpoint: &str| {
             crate::policy::parse_policy(
                 &json!({
-                    "format":"traffic-policy/v2", "resources":{"cache":{
+                    "format":"traffic-policy/v3", "resources":{"cache":{
                         "protocol":"redis", "endpoint":endpoint,"database":0}}
                 })
                 .to_string(),
@@ -254,15 +254,15 @@ mod tests {
     #[test]
     fn empty_headers_and_async_maps_are_noop_unless_replacement_is_explicit() {
         let parse = |value: Value| crate::policy::parse_policy(&value.to_string()).unwrap();
-        let mut document = parse(json!({"format":"traffic-policy/v2",
+        let mut document = parse(json!({"format":"traffic-policy/v3",
             "http":{"headers":{"x-amz-date":{"kind":"time","formats":["amz_date"]}}},
             "async_api":{"POST /jobs":{"when":{"/background":true},"end":[{"redis":{"operation":"DEL","key":"done:*","occurrence":2}}]}}
         }));
         let before = document.clone();
-        assert!(!merge(&mut document, &parse(json!({"format":"traffic-policy/v2"}))).unwrap());
+        assert!(!merge(&mut document, &parse(json!({"format":"traffic-policy/v3"}))).unwrap());
         assert_eq!(document, before);
         let next =
-            parse(json!({"format":"traffic-policy/v2","http":{"headers":{}},"async_api":{}}));
+            parse(json!({"format":"traffic-policy/v3","http":{"headers":{}},"async_api":{}}));
         assert!(!merge(&mut document, &next).unwrap());
         assert_eq!(document, before);
         assert!(

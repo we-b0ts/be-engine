@@ -124,6 +124,7 @@ impl Fixture {
         )
     }
     pub(super) fn mysql_overlay(&self) -> Value {
+        let before = fs::read(&self.report).unwrap();
         crate::replay::reclassify_background_dependencies(
             &self.policy,
             &self.report,
@@ -133,7 +134,12 @@ impl Fixture {
             ]),
         )
         .unwrap();
-        serde_json::from_slice(&fs::read(&self.report).unwrap()).unwrap()
+        let after = fs::read(&self.report).unwrap();
+        assert_eq!(
+            before, after,
+            "proof discovery must not rewrite actual Replay"
+        );
+        serde_json::from_slice(&after).unwrap()
     }
 }
 
@@ -156,16 +162,8 @@ fn mysql_old_recording_plan_apply_cache_and_removal_preserve_owner_and_finite_co
     plan.apply().unwrap();
     for _ in 0..2 {
         let report = f.mysql_overlay();
-        assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 1);
-        assert_eq!(report["unused_case_exchanges"][0]["case_id"], "origin");
-        assert_eq!(
-            report["unused_global_exchanges"].as_array().unwrap().len(),
-            2
-        );
-        assert_eq!(
-            report["unused_global_exchanges"][0]["api_trigger_source"]["case_id"],
-            "origin"
-        );
+        assert_eq!(report["unused_case_exchanges"].as_array().unwrap().len(), 3);
+        assert_eq!(report["unused_global_exchanges"], json!([]));
     }
     assert!(!f.mysql_plan().unwrap().report().changed);
     fs::write(
@@ -256,7 +254,7 @@ fn same_route_and_other_resources_allow_proven_foreign_mysql_calls() {
         let overlay = f.mysql_overlay();
         assert_eq!(
             overlay["unused_case_exchanges"].as_array().unwrap().len(),
-            1
+            2
         );
     }
 }
@@ -327,7 +325,7 @@ fn mysql_same_name_ordinary_rule_is_narrowed_and_never_reused_as_broad_proof() {
             .as_array()
             .unwrap()
             .len(),
-        2
+        0
     );
     let plan = f.mysql_plan().unwrap();
     assert!(plan.report().changed);
@@ -339,7 +337,7 @@ fn mysql_same_name_ordinary_rule_is_narrowed_and_never_reused_as_broad_proof() {
             .as_array()
             .unwrap()
             .len(),
-        1
+        0
     );
 }
 
@@ -480,12 +478,19 @@ async fn mysql_recorder_retains_idle_candidates_and_keeps_active_calls_case_owne
     state.recorder().publish_case(&case).await.unwrap();
     state.record_event(event());
     state.recorder().finish_run().await.unwrap();
-    let own =
-        fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl")).unwrap();
-    let global =
-        fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl")).unwrap();
+    let own = crate::recorder::test_io::read_to_string_sync(
+        state.recorder().case_dir(&case).join("dependencies.jsonl"),
+    )
+    .unwrap();
+    let global = crate::recorder::test_io::read_to_string_sync(
+        state
+            .recorder()
+            .run_dir
+            .join("indexes/unattributed-scope.json"),
+    )
+    .unwrap();
     assert_eq!(own.lines().count(), 1);
     assert_eq!(global.lines().count(), 1);
-    assert!(own.contains("active_window"));
-    assert!(global.contains("api_trigger_candidate"));
+    assert!(own.contains("\"kind\":\"case\""));
+    assert!(global.contains("\"kind\":\"unattributed\""));
 }

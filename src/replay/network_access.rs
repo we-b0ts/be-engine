@@ -32,13 +32,16 @@ pub(super) fn apply_recorded_network_contract(
     root_dir: &Path,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
 ) -> Result<RecordedNetworkContract> {
-    let path = find_upward(root_dir, RECORDING_NETWORK_FILENAME).ok_or_else(|| {
-        anyhow!(
-            "recording network manifest {RECORDING_NETWORK_FILENAME} was not found for {}; \
+    let path = crate::dependency_index::recording::root(root_dir)
+        .map(|run| run.join(RECORDING_NETWORK_FILENAME))
+        .or_else(|| find_upward(root_dir, RECORDING_NETWORK_FILENAME))
+        .ok_or_else(|| {
+            anyhow!(
+                "recording network manifest {RECORDING_NETWORK_FILENAME} was not found for {}; \
              replay requires a recording created by the current traffic-e2e version",
-            root_dir.display()
-        )
-    })?;
+                root_dir.display()
+            )
+        })?;
     let manifest = RecordingNetworkManifest::load(&path)?;
     let allowed = manifest
         .accessed_endpoints

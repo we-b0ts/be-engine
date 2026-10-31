@@ -12,6 +12,7 @@ use crate::policy::{AsyncApiRule, AsyncEnd, Endpoint};
 use crate::recorder::{BodyCapture, MysqlValue, RecorderEvent};
 mod recorded;
 mod selection;
+mod transaction;
 pub(crate) use selection::AsyncScope;
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,7 @@ struct ResourceScope {
 struct RedisProgress {
     resources: BTreeMap<RedisResource, BTreeSet<uuid::Uuid>>,
     observations: usize,
+    mysql: transaction::Transactions,
 }
 
 const MAX_OCCURRENCE_OBSERVATIONS: usize = 100_000;
@@ -70,7 +72,8 @@ impl ResourceScope {
                 event_type: Some(event.kind()),
             });
         }
-        self.rule
+        let signal = self
+            .rule
             .end
             .iter()
             .enumerate()
@@ -82,7 +85,28 @@ impl ResourceScope {
                 end_reason: AsyncEndReason::Resource,
                 resource_index: Some(index),
                 event_type: Some(event.kind()),
-            })
+            });
+        if let RecorderEvent::MysqlExchange(event) = event {
+            self.progress
+                .lock()
+                .expect("async progress poisoned")
+                .mysql
+                .observe(
+                    transaction::Facts {
+                        connection_id: event.connection_id,
+                        sequence: event.query_sequence,
+                        before: event.server_status_before,
+                        after: event.response.server_status,
+                        sql: event.sql.as_deref(),
+                        successful: event.outcome == DependencyExchangeOutcome::Response
+                            && event.response.error_code.is_none()
+                            && event.parse_warnings.is_empty(),
+                    },
+                    signal,
+                )
+        } else {
+            signal
+        }
     }
 
     fn occurrence_reached(&self, index: usize, end: &AsyncEnd, event: &RecorderEvent) -> bool {
@@ -336,52 +360,7 @@ fn bound_value(value: &MysqlValue) -> Option<Token> {
 }
 
 fn failed(event: &RecorderEvent) -> bool {
-    match event {
-        RecorderEvent::DependencyConnectFailure(_) => true,
-        RecorderEvent::HttpExchange(event) => {
-            failed_outcome(event.outcome)
-                || event.error.is_some()
-                || event.response_status.is_some_and(|status| status >= 400)
-        }
-        RecorderEvent::MysqlExchange(event) => {
-            failed_outcome(event.outcome)
-                || event.response.error_code.is_some()
-                || event.response.status == "error"
-        }
-        RecorderEvent::RedisExchange(event) => {
-            failed_outcome(event.outcome)
-                || matches!(event.response_kind.as_str(), "error" | "blob_error")
-        }
-        RecorderEvent::MemcachedExchange(event) => {
-            failed_outcome(event.outcome)
-                || matches!(
-                    event.response_status.as_str(),
-                    "error" | "client_error" | "server_error"
-                )
-        }
-        RecorderEvent::MotanExchange(event) => {
-            failed_outcome(event.outcome) || event.response_status == "error"
-        }
-        RecorderEvent::KafkaProduce(event) => {
-            failed_outcome(event.outcome) || event.result == "error"
-        }
-        RecorderEvent::KafkaFetch(event) => failed_outcome(event.outcome),
-        RecorderEvent::MysqlConnection(event) => event.error.is_some(),
-        RecorderEvent::RedisConnection(event) => event.error.is_some(),
-        RecorderEvent::MemcachedConnection(event) => event.error.is_some(),
-        RecorderEvent::MotanConnection(event) => event.error.is_some(),
-        RecorderEvent::KafkaConnection(event) => event.error.is_some(),
-        RecorderEvent::TcpGatewayConnection(event) => event.error.is_some(),
-        RecorderEvent::ProxyError(_) => true,
-        _ => false,
-    }
-}
-
-fn failed_outcome(outcome: DependencyExchangeOutcome) -> bool {
-    !matches!(
-        outcome,
-        DependencyExchangeOutcome::Response | DependencyExchangeOutcome::NoResponse
-    )
+    !crate::recorder::ledger::event::terminal(event).1
 }
 
 #[cfg(test)]

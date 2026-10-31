@@ -585,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn collection_replay_uses_begin_end_case_lifecycle() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
         let collection_dir = temp.path().join("api-user");
         let case_a = collection_dir.join("case-a");
         let case_b = collection_dir.join("case-b");
@@ -646,7 +646,7 @@ mod tests {
         assert!(report.get("report").is_none());
         let persisted: Value =
             serde_json::from_slice(&tokio::fs::read(&report_path).await.unwrap()).unwrap();
-        assert_eq!(persisted["version"], 6);
+        assert_eq!(persisted["version"], 7);
         assert_eq!(persisted["finalized"], true);
         assert_eq!(persisted["complete"], true);
         assert_eq!(persisted["matched_queries"].as_array().unwrap().len(), 2);

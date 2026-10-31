@@ -5,7 +5,7 @@ MySQL JSON-valued columns and cache payloads. An ordinary field declaration
 needs no API, wire event or business JSON type selector:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 json:
   fields:
     /created_at: {kind: time, formats: [unix_seconds]}

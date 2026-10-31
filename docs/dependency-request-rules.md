@@ -11,7 +11,7 @@ examples do not replace this current authoring model.
 
 > Authoring migration: the legacy YAML and flag-based commands below are
 > historical semantic references. They are not accepted configuration or CLI
-> syntax. Use the self-contained `traffic-policy/v2` rules, `project.policy`,
+> syntax. Use the self-contained `traffic-policy/v3` rules, `project.policy`,
 > and `rule plan --file … --evidence …` described in
 > [unified rule contracts](unified-rule-contracts.md). The protocol, identity,
 > evidence and lifecycle constraints described here remain mandatory.
@@ -379,7 +379,7 @@ a time anchor, and missing anchors fail closed.
 HTTP JSON uses the one global field strategy, without a native HTTP body effect:
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 json:
   fields:
     /start: {kind: time, formats: [unix_seconds]}
@@ -403,7 +403,7 @@ remain separate finite candidates; a format never establishes request ownership.
 ## HTTP multipart boundary
 
 ```yaml
-format: traffic-policy/v2
+format: traffic-policy/v3
 rules:
 - id: multipart-upload
   match:

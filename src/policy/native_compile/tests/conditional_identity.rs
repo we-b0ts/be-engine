@@ -14,7 +14,7 @@ fn rule(kind: &str) -> Value {
 
 fn compile(rules: Vec<Value>) -> Result<crate::policy::CompiledPolicy> {
     crate::policy::parse_and_compile_policy(&serde_yaml::to_string(
-        &json!({"format":"traffic-policy/v2","rules":rules}),
+        &json!({"format":"traffic-policy/v3","rules":rules}),
     )?)
 }
 

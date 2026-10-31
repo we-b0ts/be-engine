@@ -26,6 +26,10 @@ async fn finite_process_get_unblocks_recorded_case_in_a_loaded_replay() {
         "keys":["monitor"],"source_revision":"abcdef1","source_evidence":"monitor.py:loop"
     }))
     .unwrap();
+    let case_dir =
+        crate::replay::test_support::recording::centralize_partitioned(&case_dir, &[0, 2]).await;
+    let frozen =
+        crate::dependency_index::scoped::read_bytes(&case_dir.join("dependencies.jsonl")).unwrap();
     let report_path = temp.path().join("report.json");
     let (addr, task) =
         spawn_replay_with_background(&case_dir, Some(report_path.clone()), vec![rule]).await;
@@ -55,10 +59,8 @@ async fn finite_process_get_unblocks_recorded_case_in_a_loaded_replay() {
     let report = wait_for_matched_count(&report_path, "redis", 3).await;
     assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
     assert_eq!(
-        tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
-            .await
-            .unwrap(),
-        original
+        crate::dependency_index::scoped::read_bytes(&case_dir.join("dependencies.jsonl")).unwrap(),
+        frozen
     );
     task.abort();
 }
@@ -93,6 +95,7 @@ async fn background_hscan_does_not_block_a_following_mget_in_the_source_lane() {
     tokio::fs::write(case_dir.join("global-dependencies.jsonl"), global)
         .await
         .unwrap();
+    let case_dir = crate::replay::test_support::recording::centralize(&case_dir, &[0]).await;
     let report_path = temp.path().join("report.json");
     let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
     let mut client = TcpStream::connect(addr).await.unwrap();

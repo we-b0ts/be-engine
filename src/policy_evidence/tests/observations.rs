@@ -1,6 +1,85 @@
 use super::*;
 
 #[test]
+fn run_target_without_a_case_is_authenticated_and_cannot_borrow_a_primary_clock() {
+    let (_temp, artifacts, _old, source) = setup();
+    let session = uuid::Uuid::new_v4().to_string();
+    let store = WitnessStore::new_bound(&artifacts, &session, "native-policy").unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let metadata = TargetMetadata {
+        case_id: String::new(),
+        run_owner: Some(RunWitnessOwner {
+            session_id: session.clone(),
+        }),
+        surface: Surface::DependencyRequest,
+        role: TargetRole::IndependentTargetObservation,
+        resource: None,
+        operation: "SET".into(),
+        clocks: Default::default(),
+    };
+    assert_eq!(
+        store
+            .record_target(&id, metadata.clone(), &artifacts, b"private-run-arguments")
+            .unwrap(),
+        ObservationRetention::Retained
+    );
+    assert_eq!(
+        store
+            .associate(&source, &id, &artifacts, Some(b"source"))
+            .unwrap(),
+        AssociationOutcome::Incompatible
+    );
+    let manifest = store.sealed_manifest().unwrap();
+    let report = artifacts.join("run-target-report.json");
+    std::fs::write(&report,serde_json::json!({"session_id":session,"target_observation_policy_fingerprint":"native-policy",
+        "target_observation_key_context":artifacts,"cases":[]}).to_string()).unwrap();
+    let path = verify(&report, &manifest).unwrap();
+    assert_eq!(
+        read_target(&path, &manifest, 0, &artifacts).unwrap(),
+        b"private-run-arguments"
+    );
+    let value = serde_json::to_value(&metadata).unwrap();
+    assert!(value.get("case_id").is_none());
+    assert!(metadata.clocks.case.source.is_none() && metadata.clocks.case.target.is_none());
+    assert!(manifest.complete && manifest.omitted == 0);
+}
+
+#[test]
+fn run_target_rejects_fabricated_case_clock_and_foreign_replay_owner() {
+    let (_temp, artifacts, _old, _) = setup();
+    let session = uuid::Uuid::new_v4().to_string();
+    let store = WitnessStore::new_bound(&artifacts, &session, "native-policy").unwrap();
+    let mut metadata = TargetMetadata {
+        case_id: String::new(),
+        run_owner: Some(RunWitnessOwner {
+            session_id: session,
+        }),
+        surface: Surface::DependencyRequest,
+        role: TargetRole::IndependentTargetObservation,
+        resource: None,
+        operation: "GET".into(),
+        clocks: Default::default(),
+    };
+    metadata.clocks.case.target = Some(chrono::Utc::now());
+    assert!(
+        store
+            .record_target("clock", metadata.clone(), &artifacts, b"x")
+            .is_err()
+    );
+    metadata.clocks.case.target = None;
+    metadata.run_owner.as_mut().unwrap().session_id = uuid::Uuid::new_v4().to_string();
+    assert!(
+        store
+            .record_target("foreign", metadata, &artifacts, b"x")
+            .is_err()
+    );
+    assert!(
+        !store.manifest().unwrap().complete,
+        "rejected evidence remains an explicit coverage gap"
+    );
+}
+
+#[test]
 fn multi_case_sized_inventory_keeps_late_targets_authenticated_past_the_legacy_row_bound() {
     let (_temp, artifacts, _unused, metadata) = setup();
     let cases = 70;

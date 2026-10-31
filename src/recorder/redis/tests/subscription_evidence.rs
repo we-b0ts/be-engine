@@ -57,10 +57,10 @@ async fn subscribe_and_push(client: &mut TcpStream, upstream: &mut TcpStream, co
     assert_eq!(received, push);
 }
 
-async fn global_events(state: &AppState) -> Vec<Value> {
+async fn recorded_events(state: &AppState) -> Vec<Value> {
     state.recorder().flush_all_dependency_files().await.unwrap();
-    let path = state.recorder().run_dir.join("global-dependencies.jsonl");
-    match tokio::fs::read_to_string(path).await {
+    let path = state.recorder().run_dir.join("dependencies.jsonl");
+    match crate::recorder::test_io::read_to_string(path).await {
         Ok(raw) => raw
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
@@ -91,7 +91,7 @@ async fn subscriptions_keep_bootstrap_case_idle_and_reconnect_evidence_without_d
         subscribe_and_push(&mut reconnect, &mut upstream, command).await;
         close_connection(reconnect, upstream, task).await;
 
-        let events = global_events(&state).await;
+        let events = recorded_events(&state).await;
         let subscriptions: Vec<_> = events
             .iter()
             .filter(|event| event["event_type"] == "redis_exchange")
@@ -103,20 +103,17 @@ async fn subscriptions_keep_bootstrap_case_idle_and_reconnect_evidence_without_d
         assert_eq!(subscriptions.len(), 4);
         assert_eq!(pushes.len(), 4);
         assert_eq!(
-            subscriptions[0]["global_dependency_reason"],
-            "bootstrap_window"
+            subscriptions[0]["capture"]["attribution"]["kind"],
+            "startup"
         );
-        assert_eq!(subscriptions[0]["global_dependency_phase"], "bootstrap");
-        assert_eq!(
-            subscriptions[1]["global_dependency_reason"],
-            "pubsub_subscription_mirror"
-        );
+        assert_eq!(subscriptions[0]["capture"]["phase"], "startup");
+        assert_eq!(subscriptions[1]["capture"]["attribution"]["kind"], "case");
         for subscription in &subscriptions[2..] {
             assert_eq!(
-                subscription["global_dependency_reason"],
-                "pubsub_subscription"
+                subscription["capture"]["attribution"]["kind"],
+                "unattributed"
             );
-            assert_eq!(subscription["global_dependency_phase"], "runtime");
+            assert_eq!(subscription["capture"]["phase"], "runtime");
         }
         assert_eq!(
             subscriptions[1]["connection_id"],
@@ -143,7 +140,12 @@ async fn subscriptions_keep_bootstrap_case_idle_and_reconnect_evidence_without_d
             assert!(confirmation_position < push_position);
         }
 
-        let raw = tokio::fs::read_to_string(
+        state
+            .recorder()
+            .flush_case_dependency_files(&state.recorder().case_staging_dir(&case))
+            .await
+            .unwrap();
+        let raw = crate::recorder::test_io::read_to_string(
             state
                 .recorder()
                 .case_staging_dir(&case)
@@ -157,22 +159,9 @@ async fn subscriptions_keep_bootstrap_case_idle_and_reconnect_evidence_without_d
             .filter(|event| event["event_type"] == "redis_exchange")
             .collect();
         assert_eq!(case_exchanges.len(), 1);
-        let mut original = case_exchanges[0].clone();
-        original
-            .as_object_mut()
-            .unwrap()
-            .remove("case_dependency_matched_by");
-        let mut mirror = subscriptions[1].clone();
-        for field in [
-            "global_dependency_reason",
-            "global_dependency_phase",
-            "global_dependency_matched_by",
-        ] {
-            mirror.as_object_mut().unwrap().remove(field);
-        }
         assert_eq!(
-            original, mirror,
-            "the mirror must preserve the exact original event"
+            case_exchanges[0], *subscriptions[1],
+            "the scope refers to the single immutable exchange"
         );
     }
 }
@@ -213,14 +202,21 @@ async fn invalid_subscription_confirmations_never_replace_the_last_real_anchor()
         assert_eq!(received, push);
     }
     close_connection(client, upstream, task).await;
-    let events = global_events(&state).await;
+    let events = recorded_events(&state).await;
     assert_eq!(
         events
             .iter()
             .filter(|event| event["event_type"] == "redis_exchange")
             .count(),
-        1
+        4
     );
+    let complete_exchanges = events
+        .iter()
+        .filter(|event| event["event_type"] == "redis_exchange" && event["replay_safe"] == true)
+        .count();
+    // A rejected command is still complete replay evidence. It cannot replace
+    // the last successful subscription anchor used by any subsequent push.
+    assert_eq!(complete_exchanges, 2);
     let pushes: Vec<_> = events
         .iter()
         .filter(|event| event["event_type"] == "redis_pub_sub_push")
@@ -277,8 +273,20 @@ async fn truncated_confirmation_is_never_published_as_subscription_proof() {
     )
     .await
     .unwrap();
-    assert!(global_events(&state).await.is_empty());
-    let raw = tokio::fs::read_to_string(
+    let events = recorded_events(&state).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["event_type"] == "redis_exchange")
+            .count(),
+        1
+    );
+    state
+        .recorder()
+        .flush_case_dependency_files(&state.recorder().case_staging_dir(&case))
+        .await
+        .unwrap();
+    let raw = crate::recorder::test_io::read_to_string(
         state
             .recorder()
             .case_staging_dir(&case)

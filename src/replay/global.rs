@@ -109,6 +109,7 @@ async fn consume(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn load(
     path: &Path,
+    source_kind: ReplaySource,
     mysql: &mut MysqlReplayState,
     http: &mut Vec<http::ReplayHttpExchange>,
     blackholes: &mut Vec<http::ReplayHttpBlackhole>,
@@ -128,9 +129,12 @@ pub(super) async fn load(
     .await
     .context("Global index preparation failed")??;
     let source = RecordSource::new(path, index.stamp.clone(), reader);
-    redis
-        .pubsub
-        .restore_indexed(index.notifications.clone(), &root, source.clone())?;
+    redis.pubsub.restore_indexed(
+        index.notifications.clone(),
+        &root,
+        source.clone(),
+        source_kind,
+    )?;
     let records = crate::dependency_index::global::global_records(&index, &root)?;
     let mut sql = Vec::new();
     let (input, task) = stream(records.clone(), source.clone(), Phase::Metadata);
@@ -154,7 +158,9 @@ pub(super) async fn load(
                     sql.push((line, DependencyRecord::MysqlExchange(exchange)));
                 }
                 DependencyRecord::RedisPubSubPush(push) => {
-                    redis.pubsub.register_indexed(*push, reference)?
+                    redis
+                        .pubsub
+                        .register_indexed(*push, reference, source_kind)?
                 }
                 DependencyRecord::RedisConnection(connection) => {
                     redis.register_connection(*connection, targets)?
@@ -195,7 +201,7 @@ pub(super) async fn load(
                 DependencyRecord::TcpGatewayConnection(record) => {
                     http::register_tcp_connection_blackhole(
                         *record,
-                        ReplaySource::Global,
+                        source_kind,
                         None,
                         blackholes,
                         targets,
@@ -203,25 +209,36 @@ pub(super) async fn load(
                 }
                 DependencyRecord::HttpExchange(mut record) => {
                     record.decrypt_request_headers(path)?;
-                    http::register_global_exchange(*record, reference, http, targets, rules)?;
+                    http::register_global_exchange(
+                        *record,
+                        reference,
+                        http,
+                        targets,
+                        rules,
+                        source_kind,
+                    )?;
                 }
-                DependencyRecord::RedisExchange(record) => {
-                    redis.register_global_exchange(*record, reference, targets, rules)?
-                }
+                DependencyRecord::RedisExchange(record) => redis.register_global_exchange(
+                    *record,
+                    source_kind,
+                    reference,
+                    targets,
+                    rules,
+                )?,
                 DependencyRecord::MemcachedExchange(record) => {
-                    memcached.register_global_exchange(*record, reference, targets)?
+                    memcached.register_global_exchange(*record, source_kind, reference, targets)?
                 }
                 DependencyRecord::MotanExchange(record) => {
-                    motan.register_global_exchange(*record, reference, targets)?
+                    motan.register_global_exchange(*record, source_kind, reference, targets)?
                 }
                 DependencyRecord::KafkaProduce(record) => {
-                    kafka.register_global_produce(*record, reference, targets)?
+                    kafka.register_global_produce(*record, source_kind, reference, targets)?
                 }
                 DependencyRecord::KafkaFetch(record) => {
-                    kafka.register_fetch(*record, ReplaySource::Global, None, targets)?
+                    kafka.register_fetch(*record, source_kind, None, targets)?
                 }
                 DependencyRecord::KafkaDelivery(record) => {
-                    kafka.register_global_delivery(*record, reference, targets)?
+                    kafka.register_global_delivery(*record, source_kind, reference, targets)?
                 }
                 _ => {}
             }
@@ -233,7 +250,7 @@ pub(super) async fn load(
         path,
         sql,
         &BTreeSet::new(),
-        ReplaySource::Global,
+        source_kind,
         None,
         mysql,
         http,

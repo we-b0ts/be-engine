@@ -1,6 +1,7 @@
 //! Case-owned HTTP request selection and atomic normalization.
 use super::*;
 impl ReplayState {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn match_http_request(
         &mut self,
@@ -13,8 +14,72 @@ impl ReplayState {
         headers: &HeaderSnapshot,
         request_started_at: chrono::DateTime<Utc>,
     ) -> std::result::Result<RecordedHttpExchange, HttpReplayMatchError> {
-        let active_case_id = self.active_case_id.clone();
-        let mut observation_id = Some(uuid::Uuid::new_v4());
+        self.match_http_request_admitted(
+            scheme,
+            target,
+            method,
+            uri,
+            host,
+            body,
+            headers,
+            request_started_at,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn match_http_request_admitted(
+        &mut self,
+        scheme: HttpReplayScheme,
+        target: &TargetKey,
+        method: &Method,
+        uri: &Uri,
+        host: Option<&str>,
+        body: &[u8],
+        headers: &HeaderSnapshot,
+        request_started_at: chrono::DateTime<Utc>,
+        admission: Option<&ingress::Admission>,
+    ) -> std::result::Result<RecordedHttpExchange, HttpReplayMatchError> {
+        let active_case_id = admission.map_or_else(
+            || self.active_case_id.clone(),
+            |a| a.case_id().map(str::to_owned),
+        );
+        let mut observation_id =
+            Some(admission.map_or_else(uuid::Uuid::new_v4, ingress::Admission::observation_id));
+
+        let request = contracts::RequestView {
+            observation_id,
+            scheme,
+            target,
+            method,
+            uri,
+            headers,
+            body,
+            started_at: request_started_at,
+        };
+        let retention =
+            if let (Some(policy), Some(case)) = (&self.replay_policy, active_case_id.as_deref()) {
+                contracts::record_target(policy, case, &request)
+            } else {
+                contracts::record_unanchored_target(
+                    &self.target_observations,
+                    active_case_id.as_deref(),
+                    &request,
+                )
+            };
+        let observation_retained = self.target_observations.retained(&retention);
+        if matches!(
+            &retention,
+            Ok(crate::policy_evidence::ObservationRetention::Unavailable)
+        ) {
+            observation_id = None;
+        }
+        if retention.is_err() {
+            tracing::warn!(
+                "HTTP Target observation unavailable; inspect target_observation_coverage_error"
+            );
+        }
+        let report_observation_id = observation_id.filter(|_| observation_retained);
         if let Some(host) = host
             && !host_matches_target(host, target)
         {
@@ -22,37 +87,18 @@ impl ReplayState {
                 "HTTP Host header does not match replay target {}",
                 target.host
             );
-            self.record_unmatched_http(scheme, target, method, uri, reason.clone());
+            self.record_unmatched_http_for(
+                active_case_id.clone(),
+                scheme,
+                target,
+                method,
+                uri,
+                reason.clone(),
+            );
+            self.bind_last_unmatched_http_observation(report_observation_id);
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
 
-        if let (Some(policy), Some(case)) = (&self.replay_policy, active_case_id.as_deref()) {
-            match contracts::record_target(
-                policy,
-                case,
-                &contracts::RequestView {
-                    observation_id,
-                    scheme,
-                    target,
-                    method,
-                    uri,
-                    headers,
-                    body,
-                    started_at: request_started_at,
-                },
-            ) {
-                Ok(crate::policy_evidence::ObservationRetention::Unavailable) => {
-                    observation_id = None
-                }
-                Ok(crate::policy_evidence::ObservationRetention::Retained) => {}
-                Err(error) => {
-                    tracing::warn!(error = %error, "HTTP Target observation unavailable");
-                    // Global and shared-origin candidates keep native matching.
-                    // Keep the identity: a Case candidate must still associate
-                    // its retained Target before any rule comparison succeeds.
-                }
-            }
-        }
         let mut matching_index = None;
         let mut matching_policy_decision = DependencyRuleDecision::default();
         let mut matching_dynamic_decision =
@@ -65,7 +111,8 @@ impl ReplayState {
         let mut target_fingerprint = None;
         'sources: for (allow_pre_match, source) in [
             (false, ReplaySource::Case),
-            (false, ReplaySource::Global),
+            (false, ReplaySource::Startup),
+            (false, ReplaySource::Process),
             (true, ReplaySource::Case),
         ] {
             if allow_pre_match
@@ -77,8 +124,13 @@ impl ReplayState {
                 break;
             }
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
-                if !exchange.status.is_available() && !exchange.is_repeatable_preflight_probe()
-                    || exchange.source != source
+                if !(exchange.status.is_available()
+                    || exchange.is_repeatable_preflight_probe()
+                    || exchange.source == ReplaySource::Startup
+                        && exchange.status == super::super::ReplayExchangeStatus::StartupBlocked
+                        && admission.is_some_and(ingress::Admission::permits_startup))
+                    || !(exchange.source.matches_scope(source)
+                        || source.is_run_owned() && exchange.shared_origin.is_some())
                     || !active_http_case_matches(active_case_id.as_deref(), exchange)
                     || exchange.identity.scheme != scheme
                     || exchange.identity.target != *target
@@ -441,6 +493,20 @@ impl ReplayState {
                         continue;
                     }
                 }
+                if allow_pre_match && matching_index.is_some() {
+                    let reason =
+                        "HTTP hypothesis has multiple eligible Source exchanges".to_owned();
+                    self.record_unmatched_http_for(
+                        active_case_id.clone(),
+                        scheme,
+                        target,
+                        method,
+                        uri,
+                        reason.clone(),
+                    );
+                    self.bind_last_unmatched_http_observation(report_observation_id);
+                    return Err(HttpReplayMatchError::BadGateway(reason));
+                }
                 matching_request_decision = request_decision;
                 matching_multipart = multipart_matched;
                 matching_index = Some(index);
@@ -448,7 +514,9 @@ impl ReplayState {
                 if let Some(normalized) = normalized {
                     matching_dynamic_decision = normalized.decision;
                 }
-                break 'sources;
+                if !allow_pre_match {
+                    break 'sources;
+                }
             }
         }
         let Some(index) = matching_index else {
@@ -459,7 +527,15 @@ impl ReplayState {
                 "no recorded HTTP exchange matched the active case and target".to_string()
             });
             let evidence = unordered::evidence::capture(self, scheme, target, method, uri, body);
-            self.record_unmatched_http(scheme, target, method, uri, reason.clone());
+            self.record_unmatched_http_for(
+                active_case_id.clone(),
+                scheme,
+                target,
+                method,
+                uri,
+                reason.clone(),
+            );
+            self.bind_last_unmatched_http_observation(report_observation_id);
             self.http_events
                 .unmatched
                 .last_mut()
@@ -469,7 +545,7 @@ impl ReplayState {
                 .unmatched
                 .last_mut()
                 .unwrap()
-                .target_observation_id = observation_id.map(|id| {
+                .target_observation_id = report_observation_id.map(|id| {
                 crate::policy_evidence::target_observation_id(
                     &id.to_string(),
                     crate::policy::Surface::DependencyRequest,
@@ -491,7 +567,15 @@ impl ReplayState {
         let mut exchange = self.http_exchanges[index].clone();
         if let Err(error) = exchange.record.materialize_response() {
             let reason = format!("HTTP response evidence unavailable: {error:#}");
-            self.record_unmatched_http(scheme, target, method, uri, reason.clone());
+            self.record_unmatched_http_for(
+                active_case_id.clone(),
+                scheme,
+                target,
+                method,
+                uri,
+                reason.clone(),
+            );
+            self.bind_last_unmatched_http_observation(report_observation_id);
             return Err(HttpReplayMatchError::BadGateway(reason));
         }
         let lifecycle_cleanup = active_case_id.as_deref().and_then(|case| {
@@ -510,7 +594,7 @@ impl ReplayState {
             && !exchange.record.outcome.is_server_terminated()
             && (exchange.record.error.is_some() || exchange.record.response_status.is_none())
         {
-            self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
+            self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Consumed);
             self.refresh_http_global_report(index);
             let reason = "recorded HTTP exchange contains an upstream error that replay v1 cannot synthesize"
                 .to_string();
@@ -567,7 +651,15 @@ impl ReplayState {
                     .extend(decision.value_contracts),
                 Err(error) => {
                     let reason = format!("HTTP response value contract failed: {error:#}");
-                    self.record_unmatched_http(scheme, target, method, uri, reason.clone());
+                    self.record_unmatched_http_for(
+                        active_case_id.clone(),
+                        scheme,
+                        target,
+                        method,
+                        uri,
+                        reason.clone(),
+                    );
+                    self.bind_last_unmatched_http_observation(report_observation_id);
                     return Err(HttpReplayMatchError::BadGateway(reason));
                 }
             }
@@ -621,10 +713,12 @@ impl ReplayState {
             // Source stopped before receiving a response. Retain the original
             // claimed request until the runner stops Target; never synthesize
             // the proxy's post-stop 502 as a business dependency response.
-            self.http_exchanges[index].status =
-                crate::replay::ReplayExchangeStatus::AwaitingClientTermination;
+            self.claim_http_status(
+                index,
+                crate::replay::ReplayExchangeStatus::AwaitingClientTermination,
+            );
             if exchange.record.response_stream.is_some() {
-                self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Responding;
+                self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding);
                 exchange.record.lifecycle_stop = Some(gate);
                 exchange.record.stream_delivery = Some(detail);
                 return Ok(exchange.record);
@@ -640,7 +734,7 @@ impl ReplayState {
         if exchange.record.outcome.is_server_terminated()
             && exchange.record.response_stream.is_none()
         {
-            self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Responding;
+            self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding);
             return Err(HttpReplayMatchError::ServerTerminated(Box::new(
                 termination::PendingHttpTermination::new(detail, &exchange.record),
             )));
@@ -648,8 +742,10 @@ impl ReplayState {
         if exchange.record.outcome.is_client_terminated()
             && exchange.record.response_stream.is_none()
         {
-            self.http_exchanges[index].status =
-                crate::replay::ReplayExchangeStatus::AwaitingClientTermination;
+            self.claim_http_status(
+                index,
+                crate::replay::ReplayExchangeStatus::AwaitingClientTermination,
+            );
             return Err(HttpReplayMatchError::ClientTerminated(Box::new(
                 termination::PendingHttpTermination::new(detail, &exchange.record),
             )));
@@ -658,25 +754,21 @@ impl ReplayState {
             upstream_failure::materialize(&mut exchange.record);
         }
         if exchange.record.response_stream.is_some() {
-            self.http_exchanges[index].status = if exchange.record.outcome.is_client_terminated() {
-                crate::replay::ReplayExchangeStatus::AwaitingClientTermination
-            } else {
-                crate::replay::ReplayExchangeStatus::Responding
-            };
+            self.claim_http_status(
+                index,
+                if exchange.record.outcome.is_client_terminated() {
+                    crate::replay::ReplayExchangeStatus::AwaitingClientTermination
+                } else {
+                    crate::replay::ReplayExchangeStatus::Responding
+                },
+            );
             self.refresh_http_global_report(index);
             exchange.record.stream_delivery = Some(detail);
             return Ok(exchange.record);
         }
-        contracts::time_copies::commit(
-            self.replay_policy.as_ref(),
-            &mut self.http_exchanges[index],
-        )
-        .map_err(|error| {
-            HttpReplayMatchError::BadGateway(format!("HTTP time-copy provenance: {error:#}"))
-        })?;
-        self.http_exchanges[index].status = crate::replay::ReplayExchangeStatus::Consumed;
+        self.claim_http_status(index, crate::replay::ReplayExchangeStatus::Responding);
         self.refresh_http_global_report(index);
-        self.complete_http_exchange(detail);
+        exchange.record.stream_delivery = Some(detail);
         Ok(exchange.record)
     }
 }

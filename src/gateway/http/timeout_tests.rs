@@ -34,7 +34,7 @@ fn config(temp: &std::path::Path, upstream: std::net::SocketAddr) -> AppConfig {
         ..Default::default()
     }];
     config.mysql.enabled = false;
-    config.recording.case_dependency_post_response_window_ms = 20;
+    config.recording.case_dependency_post_response_window_ms = 0;
     config.recording.output_dir = temp.join("recordings");
     config.tls.ca_cert_path = temp.join("ca.pem");
     config.tls.ca_key_path = temp.join("ca-key.pem");
@@ -166,8 +166,10 @@ async fn isolation(body_timeout: bool) {
     let run = state.recorder().run_dir.as_ref();
     let old = only_case(&run.join("failed/record-old"));
     let new = only_case(&run.join("apis/record-new"));
-    let old_dependencies = std::fs::read_to_string(old.join("dependencies.jsonl")).unwrap();
-    let new_dependencies = std::fs::read_to_string(new.join("dependencies.jsonl")).unwrap();
+    let old_dependencies =
+        crate::recorder::test_io::read_to_string_sync(old.join("dependencies.jsonl")).unwrap();
+    let new_dependencies =
+        crate::recorder::test_io::read_to_string_sync(new.join("dependencies.jsonl")).unwrap();
     assert!(old_dependencies.contains("old_before_timeout"));
     assert!(old_dependencies.contains("old_after_timeout"));
     assert!(!old_dependencies.contains("new_request"));

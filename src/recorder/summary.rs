@@ -283,6 +283,24 @@ impl DependencySummaryBuilder {
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
+        if value
+            .pointer("/capture/semantic_required")
+            .and_then(Value::as_bool)
+            == Some(false)
+            && matches!(
+                event_type.as_str(),
+                "mysql_exchange"
+                    | "redis_exchange"
+                    | "memcached_exchange"
+                    | "motan_exchange"
+                    | "kafka_produce"
+                    | "kafka_fetch"
+                    | "kafka_delivery"
+                    | "redis_pub_sub_push"
+            )
+        {
+            return;
+        }
         if event_type == "mysql_exchange" && is_debug_only_mysql_exchange_value(value) {
             return;
         }

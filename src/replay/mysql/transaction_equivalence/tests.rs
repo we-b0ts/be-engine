@@ -1,6 +1,7 @@
 use super::*;
 use serde_json::json;
 mod error_rollback;
+mod implicit_native;
 mod member_comparison;
 
 pub(crate) fn records() -> Vec<Value> {
@@ -392,7 +393,7 @@ fn scoped_plans(case: &[Value], global: &[Value]) -> Vec<source::Plan> {
             .collect::<Vec<_>>()
     };
     let mut registry = Registry::default();
-    let _ = registry.prepare(&decode(global), &BTreeMap::new(), ReplaySource::Global);
+    let _ = registry.prepare(&decode(global), &BTreeMap::new(), ReplaySource::Startup);
     registry.prepare(&decode(case), &BTreeMap::new(), ReplaySource::Case)
 }
 

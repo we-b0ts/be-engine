@@ -7,11 +7,14 @@ removed after measurement unless --keep-artifacts is supplied.
 """
 import argparse
 import base64
+from contextlib import closing
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import resource
+import signal
 import shutil
 import socket
 import statistics
@@ -19,6 +22,7 @@ import struct
 import subprocess
 import time
 import uuid
+from replay_benchmark_fixtures import central_fixture
 
 
 def write_json(path, value):
@@ -47,8 +51,9 @@ def free_port():
 def make_fixture(project, kind, args):
     root = project / ".traffic-e2e/local/artifacts/recordings" / kind
     root.mkdir(parents=True, exist_ok=True)
+    write_json(root / "synthetic-benchmark.json", {"kind":"traffic-e2e-synthetic-benchmark"})
     host, port = "sql.benchmark.invalid", free_port()
-    case_ids = [f"case-{index:04d}" for index in range(args.cases if kind == "sql" else 1)]
+    case_ids = [str(uuid.UUID(int=0x10000 + index)) for index in range(args.cases if kind in ("sql", "http-hypothesis") else 1)]
     queries = []
     for index, case_id in enumerate(case_ids):
         case = root / case_id
@@ -66,18 +71,37 @@ def make_fixture(project, kind, args):
                               "database": "benchmark", "username": "root", "command": "COM_QUERY", "sql": sql,
                               "timestamp": "2026-10-17T00:00:00Z", "duration_ms": 0,
                               "response": {"status": "ok", "affected_rows": 0, "last_insert_id": 0}})
+        elif kind == "http-hypothesis":
+            host = "http.benchmark.invalid"
+            for number in range(args.queries):
+                identity = index * args.queries + number
+                source = json.dumps({"ordinal": number, "request_id": str(uuid.UUID(int=0x100000 + identity, version=4))}).encode()
+                target = json.dumps({"ordinal": number, "request_id": str(uuid.UUID(int=0x200000 + identity, version=4))}).encode()
+                path = f"/items/{number}"
+                calls.append((path, target.decode()))
+                lines.append({"event_type": "http_exchange", "id": str(uuid.UUID(int=0x300000 + identity)),
+                              "scheme": "http", "authority": f"{host}:{port}", "method": "POST", "uri": path,
+                              "request_body": capture(source), "request_headers": {
+                                  "host": [f"{host}:{port}"], "content-type": ["application/json"],
+                                  "content-length": [str(len(source))], "accept-encoding": ["identity"]},
+                              "request_started_at": "2026-10-17T00:00:00Z", "timestamp": "2026-10-17T00:00:00Z",
+                              "response_status": 200, "response_body": capture(b"{}"), "response_headers": {},
+                              "duration_ms": 0, "outcome": "response", "error": None})
         (case / "dependencies.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
         queries.append(list(reversed(calls)))
     policy = None
-    if kind == "sql":
+    if kind in ("sql", "http-hypothesis"):
         local = project / ".traffic-e2e/local/secrets"
         local.mkdir(parents=True, exist_ok=True)
         key = local / "traffic-e2e-enc.sec"
         key.write_text(base64.b64encode(os.urandom(32)).decode())
         key.chmod(0o600)
-        policy = project / ".traffic-e2e/policy.yaml"
+        policy = project / ".traffic-e2e/benchmarks" / kind / "policy.yaml"
+        policy.parent.mkdir(parents=True, exist_ok=True)
         text = "format: traffic-policy/v2\nsource_revision: benchmark-v1\nrules:\n"
-        for number in range(19):
+        if kind == "http-hypothesis":
+            text = "format: traffic-policy/v2\nsource_revision: benchmark-v1\nrules: []\n"
+        for number in range(19 if kind == "sql" else 0):
             text += (f"- id: global-write-time-{number}\n"
                      f"  match:\n    resource: {{protocol: mysql, endpoint: '{host}:{port}', database: benchmark, username: root}}\n"
                      f"    operation: COM_QUERY\n    sql: UPDATE entries_{number:02d} SET stamp=? WHERE id=7\n"
@@ -171,6 +195,46 @@ def directory_bytes(path):
     return sum(p.stat().st_size for p in path.rglob("*") if p.is_file()) if path.exists() else 0
 
 
+def percentile(values, percentile):
+    if not values:
+        return None
+    values = sorted(values)
+    position = (len(values) - 1) * percentile / 100
+    lower = int(position)
+    return values[lower] + (values[min(lower + 1, len(values) - 1)] - values[lower]) * (position - lower)
+
+
+def shared_reference_bytes(report, report_path):
+    """Logical bytes in the report's referenced shared artifact closure."""
+    directories = set()
+
+    def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+        elif isinstance(value, dict):
+            anchor, key = value.get("anchor"), value.get("key")
+            if isinstance(anchor, dict) and isinstance(key, str) and len(key) == 64 and isinstance(value.get("sha256"), str):
+                if anchor.get("kind") == "project":
+                    parent = Path(anchor["root"]) / "local/artifacts/shared-global-inventories"
+                elif anchor.get("kind") == "report_directory":
+                    parent = report_path.parent / ".replay/shared-global-inventories"
+                else:
+                    raise RuntimeError("Unknown shared evidence anchor in benchmark report")
+                directory = (parent / key).resolve()
+                if directory not in directories:
+                    if not directory.is_dir():
+                        raise RuntimeError("Benchmark report references missing shared evidence")
+                    directories.add(directory)
+                    for manifest in directory.rglob("*.json"):
+                        visit(json.loads(manifest.read_text()))
+            for item in value.values():
+                visit(item)
+
+    visit(report)
+    return sum(directory_bytes(directory) for directory in directories)
+
+
 def semantic_report(report):
     # Compare protocol decisions, original selected identities and exact SQL;
     # runtime wall clocks, session UUIDs and witness storage layout differ.
@@ -185,8 +249,19 @@ def semantic_report(report):
              "unused_mysql": len(report["unused_case_exchanges"]),
              "redis_unused": report["redis"].get("unused_global_count"),
              "pubsub": report["redis"].get("pubsub"),
+             "http_matched": report.get("matched_http_exchange_count"),
+             "http_decisions": queries("matched_http_exchanges", ("case_id", "source", "index", "method", "uri", "status")),
+             "http_unmatched": len(report.get("unmatched_http_requests", [])),
+             "hypotheses_used": bool(report.get("dependency_pre_matches")),
              "rules": report.get("replay_policy")}
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    if isinstance(value["rules"], dict):
+        value["rules"] = {k:v for k,v in value["rules"].items() if k not in ("fingerprint","path")}
+    def normalize(item):
+        if isinstance(item, dict):
+            return {k:("run_owned" if k == "source" and v in ("global","startup","process") else normalize(v)) for k,v in item.items()}
+        if isinstance(item, list): return [normalize(v) for v in item]
+        return item
+    return hashlib.sha256(json.dumps(normalize(value), sort_keys=True).encode()).hexdigest()
 
 
 def run(binary, label, index, fixture, project, args):
@@ -199,15 +274,28 @@ def run(binary, label, index, fixture, project, args):
                "--tcp-listen", f"127.33.0.1:{port}", "--fake-cidr", "127.33.0.0/16",
                "--report", str(report), "--session", str(session), "--control-socket", str(sock),
                "--case-dependency-post-response-window-ms", "0"]
+    if args.lazy_cases:
+        command.append("--lazy-case-dependencies")
     if policy:
         command += ["--policy", str(policy)]
+    if root.name == "http-hypothesis":
+        command.append("--pre-match")
     command.append(str(root))
     cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     shared_root = project / ".traffic-e2e/local/artifacts/shared-global-inventories"
     shared_before = directory_bytes(shared_root)
+    private_config = next(path for path in root.parents if path.name == ".traffic-e2e")
+    index_cache = private_config / "local/dependency-index"
+    index_before = directory_bytes(index_cache)
     started = time.perf_counter()
+    request_latencies = []
+    mismatch_latencies = []
+    rss_path = output / "peak-rss-kib.txt"
+    if not Path("/usr/bin/time").is_file():
+        raise RuntimeError("The benchmark requires /usr/bin/time for per-process peak RSS")
     with (output / "process.log").open("wb") as log:
-        process = subprocess.Popen(command, stdout=log, stderr=log)
+        process = subprocess.Popen(["/usr/bin/time", "-f", "%M", "-o", str(rss_path), *command],
+                                   stdout=log, stderr=log, start_new_session=True)
         try:
             deadline = started + 300
             while not sock.exists() or not session.exists():
@@ -222,16 +310,29 @@ def run(binary, label, index, fixture, project, args):
             for case_id, calls in zip(case_ids, queries):
                 case_started = time.perf_counter()
                 control(sock, "begin", case_id)
-                if policy:
-                    control(sock, "request_begin", case_id)
+                control(sock, "request_begin", case_id)
+                if root.name == "sql":
                     with mysql_login(port) as client:
                         for sql in calls:
+                            request_started = time.perf_counter()
                             send_packet(client, b"\x03" + sql.encode())
                             if read_packet(client)[0] != 0:
                                 raise RuntimeError("Synthetic SQL unexpectedly failed to match")
+                            request_latencies.append((time.perf_counter() - request_started) * 1000)
+                        request_started = time.perf_counter()
                         send_packet(client, b"\x03SELECT unmatched_value FROM missing_table")
                         if read_packet(client)[0] != 0xFF:
                             raise RuntimeError("Unmatched SQL must remain a genuine mismatch")
+                        mismatch_latencies.append((time.perf_counter() - request_started) * 1000)
+                elif root.name == "http-hypothesis":
+                    with closing(http.client.HTTPConnection("127.33.0.1", port, timeout=300)) as client:
+                        for path, body in calls:
+                            request_started = time.perf_counter()
+                            client.request("POST", path, body, {"Host": f"http.benchmark.invalid:{port}", "Content-Type": "application/json"})
+                            response = client.getresponse()
+                            if response.status != 200 or response.read() != b"{}":
+                                raise RuntimeError("Synthetic HTTP hypothesis unexpectedly failed")
+                            request_latencies.append((time.perf_counter() - request_started) * 1000)
                 control(sock, "end", case_id)
                 durations.append((time.perf_counter() - case_started) * 1000)
             cases_done = time.perf_counter()
@@ -241,28 +342,41 @@ def run(binary, label, index, fixture, project, args):
                 raise RuntimeError(f"Replay exited with {process.returncode}")
         finally:
             if process.poll() is None:
-                process.terminate()
+                os.killpg(process.pid, signal.SIGTERM)
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
             sock.unlink(missing_ok=True)
     finished = time.perf_counter()
     cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
     value = json.loads(report.read_text())
+    shared_referenced = shared_reference_bytes(value, report)
     witness = value.get("policy_witnesses") or {}
     if policy and (witness.get("complete") is not True or witness.get("omitted") != 0):
         raise RuntimeError("SQL benchmark must retain complete policy evidence without omissions")
-    if policy and (value["matched_query_count"] != sum(map(len, queries)) or
+    if root.name == "sql" and (value["matched_query_count"] != sum(map(len, queries)) or
                    len(value["unmatched_queries"]) != len(case_ids)):
         raise RuntimeError("SQL benchmark changed matched or genuine mismatch counts")
+    if root.name == "http-hypothesis" and (value["matched_http_exchange_count"] != sum(map(len, queries))
+            or value["unmatched_http_requests"] or not value.get("dependency_pre_matches")):
+        raise RuntimeError("HTTP hypothesis benchmark lost real matches or Source-proof debt")
     result = {"workload": root.name, "binary": label, "repeat": index,
               "startup_ms": (ready - started) * 1000, "cases_ms": durations,
               "finalize_ms": (finished - cases_done) * 1000, "wall_ms": (finished - started) * 1000,
               "cpu_ms": (cpu_after.ru_utime + cpu_after.ru_stime - cpu_before.ru_utime - cpu_before.ru_stime) * 1000,
+              "peak_rss_kib": int(rss_path.read_text().strip()),
+              "request_latency_ms": {f"p{p}": percentile(request_latencies, p) for p in (50, 95, 99)},
+              "mismatch_latency_ms": {f"p{p}": percentile(mismatch_latencies, p) for p in (50, 95, 99)},
               "report_bytes": report.stat().st_size, "artifact_bytes": directory_bytes(output),
               "shared_new_bytes": directory_bytes(shared_root) - shared_before,
+              "index_cache_new_bytes": directory_bytes(index_cache) - index_before,
+              "shared_referenced_bytes": shared_referenced,
+              "total_evidence_bytes": directory_bytes(output) + shared_referenced,
+              "source_fixture_bytes": directory_bytes(root),
+              "hypothesis_attempts": len(value.get("dependency_hypothesis_attempts", [])),
+              "used_hypotheses": len(value.get("dependency_pre_matches", [])),
               "semantic_sha256": semantic_report(value), "witness_complete": witness.get("complete"),
               "witness_omitted": witness.get("omitted"), "matched_queries": value.get("matched_query_count"),
               "unmatched_queries": len(value.get("unmatched_queries", []))}
@@ -274,7 +388,7 @@ def run(binary, label, index, fixture, project, args):
 def input_hashes(project):
     return {str(p.relative_to(project)): checksum(p)
             for p in project.rglob("*") if p.is_file() and
-            p.name in ("dependencies.jsonl", "global-dependencies.jsonl", "request.json", "expected-response.json", "policy.yaml", "recording-network.json", "traffic-e2e-enc.sec")}
+            p.name in ("dependencies.jsonl", "global-dependencies.jsonl", "request.json", "expected-response.json", "policy.yaml", "recording-network.json", "traffic-e2e-enc.sec", "dependency-manifest.json", "dependency-scope.json", "startup-scope.json", "process-scope.json", "unattributed-scope.json", "dependency-lifecycle.jsonl", "synthetic-benchmark.json")}
 
 
 def main():
@@ -284,12 +398,14 @@ def main():
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--notifications", type=int, default=65537)
     parser.add_argument("--global-exchanges", type=int, default=131073)
-    parser.add_argument("--workloads", choices=("sql", "pubsub", "global"), nargs="+",
+    parser.add_argument("--workloads", choices=("sql", "pubsub", "global", "http-hypothesis"), nargs="+",
                         default=["sql", "pubsub"])
     parser.add_argument("--queries", type=int, default=54)
     parser.add_argument("--cases", type=int, default=3)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--keep-artifacts", action="store_true")
+    parser.add_argument("--lazy-cases", action=argparse.BooleanOptionalAction, default=True,
+                        help="Use the managed default lazy Case preparation in both binaries")
     args = parser.parse_args()
     if min(args.cases, args.queries, args.repeats) < 1 or min(args.notifications, args.global_exchanges) < 0:
         parser.error("cases, queries and repeats must be positive; inventory sizes must be nonnegative")
@@ -298,19 +414,22 @@ def main():
     result_path = project / "benchmark-results.json"
     if result_path.exists():
         saved = json.loads(result_path.read_text())
-        if saved.get("semantic_version") != 2:
+        if saved.get("semantic_version") != 6:
             raise RuntimeError("Benchmark comparison schema changed; remeasure both binaries")
-        for key in ("cases", "queries", "notifications", "global_exchanges", "workloads"):
+        for key in ("cases", "queries", "notifications", "global_exchanges", "workloads", "lazy_cases"):
             if key in saved["settings"] and saved["settings"][key] != getattr(args, key):
                 raise RuntimeError(f"Benchmark setting {key} changed; use a new work directory")
         fixtures = [(Path(x[0]), x[1], x[2], x[3], Path(x[4]) if x[4] else None) for x in saved["fixtures"]]
+        paired_fixtures = [(Path(x[0]), x[1], x[2], x[3], Path(x[4]) if x[4] else None) for x in saved["paired_fixtures"]]
         if input_hashes(project) != saved["input_hashes"]:
             raise RuntimeError("Benchmark inputs changed")
     else:
         fixtures = [make_fixture(project, kind, args) for kind in args.workloads]
-        saved = {"semantic_version": 2,
+        paired_fixtures = [central_fixture(fixture, project) for fixture in fixtures]
+        saved = {"semantic_version": 6,
                  "settings": vars(args) | {"baseline": str(args.baseline), "candidate": str(args.candidate), "work_dir": str(project)},
                  "fixtures": [[str(a), b, c, d, str(e) if e else None] for a, b, c, d, e in fixtures],
+                 "paired_fixtures": [[str(a),b,c,d,str(e) if e else None] for a,b,c,d,e in paired_fixtures],
                  "input_hashes": input_hashes(project), "samples": []}
         write_json(result_path, saved)
     for label, binary in [("baseline", args.baseline), ("candidate", args.candidate)]:
@@ -322,12 +441,13 @@ def main():
             raise RuntimeError(f"The {label} binary changed; use a new work directory")
         saved["binary_sha256"][label] = binary_sha
         saved.setdefault("versions", {})[label] = subprocess.check_output([str(binary.resolve()), "--version"], text=True).strip()
-        for fixture in fixtures:
+        for fixture in (fixtures if label == "baseline" else paired_fixtures):
             for index in range(args.repeats + 1):
                 if any(x["binary"] == label and x["workload"] == fixture[0].name and x["repeat"] == index for x in saved["samples"]):
                     continue
                 sample = run(binary.resolve(), label, index, fixture, project, args)
                 sample["warmup"] = index == 0
+                sample["cache_state"] = "first_persistent_cache_build" if index == 0 else "persistent_cache_reuse"
                 saved["samples"].append(sample)
                 write_json(result_path, saved)
                 print(json.dumps(sample), flush=True)
@@ -341,10 +461,16 @@ def main():
             raise RuntimeError(f"Replay comparison semantics changed for {fixture[0].name}")
         for label in ("baseline", "candidate"):
             items = [x for x in rows if x["binary"] == label]
+            first = [x for x in all_rows if x["binary"] == label and x["warmup"]]
+            if first:
+                print(json.dumps({"first_cache_build":fixture[0].name,"binary":label,
+                                  **{k:first[0][k] for k in ("wall_ms", "cpu_ms", "startup_ms", "finalize_ms", "peak_rss_kib", "total_evidence_bytes", "index_cache_new_bytes")}}))
             if items:
                 print(json.dumps({"summary": fixture[0].name, "binary": label,
                                   **{k: statistics.median(x[k] for x in items) for k in
-                                     ("wall_ms", "cpu_ms", "startup_ms", "finalize_ms", "artifact_bytes", "report_bytes")}}))
+                                     ("wall_ms", "cpu_ms", "startup_ms", "finalize_ms", "peak_rss_kib", "artifact_bytes", "report_bytes", "total_evidence_bytes")},
+                                  "request_latency_ms": {f"p{p}": statistics.median(x["request_latency_ms"][f"p{p}"] for x in items)
+                                      for p in (50, 95, 99)} if items[0]["request_latency_ms"]["p50"] is not None else None}))
 
 
 if __name__ == "__main__":

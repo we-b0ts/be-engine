@@ -45,7 +45,7 @@ pub(super) fn install(
         .case_source
         .as_ref()
         .unwrap()
-        .join("apis/api/case-1");
+        .join("apis/api/00000000-0000-4000-8000-000000000001");
     fs::write(case.join("dependencies.jsonl"), format!("{event}\n")).unwrap();
     let key = fixture
         .root()
@@ -114,7 +114,7 @@ pub(super) fn install(
             TargetRole::DeliveredInput
         },
         source: SourceIdentity {
-            case_id: "case-1".into(),
+            case_id: "00000000-0000-4000-8000-000000000001".into(),
             exchange_id: if resource.protocol == Protocol::Http {
                 event["id"].as_str().map(str::to_owned)
             } else {
@@ -325,7 +325,7 @@ fn dependency_only_rules_cannot_replace_the_finished_primary_response_oracle() {
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1/expected-response.json");
+            .join("apis/api/00000000-0000-4000-8000-000000000001/expected-response.json");
         let mut source: serde_json::Value =
             serde_json::from_slice(&fs::read(&oracle).unwrap()).unwrap();
         if binary_body {

@@ -108,7 +108,7 @@ async fn repeated_broadcasts_claim_their_own_source_interval_once_with_live_payl
                 .is_err()
         );
         let state = runtime.state.lock().await;
-        assert!(state.redis.pubsub.unused(ReplaySource::Global).is_empty());
+        assert!(state.redis.pubsub.unused(ReplaySource::Startup).is_empty());
         assert!(state.redis.snapshot().unused_case.is_empty());
         task.abort();
         sub_task.abort();
@@ -166,7 +166,7 @@ async fn repeated_broadcasts_reject_missing_clocks_overlaps_and_duplicate_interv
                 "{scenario}"
             );
             assert_eq!(
-                state.redis.pubsub.unused(ReplaySource::Global).len(),
+                state.redis.pubsub.unused(ReplaySource::Startup).len(),
                 2,
                 "{scenario}"
             );

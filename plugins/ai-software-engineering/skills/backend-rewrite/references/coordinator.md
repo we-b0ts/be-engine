@@ -246,7 +246,8 @@ adopt completed external traffic -> identify patterns for new uncovered APIs
     -> reviewed partial handoff (one/many APIs, possibly across assigned groups)
     -> integrate exact deliveries -> group acceptance Replay
     -> repeat failures or continue other groups
-    -> final quality-check review -> final full revalidation -> final delivery
+    -> final quality-check review -> one complete actual batch session
+    -> project that session's method results -> final delivery
 
 source-proven capture gap -> apply capture rule -> API waits
     -> drain other runnable work -> wait for one full-scope external batch
@@ -409,8 +410,9 @@ wait. The coordinator consumes actions and reports task runtime events; it does 
 rebuild that queue from API counters or historical confirmations.
 
 An integrated API handoff schedules its own Replay. After ordinary work drains,
-the engine requires final pre-revalidation review, then verifies every included
-API against the admitted integrated content fingerprint.
+the engine requires final pre-revalidation review, then verifies the complete
+sealed Source run once against the admitted candidate. The same actual session
+supplies final method results; do not add per-API final runs or another sweep.
 
 ### `execution_failed`
 
@@ -453,14 +455,17 @@ and the returned `review check --pre-revalidation --quality-check TOOL
 final committed candidate before reporting success. The engine command performs
 Source/isolation checks and records the attestation without executing repository
 commands. The integrator fixes routine findings and returns the exact candidate
-and final-stage receipt. The workflow stages and order remain unchanged. Follow [final review](coordinator-review.md#final-review-before-full-revalidation).
+and final-stage receipt. Follow [final review](coordinator-review.md#final-review-before-full-revalidation).
 
 Publish the exact candidate and submit `review accept`. The engine requires
 current code, relevant inputs, check policy, inventory and immutable recording
 bindings. Missing, failing, ordinary-integration and stale reports cannot permit
 full revalidation. Relevant changes require fresh final proof; a progress-only
 publication can retain an already admitted matching receipt. Return to global
-status after admission; the engine starts the revalidation round.
+status after admission; follow the returned `BatchReplay` action. One complete
+actual Source-run session must also cover every required workflow method API.
+Scoped capture does not erase that method requirement. Missing Source inputs
+remain pending, and historical API receipts cannot substitute for the session.
 
 ### `target_quality_required`
 

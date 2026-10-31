@@ -523,7 +523,7 @@ mod tests {
         json_time.as_object_mut().unwrap().remove("kind");
         let template = "UPDATE events SET created=?, updated=?, payload=? WHERE id=?";
         let selector = json!({"api":"POST /events","resource":{"protocol":"mysql","endpoint":"db.test:3306","database":"app"},"operation":"COM_QUERY","sql":template});
-        let document = json!({"format":"traffic-policy/v2","rules":[
+        let document = json!({"format":"traffic-policy/v3","rules":[
             {"id":"times","match":selector,"effect":{"kind":"mysql_values","values":{
                 "0":{"contract":time("sql_datetime",None),"proof":proof},
                 "1":{"contract":time("sql_datetime",None),"proof":proof},

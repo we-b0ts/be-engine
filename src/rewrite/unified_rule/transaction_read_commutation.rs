@@ -35,7 +35,7 @@ fn read_commutation_public_plan_apply_validates_complete_source_and_preserves_st
                 write(
                     &root.join(".traffic-e2e/policy.yaml"),
                     json!({
-                        "format":"traffic-policy/v2","redis":{"keys":{
+                        "format":"traffic-policy/v3","redis":{"keys":{
                             "cancel:*":{"kind":"identity","formats":["string"],"read_back":true}
                         }}
                     }),
@@ -43,7 +43,7 @@ fn read_commutation_public_plan_apply_validates_complete_source_and_preserves_st
                 events.push(event(4, "DEL", &["content:1", "cancel:1"], b":1\r\n"));
             }
             fs::write(
-                source.join("apis/api/case-1/dependencies.jsonl"),
+                source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
                 events.iter().map(|e| format!("{e}\n")).collect::<String>(),
             )
             .unwrap();
@@ -56,7 +56,7 @@ fn read_commutation_public_plan_apply_validates_complete_source_and_preserves_st
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1/dependencies.jsonl");
+            .join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl");
         let original = fs::read(&dependencies).unwrap();
         let prior = crate::policy::compile_policy(
             &crate::policy::parse_policy(&fs::read_to_string(fixture.policy()).unwrap()).unwrap(),

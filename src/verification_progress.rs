@@ -9,8 +9,8 @@ use crate::config::edit::{create_atomic, write_atomic};
 
 mod epoch;
 mod ledger;
+mod logical_run;
 mod public;
-mod revision;
 
 pub(crate) use epoch::begin as begin_epoch;
 

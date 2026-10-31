@@ -3,7 +3,7 @@ use super::*;
 #[path = "contextual_tests.rs"]
 mod contextual_tests;
 
-const IDENTITY_POLICY: &str = r#"format: traffic-policy/v2
+const IDENTITY_POLICY: &str = r#"format: traffic-policy/v3
 resources:
   cache: {protocol: redis, endpoint: 'cache.test:6379', database: 0}
 json:

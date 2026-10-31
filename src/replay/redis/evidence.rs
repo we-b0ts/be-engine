@@ -6,18 +6,16 @@ impl RedisReplayState {
     pub(in crate::replay) fn register_global_exchange(
         &mut self,
         record: RecordedExchange,
+        source_kind: ReplaySource,
         reference: RecordRef,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
         rules: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
-        if record.global_dependency_reason.as_deref() == Some("pubsub_subscription_mirror") {
-            return self.pubsub.retain_subscription_mirror(record);
-        }
         let identity = (record.connection_id, record.sequence);
-        self.register_exchange(record, ReplaySource::Global, None, targets, rules)?;
+        self.register_exchange(record, source_kind, None, targets, rules)?;
         if let Some(exchange) = self.exchanges.last_mut()
             && (exchange.record.connection_id, exchange.record.sequence) == identity
-            && exchange.source == ReplaySource::Global
+            && exchange.source.is_run_owned()
         {
             exchange.response_evidence = Some(reference);
             exchange.response = Vec::new();
@@ -41,7 +39,7 @@ impl RedisReplayState {
         &self,
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
-        for item in unused_iter(&self.exchanges, ReplaySource::Global) {
+        for item in unused_iter(&self.exchanges, ReplaySource::Startup) {
             visitor(serde_json::to_value(item)?)?;
         }
         self.pubsub.visit_global_inline_unused(visitor)?;
@@ -59,7 +57,7 @@ impl RedisReplayState {
                 + self.global_report_extra_count()
                 + self.pubsub.indexed_global_remaining();
         }
-        unused_iter(&self.exchanges, ReplaySource::Global).count()
+        unused_iter(&self.exchanges, ReplaySource::Startup).count()
             + self.pubsub.global_unused_count()
     }
 }

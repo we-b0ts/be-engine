@@ -44,9 +44,9 @@ pub(super) fn verify(
     let mut total = 0usize;
     for (id, dir) in bundle.cases.clone() {
         let request = bundle.request(&dir.join("request.json"))?;
-        let path = dir.join("dependencies.jsonl");
+        let path = bundle.dependency_path(&dir)?;
         bundle.freeze(&path)?;
-        let bytes = fs::read(&path)?;
+        let bytes = crate::dependency_index::scoped::read_bytes(&path)?;
         total = total
             .checked_add(bytes.len())
             .context("Source trace inventory size overflow")?;

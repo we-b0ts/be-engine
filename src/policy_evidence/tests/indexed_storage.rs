@@ -113,6 +113,7 @@ fn large_source_response_uses_original_record_and_detects_mutation() {
                     length: bytes.len() as u64,
                     sha256: digest(&bytes).trim_start_matches("sha256:").into(),
                 },
+                view: None,
             },
         )
         .unwrap();

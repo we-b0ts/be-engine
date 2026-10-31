@@ -133,6 +133,7 @@ pub(super) fn runtime(rule: ReplayDependencyRule) -> RequestContracts {
             recorded: Some(DateTime::from_timestamp(1000, 0).unwrap()),
             actual: Some(DateTime::from_timestamp(2000, 0).unwrap()),
             dir: PathBuf::new(),
+            dependencies_path: PathBuf::new(),
         },
     );
     RequestContracts {

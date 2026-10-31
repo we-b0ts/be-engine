@@ -69,7 +69,7 @@ pub(super) fn verify(
                 || format!("global format primary validation: case={case}, surface=api.response"),
             )?;
         }
-        let trace = directory.join("dependencies.jsonl");
+        let trace = bundle.dependency_path(&directory)?;
         bundle.freeze(&trace)?;
         let mut metadata = crate::replay::MysqlInferenceMetadata::default();
         visit(&trace, |event| metadata.observe_event(event))?;
@@ -238,65 +238,64 @@ pub(super) fn global_trace(
         .as_ref()
         .context("global formats require a Source recording")?;
     let (recording, _) = crate::dependency_index::recording_files(source)?;
-    let path = recording.join("global-dependencies.jsonl");
-    if !path.is_file() {
-        return Ok(());
+    for kind in ["startup", "process", "unattributed"] {
+        let path = recording.join(format!("indexes/{kind}-scope.json"));
+        if !crate::dependency_index::scoped::exists(&path) {
+            continue;
+        }
+        bundle.freeze(&path)?;
+        let mut metadata = crate::replay::MysqlInferenceMetadata::default();
+        visit(&path, |event| metadata.observe_event(event))?;
+        visit(&path, |event| {
+            if dependency::protocol(event).is_none() {
+                return Ok(());
+            }
+            for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
+                if !has_surface(event, surface) {
+                    continue;
+                }
+                let raw = dependency::source_witness(surface, event, &recording)?;
+                let comparison = compare_prepared(
+                    event,
+                    surface,
+                    &raw,
+                    &raw,
+                    &mut CompareContext {
+                        policy,
+                        clocks: source_clocks(None, event),
+                        metadata: &metadata,
+                        copies: None,
+                        request: None,
+                        native_obligations: &mut result.stateful_target_obligations,
+                    },
+                )
+                .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
+                if record_source(&comparison, selected, result)
+                    .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?
+                {
+                    // Background Source input is evidence of format only. It has no
+                    // independent Target publication in the current API attempt.
+                    result.missing_target_witnesses += 1;
+                }
+            }
+            Ok(())
+        })?;
     }
-    bundle.freeze(&path)?;
-    let mut metadata = crate::replay::MysqlInferenceMetadata::default();
-    visit(&path, |event| metadata.observe_event(event))?;
-    visit(&path, |event| {
-        if dependency::protocol(event).is_none() {
-            return Ok(());
-        }
-        for surface in [Surface::DependencyRequest, Surface::DependencyResponse] {
-            if !has_surface(event, surface) {
-                continue;
-            }
-            let raw = dependency::source_witness(surface, event, &recording)?;
-            let comparison = compare_prepared(
-                event,
-                surface,
-                &raw,
-                &raw,
-                &mut CompareContext {
-                    policy,
-                    clocks: source_clocks(None, event),
-                    metadata: &metadata,
-                    copies: None,
-                    request: None,
-                    native_obligations: &mut result.stateful_target_obligations,
-                },
-            )
-            .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?;
-            if record_source(&comparison, selected, result)
-                .with_context(|| format!("phase=source_self_validation, surface={surface:?}"))?
-            {
-                // Background Source input is evidence of format only. It has no
-                // independent Target publication in the current API attempt.
-                result.missing_target_witnesses += 1;
-            }
-        }
-        Ok(())
-    })
+    Ok(())
 }
 
 fn visit(path: &Path, mut visitor: impl FnMut(&Value) -> Result<()>) -> Result<()> {
-    ensure!(
-        fs::metadata(path)?.len() <= 1024 * 1024 * 1024,
-        "global format trace exceeds evidence bounds"
-    );
-    for (index, line) in BufReader::new(fs::File::open(path)?).lines().enumerate() {
-        let line = line?;
+    let mut reader = crate::dependency_index::RecordStream::open(path)?;
+    while let Some((location, line)) = reader.next()? {
         ensure!(
             line.len() <= crate::dependency::http_limits::MAX_RECORD_BYTES,
             "global format record exceeds evidence bounds"
         );
-        if !line.trim().is_empty() {
-            let event: Value = serde_json::from_str(&line)?;
+        if !line.iter().all(u8::is_ascii_whitespace) {
+            let event: Value = serde_json::from_slice(line)?;
             visitor(&event).with_context(|| format!(
                 "global format trace={}, record={}, event_type={}, connection_id={}, sequence={}",
-                path.display(), index + 1,
+                path.display(), location.line,
                 event["event_type"].as_str().unwrap_or("unknown"),
                 event["connection_id"].as_str().unwrap_or("unknown"),
                 event["sequence"].as_u64().or_else(|| event["query_sequence"].as_u64())

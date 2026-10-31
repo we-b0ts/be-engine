@@ -4,7 +4,7 @@ mod peer_disconnect;
 mod streaming;
 
 #[tokio::test(start_paused = true)]
-async fn replay_end_keeps_case_active_for_default_post_response_window() {
+async fn replay_end_finishes_ordinary_case_without_a_post_response_sleep() {
     let temp = tempfile::tempdir().unwrap();
     let collection_dir = temp.path().join("api-user");
     for case_id in ["case-a", "case-b"] {
@@ -62,17 +62,9 @@ async fn replay_end_keeps_case_active_for_default_post_response_window() {
         input_timing: None,
         socketio_timing: None,
     };
-    let end_state = state.clone();
-    let ending = tokio::spawn(async move { end_case(&end, end_state).await });
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_millis(9)).await;
-    tokio::task::yield_now().await;
-
-    assert!(!ending.is_finished());
-    assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
-
-    tokio::time::advance(Duration::from_millis(1)).await;
-    let ended = ending.await.unwrap();
+    let started = tokio::time::Instant::now();
+    let ended = end_case(&end, state.clone()).await;
+    assert_eq!(started.elapsed(), Duration::ZERO);
     assert_eq!(ended["ok"], true);
     assert_eq!(state.lock().await.active_case_id, None);
 }

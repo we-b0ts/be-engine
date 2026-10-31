@@ -15,7 +15,7 @@ fn protected_mysql_cell_query_reads_large_literal_json_without_exposing_neighbor
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1");
+            .join("apis/api/00000000-0000-4000-8000-000000000001");
         crate::platform::encryption_key::load_or_create(fixture.root()).unwrap();
         let time: chrono::DateTime<chrono::Utc> = "2026-10-16T00:00:00Z".parse().unwrap();
         let later = time + chrono::Duration::seconds(60);
@@ -71,7 +71,7 @@ fn protected_mysql_cell_query_reads_large_literal_json_without_exposing_neighbor
                         TargetRole::DerivedDelivery
                     },
                     source: SourceIdentity {
-                        case_id: "case-1".into(),
+                        case_id: "00000000-0000-4000-8000-000000000001".into(),
                         exchange_id: None,
                         connection_id: Some(uuid::Uuid::nil().to_string()),
                         sequence: Some(7),
@@ -166,16 +166,16 @@ fn protected_mysql_cell_query_reads_large_literal_json_without_exposing_neighbor
             "unavailable"
         );
         assert_eq!(serde_json::to_value(fixture.state()).unwrap(), before);
-        fs::write(
-            case.join("dependencies.jsonl"),
-            format!(
-                "{}\n",
-                event
-                    .to_string()
-                    .replace("source-address", "changed-source")
-            ),
-        )
-        .unwrap();
+        let central = fixture
+            .state()
+            .case_source
+            .as_ref()
+            .unwrap()
+            .join("dependencies.jsonl");
+        let original = fs::read_to_string(&central).unwrap();
+        let changed = original.replace("source-address", "changed-source");
+        assert_ne!(original, changed);
+        fs::write(&central, changed).unwrap();
         assert!(
             query_rewrite_witness_for_scope(fixture.context(), &scope, &witness.id, &pointer, 0)
                 .is_err()
@@ -192,7 +192,7 @@ fn protected_witness_query_returns_only_selected_values_and_authenticated_header
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1");
+            .join("apis/api/00000000-0000-4000-8000-000000000001");
         let mut source = vec![
             b"device:online:1".to_vec(),
             br#"{"client_ip":"source-address","token":"private-source-token","nullable":null}"#
@@ -250,7 +250,7 @@ fn protected_witness_query_returns_only_selected_values_and_authenticated_header
                     source_role: SourceRole::DependencyRequest,
                     target_role: TargetRole::IndependentTargetObservation,
                     source: SourceIdentity {
-                        case_id: "case-1".into(),
+                        case_id: "00000000-0000-4000-8000-000000000001".into(),
                         exchange_id: None,
                         connection_id: Some(connection.to_string()),
                         sequence: Some(7),
@@ -385,7 +385,7 @@ fn protected_redis_argument_reads_orphan_target_requests_without_a_source_pair_o
             .case_source
             .as_ref()
             .unwrap()
-            .join("apis/api/case-1");
+            .join("apis/api/00000000-0000-4000-8000-000000000001");
         crate::platform::encryption_key::load_or_create(fixture.root()).unwrap();
         let args = if command == "GET" {
             vec![b"device:online:77:route".to_vec()]
@@ -412,7 +412,8 @@ fn protected_redis_argument_reads_orphan_target_requests_without_a_source_pair_o
                 .record_target(
                     id,
                     crate::policy_evidence::TargetMetadata {
-                        case_id: "case-1".into(),
+                        run_owner: None,
+                        case_id: "00000000-0000-4000-8000-000000000001".into(),
                         surface: Surface::DependencyRequest,
                         role: TargetRole::IndependentTargetObservation,
                         resource: Some(resource.clone()),
@@ -443,7 +444,7 @@ fn protected_redis_argument_reads_orphan_target_requests_without_a_source_pair_o
             command,
             &args,
         );
-        replay["redis"] = json!({"unmatched":[{"case_id":"case-1","command":command,"target_event_index":0,
+        replay["redis"] = json!({"unmatched":[{"case_id":"00000000-0000-4000-8000-000000000001","command":command,"target_event_index":0,
             "request_fingerprint":fingerprint,"reason":"unmatched"}]});
         replay["cases"][0]["target_request_started_at"] = json!(time);
         replay["policy_witnesses"] =
@@ -456,7 +457,7 @@ fn protected_redis_argument_reads_orphan_target_requests_without_a_source_pair_o
             query_rewrite_redis_argument_for_scope(
                 fixture.context(),
                 &scope,
-                "case-1",
+                "00000000-0000-4000-8000-000000000001",
                 0,
                 argument,
                 pointer,
@@ -492,7 +493,7 @@ fn protected_redis_argument_reads_orphan_target_requests_without_a_source_pair_o
             let null = query_rewrite_redis_argument_for_scope(
                 fixture.context(),
                 &scope,
-                "case-1",
+                "00000000-0000-4000-8000-000000000001",
                 0,
                 1,
                 Some("/nullable"),
@@ -503,7 +504,7 @@ fn protected_redis_argument_reads_orphan_target_requests_without_a_source_pair_o
             let missing = query_rewrite_redis_argument_for_scope(
                 fixture.context(),
                 &scope,
-                "case-1",
+                "00000000-0000-4000-8000-000000000001",
                 0,
                 1,
                 Some("/absent"),
@@ -523,8 +524,15 @@ fn protected_redis_argument_reads_orphan_target_requests_without_a_source_pair_o
             .is_err()
         );
         assert!(
-            query_rewrite_redis_argument_for_scope(fixture.context(), &scope, "case-1", 1, 0, None)
-                .is_err()
+            query_rewrite_redis_argument_for_scope(
+                fixture.context(),
+                &scope,
+                "00000000-0000-4000-8000-000000000001",
+                1,
+                0,
+                None
+            )
+            .is_err()
         );
         assert_eq!(serde_json::to_value(fixture.state()).unwrap(), before);
         let original_report = fs::read(&fixture.paths.replay).unwrap();

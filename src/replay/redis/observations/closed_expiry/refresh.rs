@@ -147,6 +147,7 @@ impl RedisReplayState {
             p.closed_expiry.iter().filter(|l| l.used_refresh && !l.settled).map(|l| {
                 let reason = "initial-TTL refresh requires every finite read and deletion to finish delivery before the original TTL, with no failed or pending observation";
                 CommandRequestReport {
+                    target_observation_id: None,
                     case_id: Some(p.case.clone()), target: p.target.clone(),
                     command: "EXPIRE".into(), target_event_index: l.deletion_event,
                     request_fingerprint: None, reason: reason.into(),

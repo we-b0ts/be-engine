@@ -197,13 +197,13 @@ mod tests {
 
     #[test]
     fn all_replaced_sections_report_only_changed_declaration_positions() {
-        let before = policy(json!({"format":"traffic-policy/v2",
+        let before = policy(json!({"format":"traffic-policy/v3",
             "json":{"fields":{"/same":{"kind":"identity","formats":["uuid"]},"/old":{"kind":"unordered"},"/changed":{"kind":"time","formats":["unix_seconds"]}}},
             "mysql":{"tables":{"old":{"pattern":"old","fields":{"id":{"kind":"identity","formats":["decimal"]}}}}},
             "redis":{"keys":{"changed":{"kind":"identity","formats":["uuid"]},"old":{"kind":"identity","formats":["uuid"]}}},
             "http":{"headers":{"x-old":{"kind":"identity","formats":["uuid"]},"x-changed":{"kind":"time","formats":["unix_seconds"]}}}
         }));
-        let after = policy(json!({"format":"traffic-policy/v2",
+        let after = policy(json!({"format":"traffic-policy/v3",
             "json":{"fields":{"/same":{"kind":"identity","formats":["uuid"]},"/new":{"kind":"unordered"},"/changed":{"kind":"time","formats":["unix_milliseconds"]}}},
             "mysql":{"tables":{"new":{"pattern":"new","fields":{"id":{"kind":"identity","formats":["decimal"]}}}}},
             "redis":{"keys":{"changed":{"kind":"identity","formats":["decimal"]},"new":{"kind":"identity","formats":["uuid"]}}},
