@@ -2,7 +2,7 @@
 use super::*;
 use crate::{dependency_index::RecordRef, replay::ReplayCase};
 use chrono::{DateTime, Utc};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 mod driver;
 mod preparation;
@@ -13,6 +13,7 @@ pub(in crate::replay) use driver::start;
 pub(in crate::replay) struct NativeClock {
     namespaces: BTreeSet<String>,
     entries: Vec<Entry>,
+    pending: BTreeMap<String, VecDeque<usize>>,
     live: BTreeMap<String, Live>,
     inputs: BTreeMap<String, BTreeSet<u64>>,
 }
@@ -42,7 +43,6 @@ struct Entry {
     database: i64,
     username: Option<String>,
     lifetime: chrono::TimeDelta,
-    reserved: bool,
     inputs_before: Vec<u64>,
 }
 
@@ -89,9 +89,18 @@ impl NativeClock {
             .collect()
     }
     pub(in crate::replay) fn needs_observer(&self, case: &str) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.case == case && !entry.reserved)
+        self.pending
+            .get(case)
+            .is_some_and(|entries| !entries.is_empty())
+    }
+    fn retire(&mut self, index: usize) {
+        let entry = &self.entries[index];
+        let pending = self
+            .pending
+            .get_mut(&entry.case)
+            .expect("prepared Case cursor");
+        debug_assert_eq!(pending.front(), Some(&index));
+        pending.pop_front();
     }
     pub(in crate::replay) fn epoch(&self, case: &str) -> Option<DateTime<Utc>> {
         self.live.get(case).map(|live| live.epoch)

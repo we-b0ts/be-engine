@@ -54,7 +54,10 @@ impl Live {
     ) {
         if self.case == case
             && self.epoch == epoch
-            && self.evidence.iter().any(|e| e.reference == reference)
+            && self
+                .evidence
+                .binary_search_by_key(&reference, |entry| entry.reference)
+                .is_ok()
         {
             self.delivered.insert(reference);
         }
@@ -119,10 +122,14 @@ pub(super) async fn accept(
                 .epoch(case)
                 .or_else(|| state.redis.request_contracts.request_times(case).target)
                 .unwrap_or_else(Utc::now);
-            let (evidence, covered) = plan
+            let (mut evidence, covered) = plan
                 .source_start
                 .map(|start| state.redis.timing_evidence(case, start))
                 .unwrap_or_else(|| (Vec::new(), false));
+            // Membership is checked for every actual delivery. A large native
+            // stream must not rescan its entire immutable timing inventory per
+            // notification; cutoff checks below are independent of this order.
+            evidence.sort_unstable_by_key(|entry| entry.reference);
             let plan = source::Plan {
                 covered: plan.covered && covered,
                 ..plan

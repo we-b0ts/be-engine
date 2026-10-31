@@ -9,6 +9,7 @@ struct Job {
     epoch: DateTime<Utc>,
     client: Uuid,
     sender: mpsc::Sender<Delivery>,
+    permit: mpsc::OwnedPermit<Delivery>,
     source: Entry,
 }
 
@@ -20,8 +21,13 @@ pub(in crate::replay) fn start(state: Arc<Mutex<ReplayState>>) {
 async fn run(weak: Weak<Mutex<ReplayState>>) {
     let mut interval = tokio::time::interval(Duration::from_millis(5));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut blocked = true;
     loop {
-        interval.tick().await;
+        // Poll only while the next original input is not yet admissible. Ready
+        // inputs drain at actual I/O speed rather than a 200-message/s ceiling.
+        if blocked {
+            interval.tick().await;
+        }
         let Some(state) = weak.upgrade() else { return };
         let job = {
             let replay = state.lock().await;
@@ -33,7 +39,11 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             }
             ready(&replay)
         };
-        let Some(job) = job else { continue };
+        let Some(job) = job else {
+            blocked = true;
+            continue;
+        };
+        blocked = false;
         let source = job.source.clone();
         let loaded = tokio::task::spawn_blocking(move || source.bytes()).await;
         let mut replay = state.lock().await;
@@ -50,9 +60,11 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
                 .get(&job.case)
                 .is_none_or(|live| !live.observer || live.closed)
             || reached(&replay, &job.case, job.epoch, job.source.lifetime)
+            || job.sender.is_closed()
             || !replay.redis.pubsub.is_subscribed(job.client, slot)
             || !replay.redis.pubsub.push_available(slot)
         {
+            blocked = true;
             continue;
         }
         let bytes = match loaded {
@@ -89,25 +101,14 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             .redis
             .pubsub
             .reserve_case_push(slot, &job.case, job.client);
-        replay.redis.pubsub.native_clock.entries[job.entry].reserved = true;
-        if job
-            .sender
-            .try_send(Delivery {
-                push: slot,
-                bytes,
-                matched: None,
-                case_id: Some(job.case.clone()),
-                request_epoch: Some(job.epoch),
-            })
-            .is_err()
-        {
-            fail(
-                &mut replay,
-                &job,
-                slot,
-                "native notification delivery queue unavailable",
-            );
-        }
+        replay.redis.pubsub.native_clock.retire(job.entry);
+        job.permit.send(Delivery {
+            push: slot,
+            bytes,
+            matched: None,
+            case_id: Some(job.case),
+            request_epoch: Some(job.epoch),
+        });
     }
 }
 
@@ -118,12 +119,8 @@ fn ready(replay: &ReplayState) -> Option<Job> {
         .live
         .get(case)
         .filter(|live| live.observer && !live.closed)?;
-    let (index, entry) = native
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| entry.case == case && !entry.reserved)
-        .min_by_key(|(_, entry)| (entry.offset, entry.ordinal))?;
+    let index = *native.pending.get(case)?.front()?;
+    let entry = &native.entries[index];
     if !reached(replay, case, live.epoch, entry.offset)
         || reached(replay, case, live.epoch, entry.lifetime)
         || !live.namespaces.contains(&entry.namespace)
@@ -146,12 +143,16 @@ fn ready(replay: &ReplayState) -> Option<Job> {
     if subscribers.next().is_some() {
         return None;
     }
+    // Reserve bounded queue capacity before materializing Source bytes. Full
+    // queues apply backpressure; they are not failed delivery observations.
+    let permit = sub.sender.clone().try_reserve_owned().ok()?;
     Some(Job {
         entry: index,
         case: case.into(),
         epoch: live.epoch,
         client: sub.client,
         sender: sub.sender.clone(),
+        permit,
         source: entry.clone(),
     })
 }
@@ -174,7 +175,7 @@ fn reached(
 }
 
 fn fail(replay: &mut ReplayState, job: &Job, slot: PushId, reason: &str) {
-    replay.redis.pubsub.native_clock.entries[job.entry].reserved = true;
+    replay.redis.pubsub.native_clock.retire(job.entry);
     replay
         .redis
         .fail_pubsub_input(slot, Some(&job.case), reason);

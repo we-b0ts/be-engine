@@ -136,9 +136,20 @@ impl PubSubState {
                 )
             })
             .collect();
+        // Entries already retain the native clock and physical Source order.
+        // A finite per-Case cursor avoids rescanning the whole run for every
+        // delivery in high-volume notification streams.
+        let mut pending = BTreeMap::<String, VecDeque<usize>>::new();
+        for (index, entry) in entries.iter().enumerate() {
+            pending
+                .entry(entry.case.clone())
+                .or_default()
+                .push_back(index);
+        }
         self.native_clock = NativeClock {
             namespaces,
             entries,
+            pending,
             live: BTreeMap::new(),
             inputs,
         };
@@ -219,7 +230,6 @@ fn select(
         database: record.database,
         username: record.username.clone(),
         lifetime,
-        reserved: false,
         inputs_before,
     };
     // Nonempty exclusions can name a dynamic Source socket. Without an

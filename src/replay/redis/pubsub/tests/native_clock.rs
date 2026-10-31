@@ -10,8 +10,10 @@ mod ambient;
 mod delivery;
 mod encryption;
 mod guards;
+mod heartbeats;
 mod recording;
 mod routing;
+mod scale;
 mod wire;
 
 const CASE: &str = "00000000-0000-0000-0000-000000000123";
