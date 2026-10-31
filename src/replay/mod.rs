@@ -272,7 +272,8 @@ pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
 pub(crate) use control::{
-    check_response_identities, input_timing_observer, native_event_observer, register_derived_input,
+    FinalizationScope, check_response_identities, input_timing_observer, native_event_observer,
+    register_derived_input,
 };
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {

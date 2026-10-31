@@ -529,9 +529,11 @@ fn is_replay_startup_progress(line: &str) -> bool {
 pub(super) async fn finalize_replay(
     state: &mut ActiveRunState,
     intentionally_incomplete: bool,
+    scope: crate::replay::FinalizationScope,
 ) -> Result<()> {
+    let command = scope.command();
     if intentionally_incomplete {
-        let response = control(state, "finalize", None, false, false)
+        let response = control(state, command, None, false, false)
             .await
             .context("failed to finalize intentionally incomplete replay")?;
         state.replay_finalized = response
@@ -540,11 +542,11 @@ pub(super) async fn finalize_replay(
             .unwrap_or(false);
         return Ok(());
     }
-    let response = match control(state, "finalize", None, true, true).await {
+    let response = match control(state, command, None, true, true).await {
         Ok(response) => response,
         Err(strict_error) => {
             state.push_error(format!("strict replay finalize failed: {strict_error:#}"));
-            control(state, "finalize", None, false, false)
+            control(state, command, None, false, false)
                 .await
                 .context("failed to finalize replay after recording dirty evidence")?
         }
@@ -658,6 +660,7 @@ async fn capture_target_diagnostics(layout: &RunLayout, state: &mut ActiveRunSta
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod finalization;
     use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
     use crate::e2e_run::model::ResolvedProjectConfig;
     use std::fs;
