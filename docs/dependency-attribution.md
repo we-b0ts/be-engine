@@ -139,6 +139,13 @@ initialization scope. An async rule addition does not force re-recording an
 unrelated API. A matching/delivery change needs fresh Replay of the affected scope
 against the same Source. Only concrete absent Source evidence opens capture debt.
 
+Startup-phase dirty evidence does not decide independent API acceptance. The
+aggregate retains the original startup phase and its unstarted dependency counts
+for diagnosis, including missing local-cache preparation. A real effect on the
+API still fails its response or Case dependency checks. Unstarted initialization
+for other APIs or process tasks does not become a Case failure or a consumed
+occurrence; the final actual batch still checks startup and process closure.
+
 After a genuine required origin execution, use
 `dependency-attribution verify <obligation-id>`. API verification checks the actual
 complete attempt; capture debt requires a new complete original input and current

@@ -263,6 +263,24 @@ mod tests {
     }
 
     #[test]
+    fn independent_case_acceptance_does_not_close_the_startup_batch_obligations() {
+        let mut report = completed();
+        report["startup_phase"] = serde_json::json!({
+            "status":"verified",
+            "boundary_case_id":"case-a",
+            "business_inventory":{"redis":2},
+            "unstarted_business_dependencies":{"redis":2}
+        });
+        assert!(!crate::replay::report_has_case_dirty_events(&report));
+        assert!(
+            validate_completed_receipt(&report)
+                .unwrap_err()
+                .to_string()
+                .contains("restart initialization phase did not complete")
+        );
+    }
+
+    #[test]
     fn a_success_flag_cannot_hide_real_unfinished_or_foreign_evidence() {
         for (pointer, value) in [
             ("/session_id", serde_json::json!("another-session")),

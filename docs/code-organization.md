@@ -240,6 +240,9 @@ is unclear.
   An implicit low-level session with startup business inventory reports its phase
   as unverified until a real boundary is observed. Frozen Case views retain
   their complete mandatory inventory; process selectors cannot waive Case debt.
+  Independent API aggregates retain startup-phase evidence for diagnosis without
+  making run-level startup debt a Case failure. Actual API response and dependency
+  checks remain strict; the final batch receipt still requires startup closure.
   `replay/http/ingress` owns genuine parsed-header admission before request-body
   collection. A bounded metadata ledger freezes observation identity, observed
   Case and startup phase; a RAII atomic guard retains actual unfinished body I/O

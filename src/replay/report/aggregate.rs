@@ -55,6 +55,9 @@ pub struct ReplayReportSummary {
     pub finalized_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finalized: Option<bool>,
+    /// Run-level startup facts remain diagnostic during independent API acceptance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub startup_phase: Option<Value>,
     pub complete: bool,
     pub dirty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -541,6 +544,7 @@ fn summarize_report(
         started_at: Some(started_at),
         finalized_at,
         finalized: Some(finalized),
+        startup_phase: report.get("startup_phase").cloned(),
         complete,
         dirty,
         replay_policy,
