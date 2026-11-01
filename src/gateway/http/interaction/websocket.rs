@@ -269,6 +269,7 @@ pub(super) async fn dispatch(
                 phase,
                 client_close_code,
                 error_kind = failure::kind(&error),
+                socketio_ack_id = error.downcast_ref::<crate::interaction::socketio::AckObservationError>().map(|ack| ack.ack_id),
                 confirmation = ?error.downcast_ref::<closing::ConfirmationFailure>(),
                 "recorded WebSocket transport or application-close confirmation failed"
             );
