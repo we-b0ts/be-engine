@@ -44,6 +44,9 @@ is unclear.
   implementation. `value_contract/json/pointers` indexes concrete field positions
   once per comparison; wildcard selection retains Source array-shape checks and
   original declaration order, before the comparator validates the strict remainder.
+  `value_contract/global/field_composition` expands Source selections once while
+  combining global and authored fields, preserving duplicate, overlap and
+  declaration-order behavior before that comparison.
 
 - `replay/preparation` binds an immutable Source scope and applicable contracts
   into a Case execution plan after native registration. `replay/native_index`
