@@ -41,7 +41,9 @@ is unclear.
   `policy/capability/coverage` admits supported protocol/role/carrier/codec
   combinations before execution, with explicit unsupported reasons. Stateful
   native effects retain their real native executor rather than a no-op generic
-  implementation.
+  implementation. `value_contract/json/pointers` indexes concrete field positions
+  once per comparison; wildcard selection retains Source array-shape checks and
+  original declaration order, before the comparator validates the strict remainder.
 
 - `replay/preparation` binds an immutable Source scope and applicable contracts
   into a Case execution plan after native registration. `replay/native_index`
