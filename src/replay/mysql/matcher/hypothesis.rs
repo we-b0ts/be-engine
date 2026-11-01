@@ -29,9 +29,11 @@ impl ReplayState {
             Some(command),
         );
         let mut search = crate::replay::candidate_selection::UniqueCandidate::new(256);
+        let sql_family = candidates::sql_family(sql);
         for index in candidates.iter().copied() {
             let exchange = &self.mysql.exchanges[index];
-            if !exchange.status.is_available()
+            if !self.mysql.candidates.permits_sql(index, sql_family)
+                || !exchange.status.is_available()
                 || !exchange.record.parse_warnings.is_empty()
                 || exchange.record.response.rows_truncated
                 || exchange.optional_session.is_some()

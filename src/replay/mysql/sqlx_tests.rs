@@ -11,6 +11,7 @@ use tempfile::tempdir;
 
 mod autocommit_tests;
 mod calendar_date;
+mod candidate_prefilter;
 mod cleanup_compatibility_tests;
 mod combined_capture_tests;
 mod conditional_table_values;

@@ -6,6 +6,9 @@ use crate::replay::native_index::{
     ProtocolIndex, ScopePartition,
 };
 use std::sync::Arc;
+mod family;
+use family::Family;
+pub(super) use family::classify as sql_family;
 
 #[derive(Debug)]
 pub(super) struct Candidates {
@@ -13,6 +16,7 @@ pub(super) struct Candidates {
     index: ProtocolIndex,
     members: CaseMembership,
     lanes: LaneIndex,
+    families: Vec<Option<Family>>,
 }
 
 impl Default for Candidates {
@@ -22,6 +26,7 @@ impl Default for Candidates {
             index: ProtocolIndex::mysql(),
             members: CaseMembership::default(),
             lanes: LaneIndex::default(),
+            families: Vec::new(),
         }
     }
 }
@@ -51,6 +56,8 @@ impl Candidates {
             *self = Self::default();
         }
         for (index, exchange) in exchanges.iter().enumerate().skip(self.count) {
+            self.families
+                .push(sql_family(exchange.record.sql.as_deref()));
             self.members
                 .register(exchange.source, exchange.case_id.as_deref(), index);
             if let Some(connection) = exchange.record.connection_id {
@@ -93,6 +100,15 @@ impl Candidates {
 
     pub(super) fn case_members(&self, case: &str) -> Arc<[usize]> {
         self.members.for_case(case)
+    }
+
+    pub(super) fn permits_sql(&self, candidate: usize, actual: Option<Family>) -> bool {
+        self.families
+            .get(candidate)
+            .copied()
+            .flatten()
+            .zip(actual)
+            .is_none_or(|(source, actual)| source == actual)
     }
 
     pub(super) fn lane_blocker(
