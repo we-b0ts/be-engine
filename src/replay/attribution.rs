@@ -80,6 +80,17 @@ pub(super) fn freeze(
                     .any(|input| input.case_id == *origin_case_id),
                 "attribution refers to an absent origin Case"
             ),
+            DependencyOwner::Shutdown {
+                process_epoch,
+                origin_case_id,
+            } => ensure!(
+                manifest.process_epochs.contains(process_epoch)
+                    && manifest
+                        .inputs
+                        .iter()
+                        .any(|input| input.case_id == *origin_case_id),
+                "shutdown attribution refers to an absent process epoch or origin Case"
+            ),
             DependencyOwner::Unattributed { .. } => {}
         }
         if let Some(scope) = run_value_scope(&decision.owner) {
@@ -95,7 +106,7 @@ pub(super) fn freeze(
     for input in &manifest.inputs {
         scopes.push(root.join(&input.path).join(scoped::CASE_SCOPE));
     }
-    for kind in ["startup", "process", "unattributed"] {
+    for kind in ["startup", "process", "shutdown", "unattributed"] {
         scopes.push(root.join(format!("indexes/{kind}-scope.json")));
     }
     let mut locations = BTreeMap::new();
@@ -133,6 +144,7 @@ pub(super) fn freeze(
                 },
                 DependencyOwner::Startup { .. } => ScopeKind::Startup,
                 DependencyOwner::Process { .. } => ScopeKind::Process,
+                DependencyOwner::Shutdown { .. } => ScopeKind::Shutdown,
                 DependencyOwner::Unattributed { .. } => ScopeKind::Unattributed,
             }
         } else {
@@ -142,6 +154,7 @@ pub(super) fn freeze(
             ScopeKind::Case { case_id } => case_id.to_string(),
             ScopeKind::Startup => "startup".into(),
             ScopeKind::Process => "process".into(),
+            ScopeKind::Shutdown => "shutdown".into(),
             ScopeKind::Unattributed => "unattributed".into(),
         };
         result
@@ -162,7 +175,12 @@ pub(super) fn freeze(
     let keys: Vec<_> = cases
         .keys()
         .cloned()
-        .chain(["startup".into(), "process".into(), "unattributed".into()])
+        .chain([
+            "startup".into(),
+            "process".into(),
+            "shutdown".into(),
+            "unattributed".into(),
+        ])
         .collect();
     for key in keys {
         let scope = result.remove(&key).unwrap_or_else(|| ScopeIndex {
@@ -171,6 +189,7 @@ pub(super) fn freeze(
             scope: match key.as_str() {
                 "startup" => ScopeKind::Startup,
                 "process" => ScopeKind::Process,
+                "shutdown" => ScopeKind::Shutdown,
                 "unattributed" => ScopeKind::Unattributed,
                 _ => ScopeKind::Case {
                     case_id: key.parse().expect("manifest Case UUID"),

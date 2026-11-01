@@ -200,7 +200,7 @@ async fn primary_http_client_fin_preserves_delayed_complete_stream() {
 }
 
 #[tokio::test]
-async fn cancelling_within_sse_message_preserves_private_prefix_and_self_replays() {
+async fn cancelling_within_sse_message_preserves_plaintext_prefix_and_self_replays() {
     let temp = tempdir().unwrap();
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut settings = config(temp.path(), upstream.local_addr().unwrap());
@@ -225,7 +225,9 @@ async fn cancelling_within_sse_message_preserves_private_prefix_and_self_replays
         let case = published(&state).await;
         let expected_path = case.join("expected-response.json");
         let mut expected: Value = serde_json::from_slice(&std::fs::read(&expected_path).unwrap()).unwrap();
-        assert!(expected["interaction"]["end"]["partial_message"]["data"].as_str().unwrap().starts_with("traffic-e2e:enc:"));
+        let stored: crate::interaction::model::WireMessage = serde_json::from_value(expected["interaction"]["end"]["partial_message"].clone()).unwrap();
+        assert_eq!(stored.decode().unwrap(), b"data: unfinished\n");
+        assert_eq!(expected["private_interaction_output"]["payloads"], "plaintext_sse");
         crate::interaction::private::decrypt_output(&mut expected, &expected_path).unwrap();
         let output: OutputObservation = serde_json::from_value(expected["interaction"].clone()).unwrap();
         assert_eq!(output.end.partial_message.unwrap().decode().unwrap(), b"data: unfinished\n");

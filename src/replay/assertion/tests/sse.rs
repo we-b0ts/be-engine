@@ -158,52 +158,61 @@ fn websocket_close_code_and_reason_are_compared() {
 }
 
 #[test]
-fn protected_source_and_target_payloads_are_compared_only_after_authenticated_decryption() {
-    let (temp, mut options) = write_raw_case("", "", "");
-    write_field(
-        &options.expected_response,
-        "interaction",
-        observation("private-output", true),
-    );
-    write_field(
-        &options.actual_response,
-        "interaction",
-        observation("private-output", true),
-    );
-    let case = temp
-        .path()
-        .join(".traffic-e2e/local/artifacts/recordings/case");
-    fs::create_dir_all(&case).unwrap();
-    crate::platform::encryption_key::load_or_create(temp.path()).unwrap();
-    for path in [
-        &mut options.request,
-        &mut options.expected_response,
-        &mut options.actual_response,
-    ] {
-        let destination = case.join(path.file_name().unwrap());
-        fs::rename(&*path, &destination).unwrap();
-        *path = destination;
+fn plaintext_and_legacy_encrypted_sse_outputs_compare_without_rewriting_private_inputs() {
+    for legacy in [false, true] {
+        let (temp, mut options) = write_raw_case("", "", "");
+        write_field(
+            &options.expected_response,
+            "interaction",
+            observation("private-output", true),
+        );
+        write_field(
+            &options.actual_response,
+            "interaction",
+            observation("private-output", true),
+        );
+        let case = temp
+            .path()
+            .join(".traffic-e2e/local/artifacts/recordings/case");
+        fs::create_dir_all(&case).unwrap();
+        crate::platform::encryption_key::load_or_create(temp.path()).unwrap();
+        for path in [
+            &mut options.request,
+            &mut options.expected_response,
+            &mut options.actual_response,
+        ] {
+            let destination = case.join(path.file_name().unwrap());
+            fs::rename(&*path, &destination).unwrap();
+            *path = destination;
+        }
+        let mut request: serde_json::Value =
+            serde_json::from_slice(&fs::read(&options.request).unwrap()).unwrap();
+        request["uri"] = json!("/sse?token=private-query");
+        crate::interaction::private::protect_request(&mut request, &options.request).unwrap();
+        fs::write(&options.request, serde_json::to_vec(&request).unwrap()).unwrap();
+        for path in [&options.expected_response, &options.actual_response] {
+            let mut response: serde_json::Value =
+                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            if legacy {
+                response["interaction"]["protocol"] = json!("raw_stream");
+            }
+            crate::interaction::private::protect_output(&mut response, path).unwrap();
+            response["interaction"]["protocol"] = json!("sse");
+            fs::write(path, serde_json::to_vec(&response).unwrap()).unwrap();
+        }
+        let paths = [
+            options.request.clone(),
+            options.expected_response.clone(),
+            options.actual_response.clone(),
+        ];
+        let before = paths.each_ref().map(|path| fs::read(path).unwrap());
+        assert!(!String::from_utf8_lossy(&before[0]).contains("private-query"));
+        assert_eq!(
+            String::from_utf8_lossy(&before[1]).contains("private-output"),
+            !legacy
+        );
+        assert!(assert_recorded_response(options).unwrap().passed);
+        let after = paths.each_ref().map(|path| fs::read(path).unwrap());
+        assert_eq!(before, after);
     }
-    let mut request: serde_json::Value =
-        serde_json::from_slice(&fs::read(&options.request).unwrap()).unwrap();
-    request["uri"] = json!("/sse?token=private-query");
-    crate::interaction::private::protect_request(&mut request, &options.request).unwrap();
-    fs::write(&options.request, serde_json::to_vec(&request).unwrap()).unwrap();
-    for path in [&options.expected_response, &options.actual_response] {
-        let mut response: serde_json::Value =
-            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        crate::interaction::private::protect_output(&mut response, path).unwrap();
-        fs::write(path, serde_json::to_vec(&response).unwrap()).unwrap();
-    }
-    let paths = [
-        options.request.clone(),
-        options.expected_response.clone(),
-        options.actual_response.clone(),
-    ];
-    let before = paths.each_ref().map(|path| fs::read(path).unwrap());
-    assert!(!String::from_utf8_lossy(&before[0]).contains("private-query"));
-    assert!(!String::from_utf8_lossy(&before[1]).contains("private-output"));
-    assert!(assert_recorded_response(options).unwrap().passed);
-    let after = paths.each_ref().map(|path| fs::read(path).unwrap());
-    assert_eq!(before, after);
 }

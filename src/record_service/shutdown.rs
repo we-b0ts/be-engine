@@ -10,7 +10,7 @@ use super::proxy::Relay;
 use crate::AppState;
 use crate::recorder::{CaseInvalidation, CaseInvalidationContext};
 
-pub(super) const CASE_DRAIN_BUDGET: Duration = Duration::from_secs(15);
+pub(super) const CASE_DRAIN_BUDGET: Duration = Duration::from_secs(60);
 
 pub(super) async fn drain<R: Redis + Clone + 'static>(
     state: &AppState,

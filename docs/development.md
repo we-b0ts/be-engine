@@ -861,7 +861,7 @@ fixing timeout isolation requires recording new evidence.
 
 Standalone `traffic-e2e record` handles normal SIGTERM/SIGINT by closing fresh
 case admission and withdrawing discovery, then retaining Source and existing
-sessions for at most 15 seconds. This wait includes dependency tails and case
+sessions for at most 60 seconds. This wait includes dependency tails and case
 publication; existing stream limits still run and an isolation failure stops
 Source promptly. An incomplete uncommitted case receives
 `shutdown_case_drain_timeout`, while its earlier independent failure is retained.

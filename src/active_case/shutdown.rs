@@ -1,7 +1,27 @@
 //! Stop new primary admission without ending admitted case activity.
 
-use super::ActiveCaseRegistry;
+use super::{ActiveCaseRegistry, ActiveCaseState};
 use crate::recorder::{CaseContext, CaseInvalidation};
+use uuid::Uuid;
+
+#[derive(Clone, Copy)]
+pub(super) struct ShutdownContext {
+    pub(super) case_id: Option<Uuid>,
+}
+
+impl ActiveCaseState {
+    /// Freeze the actual running Case once. A prior completed Case, a reserved
+    /// input or a later activation cannot acquire this teardown association.
+    pub(super) fn begin_shutdown(&mut self) {
+        if self.shutdown.is_none() {
+            let case_id = match self.active.as_slice() {
+                [case] if case.activated => Some(case.case.id),
+                _ => None,
+            };
+            self.shutdown = Some(ShutdownContext { case_id });
+        }
+    }
+}
 
 pub(crate) struct ShutdownCase {
     pub(crate) case: CaseContext,
@@ -11,6 +31,7 @@ pub(crate) struct ShutdownCase {
 impl ActiveCaseRegistry {
     pub(crate) fn close_admission(&self) {
         let mut state = self.state.lock().expect("active case registry poisoned");
+        state.begin_shutdown();
         state.admission_closed = true;
         state.case_matching_ready = false;
         state.bootstrap_open = false;
@@ -79,6 +100,52 @@ mod tests {
             registry.try_reserve(case()),
             Err(ActiveCaseRejection::Quiescing)
         ));
+    }
+
+    #[test]
+    fn shutdown_association_is_the_running_case_at_the_first_boundary() {
+        for failure_driven in [false, true] {
+            let registry = ActiveCaseRegistry::default();
+            let first = case();
+            let guard = registry.try_reserve(first.clone()).unwrap();
+            guard.activate_dependencies().unwrap();
+            let before = registry.current_targets_for_event();
+            if failure_driven {
+                registry.begin_quiescing();
+            } else {
+                registry.close_admission();
+            }
+            let during = registry.current_targets_for_event();
+            assert_eq!(during.cases[0].0.id, first.id);
+            assert_eq!(during.shutdown_case_id, Some(first.id));
+            assert_eq!(before.shutdown_case_id, None);
+            drop(during);
+            drop(guard);
+            registry.begin_quiescing();
+            registry.close_admission();
+            let after = registry.current_targets_for_event();
+            assert!(after.cases.is_empty());
+            assert_eq!(after.shutdown_case_id, Some(first.id));
+        }
+    }
+
+    #[test]
+    fn completed_or_only_reserved_cases_cannot_authorize_shutdown_association() {
+        for reserved in [false, true] {
+            let registry = ActiveCaseRegistry::default();
+            let guard = registry.try_reserve(case()).unwrap();
+            if reserved {
+                registry.close_admission();
+                guard.activate_dependencies().unwrap();
+                drop(guard);
+            } else {
+                guard.activate_dependencies().unwrap();
+                drop(guard);
+                registry.close_admission();
+            }
+            registry.begin_quiescing();
+            assert_eq!(registry.current_targets_for_event().shutdown_case_id, None);
+        }
     }
 
     #[tokio::test]

@@ -122,7 +122,7 @@ fn foreign_owner(source: &source::SourceSnapshot, owner: &DependencyOwner, api: 
             })
         }
         DependencyOwner::Process { .. } | DependencyOwner::Startup { .. } => true,
-        DependencyOwner::Unattributed { .. } => false,
+        DependencyOwner::Shutdown { .. } | DependencyOwner::Unattributed { .. } => false,
     }
 }
 

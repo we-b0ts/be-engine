@@ -12,14 +12,14 @@ pub(super) fn effective(
     decisions: &[AttributionDecision],
 ) -> Result<SemanticInventory> {
     let key = crate::policy_evidence::digest(&serde_json::to_vec(&(
-        "mandatory-scope-coverage/v2",
+        "mandatory-scope-coverage/v3",
         manifest,
         decisions,
     ))?);
     let directory = crate::dependency_index::store::cache_directory(root);
     crate::dependency_index::store::private_directory(&directory)?;
     let cache = directory.join(format!(
-        "semantic-inventory-v2-{}.json",
+        "semantic-inventory-v3-{}.json",
         key.trim_start_matches("sha256:")
     ));
     if let Ok(inventory) = crate::dependency_index::store::read_json::<SemanticInventory>(&cache)
@@ -78,6 +78,19 @@ pub(super) fn effective(
                 "mandatory Source fact has no declared input owner"
             );
         }
+        if let DependencyOwner::Shutdown {
+            process_epoch,
+            origin_case_id,
+        } = capture.attribution
+        {
+            ensure!(
+                process_epoch == capture.process_epoch
+                    && capture.phase == CapturePhase::Shutdown
+                    && input_ids.contains(&origin_case_id)
+                    && capture.admitted_case.is_none(),
+                "shutdown fact lacks its original process, shutdown boundary or associated Case"
+            );
+        }
         let (scope, location) = locations
             .get(&record.offset)
             .context("mandatory Source fact is absent from its original ownership view")?;
@@ -103,7 +116,7 @@ pub(super) fn effective(
         captured.total_mandatory == manifest.semantic_inventory.total_mandatory,
         "effective Source inventory does not cover all original business obligations"
     );
-    for kind in ["case", "startup", "process", "unattributed"] {
+    for kind in ["case", "startup", "process", "shutdown", "unattributed"] {
         ensure!(
             captured.by_owner_kind.get(kind).copied().unwrap_or(0)
                 == manifest
@@ -168,6 +181,20 @@ fn original_locations(
         .iter()
         .map(|identity| identity.path.as_str())
         .collect();
+    if sealed.contains("indexes/shutdown-scope.json")
+        || manifest
+            .semantic_inventory
+            .by_owner_kind
+            .get("shutdown")
+            .copied()
+            .unwrap_or(0)
+            > 0
+    {
+        scopes.push((
+            root.join("indexes/shutdown-scope.json"),
+            ScopeKind::Shutdown,
+        ));
+    }
     let mut locations = BTreeMap::new();
     let canonical_root = std::fs::canonicalize(root)?;
     for (path, expected) in scopes {
@@ -212,6 +239,7 @@ fn scope_key(scope: &ScopeKind) -> String {
         ScopeKind::Case { case_id } => case_id.to_string(),
         ScopeKind::Startup => "startup".into(),
         ScopeKind::Process => "process".into(),
+        ScopeKind::Shutdown => "shutdown".into(),
         ScopeKind::Unattributed => "unattributed".into(),
     }
 }
@@ -222,6 +250,7 @@ fn scope_matches(scope: &ScopeKind, owner: &DependencyOwner) -> bool {
         }
         (ScopeKind::Startup, DependencyOwner::Startup { .. })
         | (ScopeKind::Process, DependencyOwner::Process { .. })
+        | (ScopeKind::Shutdown, DependencyOwner::Shutdown { .. })
         | (ScopeKind::Unattributed, DependencyOwner::Unattributed { .. }) => true,
         _ => false,
     }

@@ -19,8 +19,14 @@ fn sse_case_and_live_dependency_tail_finish_before_source_stops() {
 
 #[test]
 #[ignore = "requires python3 and root or passwordless sudo for the fixed Source UID; no interception"]
-fn fifteen_second_shutdown_timeout_archives_the_incomplete_case_with_shutdown_reason() {
+fn sixty_second_shutdown_timeout_archives_the_incomplete_case_with_shutdown_reason() {
     runtime().block_on(exercise("timeout"));
+}
+
+#[test]
+#[ignore = "requires python3 and root or passwordless sudo for the fixed Source UID; no interception"]
+fn failed_open_case_retains_associated_post_case_dependencies_during_source_shutdown() {
+    runtime().block_on(exercise("shutdown_dependency"));
 }
 
 #[test]
@@ -50,7 +56,7 @@ async fn exercise(mode: &'static str) {
     let dependency = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let dependency_address = dependency.local_addr().unwrap();
     let finish_dependency = Arc::new(Notify::new());
-    let dependency_task = matches!(mode, "tail" | "timeout").then(|| {
+    let dependency_task = matches!(mode, "tail" | "timeout" | "shutdown_dependency").then(|| {
         let work = work.clone();
         let finish = finish_dependency.clone();
         tokio::spawn(async move {
@@ -62,7 +68,9 @@ async fn exercise(mode: &'static str) {
                 assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
                 return;
             }
-            finish.notified().await;
+            if mode == "tail" {
+                finish.notified().await;
+            }
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .await
@@ -95,8 +103,8 @@ async fn exercise(mode: &'static str) {
     options.initialize_storage().unwrap();
     let mut config = options.config().unwrap();
     config.http_gateway.record_streaming = true;
-    config.http_gateway.request_timeout_ms = if mode == "deadline" { 500 } else { 60_000 };
-    config.http_gateway.interaction.max_duration_ms = 60_000;
+    config.http_gateway.request_timeout_ms = if mode == "deadline" { 500 } else { 180_000 };
+    config.http_gateway.interaction.max_duration_ms = 180_000;
     config.http_gateway.ready.path = "/ready".into();
     config.http_gateway.ready.interval_ms = 5;
     config.recording.post_ready_settle_ms = 0;
@@ -104,7 +112,7 @@ async fn exercise(mode: &'static str) {
     config.recording.case_dependency_drain_timeout_ms = 100;
     config.recording.encrypt_request_headers.clear();
     config.mysql.enabled = false;
-    config.http.enabled = matches!(mode, "tail" | "timeout");
+    config.http.enabled = matches!(mode, "tail" | "timeout" | "shutdown_dependency");
     config.http.listen = proxy_address;
     let recordings = options
         .data_root
@@ -166,7 +174,7 @@ async fn exercise(mode: &'static str) {
             wait_file(&work.join("dependency-finished")).await;
         }
     };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(40), async {
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(90), async {
         tokio::join!(service, client)
     })
     .await
@@ -182,7 +190,7 @@ async fn exercise(mode: &'static str) {
         .path();
     let report = read_json(&run.join("recording-run.json"));
     let shutdown = read_json(&run.join("recording-shutdown.json"));
-    assert_eq!(shutdown["case_drain_timeout_ms"], 15_000);
+    assert_eq!(shutdown["case_drain_timeout_ms"], 60_000);
     assert!(
         work.join("stopped").exists(),
         "Source must be stopped before returning"
@@ -198,15 +206,60 @@ async fn exercise(mode: &'static str) {
         assert_eq!(report["published_cases"], 0);
         assert_eq!(report["failed_cases"], 1);
         let reason = report["errors"][0]["reason"].as_str().unwrap();
-        if mode == "timeout" {
+        if matches!(mode, "timeout" | "shutdown_dependency") {
             assert_eq!(reason, "shutdown_case_drain_timeout");
             assert_eq!(shutdown["outcome"], "case_drain_timeout");
             assert_eq!(shutdown["cases"][0]["failure_reason"], reason);
-            assert!(shutdown["elapsed_ms"].as_u64().unwrap() >= 15_000);
+            assert!(shutdown["elapsed_ms"].as_u64().unwrap() >= 60_000);
         } else {
             assert_eq!(reason, "interaction_max_duration");
             assert_eq!(shutdown["outcome"], "source_stop_required");
         }
+    }
+    if mode == "shutdown_dependency" {
+        let case_id = shutdown["cases"][0]["case_id"].as_str().unwrap();
+        let ledger = std::fs::read_to_string(run.join("dependencies.jsonl")).unwrap();
+        let event = ledger
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|event| {
+                event["uri"]
+                    .as_str()
+                    .is_some_and(|uri| uri.ends_with("/dependency"))
+            })
+            .expect("the real SIGTERM handler must emit its cleanup dependency");
+        assert_eq!(event["capture"]["phase"], "shutdown");
+        assert_eq!(event["capture"]["attribution"]["kind"], "shutdown");
+        assert_eq!(event["capture"]["attribution"]["origin_case_id"], case_id);
+        assert_eq!(event["capture"]["admitted_case"], serde_json::Value::Null);
+        let failed = run.join(report["errors"][0]["detail_path"].as_str().unwrap());
+        let scope = read_json(&failed.parent().unwrap().join("dependency-scope.json"));
+        assert!(
+            !scope["locations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|location| { location["exchange_id"] == event["capture"]["exchange_id"] })
+        );
+        let post = read_json(&run.join("indexes/shutdown-scope.json"));
+        assert_eq!(post["scope"]["kind"], "shutdown");
+        assert!(
+            post["locations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|location| { location["exchange_id"] == event["capture"]["exchange_id"] })
+        );
+        let manifest = read_json(&run.join("dependency-manifest.json"));
+        assert_eq!(
+            manifest["semantic_inventory"]["unattributed_dependencies"],
+            0
+        );
+        assert_eq!(
+            manifest["semantic_inventory"]["by_owner_kind"]["shutdown"],
+            1
+        );
+        assert_eq!(manifest["capture_complete"], false);
     }
     assert!(
         tokio::net::TcpStream::connect(adapter_address)
@@ -293,6 +346,9 @@ source, proxy, upstream, mode = sys.argv[1:]
 pathlib.Path('identity').write_text(f'{os.getpid()} {os.getpgrp()}')
 def stopped(*_):
     pathlib.Path('stopped').write_text('stopped')
+    if mode == 'shutdown_dependency':
+        time.sleep(0.25)
+        dependency()
     sys.exit(0)
 signal.signal(signal.SIGTERM, stopped)
 def wait(name):
@@ -313,7 +369,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if mode in ('tail', 'timeout'):
             threading.Thread(target=dependency, daemon=True).start()
             wait('dependency-entered')
-        if mode in ('tail', 'deadline'):
+        if mode in ('tail', 'deadline', 'shutdown_dependency'):
             self.send_response(200); self.send_header('Content-Type', 'text/event-stream')
             self.send_header('Transfer-Encoding', 'chunked'); self.end_headers()
             self.wfile.write(b'd\r\ndata: ready\n\n\r\n'); self.wfile.flush()

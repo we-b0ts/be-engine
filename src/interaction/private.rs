@@ -188,6 +188,10 @@ pub(crate) fn protect_output(response: &mut Value, path: &Path) -> Result<()> {
         return Ok(());
     }
     let role = output_role(response);
+    let plaintext_sse = response
+        .pointer("/interaction/protocol")
+        .and_then(Value::as_str)
+        == Some("sse");
     let cipher = EvidenceCipher::from_path(path)?;
     if let Some(headers) = response.get("headers") {
         response["private_interaction_output_headers"] = Value::String(encrypt(
@@ -197,22 +201,28 @@ pub(crate) fn protect_output(response: &mut Value, path: &Path) -> Result<()> {
         )?);
         response["headers"] = json!({});
     }
-    visit_events(response, |data, label| protect_string(data, &cipher, label))?;
-    if let Some(data) = response.pointer_mut("/interaction/end/partial_message/data") {
-        protect_string(
-            data,
-            &cipher,
-            &format!("interaction-output/v1/{role}/partial-message"),
-        )?;
+    if !plaintext_sse {
+        visit_events(response, |data, label| protect_string(data, &cipher, label))?;
+        if let Some(data) = response.pointer_mut("/interaction/end/partial_message/data") {
+            protect_string(
+                data,
+                &cipher,
+                &format!("interaction-output/v1/{role}/partial-message"),
+            )?;
+        }
+        if let Some(reason) = response.pointer_mut("/interaction/end/close/reason") {
+            protect_string(
+                reason,
+                &cipher,
+                &format!("interaction-output/v1/{role}/close/reason"),
+            )?;
+        }
     }
-    if let Some(reason) = response.pointer_mut("/interaction/end/close/reason") {
-        protect_string(
-            reason,
-            &cipher,
-            &format!("interaction-output/v1/{role}/close/reason"),
-        )?;
-    }
-    response[OUTPUT_ENVELOPE] = json!({"version":1,"role":role});
+    response[OUTPUT_ENVELOPE] = if plaintext_sse {
+        json!({"version":2,"role":role,"payloads":"plaintext_sse"})
+    } else {
+        json!({"version":1,"role":role})
+    };
     // Semantic observations own assertions. Keep no duplicate plaintext stream body.
     if response
         .get("interaction")
@@ -227,8 +237,14 @@ pub(crate) fn decrypt_output(response: &mut Value, path: &Path) -> Result<bool> 
     let Some(envelope) = response.get(OUTPUT_ENVELOPE) else {
         return Ok(false);
     };
+    let plaintext_sse = envelope.get("version").and_then(Value::as_u64) == Some(2)
+        && envelope.get("payloads").and_then(Value::as_str) == Some("plaintext_sse")
+        && response
+            .pointer("/interaction/protocol")
+            .and_then(Value::as_str)
+            == Some("sse");
     ensure!(
-        envelope.get("version").and_then(Value::as_u64) == Some(1),
+        envelope.get("version").and_then(Value::as_u64) == Some(1) || plaintext_sse,
         "unsupported private interaction output version"
     );
     ensure!(
@@ -250,22 +266,24 @@ pub(crate) fn decrypt_output(response: &mut Value, path: &Path) -> Result<bool> 
             .context("interaction output must be an object")?
             .remove("private_interaction_output_headers");
     }
-    visit_events(response, |data, label| {
-        decrypt_string(data, &cipher, label).map(|_| ())
-    })?;
-    if let Some(data) = response.pointer_mut("/interaction/end/partial_message/data") {
-        decrypt_string(
-            data,
-            &cipher,
-            &format!("interaction-output/v1/{role}/partial-message"),
-        )?;
-    }
-    if let Some(reason) = response.pointer_mut("/interaction/end/close/reason") {
-        decrypt_string(
-            reason,
-            &cipher,
-            &format!("interaction-output/v1/{role}/close/reason"),
-        )?;
+    if !plaintext_sse {
+        visit_events(response, |data, label| {
+            decrypt_string(data, &cipher, label).map(|_| ())
+        })?;
+        if let Some(data) = response.pointer_mut("/interaction/end/partial_message/data") {
+            decrypt_string(
+                data,
+                &cipher,
+                &format!("interaction-output/v1/{role}/partial-message"),
+            )?;
+        }
+        if let Some(reason) = response.pointer_mut("/interaction/end/close/reason") {
+            decrypt_string(
+                reason,
+                &cipher,
+                &format!("interaction-output/v1/{role}/close/reason"),
+            )?;
+        }
     }
     response
         .as_object_mut()
@@ -393,6 +411,49 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         crate::platform::encryption_key::load_or_create(project.path()).unwrap();
         (project, path)
+    }
+
+    #[test]
+    fn sse_source_and_target_payloads_are_stored_plaintext_with_private_headers() {
+        let (_project, path) = project();
+        for target in [false, true] {
+            let mut output = json!({"headers":{"set-cookie":["cookie-secret"]},
+                "interaction":{"protocol":"sse","events":[
+                    {"sequence":1,"message":{"kind":"text","data":"data: readable event\n\n"}}
+                ],"end":{"partial_message":{"kind":"text","data":"data: unfinished"}}}});
+            if target {
+                output["version"] = json!(1);
+            }
+            let original = output.clone();
+            protect_output(&mut output, &path).unwrap();
+            std::fs::write(&path, serde_json::to_vec(&output).unwrap()).unwrap();
+            let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(stored["interaction"], original["interaction"]);
+            assert!(!stored.to_string().contains("cookie-secret"));
+            assert_eq!(stored[OUTPUT_ENVELOPE]["version"], 2);
+            let mut wrong_protocol = stored.clone();
+            wrong_protocol["interaction"]["protocol"] = json!("socket_io");
+            assert!(decrypt_output(&mut wrong_protocol, &path).is_err());
+            decrypt_output(&mut output, &path).unwrap();
+            assert_eq!(output["interaction"], original["interaction"]);
+            assert_eq!(output["headers"], original["headers"]);
+        }
+    }
+
+    #[test]
+    fn existing_encrypted_sse_outputs_remain_readable() {
+        let (_project, path) = project();
+        let mut old = json!({"headers":{},"interaction":{"protocol":"socket_io", "events":[
+            {"sequence":1,"message":{"data":"data: historical event\n\n"}}
+        ]}});
+        protect_output(&mut old, &path).unwrap();
+        old["interaction"]["protocol"] = json!("sse");
+        assert_eq!(old[OUTPUT_ENVELOPE]["version"], 1);
+        assert!(decrypt_output(&mut old, &path).unwrap());
+        assert_eq!(
+            old["interaction"]["events"][0]["message"]["data"],
+            "data: historical event\n\n"
+        );
     }
 
     #[test]

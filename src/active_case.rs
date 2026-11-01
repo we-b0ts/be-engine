@@ -35,6 +35,7 @@ struct ActiveCaseState {
     case_matching_ready: bool,
     admission_closed: bool,
     quiescing: bool,
+    shutdown: Option<shutdown::ShutdownContext>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +43,7 @@ struct ActiveCaseRegistration {
     case: CaseContext,
     invalidation: Option<CaseInvalidation>,
     accepting_dependencies: bool,
+    activated: bool,
     dependencies: Arc<DependencyActivity>,
     recovering: bool,
     source_completed: bool,
@@ -83,6 +85,7 @@ pub(crate) struct DependencyTargets {
     pub(crate) process_rule_ids: Vec<String>,
     pub(crate) unattributed_reason: Option<&'static str>,
     pub(crate) observed_case: Option<Uuid>,
+    pub(crate) shutdown_case_id: Option<Uuid>,
     pub(crate) phase: crate::dependency::observation::CapturePhase,
     pub(crate) capture: Option<crate::recorder::ledger::CaptureReservation>,
     _reservations: Vec<DependencyReservation>,
@@ -130,6 +133,7 @@ impl ActiveCaseRegistry {
                 case_matching_ready,
                 admission_closed: false,
                 quiescing: false,
+                shutdown: None,
             })),
             active_count,
             quiescing,
@@ -164,6 +168,7 @@ impl ActiveCaseRegistry {
             case: case.clone(),
             invalidation: None,
             accepting_dependencies: false,
+            activated: false,
             dependencies: Arc::new(DependencyActivity::default()),
             recovering: false,
             source_completed: false,
@@ -188,6 +193,7 @@ impl ActiveCaseRegistry {
             .find(|registration| registration.case.id == case_id)
             .ok_or(ActiveCaseActivationError::ReservationMissing)?;
         registration.accepting_dependencies = true;
+        registration.activated = true;
         Ok(())
     }
 
@@ -199,6 +205,7 @@ impl ActiveCaseRegistry {
             .iter()
             .any(|registration| registration.case.id == case_id && registration.recovering)
         {
+            state.begin_shutdown();
             state.quiescing = true;
             self.quiescing.send_replace(true);
         }
@@ -228,6 +235,7 @@ impl ActiveCaseRegistry {
     pub(crate) fn begin_quiescing(&self) -> bool {
         let mut state = self.state.lock().expect("active case registry poisoned");
         let changed = !state.quiescing;
+        state.begin_shutdown();
         state.quiescing = true;
         state.case_matching_ready = false;
         state.bootstrap_open = false;
@@ -469,6 +477,7 @@ impl ActiveCaseRegistry {
             process_rule_ids: Vec::new(),
             unattributed_reason: None,
             observed_case,
+            shutdown_case_id: state.shutdown.and_then(|shutdown| shutdown.case_id),
             phase,
             capture,
             _reservations: reservations,
@@ -679,6 +688,7 @@ mod tests {
                 case: first,
                 invalidation: None,
                 accepting_dependencies: true,
+                activated: true,
                 dependencies: Arc::new(DependencyActivity::default()),
                 recovering: false,
                 source_completed: false,
@@ -689,6 +699,7 @@ mod tests {
                 case: second,
                 invalidation: None,
                 accepting_dependencies: true,
+                activated: true,
                 dependencies: Arc::new(DependencyActivity::default()),
                 recovering: false,
                 source_completed: false,

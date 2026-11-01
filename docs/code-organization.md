@@ -899,10 +899,13 @@ is unclear.
   before opening admission; address heartbeats never repeat these writes.
   `proxy` owns direct or reservation-aware request forwarding and completion;
   `source` owns fixed-identity process startup, trust, isolation and cleanup.
-  Its `shutdown` child owns the standalone normal-stop 15-second case wait and
+  Its `shutdown` child owns the standalone normal-stop 60-second case wait and
   pre-termination diagnostics, separately from failure-driven Source isolation.
   `active_case/shutdown` closes fresh admission without cancelling admitted
-  activity and installs timeout failures before publication commits;
+  activity, freezes the running-Case association at the first shutdown boundary,
+  and installs timeout failures before publication commits. Recorder ledger
+  persistence projects associated post-Case requests into the separate sealed
+  shutdown scope; unassociated shutdown requests retain attribution analysis;
   `active_case/publication` owns the shared primary case commit barrier.
   `recorder/shutdown` persists run-level shutdown decisions and retains the
   failure cause for unfinished staging cases; ordinary finalization owns moves.

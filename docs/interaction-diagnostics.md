@@ -12,9 +12,13 @@ like response assertion. The original `sequence` remains available as an
 observation locator; different Source and Target sequence numbers alone do not
 prove a response mismatch.
 
-Interaction headers and payloads remain encrypted in the original recording and
-actual-response artifacts. The query authenticates and decrypts each response
-once per page in memory. Plaintext payloads are not added to saved assertion
+New SSE event data and incomplete frame data are stored as plaintext in the
+original recording and actual-response artifacts. Response headers retain their
+private encryption envelope; version 2 explicitly identifies plaintext SSE
+payloads. Other interaction protocols retain payload encryption. Historical
+version 1 encrypted SSE artifacts remain readable without rewriting recordings.
+The query loads each response once per page and decrypts the remaining private
+fields in memory. Plaintext payloads are not added to saved assertion
 reports, workflow state or the ordinary public diagnosis. Unreadable or
 unauthenticated evidence is `unavailable`, independently of a missing frame or
 a present JSON `null`.

@@ -69,7 +69,7 @@ impl BatchScope {
     }
 
     pub(super) fn report(&self, report: &ReplayReport) -> BatchReconciliation {
-        let unused_run_dependencies = BTreeMap::from([
+        let mut unused_run_dependencies = BTreeMap::from([
             ("mysql".into(), report.unused_global_exchange_count),
             ("http".into(), report.unused_global_http_exchange_count),
             (
@@ -105,6 +105,18 @@ impl BatchScope {
                     .unwrap_or(report.protocols.kafka.unused_global.len()),
             ),
         ]);
+        // Teardown is retained outside executable primary inputs. Until a real
+        // teardown driver delivers these facts, WholeSource cannot certify them.
+        let shutdown = self
+            .inventory
+            .by_owner_kind
+            .get("shutdown")
+            .copied()
+            .unwrap_or(0);
+        if shutdown > 0 {
+            unused_run_dependencies
+                .insert("shutdown".into(), shutdown.try_into().unwrap_or(usize::MAX));
+        }
         // Actual requests outside a primary Case remain independent obligations.
         let actual_unmatched_or_unsafe = report.unmatched_queries.len()
             + report.unsupported_commands.len()
