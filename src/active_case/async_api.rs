@@ -142,7 +142,19 @@ impl ActiveCaseRegistry {
             return;
         }
         let mut state = self.state.lock().expect("active case registry poisoned");
-        let mut capture_failed = false;
+        if !event.capture_complete()
+            && state.active.iter().any(|case| {
+                case.async_api.is_some()
+                    && targets
+                        .cases
+                        .iter()
+                        .any(|(target, _)| target.id == case.case.id)
+            })
+        {
+            // Failure completion wakes the primary publisher. Establish global
+            // shutdown and its original Case before that publisher can finish.
+            self.begin_quiescing_locked(&mut state);
+        }
         for (target, _) in &targets.cases {
             let Some(case) = state
                 .active
@@ -168,7 +180,6 @@ impl ActiveCaseRegistry {
                     resource_index: None,
                     event_type: Some(event.kind()),
                 });
-                capture_failed = true;
                 continue;
             }
             if Instant::now() >= observation.deadline {
@@ -179,10 +190,6 @@ impl ActiveCaseRegistry {
                 }
                 observation.finish(signal);
             }
-        }
-        drop(state);
-        if capture_failed {
-            self.begin_quiescing();
         }
     }
 
