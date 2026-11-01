@@ -105,7 +105,7 @@ fn status_rewrite_for_api_uncached(
             inventory::initialize_legacy(&mut state);
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
-            let execution = super::execution::status_action(&target_root)?;
+            let execution = super::execution::status_action_for_state(&target_root, &state)?;
             initialized_report(&target_root, state, api, execution.as_ref())?
         }
         None => {

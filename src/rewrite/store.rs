@@ -9,7 +9,10 @@ use super::model::{RewriteState, STATE_VERSION};
 
 const INCOMPLETE_LOCK_GRACE: Duration = Duration::from_secs(2);
 
+mod decision_history;
 mod replacement;
+
+pub use decision_history::{compact_rewrite_decision_history, verify_rewrite_decision_history};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RewriteLockState {
@@ -86,6 +89,10 @@ impl RewriteStore {
         let _plans = super::rule_plans::events::lock(&self.target_root)?;
         let mut state = state.clone();
         super::rule_plans::events::overlay(&self.target_root, &mut state)?;
+        state
+            .dependency_review
+            .decision_history
+            .persist(&self.root.join("decision-history"), &state.workflow_id)?;
         let mut payload = serde_json::to_vec_pretty(&state)?;
         payload.push(b'\n');
         self.write_snapshot(&payload, state.revision)?;

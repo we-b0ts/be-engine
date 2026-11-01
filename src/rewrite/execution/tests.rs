@@ -111,6 +111,52 @@ fn busy_summary_reads_the_selected_recording_api_methods_and_keeps_legacy_scope_
 }
 
 #[test]
+fn operation_summary_reuses_the_supplied_workflow_snapshot() {
+    let target = configured_target();
+    let recording = tempfile::tempdir().unwrap();
+    fs::write(
+        recording.path().join("recording-run.json"),
+        r#"{"status":"completed","api_methods":{"/api":["GET","POST"]}}"#,
+    )
+    .unwrap();
+    let mut state = super::super::test_state();
+    state.case_source = Some(recording.path().into());
+    let store = RewriteStore::new(target.path()).unwrap();
+    store.save(&state).unwrap();
+    let pid = u32::try_from(unsafe { libc::getppid() }).unwrap();
+    marker(target.path(), pid, false, None);
+    let traffic = super::super::traffic_operation::TrafficOperationMarker {
+        operation_id: "traffic-test".into(),
+        kind: super::super::traffic_operation::TrafficOperationKind::Replay,
+        api: Some("GET /api".into()),
+        started_at: "2026-11-01T00:00:00Z".into(),
+        pid,
+    };
+    let runtime = crate::internal_runtime::root(target.path()).join("rewrite");
+    fs::write(
+        runtime.join("traffic-operation.json"),
+        serde_json::to_vec(&traffic).unwrap(),
+    )
+    .unwrap();
+    let before = status_action(target.path()).unwrap().unwrap();
+    assert!(
+        matches!(&before, RewriteAction::WaitRequired { summary, .. }
+        if summary == "replaying [GET, POST] /api")
+    );
+
+    // Replacing the persisted state cannot force a second read or mix a new
+    // workflow into the operation summary of an already loaded status query.
+    fs::write(runtime.join("state.json"), b"replaced after query load").unwrap();
+    let reused = status_action_for_state(target.path(), &state)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(reused).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+}
+
+#[test]
 fn stopped_executor_requires_recovery_and_never_silently_retries() {
     let target = configured_target();
     marker(target.path(), u32::MAX, false, None);

@@ -1126,6 +1126,8 @@ is unclear.
   observes external publication without owning its process or allocating IDs.
   `execution.rs` owns detached Next and legacy quality-receipt operations, completion, failure, and
   recovery without moving verification semantics out of their existing owners.
+  Its status summary reuses the caller's loaded workflow snapshot; standalone
+  operation inspection loads its own snapshot only when no caller supplied one.
   Operations bind their selected recording; validated batch replacement retires
   finished older operations while retaining current failures and running ownership.
   `next.rs` owns invocation intent, structured selection of the existing action,
@@ -1147,7 +1149,16 @@ is unclear.
   across current and parked scopes. `worker/events.rs` owns the independent
   durable feedback transaction and normalizes binding keys before merging the
   newest per-route callback; `store.rs` folds feedback into coordinator snapshots
-  on both load and save. These modules never manufacture task-runtime
+  on both load and save. Its `decision_history` child owns explicit, idle-only
+  history compaction from raw state, original-byte backups, and on-demand archive
+  verification; maintenance never adopts recording policy or folds pending events.
+  `dependency_review/decisions/history` owns ordered audit references and legacy
+  inline decoding. Its `archive` child durably publishes immutable history bodies
+  before state references, independently of recordings and workflow replacement.
+  References retain proof-template digests and counts so status validates metadata
+  without loading historical UUIDs. Newly recorded origins bind workflow, recording
+  and inventory; legacy origins remain unknown. Active `decisions` still own exact
+  finite membership and acceptance identity. These modules never manufacture task-runtime
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
   `store/replacement` owns purpose-entry archival and rollback of obsolete
@@ -1238,10 +1249,10 @@ is unclear.
   target-relative and Git tree paths. Source diff expands over the target plus
   configured same-repository managed directories and rejects tracked candidate
   changes outside that delivery scope.
-  Its `cache` child reuses successful Git identity/history reads and PR-base
-  resolution only within a status/inventory query, keyed by directory and exact
-  arguments. Other Git commands invalidate those reads; later queries inspect
-  Git again.
+  Its `cache` child reuses successful Git identity/history, diff and file-list
+  reads and PR-base resolution only within a status/inventory query, keyed by
+  directory and exact arguments. Other Git commands, including output-file
+  writes, invalidate those reads; later queries inspect Git again.
   `rewrite/review` owns the complete worker/integrator review
   pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
   child owns Rust syntax findings and complete-file line limits.

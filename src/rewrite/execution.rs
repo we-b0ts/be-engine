@@ -368,6 +368,20 @@ pub(super) fn snapshot_blocks_replay(action: Option<&RewriteAction>) -> bool {
 }
 
 pub(super) fn status_action(target_root: &Path) -> Result<Option<RewriteAction>> {
+    status_action_in_snapshot(target_root, None)
+}
+
+pub(super) fn status_action_for_state(
+    target_root: &Path,
+    state: &RewriteState,
+) -> Result<Option<RewriteAction>> {
+    status_action_in_snapshot(target_root, Some(state))
+}
+
+fn status_action_in_snapshot(
+    target_root: &Path,
+    state: Option<&RewriteState>,
+) -> Result<Option<RewriteAction>> {
     let Some(execution) = load(target_root)? else {
         return Ok(None);
     };
@@ -398,7 +412,7 @@ pub(super) fn status_action(target_root: &Path) -> Result<Option<RewriteAction>>
         Request::Next { execution_mode, .. } => Some(execution_mode),
         Request::TargetQuality { .. } => None,
     };
-    let summary = running_summary(target_root);
+    let summary = running_summary(target_root, state);
     Ok(Some(RewriteAction::WaitRequired {
         execution_mode,
         summary: if execution_mode == Some(RewriteExecutionMode::AutoNext) {
@@ -476,26 +490,27 @@ fn alive(pid: u32) -> bool {
         || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
 }
 
-fn running_summary(target_root: &Path) -> String {
+fn running_summary(target_root: &Path, state: Option<&RewriteState>) -> String {
     let Ok(super::traffic_operation::TrafficOperationState::Live(active)) =
         super::traffic_operation::state(target_root)
     else {
         return "running coordinator operation".into();
     };
-    let state = RewriteStore::new(target_root)
-        .ok()
-        .and_then(|store| store.load_snapshot().ok().flatten());
+    // The status caller already loaded and refreshed this potentially large
+    // snapshot. Standalone operation inspections retain their own fallback.
+    let loaded = if state.is_none() {
+        RewriteStore::new(target_root)
+            .ok()
+            .and_then(|store| store.load_snapshot().ok().flatten())
+    } else {
+        None
+    };
+    let state = state.or(loaded.as_ref());
     let methods = recorded_methods(
-        state
-            .as_ref()
-            .and_then(|state| state.case_source.as_deref()),
+        state.and_then(|state| state.case_source.as_deref()),
         active.api.as_deref(),
     );
-    traffic_summary(
-        &active,
-        replay_progress(target_root, state.as_ref()),
-        &methods,
-    )
+    traffic_summary(&active, replay_progress(target_root, state), &methods)
 }
 
 fn traffic_summary(

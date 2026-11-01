@@ -425,9 +425,15 @@ pub(super) fn git_text(target_root: &Path, args: &[&str]) -> Result<String> {
 }
 
 pub(super) fn git_bytes(target_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    // Only identity/history reads participate in a status snapshot. Other Git
-    // commands may mutate refs or files, so execute them and discard prior reads.
-    let cacheable = matches!(args.first(), Some(&"rev-parse" | &"merge-base" | &"log"));
+    // Read-only comparisons share the same query snapshot as identity/history.
+    // Commands that can write refs or files must discard those observations.
+    let cacheable = matches!(
+        args.first(),
+        Some(&"rev-parse" | &"merge-base" | &"log" | &"diff" | &"ls-files")
+    ) && !args
+        .iter()
+        .take_while(|arg| **arg != "--")
+        .any(|arg| *arg == "--output" || arg.starts_with("--output="));
     if cacheable {
         if let Some(output) = cache::output(target_root, args) {
             return Ok(output);

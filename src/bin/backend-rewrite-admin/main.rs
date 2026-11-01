@@ -5,10 +5,12 @@ use std::process::ExitCode;
 use anyhow::{Result, ensure};
 use clap::{Args, Parser, Subcommand};
 use traffic_e2e::{
-    KubernetesSourceOptions, RewriteCaseGroupRebuildOptions, RewriteRepairCancelOptions,
-    RewriteReplayRetryOptions, SourceUpgradeOptions, StartupSnapshotRecaptureOptions,
-    cancel_misrouted_rewrite_repair, rebuild_rewrite_case_groups, recapture_startup_snapshot,
+    KubernetesSourceOptions, RewriteCaseGroupRebuildOptions, RewriteContext,
+    RewriteRepairCancelOptions, RewriteReplayRetryOptions, SourceUpgradeOptions,
+    StartupSnapshotRecaptureOptions, cancel_misrouted_rewrite_repair,
+    compact_rewrite_decision_history, rebuild_rewrite_case_groups, recapture_startup_snapshot,
     retry_rewrite_replay_after_out_of_band_run, upgrade_source_snapshot,
+    verify_rewrite_decision_history,
 };
 
 #[derive(Debug, Parser)]
@@ -33,12 +35,28 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum AdminCommand {
+    /// Maintain archived decision history without advancing the rewrite workflow.
+    History(HistoryArgs),
     /// Replace the captured source image and runtime inputs from a ready Kubernetes Pod.
     Source(SourceArgs),
     /// Repair immutable startup inputs after an explicit project declaration change.
     Startup(StartupArgs),
     /// Repair administrator-confirmed coordinator routing mistakes.
     Repair(RepairArgs),
+}
+
+#[derive(Debug, Args)]
+struct HistoryArgs {
+    #[command(subcommand)]
+    command: HistoryCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum HistoryCommand {
+    /// Move inline history to immutable archives while the coordinator is idle.
+    Compact,
+    /// Read and validate referenced history archives without changing state.
+    Verify,
 }
 
 #[derive(Debug, Args)]
@@ -165,6 +183,22 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        AdminCommand::History(args) => {
+            let context = RewriteContext {
+                target_root: cli.target_root,
+            };
+            let result = match args.command {
+                HistoryCommand::Compact => compact_rewrite_decision_history(context)?,
+                HistoryCommand::Verify => verify_rewrite_decision_history(context)?,
+            };
+            if cli.pretty {
+                serde_json::to_writer_pretty(std::io::stdout(), &result)?;
+            } else {
+                serde_json::to_writer(std::io::stdout(), &result)?;
+            }
+            println!();
+            Ok(())
+        }
         AdminCommand::Source(args) => match args.command {
             SourceCommand::Upgrade(args) => {
                 ensure!(

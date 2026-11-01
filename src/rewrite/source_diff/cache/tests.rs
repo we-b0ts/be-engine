@@ -130,3 +130,65 @@ fn failures_are_not_cached_and_mutations_discard_reads() {
         );
     });
 }
+
+#[test]
+fn comparisons_preserve_identity_reads_and_refresh_between_queries() {
+    let root = repository("first");
+    let tracked = root.path().join("tracked.txt");
+    std::fs::write(&tracked, "before").unwrap();
+    git(root.path(), &["add", "tracked.txt"]);
+    git(root.path(), &["commit", "-qm", "tracked"]);
+    let diff = ["diff", "--no-ext-diff", "--name-only", "HEAD", "--", "."];
+    let files = ["ls-files", "--others", "--exclude-standard", "--", "."];
+    scope(|| {
+        let head = git_text(root.path(), &["rev-parse", "HEAD"]).unwrap();
+        assert!(git_text(root.path(), &diff).unwrap().is_empty());
+        assert!(git_text(root.path(), &files).unwrap().is_empty());
+        assert_eq!(
+            super::output(root.path(), &["rev-parse", "HEAD"]),
+            Some(head.into_bytes())
+        );
+        // As with identity reads, one query observes its first successful read.
+        std::fs::write(&tracked, "after").unwrap();
+        std::fs::write(root.path().join("untracked.txt"), "new").unwrap();
+        scope(|| {
+            assert!(git_text(root.path(), &diff).unwrap().is_empty());
+            assert!(git_text(root.path(), &files).unwrap().is_empty());
+        });
+    });
+    scope(|| {
+        assert_eq!(git_text(root.path(), &diff).unwrap().trim(), "tracked.txt");
+        assert_eq!(
+            git_text(root.path(), &files).unwrap().trim(),
+            "untracked.txt"
+        );
+    });
+}
+
+#[test]
+fn diff_output_writes_are_executed_and_invalidate_prior_reads() {
+    for separate in [false, true] {
+        let root = repository("first");
+        let output = root.path().join("diff.txt");
+        let name = output.to_str().unwrap();
+        let joined = format!("--output={name}");
+        let args = if separate {
+            vec!["diff", "--no-ext-diff", "--output", name, "HEAD"]
+        } else {
+            vec!["diff", "--no-ext-diff", &joined, "HEAD"]
+        };
+        scope(|| {
+            let before = git_text(root.path(), &["rev-parse", "HEAD"]).unwrap();
+            git(root.path(), &["commit", "--allow-empty", "-qm", "changed"]);
+            git_text(root.path(), &args).unwrap();
+            assert!(output.is_file());
+            assert_ne!(
+                git_text(root.path(), &["rev-parse", "HEAD"]).unwrap(),
+                before
+            );
+            std::fs::remove_file(&output).unwrap();
+            git_text(root.path(), &args).unwrap();
+            assert!(output.is_file());
+        });
+    }
+}

@@ -364,7 +364,12 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
             .dependency_review
             .decisions
             .insert_group(group.clone())?;
-        state.dependency_review.decision_history.push_group(group);
+        state.dependency_review.decision_history.record(
+            group,
+            &state.workflow_id,
+            &state.recording_run_id,
+            &original.identity,
+        );
         {
             let requirement = proposal
                 .impact
