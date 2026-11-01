@@ -21,6 +21,18 @@ pub(crate) trait InputTiming: Send + Sync {
     fn wait(&self, sequence: u64, completed: Vec<u64>) -> BoxFuture<'_, Result<Advance>>;
 }
 
+/// Business inputs retain the Source dependency-delivery prefix even when no
+/// business-completion profile makes their preceding gap compressible. Native
+/// ACKs, heartbeat controls and cancellation must remain independently runnable.
+pub(crate) fn delivery_prefix(action: &InputAction) -> bool {
+    matches!(&action.action, InputActionKind::Message { message }
+    if message.kind == MessageKind::Text
+        && matches!(decode_engine_io_text(&message.data, usize::MAX),
+            Ok(EngineIoPacket::Message(crate::interaction::socketio::SocketIoPacket {
+                kind: SocketIoKind::Event | SocketIoKind::BinaryEvent, ..
+            }))))
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub(crate) struct Advance {
     pub removed_ms: u64,

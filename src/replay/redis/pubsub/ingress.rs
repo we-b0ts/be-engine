@@ -69,6 +69,7 @@ impl Ingress {
                 Some(Evidence {
                     reference: DeliveryReference::NativePush(entry.slot),
                     completed_at: at,
+                    individual: true,
                 })
             })
             .collect()

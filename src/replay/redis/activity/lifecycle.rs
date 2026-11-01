@@ -88,25 +88,32 @@ impl RedisReplayState {
         )))
     }
 
-    pub(in crate::replay::redis) fn complete_activity(&mut self, prepared: &Prepared) {
-        self.complete_activity_delivery(prepared, None);
+    pub(in crate::replay::redis) fn complete_activity(
+        &mut self,
+        prepared: &Prepared,
+    ) -> Vec<usize> {
+        self.complete_activity_delivery(prepared, None)
     }
 
     /// Creation/deletion remain ordinary finite claims. The shared transaction
     /// has just consumed this witness, while the native lifetime still needs
     /// its pending token and original delivery coverage accounted for.
     pub(in crate::replay::redis) fn complete_finite_activity(&mut self, prepared: &Prepared) {
-        self.complete_activity_delivery(prepared, Some(prepared.witness));
+        let _ = self.complete_activity_delivery(prepared, Some(prepared.witness));
     }
 
-    fn complete_activity_delivery(&mut self, prepared: &Prepared, newly_consumed: Option<usize>) {
+    fn complete_activity_delivery(
+        &mut self,
+        prepared: &Prepared,
+        newly_consumed: Option<usize>,
+    ) -> Vec<usize> {
         if self
             .activity_refresh
             .pending
             .remove(&prepared.token)
             .is_none()
         {
-            return;
+            return Vec::new();
         }
         let p = &mut self.activity_refresh.profiles[prepared.profile];
         if matches!(prepared.kind, Completion::Read)
@@ -137,7 +144,7 @@ impl RedisReplayState {
             source_witness: super::runtime::reference(&self.exchanges[prepared.witness]),
             covered_source_observations: covered,
         };
-        for index in indices {
+        for &index in &indices {
             self.exchanges[index].status = ReplayExchangeStatus::Consumed;
             self.exchanges[index].matched_once = true;
         }
@@ -146,6 +153,7 @@ impl RedisReplayState {
         } else {
             self.activity_refresh.omitted += 1;
         }
+        indices
     }
 
     pub(in crate::replay::redis) fn fail_activity(&mut self, prepared: &Prepared) {

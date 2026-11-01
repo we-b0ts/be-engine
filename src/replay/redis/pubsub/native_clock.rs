@@ -85,6 +85,7 @@ impl NativeClock {
             .map(|entry| Evidence {
                 reference: DeliveryReference::NativePush(entry.slot),
                 completed_at: entry.source_at,
+                individual: true,
             })
             .collect()
     }

@@ -140,6 +140,10 @@ impl AppendStreams {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn append_stream_owns(&self, index: usize) -> bool {
+        self.append_streams.owners.contains_key(&index)
+    }
+
     /// Prepare a complete immutable Case once, before any selected write can claim bytes.
     pub(in crate::replay) fn prepare_append_case(&mut self, case: &str) -> Result<()> {
         if self.append_streams.prepared.contains(case) {
@@ -512,22 +516,28 @@ impl RedisReplayState {
         Ok(())
     }
 
-    pub(super) fn complete_append(&mut self, prepared: &PreparedAppend) {
+    pub(super) fn complete_append(&mut self, prepared: &PreparedAppend) -> Vec<usize> {
         let profile = &mut self.append_streams.profiles[prepared.profile];
+        let previous_delivered = profile.delivered;
         profile.in_flight.remove(&prepared.from);
         profile.completed.insert(prepared.from, prepared.to);
         while let Some(end) = profile.completed.remove(&profile.delivered) {
             profile.delivered = end;
         }
+        let mut indices = Vec::new();
         for piece in &profile.pieces {
             if piece.end <= profile.delivered {
                 self.exchanges[piece.index].status = ReplayExchangeStatus::Consumed;
                 self.exchanges[piece.index].matched_once = true;
+                if previous_delivered < piece.end {
+                    indices.push(piece.index);
+                }
             }
         }
         if profile.delivered == profile.bytes.len() {
             profile.bytes = Vec::new();
         }
+        indices
     }
 
     pub(super) fn fail_append(&mut self, prepared: &PreparedAppend) {

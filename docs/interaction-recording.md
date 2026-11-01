@@ -251,7 +251,25 @@ tokens at the same selected field are rejected as ambiguous. Request execution
 and private derived-input reconstruction use the same transformation; neither
 reads expected responses.
 
-`auto` requires an explicit `compressible_gap` with its Source completion time,
+In `auto`, business EVENT/BINARY_EVENT inputs also wait for successful delivery
+of individually timed finite Redis responses completed strictly before that input in Source.
+This prefix remains a prerequisite after the original deadline, including when
+no completion profile makes the gap compressible or another dependency protocol
+prevents compression. Later Source dependencies and in-flight handlers do not
+become prerequisites. Native client ACKs, Engine.IO heartbeat controls and
+independent cancellation stay runnable while a business input waits; the
+existing request/session budgets bound a missing prefix.
+
+Source-proven native effects keep their existing timing authority: coalesced
+observations/refreshes, APPEND regrouping, read commutation and shared setup
+cannot become new hard input predecessors. They still require their native
+coverage and final verification; they are not marked delivered or made optional.
+Compression uses exact successful native coverage, including fully delivered
+Source APPEND pieces. Partial writes cannot authorize a complete Source piece.
+Process-owned subscription aliases reuse only their validated real subscription
+response, while ordinary business responses retain their Case and epoch.
+
+Idle compression requires an explicit `compressible_gap` with its Source completion time,
 actual Target completion of the declared `after` inputs, and delivery of the
 finite Redis prefix completed before that input in Source. Redis matching,
 reservation and queued native messages do not count as delivery. A PUBLISH
@@ -275,14 +293,16 @@ Independent transport cancellation keeps its mapped original deadline, even if
 an earlier input is blocked; skipped inputs remain incomplete. A completion-bound
 close retains its explicit `after` prerequisites and the full interval after actual
 completion. Namespace/transport close gaps themselves are not compressed.
-A missing delivery gate falls back to the
-mapped original input deadline rather than extending it indefinitely.
+A compression-only gap without a delivery grant retains its mapped original
+deadline. A business input with an undelivered finite prefix retains its
+prerequisites until delivery, cancellation or the existing session deadline.
 
-The first implementation covers Redis response/native delivery. Cases containing
-other dependency protocols, missing timing metadata, explicit no-PONG programs,
-or `preserve_input_timing: true` keep recorded timing. Unmanaged execution without
-dependency feedback also keeps recorded timing. `recorded` overrides acceleration
-without changing immutable recordings or their policy. Neither mode changes lane
+The first implementation covers Redis response/native delivery. Other dependency
+protocols or explicit no-PONG programs disable compression while known Redis
+prefixes still gate business inputs. Missing Source clocks, unmanaged execution
+without dependency feedback, `preserve_input_timing: true`, or `recorded` mode
+retain the original timeline without additional delivery-prefix gates.
+Neither mode changes immutable recordings, their policy, lane
 matching or dependency assertions, and `http_stream_timing` remains independent.
 
 ## Closing a case and background work

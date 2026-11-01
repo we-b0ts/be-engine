@@ -10,7 +10,7 @@ use hyper::Request;
 use std::collections::BTreeMap;
 use tokio::time::{Duration, Instant, sleep_until};
 
-use super::timing::{Advance, cancellation, transport_cancellation};
+use super::timing::{Advance, cancellation, delivery_prefix, transport_cancellation};
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
     lifecycle::LifecycleDecision,
@@ -138,7 +138,7 @@ pub(super) async fn execute_with_feedback(
                 })
             });
         if let (Some(action), Some(timing)) = (admitted, &input_timing)
-            && action.compressible_gap
+            && (action.compressible_gap || delivery_prefix(action))
             && !cancellation(action)
             && timing_sequence != Some(action.sequence)
         {
@@ -157,7 +157,10 @@ pub(super) async fn execute_with_feedback(
                 );
             }
             if transcript.protocol == Protocol::SocketIo {
-                if input_timing.is_some() && action.compressible_gap && !cancellation(action) {
+                if input_timing.is_some()
+                    && (action.compressible_gap || delivery_prefix(action))
+                    && !cancellation(action)
+                {
                     return (timing_ready == Some(action.sequence)).then(Instant::now);
                 }
                 // Without dependency coverage no gap is eligible for acceleration.

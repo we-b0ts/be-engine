@@ -204,6 +204,7 @@ struct MatchedRedisExchange {
 pub(super) struct RedisReplayState {
     pub(in crate::replay) run_value_scopes: BTreeMap<Uuid, Arc<str>>,
     lifecycle: Lifecycle,
+    timing_deliveries: input_timing::Deliveries,
     activity_refresh: activity::ActivityRefreshes,
     pub(super) shared_source_directories: BTreeMap<String, PathBuf>,
     observations: observations::Observations,
@@ -581,7 +582,7 @@ async fn serve_connection(
                     if let Some(m) = &delivery.matched { replay.redis.fail_exchange(m, "callback case already ended".into()); }
                     continue;
                 }
-                let timing_scope = replay.input_timing.as_ref().map(|timeline| timeline.scope());
+                let timing_scope = input_timing::scope(&replay);
                 drop(replay);
                 let sent = tokio::time::timeout(std::time::Duration::from_secs(5), reader.inner.write_all(&delivery.bytes)).await;
                 let mut replay = state.lock().await;
@@ -594,9 +595,8 @@ async fn serve_connection(
                             continue;
                         }
                         replay.redis.pubsub.complete(delivery.push);
-                        if let (Some(timeline), Some((case, epoch))) = (&mut replay.input_timing, timing_scope) {
-                            timeline.delivered(&case, epoch, crate::replay::control::input_timing::DeliveryReference::NativePush(delivery.push));
-                        }
+                        input_timing::delivered(&mut replay, timing_scope.as_ref(),
+                            crate::replay::control::input_timing::DeliveryReference::NativePush(delivery.push));
                         replay.redis.lifecycle.notify_waiters();
                         if let Some(m) = &delivery.matched { replay.redis.complete_exchange(m); }
                     }

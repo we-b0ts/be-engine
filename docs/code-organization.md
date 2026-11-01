@@ -141,6 +141,12 @@ is unclear.
   response/native references and publish successful wire-delivery facts separately
   from matching and RPC completion. Supported native clocks reuse the same mapping;
   unsupported protocol delivery or recording timing retains original offsets.
+  Independently proven individual Redis delivery prefixes still gate Auto business inputs
+  without requiring compression coverage; ACKs, heartbeat and cancellation keep
+  their own native scheduling. Prefixes exclude future Source completions and
+  never infer handler completion.
+  Native coalescing/retiming retains native ownership; successful native completion
+  projects exact covered Source references into the delivery journal for compression.
   `heartbeat` records and validates the input program's causal PING/PONG bindings;
   `interaction/replay/socketio/heartbeat` schedules those responses from actual
   Target PING packets, separately from business completion barriers. Explicit

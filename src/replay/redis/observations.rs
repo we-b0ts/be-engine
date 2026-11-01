@@ -618,14 +618,18 @@ impl RedisReplayState {
         Some(prepared)
     }
 
-    pub(super) fn complete_observation(&mut self, prepared: &Prepared, witness: usize) {
+    pub(super) fn complete_observation(
+        &mut self,
+        prepared: &Prepared,
+        witness: usize,
+    ) -> Vec<usize> {
         if self
             .observations
             .in_flight
             .remove(&prepared.token)
             .is_none()
         {
-            return;
+            return Vec::new();
         }
         let profile = &self.observations.profiles[prepared.profile];
         let epoch = &profile.epochs[prepared.epoch];
@@ -658,7 +662,8 @@ impl RedisReplayState {
                 .initial_expiry
                 .map(|lifetime| profile.closed_expiry[lifetime].refresh_coverage(self)),
         };
-        for &index in &epoch.observations {
+        let indices = epoch.observations.clone();
+        for &index in &indices {
             let exchange = &mut self.exchanges[index];
             exchange.status = ReplayExchangeStatus::Consumed;
             exchange.matched_once = true;
@@ -668,6 +673,7 @@ impl RedisReplayState {
         } else {
             self.observations.omitted += 1;
         }
+        indices
     }
 
     pub(super) fn fail_observation(&mut self, prepared: &Prepared) {
