@@ -106,6 +106,15 @@ The shutdown association is frozen before awaiting manifest persistence or
 notifying failed asynchronous completion, so publication cannot release the last
 failed Case before that association is established.
 
+For recognized Python ASGI Socket.IO peers, the recorder also retains a native
+live-SID proof from the first observed WebSocket packet. A Source-initiated close
+is forwarded promptly and its close echo is flushed, but the original Case stays
+open until that exact SID confirms application disconnect completion. Redis or
+MySQL calls awaited by `on_disconnect` therefore remain Case dependencies even
+when they start after the WebSocket close. The existing cleanup budget still
+applies; unknown SIDs, unrelated errors and unconfirmed completion cannot publish
+a successful capture.
+
 Socket.IO ACK identities are released when their matching ACK is observed,
 independently of pending business completion. Reusing an acknowledged ID while
 the earlier business request awaits its terminal event is valid; reuse before

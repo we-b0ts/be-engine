@@ -162,6 +162,7 @@ pub(super) async fn dispatch(
             let (downstream, client_transport) = crate::interaction::websocket_transport::FramedTransport::new(TokioIo::new(downstream), true);
             let mut downstream = WebSocketStream::from_raw_socket(downstream, Role::Server, Some(socket_config)).await;
             let (mut upstream, upstream_control) = upstream::upgrade(upstream, socket_config).await?;
+            let mut source_close = closing::SourceClose::default();
             loop {
                 tokio::select! {
                     message = downstream.next() => {
@@ -212,11 +213,19 @@ pub(super) async fn dispatch(
                     }
                     message = upstream.next() => {
                         phase = "source_read";
-                        let Some(message) = message else { session.request_close(EndReason::ServerEof); break; };
+                        let Some(message) = message else {
+                            session.request_close(EndReason::ServerEof);
+                            phase = "source_close_confirmation";
+                            source_close.wait(&session).await?;
+                            break;
+                        };
                         let message = message?;
                         phase = "source_observe";
                         observe(&session, &message, false)?;
                         let close = matches!(message, Message::Close(_));
+                        if !close {
+                            source_close.capture_live(&session).await;
+                        }
                         phase = "downstream_send";
                         if let Err(error) = downstream.send(message).await {
                             if !failure::client_lost(&error) { return Err(error.into()); }
@@ -230,13 +239,21 @@ pub(super) async fn dispatch(
                             disconnect::observed(&session, &mut upstream, &upstream_control, &client_transport, &read_error.into()).await?;
                             break;
                         }
-                        if close { session.request_close(EndReason::ServerEof); break; }
+                        if close {
+                            session.request_close(EndReason::ServerEof);
+                            // A peer may await its WS close echo before starting
+                            // application disconnect. Flush it before probing.
+                            let _ = upstream.flush().await;
+                            phase = "source_close_confirmation";
+                            source_close.wait(&session).await?;
+                            break;
+                        }
                     }
                     _ = closing.changed() => {
                         client_transport.begin_cleanup();
                         let frame = Some(CloseFrame { code: CloseCode::Normal, reason: "recording case complete".into() });
                         phase = "close_prepare";
-                        let completion = closing::ApplicationClose::prepare(&session).await?;
+                        let completion = source_close.take(&session).await?;
                         // Engine.IO CLOSE releases the Source session before TCP shutdown.
                         let socket_io = session.observation.lock().expect("interaction observation poisoned").protocol() == crate::interaction::model::Protocol::SocketIo;
                         if socket_io {
