@@ -214,7 +214,17 @@ fn select(
         .filter(|(_, input)| offset.num_milliseconds() > i64::try_from(*input).unwrap_or(i64::MAX))
         .map(|(sequence, _)| *sequence)
         .collect();
-    let lifetime = window.end.context("native notification end missing")? - start;
+    let mut lifetime = window.end.context("native notification end missing")? - start;
+    if let Some(at) = window.untracked_at_ms {
+        lifetime =
+            lifetime
+                .min(chrono::TimeDelta::milliseconds(i64::try_from(at).context(
+                    "native notification input offset exceeds clock range",
+                )?));
+    }
+    if offset >= lifetime {
+        return Ok(None);
+    }
     let entry = Entry {
         case: window.case.clone(),
         namespace: namespace.into(),

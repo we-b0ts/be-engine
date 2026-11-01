@@ -16,7 +16,13 @@ pub(super) struct Window {
     pub namespaces: BTreeSet<String>,
     pub projectable: bool,
     pub inputs: Vec<(u64, u64)>,
+    pub untracked_at_ms: Option<u64>,
     pub selected: bool,
+}
+
+struct TrackedInputs {
+    acknowledgements: Vec<(u64, u64)>,
+    untracked_at_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -121,10 +127,11 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
         }) && ((end.and_then(|end| end.reason)
             == Some(crate::interaction::model::EndReason::ClientTransportEnd))
             == transport_end.is_some());
-        // Heartbeats do not create business prerequisites. Multi-input business
-        // projection is limited to one CONNECT and ACK-tracked client events;
-        // every preceding event still requires its actual Target ACK.
+        // Only the prefix preceding an input without an ACK is projectable.
+        // Retain later ACK identities for actual transport receipts, without
+        // using them to grant notifications beyond that prefix.
         let inputs = input.as_ref().and_then(tracked_inputs);
+        let untracked_at_ms = inputs.as_ref().and_then(|inputs| inputs.untracked_at_ms);
         let projectable = complete
             && clean
             && start.zip(closed_at).is_some_and(|(start, end)| end > start)
@@ -154,7 +161,10 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
             end: closed_at,
             namespaces,
             projectable,
-            inputs: inputs.unwrap_or_default(),
+            inputs: inputs
+                .map(|inputs| inputs.acknowledgements)
+                .unwrap_or_default(),
+            untracked_at_ms,
         });
         ensure!(
             windows.len() <= 16_384,
@@ -164,7 +174,7 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
     Ok(windows)
 }
 
-fn tracked_inputs(input: &InputTranscript) -> Option<Vec<(u64, u64)>> {
+fn tracked_inputs(input: &InputTranscript) -> Option<TrackedInputs> {
     if input.actions.len() > 128 {
         return None;
     }
@@ -187,10 +197,15 @@ fn tracked_inputs(input: &InputTranscript) -> Option<Vec<(u64, u64)>> {
     }
     let mut ids = BTreeSet::new();
     let mut inputs = Vec::new();
+    let mut untracked_at_ms = None;
     for action in input.actions.iter().skip(1) {
         if matches!(action.action, InputActionKind::TransportEnd { .. }) {
             // InputTranscript::validate confines this independent physical end
             // to the final action. It carries no business completion barrier.
+            continue;
+        }
+        if matches!(action.action, InputActionKind::Close { .. }) {
+            untracked_at_ms.get_or_insert(action.offset_ms);
             continue;
         }
         let event = match packet(action)? {
@@ -206,7 +221,6 @@ fn tracked_inputs(input: &InputTranscript) -> Option<Vec<(u64, u64)>> {
         if event.kind != SocketIoKind::Event
             || event.attachments != 0
             || event.namespace != connect.namespace
-            || !ids.insert(event.id?)
             || matches!(
                 event
                     .event_name()
@@ -216,9 +230,19 @@ fn tracked_inputs(input: &InputTranscript) -> Option<Vec<(u64, u64)>> {
         {
             return None;
         }
+        let Some(id) = event.id else {
+            untracked_at_ms.get_or_insert(action.offset_ms);
+            continue;
+        };
+        if !ids.insert(id) {
+            return None;
+        }
         inputs.push((action.sequence, action.offset_ms));
     }
-    Some(inputs)
+    Some(TrackedInputs {
+        acknowledgements: inputs,
+        untracked_at_ms,
+    })
 }
 
 fn read_input(path: &Path) -> Result<Option<Request>> {

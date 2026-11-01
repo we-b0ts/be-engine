@@ -105,7 +105,10 @@ is unclear.
   events with ACK IDs. `interaction/replay/socketio/native_receipts` correlates
   actual sent inputs and received ACK metadata independently of business
   completion and fast timing; the native clock retains Source windows, original
-  subscription ownership and the current request epoch.
+  subscription ownership and the current request epoch. An input without an ACK
+  or an explicit close ends the notification prefix, rather than invalidating
+  preceding notifications. That boundary also limits delivery lifetime; later
+  actual ACK identities remain admissible without extending the prefix.
   RESP delivery retains wire consumption and Case cancellation checks; the
   adapter and request contracts retain strict callback result comparison.
   `replay/assertion/interaction/client_ack` separately owns original client
