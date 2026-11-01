@@ -31,6 +31,7 @@ pub(in crate::recorder) struct LedgerWriter {
     cases: BTreeMap<Uuid, Vec<ScopeRecordLocation>>,
     startup: Vec<ScopeRecordLocation>,
     process: Vec<ScopeRecordLocation>,
+    shutdown: Vec<ScopeRecordLocation>,
     unknown: Vec<ScopeRecordLocation>,
     inputs: BTreeMap<Uuid, RecordingInput>,
     capture_policy_identity: String,
@@ -62,6 +63,7 @@ impl LedgerWriter {
             cases: BTreeMap::new(),
             startup: vec![],
             process: vec![],
+            shutdown: vec![],
             unknown: vec![],
             inputs: BTreeMap::new(),
             capture_policy_identity,
@@ -298,6 +300,7 @@ impl LedgerWriter {
             }
             DependencyOwner::Startup { .. } => self.startup.push(location),
             DependencyOwner::Process { .. } => self.process.push(location),
+            DependencyOwner::Shutdown { .. } => self.shutdown.push(location),
             DependencyOwner::Unattributed { .. } => {
                 self.unattributed += 1;
                 self.unknown.push(location);
@@ -349,6 +352,17 @@ impl LedgerWriter {
                 origin_case_id: case.0.id,
                 task_instance: None,
             };
+        }
+        if let Some(targets) = targets.filter(|t| t.phase == CapturePhase::Shutdown) {
+            return targets.shutdown_case_id.map_or_else(
+                || DependencyOwner::Unattributed {
+                    reason: "shutdown_without_running_case".into(),
+                },
+                |origin_case_id| DependencyOwner::Shutdown {
+                    process_epoch: self.process_epoch,
+                    origin_case_id,
+                },
+            );
         }
         if targets.is_some_and(|t| t.bootstrap_open && t.phase == CapturePhase::Startup)
             || global.is_some_and(|a| {
@@ -402,6 +416,7 @@ impl LedgerWriter {
         for (name, scope, locations) in [
             ("startup", ScopeKind::Startup, &self.startup),
             ("process", ScopeKind::Process, &self.process),
+            ("shutdown", ScopeKind::Shutdown, &self.shutdown),
             ("unattributed", ScopeKind::Unattributed, &self.unknown),
         ] {
             write_json(
@@ -485,6 +500,7 @@ impl LedgerWriter {
         for name in [
             "indexes/startup-scope.json",
             "indexes/process-scope.json",
+            "indexes/shutdown-scope.json",
             "indexes/unattributed-scope.json",
             "recording-network.json",
             "dependencies-debug.jsonl",

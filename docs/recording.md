@@ -58,7 +58,7 @@ translation happens when configuration is loaded; Replay request processing and
 dependency matching use the same effective runtime settings.
 
 Normal SIGTERM/SIGINT shutdown first withdraws discovery and closes admission of
-new cases. Source, Recorder and admitted sessions remain alive for up to **15
+new cases. Source, Recorder and admitted sessions remain alive for up to **60
 seconds**, waiting for primary requests, dependency tails and case publication.
 Existing Socket.IO polling follow-ups may finish their admitted session. Stream
 idle windows, absolute request deadlines and dependency persistence budgets
@@ -71,15 +71,31 @@ an internal safety stop (`source_isolation_required`). Source isolation can
 complete a valid recording after an asynchronous dependency failure or deadline;
 it does not imply that the operator stopped the container.
 
-If an uncommitted case is still incomplete after 15 seconds, it fails with
+If an uncommitted case is still incomplete after 60 seconds, it fails with
 `shutdown_case_drain_timeout`. An earlier independent case failure is preserved.
 The supervisor writes `recording-shutdown.json` before stopping Source, retaining
 the shutdown trigger, elapsed time, outcome and affected case identities. This
 also distinguishes case truncation from a subsequent dependency drain error.
 Cases already inside their publication commit barrier finish that transaction.
-The 15-second limit bounds the normal case wait; process termination and evidence
+The 60-second limit bounds the normal case wait; process termination and evidence
 cleanup follow their existing separate budgets. Low-level Recorder shutdown uses
 `recording.shutdown_case_drain_timeout_ms` for its own final drain.
+
+The first admission-close or isolation boundary freezes the sole running Case,
+if present. Requests already admitted to that Case retain their original owner;
+new requests while its dependency window remains open also belong to the Case.
+After that window closes, otherwise unowned teardown requests use a separate
+`shutdown` owner with the frozen `origin_case_id` (the `post-<case_id>`
+relationship). They are stored once in the central ledger and referenced by
+`indexes/shutdown-scope.json`, independently of the primary Case's result.
+Declared process-task ownership and ambiguous selector failures retain priority.
+
+If no Case was running at the first shutdown boundary, teardown requests remain
+unattributed (`shutdown_without_running_case`) and still require analysis. A
+previously completed Case or a reserved but unstarted input cannot supply the
+association later. Associated shutdown evidence does not request repository
+analysis, repair a failed Case, supply primary Replay responses, or certify a
+WholeSource pass; its unexecuted mandatory dependencies remain visible separately.
 
 HTTP request waits and HTTP streaming duration share
 `recorder.http_gateway.request_timeout_ms`, default 900000 ms (900 seconds).

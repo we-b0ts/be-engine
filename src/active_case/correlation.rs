@@ -12,6 +12,7 @@ impl DependencyTargets {
             process_rule_ids: self.process_rule_ids.clone(),
             unattributed_reason: self.unattributed_reason,
             observed_case: self.observed_case,
+            shutdown_case_id: self.shutdown_case_id,
             phase: self.phase,
             capture: None,
             _reservations: Vec::new(),
@@ -76,6 +77,7 @@ impl ActiveCaseRegistry {
             process_rule_ids: original.process_rule_ids.clone(),
             unattributed_reason: original.unattributed_reason,
             observed_case,
+            shutdown_case_id: state.shutdown.and_then(|shutdown| shutdown.case_id),
             phase,
             _reservations: reservations,
             stream_tail: Vec::new(),
@@ -102,6 +104,7 @@ impl ActiveCaseRegistry {
             process_rule_ids: Vec::new(),
             unattributed_reason: None,
             observed_case,
+            shutdown_case_id: state.shutdown.and_then(|shutdown| shutdown.case_id),
             phase,
             capture: self
                 .capture

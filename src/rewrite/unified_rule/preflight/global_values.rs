@@ -247,7 +247,7 @@ pub(super) fn global_trace(
         .as_ref()
         .context("global formats require a Source recording")?;
     let (recording, _) = crate::dependency_index::recording_files(source)?;
-    for kind in ["startup", "process", "unattributed"] {
+    for kind in ["startup", "process", "shutdown", "unattributed"] {
         let path = recording.join(format!("indexes/{kind}-scope.json"));
         if !crate::dependency_index::scoped::exists(&path) {
             continue;

@@ -141,6 +141,15 @@ pub(crate) fn validate_completed_receipt(report: &Value) -> Result<BatchReconcil
             number(report, "unused_global_http_exchange_count")? as usize,
         ),
     ]);
+    let shutdown = receipt
+        .source_inventory
+        .by_owner_kind
+        .get("shutdown")
+        .copied()
+        .unwrap_or(0);
+    if shutdown > 0 {
+        unused.insert("shutdown".into(), shutdown.try_into().unwrap_or(usize::MAX));
+    }
     empty(
         report,
         &["unused_global_exchanges", "unused_global_http_exchanges"],
@@ -260,6 +269,17 @@ mod tests {
     fn validates_one_complete_actual_session() {
         let receipt = validate_completed_receipt(&completed()).unwrap();
         assert_eq!(receipt.required_cases.len(), 2);
+    }
+
+    #[test]
+    fn associated_shutdown_cannot_disappear_into_a_whole_source_pass() {
+        let mut report = completed();
+        report["batch_reconciliation"]["source_inventory"]["total_mandatory"] =
+            serde_json::json!(1);
+        report["batch_reconciliation"]["source_inventory"]["by_owner_kind"]["shutdown"] =
+            serde_json::json!(1);
+        // Even a relabeled optimistic receipt cannot replace real teardown I/O.
+        assert!(validate_completed_receipt(&report).is_err());
     }
 
     #[test]

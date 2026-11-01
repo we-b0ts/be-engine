@@ -137,6 +137,9 @@ fn capture_detail(event: &Value) -> Result<Option<RewriteDependencyCaptureDetail
         DependencyOwner::Unattributed { reason } => {
             detail.unattributed_reason = Some(bounded(&reason)?)
         }
+        DependencyOwner::Shutdown { origin_case_id, .. } => {
+            detail.origin_case_id = Some(origin_case_id)
+        }
         DependencyOwner::Startup { .. } => {}
     }
     Ok(Some(detail))

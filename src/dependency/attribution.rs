@@ -21,6 +21,12 @@ pub enum DependencyOwner {
         #[serde(skip_serializing_if = "Option::is_none")]
         invocation: Option<String>,
     },
+    /// Recorder-owned teardown associated at the first shutdown boundary.
+    /// This is a run scope, not another executable primary Case.
+    Shutdown {
+        process_epoch: Uuid,
+        origin_case_id: Uuid,
+    },
     Unattributed {
         reason: String,
     },
@@ -58,6 +64,16 @@ impl DependencyOwner {
                 Ok(())
             }
             Self::Unattributed { reason } => bounded(reason, "unattributed reason"),
+            Self::Shutdown {
+                process_epoch,
+                origin_case_id,
+            } => {
+                ensure!(
+                    !process_epoch.is_nil() && !origin_case_id.is_nil(),
+                    "shutdown requires a nonzero process epoch and original running Case"
+                );
+                Ok(())
+            }
         }
     }
 }

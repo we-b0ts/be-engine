@@ -53,6 +53,7 @@ impl CaptureMetadata {
             DependencyOwner::Startup { .. } => "startup",
             DependencyOwner::Case { .. } => "case",
             DependencyOwner::Process { .. } => "process",
+            DependencyOwner::Shutdown { .. } => "shutdown",
             DependencyOwner::Unattributed { .. } => "unattributed",
         }
     }
@@ -154,6 +155,7 @@ pub(crate) enum ScopeKind {
     Case { case_id: Uuid },
     Startup,
     Process,
+    Shutdown,
     Unattributed,
 }
 
@@ -202,7 +204,7 @@ pub(crate) struct RecordingInput {
 pub(crate) struct SemanticInventory {
     pub total_mandatory: u64,
     pub by_owner_kind: std::collections::BTreeMap<String, u64>,
-    /// Keys are Case UUIDs, startup, process, or unattributed; values are kinds.
+    /// Keys are Case UUIDs, startup, process, shutdown, or unattributed.
     pub unsupported_by_scope:
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>,
     pub unattributed_dependencies: u64,
@@ -212,7 +214,7 @@ impl Default for SemanticInventory {
     fn default() -> Self {
         Self {
             total_mandatory: 0,
-            by_owner_kind: ["case", "startup", "process", "unattributed"]
+            by_owner_kind: ["case", "startup", "process", "shutdown", "unattributed"]
                 .map(|kind| (kind.into(), 0))
                 .into_iter()
                 .collect(),
@@ -228,6 +230,7 @@ impl SemanticInventory {
             DependencyOwner::Case { origin_case_id, .. } => ("case", origin_case_id.to_string()),
             DependencyOwner::Startup { .. } => ("startup", "startup".into()),
             DependencyOwner::Process { .. } => ("process", "process".into()),
+            DependencyOwner::Shutdown { .. } => ("shutdown", "shutdown".into()),
             DependencyOwner::Unattributed { .. } => ("unattributed", "unattributed".into()),
         };
         self.total_mandatory += 1;

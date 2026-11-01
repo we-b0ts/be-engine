@@ -229,3 +229,75 @@ async fn mandatory_closure_does_not_materialize_a_second_complete_payload_select
     );
     assert!(!full_index.exists());
 }
+
+#[tokio::test]
+async fn associated_shutdown_has_authenticated_scope_without_entering_primary_inventory() {
+    use crate::recorder::{CaseContext, HttpExchangeEvent, capture_body};
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = crate::AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    config.http_gateway.enabled = false;
+    let app = crate::AppState::new(config).await.unwrap();
+    app.close_bootstrap("ready").await.unwrap();
+    let case = CaseContext {
+        id: Uuid::from_u128(123),
+        rule_name: "fixture".into(),
+        uri_group: None,
+    };
+    let guard = app.try_reserve_active_case(case.clone()).unwrap();
+    guard.activate_dependencies().unwrap();
+    app.inner.active_cases.close_admission();
+    super::super::super::test_support::recording::publish_case(app.recorder()).await;
+    drop(guard);
+    let id = Uuid::new_v4();
+    let targets = app.capture_dependency_start(ProtocolRef::Http { exchange_id: id });
+    app.record_event_for_targets(
+        RecorderEvent::HttpExchange(HttpExchangeEvent {
+            outcome: crate::DependencyExchangeOutcome::Response,
+            id,
+            timestamp: chrono::Utc::now(),
+            request_started_at: chrono::Utc::now(),
+            client_addr: None,
+            scheme: "http".into(),
+            method: "GET".into(),
+            uri: "/cleanup".into(),
+            authority: Some("worker.test:80".into()),
+            request_headers: Default::default(),
+            request_body: capture_body(b"", 16),
+            response_status: Some(200),
+            response_headers: Some(Default::default()),
+            response_body: Some(capture_body(b"done", 16)),
+            response_stream: None,
+            discovered_tcp_targets: vec![],
+            duration_ms: 1,
+            error: None,
+        }),
+        targets,
+    );
+    app.recorder().finish_run().await.unwrap();
+    let root = app.recorder().run_dir.as_ref();
+    let (_, manifest) = recording::manifest(root).unwrap();
+    assert!(manifest.capture_complete);
+    let inventory = effective(root, &manifest, &[]).unwrap();
+    assert_eq!(inventory.total_mandatory, 1);
+    assert_eq!(inventory.by_owner_kind["shutdown"], 1);
+    assert_eq!(inventory.unattributed_dependencies, 0);
+    assert!(inventory.unsupported_by_scope.is_empty());
+    let primary: ScopeIndex = serde_json::from_slice(
+        &std::fs::read(
+            root.join(&manifest.inputs[0].path)
+                .join("dependency-scope.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(primary.locations.is_empty());
+    assert!(
+        manifest
+            .files
+            .iter()
+            .any(|file| file.path == "indexes/shutdown-scope.json")
+    );
+}

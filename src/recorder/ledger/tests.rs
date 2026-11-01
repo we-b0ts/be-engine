@@ -6,6 +6,8 @@ use crate::recorder::{CaseContext, DependencyConnectFailureEvent, RecorderEvent}
 use crate::{AppConfig, AppState};
 use std::time::Duration;
 
+mod shutdown;
+
 fn failure() -> RecorderEvent {
     RecorderEvent::DependencyConnectFailure(DependencyConnectFailureEvent {
         id: Uuid::new_v4(),

@@ -289,6 +289,11 @@ pub(super) fn bind(
                 );
             }
         }
+        DependencyOwner::Shutdown { .. } => {
+            anyhow::bail!(
+                "shutdown association is recorded at the lifecycle boundary, not authored by an attribution rule"
+            )
+        }
         DependencyOwner::Unattributed { .. } => {
             anyhow::bail!("unresolved ownership cannot bind a passing attribution rule")
         }

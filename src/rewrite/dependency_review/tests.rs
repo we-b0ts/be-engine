@@ -6,6 +6,8 @@ use crate::{
 };
 use uuid::Uuid;
 
+mod shutdown;
+
 const POLICY: &str = "format: traffic-policy/v3\nsource_revision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nprocess_dependencies:\n  tasks:\n    refresh:\n      requests:\n        - http: {host: worker.test, method: GET, path: /refresh}\n        - redis: {operation: GET, keys: [{kind: exact, value: refresh}], ports: [6379]}\nrules: []\n";
 
 fn http(path: &str) -> RecorderEvent {
