@@ -84,14 +84,11 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
     );
     // Feedback cannot arrive between the archived snapshot and workflow replacement.
     let feedback = worker::events::lock(&target_root)?;
-    let previous = if options.record_new_traffic {
-        store.load_snapshot()?
-    } else {
-        store.load()?
-    };
+    let previous = store.load_for_replacement(options.record_new_traffic)?;
+    let previous_state = previous.as_ref().and_then(|old| old.current());
     let policy = crate::config::regression::RegressionScope::load(&target_root)?;
-    let mut state = match previous.clone() {
-        Some(previous) => reset(previous),
+    let mut state = match previous_state {
+        Some(previous) => reset(previous.clone()),
         None => super::initialization::new_state(
             &target_root,
             String::new(),
@@ -106,7 +103,7 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
     state.group_replay = None;
     state.last_group_replay = None;
     if !options.record_new_traffic {
-        if previous.is_none() {
+        if previous_state.is_none() {
             regression_scope::apply(&target_root, &mut state)?;
         }
         if state.recording_run_id.is_empty()
@@ -138,7 +135,7 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
     state.regression = Some(RegressionOrigin {
         previous_workflow_id: previous
             .as_ref()
-            .map(|s| s.workflow_id.clone())
+            .map(|s| s.workflow_id().to_owned())
             .unwrap_or_default(),
         started_at: chrono::Utc::now().to_rfc3339(),
         pr_base: project.pr_base.clone(),
@@ -154,8 +151,7 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
         superseded_recording_run_id: if options.record_new_traffic {
             policy.recording_run_id
         } else {
-            previous
-                .as_ref()
+            previous_state
                 .and_then(|s| s.regression.as_ref())
                 .and_then(|o| o.superseded_recording_run_id.clone())
                 .filter(|id| Some(id) == policy.recording_run_id.as_ref())
@@ -185,7 +181,7 @@ pub fn begin(options: RewriteRegressionBeginOptions) -> Result<RewriteRegression
     let next = action::for_status(&target_root, &state)?;
     Ok(RewriteRegressionBeginReport {
         schema_version: ACTION_SCHEMA_VERSION,
-        previous_workflow_id: previous.map(|s| s.workflow_id),
+        previous_workflow_id: previous.map(|s| s.workflow_id().to_owned()),
         archive,
         work_branch,
         next,

@@ -606,11 +606,15 @@ impl TimeCopyStore {
 }
 
 pub(crate) fn schema_rule(id: &str) -> bool {
-    id == crate::policy::GLOBAL_JSON_ID || id == "global.mysql" || id == "global.redis"
+    id == crate::policy::GLOBAL_JSON_ID
+        || id == "global.mysql"
+        || id == "global.redis"
+        || id == super::time::automatic::RULE_ID
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct TimeCopyLeaf {
+    pub(crate) rule_id: &'static str,
     pub(crate) pattern: String,
     pub(crate) pointer: String,
     pub(crate) value: Value,
@@ -625,33 +629,26 @@ pub(crate) fn global_leaves(
     clocks: super::json::AnchorClocks,
 ) -> Result<Vec<TimeCopyLeaf>> {
     let mut output = Vec::new();
-    for (pattern, field) in &plan.fields {
-        if !matches!(field, crate::policy::GlobalField::Time { .. }) {
+    for selected in plan.selected_fields_with_clocks(root, clocks)? {
+        let pointer = selected.pointer;
+        let Some(value) = root.pointer(&pointer) else {
             continue;
-        }
-        for pointer in super::delivery::select(pattern, root)? {
-            let Some(value) = root.pointer(&pointer) else {
-                continue;
-            };
-            let selected = field.select_contract_with_clock(
-                value,
-                clocks.dependency.source.or(clocks.case.source),
-            )?;
-            let Some(time) = selected.time() else {
-                continue;
-            };
-            super::json::parse_time_pair(value, value, &time)?;
-            output.push(TimeCopyLeaf {
-                pattern: pattern.clone(),
-                pointer,
-                value: value.clone(),
-                time,
-            });
-            ensure!(
-                output.len() <= MAX_CASE_COPIES,
-                "global time copy leaf enumeration exceeds its bound"
-            );
-        }
+        };
+        let Some(time) = selected.contract.time() else {
+            continue;
+        };
+        super::json::parse_time_pair(value, value, &time)?;
+        output.push(TimeCopyLeaf {
+            rule_id: selected.rule_id,
+            pattern: selected.pattern,
+            pointer,
+            value: value.clone(),
+            time,
+        });
+        ensure!(
+            output.len() <= MAX_CASE_COPIES,
+            "global time copy leaf enumeration exceeds its bound"
+        );
     }
     Ok(output)
 }

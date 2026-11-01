@@ -73,24 +73,26 @@ pub(super) fn compare(
     rule: &TimeField,
     anchor: crate::replay::assertion::RequestTimes,
 ) -> Result<ComparedTime> {
-    time::validate_numeric_category(source, actual)?;
+    let format = core_format(rule.format);
+    time::validate_representation(source, actual, format)?;
     let pair = (timestamp(source, rule)?, timestamp(actual, rule)?);
     config::tolerance(&rule.tolerance)?;
-    let anchor = match rule.format {
-        Format::UnixSeconds => {
-            time::timestamp_clocks(source, actual, TimestampFormat::UnixSeconds, anchor)
-        }
-        Format::UnixMilliseconds => {
-            time::timestamp_clocks(source, actual, TimestampFormat::UnixMilliseconds, anchor)
-        }
-        Format::UnixMicroseconds => {
-            time::timestamp_clocks(source, actual, TimestampFormat::UnixMicroseconds, anchor)
-        }
-        _ => anchor,
-    };
+    let anchor = time::timestamp_clocks(source, actual, format, anchor);
     time::compare_timestamp_nanos(pair.0, pair.1, TimeMode::PreserveRelative, anchor)
         .map_err(|_| anyhow::anyhow!("request timestamp differs from its recorded relative time or is missing its request anchor"))?;
     Ok(compared_pair(pair.0, pair.1, rule))
+}
+
+fn core_format(format: Format) -> TimestampFormat {
+    match format {
+        Format::UnixSeconds => TimestampFormat::UnixSeconds,
+        Format::UnixMilliseconds => TimestampFormat::UnixMilliseconds,
+        Format::UnixMicroseconds => TimestampFormat::UnixMicroseconds,
+        Format::Rfc3339 => TimestampFormat::Rfc3339,
+        Format::Iso8601Naive => TimestampFormat::Iso8601Naive,
+        Format::SqlDatetime => TimestampFormat::SqlDatetime,
+        Format::AmzDate => TimestampFormat::AmzDate,
+    }
 }
 
 fn compared_pair(source: i128, actual: i128, rule: &TimeField) -> ComparedTime {

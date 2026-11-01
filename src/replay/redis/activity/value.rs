@@ -1,6 +1,9 @@
 //! JSON refreshes reuse the shared timestamp kernel and keep all other leaves exact.
 use super::*;
-use crate::value_contract::{json::parse_time_value, time};
+use crate::value_contract::{
+    json::{parse_time_pair, parse_time_value},
+    time,
+};
 
 pub(super) fn decode(bytes: &[u8]) -> Result<Value> {
     ensure!(
@@ -78,12 +81,7 @@ pub(super) fn check(
         let after = actual
             .pointer(pointer)
             .context("activity Target timestamp absent")?;
-        ensure!(
-            std::mem::discriminant(before) == std::mem::discriminant(after),
-            "activity refresh changed timestamp representation"
-        );
-        let a = parse_time_value(before, contract)?;
-        let b = parse_time_value(after, contract)?;
+        let (a, b) = parse_time_pair(before, after, contract)?;
         time::validate_request_window(a, source_clock)?;
         time::validate_request_window(b, actual_clock)?;
         time::compare_timestamp_nanos(

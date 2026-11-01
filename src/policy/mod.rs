@@ -32,7 +32,9 @@ mod schema;
 pub(crate) mod signatures;
 pub use signatures::SignatureDefinition;
 mod strict_map;
+mod time_defaults;
 mod time_scope;
+pub use time_defaults::TimePolicy;
 pub use time_scope::ClockScope;
 
 pub use capability::*;

@@ -104,7 +104,7 @@ impl<'a> CopyProofs<'a> {
                 &leaf.pattern,
                 &leaf.pattern,
                 &leaf.value,
-                selected.id,
+                leaf.rule_id,
             )
             .map(|lookup| lookup.at(&leaf.pointer, &leaf.pattern))
         })

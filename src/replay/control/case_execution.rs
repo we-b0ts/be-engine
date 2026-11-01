@@ -13,17 +13,25 @@ pub(super) fn failed(state: &ReplayState, case: &str) -> bool {
 }
 
 pub(super) fn status(state: &ReplayState, case: Option<&str>) -> Value {
+    let has_response_time_copies = case.is_some_and(|case| {
+        state
+            .replay_policy
+            .as_ref()
+            .is_some_and(|policy| policy.request_contracts.has_time_copies(case))
+    });
     if let Some(case) = case
         && let Some(failure) = state.dependency_tails.failure(case)
     {
         return serde_json::json!({"ok":true,"case_id":case,"failed":true,
-            "kind":"case_no_progress","failures":[failure]});
+            "kind":"case_no_progress","failures":[failure],
+            "has_response_time_copies":has_response_time_copies});
     }
     let Some(case) = case.filter(|case| state.active_case_id.as_deref() == Some(*case)) else {
         return serde_json::json!({"ok":false,"error":"case_execution_status requires the active Case"});
     };
     if !failed(state, case) {
-        return serde_json::json!({"ok":true,"case_id":case,"failed":false,"failures":[]});
+        return serde_json::json!({"ok":true,"case_id":case,"failed":false,"failures":[],
+            "has_response_time_copies":has_response_time_copies});
     }
     let report = serde_json::to_value(state.snapshot_report()).expect("Replay report serializes");
     let mut failures = Vec::new();
@@ -86,5 +94,6 @@ pub(super) fn status(state: &ReplayState, case: Option<&str>) -> Value {
             }
         }
     }
-    serde_json::json!({"ok":true,"case_id":case,"failed":true,"failures":failures})
+    serde_json::json!({"ok":true,"case_id":case,"failed":true,"failures":failures,
+        "has_response_time_copies":has_response_time_copies})
 }

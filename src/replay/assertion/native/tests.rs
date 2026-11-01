@@ -2,6 +2,7 @@ use super::*;
 use crate::policy::native::*;
 use crate::policy::{Proof, TimeAnchor, TimeRelation, TimestampFormat};
 use serde_json::json;
+mod automatic;
 
 fn clocks() -> AnchorClocks {
     AnchorClocks {

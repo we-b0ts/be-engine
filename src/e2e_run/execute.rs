@@ -59,7 +59,15 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
     store::begin_active(&layout, &state)?;
     let _ = active_progress::write(&layout, &state, ActiveProgressPhase::Building);
 
-    if let Err(error) = run_active(&config, &layout, &inventory, &mut state).await {
+    if let Err(error) = run_active(
+        &config,
+        &layout,
+        &inventory,
+        &mut state,
+        crate::replay::FinalizationScope::WholeSession,
+    )
+    .await
+    {
         state.push_error(format!("{error:#}"));
         state.status = RunStatus::Interrupted;
         mark_unfinished_cases(&mut state);
@@ -254,7 +262,15 @@ pub(crate) async fn run_e2e_apis(
     )?;
     store::begin_active(&layout, &state)?;
     let _ = active_progress::write(&layout, &state, ActiveProgressPhase::Building);
-    if let Err(error) = run_active(&config, &layout, &focused_inventory, &mut state).await {
+    if let Err(error) = run_active(
+        &config,
+        &layout,
+        &focused_inventory,
+        &mut state,
+        crate::replay::FinalizationScope::SelectedCases,
+    )
+    .await
+    {
         state.push_error(format!("{error:#}"));
         state.status = RunStatus::Interrupted;
         mark_unfinished_cases(&mut state);
@@ -438,6 +454,7 @@ async fn run_active(
     layout: &RunLayout,
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
+    finalization: crate::replay::FinalizationScope,
 ) -> Result<()> {
     state.executed_replay_identity = Some(crate::rewrite::batch_execution_identity(
         &layout.target_root,
@@ -473,8 +490,16 @@ async fn run_active(
     state.replay_pid = replay.id();
     store::write_active(layout, state)?;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingReplay);
-    let outcome =
-        run_active_with_replay(config, layout, inventory, state, &target_image, &mut replay).await;
+    let outcome = run_active_with_replay(
+        config,
+        layout,
+        inventory,
+        state,
+        &target_image,
+        &mut replay,
+        finalization,
+    )
+    .await;
     if outcome.is_err() {
         if let Err(error) =
             super::interrupted_evidence::preserve(config, layout, inventory, state).await
@@ -495,6 +520,7 @@ async fn run_active_with_replay(
     state: &mut ActiveRunState,
     target_image: &crate::TargetImage,
     replay: &mut Child,
+    finalization: crate::replay::FinalizationScope,
 ) -> Result<()> {
     let ready = async {
         tokio::select! {
@@ -554,7 +580,7 @@ async fn run_active_with_replay(
     store::write_active(layout, state)?;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Finalizing);
 
-    finalize_replay(state, intentionally_incomplete).await?;
+    finalize_replay(state, intentionally_incomplete, finalization).await?;
     wait_for_replay(replay).await?;
     state.replay_pid = None;
     build_final_evidence(config, layout, inventory, state)?;
@@ -659,6 +685,7 @@ pub(super) async fn execute_case(
         .response_assertions
         .as_ref()
         .is_some_and(|runtime| runtime.needs_time_copies())
+        && execution_status["has_response_time_copies"].as_bool() != Some(false)
     {
         let snapshot = control(state, "response_time_copies", Some(case_id), false, false).await?;
         serde_json::from_value(snapshot["time_copies"].clone())

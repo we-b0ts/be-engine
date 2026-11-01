@@ -41,12 +41,12 @@ pub(super) fn request_arguments_match(
         ArgumentSnapshot {
             args: &exchange.args,
             extras: exchange.extras.as_deref(),
-            observed_at: exchange.record.timestamp,
+            observed_at: source_start(&exchange.record),
         },
         ArgumentSnapshot {
             args: normalized.as_deref().unwrap_or(&request.args),
             extras: request.extras.as_deref(),
-            observed_at,
+            observed_at: Some(observed_at),
         },
     )
 }
@@ -410,11 +410,16 @@ pub(in crate::replay) fn source_observation(
     Ok(())
 }
 
-fn source_start(record: &RecordedExchange) -> Option<DateTime<Utc>> {
-    i64::try_from(record.duration_ms).ok().and_then(|duration| {
-        record
-            .timestamp
-            .checked_sub_signed(chrono::Duration::milliseconds(duration))
+pub(super) fn source_start(record: &RecordedExchange) -> Option<DateTime<Utc>> {
+    record.request_started_at.or_else(|| {
+        if record.timestamp == DateTime::UNIX_EPOCH {
+            return None;
+        }
+        i64::try_from(record.duration_ms).ok().and_then(|duration| {
+            record
+                .timestamp
+                .checked_sub_signed(chrono::Duration::milliseconds(duration))
+        })
     })
 }
 

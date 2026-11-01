@@ -164,15 +164,7 @@ pub(super) fn observe_global(
         dependency::validate_metadata(&witness, event)?;
         crate::policy_evidence::verify_case_clock(&witness, evidence.report)?;
         let completed = timestamp(&event["timestamp"]);
-        let started = timestamp(&event["request_started_at"]).or_else(|| {
-            completed
-                .zip(event["duration_ms"].as_u64())
-                .and_then(|(time, duration)| {
-                    time.checked_sub_signed(chrono::TimeDelta::milliseconds(
-                        i64::try_from(duration).ok()?,
-                    ))
-                })
-        });
+        let started = crate::replay::dependency_started_at(event);
         ensure!(
             witness.metadata.clocks.case.source == evidence.case_started
                 && witness
@@ -267,6 +259,11 @@ pub(super) fn observe_global(
                     crate::replay::redis_delivered_scalar_time_copies(
                         read,
                         redis,
+                        &policy
+                            .global_json
+                            .as_ref()
+                            .context("compiled time settings unavailable")?
+                            .time,
                         clocks,
                         &mut record,
                     )?;
@@ -275,6 +272,7 @@ pub(super) fn observe_global(
                     crate::replay::redis_delivered_global_time_copies(
                         read,
                         plan,
+                        policy.redis.as_ref(),
                         clocks,
                         &mut record,
                     )?;

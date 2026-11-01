@@ -1,13 +1,13 @@
 use super::*;
 
 fn clocks() -> AnchorClocks {
-    AnchorClocks {
-        case: crate::value_contract::time::ClockPair {
+    AnchorClocks::for_response(
+        crate::value_contract::time::ClockPair::default(),
+        crate::value_contract::time::ClockPair {
             source: Some("2026-10-16T00:00:00Z".parse().unwrap()),
             target: Some("2026-10-16T00:01:00Z".parse().unwrap()),
         },
-        ..Default::default()
-    }
+    )
 }
 
 fn base() -> Value {
@@ -232,14 +232,11 @@ fn changed_array_cardinality_does_not_supply_a_time_or_unordered_draft() {
 }
 
 #[test]
-fn naive_sql_and_json_times_are_only_proof_required_drafts_with_real_clock_validation() {
-    for (source, target, format) in [
-        ("2026-10-16 08:00:01", "2026-10-16 08:01:01", "sql_datetime"),
-        (
-            "2026-10-16T08:00:01",
-            "2026-10-16T08:01:01",
-            "iso8601_naive",
-        ),
+fn builtin_standard_strings_do_not_offer_redundant_rule_drafts() {
+    for (source, target) in [
+        ("2026-10-16 08:00:01", "2026-10-16 08:01:01"),
+        ("2026-10-16T08:00:01", "2026-10-16T08:01:01"),
+        ("2026-10-16T00:00:01Z", "2026-10-16T00:01:01Z"),
     ] {
         let mut drafts = Drafts::default();
         observe(
@@ -248,14 +245,7 @@ fn naive_sql_and_json_times_are_only_proof_required_drafts_with_real_clock_valid
             json!({"at":target}),
             "case",
         );
-        assert_eq!(drafts.values.len(), 1);
-        let draft = &drafts.values[0];
-        assert_eq!(
-            draft["draft_policy"]["json"]["fields"]["/at"]["formats"],
-            json!([format])
-        );
-        assert_eq!(draft["plan_ready"], false);
-        assert_eq!(draft["source_proof_required"], true);
+        assert!(drafts.candidates().is_empty());
         let mut invalid = Drafts::default();
         observe(
             &mut invalid,
@@ -275,9 +265,14 @@ fn format_drafts_deduplicate_across_api_and_carrier_positions() {
         ("dependency.request", "POST /two"),
     ] {
         let base = json!({"surface":surface,"match":{"api":api},"slot":"body"});
-        let clocks = AnchorClocks {
-            dependency: clocks().case,
-            ..clocks()
+        let clocks = if surface == "api.response" {
+            clocks()
+        } else {
+            AnchorClocks::for_request(
+                Default::default(),
+                clocks().observation(),
+                Default::default(),
+            )
         };
         drafts
             .collect(
@@ -295,4 +290,42 @@ fn format_drafts_deduplicate_across_api_and_carrier_positions() {
     let candidates = drafts.candidates();
     assert_eq!(candidates[0]["location_count"], 2);
     assert!(candidates[0]["draft_policy"].get("rules").is_none());
+}
+
+#[test]
+fn response_drafts_use_observed_completion_delta_and_never_borrow_request_clocks() {
+    let pair = |source, target| crate::value_contract::time::ClockPair {
+        source: chrono::DateTime::from_timestamp(source, 0),
+        target: chrono::DateTime::from_timestamp(target, 0),
+    };
+    for (target, completion_available) in [
+        (1_792_108_950_i64, true),
+        (1_792_108_890, true),
+        (1_792_108_890, false),
+    ] {
+        let clocks = AnchorClocks::for_response(
+            pair(1_792_108_800, 1_792_108_860),
+            if completion_available {
+                pair(1_792_108_830, 1_792_108_950)
+            } else {
+                Default::default()
+            },
+        );
+        let mut drafts = Drafts::default();
+        drafts
+            .collect(
+                &json!({"at":1_792_108_830_i64}),
+                &json!({"at":target}),
+                &JsonLocation::default(),
+                &base(),
+                "independent-response",
+                clocks,
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            drafts.candidates().len(),
+            usize::from(completion_available && target == 1_792_108_950)
+        );
+    }
 }

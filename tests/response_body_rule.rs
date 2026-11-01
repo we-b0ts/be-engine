@@ -246,17 +246,21 @@ fn typed_docx_timestamp_rule_preserves_relative_time_and_retires_legacy_authorin
         &expected,
         serde_json::to_vec(&json!({
             "status": 200,
+            "timestamp": "2024-01-01T19:04:15Z",
             "body": {"encoding":"base64","data":STANDARD.encode(docx_body("2024-01-02T03:04:05Z", 6)),"truncated":false}
         }))
         .unwrap(),
     )
     .unwrap();
+    // The exports take 10s and 30s. Their completed response events, rather
+    // than request starts, preserve the one-hour document timestamp offset.
     fs::write(
         &actual,
         serde_json::to_vec(&json!({
             "version": 1,
             "status": 200,
-            "request_sent_at": "2024-01-01T20:04:05Z",
+            "request_sent_at": "2024-01-01T20:03:45Z",
+            "response_completed_at": "2024-01-01T20:04:15Z",
             "body": {"encoding":"base64","data":STANDARD.encode(docx_body("2024-01-02T04:04:05Z", 8)),"truncated":false}
         }))
         .unwrap(),

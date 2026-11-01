@@ -27,6 +27,16 @@ source consumption or the absence of an equivalent recorded endpoint.
 
 ## Local Cache And Runtime State
 
+Startup dirt does not decide API acceptance and the ordinary API result does not
+list initialization dependencies. When a real response or Case dependency failure
+suggests missing startup state, run `backend-rewrite evidence --api /route` and
+follow the returned query ending in `source-process-traffic` with
+`backend-rewrite evidence <query-id>`. This is the on-demand entry point for
+recorded bootstrap and background traffic; use the returned
+`target-runtime-diagnostics` query for the actual Target startup and readiness
+evidence. These observations guide source tracing and do not establish causality
+or successful dependency consumption on their own.
+
 A response-affecting local cache is target behavior. Preserve source cache:
 
 - key construction and namespace;

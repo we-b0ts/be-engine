@@ -185,3 +185,49 @@ fn moving_a_previously_used_case_scope_invalidates_that_method_and_preserves_unr
     );
     assert_eq!(fs::read(&fixture.paths.replay).unwrap(), before);
 }
+
+#[test]
+fn an_implementer_can_return_unused_traffic_without_proving_exclusion_or_passing_responses() {
+    let fixture = fixture(true);
+    fixture.confirm();
+    let mut state = fixture.state();
+    state.attempts[0].gates.responses = crate::E2eResponseGate::Nonpassing;
+    state.attempts[0].counts.response_passed = 0;
+    state.attempts[0].counts.response_nonpassing = 1;
+    fixture.store().save(&state).unwrap();
+    let raw: Value = serde_json::from_str(
+        fs::read_to_string(
+            state
+                .case_source
+                .as_ref()
+                .unwrap()
+                .join("dependencies.jsonl"),
+        )
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap(),
+    )
+    .unwrap();
+    let path = fixture.root().join(".traffic-e2e/local/return-unused.json");
+    write(
+        &path,
+        json!({"schema":"dependency-attribution/v3","api":"/api",
+        "evidence_id":fixture.evidence().evidence_id,
+        "source_exchange_ids":[raw["capture"]["exchange_id"]],"reason":"This concrete dependency is not part of my API"}),
+    );
+    let before = fs::read(&fixture.paths.replay).unwrap();
+    let response = crate::rewrite::claim_foreign_unused(AttributionCommandOptions {
+        target_root: fixture.root().into(),
+        file: path,
+    })
+    .unwrap();
+    assert_eq!(response["owner"], "repository_analyst");
+    assert_eq!(response["accepted"], false);
+    let stored = fixture.state();
+    let claim = stored.dependency_review.claims.values().next().unwrap();
+    assert!(claim.exclusion.is_none());
+    assert!(!claim.reason.is_empty());
+    assert!(stored.dependency_review.receipts.is_empty());
+    assert_eq!(fs::read(&fixture.paths.replay).unwrap(), before);
+}

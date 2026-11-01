@@ -18,11 +18,11 @@ async fn table_time_templates_replay_shards_without_consuming_a_wrong_shard() {
         for source_prepared in [false, true] {
             for target_prepared in [false, true] {
                 let sql = TEMPLATE.replace("api_keys", "subtasks_0155");
-                let mut write = exchange("UPDATE subtasks_0155 SET last_used_at='2020-01-01 00:00:00', updated_at=now() WHERE subtasks_0155.id=7", json!({"status":"ok","affected_rows":1}));
+                let mut write = exchange("UPDATE subtasks_0155 SET last_used_at='2020-01-01 00:00:00.000000', updated_at=now() WHERE subtasks_0155.id=7", json!({"status":"ok","affected_rows":1}));
                 if source_prepared {
                     write["command"] = json!("COM_STMT_EXECUTE");
                     write["sql"] = json!(sql);
-                    write["params"] = json!([{"kind":"datetime","value":"2020-01-01 00:00:00"},{"kind":"integer","value":7}]);
+                    write["params"] = json!([{"kind":"datetime","value":"2020-01-01 00:00:00.000000"},{"kind":"integer","value":7}]);
                 }
                 let (temp, addr, runtime, task) = fixture_with_policy(&[write], Some(&policy)).await;
                 let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
@@ -31,7 +31,7 @@ async fn table_time_templates_replay_shards_without_consuming_a_wrong_shard() {
                 let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
                 for (attempt, table) in ["subtasks_0640", "subtasks_0155", "subtasks_0155"].into_iter().enumerate() {
                     let result = if target_prepared {
-                        sqlx::query(&TEMPLATE.replace("api_keys",table)).bind(&now).bind(7_i64).execute(&mut client).await
+                        sqlx::query(&TEMPLATE.replace("api_keys",table)).bind(chrono::NaiveDateTime::parse_from_str(&now,"%Y-%m-%d %H:%M:%S%.f").unwrap()).bind(7_i64).execute(&mut client).await
                     } else {
                         let sql = format!("UPDATE {table} SET last_used_at='{now}', updated_at=now() WHERE {table}.id=7");
                         (&mut client).execute(sql.as_str()).await
@@ -76,8 +76,14 @@ async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wro
                         1 => sqlx::query(&sql).execute(&mut client).await,
                         _ => sqlx::query(TEMPLATE).bind(chrono::NaiveDateTime::parse_from_str(&timestamp,"%Y-%m-%d %H:%M:%S%.f").unwrap()).bind(id).execute(&mut client).await,
                     };
-                    if attempt == 2 { assert_eq!(result.unwrap().rows_affected(),1); }
-                    else { assert!(result.is_err(),"stale time, changed key and exhausted evidence must fail"); }
+                    if attempt == 2 {
+                        if let Err(error) = &result {
+                            let state = runtime.state.lock().await;
+                            panic!("valid time failed: source_prepared={source_prepared}, target_mode={target_mode}, attempt={attempt}, error={error:?}, source={:?}, target={:?}, warnings={:?}", state.mysql.exchanges[0].record, state.mysql.events.unmatched_queries.last(), state.mysql.events.metadata_warnings);
+                        }
+                        assert_eq!(result.unwrap().rows_affected(),1);
+                    }
+                    else { assert!(result.is_err(),"stale time, changed key and exhausted evidence must fail: source_prepared={source_prepared}, target_mode={target_mode}, attempt={attempt}"); }
                 }
                 (&mut client).execute("COMMIT").await.unwrap();
                 client.close().await.unwrap();
@@ -99,7 +105,7 @@ async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wro
 #[tokio::test]
 async fn dynamic_sql_time_preserves_recorded_errors_and_stable_sql() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let write = exchange("UPDATE api_keys SET last_used_at='2020-01-01 00:00:00', updated_at=now() WHERE api_keys.id=7", json!({"status":"error","error_code":1213,"error_message":"deadlock"}));
+        let write = exchange("UPDATE api_keys SET last_used_at='2020-01-01 00:00:00.000000', updated_at=now() WHERE api_keys.id=7", json!({"status":"error","error_code":1213,"error_message":"deadlock"}));
         let (temp,addr,runtime,task) = fixture_with_policy(&[write],Some(&policy(TEMPLATE))).await;
         let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
@@ -119,7 +125,7 @@ async fn dynamic_sql_time_preserves_recorded_errors_and_stable_sql() {
 #[tokio::test]
 async fn dynamic_sql_time_matches_scalar_and_nested_json_fields_atomically() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let recorded_json = r#"{"name":"stable","spec":{"cloudConfig":{"nevisIpObservedAt":"2020-01-01T00:00:00+00:00"}}}"#;
+        let recorded_json = r#"{"name":"stable","spec":{"cloudConfig":{"nevisIpObservedAt":"2020-01-01T00:00:00.000000+00:00"}}}"#;
         let mut write = exchange(
             JSON_TIME_TEMPLATE,
             json!({"status":"ok","affected_rows":1}),
@@ -139,7 +145,7 @@ async fn dynamic_sql_time_matches_scalar_and_nested_json_fields_atomically() {
         let original = std::fs::read(&path).unwrap();
         let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let now = chrono::Utc::now();
-        let observed_at = now.to_rfc3339();
+        let observed_at = now.to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
         let updated_at = now.naive_utc();
 
         let changed = json!({

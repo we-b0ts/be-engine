@@ -73,7 +73,7 @@ async fn activity_refresh_tcp_supports_split_merge_and_unchanged_finite_trace() 
             runtime.state.clone(),
         ));
         let mut client = RedisBufferedReader::new(stream, MAX_BYTES);
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = now_string();
         let mut current = object(&now, &now);
         assert_eq!(
             exchange(
@@ -95,7 +95,7 @@ async fn activity_refresh_tcp_supports_split_merge_and_unchanged_finite_trace() 
                 value::bulk(&current)
             );
             let mut next: Value = serde_json::from_slice(&current).unwrap();
-            next["last_activity_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+            next["last_activity_at"] = serde_json::json!(now_string());
             current = serde_json::to_vec(&next).unwrap();
             assert_eq!(
                 exchange(

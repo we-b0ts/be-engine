@@ -440,12 +440,29 @@ only the recorded PUBLISH response and emits no fabricated callback. The marker
 is a bounded capture contract, not proof that a callback can never arrive. Legacy
 RPC recordings without callback evidence still require fresh recording.
 
-For recognized Python ASGI Socket.IO peers, observed client TCP EOF/reset is
-retained as a failed `interaction_client_transport_lost` case. The recorder
-keeps the Source connection alive long enough to prove its exact SID live,
-initiate cleanup and confirm application disconnect, then drains case-owned
-dependencies and evidence writers before allowing the next case. This cleanup
-does not add a client CLOSE input or mark the interrupted capture clean.
+For recognized Python ASGI Socket.IO peers, an independently observed client
+TCP EOF/reset at a complete WebSocket and Socket.IO message boundary is a normal
+terminal input. Recorder stores a final `transport_end` action with `end: eof`
+or `end: reset` and its original monotonic offset; it does not invent a WS CLOSE
+or Engine.IO CLOSE. A bounded raw-frame monitor distinguishes complete messages
+from truncated headers, payloads and unfinished fragmented messages, including
+frames read ahead of the current decoded message. The original pending business
+identities remain evidence and are not declared completed.
+
+Recorder proves the exact Source SID live, forwards the actual TCP FIN/RST,
+confirms its awaited application disconnect, and drains case-owned dependencies
+and evidence writers before publishing or admitting the next case. Replay sends
+the same physical FIN/RST at the recorded terminal input time, without waiting
+for an unfinished ACK or namespace admission. FIN retains its peer-close barrier;
+RST cannot provide a subsequent peer observation and retains the ordinary finite
+dependency-tail obligations. Neither transport end certifies business completion.
+An unexpected early Target transport loss remains a failed Replay.
+
+A transport end inside an incomplete raw frame remains a failed
+`interaction_client_transport_lost` case. When its exact Source teardown and
+dependency/writer drain are confirmed, recording can continue after preserving
+that failure. Existing failed recordings stay immutable and require recapture
+to acquire a proven terminal input; upgrading Replay does not promote them.
 Protocol/observation errors, unsupported peers, unconfirmed disconnect, cleanup
 timeout, lease loss and failed persistence retain Source isolation. Diagnostics
 separate client reads from input observation and record bounded transport error

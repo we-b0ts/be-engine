@@ -1,5 +1,117 @@
 //! Protected offline MySQL witnesses reuse the runtime format comparator.
 use super::*;
+
+/// Source coverage inspects decoded SQL value carriers, never envelope clocks
+/// or transport metadata. It grants no independent Target observation.
+pub(crate) fn validate_source_witness(
+    database: Option<&str>,
+    source: &[u8],
+    surface: Surface,
+    policy: &CompiledPolicy,
+    clocks: AnchorClocks,
+    resource: &crate::policy::Resource,
+    metadata: &Metadata,
+) -> Result<Comparison> {
+    let mut result = validate_witness_with_time_copies(
+        database,
+        source,
+        source,
+        surface,
+        policy,
+        clocks,
+        resource,
+        &Default::default(),
+        "",
+        metadata,
+    )?;
+    let Some(plan) = &policy.global_json else {
+        return Ok(result);
+    };
+    let coverage = |selected: Selection| {
+        crate::value_contract::global::compare_logical_with_verified(
+            &selected.source,
+            &selected.source,
+            plan,
+            clocks,
+            &[],
+        )
+    };
+    if surface == Surface::DependencyRequest {
+        let request: RequestEnvelope = serde_json::from_slice(source)?;
+        if !matches!(
+            request.command.as_str(),
+            "COM_QUERY" | "COM_STMT_EXECUTE" | "COM_STMT_PREPARE"
+        ) {
+            return Ok(result);
+        }
+        let record: RecordedMysqlExchange = serde_json::from_value(serde_json::json!({
+            "command":request.command,"sql":request.sql,"params":request.params,
+            "database":database,"response":{"status":"ok"}
+        }))?;
+        let identity = ReplaySessionIdentity {
+            target: Some(TargetKey {
+                host: resource.endpoint.host.clone(),
+                port: resource.endpoint.port,
+            }),
+            database: database.map(str::to_owned),
+            username: resource.username.clone(),
+        };
+        let context = RequestContext::new(policy, metadata.clone(), &identity, &record);
+        let tokens = record
+            .sql
+            .as_deref()
+            .and_then(crate::mysql::sql::bounds::statement)
+            .and_then(|tokens| {
+                super::super::super::sql_match::materialize_tokens(
+                    tokens,
+                    record.params.as_deref().unwrap_or_default(),
+                )
+            })
+            .context("SQL Source coverage requires complete native value bindings")?;
+        let origins = crate::mysql::sql::field_bindings::analyze(&tokens, database);
+        for (position, token) in tokens.iter().enumerate() {
+            if let Some(selected) = context.select(
+                token,
+                token,
+                origins
+                    .as_ref()
+                    .and_then(|origins| origins.at_token(position)),
+                position,
+                clocks,
+            )? && selected.id == crate::policy::GLOBAL_JSON_ID
+            {
+                let mut checked = coverage(selected)?;
+                checked.scope_schema_clocks(position);
+                result.merge_and_validate(checked);
+            }
+        }
+    } else if surface == Surface::DependencyResponse {
+        let source: ResponseEnvelope = serde_json::from_slice(source)?;
+        for (row_index, row) in source.response.rows.iter().enumerate() {
+            for (column_index, value) in row.iter().enumerate() {
+                if let Some(selected) = response_selection(
+                    policy,
+                    &source.response,
+                    column_index,
+                    value,
+                    value,
+                    source.request.sql.as_deref(),
+                    database,
+                    clocks,
+                )? && selected.id == crate::policy::GLOBAL_JSON_ID
+                {
+                    let mut checked = coverage(selected)?;
+                    checked.scope_schema_clocks_in(&format!(
+                        "mysql-source:{row_index}:{column_index}"
+                    ));
+                    result.merge_and_validate(checked);
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_witness_with_time_copies(
     database: Option<&str>,

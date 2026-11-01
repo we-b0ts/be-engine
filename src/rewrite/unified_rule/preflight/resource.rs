@@ -35,6 +35,8 @@ pub(super) fn selected(policy: &CompiledPolicy, ids: &BTreeSet<String>) -> BTree
             ids.iter()
                 .filter(|id| {
                     (id.as_str() == crate::policy::GLOBAL_JSON_ID && policy.global_json.is_some())
+                        || (id.as_str() == crate::value_contract::time::automatic::RULE_ID
+                            && policy.global_json.is_some())
                         || (id.as_str() == "global.mysql" && policy.mysql.is_some())
                         || (id.as_str() == "global.redis" && policy.redis.is_some())
                         || (id.as_str() == crate::policy::GLOBAL_HTTP_ID && policy.http.is_some())
@@ -260,6 +262,7 @@ pub(super) fn prepare(
     let mut foreign: BTreeMap<String, BTreeMap<String, PathBuf>> = BTreeMap::new();
     for file in files {
         let mut hit = ids.contains(crate::policy::GLOBAL_JSON_ID)
+            || ids.contains(crate::value_contract::time::automatic::RULE_ID)
             || ids.contains("global.mysql")
             || ids.contains("global.redis")
             || ids.contains(crate::policy::GLOBAL_HTTP_ID)

@@ -72,10 +72,17 @@ never-attempted APIs at group boundaries before ordinary integration or acceptan
 Preserve the user's scope and execute returned commands unchanged.
 
 After ordinary acceptance and final candidate review, formal final revalidation
-uses one complete actual batch session. Its method results are projections of
-that session. The sealed Source run must be complete and cover every required
-workflow method; focused receipts and historical Source runs cannot be combined
-into a final batch pass.
+uses one actual `workflow_contracts` session covering every Case of every current
+non-skipped workflow method. Its method results are projections of that session;
+`--api` cannot narrow the final scope. The sealed Source run must be complete.
+Recapture cannot erase a previously required method that remains selected by
+the current `only`/`skip` policy; restore its inputs instead of shrinking inventory.
+Startup/Process debt stays visible and does not block otherwise passing API
+contracts. `terminal_allowed` still requires the current workflow receipt, final
+review, expert closure and published progress. WholeSource `batch_verified` is a
+separate stronger conclusion and remains false until every Source occurrence is
+strictly reconciled; a workflow receipt cannot close run-owned obligations or
+stitch historical sessions into a batch pass.
 
 New workflows use `max_implementers: 16` from local `regression.yaml`, fixed for
 that workflow. Slot names and paths are `api-implementer-0` through the configured

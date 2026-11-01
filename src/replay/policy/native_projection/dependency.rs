@@ -38,7 +38,11 @@ pub(super) fn project(rule: &n::NativeRule) -> Result<ReplayDependencyRule> {
                             match &value.contract {
                                 n::GeneratedValue::Time(time) => {
                                     ensure!(
-                                        time.anchor == TimeAnchor::DependencyRequestStart,
+                                        matches!(
+                                            time.anchor,
+                                            TimeAnchor::Observation
+                                                | TimeAnchor::DependencyRequestStart
+                                        ),
                                         "HTTP query times require the corresponding dependency request start"
                                     );
                                     c::DynamicValueRule {
@@ -187,7 +191,10 @@ fn mysql_time(
     source: Option<&crate::policy::Proof>,
 ) -> Result<c::MysqlTimeFieldRule> {
     ensure!(
-        value.anchor == TimeAnchor::DependencyRequestStart,
+        matches!(
+            value.anchor,
+            TimeAnchor::Observation | TimeAnchor::DependencyRequestStart
+        ),
         "SQL request times require the corresponding dependency request start"
     );
     Ok(c::MysqlTimeFieldRule {

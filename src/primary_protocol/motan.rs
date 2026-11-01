@@ -96,7 +96,7 @@ impl NativePrimaryAdapter for MotanPrimary {
             stream.set_nodelay(true)?;
             stream.write_all(self.frame.raw()).await?;
             if self.frame.flags.oneway() {
-                return Ok((204, Vec::new()));
+                return Ok((204, Vec::new(), None));
             }
             let mut decoder = FrameDecoder::new(context.settings.motan_limits)?;
             let response = loop {
@@ -116,16 +116,18 @@ impl NativePrimaryAdapter for MotanPrimary {
             Ok::<_, anyhow::Error>((
                 crate::motan::response_kind_status_code(response.response_kind()),
                 response.raw().to_vec(),
+                Some(chrono::Utc::now()),
             ))
         };
         let mut failure = context.dependency_failure.clone();
-        let (status, response_frame) = tokio::select! {
+        let (status, response_frame, response_completed_at) = tokio::select! {
             biased;
             _ = crate::dependency::execution::rejected(&mut failure) => return Err(crate::dependency::execution::UnmatchedDependency {observed_status:None}.into()),
             response = tokio::time::timeout_at(context.deadline, operation) => response.map_err(|_| anyhow::anyhow!("target Motan request timed out"))??,
         };
         Ok(PrimaryOutput {
             api: self.api.clone(),
+            response_completed_at,
             clocks: CaseClock {
                 source_request_started_at: self.source_started_at,
                 target_request_started_at: started_at,

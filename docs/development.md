@@ -1470,9 +1470,10 @@ requiring another Replay or dispatch. Use the detail response's evidence ID;
 replaced issue evidence still rejects as stale.
 Schema v24 added top-level `pending`, counting only coordinator actions executable
 now. Inventory summaries rename their old `pending` count to `unverified`.
-Persisted state remains version 1, with optional worker observations and a
-worker-event revision cursor; legacy confirmed bindings require an actual runtime
-status check. Update AI skills with the binary when adopting this schema.
+Persisted state uses version 2 with the dependency-review ledger, optional worker
+observations and a worker-event revision cursor. Version 1 cannot resume under
+the current engine; an explicitly authorized purpose confirmation can archive it
+and start a fresh workflow. Update AI skills with the binary when adopting this schema.
 Schema v25 keeps only workflow identity and revision in scheduling responses;
 `inventory` retains the full workflow metadata. Global and scoped status share
 the same global pending projection. System-repair actions identify their API:
@@ -2042,6 +2043,13 @@ requires a new confirmation, even with unchanged code and an unfinished workflow
 
 Existing worker bindings, failures, review receipts and expert assignments are
 archived under ignored runtime history and replaced with a new workflow identity.
+For obsolete version-one state, confirmation reads only its version and workflow
+identity, archives the exact original bytes and initializes the current schema.
+It does not load old assignments, receipts or recording references. Current-state
+corruption and unknown future schemas still fail. Archive failure leaves the old
+state untouched; failed branch creation restores it. Existing recordings must
+independently satisfy the current recording format and are never converted by
+this workflow reset.
 The engine does not query, wait for or resume old workers. Old callbacks cannot
 satisfy the new workflow; first Replay diagnoses current behavior without an old
 implementation/review gate. Only fresh failures lead to new workers and expert

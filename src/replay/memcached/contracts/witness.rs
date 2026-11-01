@@ -118,12 +118,12 @@ pub(crate) fn validate_witness(
                 ArgumentSnapshot {
                     args: &source_args,
                     extras: source_extras.as_deref(),
-                    observed_at: observed(&source)?
+                    observed_at: clocks.dependency.source
                 },
                 ArgumentSnapshot {
                     args: &actual,
                     extras: target_extras.as_deref(),
-                    observed_at: observed(&target)?
+                    observed_at: clocks.dependency.target
                 }
             ),
             "unselected Memcached flags/options/expiration differ"
@@ -274,12 +274,6 @@ fn captures(value: &Value) -> Result<Vec<Vec<u8>>> {
         .iter()
         .map(capture)
         .collect()
-}
-fn observed(value: &Value) -> Result<DateTime<Utc>> {
-    Ok(value["observed_at"]
-        .as_str()
-        .context("Memcached witness observation clock missing")?
-        .parse()?)
 }
 fn protocol(wire: &str) -> Result<MemcachedWireProtocol> {
     match wire {

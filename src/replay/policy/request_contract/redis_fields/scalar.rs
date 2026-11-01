@@ -12,7 +12,8 @@ use crate::value_contract::{
 #[derive(Debug, Clone)]
 pub(in crate::replay::policy::request_contract) struct ScalarDelivery {
     source: Scalar,
-    field: GlobalField,
+    field: Option<GlobalField>,
+    time: crate::policy::TimePolicy,
     inner: Delivery,
     additional: Option<CompiledJsonPolicy>,
     clocks: AnchorClocks,
@@ -38,20 +39,39 @@ impl ScalarDelivery {
         additional: Option<&CompiledJsonPolicy>,
         clocks: AnchorClocks,
     ) -> Result<Self> {
-        let inner = Delivery::prepare_global(
-            &serde_json::to_vec(&source.logical)?,
-            &redis_scalar::plan(field),
-            clocks,
-        )?;
+        let time = additional
+            .map(|global| global.time.clone())
+            .unwrap_or_default();
+        let plan = redis_scalar::plan(field, &time);
+        let inner = Delivery::prepare_global(&serde_json::to_vec(&source.logical)?, &plan, clocks)?;
         let validation = account(inner.validation().clone());
         let additional = additional
             .filter(|plan| source.json && plan.fields.contains_key(""))
             .cloned();
         Ok(Self {
             source,
-            field: field.clone(),
+            field: Some(field.clone()),
+            time,
             inner,
             additional,
+            clocks,
+            validation,
+        })
+    }
+    fn prepare_automatic(
+        source: Scalar,
+        global: &CompiledJsonPolicy,
+        clocks: AnchorClocks,
+    ) -> Result<Self> {
+        let inner =
+            Delivery::prepare_global(&serde_json::to_vec(&source.logical)?, global, clocks)?;
+        let validation = inner.validation().clone();
+        Ok(Self {
+            source,
+            field: None,
+            time: global.time.clone(),
+            inner,
+            additional: None,
             clocks,
             validation,
         })
@@ -60,23 +80,27 @@ impl ScalarDelivery {
         &self.validation
     }
     pub(in crate::replay::policy::request_contract) fn has_identities(&self) -> bool {
-        self.field.is_identity()
-            || self
-                .additional
-                .as_ref()
-                .is_some_and(|plan| plan.fields.values().any(GlobalField::is_identity))
+        self.field.as_ref().is_some_and(|field| {
+            field.is_identity()
+                || self
+                    .additional
+                    .as_ref()
+                    .is_some_and(|plan| plan.fields.values().any(GlobalField::is_identity))
+        })
     }
     fn finish(&self, logical: &Value, now: DateTime<Utc>) -> Result<Vec<u8>> {
         let mut clocks = self.clocks;
         clocks.delivery.target = Some(now);
         let bytes = self.source.encode(logical)?;
         let source = self.source.encode(&self.source.logical)?;
-        let checked = redis_scalar::compare(&source, &bytes, &self.field, clocks, &[])?;
-        ensure!(
-            checked.passed(),
-            "derived Redis scalar violates its key format: {:?}",
-            checked.differences
-        );
+        if let Some(field) = &self.field {
+            let checked = redis_scalar::compare(&source, &bytes, field, &self.time, clocks, &[])?;
+            ensure!(
+                checked.passed(),
+                "derived Redis scalar violates its key format: {:?}",
+                checked.differences
+            );
+        }
         if let Some(plan) = &self.additional {
             let checked = crate::value_contract::global::compare(
                 &serde_json::to_vec(&self.source.logical)?,
@@ -139,15 +163,18 @@ impl RequestContracts {
         payload: &[u8],
         clocks: AnchorClocks,
     ) -> Result<Option<ScalarDelivery>> {
-        let Some(policy) = self.redis_policy() else {
+        if let Some(policy) = self.redis_policy()
+            && let Some(field) = policy.field(key)?
+        {
+            return redis_scalar::decode_field(payload, field)?
+                .map(|source| ScalarDelivery::prepare(source, field, self.global_json(), clocks))
+                .transpose();
+        }
+        let Some(global) = self.global_json() else {
             return Ok(None);
         };
-        let Some(field) = policy.field(key)? else {
-            return Ok(None);
-        };
-        let Some(source) = redis_scalar::decode_field(payload, field)? else {
-            return Ok(None);
-        };
-        ScalarDelivery::prepare(source, field, self.global_json(), clocks).map(Some)
+        redis_scalar::decode_automatic(payload, global, clocks)?
+            .map(|source| ScalarDelivery::prepare_automatic(source, global, clocks))
+            .transpose()
     }
 }

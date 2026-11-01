@@ -65,7 +65,9 @@ pub(crate) fn compare(
     target: &Value,
     contract: Contract<'_>,
 ) -> Result<Validated, Failure> {
-    if !(0..=5_000_000_000).contains(&contract.tolerance) {
+    if !(0..=crate::value_contract::time::DEFAULT_TOLERANCE.as_nanos() as i128)
+        .contains(&contract.tolerance)
+    {
         return Err(Failure::Time);
     }
     let source = parse(source)?;
@@ -160,7 +162,8 @@ pub(crate) fn compare_numeric_dates(
     tolerance: i128,
     mode: NumericDateMode,
 ) -> Result<NumericDates, Failure> {
-    if !(0..=5_000_000_000).contains(&tolerance) {
+    if !(0..=crate::value_contract::time::DEFAULT_TOLERANCE.as_nanos() as i128).contains(&tolerance)
+    {
         return Err(Failure::Time);
     }
     let integer = |value: &Value, name: &str| -> Result<Option<i64>, Failure> {

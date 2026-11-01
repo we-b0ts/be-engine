@@ -192,6 +192,7 @@ pub(super) async fn execute_with_feedback(
     }
     Ok(ReplayResponse {
         started_at,
+        completed_at: chrono::Utc::now(),
         status,
         headers,
         body: Bytes::from(bytes),

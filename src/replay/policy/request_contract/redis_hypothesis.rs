@@ -35,6 +35,10 @@ impl RequestContracts {
                 scalar_slots.extend(2 + keys.len()..source.len());
             }
             let empty = crate::policy::CompiledJsonPolicy {
+                time: self
+                    .global_json()
+                    .map(|plan| plan.time.clone())
+                    .unwrap_or_default(),
                 fields: Default::default(),
                 fingerprint: String::new(),
                 signatures: Default::default(),
@@ -70,11 +74,25 @@ impl RequestContracts {
                 } else {
                     (argument(a)?, argument(b)?)
                 };
-                let plan = if !key && (a.is_object() || a.is_array()) {
+                let plan = if !key {
                     self.global_json().unwrap_or(&empty)
                 } else {
                     &empty
                 };
+                let mut checked = crate::value_contract::global::compare_logical_with_time_copies(
+                    &a,
+                    &b,
+                    plan,
+                    &[],
+                    clocks,
+                    &[],
+                )?;
+                if checked.passed() {
+                    checked.scope_schema_clocks(index);
+                    comparison.merge_and_validate(checked);
+                    normalized[index] = source[index].clone();
+                    continue;
+                }
                 let mut preview = crate::value_contract::hypothesis::preview_values(
                     context.case,
                     &a,
@@ -86,6 +104,7 @@ impl RequestContracts {
                     location(&mut considered.candidate, index, key);
                 }
                 if let Some(checked) = &mut preview.comparison {
+                    checked.scope_schema_clocks(index);
                     for candidate in &mut checked.pre_matches {
                         location(candidate, index, key);
                     }

@@ -7,6 +7,31 @@ use base64::engine::general_purpose::STANDARD;
 mod transaction_status;
 
 #[test]
+fn semantic_exchange_retains_the_observed_request_clock_not_completion_minus_duration() {
+    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let query = MysqlPacket {
+        sequence_id: 0,
+        payload: [vec![0x03], b"SELECT 1".to_vec()].concat(),
+    };
+    let command = parse_client_command(&query).unwrap();
+    tracker.start_query(Uuid::nil(), 1, &command, &query, None);
+    let observed = tracker.pending.front().unwrap().request_started_at;
+    let exchange = tracker
+        .finish_active("ok", None, None, Some(30_000))
+        .unwrap();
+    assert_eq!(exchange.request_started_at, observed);
+    assert_ne!(
+        exchange.timestamp - chrono::TimeDelta::seconds(30),
+        observed
+    );
+    let serialized = serde_json::to_value(exchange).unwrap();
+    assert_eq!(
+        serialized["request_started_at"],
+        serde_json::to_value(observed).unwrap()
+    );
+}
+
+#[test]
 fn column_origins_preserve_wire_schema_independently_of_connection_database() {
     let column = parse_column_definition(&column_def("updated_at", MYSQL_TYPE_DATETIME)).unwrap();
     assert_eq!(column.database.as_deref(), Some("test"));

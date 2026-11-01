@@ -113,11 +113,10 @@ pub(crate) fn compare_body(
                     source,
                     target,
                     &[],
-                    crate::value_contract::json::AnchorClocks {
-                        case: times,
-                        dependency: times,
-                        ..Default::default()
-                    },
+                    crate::value_contract::json::AnchorClocks::for_response(
+                        Default::default(),
+                        times,
+                    ),
                 )?
                 .passed())
         }

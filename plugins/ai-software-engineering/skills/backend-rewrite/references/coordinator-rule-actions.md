@@ -280,12 +280,25 @@ recording observation.
 
 For `dependency_attribution_required`, dispatch the returned assignment to the
 read-only repository analyst. Dedupe by assignment ID and generation; do not
-require the current API implementer to identify every foreign caller. Unmatched
-investigations and foreign-unused claims are separate authenticated inputs.
+require the current API implementer to prove exclusion or identify another
+caller. This action is only for concrete ownerless Source occurrences or returned
+ownership disputes. All ownerless occurrences need effective process/async-API
+rules and positive attribution before formal Replay; empty review does not
+release the gate. A new batch with known owners needs no attribution analyst.
+
+A report of missing traffic already claims ownership for its API. Keep that
+diagnosis with the existing implementer: require its own async lifecycle rule or
+an exact recording omission and interception/response-IP-URL rewrite inputs.
+`investigate` retains authenticated Target requests as API-owned work; use the
+returned `show --api` view and coordinator `resolve` command to publish that
+implementer's conclusion. Unmatched or startup dirty alone is not analyst work.
 
 Use `dependency-attribution rules` to inspect complete effective task/lifecycle
 groups. Publish Source-proven process/async rules through unified rule plan/apply
-first. Obtain fresh attribution context, then apply the independent analyst
+first. Before any actual Replay exists, use the context's exact `rule_planning`
+Source-only evidence token and command; do not fabricate API attempts or apply
+value waivers through attribution planning. Obtain fresh attribution context,
+then apply the independent analyst
 submission with the exact policy fingerprint, rule IDs, Source inventory and
 expected revision. Names or exclusion evidence alone cannot authorize a pass.
 
@@ -299,12 +312,13 @@ positive ownership proof. It does not close original-owner obligations or the
 whole batch. Do not re-record an unrelated API merely because an async rule was
 added elsewhere. Close an origin obligation with `dependency-attribution verify`
 only after its actual required execution/capture; process/startup closure belongs
-to complete batch execution. A `claim_rejections` result withdraws only a mistaken
+to strict WholeSource execution. A workflow-contract receipt leaves that debt
+pending. A `claim_rejections` result withdraws only a mistaken
 claim; its negative Source proof leaves original dirty execution facts and cannot
 authorize a pass.
 
 After final candidate review, follow `BatchReplay` for one actual complete final
-session. Method results come from that same session. The current sealed Source
+workflow-contract session. Method results come from that same session. The current sealed Source
 run must be complete and must contain every required workflow method; scoped
 recapture cannot erase the durable method requirement. Inspect actual batch
 requests through `dependency-attribution batch` pages and explicit session-bound,

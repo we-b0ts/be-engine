@@ -62,6 +62,31 @@ pub(crate) fn decode_field(source: &[u8], field: &GlobalField) -> Result<Option<
     Ok(Some(scalar))
 }
 
+/// Native text stays native text. Only a Source-selected shared time contract
+/// authorizes interpreting an otherwise opaque scalar as a time value.
+pub(crate) fn decode_automatic(
+    source: &[u8],
+    plan: &crate::policy::CompiledJsonPolicy,
+    clocks: AnchorClocks,
+) -> Result<Option<Scalar>> {
+    if !(10..=35).contains(&source.len()) {
+        return Ok(None);
+    }
+    let Some(scalar) = decode(source)? else {
+        return Ok(None);
+    };
+    if scalar.json
+        || crate::value_contract::time::automatic::contract(&scalar.logical, &plan.time).is_none()
+        || !plan
+            .fields_with_clocks(&scalar.logical, clocks)?
+            .iter()
+            .any(|(_, field)| field.time().is_some())
+    {
+        return Ok(None);
+    }
+    Ok(Some(scalar))
+}
+
 impl Scalar {
     pub(crate) fn target(&self, bytes: &[u8]) -> Result<Value> {
         ensure!(
@@ -109,6 +134,7 @@ pub(crate) fn compare(
     source: &[u8],
     target: &[u8],
     field: &GlobalField,
+    settings: &crate::policy::TimePolicy,
     clocks: AnchorClocks,
     copies: &[VerifiedTimeCopy],
 ) -> Result<Comparison> {
@@ -120,18 +146,29 @@ pub(crate) fn compare(
         return Ok(Comparison::default());
     };
     let target = source.target(target)?;
+    let selected = plan(field, settings).selected_fields_with_clocks(&source.logical, clocks)?;
     if source.logical == target && !field.is_identity() {
         let mut result = Comparison::default();
-        result.evaluated.insert(GLOBAL_REDIS_ID.into());
+        result.evaluated.extend(selected.iter().map(|field| {
+            if field.rule_id == crate::policy::GLOBAL_JSON_ID {
+                GLOBAL_REDIS_ID
+            } else {
+                field.rule_id
+            }
+            .to_owned()
+        }));
         return Ok(result);
     }
-    let selected = plan(field).fields_with_clocks(&source.logical, clocks)?;
     let fields = selected
         .iter()
-        .map(|(pointer, contract)| Field {
-            rule_id: GLOBAL_REDIS_ID,
-            pointer,
-            contract,
+        .map(|selected| Field {
+            rule_id: if selected.rule_id == crate::policy::GLOBAL_JSON_ID {
+                GLOBAL_REDIS_ID
+            } else {
+                selected.rule_id
+            },
+            pointer: &selected.pointer,
+            contract: &selected.contract,
         })
         .collect::<Vec<_>>();
     Ok(json::compare_with_time_copies(
@@ -143,8 +180,12 @@ pub(crate) fn compare(
     ))
 }
 
-pub(crate) fn plan(field: &GlobalField) -> crate::policy::CompiledJsonPolicy {
+pub(crate) fn plan(
+    field: &GlobalField,
+    settings: &crate::policy::TimePolicy,
+) -> crate::policy::CompiledJsonPolicy {
     crate::policy::CompiledJsonPolicy {
+        time: settings.clone(),
         signatures: Default::default(),
         fields: std::collections::BTreeMap::from([(String::new(), field.clone())]),
         fingerprint: String::new(),

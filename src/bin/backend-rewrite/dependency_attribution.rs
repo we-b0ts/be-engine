@@ -11,7 +11,8 @@ use traffic_e2e::{
     dependency_attribution_batch_information, dependency_attribution_candidates,
     dependency_attribution_hypotheses, dependency_attribution_rules,
     dependency_attribution_source_information, dependency_attribution_target,
-    investigate_unmatched_dependency, retry_dependency_batch, verify_dependency_obligation,
+    investigate_unmatched_dependency, resolve_target_investigation, retry_dependency_batch,
+    verify_dependency_obligation,
 };
 
 #[derive(Debug, Args)]
@@ -83,6 +84,11 @@ enum Command {
     },
     /// Investigate independent unmatched Target requests, including zero Source candidates.
     Investigate {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Publish the current API implementer's diagnosis of its missing/unmatched traffic.
+    Resolve {
         #[arg(long)]
         file: PathBuf,
     },
@@ -177,6 +183,10 @@ pub(super) fn run(
         ),
         Command::Investigate { file } => super::print_json(
             &investigate_unmatched_dependency(AttributionCommandOptions { target_root, file })?,
+            pretty,
+        ),
+        Command::Resolve { file } => super::print_json(
+            &resolve_target_investigation(AttributionCommandOptions { target_root, file })?,
             pretty,
         ),
         Command::Verify { obligation_id } => super::print_json(

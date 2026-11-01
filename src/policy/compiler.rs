@@ -99,11 +99,14 @@ fn compile_expanded(
         "policy contains more than 4096 rules"
     );
     super::signatures::validate(&document.signatures)?;
-    let global_json = document
-        .json
-        .as_ref()
-        .map(|json| json.compile_with_signatures(&document.signatures))
-        .transpose()?;
+    document.time.offset()?;
+    let global_json = Some(
+        document
+            .json
+            .clone()
+            .unwrap_or_default()
+            .compile_with_settings(&document.signatures, &document.time)?,
+    );
     if let Some(mysql) = &document.mysql {
         mysql.validate()?;
     }
@@ -179,6 +182,7 @@ fn compile_expanded(
                 &(
                     &semantic,
                     &document.json,
+                    &document.time,
                     &document.mysql,
                     &document.redis,
                     &document.http,
@@ -191,6 +195,7 @@ fn compile_expanded(
                 &(
                     runtime,
                     &document.json,
+                    &document.time,
                     &document.mysql,
                     &document.redis,
                     &document.http,
@@ -337,8 +342,11 @@ pub fn compile_rule(rule: &Rule) -> Result<CompiledRule> {
         match contract.unconditional() {
             FieldContract::Time { anchor, .. } | FieldContract::Duration { anchor, .. } => {
                 ensure!(
-                    *anchor == TimeAnchor::DependencyRequestStart,
-                    "time contracts require the corresponding dependency request start"
+                    matches!(
+                        anchor,
+                        TimeAnchor::Observation | TimeAnchor::DependencyRequestStart
+                    ),
+                    "time contracts require the corresponding comparison event"
                 );
             }
             FieldContract::Unordered => {}

@@ -48,6 +48,21 @@ impl Drafts {
             return Ok(());
         }
         self.examined += 1;
+        if let Some(contract) = crate::value_contract::time::automatic::contract(source, &self.time)
+            && crate::value_contract::json::compare(
+                source,
+                target,
+                &[Field {
+                    rule_id: crate::value_contract::time::automatic::RULE_ID,
+                    pointer: "",
+                    contract: &contract,
+                }],
+                clocks,
+            )
+            .passed()
+        {
+            return Ok(());
+        }
         if let (Some(source), Some(target)) = (source.as_array(), target.as_array()) {
             let sorted = |items: &[Value]| {
                 let mut values = items.iter().map(Value::to_string).collect::<Vec<_>>();
@@ -74,14 +89,6 @@ impl Drafts {
         for format in formats {
             let contract = json!({"kind":"time","format":format,"relation":"preserve_offset"});
             let typed: FieldContract = serde_json::from_value(contract.clone())?;
-            let observed = if base["surface"] == "api.response" {
-                AnchorClocks {
-                    dependency: clocks.case,
-                    ..clocks
-                }
-            } else {
-                clocks
-            };
             if crate::value_contract::json::compare(
                 source,
                 target,
@@ -90,7 +97,7 @@ impl Drafts {
                     pointer: "",
                     contract: &typed,
                 }],
-                observed,
+                clocks,
             )
             .passed()
             {

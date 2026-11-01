@@ -48,7 +48,7 @@ pub(in crate::replay) fn compare(
             );
             crate::value_contract::time::compare_calendar_dates(source_date, target_date, times)
                 .context(
-                    "response header date does not preserve the request delta at day precision",
+                    "response header date does not preserve the observation clock delta at day precision",
                 )?;
             let day_delta = target_date.signed_duration_since(source_date).num_days();
             if let Some(previous) = selected_day_delta {

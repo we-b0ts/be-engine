@@ -154,7 +154,7 @@ fn local_inheritance_expands_every_contract_and_partial_override_without_crossin
     );
     assert_eq!(
         fields["/updatedAt"].contract.anchor,
-        TimeAnchor::DependencyRequestStart
+        TimeAnchor::Observation
     );
     assert_eq!(
         fields["/updatedAt"].contract.relation,
@@ -187,7 +187,16 @@ fn compact_and_fully_explicit_documents_have_identical_effects_proofs_and_identi
     let rendered = render_policy(&compact).unwrap();
     assert!(rendered.contains("relative_time: sql_datetime"));
     assert!(!rendered.contains("preserve_offset"));
-    assert!(!rendered.contains("utc_offset"));
+    let mut rendered_document: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+    rendered_document
+        .as_mapping_mut()
+        .unwrap()
+        .remove(serde_yaml::Value::String("time".into()));
+    assert!(
+        !serde_yaml::to_string(&rendered_document)
+            .unwrap()
+            .contains("utc_offset")
+    );
     assert!(!rendered.contains(" @ source-v1"));
     assert_eq!(rendered.matches("source_revision:").count(), 1);
     assert!(!rendered.contains("proof:"));
@@ -334,4 +343,35 @@ fn standalone_rule_proposals_inherit_proof_and_get_revision_context_before_compa
     })
     .unwrap();
     assert_eq!(proposed.rules, policy.rules);
+}
+
+#[test]
+fn independent_task_revision_belongs_to_evidence_and_not_its_runtime_selector() {
+    let old = format!("sha256:{}", "a".repeat(64));
+    let current = format!("sha256:{}", "b".repeat(64));
+    let raw = format!(
+        "format: traffic-policy/v3\nsource_revision: {old}\nrules:\n  - id: owner\n    match: {{}}\n    effect:\n      kind: process_owned\n      source_revision: {current}\n      task_name: receive_loop\n      selector: {{protocol: http, authorities: [worker.test], methods: [GET], path_prefixes: [/refresh]}}\n    proof: {{source: 'subscriber.py:run @ {current}', fact: 'This current Source loop receives the task inputs'}}\n"
+    );
+    let policy = parse_policy(&raw).unwrap();
+    assert!(
+        matches!(&policy.rules[0].as_native().unwrap().effect, NativeEffect::ProcessOwned(effect) if effect.source_revision.is_empty())
+    );
+    assert!(policy.rules[0].proof().unwrap().source.ends_with(&current));
+    let before = compile_policy(&policy).unwrap();
+    let rendered = render_policy(&policy).unwrap();
+    let after = parse_policy(&rendered).unwrap();
+    assert_eq!(after.source_revision.as_deref(), Some(old.as_str()));
+    assert_eq!(
+        compile_policy(&after).unwrap().fingerprints,
+        before.fingerprints
+    );
+    let different_evidence = parse_policy(&raw.replace(
+        &format!("subscriber.py:run @ {current}"),
+        &format!("subscriber.py:run @ {old}"),
+    ))
+    .unwrap();
+    assert_eq!(
+        compile_policy(&different_evidence).unwrap().fingerprints,
+        before.fingerprints
+    );
 }

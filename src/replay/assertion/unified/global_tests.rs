@@ -2,6 +2,38 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn calendar_day_failures_use_response_observation_clocks_and_keep_time_diagnostics() {
+    let plan = crate::policy::JsonPolicy::default().compile().unwrap();
+    let clocks = AnchorClocks::for_response(
+        Default::default(),
+        crate::value_contract::time::ClockPair {
+            source: Some("2020-01-01T00:00:00Z".parse().unwrap()),
+            target: Some("2021-01-01T00:00:00Z".parse().unwrap()),
+        },
+    );
+    let comparison = crate::value_contract::global::compare_logical(
+        &json!({"date":"2020-01-01"}),
+        &json!({"date":"2021-01-02"}),
+        &plan,
+        &[],
+        clocks,
+    )
+    .unwrap();
+    assert!(!comparison.passed());
+    let difference = comparison
+        .differences
+        .into_iter()
+        .find(|difference| difference.pointer == "/date")
+        .unwrap();
+    assert!(difference.reason.contains("observation clock"));
+    assert!(!difference.reason.contains("request"));
+    assert_eq!(
+        contract_difference(difference).kind,
+        ResponseDifferenceKind::DurationDeltaMismatch
+    );
+}
+
+#[test]
 fn one_global_strategy_compares_unrelated_api_responses_and_preserves_identity_relations() {
     let temp = tempfile::tempdir().unwrap();
     let policy = temp.path().join("policy.yaml");
@@ -26,8 +58,8 @@ json:
             assert_recorded_response_with_policy(
             ResponseAssertionOptions {case_id:"case".into(),request:temp.path().join("request.json"),expected_response:temp.path().join("expected.json"),actual_response:temp.path().join("actual.json"),policy:policy.clone()},
             &serde_json::to_vec(&json!({"method":"POST","uri":uri,"timestamp":"1970-01-01T00:16:40Z"})).unwrap(),
-            &serde_json::to_vec(&json!({"status":200,"body":capture(a,a,1005)})).unwrap(),
-            &serde_json::to_vec(&json!({"version":1,"status":status,"request_sent_at":"1970-01-01T00:33:20Z","body":capture(id,nested,2005)})).unwrap(),
+            &serde_json::to_vec(&json!({"status":200,"timestamp":"1970-01-01T00:16:40Z","body":capture(a,a,1005)})).unwrap(),
+            &serde_json::to_vec(&json!({"version":1,"status":status,"request_sent_at":"1970-01-01T00:33:20Z","response_completed_at":"1970-01-01T00:33:20Z","body":capture(id,nested,2005)})).unwrap(),
             &loaded).unwrap()
         };
         assert!(check(x, x, 200).passed);

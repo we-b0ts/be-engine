@@ -111,6 +111,7 @@ fn prepare_global_values(
     source_args: &[Vec<u8>],
     source: &[u8],
     global: &crate::policy::CompiledJsonPolicy,
+    redis: Option<&crate::policy::RedisPolicy>,
     clocks: crate::value_contract::json::AnchorClocks,
 ) -> Result<Vec<ReadValue>> {
     let values = redis_field_values(command, source_args, Some(source))?;
@@ -121,12 +122,21 @@ fn prepare_global_values(
         let Some(payload) = value.payload else {
             continue;
         };
-        if crate::json_value::parse(payload).is_none() {
+        let (logical, scalar) = if let Some(logical) = crate::json_value::parse(payload) {
+            (logical, false)
+        } else if redis
+            .map(|policy| policy.field(value.key))
+            .transpose()?
+            .flatten()
+            .is_none()
+            && let Some(scalar) =
+                crate::value_contract::redis_scalar::decode_automatic(payload, global, clocks)?
+        {
+            (scalar.logical, true)
+        } else {
             continue;
-        }
-        let plan = Arc::new(CodecPlan::compile(&crate::policy::Codec::Json)?);
-        let decoded = plan.decode(payload)?;
-        let leaves = time_copies::global_leaves(&decoded.logical, global, clocks)?
+        };
+        let leaves = time_copies::global_leaves(&logical, global, clocks)?
             .into_iter()
             .map(|leaf| Leaf {
                 pattern: Arc::from(leaf.pattern),
@@ -150,7 +160,11 @@ fn prepare_global_values(
             key: value.key.to_vec(),
             hash_field: value.hash_field.map(<[u8]>::to_vec),
             payload_digest: Sha256::digest(payload).into(),
-            plan: ReadPlan::Json(plan),
+            plan: if scalar {
+                ReadPlan::Scalar { json: false }
+            } else {
+                ReadPlan::Json(Arc::new(CodecPlan::compile(&crate::policy::Codec::Json)?))
+            },
             leaves,
         });
     }
@@ -162,6 +176,7 @@ fn prepare_scalar_values(
     source_args: &[Vec<u8>],
     source: &[u8],
     policy: &crate::policy::RedisPolicy,
+    settings: &crate::policy::TimePolicy,
     clocks: crate::value_contract::json::AnchorClocks,
 ) -> Result<Vec<ReadValue>> {
     use crate::value_contract::redis_scalar;
@@ -179,16 +194,19 @@ fn prepare_scalar_values(
         let Some(scalar) = redis_scalar::decode_field(payload, field)? else {
             continue;
         };
-        let leaves =
-            time_copies::global_leaves(&scalar.logical, &redis_scalar::plan(field), clocks)?
-                .into_iter()
-                .map(|leaf| Leaf {
-                    pattern: Arc::from(leaf.pattern),
-                    pointer: leaf.pointer,
-                    value: leaf.value,
-                    time: Arc::new(leaf.time),
-                })
-                .collect::<Vec<_>>();
+        let leaves = time_copies::global_leaves(
+            &scalar.logical,
+            &redis_scalar::plan(field, settings),
+            clocks,
+        )?
+        .into_iter()
+        .map(|leaf| Leaf {
+            pattern: Arc::from(leaf.pattern),
+            pointer: leaf.pointer,
+            value: leaf.value,
+            time: Arc::new(leaf.time),
+        })
+        .collect::<Vec<_>>();
         if leaves.is_empty() {
             continue;
         }
@@ -214,6 +232,7 @@ fn prepare_scalar_values(
 pub(crate) fn redis_delivered_scalar_time_copies(
     read: RedisTimeRead<'_>,
     policy: &crate::policy::RedisPolicy,
+    settings: &crate::policy::TimePolicy,
     clocks: crate::value_contract::json::AnchorClocks,
     record: &mut CopyRecorder<'_>,
 ) -> Result<usize> {
@@ -226,6 +245,7 @@ pub(crate) fn redis_delivered_scalar_time_copies(
         read.source_args,
         read.source_response,
         policy,
+        settings,
         clocks,
     )?;
     record_values(
@@ -243,11 +263,12 @@ pub(super) fn redis_scalar_time_write_lookups(
     position: TimeCopyPosition<'_>,
     source: &crate::value_contract::redis_scalar::Scalar,
     field: &crate::policy::GlobalField,
+    settings: &crate::policy::TimePolicy,
     clocks: crate::value_contract::json::AnchorClocks,
 ) -> Result<Vec<TimeCopyLookup>> {
     Ok(time_copies::global_leaves(
         &source.logical,
-        &crate::value_contract::redis_scalar::plan(field),
+        &crate::value_contract::redis_scalar::plan(field, settings),
         clocks,
     )?
     .into_iter()
@@ -259,7 +280,11 @@ pub(super) fn redis_scalar_time_write_lookups(
             &leaf.pattern,
             &leaf.pattern,
             &leaf.value,
-            crate::policy::GLOBAL_REDIS_ID,
+            if leaf.rule_id == crate::policy::GLOBAL_JSON_ID {
+                crate::policy::GLOBAL_REDIS_ID
+            } else {
+                leaf.rule_id
+            },
         )
         .map(|lookup| lookup.at(&leaf.pointer, &leaf.pattern))
     })
@@ -351,6 +376,7 @@ fn record_values(
 pub(crate) fn redis_delivered_global_time_copies(
     read: RedisTimeRead<'_>,
     plan: &crate::policy::CompiledJsonPolicy,
+    redis: Option<&crate::policy::RedisPolicy>,
     clocks: crate::value_contract::json::AnchorClocks,
     record: &mut CopyRecorder<'_>,
 ) -> Result<usize> {
@@ -363,6 +389,7 @@ pub(crate) fn redis_delivered_global_time_copies(
         read.source_args,
         read.source_response,
         plan,
+        redis,
         clocks,
     )?;
     record_values(
@@ -408,7 +435,7 @@ pub(super) fn redis_global_time_write_lookups(
                 &leaf.pattern,
                 &leaf.pattern,
                 &leaf.value,
-                crate::policy::GLOBAL_JSON_ID,
+                leaf.rule_id,
             )
             .map(|lookup| lookup.at(&leaf.pointer, &leaf.pattern))
         })
@@ -435,7 +462,14 @@ impl RequestContracts {
             None,
         );
         let mut values = if let Some(global) = self.global_json() {
-            prepare_global_values(context.command, source_args, source, global, clocks)?
+            prepare_global_values(
+                context.command,
+                source_args,
+                source,
+                global,
+                self.redis_policy(),
+                clocks,
+            )?
         } else {
             Vec::new()
         };
@@ -445,6 +479,10 @@ impl RequestContracts {
                 source_args,
                 source,
                 policy,
+                &self
+                    .global_json()
+                    .map(|plan| plan.time.clone())
+                    .unwrap_or_default(),
                 clocks,
             )?);
         }

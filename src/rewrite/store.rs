@@ -9,6 +9,8 @@ use super::model::{RewriteState, STATE_VERSION};
 
 const INCOMPLETE_LOCK_GRACE: Duration = Duration::from_secs(2);
 
+mod replacement;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RewriteLockState {
     Absent,
@@ -54,16 +56,8 @@ impl RewriteStore {
 
     /// Load identity and feedback without adopting a possibly obsolete recording policy.
     pub(super) fn load_snapshot(&self) -> Result<Option<RewriteState>> {
-        let bytes = match fs::read(&self.state_path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(None);
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to read rewrite state {}", self.state_path.display())
-                });
-            }
+        let Some(bytes) = self.snapshot_bytes()? else {
+            return Ok(None);
         };
         let mut state: RewriteState = serde_json::from_slice(&bytes)
             .with_context(|| format!("invalid rewrite state {}", self.state_path.display()))?;
@@ -92,18 +86,37 @@ impl RewriteStore {
         let _plans = super::rule_plans::events::lock(&self.target_root)?;
         let mut state = state.clone();
         super::rule_plans::events::overlay(&self.target_root, &mut state)?;
+        let mut payload = serde_json::to_vec_pretty(&state)?;
+        payload.push(b'\n');
+        self.write_snapshot(&payload, state.revision)?;
+        // Publication has committed. Failed cleanup must not roll it back.
+        if let Err(error) = super::rule_plans::events::compact(&self.target_root, &state) {
+            tracing::warn!(%error, "could not compact incorporated rule plans");
+        }
+        Ok(())
+    }
+
+    fn snapshot_bytes(&self) -> Result<Option<Vec<u8>>> {
+        match fs::read(&self.state_path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).with_context(|| {
+                format!("failed to read rewrite state {}", self.state_path.display())
+            }),
+        }
+    }
+
+    fn write_snapshot(&self, payload: &[u8], revision: u64) -> Result<()> {
         fs::create_dir_all(&self.root).with_context(|| {
             format!(
                 "failed to create rewrite state root {}",
                 self.root.display()
             )
         })?;
-        let mut payload = serde_json::to_vec_pretty(&state)?;
-        payload.push(b'\n');
         let temporary = self.root.join(format!(
             ".state.json.tmp.{}.{}",
             std::process::id(),
-            state.revision
+            revision
         ));
         let mut file = OpenOptions::new()
             .write(true)
@@ -111,7 +124,7 @@ impl RewriteStore {
             .open(&temporary)
             .with_context(|| format!("failed to reserve {}", temporary.display()))?;
         let result = (|| -> Result<()> {
-            file.write_all(&payload)?;
+            file.write_all(payload)?;
             file.sync_all()?;
             drop(file);
             fs::rename(&temporary, &self.state_path).with_context(|| {
@@ -121,49 +134,12 @@ impl RewriteStore {
                 )
             })?;
             File::open(&self.root)?.sync_all()?;
-            // The state is already committed. Cleanup failure cannot turn a
-            // successful policy transaction into a rollback; older events are
-            // harmless because the saved high-water mark prevents resurrection.
-            if let Err(error) = super::rule_plans::events::compact(&self.target_root, &state) {
-                tracing::warn!(%error, "could not compact incorporated rule plans");
-            }
             Ok(())
         })();
         if result.is_err() {
             let _ = fs::remove_file(temporary);
         }
         result
-    }
-
-    pub(super) fn restore_snapshot(
-        &self,
-        previous: Option<&RewriteState>,
-        feedback: &File,
-    ) -> Result<()> {
-        if let Some(previous) = previous {
-            self.save_snapshot(previous, feedback)
-        } else {
-            fs::remove_file(&self.state_path)?;
-            File::open(&self.root)?.sync_all()?;
-            Ok(())
-        }
-    }
-
-    pub(super) fn archive(&self, state: &RewriteState, next_id: &str) -> Result<PathBuf> {
-        use std::os::unix::fs::OpenOptionsExt;
-        let directory = self.root.join("history");
-        fs::create_dir_all(&directory)?;
-        let path = directory.join(format!("{next_id}.json"));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)?;
-        serde_json::to_writer_pretty(&mut file, state)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        File::open(directory)?.sync_all()?;
-        Ok(path)
     }
 
     pub(super) fn try_lock(&self) -> Result<Option<RewriteLock>> {

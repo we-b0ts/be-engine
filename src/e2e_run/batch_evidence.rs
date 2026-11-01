@@ -207,8 +207,11 @@ pub(crate) fn completed_batch_evidence(context: E2eRunContext) -> Result<ActualB
                 == process_epochs,
         "the actual session receipt belongs to different Source process lifetimes"
     );
-    let snapshot =
-        crate::rewrite::dependency_attribution_snapshot(&layout.target_root, &manifest.run_id)?;
+    let snapshot = crate::rewrite::dependency_attribution_identity_for_source(
+        &layout.target_root,
+        &layout.case_source,
+        &manifest.run_id,
+    )?;
     ensure!(
         receipt.dependency_attribution_snapshot.as_deref() == Some(&snapshot)
             && report["dependency_attribution_snapshot"].as_str() == Some(&snapshot),

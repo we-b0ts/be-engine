@@ -55,6 +55,7 @@ fn pending_binary_request(opaque: u32, opcode: u8, quiet: bool) -> PendingMemcac
         replay_safe: true,
         warnings: Vec::new(),
         started: Instant::now(),
+        request_started_at: chrono::Utc::now(),
         termination: None,
     }
 }

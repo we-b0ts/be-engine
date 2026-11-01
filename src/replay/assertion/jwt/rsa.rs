@@ -83,5 +83,11 @@ pub(super) fn compare(
     if source_header != target_header {
         return Err(Failure::Claims);
     }
-    contract::compare_authenticated_claims(source, target, anchors, 5_000_000_000, dynamic)
+    contract::compare_authenticated_claims(
+        source,
+        target,
+        anchors,
+        crate::value_contract::time::DEFAULT_TOLERANCE.as_nanos() as i128,
+        dynamic,
+    )
 }

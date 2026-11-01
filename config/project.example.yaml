@@ -32,11 +32,11 @@ project:
   state:
     runtime_root: local/runtime
 recorder:
-  # Static recorder example. Project initialization embeds these settings under
-  # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed source-traffic
-  # policy values belong in the single project.policy file.
-  artifacts:
-    root_dir: ./.traffic-e2e/local/artifacts
+  # Declare business protocols; Recorder assembles DNS/TCP/HTTPS capture.
+  # HTTP dependency capture does not filter other observed native protocols.
+  capture:
+    ingress: [http]
+    dependencies: [http]
   # Optional external-cluster Service forwarding, prepared before Source starts.
   # kubeconfig and referenced credentials are read-only runtime mounts.
   kubernetes:
@@ -51,41 +51,14 @@ recorder:
   #     service: chat-shell
   # Service TCP ports are discovered automatically; no port fields are accepted.
   dns_mock:
-    enabled: true
-    listen: 127.0.0.153:4053
+    # Optional environment-specific network overrides.
     upstream_dns: 10.10.10.10:53
-    fake_cidr: 198.19.0.0/16
-    ttl_seconds: 60
     bypass_domains:
     - doh.pub
     bypass_strategies: []
     hosts:
       db-10-185-28-119.test:
       - 10.185.28.119
-    registry_path: ./.traffic-e2e/local/artifacts/fake_dns_registry.json
-  tcp_gateway:
-    enabled: true
-    listen: 127.0.0.1:4001
-    backlog: 65535
-    record_http: true
-    mitm_https: true
-    https_ports: []
-    protocol_detection:
-      enabled: true
-      redis_port_hints:
-      - 6379
-      memcached_port_hints:
-      - 11211
-      kafka_port_hints:
-      - 9092
-      overrides: []
-  udp_gateway:
-    enabled: true
-    listen: 127.0.0.1:4002
-    forward: false
-  http:
-    enabled: false
-    listen: 127.0.0.1:8080
   http_response_rewrite:
     # JSON URL capture belongs to a capture_http_response effect in project.policy:
     # - name: cs.wegent.intra.demo.test
@@ -111,7 +84,6 @@ recorder:
         kubectl_binary: kubectl
         proxy_listen: 127.0.0.1:8001
   http_gateway:
-    enabled: true
     # Enable bounded SSE/NDJSON/raw response streams and Socket.IO sessions.
     record_streaming: false
     # Opt in separately; ordinary binary downloads otherwise retain HTTP behavior.
@@ -159,22 +131,6 @@ recorder:
       path_prefixes:
       - /
       headers: {}
-  motan_gateway:
-    enabled: false
-    listen: 0.0.0.0:18081
-    matched_upstream: 127.0.0.1:8002
-    connect_timeout_ms: 3000
-    request_timeout_ms: 30000
-    max_connections: 1024
-    max_frame_bytes: 8388608
-    max_cases_per_api: 100
-    rules: []
-  mysql:
-    enabled: false
-    record_raw_packets: false
-    routes: []
-    listen: 127.0.0.1:3307
-    upstream: 127.0.0.1:3306
   recording:
     output_dir: ./recordings
     max_body_bytes: 67108864
@@ -194,6 +150,3 @@ recorder:
     redact_headers: []
     access_policy: unrestricted
     access_rules: []
-  tls:
-    ca_cert_path: ./.traffic-e2e/local/data/traffic-recorder-ca.pem
-    ca_key_path: ./.traffic-e2e/local/data/traffic-recorder-ca-key.pem

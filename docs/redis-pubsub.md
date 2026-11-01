@@ -7,8 +7,9 @@ connection, subscription command sequence, and elapsed time. Subscriptions keep
 the existing single-subject confirmation contract. RESP3 push mode and
 multi-subject subscribe commands remain unsupported.
 
-Uncorrelated notifications are process-owned Global evidence, rather than
-dependencies of whichever HTTP case is active at arrival. Replay schedules each
+Uncorrelated notifications retain unknown ownership until an independent Source
+proof and effective task rule establish their owner. Arrival during an HTTP
+Case does not make that Case the owner. Replay schedules each
 finite notification after its original subscription is matched and confirmed.
 Unsubscribe and disconnect prevent later delivery to that subscriber. Different
 channels, patterns, shard channels, and source connections remain isolated.
@@ -71,6 +72,55 @@ those recordings need fresh capture after upgrading the Recorder.
 Pub/Sub payloads may contain application secrets or user data, like ordinary
 Redis values. They are retained exactly in the private recording artifacts; the
 engine does not infer redaction or put message payloads in diagnostic reports.
+
+## Source-proven notification ownership
+
+A real Source subscriber receive task can own its received inputs without
+claiming to identify the external publisher. Declare its complete input scope
+with its real Redis subscription command and exact arguments:
+
+```yaml
+process_dependencies:
+  tasks:
+    redis_notification_reader:
+      requests:
+        - redis:
+            resource:
+              protocol: redis
+              endpoint: cache.example:6379
+              database: 0
+            operation: SUBSCRIBE
+            arguments: [socketio]
+```
+
+The actual Source task name, entrypoint and exclusive selector ownership need
+independent Source proof. Resource host/port, logical database, username and
+channel are exact; omitted username selects anonymous authentication. `SUBSCRIBE`
+and `SSUBSCRIBE` currently require one exact argument. Pattern subscription
+commands remain unsupported in this compact declaration because their proven
+delivery scope cannot be inferred as a concrete channel. Legacy declarations
+remain readable without discarding their narrower channel constraints. The rule does not select
+outgoing `PUBLISH`, `SUBSCRIBE`, ordinary Redis commands or correlated RPC replies.
+The declared command anchors the receive stream; its original Startup or Case
+ownership remains unchanged. It does not move the handshake into the task.
+Source validation authenticates complete native frames and the original
+successful subscription confirmation, including its connection/sequence,
+realm, kind and subject. Partial task-selector groups and overlapping owners
+cannot acquire attribution.
+Task selectors do not carry Source versions. Independently reviewed proof still
+binds the concrete immutable Source inventory and is revalidated before use.
+
+Completed old central recordings can apply this rule and independent attribution
+overlay without re-recording. The original physical records remain immutable.
+Future Recorder versions classify matching received inputs directly under the
+configured task. Ownership does not create delivery receipts, reusable messages,
+room filters or publisher identity; normal Replay subscription, clock, finite
+consumption and final batch checks still apply.
+
+A separately proven process shutdown task may declare ordinary Redis `SET`
+under `redis` with explicit ports and exact keys. That classification remains
+single-use and does not waive the actual write value, options or delivery.
+Patterns, prefixes and initial-load snapshots are not supported for this write.
 
 ## RPC adapter
 

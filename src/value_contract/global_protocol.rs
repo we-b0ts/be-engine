@@ -150,7 +150,7 @@ fn aws_sigv4(context: LeafContext<'_>) -> Result<LeafObservations, String> {
             a,
             b,
             super::time::TimeMode::PreserveRelative,
-            context.clocks.dependency,
+            context.clocks.observation(),
         )?;
         let signature = |query: &super::url_query::SelectedQuery| -> anyhow::Result<()> {
             let value = query.values["X-Amz-Signature"]

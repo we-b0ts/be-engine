@@ -8,6 +8,7 @@ pub(super) fn evaluate_response(
     let AssertionInputs {
         body_available,
         times,
+        request_times,
         case_id,
         request,
         request_path,
@@ -26,6 +27,7 @@ pub(super) fn evaluate_response(
         actual_path,
         actual_fingerprint,
     } = inputs;
+    let clocks = crate::value_contract::json::AnchorClocks::for_response(request_times, times);
     ensure!(
         loaded.document.version >= 3,
         "runner-owned response assertions require replay policy version 3"
@@ -155,7 +157,7 @@ pub(super) fn evaluate_response(
                 .compiled
                 .as_ref()
                 .and_then(|compiled| compiled.http.as_ref()),
-            times,
+            clocks,
             &mut report,
         )?;
     }
@@ -171,9 +173,11 @@ pub(super) fn evaluate_response(
         }
     }
     if let Some(context) = &native_context {
-        for (id, header, result) in
-            context.header_results(expected_headers.as_ref(), actual_headers.as_ref(), times)
-        {
+        for (id, header, result) in context.header_results(
+            expected_headers.as_ref(),
+            actual_headers.as_ref(),
+            request_times,
+        ) {
             let pointer = format!("$headers/{header}");
             if let Err(kind) = &result {
                 report.unused_applicable_header_rule_ids.push(id);
@@ -195,11 +199,30 @@ pub(super) fn evaluate_response(
         report.finish(&[], &[]);
         return Ok(report);
     }
-    if loaded
+    let global_body_selected = loaded
         .compiled
         .as_ref()
-        .is_some_and(|p| p.global_json.is_some())
-        && body_rules.is_empty()
+        .and_then(|policy| policy.global_json.as_ref())
+        .map(|plan| {
+            if !plan.fields.is_empty() {
+                return Ok(true);
+            }
+            // The implicit plan recognizes textual times in actual JSON
+            // payloads. It does not replace native codecs or exact-body
+            // diagnostics for unrelated bytes.
+            if expected_body.body() == actual_body.body() {
+                return Ok(false);
+            }
+            crate::json_value::parse(expected_body.body())
+                .map(|source| {
+                    plan.selected_fields_with_clocks(&source, clocks)
+                        .map(|fields| !fields.is_empty())
+                })
+                .unwrap_or(Ok(false))
+        })
+        .transpose()?
+        .unwrap_or(false);
+    if global_body_selected && body_rules.is_empty()
         || native_context
             .as_ref()
             .is_some_and(|context| !context.is_empty())
@@ -226,11 +249,7 @@ pub(super) fn evaluate_response(
                     .compiled
                     .as_ref()
                     .and_then(|p| p.global_json.as_ref()),
-                crate::value_contract::json::AnchorClocks {
-                    case: times,
-                    dependency: times,
-                    ..Default::default()
-                },
+                clocks,
             )?;
             applicable_ids.extend(context.rule_ids());
             report.body_codec = if matches!(codec, crate::policy::Codec::Protobuf(_)) {
@@ -275,7 +294,7 @@ pub(super) fn evaluate_response(
                     .and_then(|p| p.global_json.as_ref()),
                 &expected_body,
                 &actual_body,
-                times,
+                clocks,
                 &mut report,
             )?;
         }
@@ -521,7 +540,7 @@ pub(super) fn evaluate_response(
         (Ok(expected), Ok(actual)) => {
             report.body_codec = ResponseBodyCodec::Json;
             let applicable_fields =
-                compare_json(&expected, &actual, &response_fields, &mut report, times);
+                compare_json(&expected, &actual, &response_fields, &mut report, clocks);
             if let Some(difference) = expected_body.type_difference(&actual_body) {
                 report.differences.push(difference);
             }

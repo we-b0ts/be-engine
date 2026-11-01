@@ -158,7 +158,7 @@ pub(in crate::replay) fn compare(
                 algorithm,
                 key,
                 anchors,
-                tolerance: 5_000_000_000,
+                tolerance: crate::value_contract::time::DEFAULT_TOLERANCE.as_nanos() as i128,
                 dynamic_claims: &rule.dynamic_claims,
             },
         )

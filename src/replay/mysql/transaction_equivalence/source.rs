@@ -71,6 +71,9 @@ pub(super) fn prepare(
     let mut plans = Vec::new();
     for (index, record) in records.iter().enumerate() {
         if let DependencyRecord::MysqlExchange(record) = record {
+            if super::super::is_nonsemantic_session_setup(record) {
+                continue;
+            }
             if let Some(connection) = record.connection_id {
                 connections
                     .entry(connection)

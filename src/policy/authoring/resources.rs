@@ -105,6 +105,9 @@ fn visit(rule: &mut Value, f: &mut impl FnMut(&mut Value) -> Result<()>) -> Resu
                 }
             }
             if let Some(selector) = effect.get_mut("selector") {
+                if selector.get("protocol").and_then(Value::as_str) == Some("redis_pubsub") {
+                    resource(selector, f)?;
+                }
                 if let Some(mysql) = selector.get_mut("selector") {
                     resource(mysql, f)?;
                 }

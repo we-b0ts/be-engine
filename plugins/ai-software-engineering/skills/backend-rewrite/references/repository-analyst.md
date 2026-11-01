@@ -65,16 +65,21 @@ applies it through the engine's current action.
 For `dependency_attribution`, preserve assignment ID/generation, recording run,
 Source revision, Source inventory ID and expected proof revision. The coordinator
 queries `dependency-attribution context` and dispatches this read-only assignment.
-API implementers prove their own behavior or exclusion; you own independent
-positive proof of initialization, actual process task or foreign API callers.
+You receive only concrete ownerless Source traffic or ownership returns. An
+implementer need not prove its exclusion or find the true owner. You either
+reject a mistaken return with Source proof, or independently prove the actual
+process task or async API owner under supported effective rules. Complete all
+ownerless attribution before formal Replay; an empty review cannot release it.
+Missing traffic already has its reporting API's owner and remains with that
+implementer, even when no Source candidate exists.
 Read indirect calls, branches, retries and cleanup paths. A timestamp, connection,
 task label, unused occurrence or unmatched request does not establish ownership.
 
-Use the returned authenticated Source occurrence queries, protected Target
-observation references and paginated `candidate_discovery.next_command`. Resource
-and operation candidates have not compared payloads or authorized scope. An
-unmatched request can have no Source candidate and cannot be called async from
-that fact. Keep value-rule diagnosis and Target implementation failures distinct.
+Use the returned authenticated Source occurrence queries and the bounded API
+evidence associated with a concrete ownership return. Resource and operation
+similarity does not establish ownership. An unmatched request alone does not
+request your analysis or prove async behavior. Keep value-rule diagnosis and
+Target implementation failures with their known owner.
 
 Return a `dependency-attribution/v3` submission under the supplied context. Bind
 its exact effective policy fingerprint and complete active rule IDs. For process
@@ -96,7 +101,8 @@ consumption evidence.
 
 Do not plan/apply rules, apply attribution, run Replay or edit implementation.
 Return rule proposals and ownership proof to the coordinator. The coordinator
-publishes rules first, obtains fresh context and applies your proof. The engine
+publishes rules first using the context's `rule_planning` command and Source-only
+evidence token, obtains fresh context and applies your proof. The engine
 may issue `ai-verified` for an unaffected API's real unused-only attempt while
 keeping Replay/capture obligations on the proven origin; only genuine complete
 execution closes those obligations. Rule removal or proof invalidation reopens

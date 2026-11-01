@@ -4,22 +4,13 @@ pub(super) fn compare(
     source: Option<&HeaderMapSnapshot>,
     target: Option<&HeaderMapSnapshot>,
     policy: &crate::policy::HttpPolicy,
-    times: super::super::RequestTimes,
+    clocks: crate::value_contract::json::AnchorClocks,
     report: &mut ResponseAssertionCaseReport,
 ) -> Result<()> {
     let (Some(source), Some(target)) = (source, target) else {
         return Ok(());
     };
-    let comparison = crate::value_contract::http_headers::compare(
-        source,
-        target,
-        policy,
-        crate::value_contract::json::AnchorClocks {
-            case: times,
-            dependency: times,
-            ..Default::default()
-        },
-    )?;
+    let comparison = crate::value_contract::http_headers::compare(source, target, policy, clocks)?;
     let before = crate::value_contract::http_headers::canonical(source)?;
     let after = crate::value_contract::http_headers::canonical(target)?;
     let failed = comparison

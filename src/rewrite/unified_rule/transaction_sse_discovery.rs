@@ -141,6 +141,7 @@ fn identity_only_differences_offer_source_guidance_without_inferred_permission()
     let fixture = fixture();
     let mut target = stream(true);
     target["request_sent_at"] = json!("2026-10-16T00:00:00Z");
+    target["interaction_started_at"] = json!("2026-10-16T00:00:00Z");
     for index in [0, 1, 6] {
         change_data(&mut target, index, |v| {
             v["response"]["created_at"] = json!(START)

@@ -326,20 +326,20 @@ impl RequestContracts {
                 .get(id)
                 .map(|anchor| (anchor.recorded, anchor.actual))
         });
-        json::AnchorClocks {
-            case: ClockPair {
+        json::AnchorClocks::for_request(
+            ClockPair {
                 source: case.and_then(|(recorded, _)| recorded),
                 target: case.and_then(|(_, actual)| actual),
             },
-            dependency: ClockPair {
+            ClockPair {
                 source: source_dependency,
                 target: target_dependency,
             },
-            delivery: ClockPair {
+            ClockPair {
                 source: source_delivery,
                 target: target_delivery,
             },
-        }
+        )
     }
 
     pub(in crate::replay) fn preview_redis_context(

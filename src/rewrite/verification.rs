@@ -36,6 +36,9 @@ async fn run_attempt_and_transition(
 ) -> Result<bool> {
     // Explicit API selection and a resumed round must share the same admission
     // boundary as status/next before starting any traffic execution.
+    if super::dependency_review::required_action(target_root, state).is_some() {
+        return Ok(false);
+    }
     if super::review::pre_revalidation::required_action(target_root, state)?.is_some() {
         return Ok(false);
     }

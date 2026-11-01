@@ -11,8 +11,10 @@ fn validate_time_field(field: &MysqlTimeFieldRule) -> Result<()> {
     }
     ensure!(
         field.time.relative_to == TimeReference::PreserveRelative
-            && parse_duration(&field.time.tolerance)? == 5_000,
-        "MySQL SQL times preserve request-relative differences with a fixed 5s tolerance"
+            && parse_duration(&field.time.tolerance)?
+                == crate::value_contract::time::DEFAULT_TOLERANCE.as_millis() as i64,
+        "MySQL SQL times preserve request-relative differences with a fixed {}s tolerance",
+        crate::value_contract::time::DEFAULT_TOLERANCE.as_secs()
     );
     Ok(())
 }

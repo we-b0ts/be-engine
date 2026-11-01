@@ -39,7 +39,7 @@ async fn capture_then_sql_json_and_redis_key_preserve_fixed_values_times_and_con
             exchange("SELECT count(*) FROM kinds WHERE name='old-name'", result(
                 json!([{"name":"count(*)","family":"integer","sql_type":"BIGINT"}]),
                 json!([[{"kind":"integer","value":0}]]))),
-            exchange("INSERT INTO kinds(name,json,created_at) VALUES('old-name','{\"name\":\"old-name\",\"stable\":1}','2020-01-01 00:00:00')", json!({"status":"ok","affected_rows":1})),
+            exchange("INSERT INTO kinds(name,json,created_at) VALUES('old-name','{\"name\":\"old-name\",\"stable\":1}','2020-01-01 00:00:00.000000')", json!({"status":"ok","affected_rows":1})),
             redis,
         ];
         let (temp,_,runtime,task) = fixture_with_policy(&records,Some(POLICY)).await;
@@ -125,14 +125,16 @@ async fn sql_time_evidence_uses_committed_identity_proofs_and_retired_authoring_
     tokio::time::timeout(Duration::from_secs(20),async {
         let mut capture = exchange("SELECT count(*) FROM kinds WHERE name='old-name'",result(json!([{"name":"count(*)","family":"integer","sql_type":"BIGINT"}]),json!([[{"kind":"integer","value":0}]])));
         capture["parse_warnings"] = json!([]);
-        let mut insert = exchange("INSERT INTO kinds(name,json,created_at) VALUES('old-name','{\"name\":\"old-name\",\"stable\":1}','2020-01-01 00:00:00')",json!({"status":"ok","affected_rows":1}));
+        let mut insert = exchange("INSERT INTO kinds(name,json,created_at) VALUES('old-name','{\"name\":\"old-name\",\"stable\":1}','2020-01-01 00:00:00.000000')",json!({"status":"ok","affected_rows":1}));
         insert["parse_warnings"] = json!([]);
         let policy = POLICY.split("  - id: created-at").next().unwrap().to_owned();
         let records = [capture,insert];
         let (temp,addr,runtime,task) = fixture_with_policy(&records,Some(&policy)).await;
         let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         sqlx::query("SELECT count(*) FROM kinds WHERE name=?").bind("new-name").fetch_one(&mut client).await.unwrap();
-        assert!(sqlx::query("INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)").bind("new-name").bind(r#"{"stable":1,"name":"new-name"}"#).bind(chrono::Utc::now().naive_utc()).execute(&mut client).await.is_err());
+        // Standard strings already have builtin time semantics. A real clock
+        // error still produces unmatched evidence after the identity commits.
+        assert!(sqlx::query("INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)").bind("new-name").bind(r#"{"stable":1,"name":"new-name"}"#).bind((chrono::Utc::now() + chrono::Duration::seconds(30)).naive_utc()).execute(&mut client).await.is_err());
         client.close().await.unwrap();
         let report = temp.path().join("replay.json");
         {

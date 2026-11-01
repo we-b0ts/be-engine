@@ -62,6 +62,10 @@ impl RequestContracts {
             );
             let origins = field_bindings::analyze(&source, record.database.as_deref());
             let empty = crate::policy::CompiledJsonPolicy {
+                time: self
+                    .global_json()
+                    .map(|plan| plan.time.clone())
+                    .unwrap_or_default(),
                 fields: Default::default(),
                 fingerprint: String::new(),
                 signatures: Default::default(),
@@ -101,38 +105,41 @@ impl RequestContracts {
                     .map(|context| context.select(a, b, origin, position, clocks))
                     .transpose()?
                     .flatten();
-                if let Some(selected) = selected.as_ref()
-                    && selected.id != crate::policy::GLOBAL_JSON_ID
-                {
-                    let checked = contracts::automatic::compare_selection_with_context(
+                if let Some(selected) = selected.as_ref() {
+                    let mut checked = contracts::automatic::compare_selection_with_context(
                         selected,
                         clocks,
                         &[],
                         self.compiled_rules().expect("automatic policy"),
                     )?;
-                    ensure!(
-                        checked.passed(),
-                        "authored or native temporal SQL contract failed"
-                    );
-                    comparison.merge_and_validate(checked);
-                    continue;
+                    if selected.id != crate::policy::GLOBAL_JSON_ID {
+                        ensure!(
+                            checked.passed(),
+                            "authored or native temporal SQL contract failed"
+                        );
+                    }
+                    // A different value slot may still need a provisional
+                    // identity rule. Already verified builtin time slots are
+                    // real matches and never become additional rule hints.
+                    if checked.passed() {
+                        checked.scope_schema_clocks(position);
+                        comparison.merge_and_validate(checked);
+                        continue;
+                    }
                 }
                 let (a, b) = (sql_value(a)?, sql_value(b)?);
                 ensure!(
                     origin.is_some(),
                     "SQL hypothesis requires a proven physical value slot; LIMIT and projection constants stay strict"
                 );
-                let plan = if a.is_object() || a.is_array() {
-                    self.global_json().unwrap_or(&empty)
-                } else {
-                    &empty
-                };
+                let plan = self.global_json().unwrap_or(&empty);
                 let mut preview =
                     crate::value_contract::hypothesis::preview_values(case, &a, &b, plan, clocks);
                 for considered in &mut preview.attempts {
                     sql_location(&mut considered.candidate, position, origin);
                 }
                 if let Some(checked) = &mut preview.comparison {
+                    checked.scope_schema_clocks(position);
                     for candidate in &mut checked.pre_matches {
                         sql_location(candidate, position, origin);
                     }

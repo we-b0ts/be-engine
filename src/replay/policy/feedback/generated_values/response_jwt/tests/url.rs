@@ -90,6 +90,46 @@ fn response_jwt_url_plan_apply_owns_expiry_and_preserves_evidence() {
 }
 
 #[test]
+fn jwt_companion_keeps_request_relation_while_other_business_times_use_response_completion() {
+    let (_temp, options, feedback) = url_fixture();
+    install_jwt_fixture(feedback).unwrap();
+    let at = |seconds| {
+        chrono::DateTime::from_timestamp(seconds, 0)
+            .unwrap()
+            .to_rfc3339()
+    };
+    for (source, seconds, path, clock) in [
+        (true, SOURCE + 30, &options.expected_response, "timestamp"),
+        (
+            false,
+            TARGET + 90,
+            &options.actual_response,
+            "response_completed_at",
+        ),
+    ] {
+        change_body(&options, source, |body| {
+            body["createdAt"] = json!(at(seconds))
+        });
+        let mut response: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        response[clock] = json!(at(seconds));
+        write(path, &response);
+    }
+    let passed = assert_recorded_response(copy(&options)).unwrap();
+    assert!(passed.passed, "{:?}", passed.differences);
+    change_body(&options, false, |body| {
+        body["createdAt"] = json!(at(TARGET + 30))
+    });
+    let rejected = assert_recorded_response(options).unwrap();
+    assert!(!rejected.passed);
+    assert!(
+        rejected
+            .differences
+            .iter()
+            .any(|difference| difference.pointer == "/createdAt")
+    );
+}
+
+#[test]
 fn response_jwt_url_rejects_unselected_url_changes_and_ambiguous_tokens() {
     for defect in [
         "path",
@@ -246,13 +286,55 @@ fn response_jwt_expiry_is_bound_to_each_own_token_at_integer_second_precision() 
     let (_temp, options, feedback) = url_fixture();
     install_jwt_fixture(feedback).unwrap();
     change_body(&options, false, |body| {
-        let value = chrono::DateTime::from_timestamp(TARGET + 1800, 999_999_999)
-            .unwrap()
-            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+        let value = chrono::DateTime::from_timestamp(TARGET + 1800, 999_999_000).unwrap();
         body["expiresAt"] = json!(value.to_rfc3339());
         body["downloadUrl"] = json!(body["downloadUrl"].as_str().unwrap().replace('.', "%2E"));
     });
     assert!(assert_recorded_response(options).unwrap().passed);
+}
+
+#[test]
+fn response_jwt_expiry_retains_source_fraction_width_and_timezone_spelling() {
+    for defect in ["none", "precision", "zone"] {
+        let (_temp, options, feedback) = url_fixture();
+        install_jwt_fixture(feedback).unwrap();
+        change_body(&options, true, |body| {
+            body["expiresAt"] = json!(
+                chrono::DateTime::from_timestamp(SOURCE + 1800, 0)
+                    .unwrap()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            );
+        });
+        change_body(&options, false, |body| {
+            body["expiresAt"] = json!(
+                chrono::DateTime::from_timestamp(
+                    TARGET + 1800,
+                    if defect == "precision" {
+                        123_000_000
+                    } else {
+                        0
+                    },
+                )
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, defect != "zone")
+            );
+        });
+        let report = assert_recorded_response(options).unwrap();
+        assert_eq!(
+            report.passed,
+            defect == "none",
+            "{defect}: {:?}",
+            report.differences
+        );
+        if defect != "none" {
+            assert!(
+                report
+                    .differences
+                    .iter()
+                    .any(|difference| difference.kind == ResponseDifferenceKind::JwtExpiryMismatch)
+            );
+        }
+    }
 }
 
 #[test]

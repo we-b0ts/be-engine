@@ -148,10 +148,15 @@ pub(super) async fn run_ordered_writer(
                 }
                 // EOF applies to the response direction immediately, even while the
                 // request reader still owns an output sender. Never wait for it here.
-                if reset {
-                    client_control.reset()?;
-                } else {
-                    client_control.shutdown_write()?;
+                // Recorder cleanup has already closed the registered sockets.
+                // It is not another peer FIN/RST, and repeating the shutdown
+                // can turn an idle clean connection into a false capture error.
+                if !termination.engine_stopped() {
+                    if reset {
+                        client_control.reset()?;
+                    } else {
+                        client_control.shutdown_write()?;
+                    }
                 }
                 client_open = false;
                 for (index, mut exchange) in exchanges.into_iter().enumerate() {
@@ -236,6 +241,83 @@ async fn write_payload<W: AsyncWrite + Unpin>(
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn recorder_stop_does_not_repeat_shutdown_on_an_already_disconnected_idle_socket() {
+        for engine_stop in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut config = crate::AppConfig::default();
+            config.recording.output_dir = temp.path().join("recordings");
+            config.tls.ca_cert_path = temp.path().join("ca.pem");
+            config.tls.ca_key_path = temp.path().join("ca-key.pem");
+            let state = AppState::new(config).await.unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (client, accepted) = tokio::join!(
+                TcpStream::connect(listener.local_addr().unwrap()),
+                listener.accept()
+            );
+            let _peer = client.unwrap();
+            let stream = accepted.unwrap().0;
+            let control = ConnectionControl::new(&stream).unwrap();
+            control.reset().unwrap();
+            assert_eq!(
+                control.shutdown_write().unwrap_err().kind(),
+                std::io::ErrorKind::NotConnected
+            );
+            let (_read, write) = stream.into_split();
+            let termination = ConnectionTermination::default();
+            if engine_stop {
+                termination.observe_engine_stop();
+            }
+            let (tx, rx) = mpsc::channel(1);
+            tx.send(RedisOutput::Terminated {
+                exchanges: vec![],
+                response: Bytes::new(),
+                reset: false,
+            })
+            .await
+            .unwrap();
+            drop(tx);
+            let context = ConnectionContext {
+                client_addr: None,
+                target_host: "redis.test".into(),
+                target_port: 6379,
+                target_addr: "127.0.0.1:6379".into(),
+                upstream_addr: "127.0.0.1:6379".into(),
+            };
+            let connection = Uuid::new_v4();
+            let health = Arc::new(ConnectionCaptureHealth::new(
+                connection,
+                "redis",
+                None,
+                context.target_addr.clone(),
+            ));
+            let result = run_ordered_writer(
+                Arc::new(Mutex::new(write)),
+                rx,
+                state,
+                context,
+                connection,
+                termination,
+                4096,
+                control,
+                health,
+            )
+            .await;
+            if engine_stop {
+                assert_eq!(result.unwrap(), (0, true));
+            } else {
+                assert_eq!(
+                    result
+                        .unwrap_err()
+                        .downcast_ref::<std::io::Error>()
+                        .unwrap()
+                        .kind(),
+                    std::io::ErrorKind::NotConnected
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn failed_short_write_keeps_the_delivered_prefix_length() {

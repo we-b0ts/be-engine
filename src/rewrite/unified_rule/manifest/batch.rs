@@ -2,6 +2,35 @@
 use super::*;
 
 impl Bundle {
+    pub(in crate::rewrite::unified_rule) fn load_attribution(source: &Path) -> Result<Self> {
+        crate::dependency_index::recording::authenticate(source)?;
+        let (recording, scopes) = crate::dependency_index::recording::cases(source)?;
+        let mut output = Self {
+            inventory_path: None,
+            replay_path: PathBuf::new(),
+            replay: Value::Null,
+            assertions: Value::Null,
+            cases: BTreeMap::new(),
+            artifacts: BTreeMap::new(),
+        };
+        output.freeze(&recording.join(crate::dependency::observation::MANIFEST_FILE))?;
+        for scope in scopes {
+            let directory = scope
+                .parent()
+                .context("Source Case has no directory")?
+                .to_owned();
+            output.freeze(&directory.join("request.json"))?;
+            output.freeze(&directory.join("expected-response.json"))?;
+            let case = directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .context("Source Case identity absent")?
+                .to_owned();
+            output.cases.insert(case, directory);
+        }
+        Ok(output)
+    }
+
     pub(in crate::rewrite::unified_rule) fn load_batch(
         evidence: &crate::e2e_run::BatchRuleEvidence,
         policy_identity: &str,

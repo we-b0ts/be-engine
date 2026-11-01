@@ -9,7 +9,10 @@ pub(crate) struct ResponsePayloadPair {
     pub(crate) body_available: bool,
     pub(crate) source: Vec<u8>,
     pub(crate) target: Option<Vec<u8>>,
+    /// Independently observed ordinary response completion events.
     pub(crate) times: RequestTimes,
+    pub(crate) request_times: RequestTimes,
+    pub(crate) interaction_times: RequestTimes,
     pub(crate) source_headers: Option<crate::recorder::HeaderMapSnapshot>,
     pub(crate) target_headers: Option<crate::recorder::HeaderMapSnapshot>,
 }
@@ -58,7 +61,8 @@ pub(crate) fn response_rule_payload_pair(
         None => anyhow::bail!("Source response body is absent"),
     };
     let source_body = business_body(&request, bytes, oneway, "Source response")?;
-    let source_clock = source.clock_start(request.timestamp);
+    let source_clock = source.response_completed_at();
+    let source_interaction_started_at = source.interaction_started_at();
     let mut output = ResponsePayloadPair {
         status_difference: None,
         source_interaction: source.interaction,
@@ -68,6 +72,14 @@ pub(crate) fn response_rule_payload_pair(
         target: None,
         times: RequestTimes {
             source: source_clock,
+            target: None,
+        },
+        request_times: RequestTimes {
+            source: request.timestamp,
+            target: None,
+        },
+        interaction_times: RequestTimes {
+            source: source_interaction_started_at,
             target: None,
         },
         source_headers: source.headers,
@@ -113,7 +125,9 @@ pub(crate) fn response_rule_payload_pair(
         output.status_difference = (before != after).then_some((before, after));
         output.target = Some(target_body.body().into());
         output.target_interaction = target.interaction;
-        output.times.target = target.interaction_started_at.or(target.request_sent_at);
+        output.times.target = target.response_completed_at;
+        output.request_times.target = target.request_sent_at;
+        output.interaction_times.target = target.interaction_started_at;
         output.target_headers = target.headers;
     }
     Ok(output)

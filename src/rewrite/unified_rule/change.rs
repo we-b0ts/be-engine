@@ -10,6 +10,7 @@ const CHANGE_FORMAT: &str = "traffic-policy-change/v1";
 
 pub(super) struct Proposal {
     pub policy: TrafficPolicy,
+    pub explicit_time: bool,
     pub replace_rules: BTreeSet<String>,
     pub replace_sections: BTreeSet<String>,
 }
@@ -30,10 +31,15 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
     if value.get("format").and_then(serde_yaml::Value::as_str) != Some(CHANGE_FORMAT) {
         return Ok(Proposal {
             policy: super::parse_proposal(input)?,
+            explicit_time: value.get("time").is_some(),
             replace_rules: BTreeSet::new(),
             replace_sections: BTreeSet::new(),
         });
     }
+    let explicit_time = value
+        .get("policy")
+        .and_then(|policy| policy.get("time"))
+        .is_some();
     let change: Change = serde_yaml::from_value(value).context("invalid policy change proposal")?;
     ensure!(
         change.format == CHANGE_FORMAT,
@@ -62,12 +68,13 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
     for section in &replace_sections {
         let provided = match section.as_str() {
             "json" => change.policy.json.is_some(),
+            "time" => explicit_time,
             "mysql" => change.policy.mysql.is_some(),
             "redis" => change.policy.redis.is_some(),
             "http" => change.policy.http.is_some(),
             "async_api" => change.policy.async_api.is_some(),
             _ => anyhow::bail!(
-                "unsupported replaced section {section:?}; use json, mysql, redis, http or async_api"
+                "unsupported replaced section {section:?}; use time, json, mysql, redis, http or async_api"
             ),
         };
         ensure!(
@@ -77,6 +84,7 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
     }
     ensure!(
         !change.policy.rules.is_empty()
+            || explicit_time
             || !change.policy.resources.is_empty()
             || change.policy.json.is_some()
             || change.policy.mysql.is_some()
@@ -89,6 +97,7 @@ pub(super) fn parse(input: &str) -> Result<Proposal> {
     crate::policy::compile_policy(&change.policy)?;
     Ok(Proposal {
         policy: change.policy,
+        explicit_time,
         replace_rules,
         replace_sections,
     })
@@ -176,6 +185,17 @@ fn capture_paths(document: &TrafficPolicy) -> Result<BTreeMap<String, BTreeSet<S
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn time_section_replacement_requires_an_actual_settings_declaration() {
+        let provided = json!({"format":CHANGE_FORMAT,"replace_sections":["time"],
+            "policy":{"format":"traffic-policy/v3","time":{"default_utc_offset":"+05:30"}}});
+        let parsed = parse(&provided.to_string()).unwrap();
+        assert!(parsed.explicit_time && parsed.policy.rules.is_empty());
+        let mut absent = provided;
+        absent["policy"].as_object_mut().unwrap().remove("time");
+        assert!(parse(&absent.to_string()).is_err());
+    }
 
     fn rule(id: &str, api: &str) -> serde_json::Value {
         json!({"id":id,"match":{"api":api},

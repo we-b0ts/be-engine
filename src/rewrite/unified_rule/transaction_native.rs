@@ -129,7 +129,7 @@ fn source_scope(fixture: &Fixture) -> PathBuf {
 }
 
 #[test]
-fn source_only_ownership_reenumerates_added_cases_and_retains_independent_attribution_work() {
+fn source_only_ownership_reenumerates_added_cases_without_inventing_ownerless_work() {
     for added_case in [false, true] {
         let fixture = Fixture::new();
         let source = source_scope(&fixture);
@@ -161,10 +161,14 @@ fn source_only_ownership_reenumerates_added_cases_and_retains_independent_attrib
             let state = fixture.state();
             assert!(!state.e2e_current);
             assert!(!state.rule_replay_pending);
+            // These original occurrences already belong to a Case. A policy
+            // proposal alone neither disputes that owner nor applies new proof.
             assert!(
                 crate::rewrite::dependency_review::required_action(fixture.root(), &state)
-                    .is_some()
+                    .is_none()
             );
+            assert!(state.dependency_review.decisions.is_empty());
+            assert!(state.dependency_review.receipts.is_empty());
         }
     }
 }

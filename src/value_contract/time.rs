@@ -1,10 +1,14 @@
 //! Exact timestamp parsing and clock relations, independent of replay and configuration.
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Utc};
 use serde_json::Value;
+pub(crate) mod automatic;
 pub(crate) mod calendar;
+mod representation;
+pub(crate) use representation::validate as validate_representation;
 
 pub(crate) const NANOS_PER_SECOND: i128 = 1_000_000_000;
-const TOLERANCE_NANOS: u128 = 5_000_000_000;
+pub(crate) const DEFAULT_TOLERANCE: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const TOLERANCE_NANOS: u128 = DEFAULT_TOLERANCE.as_nanos();
 const RELATIONSHIP_TOLERANCE_NANOS: u128 = 1000;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -56,6 +60,7 @@ pub(crate) enum TimeError {
     NumericCategoryChanged,
     RelationshipMismatch,
     CalendarDayMismatch,
+    RepresentationChanged,
 }
 
 impl std::fmt::Display for TimeError {
@@ -70,8 +75,9 @@ impl std::fmt::Display for TimeError {
             Self::NumericCategoryChanged => "timestamp numeric category changed",
             Self::RelationshipMismatch => "time parameter relationship changed",
             Self::CalendarDayMismatch => {
-                "calendar date does not satisfy its local request-day relation"
+                "calendar date does not preserve its local day relation to the observation clock"
             }
+            Self::RepresentationChanged => "timestamp representation changed from Source format",
         })
     }
 }

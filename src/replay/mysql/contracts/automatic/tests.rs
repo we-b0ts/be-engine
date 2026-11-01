@@ -1,5 +1,7 @@
 use super::*;
 use serde_json::json;
+mod request_clocks;
+mod standard_strings;
 
 const A: &str = "00000000-0000-4000-8000-000000000001";
 const X: &str = "00000000-0000-4000-8000-000000000002";
@@ -155,7 +157,7 @@ fn temporal_record(sql_type: &str, family: &str, value: &str) -> RecordedMysqlEx
 }
 
 #[test]
-fn native_metadata_infers_time_for_later_writes_without_field_declarations() {
+fn native_datetime_and_varchar_share_standard_time_rules_without_field_declarations() {
     let mut policy = policy();
     policy.mysql = None; // A global JSON policy enables native schema inference.
     let source = record("UPDATE tasks SET created_at='2020-01-01 08:00:01.123456' WHERE count=7");
@@ -193,7 +195,7 @@ fn native_metadata_infers_time_for_later_writes_without_field_declarations() {
             &source,
             "UPDATE tasks SET created_at='2026-01-01 08:00:01.234567' WHERE count=7"
         )
-        .is_err()
+        .is_ok_and(|result| result.passed())
     );
 }
 

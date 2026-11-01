@@ -90,7 +90,15 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
         let elapsed = end
             .and_then(|end| end.offset_ms)
             .or_else(|| response.as_ref().and_then(|r| r.duration_ms));
-        let closed_at = elapsed
+        let transport_end = input
+            .as_ref()
+            .and_then(|input| input.actions.last())
+            .filter(|action| matches!(action.action, InputActionKind::TransportEnd { .. }))
+            .map(|action| action.offset_ms);
+        // Source cleanup can finish after a real client FIN/RST. That cleanup
+        // is dependency evidence, not a longer external input delivery window.
+        let window_elapsed = elapsed.map(|end| transport_end.map_or(end, |at| at.min(end)));
+        let closed_at = window_elapsed
             .and_then(|ms| i64::try_from(ms).ok())
             .and_then(|ms| {
                 start
@@ -107,12 +115,15 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
                         crate::interaction::model::EndReason::BusinessIdle
                             | crate::interaction::model::EndReason::ClientClose
                             | crate::interaction::model::EndReason::ServerEof
+                            | crate::interaction::model::EndReason::ClientTransportEnd
                     )
                 )
-        });
-        // Multi-input projection is limited to one CONNECT and ACK-tracked
-        // ordinary client events. Every preceding event must receive its actual
-        // Target ACK before delivery; future inputs are never prerequisites.
+        }) && ((end.and_then(|end| end.reason)
+            == Some(crate::interaction::model::EndReason::ClientTransportEnd))
+            == transport_end.is_some());
+        // Heartbeats do not create business prerequisites. Multi-input business
+        // projection is limited to one CONNECT and ACK-tracked client events;
+        // every preceding event still requires its actual Target ACK.
         let inputs = input.as_ref().and_then(tracked_inputs);
         let projectable = complete
             && clean
@@ -121,11 +132,10 @@ pub(super) fn load(root: &Path, selected: &BTreeMap<String, ReplayCase>) -> Resu
                 inputs.is_some()
                     && namespaces.len() == 1
                     && elapsed.is_some_and(|end| {
-                        input
-                            .actions
-                            .last()
-                            .is_some_and(|action| action.offset_ms < end)
-                            && end <= input.policy.max_duration_ms
+                        input.actions.last().is_some_and(|action| {
+                            action.offset_ms < end
+                                || action.offset_ms == end && transport_end.is_some()
+                        }) && end <= input.policy.max_duration_ms
                     })
             });
         let connected_after = input
@@ -167,38 +177,48 @@ fn tracked_inputs(input: &InputTranscript) -> Option<Vec<(u64, u64)>> {
         {
             return None;
         }
-        let EngineIoPacket::Message(packet) =
-            decode_engine_io_text(&message.data, input.policy.max_message_bytes).ok()?
-        else {
-            return None;
-        };
-        Some(packet)
+        decode_engine_io_text(&message.data, input.policy.max_message_bytes).ok()
     };
-    let connect = packet(first)?;
+    let EngineIoPacket::Message(connect) = packet(first)? else {
+        return None;
+    };
     if connect.kind != SocketIoKind::Connect {
         return None;
     }
     let mut ids = BTreeSet::new();
-    input
-        .actions
-        .iter()
-        .skip(1)
-        .map(|action| {
-            let event = packet(action)?;
-            (event.kind == SocketIoKind::Event
-                && event.id.is_some()
-                && event.attachments == 0
-                && event.namespace == connect.namespace
-                && ids.insert(event.id?)
-                && !matches!(
-                    event
-                        .event_name()
-                        .and_then(|name| input.policy.completion_for(&event.namespace, name)),
-                    Some(crate::interaction::policy::CompletionRule::TerminalEvent { .. })
-                ))
-            .then_some((action.sequence, action.offset_ms))
-        })
-        .collect()
+    let mut inputs = Vec::new();
+    for action in input.actions.iter().skip(1) {
+        if matches!(action.action, InputActionKind::TransportEnd { .. }) {
+            // InputTranscript::validate confines this independent physical end
+            // to the final action. It carries no business completion barrier.
+            continue;
+        }
+        let event = match packet(action)? {
+            EngineIoPacket::Pong(_) if action.after.is_empty() && !action.compressible_gap => {
+                // Both legacy recorded PONG actions and explicit heartbeat
+                // programs retain their own transport scheduler. A PONG has no
+                // Socket.IO ACK and must not disable unrelated native inputs.
+                continue;
+            }
+            EngineIoPacket::Message(event) => event,
+            _ => return None,
+        };
+        if event.kind != SocketIoKind::Event
+            || event.attachments != 0
+            || event.namespace != connect.namespace
+            || !ids.insert(event.id?)
+            || matches!(
+                event
+                    .event_name()
+                    .and_then(|name| input.policy.completion_for(&event.namespace, name)),
+                Some(crate::interaction::policy::CompletionRule::TerminalEvent { .. })
+            )
+        {
+            return None;
+        }
+        inputs.push((action.sequence, action.offset_ms));
+    }
+    Some(inputs)
 }
 
 fn read_input(path: &Path) -> Result<Option<Request>> {

@@ -10,7 +10,7 @@ impl PubSubState {
     pub(in crate::replay) fn global_report_extra_count(&self) -> usize {
         self.global_report
             .rows(1, &self.pushes, true)
-            .filter(|(_, push)| push.source.is_run_owned() && !push.status.is_consumed())
+            .filter(|(_, push)| push.source.is_run_level() && !push.status.is_consumed())
             .count()
     }
     pub(in crate::replay) fn freeze_global_report_layout(&mut self) {
@@ -26,7 +26,7 @@ impl PubSubState {
         let Some(push) = self
             .pushes
             .get(index)
-            .filter(|push| push.source.is_run_owned())
+            .filter(|push| push.source.is_run_level())
         else {
             return;
         };
@@ -53,7 +53,7 @@ impl PubSubState {
         for (index, push) in self
             .global_report
             .rows(1, &self.pushes, extras)
-            .filter(|(_, push)| push.source.is_run_owned())
+            .filter(|(_, push)| push.source.is_run_level())
         {
             visitor(Row {
                 position: Position { section: 1, index },

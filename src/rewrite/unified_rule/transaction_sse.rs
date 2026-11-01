@@ -90,6 +90,11 @@ fn stream(target: bool) -> Value {
     if target {
         value["version"] = json!(1);
         value["request_sent_at"] = json!("2026-10-16T00:01:00Z");
+        value["interaction_started_at"] = json!("2026-10-16T00:01:00Z");
+        value["response_completed_at"] = json!("2026-10-16T00:01:00.100Z");
+    } else {
+        value["timestamp"] = json!("2026-10-16T00:00:00.100Z");
+        value["duration_ms"] = json!(100);
     }
     value
 }
@@ -313,7 +318,10 @@ fn sse_value_contracts_keep_identity_time_remainder_and_lifecycle_strict() {
                 target.as_object_mut().unwrap().remove("interaction");
             }
             "clock" => {
-                target.as_object_mut().unwrap().remove("request_sent_at");
+                target
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("interaction_started_at");
             }
             _ => unreachable!(),
         }
@@ -375,7 +383,10 @@ fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evid
                     .truncate(2);
             }
             "target-clock" => {
-                target.as_object_mut().unwrap().remove("request_sent_at");
+                target
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("interaction_started_at");
             }
             _ => {}
         }

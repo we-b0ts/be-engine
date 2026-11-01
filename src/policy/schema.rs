@@ -12,6 +12,7 @@ pub const POLICY_FORMAT: &str = "traffic-policy/v3";
 pub struct TrafficPolicy {
     pub format: String,
     pub source_revision: Option<String>,
+    pub time: super::TimePolicy,
     pub json: Option<super::JsonPolicy>,
     pub mysql: Option<super::MysqlPolicy>,
     pub redis: Option<super::RedisPolicy>,
@@ -27,6 +28,7 @@ impl Default for TrafficPolicy {
         Self {
             format: POLICY_FORMAT.into(),
             source_revision: None,
+            time: Default::default(),
             json: None,
             mysql: None,
             redis: None,
@@ -692,9 +694,13 @@ pub enum TimeRelation {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum TimeAnchor {
+    /// The independently observed event being compared: dependency request
+    /// initiation or primary response completion, selected by the caller.
+    #[default]
+    #[serde(rename = "observation")]
+    Observation,
     #[serde(rename = "case.request_start")]
     ApiRequestStart,
-    #[default]
     #[serde(rename = "dependency.request_start")]
     DependencyRequestStart,
     #[serde(rename = "dependency.response_delivery")]

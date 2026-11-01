@@ -47,7 +47,10 @@ fn disjoint_inbound_branches_select_initialization_without_relaxing_touches() {
         (Some("session.started"), 2001, 2000, Some(false)),
         (Some("session.touched"), 1000, 2000, Some(true)),
         (Some("session.touched"), 2000, 2000, Some(false)),
-        (None, 2000, 2000, None),
+        // The implicit comparison plan still rejects changed numeric values
+        // when no authored branch matches; it grants no numeric time format.
+        (None, 2000, 2000, Some(false)),
+        (None, 1000, 1000, Some(true)),
     ] {
         fs::write(
             fixture.cases[CASE_ID].dir.join("request.json"),

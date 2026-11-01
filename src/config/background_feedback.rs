@@ -155,6 +155,11 @@ pub(crate) fn plan_rule_config(
     let mut rules = std::mem::take(&mut config.process_owned_dependencies);
     let requested_name = requested.name().to_string();
     let (revision, fact) = match &requested {
+        BackgroundDependencyRuleConfig::RedisPubsub {
+            source_revision,
+            source_evidence,
+            ..
+        } => (source_revision, source_evidence),
         BackgroundDependencyRuleConfig::Mysql {
             source_revision,
             source_evidence,

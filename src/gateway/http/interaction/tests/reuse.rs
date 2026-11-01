@@ -145,6 +145,7 @@ async fn source_with_automatic_protocol_close(
     turn: usize,
     dependency: SocketAddr,
     application_closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    expected_transport: Option<crate::interaction::model::ClientTransportEnd>,
 ) {
     let socket = tokio_tungstenite::accept_hdr_async(stream, asgi_headers)
         .await
@@ -154,10 +155,40 @@ async fn source_with_automatic_protocol_close(
     let protocol_writer = writer.clone();
     let (frames, mut input) = tokio::sync::mpsc::channel(8);
     let protocol = tokio::spawn(async move {
-        while let Some(Ok(message)) = reader.next().await {
+        while let Some(result) = reader.next().await {
+            let message = match result {
+                Ok(message) => message,
+                Err(error) => {
+                    if let Some(end) = expected_transport {
+                        use crate::interaction::model::ClientTransportEnd;
+                        use tokio_tungstenite::tungstenite::{Error, error::ProtocolError};
+                        match end {
+                            ClientTransportEnd::Eof => assert!(matches!(
+                                error,
+                                Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
+                            )),
+                            ClientTransportEnd::Reset => assert!(
+                                matches!(error, Error::Io(ref io) if io.kind() == std::io::ErrorKind::ConnectionReset)
+                            ),
+                        }
+                    }
+                    break;
+                }
+            };
             if matches!(&message, Message::Close(_)) {
+                assert!(
+                    expected_transport.is_none(),
+                    "TCP end must not be translated into a WS CLOSE"
+                );
                 let _ = protocol_writer.lock().await.flush().await;
                 break;
+            }
+            if expected_transport.is_some() {
+                assert_ne!(
+                    message,
+                    Message::Text("1".into()),
+                    "TCP end must not be translated into Engine.IO CLOSE"
+                );
             }
             if frames.send(message).await.is_err() {
                 break;
@@ -207,6 +238,15 @@ enum AsgiProbe {
 }
 
 async fn asgi_source(listener: TcpListener, dependency: SocketAddr, probe: AsgiProbe) {
+    asgi_source_transport(listener, dependency, probe, None).await;
+}
+
+async fn asgi_source_transport(
+    listener: TcpListener,
+    dependency: SocketAddr,
+    probe: AsgiProbe,
+    expected_transport: Option<crate::interaction::model::ClientTransportEnd>,
+) {
     let sessions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::BTreeMap::<
         String,
         std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -239,7 +279,14 @@ async fn asgi_source(listener: TcpListener, dependency: SocketAddr, probe: AsgiP
                     .lock()
                     .await
                     .insert(format!("session-{turn}"), closed.clone());
-                source_with_automatic_protocol_close(stream, turn, dependency, closed).await;
+                source_with_automatic_protocol_close(
+                    stream,
+                    turn,
+                    dependency,
+                    closed,
+                    expected_transport.filter(|_| turn == 1),
+                )
+                .await;
             } else {
                 read_head(&mut stream).await;
                 let uri = head

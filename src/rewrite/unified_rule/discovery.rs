@@ -31,6 +31,7 @@ const SOURCE_CACHE_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Default)]
 struct Drafts {
+    time: crate::policy::TimePolicy,
     values: Vec<Value>,
     seen: BTreeSet<String>,
     candidate_bindings: BTreeMap<String, BTreeSet<(String, String)>>,
@@ -73,6 +74,11 @@ pub(in crate::rewrite) fn facts(
     let mut next = cursor;
     let mut drafts = Drafts {
         summary_offset: cursor.summary,
+        time: schemas
+            .as_ref()
+            .and_then(|policy| policy.global_json.as_ref())
+            .map(|global| global.time.clone())
+            .unwrap_or_default(),
         ..Default::default()
     };
     let (primary_done, dependency_done) = if cursor.primary_first {
@@ -153,14 +159,29 @@ impl Drafts {
         mut base: Value,
         witness: &str,
         clocks: AnchorClocks,
-        _schemas: Option<&CompiledPolicy>,
+        schemas: Option<&CompiledPolicy>,
         _sql_scope: Option<&BTreeSet<&str>>,
     ) -> Result<()> {
-        let codec = crate::json_value::parse(source)
-            .is_some()
-            .then_some(Codec::Json);
+        let decoded_source = crate::value_codec::CodecView::decode(&Codec::Json, source).ok();
+        let decoded_target = target
+            .and_then(|target| crate::value_codec::CodecView::decode(&Codec::Json, target).ok());
+        let codec = decoded_source.as_ref().map(|_| Codec::Json);
         if let Some(codec) = &codec {
             base["codec"] = serde_json::to_value(codec)?;
+        }
+        if let Some(((source, target), global)) = decoded_source
+            .as_ref()
+            .zip(decoded_target.as_ref())
+            .zip(schemas.and_then(|policy| policy.global_json.as_ref()))
+            && crate::value_contract::global::compare_decoded(source, target, global, &[], clocks)
+                .is_ok_and(|checked| {
+                    checked.passed()
+                        && checked
+                            .evaluated
+                            .contains(crate::value_contract::time::automatic::RULE_ID)
+                })
+        {
+            return Ok(());
         }
         // Observation positions locate immutable evidence. They do not scope
         // the authored global content format.
@@ -172,13 +193,8 @@ impl Drafts {
         let identity = serde_json::to_string(&base)?;
         self.add_entry(identity, json!({"location":base,"witness_id":witness,"needs_schema":codec.is_none(),"source_intent_required":true,
                 "instruction":if codec.is_none(){"Unrecognized Source encoding stays exact. Trace Source serialization before requesting schema or an explicit decode binding; absent drafts do not prove a missing capability. Consult docs/content-policy-layout.md only when Source establishes the format. An opaque or equal value does not prove generation."}else if base["slot"].get("sse_data").is_some(){"Pointers address the SSE data JSON and share the root json.fields formats. Trace Source before changing a declaration. Keep event presence/order, envelopes and unselected text strict; see docs/sse-value-contracts.md."}else{"Decoding alone authorizes no changes. Inspect these locations and existing global JSON fields, then trace Source generation and data flow. Supported compound formats and explicit decode bindings are documented in docs/content-policy-layout.md; do not infer them from field names, equal values or nulls."}}));
-        let (Some(codec), Some(target)) = (codec, target) else {
-            return Ok(());
-        };
-        let (Ok(source), Ok(target)) = (
-            crate::value_codec::CodecView::decode(&codec, source),
-            crate::value_codec::CodecView::decode(&codec, target),
-        ) else {
+        let (Some(codec), Some(source), Some(target)) = (codec, decoded_source, decoded_target)
+        else {
             return Ok(());
         };
         let paths = match &codec {

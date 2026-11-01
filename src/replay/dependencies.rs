@@ -328,6 +328,9 @@ pub(super) fn register_dependency_records(
                 )
             })?;
         register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
+        if mysql::is_nonsemantic_session_setup(&exchange) {
+            continue;
+        }
         let timing = ReplayExchangeTiming::from_recorded(exchange.duration_ms, exchange.outcome);
         let mysql_index = mysql.exchanges.len();
         mysql.register_exchange(ReplayExchange {
@@ -411,6 +414,7 @@ pub(super) fn active_case_matches(active_case_id: Option<&str>, exchange: &Repla
     match exchange.source {
         ReplaySource::Startup | ReplaySource::Process => true,
         ReplaySource::Case => exchange.case_id.as_deref() == active_case_id,
+        ReplaySource::Unattributed => false,
     }
 }
 

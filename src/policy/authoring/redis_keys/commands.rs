@@ -85,7 +85,7 @@ impl Commands {
                         contract: SequenceArgument::Time(TimeContract {
                             format: format.format,
                             relation: TimeRelation::PreserveOffset,
-                            anchor: TimeAnchor::DependencyRequestStart,
+                            anchor: TimeAnchor::Observation,
                             utc_offset: format.utc_offset.clone(),
                             clock_group: Some(format!("{AUTO_GROUP}{index}")),
                             clock_scope: ClockScope::default(),

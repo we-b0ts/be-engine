@@ -214,3 +214,63 @@ fn explicit_policy_cannot_override_the_project_authority() {
         .is_err()
     );
 }
+
+#[test]
+fn business_http_capture_preserves_project_policy_and_runtime_overrides() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = fixture(&temp);
+    let original = std::fs::read_to_string(&path).unwrap();
+    let concise = original.replace(
+        "  dns_mock:\n    enabled: true\n    upstream_dns: 127.0.0.1:5300\n  tcp_gateway:\n    enabled: true\n  udp_gateway:\n    enabled: true\n    forward: false\n",
+        "  capture:\n    ingress: [http]\n    dependencies: [http]\n  dns_mock:\n    upstream_dns: 127.0.0.1:5300\n",
+    );
+    assert_ne!(concise, original);
+    std::fs::write(&path, concise).unwrap();
+
+    let mut configured = options(&path);
+    configured.data_root = temp.path().join("mounted-data");
+    configured.ready_path = Some("/runtime-ready".into());
+    configured.request_timeout_seconds = Some(17);
+    let config = configured.config().unwrap();
+    assert!(config.http_gateway.enabled);
+    assert!(config.dns_mock.enabled);
+    assert!(config.tcp_gateway.enabled);
+    assert!(config.tcp_gateway.mitm_https);
+    assert!(!config.udp_gateway.enabled);
+    assert_eq!(config.http_gateway.ready.path, "/runtime-ready");
+    assert_eq!(config.http_gateway.request_timeout_ms, 17_000);
+    assert!(!config.http_gateway.record_streaming);
+    assert_eq!(config.http_gateway.per_api_case_limits.default, 7);
+    assert_eq!(
+        config.http_gateway.case_path_patterns,
+        ["/api/teams/*/skills"]
+    );
+    assert_eq!(config.http_gateway.exclude_rules.len(), 1);
+    assert!(config.http_response_rewrite.is_enabled());
+    assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
+    assert_eq!(config.recording.redact_headers, ["x-private-header"]);
+    assert_eq!(
+        config.dns_mock.upstream_dns,
+        "127.0.0.1:5300".parse().unwrap()
+    );
+    assert_eq!(config.http_gateway.listen, configured.recorder_listen);
+    assert_eq!(
+        config.http_gateway.matched_upstream,
+        configured.source_origin
+    );
+    assert_eq!(
+        config.dns_mock.registry_path,
+        configured
+            .data_root
+            .join(".traffic-e2e/local/artifacts/fake_dns_registry.json")
+    );
+
+    configured.no_interception = true;
+    let without_interception = configured.config().unwrap();
+    assert!(without_interception.http_gateway.enabled);
+    assert!(!without_interception.dns_mock.enabled);
+    assert!(!without_interception.tcp_gateway.enabled);
+    assert!(!without_interception.udp_gateway.enabled);
+    assert!(!without_interception.http_response_rewrite.is_enabled());
+    without_interception.validate().unwrap();
+}

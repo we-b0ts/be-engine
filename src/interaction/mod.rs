@@ -10,3 +10,4 @@ pub(crate) mod private;
 pub(crate) mod replay;
 pub mod socketio;
 pub mod stream;
+pub(crate) mod websocket_transport;

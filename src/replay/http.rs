@@ -670,6 +670,7 @@ fn active_http_case_matches(active_case_id: Option<&str>, exchange: &ReplayHttpE
         ReplaySource::Case => {
             exchange.shared_origin.is_some() || exchange.case_id.as_deref() == active_case_id
         }
+        ReplaySource::Unattributed => false,
     }
 }
 

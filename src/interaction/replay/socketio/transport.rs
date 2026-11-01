@@ -18,8 +18,11 @@ use tokio_tungstenite::{
 
 use super::super::HttpClient;
 use crate::http::response_headers;
+use crate::interaction::model::ClientTransportEnd;
 use crate::interaction::model::{MessageKind, WireMessage};
 use crate::recorder::HeaderMapSnapshot;
+
+mod termination;
 
 type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -45,6 +48,20 @@ pub(super) enum ReaderEvent {
     Error(String),
 }
 
+pub(super) struct ReaderObservation {
+    pub(super) at: std::time::Instant,
+    pub(super) event: ReaderEvent,
+}
+
+impl ReaderObservation {
+    fn now(event: ReaderEvent) -> Self {
+        Self {
+            at: std::time::Instant::now(),
+            event,
+        }
+    }
+}
+
 enum Outgoing {
     Polling {
         client: Box<HttpClient>,
@@ -58,14 +75,16 @@ enum Outgoing {
 pub(super) struct Transport {
     outgoing: Outgoing,
     reader: ReaderTask,
-    tx: mpsc::Sender<ReaderEvent>,
-    rx: mpsc::Receiver<ReaderEvent>,
-    deferred: VecDeque<ReaderEvent>,
+    tx: mpsc::Sender<ReaderObservation>,
+    rx: mpsc::Receiver<ReaderObservation>,
+    deferred: VecDeque<ReaderObservation>,
     origin: String,
     sid: Option<String>,
     max_message_bytes: usize,
     socket_io: bool,
     engine_close_sent: bool,
+    raw_control: Option<termination::Control>,
+    raw_end: Option<ClientTransportEnd>,
     pub(super) status: StatusCode,
     pub(super) headers: HeaderMapSnapshot,
 }
@@ -92,7 +111,7 @@ impl Transport {
             );
         }
         if websocket {
-            let (writer, reader, response) = connect_websocket(
+            let (writer, reader, response, control) = connect_websocket(
                 request.uri(),
                 request.headers(),
                 tx.clone(),
@@ -109,6 +128,8 @@ impl Transport {
                 max_message_bytes,
                 socket_io: !generic_websocket,
                 engine_close_sent: false,
+                raw_control: Some(control),
+                raw_end: None,
                 deferred: VecDeque::new(),
                 status: response.status(),
                 headers: response_headers::snapshot_standard(response.headers()),
@@ -135,6 +156,7 @@ impl Transport {
         let deferred = parse_payload(&bytes, max_message_bytes)?
             .into_iter()
             .map(ReaderEvent::Message)
+            .map(ReaderObservation::now)
             .collect();
         // The reader waits until OPEN has supplied a live SID via set_sid().
         let reader = ReaderTask(tokio::spawn(async {}));
@@ -152,6 +174,8 @@ impl Transport {
             max_message_bytes,
             socket_io: true,
             engine_close_sent: false,
+            raw_control: None,
+            raw_end: None,
             deferred,
             status,
             headers,
@@ -208,7 +232,11 @@ impl Transport {
                         Ok(true) => break,
                         Ok(false) => {}
                         Err(error) => {
-                            let _ = tx.send(ReaderEvent::Error(format!("{error:#}"))).await;
+                            let _ = tx
+                                .send(ReaderObservation::now(ReaderEvent::Error(format!(
+                                    "{error:#}"
+                                ))))
+                                .await;
                             break;
                         }
                     }
@@ -219,6 +247,10 @@ impl Transport {
     }
 
     pub(super) async fn recv(&mut self) -> Option<ReaderEvent> {
+        self.recv_observation().await.map(|observed| observed.event)
+    }
+
+    pub(super) async fn recv_observation(&mut self) -> Option<ReaderObservation> {
         if let Some(event) = self.deferred.pop_front() {
             Some(event)
         } else {
@@ -226,7 +258,16 @@ impl Transport {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn queued_observations(&self) -> usize {
+        self.deferred.len() + self.rx.len()
+    }
+
     pub(super) async fn send(&mut self, message: &WireMessage) -> Result<()> {
+        ensure!(
+            self.raw_end.is_none(),
+            "Target WebSocket write side has ended"
+        );
         match &mut self.outgoing {
             Outgoing::WebSocket(writer) => {
                 let message = match message.kind {
@@ -320,7 +361,7 @@ impl Transport {
                 request_headers.append(name.clone(), value.parse()?);
             }
         }
-        let (mut writer, reader, _) = connect_websocket(
+        let (mut writer, reader, _, control) = connect_websocket(
             &uri,
             &request_headers,
             self.tx.clone(),
@@ -332,12 +373,12 @@ impl Transport {
         let mut deferred = Vec::new();
         let mut deferred_bytes = 0usize;
         loop {
-            match self
+            let observed = self
                 .rx
                 .recv()
                 .await
-                .context("WebSocket upgrade probe ended")?
-            {
+                .context("WebSocket upgrade probe ended")?;
+            match observed.event {
                 ReaderEvent::Message(message) if message == WireMessage::text("3probe") => break,
                 ReaderEvent::Closed | ReaderEvent::Close { .. } => {
                     anyhow::bail!("Target closed during Engine.IO upgrade probe")
@@ -355,7 +396,10 @@ impl Transport {
                         deferred.len() < 1024,
                         "Engine.IO upgrade has too many deferred messages"
                     );
-                    deferred.push(event);
+                    deferred.push(ReaderObservation {
+                        at: observed.at,
+                        event,
+                    });
                 }
             }
         }
@@ -363,6 +407,7 @@ impl Transport {
         self.reader.abort();
         self.reader = reader;
         self.outgoing = Outgoing::WebSocket(writer);
+        self.raw_control = Some(control);
         // Retain polling observations ahead of later WebSocket messages.
         self.deferred.extend(deferred);
         Ok(())
@@ -377,12 +422,51 @@ impl Transport {
         self.finish_close(code, reason, false).await
     }
 
+    /// A captured peer end is a raw transport input, never a protocol CLOSE.
+    /// FIN retains the read side until the real peer ends; RST ends the socket
+    /// immediately. Neither transition completes pending application work.
+    pub(super) fn begin_transport_end(
+        &mut self,
+        end: ClientTransportEnd,
+    ) -> Result<std::time::Instant> {
+        ensure!(
+            self.is_websocket(),
+            "client transport end requires an active WebSocket"
+        );
+        ensure!(
+            self.raw_end.is_none(),
+            "client transport end was already sent"
+        );
+        let control = self
+            .raw_control
+            .as_ref()
+            .context("Target WebSocket has no transport control")?;
+        self.raw_end = Some(end);
+        control.send(end)
+    }
+
+    pub(super) fn complete_transport_end(&mut self) {
+        self.outgoing = Outgoing::Closed;
+        self.reader.abort();
+    }
+
+    pub(super) fn raw_end_complete(&self) -> bool {
+        self.raw_end.is_some() && matches!(self.outgoing, Outgoing::Closed)
+    }
+
     async fn finish_close(
         &mut self,
         code: Option<u16>,
         reason: &str,
         wait_for_peer: bool,
     ) -> Result<()> {
+        if self.raw_end.is_some() {
+            // The raw end has already been issued. Cleanup must not append a
+            // WebSocket CLOSE or Engine.IO CLOSE to this different input.
+            self.outgoing = Outgoing::Closed;
+            self.reader.abort();
+            return Ok(());
+        }
         let websocket = matches!(self.outgoing, Outgoing::WebSocket(_));
         match &mut self.outgoing {
             Outgoing::Closed => return Ok(()),
@@ -439,9 +523,14 @@ impl Drop for Transport {
 async fn connect_websocket(
     uri: &Uri,
     headers: &hyper::HeaderMap,
-    tx: mpsc::Sender<ReaderEvent>,
+    tx: mpsc::Sender<ReaderObservation>,
     limit: usize,
-) -> Result<(Writer, ReaderTask, hyper::Response<Option<Vec<u8>>>)> {
+) -> Result<(
+    Writer,
+    ReaderTask,
+    hyper::Response<Option<Vec<u8>>>,
+    termination::Control,
+)> {
     let mut url = url::Url::parse(&uri.to_string())?;
     url.set_scheme(if uri.scheme_str() == Some("https") {
         "wss"
@@ -458,9 +547,12 @@ async fn connect_websocket(
         tokio_tungstenite::connect_async_with_config(request, Some(config), true)
             .await
             .context("Target WebSocket handshake failed")?;
+    let control = termination::Control::new(&socket)?;
+    let reader_control = control.clone();
     let (writer, mut incoming) = socket.split();
     let reader = tokio::spawn(async move {
         while let Some(message) = incoming.next().await {
+            let at = std::time::Instant::now();
             let event = match message {
                 Ok(Message::Text(data)) => ReaderEvent::Message(WireMessage::text(data.as_str())),
                 Ok(Message::Binary(data)) => ReaderEvent::Message(WireMessage::binary(&data)),
@@ -470,19 +562,44 @@ async fn connect_websocket(
                     let (code, reason) = frame.map_or((None, String::new()), |frame| {
                         (Some(u16::from(frame.code)), frame.reason.to_string())
                     });
-                    let _ = tx.send(ReaderEvent::Close { code, reason }).await;
+                    let requested = reader_control.note_terminal(at);
+                    let _ = tx
+                        .send(ReaderObservation {
+                            at,
+                            event: ReaderEvent::Close { code, reason },
+                        })
+                        .await;
+                    if requested {
+                        reader_control.wait_peer_end(&tx).await;
+                    }
                     return;
                 }
                 Ok(Message::Frame(_)) => continue,
-                Err(error) => ReaderEvent::Error(error.to_string()),
+                Err(error) => {
+                    if reader_control.note_terminal(at) && termination::physical_end(&error) {
+                        reader_control.wait_peer_end(&tx).await;
+                        return;
+                    }
+                    ReaderEvent::Error(error.to_string())
+                }
             };
-            if tx.send(event).await.is_err() {
+            if tx.send(ReaderObservation { at, event }).await.is_err() {
                 return;
             }
         }
-        let _ = tx.send(ReaderEvent::Closed).await;
+        let at = std::time::Instant::now();
+        if reader_control.note_terminal(at) {
+            reader_control.wait_peer_end(&tx).await;
+        } else {
+            let _ = tx
+                .send(ReaderObservation {
+                    at,
+                    event: ReaderEvent::Closed,
+                })
+                .await;
+        }
     });
-    Ok((writer, ReaderTask(reader), response))
+    Ok((writer, ReaderTask(reader), response, control))
 }
 
 fn copy_headers(source: &hyper::HeaderMap, target: &mut hyper::HeaderMap) {
@@ -525,11 +642,15 @@ fn with_sid(uri: &Uri, sid: &str) -> Result<Uri> {
     Ok(url.as_str().parse()?)
 }
 
-async fn send_payload(tx: &mpsc::Sender<ReaderEvent>, bytes: &[u8], limit: usize) -> Result<bool> {
+async fn send_payload(
+    tx: &mpsc::Sender<ReaderObservation>,
+    bytes: &[u8],
+    limit: usize,
+) -> Result<bool> {
     let mut closed = false;
     for message in parse_payload(bytes, limit)? {
         closed |= message.kind == MessageKind::Text && message.data == "1";
-        tx.send(ReaderEvent::Message(message))
+        tx.send(ReaderObservation::now(ReaderEvent::Message(message)))
             .await
             .context("Engine.IO receiver stopped")?;
     }

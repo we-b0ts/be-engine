@@ -42,6 +42,7 @@ impl IndexedNotifications {
         lanes: Vec<crate::dependency_index::global::NotificationLane>,
         root: &Path,
         source: Arc<RecordSource>,
+        source_kind: ReplaySource,
     ) -> Result<()> {
         for lane in lanes {
             let record: RecordedPush = serde_json::from_value(lane.record)?;
@@ -61,16 +62,22 @@ impl IndexedNotifications {
             let pages = Paged::restore(lane.pages.resolve(root)?)?;
             let count = pages.count;
             let anchor = (record.connection_id, record.subscription_sequence);
-            ensure!(
-                self.by_anchor.insert(anchor, self.lanes.len()).is_none(),
-                "duplicate indexed Redis subscription anchor"
-            );
+            // Ambient slots are eligible only for proven native ingress/echo
+            // delivery. They never run on the subscription-age fallback timer.
+            // This also permits the same physical subscription to span original
+            // Process and Unattributed views without merging their ownership.
+            if source_kind.is_run_owned() {
+                ensure!(
+                    self.by_anchor.insert(anchor, self.lanes.len()).is_none(),
+                    "duplicate indexed Redis subscription anchor"
+                );
+            }
             self.lanes.push(IndexedLane {
                 record,
                 kind,
                 subject: lane.subject,
                 source: source.clone(),
-                source_kind: ReplaySource::Startup,
+                source_kind,
                 pages: Some(pages),
                 writer: None,
                 count,

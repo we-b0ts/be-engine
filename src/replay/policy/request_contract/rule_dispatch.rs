@@ -62,11 +62,28 @@ impl NativeDispatch {
                     .as_ref()
                     .and_then(|plan| plan.operation.symbol())
                 {
-                    operations
-                        .exact
-                        .entry(operation.to_owned())
-                        .or_default()
-                        .push(index);
+                    if matches!(
+                        compiled.rule.effect,
+                        crate::policy::NativeEffect::MysqlValues(_)
+                    ) && matches!(operation, "COM_QUERY" | "COM_STMT_EXECUTE")
+                    {
+                        // One SQL value contract owns both native encodings.
+                        // Keep that explicit owner visible before automatic
+                        // scalar inference can accept an exact historical value.
+                        for operation in ["COM_QUERY", "COM_STMT_EXECUTE"] {
+                            operations
+                                .exact
+                                .entry(operation.into())
+                                .or_default()
+                                .push(index);
+                        }
+                    } else {
+                        operations
+                            .exact
+                            .entry(operation.to_owned())
+                            .or_default()
+                            .push(index);
+                    }
                 } else {
                     operations.any.push(index);
                 }
@@ -215,6 +232,44 @@ mod tests {
         assert_eq!(
             RulePositions::new(&[0, 3, 8], &[1, 3, 9]).collect::<Vec<_>>(),
             vec![0, 1, 3, 8, 9]
+        );
+    }
+
+    #[test]
+    fn sql_value_owners_are_indexed_for_text_and_binary_execute_commands() {
+        let policy = crate::policy::parse_and_compile_policy(
+            r#"format: traffic-policy/v3
+rules:
+  - id: authored-clock
+    match:
+      resource: {protocol: mysql, endpoint: 'db.test:3306', database: app}
+      operation: COM_QUERY
+      sql: UPDATE tasks SET stamp=? WHERE id=7
+    effect:
+      kind: mysql_values
+      values:
+        0: {relative_time: sql_datetime, utc_offset: '+00:00'}
+"#,
+        )
+        .unwrap();
+        let dispatch = NativeDispatch::prepare(&policy).unwrap();
+        let target = TargetKey {
+            host: "db.test".into(),
+            port: 3306,
+        };
+        for operation in ["COM_QUERY", "COM_STMT_EXECUTE"] {
+            assert_eq!(
+                dispatch
+                    .candidates(ProtocolKind::Mysql, Some(&target), operation)
+                    .collect::<Vec<_>>(),
+                vec![0]
+            );
+        }
+        assert!(
+            dispatch
+                .candidates(ProtocolKind::Mysql, Some(&target), "COM_PING")
+                .next()
+                .is_none()
         );
     }
 }

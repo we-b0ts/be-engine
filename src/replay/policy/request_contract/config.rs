@@ -127,7 +127,10 @@ pub(crate) struct TimeField {
     pub tolerance: String,
 }
 fn default_tolerance() -> String {
-    "5s".into()
+    format!(
+        "{}s",
+        crate::value_contract::time::DEFAULT_TOLERANCE.as_secs_f64()
+    )
 }
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -177,7 +180,11 @@ pub(crate) fn tolerance(value: &str) -> Result<f64> {
         .strip_suffix('s')
         .ok_or_else(|| anyhow::anyhow!("request tolerance must be in seconds"))?
         .parse::<f64>()?;
-    ensure!(seconds == 5.0, "request tolerance is fixed at 5s");
+    ensure!(
+        seconds == crate::value_contract::time::DEFAULT_TOLERANCE.as_secs_f64(),
+        "request tolerance is fixed at {}s",
+        crate::value_contract::time::DEFAULT_TOLERANCE.as_secs_f64()
+    );
     Ok(seconds)
 }
 
@@ -185,7 +192,11 @@ impl TimeField {
     pub(crate) fn validate(&self) -> Result<()> {
         tolerance(&self.tolerance)?;
         ensure!(
-            self.anchor == crate::policy::TimeAnchor::DependencyRequestStart,
+            matches!(
+                self.anchor,
+                crate::policy::TimeAnchor::Observation
+                    | crate::policy::TimeAnchor::DependencyRequestStart
+            ),
             "Redis request times require the corresponding dependency request start"
         );
         if let Some(group) = &self.clock_group {

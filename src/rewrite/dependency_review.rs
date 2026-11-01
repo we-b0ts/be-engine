@@ -1,17 +1,21 @@
 //! Independent Source attribution and API-scoped verification obligations.
+mod analysis;
 mod batch;
 mod batch_verification;
+mod decisions;
 mod investigations;
 mod model;
 mod ownership_impact;
 mod projection;
 mod queries;
 mod rules;
+mod snapshot;
 mod source;
 mod target_query;
 #[cfg(test)]
 mod tests;
 mod verification;
+mod workflow_verification;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -27,12 +31,14 @@ use super::{
     verification_obligations::{ScopeObligation, VerificationScope},
 };
 use crate::dependency::attribution::{AttributionDecision, DependencyOwner};
+pub(super) use analysis::required_action;
 pub use batch::{dependency_attribution_batch_information, retry_dependency_batch};
 pub(super) use batch::{required_action as batch_action, run as run_batch};
 pub(super) use batch_verification::current as batch_current;
 pub use investigations::{
     InvestigationOutcome, InvestigationResolution, TargetInvestigation,
-    TargetInvestigationSubmission, investigate_unmatched_dependency,
+    TargetInvestigationResolutionSubmission, TargetInvestigationSubmission,
+    investigate_unmatched_dependency, resolve_target_investigation,
 };
 pub(super) use model::ReviewLedger;
 pub use model::{
@@ -46,6 +52,7 @@ pub use projection::dependency_attribution_hypotheses;
 pub(super) use projection::information as api_information;
 pub use queries::{dependency_attribution_candidates, dependency_attribution_rules};
 pub use target_query::dependency_attribution_target;
+pub(super) use workflow_verification::{current as workflow_current, pending as workflow_pending};
 
 fn open(root: &Path) -> Result<(std::path::PathBuf, RewriteStore)> {
     let (root, _) = crate::e2e_run::resolve_project(root)?;
@@ -63,24 +70,17 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
             .transpose()?;
         let inventory_changed =
             state.dependency_review.source_inventory_id.as_deref() != inventory.as_deref();
-        let expired = state
-            .dependency_review
-            .decisions
-            .iter()
-            .filter(|(_, decision)| {
-                inventory_changed
-                    || !rules::current(decision, &active)
-                    || Some(decision.proof.source_revision.as_str())
-                        != state.source_revision.as_deref()
-            })
-            .map(|(id, _)| *id)
-            .collect::<BTreeSet<_>>();
+        let source_revision = state.source_revision.clone();
+        let expired = state.dependency_review.decisions.retain_groups(|decision| {
+            !inventory_changed
+                && rules::current(decision, &active)
+                && Some(decision.proof.source_revision.as_str()) == source_revision.as_deref()
+        });
         if !expired.is_empty() {
             let expired_proofs = expired
                 .iter()
-                .filter_map(|id| state.dependency_review.decisions.get(id))
-                .filter(|decision| !rules::current(decision, &active))
-                .map(|decision| decision.proof_id.clone())
+                .filter(|group| !rules::current(&group.template, &active))
+                .map(|group| group.template.proof_id.clone())
                 .collect::<BTreeSet<_>>();
             for obligation in
                 state
@@ -93,13 +93,12 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
             {
                 obligation.retired_reason=Some("ownership proof lost its effective rule binding; original Source ownership is restored and must still reconcile".into());
             }
-            state
-                .dependency_review
-                .decisions
-                .retain(|id, _| !expired.contains(id));
             for claim in state.dependency_review.claims.values_mut() {
                 if claim.recording_run_id == state.recording_run_id
-                    && !claim.source_exchange_ids.is_disjoint(&expired)
+                    && claim
+                        .source_exchange_ids
+                        .iter()
+                        .any(|id| expired.iter().any(|group| group.contains(id)))
                 {
                     claim.status = ClaimStatus::Pending;
                 }
@@ -109,6 +108,8 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
             state.dependency_review.revision += 1;
         }
     }
+    investigations::refresh(state);
+    analysis::refresh_inventory(state)?;
     if !state.dependency_review.receipts.is_empty() {
         verification::invalidate_receipts(root, state)?;
     }
@@ -132,12 +133,6 @@ pub fn dependency_attribution_context(
         .claims
         .iter()
         .map(|claim| claim.api.clone())
-        .chain(
-            context
-                .investigations
-                .iter()
-                .map(|request| request.api.clone()),
-        )
         .collect::<BTreeSet<_>>();
     context.evidence_commands = apis
         .into_iter()
@@ -202,44 +197,6 @@ fn context_for(
         .map(|(id, _)| *id)
         .collect();
     let assignment_id = assignment_id(state)?;
-    let owners = decisions
-        .iter()
-        .map(|(id, decision)| (**id, decision.owner.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let investigations = state
-        .dependency_review
-        .investigations
-        .values()
-        .filter(|request| {
-            request.recording_run_id == state.recording_run_id
-                && matches!(
-                    request.status,
-                    ClaimStatus::Pending | ClaimStatus::Unresolved
-                )
-        })
-        .cloned()
-        .map(|mut request| {
-            request.candidate_discovery = request
-                .target_observations
-                .iter()
-                .map(|(id, observation)| {
-                    (
-                        id.clone(),
-                        queries::candidate_page(
-                            root,
-                            state,
-                            source,
-                            (&request.id, id),
-                            observation,
-                            &owners,
-                            0,
-                        ),
-                    )
-                })
-                .collect();
-            request
-        })
-        .collect();
     Ok(AttributionReviewContext {
         schema: SCHEMA,
         work_type: "dependency_attribution",
@@ -250,11 +207,11 @@ fn context_for(
         revision: state.dependency_review.revision,
         assignment_id,
         claims,
-        investigations,
         task_groups: BTreeMap::new(),
         evidence_commands: vec![],
         effective_policy_fingerprint: String::new(),
         rule_groups: vec![],
+        rule_planning: crate::rewrite::unified_rule::attribution::information(root, state)?,
         unattributed_exchange_ids,
         obligations: state
             .dependency_review
@@ -263,7 +220,7 @@ fn context_for(
             .filter(|o| o.pending())
             .cloned()
             .collect(),
-        next_step: "Analyze actual Source tasks and indirect callers read-only. Submit independent positive owner proofs; claim exclusion alone never removes a consumption obligation.",
+        next_step: "Resolve every ownerless Source occurrence through supported process-task or async-origin API rules and independent positive proof before formal Replay. Reject mistaken ownership returns with Source proof. Missing traffic remains with its reporting API implementer; no ownership result proves consumption.",
     })
 }
 
@@ -286,30 +243,38 @@ pub fn claim_foreign_unused(options: AttributionCommandOptions) -> Result<Value>
     super::worker::ensure_api_confirmed(&state, &api, "submitting an unused ownership claim")?;
     let selected = super::inventory::scoped(&state, Some(&api.parse()?))?;
     let original = source::load(&state)?;
-    let actual = verification::actual(&root, &selected, &original)?;
-    input.exclusion.validate(
-        selected
-            .source_revision
-            .as_deref()
-            .context("Source revision absent")?,
-    )?;
+    let actual = verification::claim_actual(&root, &selected, &original)?;
+    let source_revision = selected
+        .source_revision
+        .as_deref()
+        .context("Source revision absent")?;
+    if let Some(proof) = &input.exclusion {
+        proof.validate(source_revision)?;
+    }
+    let reason = if input.reason.trim().is_empty() {
+        input
+            .exclusion
+            .as_ref()
+            .map(|proof| proof.exclusive_scope.clone())
+            .unwrap_or_default()
+    } else {
+        input.reason.clone()
+    };
+    ensure!(
+        !reason.trim().is_empty() && reason.len() <= 4096,
+        "ownership return requires concrete unused occurrences and a bounded reason, not an exclusion proof"
+    );
     ensure!(
         !input.source_exchange_ids.is_empty()
             && input.source_exchange_ids.is_subset(&actual.unused),
         "claim must select actual unused occurrences from this exact finalized attempt"
-    );
-    ensure!(
-        input.source_exchange_ids.iter().all(|id| original
-            .exchanges
-            .get(id)
-            .is_some_and(|event| event.complete)),
-        "claim cannot exempt incomplete Source capture"
     );
     let id = source::digest(&serde_json::to_vec(&(
         &state.workflow_id,
         &api,
         actual.attempt,
         &input.source_exchange_ids,
+        &reason,
         &input.exclusion,
     ))?);
     if !state.dependency_review.claims.contains_key(&id) {
@@ -320,13 +285,14 @@ pub fn claim_foreign_unused(options: AttributionCommandOptions) -> Result<Value>
                 api: input.api,
                 method_api: api,
                 recording_run_id: state.recording_run_id.clone(),
-                source_revision: input.exclusion.source_revision.clone(),
+                source_revision: source_revision.into(),
                 source_inventory_id: original.identity,
                 attempt: actual.attempt,
                 execution_identity: actual.execution_identity,
                 report_sha256: actual.report_sha256,
                 source_exchange_ids: input.source_exchange_ids,
                 exclusion: input.exclusion,
+                reason,
                 status: ClaimStatus::Pending,
                 rejection: None,
             },
@@ -384,21 +350,21 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
             &proposal,
         ))?);
         ownership_impact::observe(&state, &original, &proposal, &mut moved_case_scopes);
-        for id in &proposal.source_exchange_ids {
-            let decision = AttributionDecision {
-                exchange_id: *id,
+        let group = std::sync::Arc::new(decisions::DecisionGroup {
+            template: decisions::DecisionTemplate {
                 owner: proposal.owner.clone(),
                 proof_id: proof_id.clone(),
                 proof_revision: next_revision,
                 proof: proposal.proof.clone(),
-                rule_bindings: rule_bindings.clone(),
-            };
-            state
-                .dependency_review
-                .decision_history
-                .push(decision.clone());
-            state.dependency_review.decisions.insert(*id, decision);
-        }
+                rule_bindings,
+            },
+            exchange_ids: proposal.source_exchange_ids.iter().copied().collect(),
+        });
+        state
+            .dependency_review
+            .decisions
+            .insert_group(group.clone())?;
+        state.dependency_review.decision_history.push_group(group);
         {
             let requirement = proposal
                 .impact
@@ -454,9 +420,10 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
         claim.status = ClaimStatus::Rejected;
         claim.rejection = Some(rejection.clone());
     }
-    for resolution in &input.investigation_resolutions {
-        investigations::apply_resolution(&mut state, resolution)?;
-    }
+    ensure!(
+        input.investigation_resolutions.is_empty(),
+        "missing or unmatched traffic has an API owner; submit its implementer diagnosis with dependency-attribution resolve"
+    );
     for claim in state.dependency_review.claims.values_mut() {
         if claim.status != ClaimStatus::Rejected
             && claim.recording_run_id == state.recording_run_id
@@ -495,10 +462,12 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
     let accepted = verification::reconcile(&root, &mut state, &original)?;
     state.bump();
     store.save(&state)?;
+    let pending = required_action(&root, &state);
     Ok(
         json!({"schema":SCHEMA,"revision":next_revision,"accepted_apis":accepted,
         "pending_obligations":state.dependency_review.obligations.values().filter(|o|o.pending()).collect::<Vec<_>>(),
-        "batch_verified":false,"next_command":super::action::next_command(&root)}),
+        "ownership_complete":pending.is_none(),"unattributed_remaining":state.dependency_review.unresolved_source_exchange_ids.len(),
+        "next_action":pending,"batch_verified":false,"next_command":super::action::next_command(&root)}),
     )
 }
 
@@ -603,35 +572,32 @@ fn validate_proposal(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn dependency_attribution_overlay(
     root: &Path,
     recording_run: &str,
 ) -> Result<Vec<AttributionDecision>> {
-    let Some(state) = RewriteStore::new(root)?.load_snapshot()? else {
-        return Ok(vec![]);
-    };
-    if state.recording_run_id != recording_run {
-        return Ok(vec![]);
-    }
-    if state.dependency_review.recording_run_id.as_deref() != Some(recording_run) {
-        return Ok(vec![]);
-    }
-    ensure!(
-        state.dependency_review.source_inventory_id.as_deref()
-            == Some(source::inventory_identity(&state)?.as_str()),
-        "attribution overlay belongs to a changed sealed Source inventory; obtain fresh independent proof"
-    );
-    let active = rules::fingerprints(&rules::load(root)?)?;
-    Ok(state
-        .dependency_review
-        .decisions
-        .values()
-        .filter(|decision| {
-            Some(decision.proof.source_revision.as_str()) == state.source_revision.as_deref()
-                && rules::current(decision, &active)
-        })
-        .cloned()
-        .collect())
+    snapshot::overlay(root, recording_run)
+}
+
+pub(crate) fn dependency_attribution_identity(root: &Path, recording_run: &str) -> Result<String> {
+    snapshot::identity(root, recording_run)
+}
+
+pub(crate) fn dependency_attribution_identity_for_source(
+    root: &Path,
+    source: &Path,
+    recording_run: &str,
+) -> Result<String> {
+    snapshot::identity_for_source(root, source, recording_run)
+}
+
+pub(crate) fn freeze_dependency_attribution(
+    target: Option<&Path>,
+    source: &Path,
+    recording_run: &str,
+) -> Result<(Vec<AttributionDecision>, String)> {
+    snapshot::frozen(target, source, recording_run)
 }
 
 pub(super) fn batch_pending(state: &RewriteState) -> bool {
@@ -665,44 +631,6 @@ pub(super) fn batch_pending(state: &RewriteState) -> bool {
             })
 }
 
-pub(super) fn required_action(
-    root: &Path,
-    state: &RewriteState,
-) -> Option<super::model::RewriteAction> {
-    let initial = state.case_source.is_some()
-        && state.dependency_review.recording_run_id.as_deref()
-            != Some(state.recording_run_id.as_str());
-    let count = state
-        .dependency_review
-        .claims
-        .values()
-        .filter(|claim| {
-            claim.recording_run_id == state.recording_run_id && claim.status == ClaimStatus::Pending
-        })
-        .count();
-    let unmatched = state
-        .dependency_review
-        .investigations
-        .values()
-        .filter(|request| {
-            request.recording_run_id == state.recording_run_id
-                && request.status == ClaimStatus::Pending
-        })
-        .count();
-    let final_unresolved = batch::apis_ready(state)
-        && !state
-            .dependency_review
-            .unresolved_source_exchange_ids
-            .is_empty();
-    (count > 0 || unmatched > 0 || initial || final_unresolved).then(||super::model::RewriteAction::DependencyAttributionRequired {
-        summary:if initial {"review new recording attribution once before Replay; retain unresolved scopes without blocking unrelated API diagnosis".into()} else {format!("independently prove Source ownership for {count} unused dependency claims; current API implementation may continue")},
-        assignment_id:assignment_id(state).expect("serializable attribution assignment"),dispatch_generation:state.dependency_review.revision,
-        claim_kinds:BTreeMap::from([("foreign_unused".into(),count),("target_request_investigation".into(),unmatched)]),
-        context:super::action::command(root,vec!["dependency-attribution".into(),"context".into()],vec![]),
-        apply:super::action::command(root,vec!["dependency-attribution".into(),"apply".into(),"--file".into(),"<attribution.json>".into()],vec![]),
-    })
-}
-
 fn assignment_id(state: &RewriteState) -> Result<String> {
     Ok(source::digest(&serde_json::to_vec(&(
         &state.workflow_id,
@@ -717,6 +645,10 @@ pub fn verify_dependency_obligation(context: super::RewriteContext, id: &str) ->
     let _lock = store.lock()?;
     let mut state = store.load()?.context("rewrite workflow absent")?;
     let session = verification::verify_obligation(&root, &mut state, id)?;
+    // This explicit verification command can retain a stronger WholeSource
+    // receipt only when its independent strict full-session validator passes.
+    // Workflow finalization never calls this path for run-owned obligations.
+    let _ = batch_verification::accept(&root, &mut state);
     state.dependency_review.revision += 1;
     state.bump();
     store.save(&state)?;
@@ -767,7 +699,7 @@ pub fn dependency_attribution_source_information(
     Ok(
         json!({"schema":SCHEMA,"recording_run_id":state.recording_run_id,"source_inventory_id":inventory.identity,
         "source_exchange_id":id,"capture":event.capture,"capture_complete":event.complete,
-        "effective_attribution":state.dependency_review.decisions.get(&id),
+        "effective_attribution":state.dependency_review.decisions.get(&id).map(|decision|decision.decision(id)),
         "request_shape":{"event_type":metadata["event_type"],"operation":metadata["command"].as_str().or_else(||metadata["method"].as_str()),
             "endpoint":{"host":metadata["target_host"],"port":metadata["target_port"]},
             "args_count":metadata["args"].as_array().map(Vec::len),"params_count":metadata["params"].as_array().map(Vec::len),

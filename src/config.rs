@@ -19,8 +19,10 @@ mod background_motan_feedback;
 mod background_mysql_feedback;
 mod background_redis_feedback;
 mod breeze_capture_feedback;
+mod capture;
 mod case_limits;
 mod dns;
+mod document;
 pub(crate) mod edit;
 mod feedback;
 mod http_gateway;
@@ -75,6 +77,7 @@ pub use breeze_capture_feedback::{
     BreezeEndpointCaptureFeedback, BreezeResourceCaptureFeedback, BreezeResourceCapturePlan,
     BreezeResourceCaptureReport, plan_breeze_endpoint_capture, plan_breeze_resource_capture,
 };
+pub use capture::{CaptureConfig, CaptureProtocol};
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
 pub(crate) use feedback::validate_case_path_pattern;
@@ -112,14 +115,12 @@ pub const DEFAULT_DNS_MOCK_LISTEN: &str = "127.0.0.153:4053";
 pub const DEFAULT_TCP_GATEWAY_LISTEN: &str = "127.0.0.1:4001";
 pub const DEFAULT_UDP_GATEWAY_LISTEN: &str = "127.0.0.1:4002";
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Default)]
 pub struct AppConfig {
+    pub capture: Option<CaptureConfig>,
     pub artifacts: Option<ArtifactsConfig>,
     pub dns_mock: DnsMockConfig,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub upstream_routes: Vec<UpstreamRouteConfig>,
-    #[serde(skip_serializing_if = "KubernetesConfig::is_default")]
     pub kubernetes: KubernetesConfig,
     pub tcp_gateway: TcpGatewayConfig,
     pub udp_gateway: UdpGatewayConfig,
@@ -130,14 +131,10 @@ pub struct AppConfig {
     pub mysql: MysqlConfig,
     pub recording: RecordingConfig,
     pub tls: TlsConfig,
-    #[serde(skip)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
-    #[serde(skip)]
     pub process_dependency_tasks: std::collections::BTreeMap<String, String>,
-    #[serde(skip)]
     pub async_api: std::collections::BTreeMap<String, crate::policy::AsyncApiRules>,
     /// Already admitted policy identity, used only for optional recording-time indexes.
-    #[serde(skip)]
     pub global_projection_policy: Option<String>,
 }
 

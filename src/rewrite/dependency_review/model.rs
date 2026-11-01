@@ -8,7 +8,7 @@ use uuid::Uuid;
 use super::super::verification_obligations::{
     ScopeObligation, VerificationImpact, VerificationScope,
 };
-use crate::dependency::attribution::{AttributionDecision, AttributionProof, DependencyOwner};
+use crate::dependency::attribution::{AttributionProof, DependencyOwner};
 
 pub const SCHEMA: &str = "dependency-attribution/v3";
 
@@ -21,13 +21,55 @@ pub(in crate::rewrite) struct ReviewLedger {
     pub unresolved_source_exchange_ids: BTreeSet<Uuid>,
     pub claims: BTreeMap<String, ForeignUnusedClaim>,
     pub investigations: BTreeMap<String, super::investigations::TargetInvestigation>,
-    pub decisions: BTreeMap<Uuid, AttributionDecision>,
-    pub decision_history: Vec<AttributionDecision>,
+    pub decisions: super::decisions::DecisionSet,
+    pub decision_history: super::decisions::DecisionHistory,
     pub obligations: BTreeMap<String, ScopeObligation>,
     pub receipts: BTreeMap<String, AcceptanceReceipt>,
     pub batch_receipt: Option<BatchAcceptanceReceipt>,
     pub batch_failure: Option<BatchFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_receipt: Option<WorkflowAcceptanceReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_failure: Option<WorkflowFailure>,
     pub required_method_apis: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct WorkflowAcceptanceReceipt {
+    pub completion_scope: WorkflowCompletionScope,
+    pub workflow_id: String,
+    pub policy_fingerprint: String,
+    pub review_context: String,
+    pub review_receipt_identity: String,
+    pub projections: BTreeMap<PathBuf, WorkflowArtifactIdentity>,
+    pub actual: BatchAcceptanceReceipt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct WorkflowArtifactIdentity {
+    pub sha256: String,
+    pub stamp: crate::dependency_index::FileStamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::rewrite) enum WorkflowCompletionScope {
+    WorkflowContracts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::rewrite) struct WorkflowFailure {
+    pub recording_run_id: String,
+    pub source_inventory_id: String,
+    pub replay_identity: String,
+    pub attribution_snapshot: String,
+    pub policy_fingerprint: String,
+    pub method_apis: BTreeSet<String>,
+    pub results: Vec<crate::E2eApiRunResult>,
+    pub evidence_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +112,10 @@ pub struct ForeignUnusedClaim {
     pub execution_identity: String,
     pub report_sha256: String,
     pub source_exchange_ids: BTreeSet<Uuid>,
-    pub exclusion: AttributionProof,
+    #[serde(default)]
+    pub exclusion: Option<AttributionProof>,
+    #[serde(default)]
+    pub reason: String,
     pub status: ClaimStatus,
     pub rejection: Option<ClaimRejection>,
 }
@@ -90,6 +135,8 @@ pub enum ClaimStatus {
     Proved,
     Rejected,
     Unresolved,
+    /// Historical API request investigation replaced by a newer real attempt.
+    Superseded,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +146,11 @@ pub struct ForeignUnusedSubmission {
     pub api: String,
     pub evidence_id: String,
     pub source_exchange_ids: BTreeSet<Uuid>,
-    pub exclusion: AttributionProof,
+    /// Optional historical diagnosis; an implementer need not prove exclusion.
+    #[serde(default)]
+    pub exclusion: Option<AttributionProof>,
+    #[serde(default)]
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,11 +164,11 @@ pub struct AttributionReviewContext {
     pub revision: u64,
     pub assignment_id: String,
     pub claims: Vec<ForeignUnusedClaim>,
-    pub investigations: Vec<super::investigations::TargetInvestigation>,
     pub task_groups: BTreeMap<String, Vec<String>>,
     pub evidence_commands: Vec<crate::rewrite::RewriteCommandSpec>,
     pub effective_policy_fingerprint: String,
     pub rule_groups: Vec<serde_json::Value>,
+    pub rule_planning: serde_json::Value,
     pub unattributed_exchange_ids: BTreeSet<Uuid>,
     pub obligations: Vec<ScopeObligation>,
     pub next_step: &'static str,

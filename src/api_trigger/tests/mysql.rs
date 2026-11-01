@@ -428,6 +428,7 @@ async fn mysql_recorder_retains_idle_candidates_and_keeps_active_calls_case_owne
             id: Uuid::new_v4(),
             connection_id: Uuid::new_v4(),
             query_sequence: 1,
+            request_started_at: chrono::Utc::now(),
             timestamp: chrono::Utc::now(),
             client_addr: None,
             route_name: None,

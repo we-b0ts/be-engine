@@ -58,6 +58,7 @@ impl NativePrimaryAdapter for HttpPrimary<'_> {
         .await?;
         Ok(PrimaryOutput {
             api: self.api.clone(),
+            response_completed_at: Some(response.response_completed_at),
             clocks: CaseClock {
                 source_request_started_at: self.source_started_at,
                 target_request_started_at: response.request_sent_at,

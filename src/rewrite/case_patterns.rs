@@ -226,7 +226,14 @@ fn apply_patterns(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
+    let before = after.clone();
     after.extend(patterns.iter().cloned());
+    if after == before {
+        // Recognizing static routes or repeating existing patterns changes only
+        // the API catalog. Preserve every capture identity and proof verbatim.
+        crate::config::AppConfig::load_with_source_policy(project_config, &policy)?;
+        return Ok(policy.http.case_path_patterns);
+    }
     policy.http.case_path_patterns = after.into_iter().collect();
     policy.http.source_revision = source_revision.into();
 
@@ -330,6 +337,55 @@ mod tests {
         let candidate = "GET /api/tasks/456/tree".parse().unwrap();
 
         assert!(catalog_covers(&catalog, &candidate));
+    }
+
+    #[test]
+    fn static_route_identification_preserves_an_existing_policy_revision_and_capture_scope() {
+        let target = configured_target();
+        crate::rewrite::test_support::install_source_snapshot(target.path());
+        let policy_path = target.path().join(".traffic-e2e/policy.yaml");
+        let declared_revision = format!("sha256:{}", "2".repeat(64));
+        assert_ne!(
+            fingerprint::source_image_revision(target.path()).unwrap(),
+            declared_revision
+        );
+        let original = format!(
+            "format: traffic-policy/v3\nsource_revision: {declared_revision}\n\
+             recording:\n  case_paths: [/api/existing/*]\n\
+             json:\n  fields:\n    /id: {{kind: identity, formats: [uuid]}}\n"
+        );
+        fs::write(&policy_path, &original).unwrap();
+        write_run(target.path(), "20260902000000", &["/api/new-static"]);
+        let mut state = crate::rewrite::test_state();
+        state.api.clear();
+        state.source_route.clear();
+        state.recording_apis.clear();
+        state.recording_run_id = "20260902000000".into();
+        assert!(identify_after_finalized_recording(target.path(), &mut state).unwrap());
+        let batch_id = state
+            .case_pattern_identification
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
+        let store = RewriteStore::new(target.path()).unwrap();
+        store.save(&state).unwrap();
+
+        let result = apply(RewriteCasePatternApplyOptions {
+            target_root: target.path().into(),
+            batch_id,
+            patterns: Vec::new(),
+        })
+        .unwrap();
+
+        assert!(matches!(
+            result.action,
+            RewriteAction::AdvanceRequired { .. }
+        ));
+        let state = store.load().unwrap().unwrap();
+        assert!(state.case_pattern_identification.is_none());
+        assert!(state.api_catalog.contains("GET /api/new-static"));
+        assert_eq!(fs::read_to_string(policy_path).unwrap(), original);
     }
 
     #[test]

@@ -39,6 +39,7 @@ impl Delivery {
             case: source_clock(clocks.case),
             dependency: source_clock(clocks.dependency),
             delivery: source_clock(clocks.delivery),
+            observation: clocks.observation.map(source_clock),
         };
         let check = crate::value_contract::global::compare_decoded(
             &decoded,
@@ -93,21 +94,31 @@ impl Delivery {
         )?;
         let selected = self
             .global
-            .fields_with_clocks(&self.decoded.logical, clocks)?;
+            .selected_fields_with_clocks(&self.decoded.logical, clocks)?;
         let mut allowed = Vec::new();
-        for (pointer, contract) in selected {
+        for selected in selected {
+            let pointer = selected.pointer;
+            let contract = selected.contract;
             let Some(time) = contract.time() else {
                 continue;
             };
+            let copy = self.copies.iter().find(|copy| copy.pointer == pointer);
+            // Recognition alone never translates a textual time. An exact
+            // counterpart from a proven preceding write/read is a stored copy,
+            // independent of whether its format was authored or recognized.
+            if selected.rule_id == crate::value_contract::time::automatic::RULE_ID && copy.is_none()
+            {
+                continue;
+            }
             allowed.push(pointer.clone());
-            if let Some(copy) = self.copies.iter().find(|copy| copy.pointer == pointer) {
+            if let Some(copy) = copy {
                 let source =
                     self.decoded.logical.pointer(&pointer).ok_or_else(|| {
                         anyhow::anyhow!("stored timestamp Source field disappeared")
                     })?;
                 ensure!(
                     copy.proof.permits_value(
-                        crate::policy::GLOBAL_JSON_ID,
+                        selected.rule_id,
                         &pointer,
                         &pointer,
                         source,
@@ -154,7 +165,7 @@ impl Delivery {
         allowed.extend(copied_allowed);
         allowed.extend(
             self.global
-                .fields_with_clocks(&self.decoded.logical, clocks)?
+                .delivery_fields_with_clocks(&self.decoded.logical, clocks)?
                 .into_iter()
                 .filter_map(|(pointer, field)| field.time().map(|_| pointer)),
         );

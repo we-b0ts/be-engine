@@ -16,7 +16,7 @@ pub(in crate::replay) fn case_id(file: &Path) -> Result<String> {
 }
 
 /// Read only the physical dependency clock; a primary API timestamp is never a substitute.
-pub(in crate::replay) fn dependency_started_at(
+pub(crate) fn dependency_started_at(
     event: &serde_json::Value,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     if let Some(started) = event["request_started_at"].as_str() {

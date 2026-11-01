@@ -62,6 +62,7 @@ fn checked(input: Option<&InputTranscript>, source: &[&str], target: &[&str]) ->
         Some(&output(target)),
         None,
         Default::default(),
+        Default::default(),
         &Default::default(),
         context.as_ref(),
     )
@@ -199,6 +200,7 @@ fn paired_ack_arguments_still_evaluate_global_field_contracts() {
             Some(&source),
             Some(&output(&[b, a])),
             policy.global_json.as_ref(),
+            Default::default(),
             Default::default(),
             &Default::default(),
             Some(&context),

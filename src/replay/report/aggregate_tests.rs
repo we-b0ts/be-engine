@@ -11,6 +11,37 @@ use super::aggregate::{
 };
 
 #[test]
+fn startup_debt_is_diagnostic_during_independent_api_acceptance() {
+    for status in ["verified", "phase_unverified"] {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("recording");
+        let mut report = report_value(7, &source.join("api"), &[("case-a", "ended")], 0);
+        let startup = json!({
+            "status":status,
+            "boundary_case_id":"case-a",
+            "business_inventory":{"mysql":10,"redis":2},
+            "unstarted_business_dependencies":{"mysql":10,"redis":2}
+        });
+        report["startup_phase"] = startup.clone();
+        write_report(&source, "api", report.clone());
+        let aggregate = aggregate_replay_reports(&source).unwrap();
+        assert!(aggregate.is_complete());
+        assert!(!aggregate.is_dirty(), "{status}");
+        assert!(
+            serde_json::to_value(&aggregate.reports[0])
+                .unwrap()
+                .get("startup_phase")
+                .is_none()
+        );
+        assert_eq!(report["startup_phase"], startup);
+
+        report["unused_case_exchanges"] = json!([{"case_id":"case-a"}]);
+        write_report(&source, "api", report);
+        assert!(aggregate_replay_reports(&source).unwrap().is_dirty());
+    }
+}
+
+#[test]
 fn connection_failure_inventory_survives_summary_and_dependency_evidence() {
     for (field, dirty) in [
         ("unused_case", true),

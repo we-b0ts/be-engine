@@ -222,10 +222,12 @@ again merely because another method projection of the same final batch is shown.
 Retrying the identical successful candidate reuses the cached result and
 restores its report file if needed; the engine never executes the quality tool.
 
-Your final review admits the candidate for one complete actual batch session;
-the coordinator follows the engine's `BatchReplay` action. That same session
-supplies formal final method results. Do not add per-API final Replay runs or a
-second sweep, and do not infer a batch pass from an accepted quality receipt.
+Your final review admits the candidate for one actual `workflow_contracts`
+session; the coordinator follows the engine's `BatchReplay` action. That same
+session covers all Cases of all non-skipped workflow methods and supplies their
+formal final results. Startup/Process consumption remains a separate WholeSource
+conclusion. Do not add per-API final Replay runs or a second sweep, and do not
+infer execution success from an accepted quality receipt.
 
 ## Output
 

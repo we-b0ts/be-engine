@@ -18,6 +18,10 @@ pub(in crate::replay) fn compare(
     times: RequestTimes,
 ) -> Result<(), ResponseDifferenceKind> {
     validate_inputs(expected, actual, times)?;
+    if let ResponseTimeRule::Timestamp { format, .. } = rule {
+        time::validate_representation(expected, actual, timestamp_format(format))
+            .map_err(difference)?;
+    }
     match rule {
         ResponseTimeRule::Timestamp { format, mode } => time::compare_timestamp_nanos(
             timestamp_nanos(expected, format)?,
@@ -44,6 +48,8 @@ pub(super) fn compare_preserved_timestamp(
     times: RequestTimes,
 ) -> Result<(), ResponseDifferenceKind> {
     validate_inputs(expected, actual, times)?;
+    time::validate_representation(expected, actual, timestamp_format(format))
+        .map_err(difference)?;
     time::compare_timestamp_nanos(
         timestamp_nanos(expected, format)?,
         timestamp_nanos(actual, format)?,

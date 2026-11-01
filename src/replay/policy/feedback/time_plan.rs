@@ -2,7 +2,7 @@
 use super::*;
 use crate::replay::{
     ResponseGatewayProtocol,
-    assertion::{read_replay_request_times, time},
+    assertion::{read_replay_response_times, time},
     read_actual_response_body, read_expected_response_body,
 };
 
@@ -59,7 +59,7 @@ pub(super) fn verify(
                     )),
             "time rule request scope differs from assertion evidence"
         );
-        let times = read_replay_request_times(request, actual)?;
+        let times = read_replay_response_times(expected, actual)?;
         let protocol = response
             .gateway_protocol
             .unwrap_or(ResponseGatewayProtocol::Http);

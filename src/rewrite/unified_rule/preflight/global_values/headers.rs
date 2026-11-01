@@ -45,11 +45,16 @@ pub(super) fn primary(
         bundle.primary_response(case, directory)?;
     let pair = crate::replay::response_payload_pair(request, &source, None)?;
     let before = snapshot(&source["headers"])?;
-    let clocks = AnchorClocks {
-        case: pair.times,
-        dependency: pair.times,
-        ..Default::default()
-    };
+    let clocks = AnchorClocks::for_response(
+        crate::value_contract::time::ClockPair {
+            source: pair.request_times.source,
+            target: pair.request_times.source,
+        },
+        crate::value_contract::time::ClockPair {
+            source: pair.times.source,
+            target: pair.times.source,
+        },
+    );
     let checked = http_headers::compare(&before, &before, policy, clocks)?;
     let selected = BTreeSet::from([crate::policy::GLOBAL_HTTP_ID.into()]);
     if !record_source(&checked, &selected, result)? {
@@ -68,11 +73,7 @@ pub(super) fn primary(
         &before,
         &after,
         policy,
-        AnchorClocks {
-            case: pair.times,
-            dependency: pair.times,
-            ..Default::default()
-        },
+        AnchorClocks::for_response(pair.request_times, pair.times),
     )?;
     valid_count(&checked, &selected)?;
     result.independent_target_validations += 1;

@@ -60,6 +60,7 @@ pub enum CaptureResponseContract {
 pub struct ProcessOwnedEffect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_name: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_revision: String,
     pub selector: ProcessSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +70,7 @@ pub struct ProcessOwnedEffect {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProcessSelector {
+    RedisPubsub(RedisPubsubSelector),
     Mysql {
         selector: MysqlProcessSelector,
         #[serde(default)]
@@ -115,6 +117,25 @@ pub enum ProcessSelector {
         interface: String,
         method: String,
     },
+}
+
+/// Ownership of received native inputs, independent of their external publisher.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisPubsubSelector {
+    pub resource: Resource,
+    pub channel: String,
+    pub kind: RedisPubsubKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RedisPubsubKind {
+    Message,
+    Pmessage,
+    Smessage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

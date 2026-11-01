@@ -3,6 +3,15 @@ use anyhow::{Result, ensure};
 
 use super::*;
 
+pub(super) fn normalize_process_owner(rule: &mut NativeRule) {
+    if let NativeEffect::ProcessOwned(effect) = &mut rule.effect
+        && effect.task_name.is_some()
+        && effect.origin.is_none()
+    {
+        effect.source_revision.clear();
+    }
+}
+
 pub(super) fn validate(rule: &NativeRule) -> Result<()> {
     match &rule.effect {
         NativeEffect::CaptureHttp(effect) => {
@@ -103,6 +112,13 @@ pub(super) fn validate(rule: &NativeRule) -> Result<()> {
                 proven(origin, validate_origin)?;
             }
             match &effect.selector {
+                ProcessSelector::RedisPubsub(selector) => {
+                    ensure!(
+                        effect.origin.is_none(),
+                        "Redis Pub/Sub input ownership has no API origin adapter"
+                    );
+                    crate::config::process_owned_dependencies::pubsub::validate(selector)?;
+                }
                 ProcessSelector::Mysql {
                     selector,
                     transaction_members,

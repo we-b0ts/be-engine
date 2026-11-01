@@ -104,6 +104,7 @@ pub(super) fn select_action(
     if matches!(
         base,
         RewriteAction::PlanApplyRequired { .. }
+            | RewriteAction::DependencyAttributionRequired { .. }
             | RewriteAction::RepositoryAnalysisRequired { .. }
             | RewriteAction::BatchDiagnosisRequired { .. }
     ) {
@@ -248,6 +249,9 @@ pub(super) fn for_scoped_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
+    if let Some(required) = super::dependency_review::required_action(target_root, state) {
+        return Ok(envelope(target_root, state, required));
+    }
     // A reusable slot owns batches, so scoped inspection must preserve the
     // global analysis and group-round gates rather than offer a legacy lease.
     if state.implementers.is_some() {
@@ -422,8 +426,8 @@ pub(super) fn envelope(
         api_inventory: Some(inventory::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: super::expert::counts(state).2 == 0
-            && super::dependency_review::batch_current(target_root, state).unwrap_or(false)
-            && !super::dependency_review::batch_pending(state)
+            && super::dependency_review::workflow_current(target_root, state).unwrap_or(false)
+            && !super::dependency_review::workflow_pending(state)
             && !super::rule_plans::pending(state)
             && super::review::admission_current(target_root, state)
             && super::review::pre_revalidation::completion_current(target_root, state)

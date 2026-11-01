@@ -17,10 +17,16 @@ struct CompareContext<'a> {
 }
 
 fn active(policy: &CompiledPolicy, selected: &BTreeSet<String>) -> bool {
-    selected.contains(GLOBAL_JSON_ID) && policy.global_json.is_some()
+    json_active(policy, selected)
         || selected.contains("global.mysql") && policy.mysql.is_some()
         || selected.contains("global.redis") && policy.redis.is_some()
         || selected.contains(crate::policy::GLOBAL_HTTP_ID) && policy.http.is_some()
+}
+
+fn json_active(policy: &CompiledPolicy, selected: &BTreeSet<String>) -> bool {
+    policy.global_json.is_some()
+        && (selected.contains(GLOBAL_JSON_ID)
+            || selected.contains(crate::value_contract::time::automatic::RULE_ID))
 }
 
 pub(super) fn verify(
@@ -64,10 +70,13 @@ pub(super) fn verify(
         {
             headers::primary(bundle, &case, &directory, &request, http, result)?;
         }
-        if selected.contains(GLOBAL_JSON_ID) && policy.global_json.is_some() {
-            primary(root, bundle, &case, &directory, &request, policy, result).with_context(
-                || format!("global format primary validation: case={case}, surface=api.response"),
-            )?;
+        if json_active(policy, selected) {
+            primary(
+                root, bundle, &case, &directory, &request, policy, selected, result,
+            )
+            .with_context(|| {
+                format!("global format primary validation: case={case}, surface=api.response")
+            })?;
         }
         let trace = bundle.dependency_path(&directory)?;
         bundle.freeze(&trace)?;
@@ -325,24 +334,12 @@ fn has_surface(event: &Value, surface: Surface) -> bool {
 
 fn source_clocks(case: Option<DateTime<Utc>>, event: &Value) -> AnchorClocks {
     let completed = timestamp(&event["timestamp"]);
-    let started = timestamp(&event["request_started_at"]).or_else(|| {
-        completed
-            .zip(event["duration_ms"].as_u64())
-            .and_then(|(time, duration)| {
-                time.checked_sub_signed(chrono::TimeDelta::milliseconds(
-                    i64::try_from(duration).ok()?,
-                ))
-            })
-    });
+    let started = crate::replay::dependency_started_at(event);
     let pair = |source| ClockPair {
         source,
         target: source,
     };
-    AnchorClocks {
-        case: pair(case),
-        dependency: pair(started),
-        delivery: pair(completed),
-    }
+    AnchorClocks::for_request(pair(case), pair(started), pair(completed))
 }
 
 fn valid_count(comparison: &Comparison, selected: &BTreeSet<String>) -> Result<usize> {
@@ -370,7 +367,7 @@ fn record_source(
     Ok(true)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // The selected evidence IDs remain separate from built-in policy.
 fn primary(
     root: &Path,
     bundle: &mut Bundle,
@@ -378,9 +375,22 @@ fn primary(
     directory: &Path,
     request: &Value,
     policy: &CompiledPolicy,
+    selected: &BTreeSet<String>,
     result: &mut Preflight,
 ) -> Result<()> {
     let plan = policy.global_json.as_ref().expect("selected global JSON");
+    // Native owners compose into this comparison but their usage is recorded
+    // by API preflight. Count global and built-in Source coverage once here.
+    let selected = selected
+        .iter()
+        .filter(|id| {
+            matches!(
+                id.as_str(),
+                GLOBAL_JSON_ID | crate::value_contract::time::automatic::RULE_ID
+            )
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let super::super::manifest::PrimaryResponse { source, target } =
         bundle.primary_response(case, directory)?;
     let source_pair = crate::replay::response_payload_pair(request, &source, None)?;
@@ -408,20 +418,21 @@ fn primary(
     }
     context.ensure_current()?;
 
-    let clocks = AnchorClocks {
-        case: ClockPair {
+    let clocks = AnchorClocks::for_response(
+        ClockPair {
+            source: source_pair.request_times.source,
+            target: source_pair.request_times.source,
+        },
+        ClockPair {
             source: source_pair.times.source,
             target: source_pair.times.source,
         },
-        dependency: ClockPair {
-            source: source_pair.times.source,
-            target: source_pair.times.source,
-        },
-        ..Default::default()
-    };
+    );
     let compare_body = |source: &[u8], target: &[u8], clocks| {
         if context.is_empty() {
-            global::compare(source, target, plan, &[], clocks)
+            compare_bytes(source, target, plan, clocks)
+        } else if source == target {
+            context.compare_encoded_source_coverage(source, &[], Some(plan), clocks)
         } else {
             context.compare_encoded_global(source, target, &[], Some(plan), clocks)
         }
@@ -431,12 +442,15 @@ fn primary(
         source_pair.source_interaction.as_ref(),
         source_pair.source_interaction.as_ref(),
         Some(plan),
+        ClockPair {
+            source: source_pair.interaction_times.source,
+            target: source_pair.interaction_times.source,
+        },
         clocks.case,
     )?);
-    let selected = BTreeSet::from([GLOBAL_JSON_ID.into()]);
-    if !record_source(&comparison, &selected, result)
-        .context("phase=source_self_validation, document=body_or_interaction")?
-    {
+    let relevant = record_source(&comparison, &selected, result)
+        .context("phase=source_self_validation, document=body_or_interaction")?;
+    if !relevant {
         return Ok(());
     }
     let Some(target) = target else {
@@ -446,11 +460,7 @@ fn primary(
     let Some(pair) = super::response::target_pair(request, &source, &target, case, result)? else {
         return Ok(());
     };
-    let clocks = AnchorClocks {
-        case: pair.times,
-        dependency: pair.times,
-        ..Default::default()
-    };
+    let clocks = AnchorClocks::for_response(pair.request_times, pair.times);
     let mut checked = compare_body(
         &pair.source,
         pair.target
@@ -462,11 +472,14 @@ fn primary(
         pair.source_interaction.as_ref(),
         pair.target_interaction.as_ref(),
         Some(plan),
-        pair.times,
+        pair.interaction_times,
+        pair.request_times,
     )?);
-    valid_count(&checked, &selected)
+    let checked = valid_count(&checked, &selected)
         .context("phase=independent_target_validation, document=body_or_interaction")?;
-    result.independent_target_validations += 1;
+    if relevant || checked > 0 {
+        result.independent_target_validations += 1;
+    }
     Ok(())
 }
 
@@ -505,6 +518,17 @@ fn compare_prepared(
     let policy = context.policy;
     let clocks = context.clocks;
     if dependency::protocol(event) == Some(Protocol::Mysql) {
+        if source == target && context.copies.is_none() {
+            return crate::replay::mysql_validate_global_source_witness(
+                event["database"].as_str(),
+                source,
+                surface,
+                policy,
+                clocks,
+                &observed_resource(event)?,
+                context.metadata,
+            );
+        }
         if let Some((store, case)) = context.copies {
             return crate::replay::mysql_validate_global_witness_with_time_copies(
                 event["database"].as_str(),
@@ -597,11 +621,24 @@ fn compare_prepared(
             ensure!(source == target, "Memcached fragments remain exact");
             continue;
         }
-        let mut checked = global::compare(source, target, plan, &[], clocks)?;
+        let mut checked = compare_bytes(source, target, plan, clocks)?;
         checked.scope_schema_clocks(index);
         comparison.merge_and_validate(checked);
     }
     Ok(comparison)
+}
+
+fn compare_bytes(
+    source: &[u8],
+    target: &[u8],
+    plan: &crate::policy::CompiledJsonPolicy,
+    clocks: AnchorClocks,
+) -> Result<Comparison> {
+    if source == target {
+        global::compare_source_coverage(source, plan, &[], clocks)
+    } else {
+        global::compare(source, target, plan, &[], clocks)
+    }
 }
 
 fn observed_resource(event: &Value) -> Result<crate::policy::Resource> {

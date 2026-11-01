@@ -15,6 +15,8 @@ struct Document {
     #[serde(default, deserialize_with = "declared_revision")]
     source_revision: Option<String>,
     #[serde(default)]
+    time: crate::policy::TimePolicy,
+    #[serde(default)]
     recording: Option<recording::Declaration>,
     #[serde(default)]
     json: Option<crate::policy::JsonPolicy>,
@@ -118,6 +120,7 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
             Ok(Self {
                 format: document.format,
                 source_revision: document.source_revision,
+                time: document.time,
                 json: document.json,
                 mysql: document.mysql,
                 redis,
@@ -224,7 +227,7 @@ fn redis_rule(rule: &PolicyRule) -> bool {
                 | crate::policy::NativeEffect::RedisActivityRefresh(_)
         )
         || matches!(&rule.effect, crate::policy::NativeEffect::ProcessOwned(effect)
-            if matches!(effect.selector, crate::policy::native::ProcessSelector::Redis { .. }))
+            if matches!(effect.selector, crate::policy::native::ProcessSelector::Redis { .. } | crate::policy::native::ProcessSelector::RedisPubsub(_)))
 }
 
 /// Typed callers can insert rules without a document context; normalize them
@@ -252,6 +255,7 @@ pub(crate) fn expanded(document: &TrafficPolicy) -> Result<TrafficPolicy> {
     Ok(TrafficPolicy {
         format: document.format.clone(),
         source_revision: document.source_revision.clone(),
+        time: document.time.clone(),
         json: document.json.clone(),
         mysql: document.mysql.clone(),
         redis: document.redis.clone(),
@@ -286,6 +290,7 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
     if let Some(revision) = &document.source_revision {
         root.insert("source_revision".into(), revision.clone().into());
     }
+    root.insert("time".into(), serde_yaml::to_value(&document.time)?);
     if let Some(json) = &document.json {
         root.insert("json".into(), serde_yaml::to_value(json)?);
     }

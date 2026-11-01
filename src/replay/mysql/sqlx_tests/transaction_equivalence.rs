@@ -5,6 +5,26 @@ fn records() -> Vec<Value> {
     super::super::transaction_equivalence::tests::records()
 }
 
+fn with_setup_observations(mut values: Vec<Value>) -> Vec<Value> {
+    let setup = |sequence, sql, before, after| {
+        let mut value = values[0].clone();
+        value["query_sequence"] = json!(sequence);
+        value["sql"] = json!(sql);
+        value["server_status_before"] = before;
+        value["response"]["server_status"] = json!(after);
+        let mut capture = crate::dependency::observation::fixture_capture("case");
+        capture.semantic_required = false;
+        value["capture"] = serde_json::to_value(capture).unwrap();
+        value
+    };
+    let first = setup(1, "SET NAMES utf8mb4", Value::Null, 2);
+    let second = setup(2, "SET time_zone = '+08:00'", json!(2), 2);
+    let fourth = setup(4, "SET NAMES utf8mb4", json!(0), 0);
+    values.splice(0..0, [first, second]);
+    values.insert(3, fourth);
+    values
+}
+
 fn multi_write_records() -> Vec<Value> {
     let mut values = records();
     values.truncate(4);
@@ -82,8 +102,8 @@ async fn body(tx: &mut sqlx::Transaction<'_, sqlx::MySql>, value: i32) {
 #[tokio::test]
 async fn sqlx_explicit_transactions_cover_one_persistent_source_autocommit_setting() {
     tokio::time::timeout(Duration::from_secs(20), async {
-        for policy in [false, true] {
-            let values = records();
+        for (policy, observations) in [(false, false), (true, false), (false, true), (true, true)] {
+            let values = if observations { with_setup_observations(records()) } else { records() };
             let (temp, addr, runtime, task) = fixture(&values, policy).await;
             let path = temp.path().join(".traffic-e2e/local/recordings/case-id/dependencies.jsonl");
             let original = std::fs::read(&path).unwrap();

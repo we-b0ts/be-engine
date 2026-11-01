@@ -40,9 +40,34 @@ pub(super) fn validate(
         }
     }
     let mut count = 0;
+    let mut subscriptions = BTreeMap::new();
+    if matches!(rule, BackgroundDependencyRuleConfig::RedisPubsub { .. }) {
+        each_event(
+            files,
+            |_, event| {
+                Ok(
+                    crate::config::process_owned_dependencies::pubsub::subscription_identity(event)
+                        .is_some(),
+                )
+            },
+            |_, _, event| {
+                let id =
+                    crate::config::process_owned_dependencies::pubsub::subscription_identity(event)
+                        .expect("selected subscription");
+                if let Some(before) = subscriptions.insert(id, event.clone()) {
+                    ensure!(
+                        before == *event,
+                        "Source Pub/Sub subscription anchor is ambiguous"
+                    );
+                }
+                Ok(())
+            },
+        )?;
+    }
     let event_kind = match rule {
         BackgroundDependencyRuleConfig::Mysql { .. } => "mysql_exchange",
         BackgroundDependencyRuleConfig::Redis { .. } => "redis_exchange",
+        BackgroundDependencyRuleConfig::RedisPubsub { .. } => "redis_pub_sub_push",
         BackgroundDependencyRuleConfig::Http { .. } => "http_exchange",
         BackgroundDependencyRuleConfig::Memcached { .. } => "memcached_exchange",
         BackgroundDependencyRuleConfig::Motan { .. } => "motan_exchange",
@@ -50,7 +75,9 @@ pub(super) fn validate(
     each_event(
         files,
         |role, event| {
-            if event["_source_proof_requires_original"] == true {
+            if event["_source_proof_requires_original"] == true
+                || event_kind == "redis_pub_sub_push"
+            {
                 // Oversized selector fields require a conservative original
                 // read. Complete metadata retains origin wire identity and
                 // SQL fingerprints; the original event still decides ownership.
@@ -63,6 +90,32 @@ pub(super) fn validate(
                 return Ok(());
             }
             match event["event_type"].as_str() {
+                Some("redis_pub_sub_push") => {
+                    ensure!(
+                        event["replay_safe"] == true && event["rpc_request"].is_null(),
+                        "process-owned Pub/Sub input requires complete non-RPC notification evidence"
+                    );
+                    let raw = crate::config::process_owned_dependencies::pubsub::capture(
+                        &event["response"],
+                    )
+                    .context("Source Pub/Sub input is unavailable")?;
+                    ensure!(
+                        crate::redis::parse_pubsub_push(&raw)?.is_some(),
+                        "Source Pub/Sub notification framing is invalid"
+                    );
+                    let BackgroundDependencyRuleConfig::RedisPubsub { selector, .. } = rule else {
+                        unreachable!("Pub/Sub selector")
+                    };
+                    let anchor = crate::config::process_owned_dependencies::pubsub::anchor(event)
+                        .context("Source Pub/Sub input anchor is invalid")?;
+                    crate::config::process_owned_dependencies::pubsub::validate_subscription(
+                        selector,
+                        event,
+                        subscriptions.get(&anchor).context(
+                            "Source Pub/Sub input has no original subscription confirmation",
+                        )?,
+                    )?;
+                }
                 Some("http_exchange") => {
                     crate::replay::http_source_witness(event, Surface::DependencyRequest, path)?;
                     // Ownership cannot hide an incomplete or failed dependency.

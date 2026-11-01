@@ -7,6 +7,8 @@ pub(super) mod case_cleanup;
 mod case_execution;
 pub(super) mod dependency_tail;
 mod derived_input;
+mod finalization;
+pub(crate) use finalization::FinalizationScope;
 mod identity;
 pub(in crate::replay) mod input_timing;
 mod native_event;
@@ -313,7 +315,7 @@ pub(super) async fn handle_control_request(
                 })
             }
         }
-        "finalize" => {
+        "finalize" | "finalize_cases" => {
             let (response, report) = finalize_replay(&request, state.clone()).await;
             final_report = report;
             response
@@ -338,9 +340,10 @@ pub(super) async fn handle_control_request(
         }),
     };
     let should_stop = command == "stop"
-        || (matches!(command, "finalize" | "interrupt")
+        || (matches!(command, "finalize" | "finalize_cases" | "interrupt")
             && response.get("ok").and_then(Value::as_bool).unwrap_or(false));
-    if command == "finalize" && should_stop && report_path.is_none() {
+    let finalizing = matches!(command, "finalize" | "finalize_cases");
+    if finalizing && should_stop && report_path.is_none() {
         state.lock().await.finalized_at = None;
         return (
             serde_json::json!({
@@ -350,7 +353,7 @@ pub(super) async fn handle_control_request(
             false,
         );
     }
-    if command == "finalize" && should_stop {
+    if finalizing && should_stop {
         let path = report_path.expect("finalize report path checked");
         let report = final_report
             .as_mut()
@@ -397,7 +400,7 @@ async fn finalize_replay(
     }
     let mut report = state.snapshot_report();
     let complete = report_is_complete(&report);
-    let dirty = report_is_dirty(&report);
+    let dirty = FinalizationScope::from_command(&request.command).is_dirty(&report);
     if request.fail_on_incomplete && !complete {
         return (
             serde_json::json!({

@@ -14,7 +14,10 @@ use super::timing::{Advance, cancellation, transport_cancellation};
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
     lifecycle::LifecycleDecision,
-    model::{EndReason, InputAction, InputActionKind, InputTranscript, Protocol, WireMessage},
+    model::{
+        ClientTransportEnd, EndReason, InputAction, InputActionKind, InputTranscript, Protocol,
+        WireMessage,
+    },
     observation::Observation,
     socketio::{EngineIoPacket, SocketIoDecoder, SocketIoKind},
 };
@@ -70,6 +73,10 @@ pub(super) async fn execute_with_feedback(
     let mut removed_ms = 0;
     let mut heartbeats = heartbeat::Heartbeats::new(transcript);
     let mut namespaces = namespace::Admission::default();
+    let has_transport_end = transcript
+        .actions
+        .last()
+        .is_some_and(|action| matches!(action.action, InputActionKind::TransportEnd { .. }));
     let (mut reason, mut transport_clean) = 'session: loop {
         if dependency_failure
             .as_ref()
@@ -105,8 +112,8 @@ pub(super) async fn execute_with_feedback(
         let now = elapsed_ms(started);
         match observed.decision(now) {
             LifecycleDecision::Close(EndReason::BusinessIdle)
-                if transcript.protocol == Protocol::SocketIo && next < transcript.actions.len() => {
-            }
+                if (transcript.protocol == Protocol::SocketIo || has_transport_end)
+                    && next < transcript.actions.len() => {}
             LifecycleDecision::Close(reason) => break (reason, true),
             LifecycleDecision::Fail(reason) => break (reason, false),
             _ => {}
@@ -144,6 +151,11 @@ pub(super) async fn execute_with_feedback(
             ));
         }
         let due = admitted.and_then(|action| {
+            if matches!(action.action, InputActionKind::TransportEnd { .. }) {
+                return Some(
+                    started + Duration::from_millis(action.offset_ms.saturating_sub(removed_ms)),
+                );
+            }
             if transcript.protocol == Protocol::SocketIo {
                 if input_timing.is_some() && action.compressible_gap && !cancellation(action) {
                     return (timing_ready == Some(action.sequence)).then(Instant::now);
@@ -176,15 +188,11 @@ pub(super) async fn execute_with_feedback(
         let lifecycle_deadline = session_deadline(transcript, &observed, next, started);
         // A recorded transport cancellation must remain available while an
         // earlier input is waiting for an ACK, namespace or dependency delivery.
-        let cancel = (transcript.protocol == Protocol::SocketIo)
-            .then(|| {
-                transcript
-                    .actions
-                    .iter()
-                    .skip(next + 1)
-                    .find(|action| transport_cancellation(action))
-            })
-            .flatten();
+        let cancel = transcript.actions.iter().skip(next + 1).find(|action| {
+            transport_cancellation(action)
+                && (transcript.protocol == Protocol::SocketIo
+                    || matches!(action.action, InputActionKind::TransportEnd { .. }))
+        });
         let cancel_due = cancel.map(|action| {
             started + Duration::from_millis(action.offset_ms.saturating_sub(removed_ms))
         });
@@ -210,6 +218,16 @@ pub(super) async fn execute_with_feedback(
                     InputActionKind::Message {message} => {
                         observed.input(message.clone(), elapsed_ms(started))?;
                         tokio::time::timeout_at(deadline, transport.send(message)).await.context("Target cancellation timed out")??;
+                    }
+                    InputActionKind::TransportEnd { end } => {
+                        // Skipped earlier input stays incomplete even though
+                        // the independent physical cancellation still occurs.
+                        break terminate_transport(&mut transport, &mut TerminalObservation {
+                            observed: &mut observed, server_decoder: &mut server_decoder,
+                            native_events: &native_events, server_ordinals: &mut server_ordinals,
+                            native_receipts: &mut native_receipts,
+                        }, *end, started,
+                            transcript.policy.cleanup_timeout_ms, &mut dependency_failure).await?;
                     }
                     _ => unreachable!("transport cancellation"),
                 }
@@ -258,7 +276,7 @@ pub(super) async fn execute_with_feedback(
                                     }
                                     EngineIoPacket::Message(packet) if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent) => {
                                         let ordinal = server_ordinals.entry(packet.namespace.clone()).or_default();
-                                        *ordinal += 1;
+                                        *ordinal = ordinal.checked_add(1).context("native event ordinal exceeds range")?;
                                         if let (Some(sink), Some(event)) = (&native_events, packet.event_name()) {
                                             let event = NativeEvent { namespace: packet.namespace.clone(), event: event.into(), ordinal: *ordinal };
                                             tokio::select! {
@@ -344,6 +362,16 @@ pub(super) async fn execute_with_feedback(
                         next += 1;
                         break (EndReason::ClientClose, true);
                     }
+                    InputActionKind::TransportEnd { end } => {
+                        let ended = terminate_transport(&mut transport, &mut TerminalObservation {
+                            observed: &mut observed, server_decoder: &mut server_decoder,
+                            native_events: &native_events, server_ordinals: &mut server_ordinals,
+                            native_receipts: &mut native_receipts,
+                        }, *end, started,
+                            transcript.policy.cleanup_timeout_ms, &mut dependency_failure).await?;
+                        next += 1;
+                        break ended;
+                    }
                 }
                 next += 1;
                 last_offset = action.offset_ms;
@@ -352,7 +380,7 @@ pub(super) async fn execute_with_feedback(
         }
     };
     let cleanup = Duration::from_millis(transcript.policy.cleanup_timeout_ms);
-    let mut closed = reason == EndReason::ServerEof;
+    let mut closed = reason == EndReason::ServerEof || transport.raw_end_complete();
     if !closed && transport_clean {
         tokio::select! {
             biased;
@@ -376,21 +404,165 @@ pub(super) async fn execute_with_feedback(
         )
         .await;
     }
-    let (_, observation) = observed.finish(
+    let (actual_input, observation) = observed.finish(
         reason,
         elapsed_ms(started),
         transport_clean
             && closed
             && next == transcript.actions.len()
-            && heartbeats.complete(removed_ms > 0 && reason == EndReason::ClientClose),
+            && heartbeats.complete(
+                removed_ms > 0
+                    && matches!(
+                        reason,
+                        EndReason::ClientClose | EndReason::ClientTransportEnd
+                    ),
+            ),
     )?;
+    if reason == EndReason::ClientTransportEnd && next == transcript.actions.len() {
+        ensure!(
+            actual_input.actions.last().map(|action| action.sequence)
+                == transcript.actions.last().map(|action| action.sequence),
+            "recorded session transport-end identity is inconsistent"
+        );
+    }
     Ok(ReplayResponse {
         started_at,
+        completed_at: chrono::Utc::now(),
         status: transport.status,
         headers: transport.headers.clone(),
         body: Bytes::new(),
         observation,
     })
+}
+
+async fn terminate_transport(
+    transport: &mut Transport,
+    observation: &mut TerminalObservation<'_>,
+    end: ClientTransportEnd,
+    started: Instant,
+    cleanup_ms: u64,
+    dependency_failure: &mut Option<tokio::sync::watch::Receiver<bool>>,
+) -> Result<(EndReason, bool)> {
+    ensure!(
+        transport.is_websocket(),
+        "client transport end requires an active WebSocket"
+    );
+    let dispatched_at = transport.begin_transport_end(end)?;
+    let completion = async {
+        loop {
+            let actual = transport
+                .recv_observation()
+                .await
+                .context("Target reader stopped before physical termination")?;
+            if actual.at <= dispatched_at {
+                match actual.event {
+                    ReaderEvent::Message(message) => {
+                        let offset = actual
+                            .at
+                            .saturating_duration_since(started.into_std())
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX);
+                        observation.output_before_end(message, offset).await?;
+                    }
+                    ReaderEvent::Ping(_) => {}
+                    ReaderEvent::Close { .. } | ReaderEvent::Closed => {
+                        anyhow::bail!("Target ended before recorded client transport input")
+                    }
+                    ReaderEvent::Error(_) => anyhow::bail!(
+                        "Target transport failed before recorded client transport input"
+                    ),
+                }
+                continue;
+            }
+            match actual.event {
+                ReaderEvent::Message(_) | ReaderEvent::Ping(_) | ReaderEvent::Close { .. } => {}
+                ReaderEvent::Closed => break,
+                ReaderEvent::Error(_) => anyhow::bail!("Target transport termination failed"),
+            }
+        }
+        let offset = dispatched_at
+            .saturating_duration_since(started.into_std())
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        observation.observed.client_transport_end(end, offset)?;
+        transport.complete_transport_end();
+        Ok::<_, anyhow::Error>(())
+    };
+    let result = tokio::select! {
+        biased;
+        _ = crate::dependency::execution::rejected(dependency_failure) => {
+            return Ok((EndReason::DependencyFailure, false));
+        }
+        result = tokio::time::timeout(Duration::from_millis(cleanup_ms), completion) => result,
+    };
+    match result {
+        Ok(Ok(())) => Ok((EndReason::ClientTransportEnd, true)),
+        Ok(Err(error)) => Err(error.context("Target client transport end failed")),
+        Err(_) => Ok((EndReason::CleanupTimeout, false)),
+    }
+}
+
+/// The reader may already have queued output when the independent cancellation
+/// deadline fires. Retain those facts and native receipts before ending input.
+struct TerminalObservation<'a> {
+    observed: &'a mut Observation,
+    server_decoder: &'a mut SocketIoDecoder,
+    native_events: &'a Option<std::sync::Arc<dyn super::NativeEventSink>>,
+    server_ordinals: &'a mut BTreeMap<String, u64>,
+    native_receipts: &'a mut native_receipts::Receipts,
+}
+
+impl TerminalObservation<'_> {
+    async fn output_before_end(&mut self, message: WireMessage, offset: u64) -> Result<()> {
+        self.observed.output(message.clone(), offset)?;
+        if self.observed.protocol() != Protocol::SocketIo {
+            return Ok(());
+        }
+        for packet in self.server_decoder.push(&message)? {
+            match packet {
+                EngineIoPacket::Close => {
+                    anyhow::bail!("Target Engine.IO CLOSE preceded client transport input")
+                }
+                EngineIoPacket::Message(packet) if packet.kind == SocketIoKind::Connect => {
+                    if let Some(sink) = self.native_events {
+                        sink.connected(&packet.namespace).await?;
+                    }
+                }
+                EngineIoPacket::Message(packet)
+                    if matches!(packet.kind, SocketIoKind::Ack | SocketIoKind::BinaryAck) =>
+                {
+                    if let Some(sequence) = self.native_receipts.acknowledge(&packet)
+                        && let Some(sink) = self.native_events
+                    {
+                        sink.acknowledged(sequence).await?;
+                    }
+                }
+                EngineIoPacket::Message(packet)
+                    if matches!(packet.kind, SocketIoKind::Event | SocketIoKind::BinaryEvent) =>
+                {
+                    let ordinal = self
+                        .server_ordinals
+                        .entry(packet.namespace.clone())
+                        .or_default();
+                    *ordinal = ordinal
+                        .checked_add(1)
+                        .context("native event ordinal exceeds range")?;
+                    if let (Some(sink), Some(event)) = (self.native_events, packet.event_name()) {
+                        sink.observe(NativeEvent {
+                            namespace: packet.namespace.clone(),
+                            event: event.into(),
+                            ordinal: *ordinal,
+                        })
+                        .await?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -438,7 +610,11 @@ fn session_deadline(
     next: usize,
     started: Instant,
 ) -> Instant {
-    let millis = if transcript.protocol == Protocol::SocketIo
+    let terminal_transport = transcript
+        .actions
+        .last()
+        .is_some_and(|action| matches!(action.action, InputActionKind::TransportEnd { .. }));
+    let millis = if (transcript.protocol == Protocol::SocketIo || terminal_transport)
         && next < transcript.actions.len()
         && observed.pending().is_empty()
     {
@@ -463,7 +639,10 @@ fn websocket_action_due(
         let at = *completed.get(sequence)?;
         barrier = Some(barrier.map_or(at, |previous: Instant| previous.max(at)));
     }
-    let closes = matches!(action.action, InputActionKind::Close { .. });
+    let closes = matches!(
+        action.action,
+        InputActionKind::Close { .. } | InputActionKind::TransportEnd { .. }
+    );
     if closes && let Some(gap_start) = action.gap_start_ms {
         let delay = action.offset_ms.checked_sub(gap_start)?;
         // Keep the actual completion barrier even when client idle time is compressed.

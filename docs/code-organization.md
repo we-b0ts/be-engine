@@ -70,6 +70,21 @@ is unclear.
   payload sizes. Protocol validation and aggregate evidence budgets stay with
   their existing owners.
 
+- `value_contract/time` owns standard temporal recognition, representation,
+  relative-clock comparison and the common tolerance. `policy/time_defaults`
+  owns the project-wide civil offset. Callers supply dependency request or
+  response-event clocks through `AnchorClocks`; explicit request and delivery
+  provenance remain separate. Protocol adapters retain native value framing.
+  Built-in validation never supplies positive coverage for an authored rule.
+  `replay/contract_value` renders stored time counterparts only with authenticated
+  preceding write/read proofs, including recognized textual times; recognition
+  alone still permits comparison without generating delivery translations.
+
+- `replay/mysql/session_setup` recognizes narrow successful nonsemantic driver
+  observations. Native registration and Source transaction/read-span proof use
+  that same boundary; business SQL, AUTOCOMMIT, errors and status-changing or
+  unknown session effects retain their existing finite contracts.
+
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
   `preparation` proves immutable identity, clocks and subscription slots;
@@ -82,6 +97,10 @@ is unclear.
   `interaction/replay/feedback` carries that observation interface separately
   from protocol parsing and control transport. No expected output enters the
   input executor, and recorded ACK payloads retain their existing references.
+  `replay/global/notifications` exposes authenticated Unattributed notification
+  slots to these native input proofs without admitting unowned outgoing commands
+  or changing Source ownership. Such slots have no subscription-age timer fallback;
+  physical record order is retained across separate Source ownership views.
   Ordinary native notification clocks also admit bounded same-namespace client
   events with ACK IDs. `interaction/replay/socketio/native_receipts` correlates
   actual sent inputs and received ACK metadata independently of business
@@ -100,8 +119,10 @@ is unclear.
   termination time and explicit transport FIN/RST control. Recorder connection
   registration marks engine-owned cleanup before socket shutdown. Protocol
   adapters retain framing, session/request correlation and timed response-prefix
-  materialization. `replay/exchange` owns shared termination timing and validation;
-  protocol delivery owns claims, consumption and dirty reporting. See
+  materialization. `replay/exchange` owns shared termination timing and validation.
+  Redis's ordered recording writer mirrors peer closes only before authenticated
+  recorder cleanup; pending exchanges still retain their incomplete-capture facts.
+  Protocol delivery owns claims, consumption and dirty reporting. See
   [dependency termination](dependency-termination.md).
   `replay/mysql/wire_diagnostics` owns opt-in connection-local protocol envelopes
   and request counters. It exposes packet lengths, sequence numbers and leading
@@ -125,6 +146,11 @@ is unclear.
   Target PING packets, separately from business completion barriers. Explicit
   peer Close observations retain pending business identities without inventing
   completion or accepting unobserved transport truncation.
+  `interaction/websocket_transport` owns bounded raw-frame boundary and real
+  peer FIN/RST observations without retaining payloads. Its continuous read tap
+  preserves read-ahead and unfinished fragmentation, independently of decoded
+  message observation and application completion. Typed client transport-end
+  inputs retain their original clocks and unfinished business identities.
   `gateway/http/interaction` owns primary transport forwarding, session admission,
   recording and close orchestration. Its `ordinary` child forwards finite HTTP
   frames independently of case-owned capture, drain and publication.
@@ -191,9 +217,12 @@ is unclear.
   responses and automatic WS close echoes cannot prove completion. Native
   statuses require complete JSON-string and SID matches. Transport failures
   remain visible to `finish` even when the primary close was already observed;
-  Its `disconnect` child retains lost-client failures through native application
-  disconnect confirmation; it never creates a client CLOSE input or clean
-  transcript. `failure` classifies transport errors without formatting private
+  Its `disconnect` child forwards a proven complete-boundary TCP FIN/RST as a
+  typed terminal input and retains exact native application confirmation. Raw
+  frame truncation retains failed evidence through the existing recovery path;
+  no path synthesizes a client CLOSE input. Its `upstream` child retains Hyper
+  preread bytes and the actual upgraded TCP control through HTTP/TLS adapters.
+  `failure` classifies transport errors without formatting private
   frames or I/O context. `interaction/recovery` permits Source reuse only after
   this protocol proof, complete dependency/writer drain and failure publication;
   `active_case/recovery` owns the shared closed-attribution check. Protocol errors,
@@ -223,6 +252,10 @@ is unclear.
   An implicit low-level session with startup business inventory reports its phase
   as unverified until a real boundary is observed. Frozen Case views retain
   their complete mandatory inventory; process selectors cannot waive Case debt.
+  Independent API aggregates omit startup inventories and do not make run-level
+  startup debt a Case failure. The on-demand Source process evidence query retains
+  the diagnostic entry point. Actual API response and dependency
+  checks remain strict; the final batch receipt still requires startup closure.
   `replay/http/ingress` owns genuine parsed-header admission before request-body
   collection. A bounded metadata ledger freezes observation identity, observed
   Case and startup phase; a RAII atomic guard retains actual unfinished body I/O
@@ -262,6 +295,12 @@ is unclear.
   `e2e_run/batch_evidence` binds final verification to one latest complete-round
   execution, its immutable Source manifest, whole input inventory, current owner
   snapshot and actual session receipt. It never joins focused method attempts.
+  `e2e_run/workflow_evidence` independently authenticates one final session for
+  every current workflow method and its complete Case inventory. Its validation
+  child checks original response, dependency and Target-stop evidence without
+  certifying startup or process consumption. `rewrite/dependency_review/workflow_verification`
+  owns that scope's receipt, freshness and API obligations; WholeSource receipts
+  and run-owned obligations retain their stricter, separate verification.
   Execution freezes a fresh Target/runtime-policy identity before startup and
   checks it again after execution; the cold evidence reader revalidates that
   identity, Source image revision and engine build before returning receipt refs.
@@ -277,6 +316,10 @@ is unclear.
   Case. Actual native Replay rejections retain that fence through the final
   locked ownership release; recorded dependency errors remain ordinary replies.
   `metadata/references` owns the shared semantic exchange identities.
+  Central observations with `semantic_required: false` do not create finite tail
+  obligations. Redis protocol controls retain native Target session context,
+  without creating business slots or ordinary-pool socket bindings; recorded
+  session failures and actual stateful operations keep their native contracts.
   `dependency/execution` owns the protocol-independent rejection signal and typed error.
   `e2e_run/execution_failure` retains the incomplete execution cause and independent
   primary status observations for public diagnosis and evidence queries.
@@ -801,7 +844,19 @@ is unclear.
   the prepared recording witnesses for every case in that session before
   deriving method evidence. Original reports, Case outcomes and errors remain
   immutable. `rewrite/dependency_review` owns independently proved attribution,
-  conditional API receipts and explicit owner verification debt. `rewrite/fingerprint`
+  conditional API receipts and explicit owner verification debt. Its `analysis`
+  child selects concrete ownerless/disputed Source work and gates formal Replay
+  until supported owner rules resolve it. Known-owned batch changes need no
+  analyst; `investigations/resolution` publishes the existing API implementer's
+  current-attempt diagnosis of its owned missing traffic.
+  `decisions` stores immutable, shared proof templates with complete finite UUID
+  membership and ordered history; `decisions/serde` reads legacy occurrence
+  maps/arrays and publishes compact groups. Status validates proof groups without
+  expanding per-occurrence DTOs; the Replay overlay owns that explicit projection.
+  `rewrite/unified_rule/attribution` admits Source-only ownership/lifecycle plans
+  before Replay, without inventing a Target attempt. Its execution identity and
+  preflight stay distinct from actual API and batch witnesses; value/sharing
+  permissions retain their execution evidence requirements. `rewrite/fingerprint`
   separates executed behavior identity from pure classification changes.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
@@ -1088,6 +1143,9 @@ is unclear.
   on both load and save. These modules never manufacture task-runtime
   handles or manage worktrees. `model.rs` owns the remaining persisted state and
   public action contract and reexports the worker contract for compatibility.
+  `store/replacement` owns purpose-entry archival and rollback of obsolete
+  snapshots. It reads only their version and workflow identity, preserves their
+  original bytes and never loads old assignments or receipts into a new workflow.
   `recording_api/scope` owns exact route/canonical pattern selector grammar and
   identity shared by coordinator commands and local regression configuration. `api_selector`
   owns executable route-to-method inventory selection and worker scope projection.
@@ -1107,7 +1165,9 @@ is unclear.
   `case_patterns.rs` owns the low-frequency post-recording pattern
   identification gate, persistent canonical API catalog, and add-only policy
   application; it does not mutate recorded cases or delegate this gate to API
-  workers. `work_scope.rs` owns the API worker scope identity.
+  workers. Recognizing static routes or repeating existing patterns advances the
+  catalog while preserving capture policy bytes, identities and proofs.
+  `work_scope.rs` owns the API worker scope identity.
   `revalidation.rs` owns the coordinator's explicit verification request
   boundary and projection for deferred API status. Requests and scoped Next obey
   the same round gate and cannot turn stale successes into first-pass work.
@@ -1209,6 +1269,14 @@ is unclear.
   recorder fields remain embedded in `.traffic-e2e/project.yaml`; planners
   validate both documents and atomically replace only
   the unified file named by `project.policy`.
+- `config/document.rs` owns the Recorder authoring-to-runtime boundary shared by
+  standalone, embedded and generated configuration. Its common serde path
+  compiles business capture requirements before validation and omits derived
+  defaults when serializing, while retaining explicit overrides.
+  `config/capture.rs` owns independent ingress/dependency protocol requirements,
+  their required transport facilities and conflicting-override diagnostics.
+  It reuses protocol identities rather than defining another protocol enum.
+  Requirements do not filter observed traffic or add Replay matching work.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
 - `platform/mod.rs` owns one managed subprocess composition boundary: it maps
   validated project/recorder state into the staged shell runtime and collects
@@ -1334,6 +1402,13 @@ explicit repository-wide audit.
   `config/process_owned_dependencies/mysql.rs` owns MySQL rule validation and
   matching, while `config/background_mysql_feedback.rs` owns immutable-evidence
   planning and atomic configuration application.
+  `config/process_owned_dependencies/redis` validates finite Redis task selectors,
+  including exact-key process writes without snapshot permission. Its `pubsub`
+  sibling validates exact received-notification scope and original subscription
+  confirmations; it never matches outgoing commands or infers external producers.
+  Recorder classification, Source-only rule preflight and independent attribution
+  reuse that scope. Protocol delivery retains its original finite-consumption
+  and subscription guards.
 
 - `rewrite/dependency_rule/planner.rs` owns protocol selector conversion and
   construction of engine evidence plans; its parent owns coordinator rule

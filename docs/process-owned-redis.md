@@ -2,7 +2,7 @@
 
 A proven independent process read can be classified without turning its value
 into a reusable initialization snapshot. Declare exact bounded keys and ports
-under the actual Source task, with the policy's root `source_revision`:
+under the actual Source task. Task declarations do not bind to a Source version:
 
 ```yaml
 process_dependencies:

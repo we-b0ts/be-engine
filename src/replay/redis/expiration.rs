@@ -57,7 +57,9 @@ pub(crate) fn normalize(
     let target_remaining = target_deadline - i128::from(target_clock);
     ensure!(
         (source_remaining > 0) == (target_remaining > 0)
-            && source_remaining.abs_diff(target_remaining) <= (5 * scale) as u128,
+            && source_remaining.abs_diff(target_remaining)
+                <= u128::from(crate::value_contract::time::DEFAULT_TOLERANCE.as_secs())
+                    * scale as u128,
         "Redis absolute expiration changed its remaining lifetime"
     );
     let mut normalized = target.to_vec();

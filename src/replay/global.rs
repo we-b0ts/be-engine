@@ -2,6 +2,9 @@
 use super::*;
 use crate::dependency_index::{Paged, RecordReader, RecordRef, RecordSource};
 
+mod notifications;
+pub(super) use notifications::load as load_unattributed_notifications;
+
 type StreamItem = (DependencyRecord, RecordRef, Option<(usize, bool)>);
 type StreamBatch = Vec<StreamItem>;
 

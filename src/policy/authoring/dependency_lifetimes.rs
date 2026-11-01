@@ -2,13 +2,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml::{Mapping, Value};
 use sha2::{Digest, Sha256};
 
 use super::resources;
 use crate::policy::native::{
-    FiniteSharingEffect, NativeKeySelector, ProcessOwnedEffect, ProcessSelector,
+    FiniteSharingEffect, NativeKeySelector, ProcessOwnedEffect, ProcessSelector, RedisPubsubKind,
+    RedisPubsubSelector,
 };
 use crate::policy::{
     NativeEffect, NativeMatch, NativeRule, PolicyRule, Proof, ResourceDeclaration,
@@ -64,7 +65,7 @@ impl<'de> Deserialize<'de> for Entry {
         let (protocol, payload) = fields.into_iter().next().expect("one protocol");
         if !matches!(
             protocol.as_str(),
-            "http" | "redis" | "mysql" | "memcached" | "motan"
+            "http" | "redis" | "redis_pubsub" | "mysql" | "memcached" | "motan"
         ) || !payload.is_mapping()
         {
             return Err(serde::de::Error::custom(
@@ -121,6 +122,49 @@ struct HttpProcessRequest {
     methods: Option<Vec<String>>,
     #[serde(default)]
     path_prefixes: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RedisSubscriptionRequest {
+    resource: crate::policy::Resource,
+    operation: String,
+    arguments: Vec<String>,
+}
+
+fn redis_subscription(payload: &Value) -> Result<Option<Value>> {
+    let operation = payload
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if !matches!(
+        operation.as_str(),
+        "SUBSCRIBE" | "SSUBSCRIBE" | "PSUBSCRIBE"
+    ) {
+        return Ok(None);
+    }
+    ensure!(
+        operation != "PSUBSCRIBE",
+        "process Redis PSUBSCRIBE command ownership is not supported without an independently proven concrete delivery scope"
+    );
+    let selected: RedisSubscriptionRequest = serde_yaml::from_value(payload.clone())?;
+    ensure!(
+        selected.arguments.len() == 1,
+        "process Redis subscription currently requires one exact command argument"
+    );
+    let selector = RedisPubsubSelector {
+        resource: selected.resource,
+        kind: if selected.operation.eq_ignore_ascii_case("SUBSCRIBE") {
+            RedisPubsubKind::Message
+        } else {
+            RedisPubsubKind::Smessage
+        },
+        channel: selected.arguments[0].clone(),
+        pattern: None,
+    };
+    crate::config::process_owned_dependencies::pubsub::validate(&selector)?;
+    Ok(Some(serde_yaml::to_value(selector)?))
 }
 
 fn http_host(host: &str) -> Result<String> {
@@ -263,9 +307,19 @@ fn process(
     named: &BTreeMap<String, ResourceDeclaration>,
 ) -> Result<NativeEffect> {
     task_name(task)?;
-    let revision = revision.context("process_dependencies requires the root source_revision")?;
-    super::proof::revision(revision)?;
-    let payload = if entry.protocol == "http" {
+    let subscription = if entry.protocol == "redis" {
+        redis_subscription(&entry.payload)?
+    } else {
+        None
+    };
+    let protocol = if subscription.is_some() {
+        "redis_pubsub"
+    } else {
+        &entry.protocol
+    };
+    let payload = if let Some(payload) = subscription {
+        payload
+    } else if entry.protocol == "http" {
         let selector = http_process(entry.payload.clone())?;
         let mut payload = serde_yaml::to_value(selector)?;
         payload
@@ -284,19 +338,20 @@ fn process(
         !selector.contains_key("protocol"),
         "process request protocol belongs in its wrapper"
     );
-    selector.insert("protocol".into(), entry.protocol.clone().into());
+    selector.insert("protocol".into(), protocol.into());
     // Only the existing schema-owned MySQL selector/member resource positions
     // are expanded. SQL, argument strings and business values are not traversed.
     let mut owned: Value = serde_yaml::from_str("effect: {kind: process_owned}")?;
+    owned["effect"]["task_name"] = task.into();
     owned["effect"]["selector"] = selector.into();
     resources::expand(&mut owned, named)?;
     if let Some(proof) = &entry.proof {
         owned["proof"] = serde_yaml::to_value(proof)?;
     }
-    super::walk::expand_rule(&mut owned, Some(revision))?;
+    super::walk::expand_rule(&mut owned, revision)?;
     let selector: ProcessSelector = serde_yaml::from_value(owned["effect"]["selector"].clone())?;
     Ok(NativeEffect::ProcessOwned(ProcessOwnedEffect {
-        source_revision: revision.into(),
+        source_revision: String::new(),
         task_name: Some(task.into()),
         selector,
         origin: None,
@@ -352,16 +407,36 @@ fn lower(
         when: None,
     };
     let mut semantic = without_proofs(rule.clone());
-    // Source provenance still participates in policy validation/fingerprints,
-    // but changing the snapshot does not change this request's identity.
+    // Source provenance belongs to independently checked evidence, not the
+    // lifetime of this named task's request selector.
     if let NativeEffect::ProcessOwned(effect) = &mut semantic.effect {
         effect.source_revision.clear();
     }
-    let hash = Sha256::digest(serde_json::to_vec(&(
-        scope.name(),
-        semantic.selector,
-        semantic.effect,
-    ))?);
+    let bytes = if let NativeEffect::ProcessOwned(effect) = &semantic.effect {
+        // Keep the original generated identifier encoding after source_revision
+        // becomes omitted in the public typed effect. This is an empty identity
+        // slot, never a Source permission or a cached historical fingerprint.
+        #[derive(Serialize)]
+        struct Identity<'a> {
+            kind: &'static str,
+            task_name: &'a Option<String>,
+            source_revision: &'static str,
+            selector: &'a ProcessSelector,
+        }
+        serde_json::to_vec(&(
+            scope.name(),
+            &semantic.selector,
+            Identity {
+                kind: "process_owned",
+                task_name: &effect.task_name,
+                source_revision: "",
+                selector: &effect.selector,
+            },
+        ))?
+    } else {
+        serde_json::to_vec(&(scope.name(), &semantic.selector, &semantic.effect))?
+    };
+    let hash = Sha256::digest(bytes);
     rule.id = format!("{PREFIX}{}.{hash:x}", scope.name());
     Ok(rule)
 }
@@ -473,10 +548,27 @@ fn entry_from_rule(
                 .as_mapping()
                 .context("process selector requires mapping")?
                 .clone();
-            let protocol = selector
+            let mut protocol = selector
                 .remove("protocol")
                 .and_then(|value| value.as_str().map(str::to_owned))
                 .context("process protocol is missing")?;
+            if let ProcessSelector::RedisPubsub(selected) = &effect.selector {
+                let operation = match selected.kind {
+                    RedisPubsubKind::Message => "SUBSCRIBE",
+                    RedisPubsubKind::Smessage => "SSUBSCRIBE",
+                    // A legacy concrete delivery-channel filter cannot be
+                    // dropped to manufacture a broader pattern subscription.
+                    RedisPubsubKind::Pmessage => return Ok(None),
+                };
+                selector = Mapping::new();
+                selector.insert("resource".into(), serde_yaml::to_value(&selected.resource)?);
+                selector.insert("operation".into(), operation.into());
+                selector.insert(
+                    "arguments".into(),
+                    serde_yaml::to_value(vec![selected.channel.clone()])?,
+                );
+                protocol = "redis".into();
+            }
             if protocol == "http" {
                 let Some(authorities) = selector.remove("authorities") else {
                     return Ok(None);

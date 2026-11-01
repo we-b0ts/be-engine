@@ -80,6 +80,9 @@ pub(crate) fn protect_request(request: &mut Value, path: &Path) -> Result<()> {
                 }
                 Ok(())
             }
+            // Transport kind and timing are public control metadata; this
+            // action has no private message, close reason or acquisition URL.
+            "transport_end" => Ok(()),
             _ => anyhow::bail!("unsupported private interaction input kind"),
         }
     })?;
@@ -170,6 +173,7 @@ pub(crate) fn decrypt_request(request: &mut Value, path: &Path) -> Result<bool> 
                     changed = true;
                 }
             }
+            "transport_end" => {}
             _ => anyhow::bail!("unsupported private interaction input kind"),
         }
         Ok(())
@@ -419,6 +423,29 @@ mod tests {
             serde_json::from_slice(&crate::request_headers::load_request_file(&path).unwrap())
                 .unwrap();
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn transport_ends_survive_private_input_publication_without_exposing_messages() {
+        let (_project, path) = project();
+        for end in ["eof", "reset"] {
+            let original = json!({"uri":"/socket.io/?token=secret-token","headers":{},
+            "interaction":{"actions":[
+                {"sequence":1,"offset_ms":0,"action":{"kind":"message","message":{"kind":"text","data":"private-input"}}},
+                {"sequence":2,"offset_ms":17,"after":[],"compressible_gap":false,
+                    "action":{"kind":"transport_end","end":end}}
+            ]}});
+            let mut protected = original.clone();
+            protect_request(&mut protected, &path).unwrap();
+            assert!(!protected.to_string().contains("private-input"));
+            assert!(!protected.to_string().contains("secret-token"));
+            assert_eq!(
+                protected["interaction"]["actions"][1],
+                original["interaction"]["actions"][1]
+            );
+            decrypt_request(&mut protected, &path).unwrap();
+            assert_eq!(protected, original);
+        }
     }
 
     #[test]

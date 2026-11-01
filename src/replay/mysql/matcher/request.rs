@@ -319,15 +319,19 @@ impl ReplayState {
                                     |compiled| {
                                         (compiled.global_json.is_some() || compiled.mysql.is_some())
                                             && (dynamic.is_none()
-                                                || policy.request_contracts.has_mysql_formats(
-                                                    identity,
-                                                    &self.mysql.exchanges[index].record,
-                                                ))
+                                                || policy
+                                                    .request_contracts
+                                                    .has_authored_mysql_formats(
+                                                        identity,
+                                                        &self.mysql.exchanges[index].record,
+                                                    ))
                                     },
                                 );
-                                // Global identities compare the original complete
-                                // values. Native effects already authenticated their
-                                // identity projection before scalar time checking.
+                                // Authored global owners compare original values.
+                                // Implicit textual-time recognition keeps the native
+                                // identity projection already authenticated above.
+                                // Original wire evidence was recorded before either
+                                // comparison view was constructed.
                                 let (record, selected_sql, selected_params) = if global {
                                     (
                                         &self.mysql.exchanges[index].record,

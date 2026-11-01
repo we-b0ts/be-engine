@@ -5,6 +5,9 @@ use std::{fs, process::Command};
 #[path = "review_tests.rs"]
 mod review_tests;
 
+#[path = "obsolete_state_tests.rs"]
+mod obsolete_state_tests;
+
 fn git(root: &Path, args: &[&str]) {
     assert!(
         Command::new("git")

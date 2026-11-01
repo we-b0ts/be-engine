@@ -34,7 +34,9 @@ pub fn dependency_attribution_api_information(
     });
     Ok(
         json!({"schema":"target-api-information/v3","api":route,"work_scope":{"kind":"api","api":route},
-        "accepted":accepted,"batch_verified":super::batch_verification::current(&root,&state)?,"method_results":results}),
+        "accepted":accepted,"batch_verified":super::batch_current(&root,&state)?,
+        "completion_scope":"workflow_contracts","workflow_verified":super::workflow_verification::current(&root,&state)? && !super::workflow_verification::pending(&state),
+        "workflow_method_apis":super::workflow_verification::methods(&state),"method_results":results}),
     )
 }
 
@@ -127,6 +129,7 @@ pub(in crate::rewrite) fn information(
         .values()
         .filter(|claim| claim.method_api == api && claim.recording_run_id == state.recording_run_id)
         .collect::<Vec<_>>();
+    let investigations = super::investigations::for_api(root, state, api)?;
     let mut actions = Vec::new();
     if groups
         .values()
@@ -143,6 +146,15 @@ pub(in crate::rewrite) fn information(
     }) {
         actions.push(json!({"owner":"repository_analyst","action":"prove_source_attribution",
             "command":crate::rewrite::action::command(root,vec!["dependency-attribution".into(),"context".into()],vec![])}));
+    }
+    if investigations.iter().any(|entry| {
+        matches!(
+            entry["investigation"]["status"].as_str(),
+            Some("pending" | "unresolved")
+        )
+    }) {
+        actions.push(json!({"owner":"api_implementer","action":"diagnose_owned_missing_traffic",
+            "required":"Return Source proof for this API's async lifecycle rule or the exact recording omission and capture/response-rewrite repair."}));
     }
     let next = (offset.saturating_add(PAGE) < groups.len()).then(|| {
         crate::rewrite::action::command(
@@ -164,6 +176,7 @@ pub(in crate::rewrite) fn information(
         "recording_run_id":state.recording_run_id,"source_revision":state.source_revision,
         "actual_attempt":last,"actual_session_id":report["session_id"],"actual_evidence_available":!report.is_null(),
         "unavailable_reason":unavailable_reason,"acceptance":{"verdict":verdict,"scope":"method_contract",
+            "completion_scope":"workflow_contracts","workflow_verified":super::workflow_verification::current(root,state)? && !super::workflow_verification::pending(state),
             "actual_attempt":last.map(|attempt|attempt.attempt),"receipt":receipt_current.then(||state.dependency_review.receipts.get(api)),
             "batch_verified":batch_current,"complete_batch_receipt":batch_current.then_some(&state.dependency_review.batch_receipt)},
         "gates":last.map(|attempt|&attempt.gates),"response_counts":last.map(|attempt|&attempt.counts),
@@ -171,7 +184,7 @@ pub(in crate::rewrite) fn information(
         "dependency_occurrences":occurrence_information,
         "hypotheses":{"total_groups":groups.len(),"total_attempts":report["dependency_hypothesis_attempts"].as_array().map_or(0,Vec::len),
             "coverage_error":report["dependency_hypothesis_coverage_error"],"groups":groups.into_values().skip(offset).take(PAGE).collect::<Vec<_>>(),
-            "offset":offset,"next":next},"ownership_claims":claims,"obligations":obligations,"next_actions":actions,
+            "offset":offset,"next":next},"ownership_claims":claims,"owned_request_investigations":investigations,"obligations":obligations,"next_actions":actions,
         "coordinate_contract":{"sql_params":"zero-based; inline SQL uses original token positions",
             "redis_args":"zero-based after command; SET args[0] is the key","json":"original JSON pointer"}}),
     )
@@ -196,7 +209,7 @@ fn occurrence_information(
     let entries = unused.iter().skip(offset).take(PAGE).map(|id| {
         let event = &source.exchanges[id];
         json!({"source_exchange_id":id,"captured_owner":event.capture.attribution,
-            "effective_attribution":state.dependency_review.decisions.get(id),"capture_complete":event.complete,
+            "effective_attribution":state.dependency_review.decisions.get(id).map(|decision|decision.decision(*id)),"capture_complete":event.complete,
             "source_query":crate::rewrite::action::command(root,vec!["dependency-attribution".into(),"source".into(),"--exchange-id".into(),id.to_string()],vec![])})
     }).collect::<Vec<_>>();
     Ok(

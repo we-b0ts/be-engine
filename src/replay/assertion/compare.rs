@@ -7,15 +7,16 @@ use super::model::{
     JsonJoinedStringCandidate, ResponseAssertionCaseReport, ResponseDifference,
     ResponseDifferenceKind,
 };
-use super::time::{self, RequestTimes};
+use super::time;
 use crate::replay::policy::{ResponseField, ResponseRuleKind, select_json_pointers};
+use crate::value_contract::json::AnchorClocks;
 
 pub(super) fn compare_json(
     expected: &Value,
     actual: &Value,
     fields: &[ResponseField],
     report: &mut ResponseAssertionCaseReport,
-    times: RequestTimes,
+    clocks: AnchorClocks,
 ) -> Vec<ResponseField> {
     let mut selected = BTreeMap::new();
     let mut applicable = Vec::new();
@@ -45,7 +46,7 @@ pub(super) fn compare_json(
         expected,
         actual,
     );
-    compare_value("", expected, actual, &selected, report, times, &mut jwt);
+    compare_value("", expected, actual, &selected, report, clocks, &mut jwt);
     for ids in [
         &mut report.applied_generated_rule_ids,
         &mut report.applied_unordered_rule_ids,
@@ -63,12 +64,12 @@ fn compare_value(
     actual: &Value,
     fields: &BTreeMap<String, &ResponseField>,
     report: &mut ResponseAssertionCaseReport,
-    times: RequestTimes,
+    clocks: AnchorClocks,
     jwt: &mut super::jwt::JwtComparison<'_>,
 ) {
     if let Some(field) = fields.get(pointer) {
         match field.kind {
-            ResponseRuleKind::Jwt => match jwt.compare(field, pointer, times) {
+            ResponseRuleKind::Jwt => match jwt.compare(field, pointer, clocks.case) {
                 Ok(()) => report.applied_generated_rule_ids.push(field.id.clone()),
                 Err(kind) => {
                     report
@@ -81,7 +82,7 @@ fn compare_value(
                     field.time.expect("validated time rule"),
                     expected,
                     actual,
-                    times,
+                    clocks.observation(),
                 ) {
                     Ok(()) => report.applied_generated_rule_ids.push(field.id.clone()),
                     Err(kind) => report.differences.push(difference(
@@ -173,7 +174,7 @@ fn compare_value(
                 let child = child_pointer(pointer, key);
                 match (expected.get(key), actual.get(key)) {
                     (Some(expected), Some(actual)) => {
-                        compare_value(&child, expected, actual, fields, report, times, jwt)
+                        compare_value(&child, expected, actual, fields, report, clocks, jwt)
                     }
                     (Some(expected), None) => report.differences.push(difference(
                         &child,
@@ -216,7 +217,7 @@ fn compare_value(
                     actual,
                     fields,
                     report,
-                    times,
+                    clocks,
                     jwt,
                 );
             }

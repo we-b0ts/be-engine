@@ -154,6 +154,7 @@ impl Document {
 
 pub(crate) fn query_plan(plan: &CompiledJsonPolicy) -> CompiledJsonPolicy {
     CompiledJsonPolicy {
+        time: plan.time.clone(),
         fields: plan
             .fields
             .iter()

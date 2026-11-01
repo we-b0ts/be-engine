@@ -24,7 +24,7 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                     .enumerate()
                     .map(|(i, template)| {
                         let sql = template
-                            .replacen('?', "'2019-12-31 00:00:00'", 1)
+                            .replacen('?', "'2019-12-31 00:00:00.000000'", 1)
                             .replacen('?', "7", 1);
                         let mut read = exchange(
                             &sql,
@@ -37,7 +37,7 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                             read["command"] = json!("COM_STMT_EXECUTE");
                             read["sql"] = json!(template);
                             read["params"] = json!([
-                                {"kind":"datetime","value":"2019-12-31 00:00:00"},
+                                {"kind":"datetime","value":"2019-12-31 00:00:00.000000"},
                                 {"kind":"integer","value":7}
                             ]);
                         }
@@ -84,6 +84,10 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                             }
                         };
                         if attempt == 2 {
+                            if let Err(error) = &rows {
+                                let state = runtime.state.lock().await;
+                                panic!("valid cutoff failed: source_prepared={source_prepared}, target_mode={target_mode}, template={template}, error={error:?}, source={:?}, target={:?}, warnings={:?}", state.mysql.exchanges[0].record, state.mysql.events.unmatched_queries.last(), state.mysql.events.metadata_warnings);
+                            }
                             let rows = rows.unwrap();
                             assert_eq!(rows.len(), 1);
                             assert_eq!(rows[0].get::<i64, _>(0), 42);

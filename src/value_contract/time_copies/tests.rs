@@ -521,7 +521,7 @@ fn provenance_capacity_fails_closed_and_case_reset_reclaims_it() {
 }
 
 #[test]
-fn typed_copies_normalize_timestamp_precision_without_changing_category() {
+fn typed_copies_preserve_each_source_position_representation_and_numeric_category() {
     let p = position();
     for (format, source, delivered, write_source, write_target) in [
         (
@@ -542,8 +542,12 @@ fn typed_copies_normalize_timestamp_precision_without_changing_category() {
         let field = contract(format, None);
         let time = field.time().unwrap();
         let mut store = store();
-        let record =
+        assert!(
             TimeCopyRecord::new_time(&time, p, p, "/t", "/t", &json!(source), &json!(delivered))
+                .is_err()
+        );
+        let record =
+            TimeCopyRecord::new_time(&time, p, p, "/t", "/t", &json!(source), &json!(source))
                 .unwrap();
         store.record_batch("case", vec![record]).unwrap();
         let proof = store
@@ -556,6 +560,16 @@ fn typed_copies_normalize_timestamp_precision_without_changing_category() {
         }];
         assert!(
             json::compare_with_time_copies(
+                &json!({"t":write_source}),
+                &json!({"t":write_source}),
+                &fields,
+                clocks(),
+                std::slice::from_ref(&proof)
+            )
+            .passed()
+        );
+        assert!(
+            !json::compare_with_time_copies(
                 &json!({"t":write_source}),
                 &json!({"t":write_target}),
                 &fields,

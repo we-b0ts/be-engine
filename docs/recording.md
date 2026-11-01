@@ -12,6 +12,51 @@ reuses the Recorder section of `.traffic-e2e/project.yaml` and the single
 The app does not inspect Git or start the rewrite coordinator. Ingress selects API traffic. Recorder preserves the configured HTTP include/exclude
 rules; their default permits all methods and paths.
 
+Declare the business protocols independently for incoming API requests and
+outgoing dependencies. An HTTP API that calls HTTP or HTTPS services can use:
+
+```yaml
+recorder:
+  capture:
+    ingress: [http]
+    dependencies: [http]
+  dns_mock:
+    upstream_dns: 10.10.10.11:53
+  http_gateway:
+    matched_upstream: http://127.0.0.1:8080
+    ready:
+      enabled: true
+      path: /health
+```
+
+`capture.ingress: [http]` enables the primary HTTP gateway.
+`capture.dependencies: [http]` enables fake DNS, the transparent TCP gateway,
+HTTP dependency parsing and HTTPS MITM. HTTP depends on TCP transport, so an
+HTTP-only business integration still needs that internal gateway. The two roles
+do not enable each other: an HTTP entry point does not imply HTTP dependencies,
+and an outgoing HTTP call does not create an HTTP entry point. In this example,
+UDP, the Motan entry gateway and the dedicated MySQL proxy remain disabled.
+
+These declarations select required recording facilities; they are not a traffic
+allowlist. Protocol detection still observes incidental native dependencies so
+unexpected traffic is retained for analysis. Keep business include/exclude
+rules, readiness, streaming and timeout settings when they affect the project.
+For example, `http_gateway.record_streaming: true` selects streaming capture;
+`project.replay.http_stream_timing` separately selects replay timing and defaults
+to `recorded`.
+
+Transport settings remain optional overrides when a project needs a different
+listener, upstream DNS server, CA location or artifact directory. A declaration
+that requires HTTP dependency capture conflicts with an explicit
+`tcp_gateway.enabled: false`, `record_http: false` or `mitm_https: false`;
+configuration loading reports the conflict instead of silently changing it.
+The default artifact directory is `.traffic-e2e/local/artifacts`, with the fake
+DNS registry under that directory. Serialization keeps the protocol declarations
+and differing overrides without expanding derived infrastructure defaults.
+Documents without `capture` retain their explicit transport behavior. This
+translation happens when configuration is loaded; Replay request processing and
+dependency matching use the same effective runtime settings.
+
 Normal SIGTERM/SIGINT shutdown first withdraws discovery and closes admission of
 new cases. Source, Recorder and admitted sessions remain alive for up to **15
 seconds**, waiting for primary requests, dependency tails and case publication.

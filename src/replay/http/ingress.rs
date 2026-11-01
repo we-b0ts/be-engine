@@ -105,6 +105,7 @@ impl HttpIngress {
                 }
                 ReplaySource::Startup => owners.startup += 1,
                 ReplaySource::Process => owners.process += 1,
+                ReplaySource::Unattributed => {}
             }
         }
     }

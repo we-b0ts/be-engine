@@ -201,7 +201,10 @@ pub(crate) fn primary_interaction_failure(
         EndReason::ProtocolError => "interaction_protocol_error",
         EndReason::BudgetExceeded => "interaction_budget_exceeded",
         EndReason::CleanupTimeout => "interaction_cleanup_timeout",
-        EndReason::BusinessIdle | EndReason::ServerEof | EndReason::ClientClose => return None,
+        EndReason::BusinessIdle
+        | EndReason::ServerEof
+        | EndReason::ClientClose
+        | EndReason::ClientTransportEnd => return None,
     };
     Some(CaseInvalidation::new(
         failure,
@@ -395,6 +398,25 @@ mod tests {
         let reason = invalid_case_reason(&request(), &json_response(b"not-json")).unwrap();
 
         assert_eq!(reason.0, "expected_response_json_invalid");
+    }
+
+    #[test]
+    fn observed_client_transport_end_retains_independent_lease_or_dependency_failure() {
+        use crate::interaction::model::EndReason;
+        assert!(primary_interaction_failure(EndReason::ClientTransportEnd, 10, &[1]).is_none());
+        let failure = interaction_invalidation(
+            EndReason::ClientTransportEnd,
+            10,
+            &[1],
+            Some(CaseInvalidation::new(
+                "interaction_reservation_lost",
+                "real lease loss",
+            )),
+            None,
+        )
+        .unwrap();
+        assert_eq!(failure.reason, "interaction_reservation_lost");
+        assert!(primary_interaction_failure(EndReason::TransportError, 10, &[1]).is_some());
     }
 
     #[tokio::test]

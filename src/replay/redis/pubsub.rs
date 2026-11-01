@@ -171,12 +171,7 @@ impl PubSubState {
         source: Arc<crate::dependency_index::RecordSource>,
         source_kind: ReplaySource,
     ) -> Result<()> {
-        let before = self.indexed.lanes.len();
-        self.indexed.restore(lanes, root, source)?;
-        for lane in &mut self.indexed.lanes[before..] {
-            lane.source_kind = source_kind;
-        }
-        Ok(())
+        self.indexed.restore(lanes, root, source, source_kind)
     }
 
     pub(super) fn case_is_dirty(&self, case: &str) -> bool {
@@ -240,7 +235,7 @@ impl PubSubState {
         self.bindings.index(&record, source, case_id, index)?;
         if record.rpc_request.is_none() {
             ensure!(
-                source.is_run_owned(),
+                source.is_run_level(),
                 "uncorrelated Redis Pub/Sub notifications require Global process ownership"
             );
             Arc::make_mut(
@@ -385,7 +380,7 @@ impl PubSubState {
             .iter()
             .enumerate()
             .filter(|(_, p)| p.source == source && p.status != ReplayExchangeStatus::Consumed)
-            .take(if source.is_run_owned() {
+            .take(if source.is_run_level() {
                 100
             } else {
                 usize::MAX
@@ -403,7 +398,7 @@ impl PubSubState {
                 command: "PUBSUB_PUSH".into(),
             })
             .collect();
-        if source.is_run_owned() {
+        if source.is_run_level() {
             result.extend(self.indexed.unused(100usize.saturating_sub(result.len())));
         }
         result
@@ -412,7 +407,7 @@ impl PubSubState {
     pub(super) fn global_unused_count(&self) -> usize {
         self.pushes
             .iter()
-            .filter(|p| p.source.is_run_owned() && p.status != ReplayExchangeStatus::Consumed)
+            .filter(|p| p.source.is_run_level() && p.status != ReplayExchangeStatus::Consumed)
             .count()
             + self.indexed.total
             - self.indexed.delivered
@@ -426,7 +421,7 @@ impl PubSubState {
             .pushes
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.source.is_run_owned() && !p.status.is_consumed())
+            .filter(|(_, p)| p.source.is_run_level() && !p.status.is_consumed())
         {
             visitor(serde_json::to_value(CommandUnusedReport {
                 index: push.report_index.unwrap_or(index),

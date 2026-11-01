@@ -4,6 +4,7 @@ use chrono::TimeZone;
 use serde_json::json;
 mod calendar;
 mod optional;
+mod representation;
 
 #[test]
 fn naive_delivery_preserves_civil_text_without_timezone_configuration() {

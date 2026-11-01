@@ -419,6 +419,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    mod capture_tests;
     mod socketio_timing_tests;
     use crate::e2e_run::model::MAX_TARGET_STARTUP_TIMEOUT_SECONDS;
 

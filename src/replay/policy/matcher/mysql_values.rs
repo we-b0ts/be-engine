@@ -75,7 +75,10 @@ pub(in crate::replay::policy) fn validate_selected_time(
     selected: &SelectedMysqlTime,
     times: crate::replay::assertion::RequestTimes,
 ) -> Result<(), String> {
-    if selected.anchor != crate::policy::TimeAnchor::DependencyRequestStart {
+    if !matches!(
+        selected.anchor,
+        crate::policy::TimeAnchor::Observation | crate::policy::TimeAnchor::DependencyRequestStart
+    ) {
         return Err("SQL dependency time requires independent dependency request clocks".into());
     }
     validate_relative_time(&selected.source, &selected.target, &selected.rule, times)
@@ -248,8 +251,11 @@ impl ReplayPolicyRuntime {
                             // anchor through inventory projection; the typed native
                             // evaluator validates it with independent clocks at EXECUTE.
                             if metadata
-                                && selected.anchor
-                                    == crate::policy::TimeAnchor::DependencyRequestStart
+                                && matches!(
+                                    selected.anchor,
+                                    crate::policy::TimeAnchor::Observation
+                                        | crate::policy::TimeAnchor::DependencyRequestStart
+                                )
                             {
                                 continue;
                             }

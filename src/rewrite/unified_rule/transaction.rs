@@ -15,6 +15,8 @@ mod api_time_transaction;
 mod append_transaction;
 #[path = "transaction_batch.rs"]
 mod batch_transaction;
+#[path = "transaction_builtin_time.rs"]
+mod builtin_time_transaction;
 #[path = "transaction_calendar_date.rs"]
 mod calendar_date_transaction;
 #[path = "transaction_capture_refresh.rs"]
@@ -371,8 +373,8 @@ impl Fixture {
 
     fn replace_response_bodies(&self, source: &[u8], target: &[u8]) {
         self.replace_responses(
-            json!({"status":200,"body":raw_body(source)}),
-            json!({"version":1,"status":200,"body":raw_body(target),"request_sent_at":"2026-10-16T00:01:00Z"}),
+            json!({"status":200,"body":raw_body(source),"timestamp":"2026-10-16T00:00:00Z"}),
+            json!({"version":1,"status":200,"body":raw_body(target),"request_sent_at":"2026-10-16T00:01:00Z","response_completed_at":"2026-10-16T00:01:00Z"}),
         );
     }
 

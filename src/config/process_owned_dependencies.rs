@@ -1,5 +1,7 @@
 mod matching;
 pub(crate) mod mysql;
+pub(crate) mod pubsub;
+mod redis;
 pub use mysql::{MysqlBackgroundSelector, MysqlBackgroundTableSeries};
 
 use std::collections::HashSet;
@@ -28,6 +30,13 @@ pub struct RedisKeyPatternConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
+    RedisPubsub {
+        name: String,
+        selector: crate::policy::native::RedisPubsubSelector,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        source_revision: String,
+        source_evidence: String,
+    },
     Mysql {
         #[serde(default, skip_serializing_if = "super::api_trigger::mysql::disabled")]
         include_transaction_boundaries: bool,
@@ -39,6 +48,7 @@ pub enum BackgroundDependencyRuleConfig {
         identity_value_index: Option<usize>,
         name: String,
         selector: MysqlBackgroundSelector,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         source_revision: String,
         source_evidence: String,
     },
@@ -121,6 +131,7 @@ impl BackgroundDependencyRuleConfig {
             | Self::Http { name, .. }
             | Self::Memcached { name, .. }
             | Self::Redis { name, .. }
+            | Self::RedisPubsub { name, .. }
             | Self::Motan { name, .. } => name,
         }
     }
@@ -154,6 +165,18 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
             bail!("duplicate process-owned dependency rule name {name:?}");
         }
         match rule {
+            BackgroundDependencyRuleConfig::RedisPubsub {
+                selector,
+                source_revision,
+                source_evidence,
+                ..
+            } => {
+                pubsub::validate(selector)?;
+                if !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
+                }
+                validate_optional_source_evidence(source_evidence)?;
+            }
             BackgroundDependencyRuleConfig::Mysql {
                 selector,
                 source_revision,
@@ -166,7 +189,9 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                     selector.validate()?;
                 }
                 super::api_trigger::mysql::validate(rule)?;
-                validate_source_revision(source_revision)?;
+                if rule.trigger_source().is_some() || !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
+                }
                 validate_optional_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Http {
@@ -214,117 +239,7 @@ pub(crate) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 }
                 validate_optional_source_evidence(source_evidence)?;
             }
-            BackgroundDependencyRuleConfig::Redis {
-                ports,
-                command,
-                keys,
-                key_patterns,
-                key_prefix,
-                key_suffix,
-                initial_load_timeout_ms,
-                fields,
-                source_revision,
-                source_evidence,
-                ..
-            } => {
-                validate_redis_ports(name, ports)?;
-                if rule.trigger_source().is_some() {
-                    super::api_trigger::validate_redis(rule)?;
-                    if !source_revision.is_empty() {
-                        validate_source_revision(source_revision)?;
-                    }
-                    validate_optional_source_evidence(source_evidence)?;
-                    continue;
-                }
-                if let BackgroundDependencyRuleConfig::Redis {
-                    key_templates,
-                    arguments,
-                    key_sequence,
-                    script,
-                    ..
-                } = rule
-                {
-                    anyhow::ensure!(
-                        key_templates.is_empty()
-                            && arguments.is_empty()
-                            && key_sequence.is_empty()
-                            && script.is_none(),
-                        "key_templates and arguments require trigger_source"
-                    );
-                }
-                match command.as_str() {
-                    "ZCOUNT" => {
-                        if !keys.is_empty()
-                            || !key_patterns.is_empty()
-                            || initial_load_timeout_ms.is_some()
-                            || !fields.is_empty()
-                        {
-                            bail!(
-                                "Redis ZCOUNT process-owned dependency rule {name:?} must use key_prefix/key_suffix without keys or initial_load_timeout_ms"
-                            );
-                        }
-                        validate_single_line(
-                            "Redis process-owned dependency key prefix",
-                            key_prefix,
-                            512,
-                        )?;
-                        validate_single_line(
-                            "Redis process-owned dependency key suffix",
-                            key_suffix,
-                            512,
-                        )?;
-                    }
-                    "GET" | "SCARD" | "HGETALL" => {
-                        if !key_patterns.is_empty()
-                            || !key_prefix.is_empty()
-                            || !key_suffix.is_empty()
-                            || !fields.is_empty()
-                        {
-                            bail!(
-                                "Redis {command} process-owned dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
-                            );
-                        }
-                        validate_exact_redis_keys(name, command, keys)?;
-                        if *initial_load_timeout_ms == Some(0) {
-                            bail!(
-                                "Redis {command} process-owned dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
-                            );
-                        }
-                    }
-                    "HGET" | "HMGET" | "HSCAN" => {
-                        if !key_prefix.is_empty() || !key_suffix.is_empty() {
-                            bail!(
-                                "Redis {command} process-owned dependency rule {name:?} must use keys/key_patterns instead of key_prefix/key_suffix"
-                            );
-                        }
-                        if *initial_load_timeout_ms == Some(0)
-                            || initial_load_timeout_ms.is_some()
-                                && (keys.is_empty() || !key_patterns.is_empty())
-                        {
-                            bail!(
-                                "Redis {command} process-owned dependency rule {name:?} initial_load_timeout_ms requires a positive timeout and exact initial-load keys"
-                            );
-                        }
-                        validate_redis_key_selectors(name, command, keys, key_patterns)?;
-                        if command == "HSCAN" {
-                            if !fields.is_empty() {
-                                bail!(
-                                    "Redis HSCAN process-owned dependency rule {name:?} must not use fields"
-                                );
-                            }
-                        } else {
-                            validate_redis_hash_fields(name, command, fields)?;
-                        }
-                    }
-                    _ => bail!(
-                        "Redis process-owned dependency rule {name:?} currently supports only commands \"ZCOUNT\", \"GET\", \"SCARD\", \"HGETALL\", \"HGET\", \"HMGET\", and \"HSCAN\""
-                    ),
-                }
-                if !source_revision.is_empty() {
-                    validate_source_revision(source_revision)?;
-                }
-                validate_optional_source_evidence(source_evidence)?;
-            }
+            BackgroundDependencyRuleConfig::Redis { .. } => redis::validate(rule)?,
             BackgroundDependencyRuleConfig::Motan {
                 group,
                 interface_name,
@@ -422,6 +337,12 @@ fn rules_overlap(
     }
 
     match (left, right) {
+        (
+            BackgroundDependencyRuleConfig::RedisPubsub { selector: left, .. },
+            BackgroundDependencyRuleConfig::RedisPubsub {
+                selector: right, ..
+            },
+        ) => left == right,
         (
             BackgroundDependencyRuleConfig::Mysql { selector: left, .. },
             BackgroundDependencyRuleConfig::Mysql {
@@ -814,6 +735,7 @@ pub(crate) fn redis_rule_matches(
     };
     ports.contains(&target_port)
         && expected_command.eq_ignore_ascii_case(command)
+        && (!expected_command.eq_ignore_ascii_case("SET") || args.len() >= 2)
         && key_matches
         && (fields.is_empty()
             || args[1..]

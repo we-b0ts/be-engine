@@ -72,10 +72,29 @@ impl RequestContracts {
             if !source.stored {
                 continue;
             }
-            let Some(before) = source.payload.and_then(crate::json_value::parse) else {
+            let (Some(source_payload), Some(target_payload)) = (source.payload, target.payload)
+            else {
                 continue;
             };
-            let Some(after) = target.payload.and_then(crate::json_value::parse) else {
+            let (before, after) = if let Some(before) = crate::json_value::parse(source_payload) {
+                let after = crate::json_value::parse(target_payload)
+                    .context("Redis temporal write Target changed JSON encoding")?;
+                (before, after)
+            } else if self
+                .redis_policy()
+                .map(|policy| policy.field(source.key))
+                .transpose()?
+                .flatten()
+                .is_none()
+                && let Some(scalar) = crate::value_contract::redis_scalar::decode_automatic(
+                    source_payload,
+                    global,
+                    clocks,
+                )?
+            {
+                let after = scalar.target(target_payload)?;
+                (scalar.logical, after)
+            } else {
                 continue;
             };
             let source_position = super::time_copies::redis_time_position(
@@ -128,7 +147,16 @@ impl RequestContracts {
         if !self.has_time_copies(context.case) {
             return Ok(Vec::new());
         }
-        let Some(logical) = source.payload.and_then(crate::json_value::parse) else {
+        let Some(payload) = source.payload else {
+            return Ok(Vec::new());
+        };
+        let logical = if let Some(logical) = crate::json_value::parse(payload) {
+            logical
+        } else if let Some(scalar) =
+            crate::value_contract::redis_scalar::decode_automatic(payload, global, clocks)?
+        {
+            scalar.logical
+        } else {
             return Ok(Vec::new());
         };
         let source_position = super::time_copies::redis_time_position(
@@ -152,7 +180,7 @@ impl RequestContracts {
                 &leaf.pattern,
                 &leaf.pattern,
                 &leaf.value,
-                crate::policy::GLOBAL_JSON_ID,
+                leaf.rule_id,
             )
             .map(|lookup| lookup.at(&leaf.pointer, &leaf.pointer)) else {
                 continue;

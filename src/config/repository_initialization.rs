@@ -775,7 +775,8 @@ mod tests {
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
         assert!(project.contains("version: 18"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.target"));
-        assert!(project.contains("success_status: 200"));
+        let effective = crate::AppConfig::load(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
+        assert_eq!(effective.http_gateway.ready.success_status, 200);
         assert!(!project.contains("http_host:"));
         assert!(!project.contains("motan_port:"));
         assert!(project.contains("runtime_root: local/runtime"));

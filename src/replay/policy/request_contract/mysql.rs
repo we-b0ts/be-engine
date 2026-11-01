@@ -12,12 +12,38 @@ impl RequestContracts {
         identity: &ReplaySessionIdentity,
         record: &RecordedMysqlExchange,
     ) -> bool {
+        self.has_mysql_formats_in_scope(identity, record, false)
+    }
+
+    pub(in crate::replay) fn has_authored_mysql_formats(
+        &self,
+        identity: &ReplaySessionIdentity,
+        record: &RecordedMysqlExchange,
+    ) -> bool {
+        self.has_mysql_formats_in_scope(identity, record, true)
+    }
+
+    fn has_mysql_formats_in_scope(
+        &self,
+        identity: &ReplaySessionIdentity,
+        record: &RecordedMysqlExchange,
+        authored_only: bool,
+    ) -> bool {
         let Some(policy) = self
             .compiled_rules()
             .filter(|policy| policy.global_json.is_some() || policy.mysql.is_some())
         else {
             return false;
         };
+        if authored_only
+            && policy.mysql.is_none()
+            && policy
+                .global_json
+                .as_ref()
+                .is_none_or(|plan| plan.fields.is_empty())
+        {
+            return false;
+        }
         let Ok(tokens) = super::super::matcher::mysql_values::materialized(
             record.sql.as_deref(),
             record.params.as_deref(),
@@ -41,9 +67,12 @@ impl RequestContracts {
             None,
         );
         // A malformed declared field must still reach normal validation.
-        context
-            .selects_values(&tokens, record.database.as_deref(), clocks)
-            .unwrap_or(true)
+        if authored_only {
+            context.selects_authored_values(&tokens, record.database.as_deref(), clocks)
+        } else {
+            context.selects_values(&tokens, record.database.as_deref(), clocks)
+        }
+        .unwrap_or(true)
     }
     /// PREPARE can prove SQL shape; runtime execution retains all value checks.
     pub(in crate::replay) fn mysql_fields_metadata_matches(

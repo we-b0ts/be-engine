@@ -78,7 +78,8 @@ impl ReplayRuntime {
         let mut http_exchanges = Vec::new();
         let mut http_events = http::HttpReplayEvents::default();
         let mut http_blackholes = Vec::new();
-        let mut redis = redis::RedisReplayState::default();
+        let mut redis =
+            redis::RedisReplayState::with_run_value_scopes(attribution.run_value_scopes);
         let mut memcached = memcached::MemcachedReplayState::default();
         let mut kafka = kafka::KafkaReplayState::default();
         let mut motan = motan::MotanReplayState::default();
@@ -134,6 +135,9 @@ impl ReplayRuntime {
                 reader.clone(),
             )
             .await?;
+        }
+        if let Some(path) = attribution.unattributed {
+            global::load_unattributed_notifications(&path, &mut redis, reader.clone()).await?;
         }
         // Source-owned Global slots are stable across selected APIs. Later
         // Case-derived Global aliases remain small session-specific evidence.

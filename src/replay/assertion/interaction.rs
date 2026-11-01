@@ -54,11 +54,13 @@ use crate::interaction::model::{
     MessageKind, OutputObservation, Protocol, TRANSCRIPT_VERSION, WireMessage,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compare(
     expected: Option<&OutputObservation>,
     actual: Option<&OutputObservation>,
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
+    request_times: super::RequestTimes,
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     report: &mut ResponseAssertionCaseReport,
     ack_context: Option<&AckContext>,
@@ -68,6 +70,7 @@ pub(super) fn compare(
         actual,
         global,
         times,
+        request_times,
         copies,
         ack_context,
     )?;
@@ -88,22 +91,26 @@ pub(crate) fn compare_outputs_global(
     actual: Option<&OutputObservation>,
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
+    request_times: super::RequestTimes,
 ) -> Result<Comparison> {
     compare_outputs_global_with_time_copies(
         expected,
         actual,
         global,
         times,
+        request_times,
         &Default::default(),
         None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compare_outputs_global_with_time_copies(
     expected: Option<&OutputObservation>,
     actual: Option<&OutputObservation>,
     global: Option<&crate::policy::CompiledJsonPolicy>,
     times: super::RequestTimes,
+    request_times: super::RequestTimes,
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     ack_context: Option<&AckContext>,
 ) -> Result<Comparison> {
@@ -166,14 +173,20 @@ fn compare_outputs_global_with_time_copies(
         let actual_index = alignment[index];
         let actual = &actual_events[actual_index];
         let pointer = format!("$interaction/events/{index}");
+        let observed = super::RequestTimes {
+            source: source_offsets
+                .get(index)
+                .and_then(|offset| event_clock(times.source, *offset)),
+            target: target_offsets
+                .get(actual_index)
+                .and_then(|offset| event_clock(times.target, *offset)),
+        };
+        let clocks =
+            crate::value_contract::json::AnchorClocks::for_response(request_times, observed);
         if sse && global.is_some() {
             let first_difference = report.differences.len();
-            let observed = super::RequestTimes {
-                source: event_clock(times.source, source_offsets[index]),
-                target: event_clock(times.target, target_offsets[actual_index]),
-            };
             let mut comparison = contracts::compare_message(
-                expected, actual, global, times, &pointer, copies, observed,
+                expected, actual, global, clocks, &pointer, copies, observed,
             );
             comparison.scope_schema_clocks(index);
             report.merge_and_validate(comparison);
@@ -187,7 +200,7 @@ fn compare_outputs_global_with_time_copies(
                 mismatch(&mut report, &pointer);
             }
             let adapted = if socketio {
-                socketio::compare_message(expected, actual, global, times, &pointer)?
+                socketio::compare_message(expected, actual, global, clocks, &pointer)?
             } else {
                 None
             };
@@ -199,11 +212,7 @@ fn compare_outputs_global_with_time_copies(
                     &actual.decode()?,
                     global,
                     &[],
-                    crate::value_contract::json::AnchorClocks {
-                        case: times,
-                        dependency: times,
-                        ..Default::default()
-                    },
+                    clocks,
                 )?;
                 for difference in &mut comparison.differences {
                     difference.pointer = format!("{pointer}/data{}", difference.pointer);

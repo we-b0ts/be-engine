@@ -54,6 +54,7 @@ fn mysql(actual: &str, parameters: Option<Vec<MysqlValue>>) -> RecorderEvent {
         id: Uuid::new_v4(),
         connection_id: Uuid::new_v4(),
         query_sequence: 1,
+        request_started_at: chrono::Utc::now(),
         timestamp: chrono::Utc::now(),
         client_addr: None,
         route_name: None,

@@ -69,12 +69,13 @@ async fn fragmented_sniff_waits_for_a_complete_command_without_consuming_it() {
 async fn delayed_http_client_is_still_routed_to_http_recorder() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempfile::tempdir().unwrap();
-    let mut config = crate::AppConfig::default();
+    let mut config: crate::AppConfig =
+        serde_yaml::from_str("capture: {dependencies: [http]}").unwrap();
+    config.artifacts = None;
     config.recording.output_dir = temp.path().join("recordings");
+    config.dns_mock.registry_path = temp.path().join("fake_dns_registry.json");
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
-    config.tcp_gateway.record_http = true;
-    config.tcp_gateway.protocol_detection.enabled = true;
     let state = crate::AppState::new(config).await.unwrap();
 
     let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -173,13 +174,13 @@ async fn delayed_http_client_is_still_routed_to_http_recorder() {
 async fn delayed_tls_client_is_still_routed_to_https_mitm() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempfile::tempdir().unwrap();
-    let mut config = crate::AppConfig::default();
+    let mut config: crate::AppConfig =
+        serde_yaml::from_str("capture: {dependencies: [http]}").unwrap();
+    config.artifacts = None;
     config.recording.output_dir = temp.path().join("recordings");
+    config.dns_mock.registry_path = temp.path().join("fake_dns_registry.json");
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
-    config.tcp_gateway.record_http = true;
-    config.tcp_gateway.mitm_https = true;
-    config.tcp_gateway.protocol_detection.enabled = true;
     let state = crate::AppState::new(config).await.unwrap();
 
     let upstream_config = state.ca().server_config_for_host("example.test").unwrap();

@@ -3,12 +3,13 @@ use chrono::{DateTime, Utc};
 use crate::memcached::MemcachedWireProtocol;
 
 const MAX_RELATIVE_EXPIRATION_SECONDS: u64 = 60 * 60 * 24 * 30;
-const ABSOLUTE_EXPIRATION_TOLERANCE_SECONDS: u128 = 5;
+const ABSOLUTE_EXPIRATION_TOLERANCE_SECONDS: u64 =
+    crate::value_contract::time::DEFAULT_TOLERANCE.as_secs();
 
 pub(super) struct ArgumentSnapshot<'a> {
     pub(super) args: &'a [Vec<u8>],
     pub(super) extras: Option<&'a [u8]>,
-    pub(super) observed_at: DateTime<Utc>,
+    pub(super) observed_at: Option<DateTime<Utc>>,
 }
 
 pub(super) fn arguments_match(
@@ -57,7 +58,10 @@ fn text_arguments_match(
     let Some(b) = parse_text_expiration(&actual.args[index]) else {
         return false;
     };
-    expiration_matches(a, b, recorded.observed_at, actual.observed_at)
+    recorded
+        .observed_at
+        .zip(actual.observed_at)
+        .is_some_and(|(source, target)| expiration_matches(a, b, source, target))
 }
 
 fn binary_arguments_match(
@@ -95,12 +99,12 @@ fn binary_arguments_match(
     if arithmetic && (a == u32::MAX || b == u32::MAX) {
         return false;
     }
-    expiration_matches(
-        u64::from(a),
-        u64::from(b),
-        recorded.observed_at,
-        actual.observed_at,
-    )
+    recorded
+        .observed_at
+        .zip(actual.observed_at)
+        .is_some_and(|(source, target)| {
+            expiration_matches(u64::from(a), u64::from(b), source, target)
+        })
 }
 
 fn parse_text_expiration(value: &[u8]) -> Option<u64> {
@@ -125,7 +129,7 @@ fn expiration_matches(
     }
     let recorded_ttl = i128::from(recorded) - i128::from(recorded_at.timestamp());
     let actual_ttl = i128::from(actual) - i128::from(actual_at.timestamp());
-    recorded_ttl.abs_diff(actual_ttl) <= ABSOLUTE_EXPIRATION_TOLERANCE_SECONDS
+    recorded_ttl.abs_diff(actual_ttl) <= u128::from(ABSOLUTE_EXPIRATION_TOLERANCE_SECONDS)
 }
 
 #[cfg(test)]
@@ -164,12 +168,12 @@ mod tests {
             ArgumentSnapshot {
                 args: recorded.0,
                 extras: recorded.1,
-                observed_at: recorded.2,
+                observed_at: Some(recorded.2),
             },
             ArgumentSnapshot {
                 args: actual.0,
                 extras: actual.1,
-                observed_at: actual.2,
+                observed_at: Some(actual.2),
             },
         )
     }

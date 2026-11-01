@@ -1,7 +1,9 @@
 //! WebSocket upgrade and a bidirectional, message-preserving recording pump.
 mod closing;
 mod disconnect;
+mod disconnect_read;
 mod failure;
+mod upstream;
 
 use super::{
     SessionRef,
@@ -157,8 +159,9 @@ pub(super) async fn dispatch(
             let (downstream, upstream) = tokio::try_join!(downstream, upstream)?;
             let limit = session.state.config().http_gateway.interaction.max_message_bytes;
             let socket_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default().max_message_size(Some(limit)).max_frame_size(Some(limit));
-            let mut downstream = WebSocketStream::from_raw_socket(TokioIo::new(downstream), Role::Server, Some(socket_config)).await;
-            let mut upstream = WebSocketStream::from_raw_socket(TokioIo::new(upstream), Role::Client, Some(socket_config)).await;
+            let (downstream, client_transport) = crate::interaction::websocket_transport::FramedTransport::new(TokioIo::new(downstream), true);
+            let mut downstream = WebSocketStream::from_raw_socket(downstream, Role::Server, Some(socket_config)).await;
+            let (mut upstream, upstream_control) = upstream::upgrade(upstream, socket_config).await?;
             loop {
                 tokio::select! {
                     message = downstream.next() => {
@@ -167,7 +170,7 @@ pub(super) async fn dispatch(
                             Some(Ok(message)) => message,
                             Some(Err(error)) if failure::client_lost(&error) => {
                                 phase = "client_disconnect_cleanup";
-                                disconnect::cleanup(&session, &mut upstream, &error.into()).await?;
+                                disconnect::observed(&session, &mut upstream, &upstream_control, &client_transport, &error.into()).await?;
                                 break;
                             }
                             Some(Err(error)) => return Err(error.into()),
@@ -215,10 +218,22 @@ pub(super) async fn dispatch(
                         observe(&session, &message, false)?;
                         let close = matches!(message, Message::Close(_));
                         phase = "downstream_send";
-                        downstream.send(message).await?;
+                        if let Err(error) = downstream.send(message).await {
+                            if !failure::client_lost(&error) { return Err(error.into()); }
+                            phase = "client_disconnect_read";
+                            let timeout_ms = session.observation.lock().expect("interaction observation poisoned").policy().cleanup_timeout_ms;
+                            let read_error = disconnect_read::after_write_failure(
+                                &mut downstream, &client_transport, &mut closing,
+                                std::time::Duration::from_millis(timeout_ms),
+                            ).await?;
+                            phase = "client_disconnect_cleanup";
+                            disconnect::observed(&session, &mut upstream, &upstream_control, &client_transport, &read_error.into()).await?;
+                            break;
+                        }
                         if close { session.request_close(EndReason::ServerEof); break; }
                     }
                     _ = closing.changed() => {
+                        client_transport.begin_cleanup();
                         let frame = Some(CloseFrame { code: CloseCode::Normal, reason: "recording case complete".into() });
                         phase = "close_prepare";
                         let completion = closing::ApplicationClose::prepare(&session).await?;

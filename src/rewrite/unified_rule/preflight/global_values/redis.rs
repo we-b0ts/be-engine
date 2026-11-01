@@ -2,7 +2,7 @@
 //! authenticated read-copy facts. Native key relations remain Replay obligations.
 use super::*;
 use crate::policy::native::{NativeKeyContract, NativeKeySelector};
-use crate::value_codec::{CodecPlan, DecodedValue};
+use crate::value_codec::CodecPlan;
 use crate::value_contract::time_copies::{TimeCopyLookup, TimeCopyPosition};
 mod script_times;
 
@@ -43,7 +43,16 @@ pub(super) fn compare(
             "global JSON Redis publish channel/arity changed"
         );
         return if let Some(plan) = &context.policy.global_json {
-            global::compare(&source_args[1], &target_args[1], plan, &[], clocks)
+            if let Some(source) = crate::value_contract::redis_scalar::decode_automatic(
+                &source_args[1],
+                plan,
+                clocks,
+            )? {
+                let target = source.target(&target_args[1])?;
+                global::compare_logical_with_verified(&source.logical, &target, plan, clocks, &[])
+            } else {
+                compare_bytes(&source_args[1], &target_args[1], plan, clocks)
+            }
         } else {
             ensure!(
                 source_args[1] == target_args[1],
@@ -71,6 +80,7 @@ pub(super) fn compare(
     } else {
         (BTreeSet::new(), Comparison::default())
     };
+    let native_time_arguments = allowed.clone();
     let mut key_obligations = BTreeSet::new();
     for (index, (before, after)) in before.iter().zip(&after).enumerate() {
         ensure!(
@@ -105,6 +115,19 @@ pub(super) fn compare(
         }
         match (before.payload, after.payload) {
             (Some(source), Some(target)) => {
+                if before
+                    .argument
+                    .is_some_and(|argument| native_time_arguments.contains(&argument))
+                {
+                    let coverage = compare_value(event, before, before, source, source, context)?;
+                    if coverage.passed() && coverage.evaluated.is_empty() {
+                        // The native script contract already owns this whole
+                        // scalar. Requiring an absent JSON field here would
+                        // revoke that proven permission while adding another
+                        // payload field. Explicit global formats still compare.
+                        continue;
+                    }
+                }
                 let mut checked = compare_value(event, before, after, source, target, context)?;
                 if !checked.evaluated.is_empty() {
                     allowed.extend(before.argument);
@@ -158,13 +181,7 @@ fn compare_value(
             && crate::json_value::parse(source).is_some()
             && plan.fields.contains_key("")
         {
-            comparison.merge_and_validate(global::compare(
-                source,
-                target,
-                plan,
-                &[],
-                context.clocks,
-            )?);
+            comparison.merge_and_validate(compare_bytes(source, target, plan, context.clocks)?);
         }
         return Ok(comparison);
     }
@@ -178,12 +195,62 @@ fn compare_value(
         .compile()?;
         &fallback
     };
+    if let Some(scalar) =
+        crate::value_contract::redis_scalar::decode_automatic(source, plan, context.clocks)?
+    {
+        let actual = scalar.target(target)?;
+        let copies = if let Some((store, case)) = context.copies {
+            let resource = observed_resource(event)?;
+            let database = event["database"]
+                .as_i64()
+                .context("Redis copy lacks observed database")?;
+            proofs(
+                store,
+                case,
+                crate::replay::redis_time_position(
+                    &resource.endpoint.host,
+                    resource.endpoint.port,
+                    database,
+                    before,
+                ),
+                crate::replay::redis_time_position(
+                    &resource.endpoint.host,
+                    resource.endpoint.port,
+                    database,
+                    after,
+                ),
+                &scalar.logical,
+                plan,
+                context.clocks,
+            )?
+        } else {
+            vec![]
+        };
+        return if source == target {
+            global::compare_logical_with_verified(
+                &scalar.logical,
+                &actual,
+                plan,
+                context.clocks,
+                &[],
+            )
+        } else {
+            global::compare_logical_with_time_copies(
+                &scalar.logical,
+                &actual,
+                plan,
+                &[],
+                context.clocks,
+                &copies,
+            )
+        };
+    }
     let Some((store, case)) = context.copies else {
-        return global::compare(source, target, plan, &[], context.clocks);
+        return compare_bytes(source, target, plan, context.clocks);
     };
     let codec = CodecPlan::compile(&crate::policy::Codec::Json)?;
     let Ok(expected) = codec.decode(source) else {
-        return global::compare(source, target, plan, &[], context.clocks);
+        return compare_bytes(source, target, plan, context.clocks);
     };
     let actual = codec
         .decode(target)
@@ -209,11 +276,22 @@ fn compare_value(
         case,
         source_position,
         target_position,
-        &expected,
+        &expected.logical,
         plan,
         context.clocks,
     )?;
-    global::compare_decoded_with_time_copies(&expected, &actual, plan, &[], context.clocks, &proofs)
+    if source == target {
+        global::compare_decoded_source_coverage(&expected, plan, &[], context.clocks)
+    } else {
+        global::compare_decoded_with_time_copies(
+            &expected,
+            &actual,
+            plan,
+            &[],
+            context.clocks,
+            &proofs,
+        )
+    }
 }
 
 fn compare_scalar(
@@ -225,19 +303,15 @@ fn compare_scalar(
     field: &crate::policy::GlobalField,
     context: &CompareContext<'_>,
 ) -> Result<Comparison> {
+    let settings = &context
+        .policy
+        .global_json
+        .as_ref()
+        .context("compiled time settings unavailable")?
+        .time;
     let mut proofs = Vec::new();
     if let Some((store, case)) = context.copies
         && let Some(scalar) = crate::value_contract::redis_scalar::decode_field(source, field)?
-        && let Some(time) = field
-            .select_contract_with_clock(
-                &scalar.logical,
-                context
-                    .clocks
-                    .dependency
-                    .source
-                    .or(context.clocks.case.source),
-            )?
-            .time()
     {
         let resource = observed_resource(event)?;
         let database = event["database"]
@@ -255,20 +329,39 @@ fn compare_scalar(
             database,
             after,
         );
-        if let Some(lookup) = TimeCopyLookup::new_time(
-            &time,
-            source_position,
-            target_position,
-            "",
-            "",
-            &scalar.logical,
-            "global.redis",
-        ) && let Some(proof) = store.proof_prepared(case, &lookup.at("", ""))
+        for selected in crate::value_contract::redis_scalar::plan(field, settings)
+            .selected_fields_with_clocks(&scalar.logical, context.clocks)?
         {
-            proofs.push(proof);
+            let Some(time) = selected.contract.time() else {
+                continue;
+            };
+            let rule_id = if selected.rule_id == crate::policy::GLOBAL_JSON_ID {
+                crate::policy::GLOBAL_REDIS_ID
+            } else {
+                selected.rule_id
+            };
+            if let Some(lookup) = TimeCopyLookup::new_time(
+                &time,
+                source_position,
+                target_position,
+                "",
+                "",
+                &scalar.logical,
+                rule_id,
+            ) && let Some(proof) = store.proof_prepared(case, &lookup.at("", ""))
+            {
+                proofs.push(proof);
+            }
         }
     }
-    crate::value_contract::redis_scalar::compare(source, target, field, context.clocks, &proofs)
+    crate::value_contract::redis_scalar::compare(
+        source,
+        target,
+        field,
+        settings,
+        context.clocks,
+        &proofs,
+    )
 }
 
 fn proofs(
@@ -276,12 +369,12 @@ fn proofs(
     case: &str,
     source: TimeCopyPosition<'_>,
     target: TimeCopyPosition<'_>,
-    decoded: &DecodedValue,
+    logical: &Value,
     plan: &crate::policy::CompiledJsonPolicy,
     clocks: AnchorClocks,
 ) -> Result<Vec<crate::value_contract::json::VerifiedTimeCopy>> {
     Ok(
-        crate::value_contract::time_copies::global_leaves(&decoded.logical, plan, clocks)?
+        crate::value_contract::time_copies::global_leaves(logical, plan, clocks)?
             .into_iter()
             .filter_map(|leaf| {
                 let lookup = TimeCopyLookup::new_time(
@@ -291,7 +384,7 @@ fn proofs(
                     &leaf.pattern,
                     &leaf.pattern,
                     &leaf.value,
-                    GLOBAL_JSON_ID,
+                    leaf.rule_id,
                 )?;
                 store.proof_prepared(case, &lookup.at(&leaf.pointer, &leaf.pattern))
             })

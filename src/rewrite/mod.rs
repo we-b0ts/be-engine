@@ -36,7 +36,9 @@ pub use worker::runtime::{RewriteWorkerReportOptions, report as report_rewrite_w
 mod dependency_review;
 mod dependency_rule;
 mod verification_obligations;
-pub(crate) use dependency_review::dependency_attribution_overlay;
+pub(crate) use dependency_review::{
+    dependency_attribution_identity_for_source, freeze_dependency_attribution,
+};
 pub(crate) fn batch_execution_identity(root: &std::path::Path) -> anyhow::Result<String> {
     fingerprint::fresh_replay_identity(root)
 }
@@ -44,20 +46,19 @@ pub(crate) fn dependency_attribution_snapshot(
     root: &std::path::Path,
     run: &str,
 ) -> anyhow::Result<String> {
-    Ok(crate::policy_evidence::digest(&serde_json::to_vec(
-        &dependency_review::dependency_attribution_overlay(root, run)?,
-    )?))
+    dependency_review::dependency_attribution_identity(root, run)
 }
 pub use dependency_review::{
     AttributionCommandOptions, AttributionReviewContext, AttributionRuleBinding,
     AttributionSubmission, ClaimRejection, ForeignUnusedClaim, ForeignUnusedSubmission,
     InvestigationOutcome, InvestigationResolution, ProposedAttribution, TargetInvestigation,
-    TargetInvestigationSubmission, apply_dependency_attribution, claim_foreign_unused,
-    dependency_attribution_api_information, dependency_attribution_batch_information,
-    dependency_attribution_candidates, dependency_attribution_context,
-    dependency_attribution_hypotheses, dependency_attribution_rules,
-    dependency_attribution_source_information, dependency_attribution_target,
-    investigate_unmatched_dependency, retry_dependency_batch, verify_dependency_obligation,
+    TargetInvestigationResolutionSubmission, TargetInvestigationSubmission,
+    apply_dependency_attribution, claim_foreign_unused, dependency_attribution_api_information,
+    dependency_attribution_batch_information, dependency_attribution_candidates,
+    dependency_attribution_context, dependency_attribution_hypotheses,
+    dependency_attribution_rules, dependency_attribution_source_information,
+    dependency_attribution_target, investigate_unmatched_dependency, resolve_target_investigation,
+    retry_dependency_batch, verify_dependency_obligation,
 };
 pub use verification_obligations::{
     VerificationImpact, VerificationRequirement, VerificationScope,
@@ -304,12 +305,12 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
         "this plan uses a retired rule format; run `backend-rewrite rule recover {plan_id}`, obtain fresh evidence and use `rule plan --file <rule.yaml> --evidence <id>`"
     );
     let apply_intent = if unified {
-        let batch = inventory::scoped(&state, Some(&api.parse()?))?
+        let api_confirmation_required = inventory::scoped(&state, Some(&api.parse()?))?
             .rule_plan
             .as_ref()
             .and_then(|plan| plan.unified.as_ref())
-            .is_some_and(|plan| plan.is_batch());
-        if !batch {
+            .is_some_and(|plan| plan.requires_api_confirmation());
+        if api_confirmation_required {
             worker::ensure_api_confirmed(&state, &api, "applying a unified traffic rule")?;
         }
         let intent = inventory::with_slice_mut(&mut state, &api, |slice| {

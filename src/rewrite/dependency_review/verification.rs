@@ -22,18 +22,35 @@ pub(super) fn actual(
     state: &RewriteState,
     source: &source::SourceSnapshot,
 ) -> Result<ActualAttempt> {
+    ensure!(
+        state
+            .attempts
+            .last()
+            .is_some_and(|attempt| attempt.engine_fingerprint.as_deref()
+                == Some(crate::build_info::ENGINE_FINGERPRINT)),
+        "attribution acceptance requires an actual attempt from the current engine build"
+    );
+    ensure!(
+        state
+            .attempts
+            .last()
+            .is_some_and(super::super::replay_admission::dependency_only),
+        "unused attribution acceptance requires passing responses and complete actual Replay with dependency-only failures"
+    );
+    claim_actual(root, state, source)
+}
+
+/// Reporting disputed ownership requires real unused evidence, not a passing
+/// response or an implementer's proof of who actually owns the occurrence.
+pub(super) fn claim_actual(
+    root: &Path,
+    state: &RewriteState,
+    source: &source::SourceSnapshot,
+) -> Result<ActualAttempt> {
     let attempt = state
         .attempts
         .last()
         .context("API has no real Replay attempt")?;
-    ensure!(
-        attempt.engine_fingerprint.as_deref() == Some(crate::build_info::ENGINE_FINGERPRINT),
-        "attribution acceptance requires an actual attempt from the current engine build"
-    );
-    ensure!(
-        super::super::replay_admission::dependency_only(attempt),
-        "unused attribution requires passing responses and complete actual Replay with dependency-only failures"
-    );
     let execution_identity = super::super::fingerprint::replay_identity(root)?;
     ensure!(
         state.replay_identity.as_deref() == Some(&execution_identity),
@@ -407,9 +424,8 @@ pub(super) fn verify_obligation(root: &Path, state: &mut RewriteState, id: &str)
             "new recording has no complete origin input"
         );
     } else {
-        let overlay =
-            crate::rewrite::dependency_attribution_overlay(root, &state.recording_run_id)?;
-        let snapshot = source::digest(&serde_json::to_vec(&overlay)?);
+        let snapshot =
+            crate::rewrite::dependency_attribution_snapshot(root, &state.recording_run_id)?;
         ensure!(
             report["dependency_attribution_snapshot"].as_str() == Some(&snapshot),
             "origin Replay did not execute the current frozen attribution scope"

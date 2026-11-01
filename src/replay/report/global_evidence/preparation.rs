@@ -115,7 +115,11 @@ pub(crate) async fn prewarm(
             );
             let source_sha256 = if crate::dependency_index::recording::root(&source).is_some() {
                 let (_, manifest) = crate::dependency_index::recording::manifest(&source)?;
-                let empty_snapshot = Some(crate::policy_evidence::digest(b"[]"));
+                // Use the same sealed-run identity as Replay, without consulting
+                // a Target workflow or importing a later attribution overlay.
+                let (_, empty_snapshot) =
+                    crate::rewrite::freeze_dependency_attribution(None, &run, &manifest.run_id)?;
+                let empty_snapshot = Some(empty_snapshot);
                 crate::policy_evidence::digest(&serde_json::to_vec(&(
                     manifest.files,
                     empty_snapshot,

@@ -6,11 +6,16 @@ use crate::interaction::model::{
 use crate::interaction::policy::InteractionPolicy;
 use std::time::Duration;
 mod active;
+mod ambient;
 mod delivery;
 mod encryption;
 mod guards;
+mod heartbeats;
+mod observations;
 mod recording;
 mod routing;
+mod scale;
+mod transport_end;
 mod wire;
 
 const CASE: &str = "00000000-0000-0000-0000-000000000123";

@@ -26,31 +26,58 @@ enum Shape {
 }
 
 pub(crate) fn expand_rule(value: &mut Value, revision: Option<&str>) -> Result<()> {
-    Walker {
-        revision,
-        compact: false,
-        require_proof: false,
-    }
-    .rule(value)
+    rule_with_revision(value, revision, false, false)
 }
 pub(super) fn compact_rule(value: &mut Value, revision: Option<&str>) -> Result<()> {
-    Walker {
-        revision,
-        compact: true,
-        require_proof: false,
-    }
-    .rule(value)
+    rule_with_revision(value, revision, true, false)
 }
 
 /// Source evidence belongs to a plan proposal, independently of the runtime
 /// policy produced by rendering that proposal.
 pub(crate) fn require_source_proof(value: &mut Value, revision: Option<&str>) -> Result<()> {
+    rule_with_revision(value, revision, false, true)
+}
+
+fn rule_with_revision(
+    value: &mut Value,
+    revision: Option<&str>,
+    compact: bool,
+    require_proof: bool,
+) -> Result<()> {
+    // Independent task selectors survive Source upgrades. Evidence keeps its
+    // own revision, which also defaults nested proofs within this owner.
+    let independent = value.get("effect").is_some_and(|effect| {
+        effect.get("kind").and_then(Value::as_str) == Some("process_owned")
+            && effect.get("origin").is_none_or(Value::is_null)
+            && effect.get("task_name").and_then(Value::as_str).is_some()
+    });
+    let local = if independent {
+        let own = value
+            .get("proof")
+            .and_then(|proof| proof.get("source"))
+            .map(|source| crate::policy::proof::deserialize_source(source.clone()))
+            .transpose()?;
+        own.as_deref()
+            .and_then(|source| source.rsplit_once(" @ "))
+            .map(|(_, revision)| revision.to_owned())
+            .or_else(|| {
+                value
+                    .get("effect")
+                    .and_then(|effect| effect.get("source_revision"))
+                    .and_then(Value::as_str)
+                    .filter(|revision| !revision.is_empty())
+                    .map(str::to_owned)
+            })
+    } else {
+        None
+    };
     Walker {
-        revision,
-        compact: false,
-        require_proof: true,
+        revision: local.as_deref().or(revision),
+        compact,
+        require_proof,
     }
-    .rule(value)
+    .rule(value)?;
+    Ok(())
 }
 
 struct Walker<'a> {
@@ -241,7 +268,13 @@ impl Walker<'_> {
                 self.one(map, "contract", Shape::CaptureResponse, false, parent, 0)?
             }
             "process_owned" => {
-                proof::source_effect(map, self.revision, self.compact)?;
+                if map.get("origin").is_none_or(Value::is_null)
+                    && map.get("task_name").and_then(Value::as_str).is_some()
+                {
+                    map.remove("source_revision");
+                } else {
+                    proof::source_effect(map, self.revision, self.compact)?;
+                }
                 self.one(map, "selector", Shape::ProcessSelector, false, parent, 0)?;
                 self.one(map, "origin", Shape::Origin, true, parent, 0)?;
             }

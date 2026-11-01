@@ -50,17 +50,25 @@ pub(super) fn prepare(
             }
             Ok(())
         };
-    if let Some(source) = crate::json_value::parse(source) {
-        let target =
-            crate::json_value::parse(target).context("delivered HTTP JSON changed encoding")?;
-        observe(&source, &target, "")?;
-    } else if let Ok(source) = crate::value_codec::sse::Document::decode(source) {
-        let target = crate::value_codec::sse::Document::decode(target)?;
+    if let Some(logical) = crate::json_value::parse(source) {
+        let delivered = if source == target {
+            None
+        } else {
+            Some(crate::json_value::parse(target).context("delivered HTTP JSON changed encoding")?)
+        };
+        observe(&logical, delivered.as_ref().unwrap_or(&logical), "")?;
+    } else if let Ok(document) = crate::value_codec::sse::Document::decode(source) {
+        let delivered = if source == target {
+            None
+        } else {
+            Some(crate::value_codec::sse::Document::decode(target)?)
+        };
+        let delivered = delivered.as_ref().unwrap_or(&document);
         anyhow::ensure!(
-            source.events.len() == target.events.len(),
+            document.events.len() == delivered.events.len(),
             "HTTP stream time inventory changed"
         );
-        for (index, (source, target)) in source.events.iter().zip(&target.events).enumerate() {
+        for (index, (source, target)) in document.events.iter().zip(&delivered.events).enumerate() {
             if let Some(source) = crate::json_value::parse(source.data.as_bytes()) {
                 let target = crate::json_value::parse(target.data.as_bytes())
                     .context("delivered SSE JSON changed encoding")?;
@@ -81,6 +89,9 @@ pub(in crate::replay::http) fn commit(
     let Some(read) = exchange.time_copy_delivery.take() else {
         return Ok(());
     };
+    if read.records.is_empty() {
+        return Ok(());
+    }
     let owner = &policy
         .context("HTTP time provenance requires its policy")?
         .request_contracts;

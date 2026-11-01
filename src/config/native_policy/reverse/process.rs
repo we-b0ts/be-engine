@@ -3,6 +3,7 @@ use crate::policy::{Database, Endpoint, Protocol, Resource};
 
 pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
     let selector = match value {
+        B::RedisPubsub { selector, .. } => n::ProcessSelector::RedisPubsub(selector.clone()),
         B::Http {
             authorities,
             methods,
@@ -110,6 +111,9 @@ pub(super) fn rule(value: &B, proof: &Proof) -> Result<n::NativeRule> {
     };
     let revision = match value {
         B::Http {
+            source_revision, ..
+        }
+        | B::RedisPubsub {
             source_revision, ..
         }
         | B::Mysql {

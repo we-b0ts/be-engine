@@ -145,6 +145,14 @@ impl RequestContracts {
             return None;
         }
         let values = redis_field_values(command, args, Some(response)).ok()?;
+        let mut clocks = self.contract_clocks(
+            Some(source_case),
+            source_started,
+            actual_started,
+            observed,
+            None,
+        );
+        clocks.case.target = self.request_times(case).target;
         if values.iter().all(|value| {
             value.payload.is_none_or(|payload| {
                 let scalar = self
@@ -153,21 +161,18 @@ impl RequestContracts {
                     .is_some()
                     && crate::value_contract::redis_scalar::decode(payload)
                         .is_ok_and(|value| value.is_some());
+                let automatic = self.global_json().is_some_and(|global| {
+                    crate::value_contract::redis_scalar::decode_automatic(payload, global, clocks)
+                        .is_ok_and(|value| value.is_some())
+                });
                 !scalar
+                    && !automatic
                     && (self.global_json().is_none() || crate::json_value::parse(payload).is_none())
             })
         }) {
             return None;
         }
         Some((|| {
-            let mut clocks = self.contract_clocks(
-                Some(source_case),
-                source_started,
-                actual_started,
-                observed,
-                None,
-            );
-            clocks.case.target = self.request_times(case).target;
             let target_values = redis_field_values(command, actual_args, Some(response))?;
             ensure!(
                 values.len() == target_values.len(),

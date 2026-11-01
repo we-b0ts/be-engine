@@ -74,6 +74,26 @@ async fn clean_native_interactions_retain_original_case_refs_without_a_sidecar()
 }
 
 #[tokio::test]
+async fn redis_protocol_observations_do_not_become_interaction_business_tails() {
+    let temp = tempfile::tempdir().unwrap();
+    let references = files(temp.path(), Protocol::SocketIo).await;
+    let path = temp.path().join("dependencies.jsonl");
+    let original = tokio::fs::read_to_string(&path).await.unwrap();
+    let control = json!({
+        "event_type":"redis_exchange", "command":"CLIENT",
+        "capture":{"semantic_required":false}
+    });
+    tokio::fs::write(&path, format!("{control}\n{original}"))
+        .await
+        .unwrap();
+    let tail = from_complete_source(temp.path(), Duration::from_secs(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tail.references, references);
+}
+
+#[tokio::test]
 async fn source_post_input_allowance_uses_offsets_without_reading_message_bodies() {
     let temp = tempfile::tempdir().unwrap();
     files(temp.path(), Protocol::SocketIo).await;
@@ -99,6 +119,45 @@ async fn source_post_input_allowance_uses_offsets_without_reading_message_bodies
             from_complete_source(temp.path(), Duration::from_millis(100))
                 .await
                 .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_client_transport_end_retains_its_finite_cleanup_inventory_and_allowance() {
+    for protocol in [Protocol::SocketIo, Protocol::WebSocket] {
+        let temp = tempfile::tempdir().unwrap();
+        let references = files(temp.path(), protocol).await;
+        let path = temp.path().join("request.json");
+        let mut request: Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        request["interaction"]["actions"] = json!([
+            {"offset_ms":10,"action":{"kind":"message","message":{"data":"unread"}}},
+            {"offset_ms":400,"action":{"kind":"transport_end","end":"reset"}}
+        ]);
+        tokio::fs::write(&path, request.to_string()).await.unwrap();
+        let path = temp.path().join("expected-response.json");
+        let mut response: Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        response["interaction"]["end"]["reason"] = "client_transport_end".into();
+        tokio::fs::write(&path, response.to_string()).await.unwrap();
+        let metadata = from_complete_source(temp.path(), Duration::from_millis(100))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(metadata.references, references);
+        assert_eq!(metadata.interaction_post_input_ms, Some(100));
+        assert_eq!(metadata.request_timeout_ms, 600);
+        // A bare normal-looking end reason cannot invent a terminating input.
+        request["interaction"]["actions"][1]["action"] = json!({"kind":"close"});
+        tokio::fs::write(temp.path().join("request.json"), request.to_string())
+            .await
+            .unwrap();
+        assert!(
+            from_complete_source(temp.path(), Duration::from_millis(100))
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 }

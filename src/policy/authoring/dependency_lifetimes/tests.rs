@@ -96,7 +96,7 @@ fn one_named_source_task_preserves_multiple_protocol_dependencies_and_mysql_alia
             panic!("process owner");
         };
         assert_eq!(effect.task_name.as_deref(), Some("refresh_background"));
-        assert_eq!(effect.source_revision, "source-v1");
+        assert!(effect.source_revision.is_empty());
         assert!(rule.proof().is_none());
     }
     let NativeEffect::ProcessOwned(effect) = &rules[2].as_native().unwrap().effect else {
@@ -148,6 +148,14 @@ fn process_http_simple_form_roundtrips_without_authorities_or_a_default_port() {
     );
     let rules =
         native(expand(None, Some(declaration), Some("source-v1"), &BTreeMap::new()).unwrap());
+    let legacy_identity = br#"["process_dependencies",{},{"kind":"process_owned","task_name":"refresh","source_revision":"","selector":{"protocol":"http","authorities":["keys.example.com"],"methods":["GET"],"path_prefixes":["/keys"]}}]"#;
+    assert_eq!(
+        rules[0].id(),
+        format!(
+            "dependency.process_dependencies.{:x}",
+            Sha256::digest(legacy_identity)
+        )
+    );
     let NativeEffect::ProcessOwned(effect) = &rules[0].as_native().unwrap().effect else {
         panic!("process")
     };
@@ -219,7 +227,7 @@ fn ids_exclude_evidence_and_revision_but_include_actual_task_and_resolved_resour
     else {
         panic!("process")
     };
-    assert_eq!(revision_effect.source_revision, "source-v2");
+    assert!(revision_effect.source_revision.is_empty());
     let fingerprints = |revision: &str| {
         let revision = format!("sha256:{:x}", Sha256::digest(revision.as_bytes()));
         crate::policy::parse_and_compile_policy(&format!(
@@ -228,7 +236,7 @@ fn ids_exclude_evidence_and_revision_but_include_actual_task_and_resolved_resour
         .unwrap()
         .fingerprints
     };
-    assert_ne!(fingerprints("source-v1"), fingerprints("source-v2"));
+    assert_eq!(fingerprints("source-v1"), fingerprints("source-v2"));
     let renamed: BTreeMap<_, _> = [("renamed".to_owned(), names["task_mysql"].clone())].into();
     let alias = native(
         expand(
@@ -284,7 +292,170 @@ fn strict_lifetime_shape_rejects_hidden_scopes_missing_hosts_and_semantic_duplic
     let declaration = processes(
         "tasks: {refresh: {requests: [{http: {host: api.example.com, method: GET, path: /keys}}]}}",
     );
-    assert!(expand(None, Some(declaration), None, &BTreeMap::new()).is_err());
+    assert!(expand(None, Some(declaration), None, &BTreeMap::new()).is_ok());
+}
+
+#[test]
+fn redis_commands_define_two_tasks_without_source_version_and_roundtrip_legacy_rules() {
+    let raw = r#"format: traffic-policy/v3
+process_dependencies:
+  tasks:
+    socketio_pubsub_receive_loop:
+      requests:
+      - redis:
+          resource: {protocol: redis, endpoint: cache.test:6379, database: 0, username: default}
+          operation: SUBSCRIBE
+          arguments: [socketio]
+    webserver_lifespan_shutdown:
+      requests:
+      - redis:
+          ports: [6379]
+          operation: SET
+          keys: [{kind: exact, value: 'wegent:shutdown_state'}]
+"#;
+    let policy = crate::policy::parse_policy(raw).unwrap();
+    let compiled = crate::policy::compile_policy(&policy).unwrap();
+    let projected = crate::config::native_policy::project_source_policy(&compiled.native).unwrap();
+    crate::config::process_owned_dependencies::validate(&projected.process_owned_dependencies)
+        .unwrap();
+    assert_eq!(compiled.native.len(), 2);
+    let text = crate::policy::render_policy(&policy).unwrap();
+    let rendered: Value = serde_yaml::from_str(&text).unwrap();
+    assert!(rendered.get("rules").is_none());
+    assert!(!text.contains("source_revision"));
+    assert!(!text.contains("redis_pubsub"));
+    assert_eq!(
+        rendered["process_dependencies"]["tasks"]
+            .as_mapping()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        rendered["process_dependencies"]["tasks"]["socketio_pubsub_receive_loop"]["requests"][0]["redis"]
+            ["arguments"][0],
+        "socketio"
+    );
+    assert_eq!(
+        crate::policy::parse_and_compile_policy(&text)
+            .unwrap()
+            .fingerprints,
+        compiled.fingerprints
+    );
+
+    // Re-render a legacy generated generic rule without changing IDs or selectors.
+    let old = format!("sha256:{}", "a".repeat(64));
+    let current = format!("sha256:{}", "b".repeat(64));
+    let mut legacy = serde_yaml::to_value(&policy).unwrap();
+    let mut rules = policy
+        .rules
+        .iter()
+        .map(|rule| serde_yaml::to_value(rule).unwrap())
+        .collect::<Vec<_>>();
+    for rule in &mut rules {
+        rule["effect"]["source_revision"] = current.clone().into();
+        rule["proof"] = serde_yaml::from_str(&format!("source: 'subscriber.py:run @ {current}'\nfact: 'Actual Source task owns this full command scope'\n")).unwrap();
+    }
+    legacy
+        .as_mapping_mut()
+        .unwrap()
+        .remove("process_dependencies");
+    legacy["source_revision"] = old.clone().into();
+    legacy["rules"] = rules.into();
+    let restored = crate::policy::parse_policy(&serde_yaml::to_string(&legacy).unwrap()).unwrap();
+    let rendered = crate::policy::render_policy(&restored).unwrap();
+    let value: Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(value["source_revision"], old);
+    assert!(value.get("rules").is_none());
+    assert!(!rendered.contains("redis_pubsub"));
+    assert_eq!(
+        crate::policy::compile_policy(&restored)
+            .unwrap()
+            .fingerprints,
+        compiled.fingerprints
+    );
+    assert_eq!(
+        crate::policy::parse_and_compile_policy(&rendered)
+            .unwrap()
+            .fingerprints,
+        compiled.fingerprints
+    );
+    assert_eq!(
+        restored
+            .rules
+            .iter()
+            .map(PolicyRule::id)
+            .collect::<Vec<_>>(),
+        policy.rules.iter().map(PolicyRule::id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn redis_subscription_commands_reject_unproven_or_nonexact_shapes() {
+    let raw = "format: traffic-policy/v3\nprocess_dependencies:\n  tasks:\n    reader:\n      requests:\n      - redis:\n          resource: {protocol: redis, endpoint: cache.test:6379, database: 0}\n          operation: SUBSCRIBE\n          arguments: [socketio]\n";
+    for invalid in [
+        raw.replace(", database: 0", ""),
+        raw.replace("protocol: redis", "protocol: mysql"),
+        raw.replace("arguments: [socketio]", "arguments: []"),
+        raw.replace("arguments: [socketio]", "arguments: [socketio, another]"),
+        raw.replace("arguments: [socketio]", "arguments: ['']"),
+        raw.replace("operation: SUBSCRIBE", "operation: PSUBSCRIBE"),
+        raw.replace("operation: SUBSCRIBE", "operation: PUBLISH"),
+        raw.replace(
+            "arguments: [socketio]",
+            "arguments: [socketio]\n          kind: message",
+        ),
+        raw.replace(
+            "    reader:",
+            "    reader:\n      source_revision: source-v1",
+        ),
+    ] {
+        assert!(
+            crate::policy::parse_and_compile_policy(&invalid).is_err(),
+            "{invalid}"
+        );
+    }
+    let shard =
+        crate::policy::parse_and_compile_policy(&raw.replace("SUBSCRIBE", "SSUBSCRIBE")).unwrap();
+    assert!(
+        matches!(&shard.native[0].rule.effect, NativeEffect::ProcessOwned(effect)
+        if matches!(&effect.selector, ProcessSelector::RedisPubsub(selector) if selector.kind == RedisPubsubKind::Smessage))
+    );
+}
+
+#[test]
+fn independent_task_proof_keeps_its_revision_and_rejects_conflicting_nested_evidence() {
+    let old = format!("sha256:{}", "a".repeat(64));
+    let current = format!("sha256:{}", "b".repeat(64));
+    let raw = format!(
+        r#"format: traffic-policy/v3
+source_revision: {old}
+process_dependencies:
+  tasks:
+    refresh:
+      requests:
+      - mysql:
+          selector: {{resource: task_mysql, sql: 'SELECT id FROM {{{{table}}}} WHERE state = ?', tables: [tasks]}}
+        proof: {{source: 'refresh.py:run @ {current}', fact: 'This Source task owns the complete request scope'}}
+resources:
+  task_mysql: {{protocol: mysql, endpoint: db.test:3306, database: tasks, username: worker}}
+"#
+    );
+    let policy = crate::policy::parse_policy(&raw).unwrap();
+    let NativeEffect::ProcessOwned(effect) = &policy.rules[0].as_native().unwrap().effect else {
+        panic!("process");
+    };
+    assert!(effect.source_revision.is_empty());
+    assert!(policy.rules[0].proof().unwrap().source.ends_with(&current));
+    crate::policy::compile_policy(&policy).unwrap();
+    // Independent MySQL tasks cannot acquire transaction-members permissions.
+    // A conflicting nested proof must be rejected by the proof owner before
+    // that separate runtime capability guard is even consulted.
+    let conflict = raw.replace("        proof:", &format!(
+        "          transaction_members:\n          - contract: {{resource: task_mysql, sql: 'SELECT id FROM {{{{table}}}} WHERE id = ?', tables: [tasks]}}\n            proof: {{source: 'nested.py:run @ {old}', fact: 'A conflicting Source revision'}}\n        proof:"
+    ));
+    let error = crate::policy::parse_policy(&conflict).unwrap_err();
+    assert!(format!("{error:#}").contains("proof Source revision conflicts"));
 }
 
 #[test]

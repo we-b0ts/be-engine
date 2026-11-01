@@ -1,11 +1,13 @@
-//! Lost clients retain failed evidence; only confirmed Source teardown can resume.
+//! Complete TCP terminal inputs publish; interrupted frames retain failed evidence.
 use super::*;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum End {
     Eof,
     Reset,
     PartialFrame,
+    PartialPayload,
+    UnfinishedFragment,
     InvalidFrame,
 }
 
@@ -57,6 +59,17 @@ async fn lost_client(address: SocketAddr, end: End) {
                 .unwrap();
             socket.get_mut().shutdown().await.unwrap();
         }
+        End::PartialPayload | End::UnfinishedFragment => {
+            // A masked data frame with an incomplete payload, or a complete
+            // non-FIN first fragment, must not become a replayable EOF input.
+            let bytes = if matches!(end, End::PartialPayload) {
+                vec![0x81, 0x82, 0, 0, 0, 0, b'x']
+            } else {
+                vec![0x01, 0x81, 0, 0, 0, 0, b'x']
+            };
+            socket.get_mut().write_all(&bytes).await.unwrap();
+            socket.get_mut().shutdown().await.unwrap();
+        }
         End::InvalidFrame => {
             socket
                 .get_mut()
@@ -75,7 +88,21 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
     settings.http_gateway.interaction.business_idle_ms = 2_000;
     let state = AppState::new(settings).await.unwrap();
     let (dependency, server, capture, _) = redis_capture(state.clone()).await;
-    let source = tokio::spawn(asgi_source(listener, dependency, probe));
+    let complete = matches!(end, End::Eof | End::Reset)
+        && matches!(probe, AsgiProbe::RemovedAfterClose)
+        && !lease_loss
+        && !persistence_failure;
+    let expected_transport = complete.then(|| match end {
+        End::Eof => crate::interaction::model::ClientTransportEnd::Eof,
+        End::Reset => crate::interaction::model::ClientTransportEnd::Reset,
+        _ => unreachable!(),
+    });
+    let source = tokio::spawn(asgi_source_transport(
+        listener,
+        dependency,
+        probe,
+        expected_transport,
+    ));
     let (address, gateway) = gateway(state.clone()).await;
     let client = tokio::spawn(lost_client(address, end));
     // Retain a real writer across application cleanup and verify publication
@@ -102,7 +129,9 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
             state
                 .recorder()
                 .case_staging_dir(&case)
-                .join("request.json.invalid"),
+                // A proven EOF is now publishable, so fail its real primary
+                // request write rather than the old invalid-capture filename.
+                .join("request.json"),
         )
         .await
         .unwrap();
@@ -123,13 +152,22 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
             .wait_for_no_active_case(Duration::from_secs(3))
             .await
     );
-    let failed = state.recorder().case_failed_dir(&case);
-    let error: Value = serde_json::from_slice(
-        &tokio::fs::read(failed.join("recording-error.json"))
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let directory = if complete {
+        state.recorder().case_dir(&case)
+    } else {
+        state.recorder().case_failed_dir(&case)
+    };
+    let error = if complete {
+        assert!(!state.recorder().case_failed_dir(&case).exists());
+        Value::Null
+    } else {
+        serde_json::from_slice::<Value>(
+            &tokio::fs::read(directory.join("recording-error.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    };
     let isolated = matches!(end, End::InvalidFrame)
         || !matches!(probe, AsgiProbe::RemovedAfterClose)
         || lease_loss
@@ -140,22 +178,39 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
         "{error}"
     );
     assert_eq!(state.inner.active_cases.is_quiescing(), isolated);
-    assert!(!state.recorder().case_dir(&case).exists());
+    assert_eq!(state.recorder().case_dir(&case).exists(), complete);
     if !isolated {
-        assert_eq!(error["reason"], "interaction_client_transport_lost");
+        if !complete {
+            assert_eq!(error["reason"], "interaction_client_transport_lost");
+        }
         let expected: Value = serde_json::from_slice(
-            &tokio::fs::read(failed.join("expected-response.json.invalid"))
-                .await
-                .unwrap(),
+            &tokio::fs::read(directory.join(if complete {
+                "expected-response.json"
+            } else {
+                "expected-response.json.invalid"
+            }))
+            .await
+            .unwrap(),
         )
         .unwrap();
-        assert_eq!(expected["interaction"]["end"]["clean"], false);
-        assert_eq!(expected["interaction"]["end"]["reason"], "transport_error");
+        assert_eq!(expected["interaction"]["end"]["clean"], complete);
+        assert_eq!(
+            expected["interaction"]["end"]["reason"],
+            if complete {
+                "client_transport_end"
+            } else {
+                "transport_error"
+            }
+        );
         assert!(expected["interaction"]["end"]["close"].is_null());
         let request: Value = serde_json::from_slice(
-            &tokio::fs::read(failed.join("request.json.invalid"))
-                .await
-                .unwrap(),
+            &tokio::fs::read(directory.join(if complete {
+                "request.json"
+            } else {
+                "request.json.invalid"
+            }))
+            .await
+            .unwrap(),
         )
         .unwrap();
         assert!(
@@ -165,8 +220,30 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
                 .iter()
                 .any(|action| action["action"]["kind"] == "close")
         );
+        let actions = request["interaction"]["actions"].as_array().unwrap();
+        if complete {
+            let terminal = actions.last().unwrap();
+            assert_eq!(terminal["action"]["kind"], "transport_end");
+            assert_eq!(
+                terminal["action"]["end"],
+                if matches!(end, End::Eof) {
+                    "eof"
+                } else {
+                    "reset"
+                }
+            );
+            assert!(terminal["after"].as_array().unwrap().is_empty());
+            assert_eq!(terminal["compressible_gap"], false);
+            assert!(request["interaction"]["socket_io_heartbeat"].is_object());
+        } else {
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| action["action"]["kind"] == "transport_end")
+            );
+        }
         let dependencies =
-            crate::recorder::test_io::read_to_string(failed.join("dependencies.jsonl"))
+            crate::recorder::test_io::read_to_string(directory.join("dependencies.jsonl"))
                 .await
                 .unwrap();
         let rows: Vec<Value> = dependencies
@@ -193,8 +270,9 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
         assert!(!*state.inner.interactions.source_stop.borrow());
         let mut cases = Vec::new();
         find_cases(&state.recorder().run_dir.join("apis"), &mut cases);
-        assert_eq!(cases.len(), 1);
-        let rows = crate::recorder::test_io::read_to_string(cases[0].join("dependencies.jsonl"))
+        assert_eq!(cases.len(), if complete { 2 } else { 1 });
+        let second = cases.iter().find(|path| **path != directory).unwrap();
+        let rows = crate::recorder::test_io::read_to_string(second.join("dependencies.jsonl"))
             .await
             .unwrap();
         let rows: Vec<Value> = rows
@@ -220,8 +298,24 @@ async fn recover(end: End, probe: AsgiProbe, lease_loss: bool, persistence_failu
 }
 
 #[tokio::test]
-async fn client_eof_reset_and_partial_frame_archive_failure_then_reuse_source() {
-    for end in [End::Eof, End::Reset, End::PartialFrame] {
+async fn client_eof_and_reset_publish_then_reuse_source() {
+    for end in [End::Eof, End::Reset] {
+        timeout(
+            Duration::from_secs(8),
+            recover(end, AsgiProbe::RemovedAfterClose, false, false),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn interrupted_websocket_framing_stays_failed_after_source_cleanup() {
+    for end in [
+        End::PartialFrame,
+        End::PartialPayload,
+        End::UnfinishedFragment,
+    ] {
         timeout(
             Duration::from_secs(8),
             recover(end, AsgiProbe::RemovedAfterClose, false, false),

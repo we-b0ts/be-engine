@@ -53,8 +53,7 @@ fn global_json_uses_independent_dependency_start_clocks_without_resource_or_api_
         key: Some(b"unconfigured-key"),
         recorded_value: Some(&source),
         actual_value: Some(&target),
-        recorded_observed_at: DateTime::from_timestamp(1010, 0).unwrap(),
-        recorded_duration_ms: 10_000,
+        recorded_request_started_at: DateTime::from_timestamp(1000, 0),
         actual_observed_at: DateTime::from_timestamp(2000, 0).unwrap(),
     };
     let decision = runtime.preview_memcached(&context).unwrap();
@@ -101,8 +100,7 @@ fn unrecognized_protobuf_values_keep_exact_bytes() {
         key: Some(b"session"),
         recorded_value: Some(&source),
         actual_value: Some(&source),
-        recorded_observed_at: DateTime::from_timestamp(1010, 0).unwrap(),
-        recorded_duration_ms: 10_000,
+        recorded_request_started_at: DateTime::from_timestamp(1000, 0),
         actual_observed_at: DateTime::from_timestamp(2000, 0).unwrap(),
     };
     let decision = runtime.preview_memcached(&context).unwrap();
@@ -114,5 +112,35 @@ fn unrecognized_protobuf_values_keep_exact_bytes() {
                 ..context
             })
             .is_err()
+    );
+}
+
+#[test]
+fn missing_memcached_request_clock_cannot_use_an_available_api_anchor() {
+    let (_temp, runtime) = runtime();
+    let source = br#"{"created_at":1000}"#;
+    let target = br#"{"created_at":1005}"#;
+    let endpoint = TargetKey {
+        host: "cache.test".into(),
+        port: 11211,
+    };
+    let context = MemcachedPolicyContext {
+        case_id: Some("case"),
+        target: &endpoint,
+        command: "set",
+        key: Some(b"key"),
+        recorded_value: Some(source),
+        actual_value: Some(target),
+        recorded_request_started_at: None,
+        actual_observed_at: DateTime::from_timestamp(1005, 0).unwrap(),
+    };
+    assert!(runtime.preview_memcached(&context).is_err());
+    assert!(
+        runtime
+            .preview_memcached(&MemcachedPolicyContext {
+                recorded_request_started_at: DateTime::from_timestamp(1000, 0),
+                ..context
+            })
+            .is_ok()
     );
 }

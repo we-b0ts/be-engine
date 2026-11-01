@@ -16,6 +16,7 @@ mod response;
 mod savepoints;
 mod session;
 mod session_setup;
+pub(in crate::replay) use session_setup::is_nonsemantic_session_setup;
 pub(in crate::replay) mod sql_match;
 #[cfg(test)]
 mod sqlx_tests;

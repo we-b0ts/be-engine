@@ -272,7 +272,8 @@ pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
 pub(crate) use control::{
-    check_response_identities, input_timing_observer, native_event_observer, register_derived_input,
+    FinalizationScope, check_response_identities, input_timing_observer, native_event_observer,
+    register_derived_input,
 };
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -739,6 +740,7 @@ pub(crate) use redis::value as redis_value;
 
 mod json_order;
 mod recording_evidence;
+pub(crate) use recording_evidence::dependency_started_at;
 
 pub use policy::{DependencyRequestRuleFeedback, plan_dependency_request_rule};
 
@@ -768,4 +770,5 @@ pub(crate) use policy::native_projection::compiled_input_rules;
 
 pub(crate) use redis::expiration::normalize as normalize_redis_expiration;
 
+pub(crate) use mysql::contracts::automatic::validate_source_witness as mysql_validate_global_source_witness;
 pub(crate) use mysql::contracts::automatic::validate_witness_with_time_copies as mysql_validate_global_witness_with_time_copies;

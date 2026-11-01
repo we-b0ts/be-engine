@@ -1,4 +1,5 @@
-//! Independent Target requests may be investigated without inventing a Source pair.
+//! API-owned missing/unmatched requests, independent of analyst ownership work.
+mod resolution;
 use super::{
     model::{AttributionCommandOptions, ClaimStatus, SCHEMA},
     source,
@@ -12,6 +13,7 @@ use crate::{
     policy_evidence::{TargetRole, WitnessManifest},
 };
 use anyhow::{Context, Result, ensure};
+pub use resolution::{TargetInvestigationResolutionSubmission, resolve_target_investigation};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -161,7 +163,7 @@ pub fn investigate_unmatched_dependency(options: AttributionCommandOptions) -> R
             TargetInvestigation {
                 id: id.clone(),
                 kind: "target_request_investigation".into(),
-                api: input.api,
+                api: input.api.clone(),
                 method_api: api,
                 recording_run_id: state.recording_run_id.clone(),
                 source_revision: selected
@@ -187,9 +189,9 @@ pub fn investigate_unmatched_dependency(options: AttributionCommandOptions) -> R
         store.save(&state)?;
     }
     Ok(
-        json!({"schema":SCHEMA,"investigation_id":id,"status":"attribution_pending","accepted":false,
-        "does_not_prove":"Submitting an unmatched investigation does not establish async ownership or create Source evidence.",
-        "next_command":crate::rewrite::action::command(&root,vec!["dependency-attribution".into(),"context".into()],vec![])}),
+        json!({"schema":SCHEMA,"investigation_id":id,"status":"implementation_diagnosis_required","owner":"api_implementer","accepted":false,
+        "does_not_prove":"Missing traffic has the reporting API's owner. Unmatched evidence does not establish async behavior or a recording omission.",
+        "next_command":crate::rewrite::action::command(&root,vec!["dependency-attribution".into(),"show".into(),"--api".into(),input.api],vec![])}),
     )
 }
 
@@ -217,6 +219,39 @@ pub(super) fn unmatched_observations(report: &Value, cases: &BTreeSet<String>) -
         }
     }
     ids
+}
+
+pub(super) fn refresh(state: &mut crate::rewrite::model::RewriteState) {
+    let attempts = std::iter::once(&state.active_slice)
+        .chain(state.parked_slices.values())
+        .filter_map(|slice| {
+            slice
+                .attempts
+                .last()
+                .map(|attempt| (slice.api.clone(), attempt.attempt))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for request in state
+        .dependency_review
+        .investigations
+        .values_mut()
+        .filter(|request| {
+            request.recording_run_id == state.recording_run_id
+                && matches!(
+                    request.status,
+                    ClaimStatus::Pending | ClaimStatus::Unresolved
+                )
+        })
+    {
+        if attempts
+            .get(&request.method_api)
+            .is_some_and(|attempt| *attempt > request.attempt)
+        {
+            // Preserve the old observations and conclusion without transferring
+            // them to a different execution or inventing a passing verdict.
+            request.status = ClaimStatus::Superseded;
+        }
+    }
 }
 
 pub(super) fn apply_resolution(
@@ -282,4 +317,40 @@ pub(super) fn apply_resolution(
     };
     request.resolution = Some(resolution.outcome);
     Ok(())
+}
+
+pub(super) fn for_api(
+    root: &std::path::Path,
+    state: &crate::rewrite::model::RewriteState,
+    api: &str,
+) -> Result<Vec<Value>> {
+    let requests = state
+        .dependency_review
+        .investigations
+        .values()
+        .filter(|request| {
+            request.method_api == api && request.recording_run_id == state.recording_run_id
+        })
+        .collect::<Vec<_>>();
+    if requests.is_empty() {
+        return Ok(vec![]);
+    }
+    let source = source::load(state)?;
+    let active = super::rules::fingerprints(&super::rules::load(root)?)?;
+    let owners = state
+        .dependency_review
+        .decisions
+        .iter()
+        .filter(|(_, decision)| super::rules::current(decision, &active))
+        .map(|(id, decision)| (*id, decision.owner.clone()))
+        .collect();
+    Ok(requests.into_iter().map(|request| {
+        let discovery = request.target_observations.iter().map(|(id, observation)|
+            (id.clone(), super::queries::candidate_page(root, state, &source, (&request.id, id), observation, &owners, 0)))
+            .collect::<BTreeMap<_,_>>();
+        json!({"investigation":request,"owner":"api_implementer","candidate_discovery":discovery,
+            "expected_revision":state.dependency_review.revision,
+            "resolve_command":crate::rewrite::action::command(root,vec!["dependency-attribution".into(),"resolve".into(),"--file".into(),"<implementer-diagnosis.json>".into()],vec![]),
+            "required_diagnosis":"Trace the reporting API's async lifecycle, cache and real dependency client. Publish its async API rule if scope is wrong; otherwise prove the exact capture omission and interception/response-rewrite change. Do not send owned missing traffic to the repository analyst."})
+    }).collect())
 }

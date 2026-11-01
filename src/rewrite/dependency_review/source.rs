@@ -48,21 +48,33 @@ fn recording_root(source: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn inventory_identity(state: &RewriteState) -> Result<String> {
-    let root = recording_root(
+    Ok(inventory(state)?.0)
+}
+
+/// Sealed counts select analysis work without loading business payloads or the
+/// complete central index on every coordinator status request.
+pub(super) fn inventory(state: &RewriteState) -> Result<(String, u64)> {
+    inventory_at(
         state
             .case_source
             .as_deref()
             .context("workflow has no Source recording")?,
-    )?;
+        &state.recording_run_id,
+    )
+}
+
+pub(super) fn inventory_at(path: &Path, run_id: &str) -> Result<(String, u64)> {
+    let root = recording_root(path)?;
     let bytes = fs::read(root.join(MANIFEST_FILE))?;
     let manifest: RecordingManifest = serde_json::from_slice(&bytes)?;
     ensure!(
-        manifest.schema == RECORDING_SCHEMA
-            && manifest.sealed
-            && manifest.run_id == state.recording_run_id,
+        manifest.schema == RECORDING_SCHEMA && manifest.sealed && manifest.run_id == run_id,
         "Source recording inventory is not the current sealed workflow input"
     );
-    Ok(digest(&bytes))
+    Ok((
+        digest(&bytes),
+        manifest.semantic_inventory.unattributed_dependencies,
+    ))
 }
 
 pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {

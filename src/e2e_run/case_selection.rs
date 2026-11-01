@@ -32,6 +32,16 @@ struct GroupSelection {
 }
 
 impl CaseSelection {
+    pub(super) fn completed_workflow(&self) -> Result<&str> {
+        ensure!(
+            self.final_round
+                && !self.workflow_id.is_empty()
+                && self.skipped_passed_case_ids.is_empty(),
+            "workflow certification requires a fresh final session without skipped historical passes"
+        );
+        Ok(&self.workflow_id)
+    }
+
     pub(super) fn project(&mut self, api: &str) {
         self.groups.retain(|group, _| group == api);
         self.skipped_passed_case_ids.retain(|id| {
