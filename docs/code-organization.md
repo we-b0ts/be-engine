@@ -576,7 +576,10 @@ is unclear.
   original baseline probes and complete override/transaction/restoration scopes
   during preparation. Its parent binds NEXT settings to actual Target sockets,
   observes successful deliveries through the existing transaction owner and
-  grants only proven Source restoration omission. Candidate fencing stays in
+  grants only proven Source restoration omission. Its Source proof classifies
+  complete read-only scopes; its live owner requires every original read and a
+  successful real Target end before allowing an already optional read-only
+  Source end to differ between COMMIT and ROLLBACK. Candidate fencing stays in
   the MySQL matcher; values, business transaction parity, wire completion and
   original consumption retain their existing owners.
 

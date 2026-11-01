@@ -17,6 +17,7 @@ struct Profile {
     target: Option<Uuid>,
     phase: &'static str,
     observed: usize,
+    end_omission_proven: bool,
 }
 
 #[derive(Debug)]
@@ -76,6 +77,7 @@ impl Registry {
                     target: None,
                     phase: "unobserved",
                     observed: 0,
+                    end_omission_proven: false,
                 },
             );
         }
@@ -183,6 +185,7 @@ impl Registry {
             {
                 profile.target = Some(connection);
                 profile.phase = "pending_begin";
+                profile.end_omission_proven = false;
                 self.defaults
                     .entry(connection)
                     .or_insert(Some(profile.plan.baseline));
@@ -212,20 +215,32 @@ impl Registry {
             };
             return None;
         }
+        let ending = matches!(sql.as_str(), "commit" | "rollback");
+        // A read-only Source end is already optional under the transaction
+        // owner. The Target must still really end this explicit transaction,
+        // after delivering every original read on this same socket.
+        let omitted_end = ending && index.is_none() && profile.plan.read_only;
         if let Some(index) = index {
             binding.valid &=
                 binding.begun && profile.plan.required.contains(&index) && before & 0x200b == 3;
             binding.seen.insert(index);
-        } else {
+        } else if !omitted_end {
             binding.valid = false;
         }
         profile.observed = binding.seen.len();
-        if matches!(sql.as_str(), "commit" | "rollback") {
+        if ending {
+            let complete = index == Some(profile.plan.end) && binding.seen == profile.plan.required
+                || omitted_end
+                    && !binding.seen.contains(&profile.plan.end)
+                    && binding.seen.len() + 1 == profile.plan.required.len()
+                    && binding.seen.is_subset(&profile.plan.required);
             let covered = binding.valid
-                && index == Some(profile.plan.end)
-                && binding.seen == profile.plan.required
+                && binding.begun
+                && before & 0x200b == 3
                 && after & 0x200b == 2
+                && complete
                 && transactions.covered_by(profile.plan.end, connection);
+            profile.end_omission_proven = covered && omitted_end;
             profile.phase = if covered {
                 "covered"
             } else {
@@ -262,6 +277,8 @@ impl Registry {
                 "isolation":p.level.name(), "baseline":p.baseline.name(),
                 "target_connection_id":profile.target, "phase":profile.phase,
                 "required_members":p.required.len(), "delivered_members":profile.observed,
+                "read_only":p.read_only,
+                "source_end_omission_proven":profile.end_omission_proven,
                 "reset_omission_proven":profile.phase == "covered",
                 "coverage_kind":"source_session_restoration_omission"
             })

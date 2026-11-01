@@ -25,6 +25,7 @@ mod foreign_cleanup_tests;
 mod global_transaction_tests;
 mod identity_read_back;
 mod isolation;
+mod isolation_read_only;
 mod large_identity_tests;
 mod large_predicate_tests;
 mod large_sql_values_tests;

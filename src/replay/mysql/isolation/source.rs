@@ -25,6 +25,7 @@ pub(in crate::replay) struct Plan {
     pub(super) end: usize,
     pub(super) reset: usize,
     pub(super) required: BTreeSet<usize>,
+    pub(super) read_only: bool,
 }
 
 fn successful(record: &RecordedMysqlExchange) -> bool {
@@ -243,6 +244,7 @@ fn prove(
     let start_sequence = sequence;
     let mut previous = first.response.server_status?;
     let mut required = BTreeSet::new();
+    let mut read_only = true;
     let mut active = false;
     let mut end = None;
     for &(index, row) in rows.iter().skip(1).take(260) {
@@ -275,6 +277,7 @@ fn prove(
                 end: end?,
                 reset: index,
                 required,
+                read_only,
             });
         }
         let normalized = normalize_sql(sql);
@@ -293,17 +296,19 @@ fn prove(
         }
         // Exactly one ordinary implicit Source transaction. Session mutations,
         // savepoints, failures, gaps and second transactions retain strict matching.
+        let effect = optional_session::read::classify(sql);
         if end.is_some()
             || row.command != "COM_QUERY"
             || after != 1
             || !(before == 0 && !active || before == 1 && active)
-            || optional_session::read::classify(sql) == optional_session::read::Effect::Unknown
+            || effect == optional_session::read::Effect::Unknown
             || crate::mysql::sql::tokens(sql)
                 .is_none_or(|t| optional_session::read::has_session_effect(&t))
             || !matches!(row.response.status.as_str(), "ok" | "resultset")
         {
             return None;
         }
+        read_only &= effect == optional_session::read::Effect::ReadOnly;
         active = true;
         required.insert(index);
     }
