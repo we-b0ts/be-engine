@@ -404,8 +404,7 @@ async fn binary_get_delivery_rebases_json_with_live_correlation_and_finite_consu
         );
         assert_eq!(decoded.logical["stable"], 7);
         client.write_all(&request).await.unwrap();
-        client.read_exact(&mut header).await.unwrap();
-        assert_ne!(&header[6..8], &[0, 0]);
+        assert_eq!(client.read(&mut header).await.unwrap(), 0);
         let mut found = false;
         for _ in 0..150 {
             let report: Value =

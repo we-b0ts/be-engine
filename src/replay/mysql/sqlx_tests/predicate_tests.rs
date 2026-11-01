@@ -14,7 +14,8 @@ async fn global_formats_preserve_numeric_string_in_permutations() {
         for (last, passes) in [("802", false), ("801", true), ("801", false)] {
             let result = sqlx::query(target).bind("Namespace").bind("388").bind("535").bind("539").bind("693").bind("699").bind(last).fetch_one(&mut client).await;
             if passes { assert_eq!(result.unwrap().get::<i64,_>("resource_members_resource_id"), 7); }
-            else { assert!(result.is_err(), "changed values and exhausted evidence must fail"); }
+            else { assert!(result.is_err(), "changed values and exhausted evidence must fail");
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await; }
         }
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count, 1);
@@ -50,6 +51,13 @@ async fn global_formats_preserve_unordered_predicates_without_selected_sql_field
             .fetch_one(&mut client)
             .await
             .is_err());
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let row = sqlx::query("SELECT users.id AS users_id FROM users WHERE users.id IN (1,2,3) AND users.is_active IS true")
             .fetch_one(&mut client)
             .await
@@ -59,6 +67,13 @@ async fn global_formats_preserve_unordered_predicates_without_selected_sql_field
             .fetch_one(&mut client)
             .await
             .is_err());
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         client.close().await.unwrap();
         assert_eq!(
             runtime.state.lock().await.mysql.events.matched_query_count,
@@ -120,6 +135,7 @@ async fn sqlx_predicate_orders_match_all_protocol_pairs_and_cached_parameter_reb
                         };
                         if attempt == 1 || attempt == 3 {
                             assert!(response.is_err(), "wrong values or exhausted evidence must fail");
+                            client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                         } else {
                             let response = response.unwrap();
                             assert_eq!(response[0].columns().iter().map(|c| c.name()).collect::<Vec<_>>(), ["title", "id"]);
@@ -245,6 +261,13 @@ async fn sqlx_predicate_prepare_keeps_fixed_values_and_execute_checks_remaining_
                 .await
                 .is_err()
         );
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let row = sqlx::query(target)
             .bind(7_i64)
             .bind(2_i64)

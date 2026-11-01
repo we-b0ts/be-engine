@@ -135,7 +135,7 @@ async fn handle_connection_inner(
                         ResultRowEncoding::Text,
                     )
                     .await?;
-                    if directive == SessionDirective::ClientTerminated {
+                    if directive == SessionDirective::Close {
                         break;
                     }
                     if command.command_name == "COM_INIT_DB" && successful {
@@ -172,7 +172,7 @@ async fn handle_connection_inner(
             "COM_QUERY" => {
                 let sql = command.query.as_deref().unwrap_or_default();
                 if handle_query(&mut stream, state.clone(), &mut session, sql).await?
-                    == SessionDirective::ClientTerminated
+                    == SessionDirective::Close
                 {
                     break;
                 }
@@ -180,14 +180,14 @@ async fn handle_connection_inner(
             "COM_STMT_PREPARE" => {
                 let sql = command.query.as_deref().unwrap_or_default();
                 if handle_stmt_prepare(&mut stream, state.clone(), &mut session, sql).await?
-                    == SessionDirective::ClientTerminated
+                    == SessionDirective::Close
                 {
                     break;
                 }
             }
             "COM_STMT_EXECUTE" => {
                 if handle_stmt_execute(&mut stream, state.clone(), &mut session, &packet).await?
-                    == SessionDirective::ClientTerminated
+                    == SessionDirective::Close
                 {
                     break;
                 }

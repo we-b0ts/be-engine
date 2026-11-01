@@ -314,17 +314,20 @@ is unclear.
   Execution freezes a fresh Target/runtime-policy identity before startup and
   checks it again after execution; the cold evidence reader revalidates that
   identity, Source image revision and engine build before returning receipt refs.
-  An unclean Socket.IO/WebSocket session stops the attempt before another input;
-  ordinary shutdown/finalization preserves the failed Case and pending inventory.
-  Started-I/O drain alone cannot prove that sleeping disconnect hooks have ended.
+  A failed primary or dirty dependency result belongs to its Case. Native
+  rejection closes the affected dependency connection; the runner closes the
+  primary transport and drains accepted I/O before admitting another input.
+  The per-API failure counter, rather than a native-session failure, limits how
+  many failed Cases execute. Unused Source inventory remains unused and dirty.
   `control/dependency_tail/metadata/interaction_inventory` derives finite waits
   from a clean original Socket.IO/WebSocket completion and its Case dependencies
   when explicit tail observations are absent. It streams original metadata,
   retains the Source elapsed-time budget and post-input idle allowance, and never
-  supplies response frames to Target. A stalled native interaction retains Case
-  ownership until runner shutdown rather than admitting late calls into another
-  Case. Actual native Replay rejections retain that fence through the final
-  locked ownership release; recorded dependency errors remain ordinary replies.
+  supplies response frames to Target. A stalled native interaction records its
+  no-progress failure and drains accepted I/O before the locked ownership
+  release. Dirty evidence alone does not retain global Case ownership. An actual
+  I/O cleanup failure retains ownership; recorded dependency errors remain
+  ordinary replies.
   `metadata/references` owns the shared semantic exchange identities.
   Central observations with `semantic_required: false` do not create finite tail
   obligations. Redis protocol controls retain native Target session context,

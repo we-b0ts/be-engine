@@ -87,7 +87,7 @@ impl ReplaySession {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::replay) enum SessionDirective {
     Continue,
-    ClientTerminated,
+    Close,
 }
 
 pub(super) async fn deliver_matched(
@@ -124,7 +124,7 @@ pub(super) async fn deliver_matched(
                     state.lock().await.complete_exchange(&matched),
                     "MySQL cleanup claim was cancelled before completion"
                 );
-                return Ok(SessionDirective::ClientTerminated);
+                return Ok(SessionDirective::Close);
             }
             Err(error) => {
                 state
@@ -171,7 +171,7 @@ pub(super) async fn deliver_matched(
                         super::super::exchange::retain_connection(stream).await;
                     }
                 }
-                return Ok(SessionDirective::ClientTerminated);
+                return Ok(SessionDirective::Close);
             }
             Err(error) => {
                 state
@@ -387,15 +387,7 @@ pub(in crate::replay) async fn handle_query(
                     report.target_event_index = event_index;
                 }
             }
-            write_packet_and_flush(
-                stream,
-                MysqlPacket {
-                    sequence_id: 1,
-                    payload: err_payload(1105, "no recorded dependency matched this SQL"),
-                },
-            )
-            .await?;
-            Ok(SessionDirective::Continue)
+            Ok(SessionDirective::Close)
         }
     }
 }
@@ -470,15 +462,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                 "COM_STMT_EXECUTE referenced an unknown replay statement id",
             );
         }
-        write_packet_and_flush(
-            stream,
-            MysqlPacket {
-                sequence_id: 1,
-                payload: err_payload(1105, "unknown prepared statement id"),
-            },
-        )
-        .await?;
-        return Ok(SessionDirective::Continue);
+        return Ok(SessionDirective::Close);
     };
     if let Some(param_types) = parsed.param_types
         && let Some(statement) = session.statements.get_mut(&parsed.statement_id)
@@ -585,18 +569,7 @@ pub(in crate::replay) async fn handle_stmt_execute(
                     report.target_event_index = event_index;
                 }
             }
-            write_packet_and_flush(
-                stream,
-                MysqlPacket {
-                    sequence_id: 1,
-                    payload: err_payload(
-                        1105,
-                        "no recorded dependency matched this prepared SQL and params",
-                    ),
-                },
-            )
-            .await?;
-            Ok(SessionDirective::Continue)
+            Ok(SessionDirective::Close)
         }
     }
 }

@@ -28,12 +28,8 @@ async fn redis_get_del_on_pooled_connections_keeps_lane_order_across_response_de
     let (addr, state, task) = spawn(&case, None).await;
     let mut reader = TcpStream::connect(addr).await.unwrap();
     let mut deleter = TcpStream::connect(addr).await.unwrap();
-    request(
-        &mut deleter,
-        &["DEL", "session:0"],
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
+    request(&mut deleter, &["DEL", "session:0"], b"").await;
+    deleter = TcpStream::connect(addr).await.unwrap();
     for i in 0..100 {
         let key = format!("session:{i}");
         request(&mut reader, &["GET", &key], b"$1\r\nx\r\n").await;

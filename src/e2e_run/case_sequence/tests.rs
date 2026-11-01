@@ -1,4 +1,4 @@
-//! A failed live session cannot lend delayed teardown work to a later input.
+//! Failed cases retain their diagnostics and yield to later cases after cleanup.
 use super::*;
 use crate::e2e_run::model::CaseStatus;
 use crate::interaction::{
@@ -19,16 +19,21 @@ use tokio::{
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test]
-async fn rejected_socketio_session_stops_before_a_later_case_can_inherit_teardown() {
-    rejected_session(Protocol::SocketIo).await;
+async fn rejected_socketio_session_does_not_stop_the_next_case() {
+    rejected_session(Protocol::SocketIo, 2, 10).await;
 }
 
 #[tokio::test]
-async fn rejected_websocket_session_stops_before_a_later_case_can_inherit_teardown() {
-    rejected_session(Protocol::WebSocket).await;
+async fn rejected_websocket_session_does_not_stop_the_next_case() {
+    rejected_session(Protocol::WebSocket, 2, 10).await;
 }
 
-async fn rejected_session(protocol: Protocol) {
+#[tokio::test]
+async fn rejected_sessions_stop_only_after_the_configured_failure_count() {
+    rejected_session(Protocol::SocketIo, 12, 10).await;
+}
+
+async fn rejected_session(protocol: Protocol, case_count: usize, failure_limit: usize) {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();
     std::fs::create_dir_all(root.join(".traffic-e2e/local")).unwrap();
@@ -36,15 +41,23 @@ async fn rejected_session(protocol: Protocol) {
     let (mut layout, _, mut state) = super::super::test_session::session(root);
     layout.active_dir = root.join(".traffic-e2e/local/runtime/active");
     std::fs::create_dir_all(layout.active_dir.join("reports")).unwrap();
-    for case in &mut state.cases {
-        case.status = CaseStatus::Pending;
-        case.assertion_passed = None;
-        case.replay_clean = None;
-    }
+    let template = state.cases[0].clone();
+    state.cases = (0..case_count)
+        .map(|index| {
+            let mut case = template.clone();
+            case.case_id = format!("case-{index}");
+            case.case_dir = root.join("recording").join(&case.case_id);
+            std::fs::create_dir_all(&case.case_dir).unwrap();
+            case.status = CaseStatus::Pending;
+            case.assertion_passed = None;
+            case.replay_clean = None;
+            case
+        })
+        .collect();
     let mut config = super::super::test_session::config(root);
     config.runner_owned_response_assertions = false;
     config.replay_loading.lazy_cases = false;
-    config.max_failed_cases_per_api = 10;
+    config.max_failed_cases_per_api = failure_limit;
     std::fs::write(
         &config.replay_policy,
         "format: traffic-policy/v3\nrules: []\n",
@@ -137,8 +150,7 @@ async fn rejected_session(protocol: Protocol) {
             }
         );
         rejected.store(true, Ordering::Release);
-        // Native application disconnect hooks may still be sleeping after the
-        // engine aborts this transport. A new primary must never be admitted.
+        // The failed primary transport closes before later cases connect.
         while let Some(Ok(message)) = socket.next().await {
             if matches!(message, Message::Close(_)) {
                 break;
@@ -209,14 +221,20 @@ async fn rejected_session(protocol: Protocol) {
         state.cases[0].execution_failure.as_ref().unwrap()["request_completed"],
         false
     );
-    assert_eq!(
-        state.cases[1].status,
-        CaseStatus::Pending,
-        "later inputs must remain unexecuted after interrupted session teardown"
+    let executed = case_count.min(failure_limit);
+    assert!(
+        state.cases[..executed]
+            .iter()
+            .all(|case| case.status == CaseStatus::Failed),
+        "{:?}",
+        state.errors
     );
-    assert!(state.cases[1].execution_failure.is_none());
-    assert_eq!(accepted.load(Ordering::SeqCst), 1);
-    // The caller owns ordinary Target shutdown and aggregate finalization;
-    // stopping the sequence must not invent a fresh bootstrap process.
+    assert!(
+        state.cases[executed..]
+            .iter()
+            .all(|case| case.status == CaseStatus::Pending)
+    );
+    assert_eq!(accepted.load(Ordering::SeqCst), executed);
+    // Target shutdown and aggregate finalization remain with the caller.
     assert!(state.target_started);
 }

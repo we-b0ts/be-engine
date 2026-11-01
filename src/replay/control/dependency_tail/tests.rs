@@ -218,7 +218,15 @@ async fn missing_call_uses_the_begin_deadline_and_repeated_begin_cannot_extend_i
             .unwrap()
             .contains("absolute request budget")
     );
-    assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
+    assert!(state.lock().await.active_case_id.is_none());
+    assert!(
+        state
+            .lock()
+            .await
+            .dependency_tails
+            .failure("case-a")
+            .is_some()
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -260,7 +268,15 @@ async fn the_absolute_budget_also_bounds_the_preceding_fixed_cleanup_window() {
     assert_eq!(ended["ok"], false);
     assert_eq!(ended["dirty"], true);
     assert_eq!(started.elapsed(), Duration::from_millis(100));
-    assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
+    assert!(state.lock().await.active_case_id.is_none());
+    assert!(
+        state
+            .lock()
+            .await
+            .dependency_tails
+            .failure("case-a")
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -290,7 +306,15 @@ async fn unrelated_redis_heartbeats_do_not_extend_the_absolute_tail_budget() {
     .unwrap();
     assert_eq!(ended["ok"], false);
     assert!(started.elapsed() < Duration::from_millis(400));
-    assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
+    assert!(state.lock().await.active_case_id.is_none());
+    assert!(
+        state
+            .lock()
+            .await
+            .dependency_tails
+            .failure("case-a")
+            .is_some()
+    );
     noise.abort();
     let _ = noise.await;
     task.abort();

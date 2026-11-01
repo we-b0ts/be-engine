@@ -71,6 +71,12 @@ impl CaseTails {
         self.failures.get(case)
     }
 
+    pub(super) fn record_cleanup_failure(&mut self, case: &str, reason: &str) {
+        self.failures.entry(case.into()).or_insert_with(
+            || serde_json::json!({"kind":"case_cleanup_failed","case_id":case,"reason":reason}),
+        );
+    }
+
     pub(in crate::replay) fn failures(&self) -> Vec<serde_json::Value> {
         self.failures.values().cloned().chain(self.source_business_incomplete.iter().map(|case|
             serde_json::json!({"kind":"source_business_incomplete","case_id":case,"requires_new_recording":true,"reason":"Source observation ended without its declared async completion resource"})
@@ -435,26 +441,6 @@ pub(super) async fn prepare_target_stop(
     drain_selected(state, case_id, true).await
 }
 
-/// A native peer close cannot certify application teardown after a Replay
-/// rejection. Its hook may still sleep even when accepted I/O has drained.
-/// The caller also checks this under the final ownership-release lock so a
-/// rejection between tail drain and release cannot admit the next Case.
-pub(super) fn ensure_interaction_not_failed(state: &ReplayState, case_id: &str) -> Result<()> {
-    let native = state
-        .dependency_tails
-        .cases
-        .get(case_id)
-        .and_then(Option::as_ref)
-        .is_some_and(|tail| tail.interaction_post_input.is_some());
-    ensure!(
-        !native
-            || !(state.case_cleanup.deadline(case_id).is_some()
-                || super::case_execution::failed(state, case_id)),
-        "interaction dependency execution failed; case ownership was retained for Target shutdown"
-    );
-    Ok(())
-}
-
 async fn drain_selected(
     state: &Arc<Mutex<ReplayState>>,
     case_id: &str,
@@ -515,7 +501,6 @@ async fn drain_selected(
         {
             super::case_cleanup::mark_failed(&mut state, case_id)?;
         }
-        ensure_interaction_not_failed(&state, case_id)?;
         let failure_cleanup = state.case_cleanup.deadline(case_id).is_some();
         if let Some(cleanup) = state.case_cleanup.deadline(case_id) {
             deadline = cleanup;
@@ -614,15 +599,6 @@ async fn drain_selected(
                 .dependency_tails
                 .failures
                 .insert(case_id.into(), failure);
-            if tail.interaction_post_input.is_some() {
-                // Wire close did not prove the application hook finished.
-                // Keep the failed Case active so ordinary runner cleanup stops
-                // Target instead of attributing its late calls to the next Case.
-                anyhow::bail!(
-                    "{}; interaction case ownership was retained",
-                    progress.failure_reason(remaining)
-                );
-            }
             super::case_cleanup::mark_failed(&mut state, case_id)?;
             drop(state);
             continue;

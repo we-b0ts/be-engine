@@ -776,12 +776,7 @@ async fn serve_connection(
                     pubsub::schedule_notifications(state.clone(), deliveries);
                 }
             }
-            Err(reason) => {
-                reader
-                    .inner
-                    .write_all(format!("-ERR {reason}\r\n").as_bytes())
-                    .await?;
-            }
+            Err(_) => break,
         }
     }
     Ok(())

@@ -1,4 +1,4 @@
-//! Actual TCP backpressure must retain Case ownership until delivery or failure.
+//! Actual TCP backpressure retains Case ownership until admitted delivery drains.
 use super::*;
 
 async fn partial_input(
@@ -25,7 +25,49 @@ async fn partial_input(
         .to_string(),
     )
     .unwrap();
-    let runtime = runtime(root, &[], &globals, true).await.unwrap();
+    let mut runtime = runtime(root, &[], &globals, true).await.unwrap();
+    if root.join("unselected").is_dir() {
+        // This test needs both real published Cases in its replay scope.
+        let case_dir = runtime.state.lock().await.cases[CASE]
+            .dir
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let addr = "127.0.0.1:0".parse().unwrap();
+        runtime = Arc::new(
+            ReplayRuntime::load_with_lifecycle(
+                ReplayConfig {
+                    case_dir,
+                    selected_case_ids: vec![],
+                    dns_listen: addr,
+                    tcp_listen: addr,
+                    fake_cidr: "198.18.0.0/15".into(),
+                    report_path: None,
+                    session_path: None,
+                    control_socket_path: None,
+                    ca_cert_path: Some(root.join("ca.pem")),
+                    ca_key_path: Some(root.join("ca-key.pem")),
+                    policy_path: None,
+                    http_ignore_query_params: vec![],
+                    process_owned_dependencies: vec![],
+                    allowed_unused_http: None,
+                },
+                addr,
+                addr,
+                ReplayLifecycleConfig {
+                    dependency_loading: ReplayDependencyLoading {
+                        lazy_cases: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap(),
+        );
+        let begun = guards::control(&runtime, json!({"command":"begin","case_id":CASE})).await;
+        assert_eq!(begun["ok"], true, "{begun}");
+    }
     let (mut subscriber, task) = connect(&runtime).await;
     assert_eq!(
         send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
@@ -59,8 +101,15 @@ async fn partial_input(
 }
 
 #[tokio::test]
-async fn failed_primary_cleanup_waits_for_partial_native_input_and_retains_case() {
+async fn failed_primary_cleanup_waits_for_partial_native_input_before_next_case() {
     let temp = tempfile::tempdir().unwrap();
+    let next_case = "00000000-0000-0000-0000-000000000124";
+    std::fs::create_dir(temp.path().join("unselected")).unwrap();
+    std::fs::write(
+        temp.path().join("unselected/request.json"),
+        json!({"method":"GET","uri":"/next","timestamp":"2020-01-01T00:11:00Z"}).to_string(),
+    )
+    .unwrap();
     let (runtime, mut subscriber, task, raw) = partial_input(temp.path()).await;
     // Failed primary cleanup also has to drain inputs already admitted to TCP.
     assert_eq!(
@@ -82,24 +131,48 @@ async fn failed_primary_cleanup_waits_for_partial_native_input_and_retains_case(
         runtime.state.lock().await.active_case_id.as_deref(),
         Some(CASE)
     );
+    assert_eq!(
+        guards::control(&runtime, json!({"command":"begin","case_id":next_case})).await["ok"],
+        false
+    );
+    assert!(runtime.state.lock().await.redis.has_case_in_flight());
+    assert_eq!(
+        runtime
+            .state
+            .lock()
+            .await
+            .redis
+            .pubsub
+            .report()
+            .unwrap()
+            .delivered_pushes,
+        0
+    );
     assert_eq!(read(&mut subscriber).await, raw);
     let ended = tokio::time::timeout(Duration::from_secs(2), ending)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(ended["ok"], false, "{ended}");
-    assert!(
-        ended["error"]
-            .as_str()
-            .unwrap()
-            .contains("interaction dependency execution failed")
-    );
+    // The primary failure is owned by the caller; all admitted dependency I/O
+    // completed successfully and must not create a dependency failure.
+    assert_eq!(ended["ok"], true, "{ended}");
+    assert_eq!(ended["dirty"], false);
     let state = runtime.state.lock().await;
-    // A failed native primary still requires Target shutdown before release.
-    assert_eq!(state.active_case_id.as_deref(), Some(CASE));
+    assert!(state.active_case_id.is_none());
     assert!(!state.redis.has_case_in_flight());
     assert!(!state.redis.case_has_runtime_failure(CASE));
     assert_eq!(state.redis.pubsub.report().unwrap().delivered_pushes, 1);
+    assert_eq!(state.redis.pubsub.report().unwrap().failed_pushes, 0);
+    assert!(state.redis.snapshot().unused_case.is_empty());
+    drop(state);
+    assert_eq!(
+        guards::control(&runtime, json!({"command":"begin","case_id":next_case})).await["ok"],
+        true
+    );
+    assert_eq!(
+        guards::control(&runtime, json!({"command":"end","case_id":next_case})).await["ok"],
+        true
+    );
     task.abort();
 }
 

@@ -60,18 +60,15 @@ async fn rpc_sid_representation_requires_explicit_formats_without_relaxing_busin
             )
             .await
             .unwrap();
-            let (mut client, task) = connect(&runtime).await;
+            let (mut client, mut task) = connect(&runtime).await;
             let mut changed = actual_broadcast.clone();
             changed["room"] = "user:8".into();
-            assert!(
-                send(
-                    &mut client,
-                    &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()]
-                )
-                .await
-                .starts_with(b"-ERR"),
-                "business room changed with {format}, lazy={lazy}"
-            );
+            send_unmatched(
+                &mut client,
+                &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()],
+            )
+            .await;
+            reconnect(&runtime, &mut client, &mut task).await;
             assert_eq!(
                 send(
                     &mut client,
@@ -92,26 +89,23 @@ async fn rpc_sid_representation_requires_explicit_formats_without_relaxing_busin
             ] {
                 let mut changed = actual_rpc.clone();
                 *changed.pointer_mut(pointer).unwrap() = value;
-                assert!(
-                    send(
-                        &mut client,
-                        &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()]
-                    )
-                    .await
-                    .starts_with(b"-ERR"),
-                    "accepted changed {pointer} with {format}, lazy={lazy}"
-                );
+                send_unmatched(
+                    &mut client,
+                    &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()],
+                )
+                .await;
+                reconnect(&runtime, &mut client, &mut task).await;
             }
-            let response = send(
-                &mut client,
-                &[
-                    b"PUBLISH",
-                    b"jobs",
-                    &serde_json::to_vec(&actual_rpc).unwrap(),
-                ],
-            )
-            .await;
             if accepted {
+                let response = send(
+                    &mut client,
+                    &[
+                        b"PUBLISH",
+                        b"jobs",
+                        &serde_json::to_vec(&actual_rpc).unwrap(),
+                    ],
+                )
+                .await;
                 assert_eq!(response, b":1\r\n", "lazy={lazy}");
                 assert!(
                     runtime
@@ -123,20 +117,25 @@ async fn rpc_sid_representation_requires_explicit_formats_without_relaxing_busin
                         .unused_case
                         .is_empty()
                 );
-                assert!(
-                    send(
-                        &mut client,
-                        &[
-                            b"PUBLISH",
-                            b"jobs",
-                            &serde_json::to_vec(&actual_rpc).unwrap()
-                        ]
-                    )
-                    .await
-                    .starts_with(b"-ERR")
-                );
+                send_unmatched(
+                    &mut client,
+                    &[
+                        b"PUBLISH",
+                        b"jobs",
+                        &serde_json::to_vec(&actual_rpc).unwrap(),
+                    ],
+                )
+                .await;
             } else {
-                assert!(response.starts_with(b"-ERR"), "lazy={lazy}");
+                send_unmatched(
+                    &mut client,
+                    &[
+                        b"PUBLISH",
+                        b"jobs",
+                        &serde_json::to_vec(&actual_rpc).unwrap(),
+                    ],
+                )
+                .await;
             }
             task.abort();
         }

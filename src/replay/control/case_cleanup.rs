@@ -80,7 +80,6 @@ pub(super) async fn lock_for_release<'a>(
     );
     loop {
         let state = lock_drained(shared, case, deadline).await?;
-        dependency_tail::ensure_interaction_not_failed(&state, case)?;
         if state.http_ingress.try_close_case(case) {
             return Ok(state);
         }

@@ -89,24 +89,22 @@ async fn remote_rpc_uses_case_clock_observed_sid_and_one_original_notification()
             globals.push(push(sub, None, &raw, 60));
             let runtime = runtime(temp.path(), &cases, &globals, lazy).await.unwrap();
             let (mut subscriber, sub_task) = connect(&runtime).await;
-            let (mut client, client_task) = connect(&runtime).await;
+            let (mut client, mut client_task) = connect(&runtime).await;
             assert_eq!(
                 send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
                 SUBSCRIBED
             );
             // Neither time alone nor a guessed callback creates a session or consumes a reply.
-            assert!(
-                send(
-                    &mut client,
-                    &[
-                        b"PUBLISH",
-                        b"jobs",
-                        &serde_json::to_vec(&reply(TARGET_SID)).unwrap()
-                    ]
-                )
-                .await
-                .starts_with(b"-ERR")
-            );
+            send_unmatched(
+                &mut client,
+                &[
+                    b"PUBLISH",
+                    b"jobs",
+                    &serde_json::to_vec(&reply(TARGET_SID)).unwrap(),
+                ],
+            )
+            .await;
+            reconnect(&runtime, &mut client, &mut client_task).await;
             assert_eq!(read(&mut subscriber).await, raw);
             assert_eq!(
                 send(
@@ -154,26 +152,19 @@ async fn remote_rpc_uses_case_clock_observed_sid_and_one_original_notification()
             ] {
                 let mut changed = reply(TARGET_SID);
                 *changed.pointer_mut(pointer).unwrap() = value;
-                assert!(
-                    send(
-                        &mut client,
-                        &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()]
-                    )
-                    .await
-                    .starts_with(b"-ERR"),
-                    "accepted changed {pointer}, lazy={lazy}"
-                );
+                send_unmatched(
+                    &mut client,
+                    &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()],
+                )
+                .await;
+                reconnect(&runtime, &mut client, &mut client_task).await;
             }
             let actual = serde_json::to_vec(&reply(TARGET_SID)).unwrap();
             assert_eq!(
                 send(&mut client, &[b"PUBLISH", b"jobs", &actual]).await,
                 response
             );
-            assert!(
-                send(&mut client, &[b"PUBLISH", b"jobs", &actual])
-                    .await
-                    .starts_with(b"-ERR")
-            );
+            send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &actual]).await;
             assert!(
                 tokio::time::timeout(Duration::from_millis(30), read_redis_frame(&mut subscriber))
                     .await
@@ -329,19 +320,17 @@ async fn ordinary_callback_payload_without_socketio_case_metadata_keeps_strict_m
     )
     .await
     .unwrap();
-    let (mut client, task) = connect(&runtime).await;
-    assert!(
-        send(
-            &mut client,
-            &[
-                b"PUBLISH",
-                b"jobs",
-                &serde_json::to_vec(&reply(TARGET_SID)).unwrap()
-            ]
-        )
-        .await
-        .starts_with(b"-ERR")
-    );
+    let (mut client, mut task) = connect(&runtime).await;
+    send_unmatched(
+        &mut client,
+        &[
+            b"PUBLISH",
+            b"jobs",
+            &serde_json::to_vec(&reply(TARGET_SID)).unwrap(),
+        ],
+    )
+    .await;
+    reconnect(&runtime, &mut client, &mut task).await;
     assert_eq!(
         send(&mut client, &[b"PUBLISH", b"jobs", &payload]).await,
         b":1\r\n"

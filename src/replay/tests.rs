@@ -341,8 +341,7 @@ mod tests {
             },
         )
         .await;
-        let err = read_packet(&mut client).await.unwrap().unwrap();
-        assert_eq!(err.payload[0], 0xff);
+        assert!(read_packet(&mut client).await.unwrap().is_none());
 
         wait_for_report_contains(&report_path, r#""sql": "SET @tenant_id = 1""#).await;
         let report: Value =
@@ -429,8 +428,7 @@ mod tests {
             },
         )
         .await;
-        let error = read_packet(&mut client).await.unwrap().unwrap();
-        assert_eq!(error.payload[0], 0xff);
+        assert!(read_packet(&mut client).await.unwrap().is_none());
 
         wait_for_report_contains(
             &report_path,

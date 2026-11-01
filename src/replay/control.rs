@@ -631,26 +631,41 @@ pub(super) async fn end_case(
             .and_then(|result| result),
         None => cleanup.await,
     };
-    if let Err(error) = cleanup {
+    let cleanup_failure = if let Err(error) = cleanup {
         let error = case_cleanup::failure_description(&state, &error).await;
-        let mut response = serde_json::json!({"ok": false, "error": error});
-        if deadline.is_some() {
-            response["dirty"] = true.into();
+        let mut current = state.lock().await;
+        current
+            .dependency_tails
+            .record_cleanup_failure(case_id, &error);
+        if case_cleanup::has_started(&current) {
+            return serde_json::json!({"ok":false,"dirty":true,"error":error});
         }
-        return response;
-    }
+        // An expired business budget fails this Case. With no accepted I/O
+        // left, it must not strand global ownership and block later inputs.
+        if let Err(failure) = case_cleanup::mark_failed(&mut current, case_id) {
+            return serde_json::json!({"ok":false,"dirty":true,
+                "error":format!("{error}; failed to retain Case failure: {failure:#}")});
+        }
+        Some(error)
+    } else {
+        None
+    };
+    let release_deadline = state
+        .lock()
+        .await
+        .case_cleanup
+        .deadline(case_id)
+        .or(deadline);
 
     let counter_sample = {
-        let mut state = match case_cleanup::lock_for_release(&state, case_id, deadline).await {
-            Ok(state) => state,
-            Err(error) => {
-                let error = case_cleanup::failure_description(&state, &error).await;
-                return serde_json::json!({"ok":false,"dirty":true,"error":error});
-            }
-        };
-        if let Err(error) = dependency_tail::ensure_interaction_not_failed(&state, case_id) {
-            return serde_json::json!({"ok":false,"dirty":true,"error":format!("{error:#}")});
-        }
+        let mut state =
+            match case_cleanup::lock_for_release(&state, case_id, release_deadline).await {
+                Ok(state) => state,
+                Err(error) => {
+                    let error = case_cleanup::failure_description(&state, &error).await;
+                    return serde_json::json!({"ok":false,"dirty":true,"error":error});
+                }
+            };
         let sample = state
             .egress_counter_starts
             .remove(case_id)
@@ -678,6 +693,9 @@ pub(super) async fn end_case(
     }
     let state = state.lock().await;
     let dirty = state.case_is_dirty(case_id);
+    if let Some(error) = cleanup_failure {
+        return serde_json::json!({"ok":false,"dirty":true,"case_finished":true,"error":error});
+    }
     if request.fail_on_dirty && dirty {
         serde_json::json!({
             "ok": false,

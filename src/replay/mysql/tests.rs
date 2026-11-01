@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 mod autocommit_tests;
 mod global_payload;
+mod unmatched_connection_tests;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 #[tokio::test]

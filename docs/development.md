@@ -3688,13 +3688,17 @@ The case records `execution_failure.kind: dependency_unmatched` and
 observed primary status remains a separate fact. Complete stream observations
 and interrupted framed prefixes remain protected evidence. Already started
 case I/O retains its normal drain barrier; unused Source calls remain unused.
-After cleanup, finite requests continue under the existing failure limit.
-A WebSocket or Socket.IO session without a clean closure stops the attempt
-before another input is admitted: a sleeping disconnect hook may issue future
-I/O even after all started deliveries drain. Normal Target shutdown and aggregate
-finalization retain the failed Case and leave later Cases unexecuted, without
-inventing another startup or treating partial coverage as a pass. Clean sessions
-continue to reuse the running Target. Public `diagnosis.execution_failures`
+An unmatched Redis, MySQL or Memcached request closes its dependency connection
+without synthesizing a protocol business error; an unmatched HTTP request returns
+502. The native dependency report retains the rejected command and its matching
+diagnostic. Recorded business errors still replay as ordinary protocol replies.
+After cleanup, finite and interaction requests continue under the per-API failure
+limit (`verification.max_failed_cases_per_api`, default 10). A missing dependency
+call or unclean primary closure fails the current Case without ending the whole
+attempt. A no-progress failure preserves every unused Source dependency and
+drains accepted I/O before releasing Case ownership. An actual cleanup or Replay
+infrastructure failure still reports an interrupted attempt. No failed Case or
+partial coverage becomes a pass. Public `diagnosis.execution_failures`
 and the dirty-cluster evidence query expose these causes before downstream
 missing responses, stream events or unused calls. No expected output drives
 request execution and no response or ACK is synthesized.

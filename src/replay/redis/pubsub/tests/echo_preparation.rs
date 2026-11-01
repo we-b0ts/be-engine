@@ -197,11 +197,7 @@ async fn prepared_self_echo_preserves_pipelined_publish_delete_and_live_payload(
             parse_pubsub_push(&received).unwrap().unwrap().payload,
             actual
         );
-        assert!(
-            send(&mut client, &[b"PUBLISH", b"jobs", &actual])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &actual]).await;
         let state = runtime.state.lock().await;
         assert!(Arc::ptr_eq(
             &prepared,

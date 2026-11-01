@@ -6,7 +6,7 @@ use serde_json::json;
 use std::{fs, sync::Arc};
 use tokio::sync::Mutex;
 
-const ERROR: &[u8] = b"-ERR no recorded Redis dependency matched\r\n";
+const ERROR: &[u8] = b"";
 
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -365,12 +365,14 @@ async fn redis_api_origin_keeps_current_business_order_and_exact_arguments() {
             ERROR,
         )
         .await;
+        client = TcpStream::connect(addr).await.unwrap();
         request(
             &mut client,
             &["ZREM", "presence:8", "client-active", "client-away"],
             ERROR,
         )
         .await;
+        client = TcpStream::connect(addr).await.unwrap();
         request(
             &mut client,
             &["ZREM", "presence:7", "client-active", "client-away"],
@@ -383,12 +385,14 @@ async fn redis_api_origin_keeps_current_business_order_and_exact_arguments() {
             ERROR,
         )
         .await;
+        client = TcpStream::connect(addr).await.unwrap();
         request(
             &mut client,
             &["ZADD", "presence:7", "101", "client-away"],
             ERROR,
         )
         .await;
+        client = TcpStream::connect(addr).await.unwrap();
         request(
             &mut client,
             &["ZADD", "presence:7", "100", "client-away"],

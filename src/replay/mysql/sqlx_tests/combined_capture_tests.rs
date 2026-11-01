@@ -16,6 +16,7 @@ async fn combined_capture_from_real_unmatched_insert_then_fresh_replay_is_finite
         let original = std::fs::read(&path).unwrap();
         let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!(sqlx::query(SQL).bind(TARGET).bind(chrono::Utc::now().naive_utc()).bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let replay_report = temp.path().join("replay.json");
         {
@@ -36,10 +37,12 @@ async fn combined_capture_from_real_unmatched_insert_then_fresh_replay_is_finite
         let (fresh,addr,runtime,task) = fixture_with_policy(&[source],Some(&policy)).await;
         let mut client = connect(addr,&fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!(sqlx::query(SQL).bind(TARGET).bind(chrono::Utc::now().naive_utc()).bind(8_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!(runtime.state.lock().await.replay_policy.as_ref().unwrap().report().dynamic_bindings.is_empty());
         let now = chrono::Utc::now().naive_utc();
         assert_eq!(sqlx::query(SQL).bind(TARGET).bind(now).bind(7_i64).execute(&mut client).await.unwrap().rows_affected(),1);
         assert!(sqlx::query(SQL).bind(TARGET).bind(now).bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count,1);
@@ -67,6 +70,7 @@ async fn combined_table_capture_replays_two_shards_without_cross_table_consumpti
         let first = SQL.replace("items","items_0001");
         let second = SQL.replace("items","items_0002");
         assert!(sqlx::query(&first).bind("target-1").bind(chrono::Utc::now().naive_utc()).bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let replay_report = temp.path().join("replay.json");
         {
@@ -87,11 +91,13 @@ async fn combined_table_capture_replays_two_shards_without_cross_table_consumpti
         // The recorded first write must not match a different allowed shard;
         // the real second write has another stable owner and remains finite.
         assert!(sqlx::query(&second).bind("target-1").bind(chrono::Utc::now().naive_utc()).bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!(runtime.state.lock().await.replay_policy.as_ref().unwrap().report().dynamic_bindings.is_empty());
         for (sql,name,owner) in [(&first,"target-1",7_i64),(&second,"target-2",8_i64)] {
             assert_eq!(sqlx::query(sql).bind(name).bind(chrono::Utc::now().naive_utc()).bind(owner).execute(&mut client).await.unwrap().rows_affected(),1);
         }
         assert!(sqlx::query(&first).bind("target-1").bind(chrono::Utc::now().naive_utc()).bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &fresh.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count,2);

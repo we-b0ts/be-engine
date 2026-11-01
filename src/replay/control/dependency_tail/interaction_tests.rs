@@ -9,7 +9,7 @@ use crate::interaction::policy::InteractionPolicy;
 use crate::replay::control::{begin_case, end_case};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -180,7 +180,7 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
 }
 
 #[tokio::test]
-async fn rejected_native_dependency_keeps_its_case_with_pending_or_consumed_inventory() {
+async fn rejected_native_dependency_preserves_failure_then_releases_after_actual_io_drains() {
     for consumed in [false, true] {
         let fixture = fixture(None, 0).await;
         original_interaction(&fixture, Protocol::SocketIo, 600).await;
@@ -197,32 +197,27 @@ async fn rejected_native_dependency_keeps_its_case_with_pending_or_consumed_inve
             peer.read_exact(&mut response).await.unwrap();
             assert_eq!(&response, b"+OK\r\n");
         }
-        // A real Target request is rejected. Even if every Source response was
-        // already delivered, the application's error continuation can still
-        // sleep and start another call after the primary wire close.
+        // A rejected real Target request closes its dependency connection. The
+        // failed Case remains dirty without consuming its unused Source calls.
         peer.write_all(b"*2\r\n$3\r\nGET\r\n$5\r\nother\r\n")
             .await
             .unwrap();
-        let mut response = Vec::new();
-        tokio::io::BufReader::new(&mut peer)
-            .read_until(b'\n', &mut response)
-            .await
-            .unwrap();
-        assert!(response.starts_with(b"-ERR"));
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), peer.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
         let mut end = command("end");
         end.fail_on_dirty = true;
         let ended = end_case(&end, state.clone()).await;
         assert_eq!(ended["ok"], false, "{ended}");
         assert_eq!(ended["dirty"], true);
-        assert!(
-            ended["error"]
-                .as_str()
-                .unwrap()
-                .contains("ownership was retained")
-        );
         {
             let state = state.lock().await;
-            assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
+            assert!(state.active_case_id.is_none());
             assert!(state.redis.case_has_runtime_failure("case-a"));
             assert_eq!(
                 state.redis.snapshot().unused_case.len(),
@@ -231,7 +226,9 @@ async fn rejected_native_dependency_keeps_its_case_with_pending_or_consumed_inve
         }
         let mut next = command("begin");
         next.case_id = Some("case-b".into());
-        assert_eq!(begin_case(&next, state.clone()).await["ok"], false);
+        assert_eq!(begin_case(&next, state.clone()).await["ok"], true);
+        next.command = "end".into();
+        assert_eq!(end_case(&next, state.clone()).await["ok"], true);
         peer.shutdown().await.unwrap();
         task.await.unwrap().unwrap();
     }
@@ -263,7 +260,7 @@ async fn recorded_native_dependency_error_is_consumed_without_a_replay_rejection
 }
 
 #[tokio::test]
-async fn missing_interaction_call_after_source_idle_allowance_stops_next_admission() {
+async fn missing_interaction_call_after_source_idle_allowance_fails_case_and_allows_next() {
     let fixture = fixture(None, 0).await;
     original_interaction(&fixture, Protocol::SocketIo, 600).await;
     let state = fixture.runtime.state.clone();
@@ -286,24 +283,21 @@ async fn missing_interaction_call_after_source_idle_allowance_stops_next_admissi
     assert!(!ending.is_finished());
     tokio::time::advance(Duration::from_millis(50)).await;
     let ended = ending.await.unwrap();
-    assert_eq!(ended["ok"], false, "{ended}");
+    // fail_on_dirty is false: ending succeeds while preserving failure evidence.
+    assert_eq!(ended["ok"], true, "{ended}");
     assert_eq!(ended["dirty"], true);
-    assert!(
-        ended["error"]
-            .as_str()
-            .unwrap()
-            .contains("ownership was retained")
-    );
     let state_guard = state.lock().await;
     let failure = state_guard.dependency_tails.failure("case-a").unwrap();
     assert_eq!(failure["kind"], "case_no_progress");
     assert_eq!(failure["waiting"]["no_progress_timeout_ms"], 250);
     assert_eq!(state_guard.redis.snapshot().unused_case.len(), 1);
-    assert_eq!(state_guard.active_case_id.as_deref(), Some("case-a"));
+    assert!(state_guard.active_case_id.is_none());
     drop(state_guard);
     let mut next = command("begin");
     next.case_id = Some("case-b".into());
-    assert_eq!(begin_case(&next, state).await["ok"], false);
+    assert_eq!(begin_case(&next, state.clone()).await["ok"], true);
+    next.command = "end".into();
+    assert_eq!(end_case(&next, state).await["ok"], true);
 }
 
 #[tokio::test]
@@ -337,7 +331,7 @@ async fn cancelling_interaction_tail_wait_cannot_release_or_renew_the_case() {
 }
 
 #[tokio::test]
-async fn missing_interaction_tail_uses_the_original_absolute_budget_and_retains_ownership() {
+async fn missing_interaction_tail_preserves_original_budget_failure_and_allows_next() {
     let fixture = fixture(None, 0).await;
     original_interaction(&fixture, Protocol::SocketIo, 0).await;
     let state = fixture.runtime.state.clone();
@@ -355,9 +349,19 @@ async fn missing_interaction_tail_uses_the_original_absolute_budget_and_retains_
     assert_eq!(ended["ok"], false, "{ended}");
     assert_eq!(ended["dirty"], true);
     assert!(ended["error"].as_str().unwrap().contains("budget"));
-    assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
+    assert!(state.lock().await.active_case_id.is_none());
     assert_eq!(state.lock().await.redis.snapshot().unused_case.len(), 1);
+    assert!(
+        state
+            .lock()
+            .await
+            .dependency_tails
+            .failure("case-a")
+            .is_some()
+    );
     let mut next = command("begin");
     next.case_id = Some("case-b".into());
-    assert_eq!(begin_case(&next, state).await["ok"], false);
+    assert_eq!(begin_case(&next, state.clone()).await["ok"], true);
+    next.command = "end".into();
+    assert_eq!(end_case(&next, state).await["ok"], true);
 }

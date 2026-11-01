@@ -108,7 +108,14 @@ async fn isolation_rejects_unproven_modes_active_settings_cross_socket_and_missi
                             .await
                             .is_err()
                     );
-                    transaction.rollback().await.unwrap();
+                    assert!(
+                        transaction
+                            .rollback()
+                            .await
+                            .unwrap_err()
+                            .as_database_error()
+                            .is_none()
+                    );
                 }
                 "different-level" => {
                     assert!(
@@ -140,7 +147,14 @@ async fn isolation_rejects_unproven_modes_active_settings_cross_socket_and_missi
                             .await
                             .is_err()
                     );
-                    transaction.rollback().await.unwrap();
+                    assert!(
+                        transaction
+                            .rollback()
+                            .await
+                            .unwrap_err()
+                            .as_database_error()
+                            .is_none()
+                    );
                 }
                 "missing-begin" => {
                     client

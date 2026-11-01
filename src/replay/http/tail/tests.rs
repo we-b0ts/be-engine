@@ -177,7 +177,8 @@ async fn shared_http_permission_does_not_waive_the_case_actual_inventory() {
             .len(),
         1
     );
-    assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
+    assert!(state.active_case_id.is_none());
+    assert!(state.dependency_tails.failure("case-a").is_some());
 }
 
 #[tokio::test]
@@ -196,7 +197,8 @@ async fn unshared_or_explicit_completion_http_cannot_be_omitted() {
         .unwrap();
         assert_eq!(ended["ok"], false, "{ended}");
         let state = fixture.runtime.state.lock().await;
-        assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
+        assert!(state.active_case_id.is_none());
+        assert!(state.dependency_tails.failure("case-a").is_some());
         assert_eq!(
             state.http_exchange_status(index(&state, fixture.cache)),
             Some(ReplayExchangeStatus::Available)

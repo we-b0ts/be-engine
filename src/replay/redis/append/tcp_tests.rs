@@ -167,12 +167,27 @@ async fn replay_tcp_scope(
         )
         .await
         .unwrap()
-        .unwrap()
         .unwrap();
-        assert_eq!(
-            response.raw.as_ref(),
-            b"-ERR no recorded Redis dependency matched\r\n"
+        assert!(
+            response.is_none(),
+            "unmatched request must close without a reply"
         );
+        task.await.unwrap().unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        task = tokio::spawn(handle_connection(
+            server,
+            ReplayTarget {
+                host: "redis.test".into(),
+                port: 6379,
+                fake_ip: "198.18.0.1".parse().unwrap(),
+                protocol: ReplayProtocol::Redis,
+            },
+            runtime.state.clone(),
+        ));
+        client = RedisBufferedReader::new(stream, 1024 * 1024);
     }
     let chunks = observation_chunks.unwrap_or(&[b"a", b"bcd"]);
     let mut requests: Vec<(Vec<&[u8]>, Vec<u8>)> =

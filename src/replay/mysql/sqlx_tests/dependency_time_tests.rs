@@ -87,6 +87,7 @@ async fn dependency_request_time_supports_faster_batches_over_tls_text_and_prepa
                 .await
                 .is_err()
         );
+        client = connect(addr, &case.join(".replay/ca.pem")).await;
         assert!(
             prepared(
                 &mut client,
@@ -97,12 +98,14 @@ async fn dependency_request_time_supports_faster_batches_over_tls_text_and_prepa
             .await
             .is_err()
         );
+        client = connect(addr, &case.join(".replay/ca.pem")).await;
         let stale = current - chrono::TimeDelta::seconds(10);
         assert!(
             prepared(&mut client, 1, stale, payload(stale))
                 .await
                 .is_err()
         );
+        client = connect(addr, &case.join(".replay/ca.pem")).await;
 
         for id in 1..=50 {
             let clock = now();
@@ -122,7 +125,7 @@ async fn dependency_request_time_supports_faster_batches_over_tls_text_and_prepa
                 .await
                 .is_err()
         );
-        client.close().await.unwrap();
+        drop(client);
 
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count, 50);

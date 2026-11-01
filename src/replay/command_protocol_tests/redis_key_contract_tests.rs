@@ -117,7 +117,7 @@ async fn redis_generated_keys_plan_in_stages_and_replay_with_consistent_json_ref
         let mut client = TcpStream::connect(addr).await.unwrap();
         let session =
             json!({"id":"cd34","expires_at":Utc::now().timestamp()+3600,"owner":7}).to_string();
-        let error = b"-ERR no recorded Redis dependency matched\r\n";
+        let error = b"";
         if stage == 2 {
             let wrong =
                 json!({"id":"cd34","expires_at":Utc::now().timestamp()+3600,"owner":8}).to_string();
@@ -127,6 +127,7 @@ async fn redis_generated_keys_plan_in_stages_and_replay_with_consistent_json_ref
                 error,
             )
             .await;
+            client = TcpStream::connect(addr).await.unwrap();
             assert!(
                 state
                     .lock()
@@ -231,7 +232,7 @@ async fn redis_key_window_preserves_multi_exec_order_and_finite_command_consumpt
         let key = format!("rate:user:{}", Utc::now().timestamp().div_euclid(60));
         let mut client = TcpStream::connect(addr).await.unwrap();
         redis_value_tests::request(&mut client, &["MULTI"], b"+OK\r\n").await;
-        let error = b"-ERR no recorded Redis dependency matched\r\n";
+        let error = b"";
         redis_value_tests::request(
             &mut client,
             &["INCRBY", &key, "1"],

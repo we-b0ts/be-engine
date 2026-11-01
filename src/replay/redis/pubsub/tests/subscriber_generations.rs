@@ -187,12 +187,9 @@ async fn rpc_subscriber_generation_priority_keeps_recorded_lane_predecessors() {
         )
         .await
         .unwrap();
-        let (mut subscriber, task) = connect(&runtime).await;
-        assert!(
-            send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"])
-                .await
-                .starts_with(b"-ERR")
-        );
+        let (mut subscriber, mut task) = connect(&runtime).await;
+        send_unmatched(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await;
+        reconnect(&runtime, &mut subscriber, &mut task).await;
         assert_eq!(runtime.state.lock().await.redis.events.matched_count, 0);
         assert_eq!(
             send(&mut subscriber, &[b"GET", b"before"]).await,

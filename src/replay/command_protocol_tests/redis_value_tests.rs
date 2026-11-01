@@ -51,6 +51,18 @@ pub(super) async fn request(client: &mut TcpStream, parts: &[&str], expected: &[
         bytes.extend_from_slice(format!("${}\r\n{}\r\n", part.len(), part).as_bytes());
     }
     client.write_all(&bytes).await.unwrap();
+    if expected.is_empty() {
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), client.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
+            "engine rejection must close without a synthetic Redis reply"
+        );
+        return;
+    }
     let mut response = vec![0; expected.len()];
     tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut response))
         .await
@@ -86,12 +98,7 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
     std::fs::write(case.join("expected-response.json"), "{}").unwrap();
     let (addr, state, task) = spawn(&case, None).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
-    request(
-        &mut client,
-        &["SET", "members:1", TARGET, "EX", "900"],
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
+    request(&mut client, &["SET", "members:1", TARGET, "EX", "900"], b"").await;
     let report = temp.path().join("replay.json");
     {
         let mut state = state.lock().await;
@@ -116,18 +123,10 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
     .unwrap();
     let (addr, state, task) = spawn(&case, Some(policy)).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
-    request(
-        &mut client,
-        &["GET", "members:1"],
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
-    request(
-        &mut client,
-        &["SET", "members:1", TARGET, "EX", "901"],
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
+    request(&mut client, &["GET", "members:1"], b"").await;
+    client = TcpStream::connect(addr).await.unwrap();
+    request(&mut client, &["SET", "members:1", TARGET, "EX", "901"], b"").await;
+    client = TcpStream::connect(addr).await.unwrap();
     request(
         &mut client,
         &["SET", "members:1", TARGET, "EX", "900"],
@@ -135,12 +134,7 @@ async fn redis_value_discovery_plan_apply_then_real_set_get_preserves_lane_and_p
     )
     .await;
     request(&mut client, &["GET", "members:1"], b"$8\r\nrecorded\r\n").await;
-    request(
-        &mut client,
-        &["SET", "members:1", TARGET, "EX", "900"],
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
+    request(&mut client, &["SET", "members:1", TARGET, "EX", "900"], b"").await;
     let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
     assert_eq!(report["redis"]["matched_count"], 2);
     assert_eq!(

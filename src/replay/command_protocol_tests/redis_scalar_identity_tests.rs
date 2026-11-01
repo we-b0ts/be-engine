@@ -78,7 +78,7 @@ redis:
     let mut client = TcpStream::connect(addr).await.unwrap();
     let mut reader = TcpStream::connect(addr).await.unwrap();
     let mut releaser = TcpStream::connect(addr).await.unwrap();
-    let error = b"-ERR no recorded Redis dependency matched\r\n";
+    let error = b"";
     request(
         &mut client,
         &[
@@ -91,6 +91,7 @@ redis:
         error,
     )
     .await;
+    client = TcpStream::connect(addr).await.unwrap();
     request(
         &mut client,
         &[
@@ -104,6 +105,7 @@ redis:
         error,
     )
     .await;
+    client = TcpStream::connect(addr).await.unwrap();
     request(
         &mut client,
         &[
@@ -129,6 +131,7 @@ redis:
         error,
     )
     .await;
+    releaser = TcpStream::connect(addr).await.unwrap();
     request(
         &mut reader,
         &["MGET", "item:online:1", "item:online:legacy"],
@@ -142,6 +145,7 @@ redis:
         error,
     )
     .await;
+    releaser = TcpStream::connect(addr).await.unwrap();
     request(
         &mut releaser,
         &[
@@ -154,6 +158,7 @@ redis:
         error,
     )
     .await;
+    releaser = TcpStream::connect(addr).await.unwrap();
     request(
         &mut releaser,
         &[
@@ -180,7 +185,7 @@ redis:
     .await;
     let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
     assert_eq!(report["redis"]["matched_count"], 3);
-    assert_eq!(report["redis"]["connections"], 3);
+    assert_eq!(report["redis"]["connections"], 8);
     assert!(
         report["redis"]["unused_case"]
             .as_array()

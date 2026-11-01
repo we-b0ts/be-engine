@@ -23,7 +23,7 @@ pub(super) fn status(state: &ReplayState, case: Option<&str>) -> Value {
         && let Some(failure) = state.dependency_tails.failure(case)
     {
         return serde_json::json!({"ok":true,"case_id":case,"failed":true,
-            "kind":"case_no_progress","failures":[failure],
+            "kind":failure["kind"],"failures":[failure],
             "has_response_time_copies":has_response_time_copies});
     }
     let Some(case) = case.filter(|case| state.active_case_id.as_deref() == Some(*case)) else {

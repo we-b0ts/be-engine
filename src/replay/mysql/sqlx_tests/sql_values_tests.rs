@@ -37,7 +37,8 @@ async fn table_time_templates_replay_shards_without_consuming_a_wrong_shard() {
                         (&mut client).execute(sql.as_str()).await
                     };
                     if attempt == 1 { assert_eq!(result.unwrap().rows_affected(),1); }
-                    else { assert!(result.is_err(), "wrong shard and exhausted evidence must fail"); }
+                    else { assert!(result.is_err(), "wrong shard and exhausted evidence must fail");
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await; }
                 }
                 client.close().await.unwrap();
                 let state = runtime.state.lock().await;
@@ -83,7 +84,8 @@ async fn dynamic_sql_time_matches_text_and_prepared_writes_without_consuming_wro
                         }
                         assert_eq!(result.unwrap().rows_affected(),1);
                     }
-                    else { assert!(result.is_err(),"stale time, changed key and exhausted evidence must fail: source_prepared={source_prepared}, target_mode={target_mode}, attempt={attempt}"); }
+                    else { assert!(result.is_err(),"stale time, changed key and exhausted evidence must fail: source_prepared={source_prepared}, target_mode={target_mode}, attempt={attempt}");
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await; }
                 }
                 (&mut client).execute("COMMIT").await.unwrap();
                 client.close().await.unwrap();
@@ -111,6 +113,7 @@ async fn dynamic_sql_time_preserves_recorded_errors_and_stable_sql() {
         let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
         for template in [TEMPLATE.replace("api_keys", "other_keys"), TEMPLATE.replace("updated_at=now()", "updated_at=NULL"), TEMPLATE.replace("WHERE api_keys.id=?", "WHERE api_keys.id=? OR 1=1")] {
             assert!(sqlx::query(&template).bind(&now).bind(7_i64).execute(&mut client).await.is_err());
+            client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         }
         let error = sqlx::query(TEMPLATE).bind(&now).bind(7_i64).execute(&mut client).await.unwrap_err();
         assert_eq!(error.as_database_error().unwrap().downcast_ref::<sqlx::mysql::MySqlDatabaseError>().number(),1213);
@@ -162,6 +165,7 @@ async fn dynamic_sql_time_matches_scalar_and_nested_json_fields_atomically() {
                 .await
                 .is_err()
         );
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
 
         let matching = json!({
             "spec":{"cloudConfig":{"nevisIpObservedAt":observed_at}},

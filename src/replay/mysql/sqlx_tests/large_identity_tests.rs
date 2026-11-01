@@ -54,7 +54,8 @@ async fn large_identity_write_keeps_blob_status_predicate_and_consumption_exact(
                     } else {
                         client.execute(format!("UPDATE attachments SET image='{image}', storage_key='target-key', status='{status}' WHERE id={id}").as_str()).await
                     };
-                    if attempt==3 {assert_eq!(result.unwrap().rows_affected(),1);} else {assert!(result.is_err());}
+                    if attempt==3 {assert_eq!(result.unwrap().rows_affected(),1);} else {assert!(result.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;}
                 }
                 client.close().await.unwrap();
                 let state=runtime.state.lock().await;

@@ -35,48 +35,37 @@ async fn bounded_window_without_callback_consumes_only_the_publish_and_preserves
             send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
             confirmed
         );
-        let (mut publisher, pub_task) = connect(&runtime).await;
+        let (mut publisher, mut pub_task) = connect(&runtime).await;
         let mut changed: Value = serde_json::from_slice(&request(TARGET, 9)).unwrap();
         changed["event"] = "different:event".into();
-        assert!(
-            send(
-                &mut publisher,
-                &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()]
-            )
-            .await
-            .starts_with(b"-ERR")
-        );
+        send_unmatched(
+            &mut publisher,
+            &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()],
+        )
+        .await;
+        reconnect(&runtime, &mut publisher, &mut pub_task).await;
         assert_eq!(
             send(&mut publisher, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await,
             b":1\r\n"
         );
         // An absent callback does not waive bijective protocol identity binding.
-        assert!(
-            send(&mut publisher, &[b"PUBLISH", b"jobs", &request(TARGET, 9)])
-                .await
-                .starts_with(b"-ERR")
-        );
-        assert!(
-            send(
-                &mut publisher,
-                &[
-                    b"PUBLISH",
-                    b"jobs",
-                    &request(&Uuid::new_v4().simple().to_string(), 10)
-                ]
-            )
-            .await
-            .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut publisher, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await;
+        reconnect(&runtime, &mut publisher, &mut pub_task).await;
+        send_unmatched(
+            &mut publisher,
+            &[
+                b"PUBLISH",
+                b"jobs",
+                &request(&Uuid::new_v4().simple().to_string(), 10),
+            ],
+        )
+        .await;
+        reconnect(&runtime, &mut publisher, &mut pub_task).await;
         assert_eq!(
             send(&mut publisher, &[b"PUBLISH", b"jobs", &request(TARGET, 10)]).await,
             b":1\r\n"
         );
-        assert!(
-            send(&mut publisher, &[b"PUBLISH", b"jobs", &request(TARGET, 11)])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut publisher, &[b"PUBLISH", b"jobs", &request(TARGET, 11)]).await;
         assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(30),
@@ -145,11 +134,7 @@ async fn late_global_callback_links_only_its_original_publish_and_is_delivered_o
         let (identity, _) = rpc::callback(&payload).unwrap().unwrap();
         assert_eq!(identity.host, TARGET);
         assert_eq!(identity.id, 9);
-        assert!(
-            send(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 10)])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 10)]).await;
         assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(30),

@@ -6,7 +6,7 @@ const SOURCE_A: &str = "0123456789ab4def8123456789abcdef";
 const SOURCE_B: &str = "1123456789ab4def8123456789abcdef";
 const TARGET_A: &str = "fedcba98765443218123456789abcdef";
 const TARGET_B: &str = "eedcba98765443218123456789abcdef";
-const ERROR: &[u8] = b"-ERR no recorded Redis dependency matched\r\n";
+const ERROR: &[u8] = b"";
 
 fn payload(id: &str, stage: u8) -> Vec<u8> {
     serde_json::json!({"host_id":id,"stage":stage})
@@ -23,6 +23,11 @@ async fn publish(client: &mut TcpStream, channel: &str, payload: &[u8], expected
     }
     tokio::time::timeout(Duration::from_secs(5), async {
         client.write_all(&bytes).await.unwrap();
+        if expected.is_empty() {
+            let mut byte = [0];
+            assert_eq!(client.read(&mut byte).await.unwrap(), 0);
+            return;
+        }
         let mut response = vec![0; expected.len()];
         client.read_exact(&mut response).await.unwrap();
         assert_eq!(response, expected);
@@ -108,8 +113,11 @@ async fn global_publish_formats_preserve_order_stable_fields_and_cross_protocol_
     let mut client = TcpStream::connect(address).await.unwrap();
     // Failed previews retain the original ordered slot and do not pin an ID.
     publish(&mut client, "events", &payload(TARGET_B, 2), ERROR).await;
+    client = TcpStream::connect(address).await.unwrap();
     publish(&mut client, "other", &payload(TARGET_B, 1), ERROR).await;
+    client = TcpStream::connect(address).await.unwrap();
     publish(&mut client, "events", &payload("not-hex", 1), ERROR).await;
+    client = TcpStream::connect(address).await.unwrap();
     publish(&mut client, "events", &payload(TARGET_A, 1), b":1\r\n").await;
     assert_eq!(
         http_request(http_address, TARGET_B).await,
@@ -122,6 +130,7 @@ async fn global_publish_formats_preserve_order_stable_fields_and_cross_protocol_
     // The same Source value must keep the same Target value across sockets.
     let mut second = TcpStream::connect(address).await.unwrap();
     publish(&mut second, "events", &payload(TARGET_B, 2), ERROR).await;
+    second = TcpStream::connect(address).await.unwrap();
     publish(&mut second, "events", &payload(TARGET_A, 2), b":2\r\n").await;
     publish(&mut second, "events", &payload(TARGET_B, 3), b":3\r\n").await;
     publish(&mut second, "events", &payload(TARGET_B, 3), ERROR).await;
@@ -226,6 +235,7 @@ async fn unknown_pickle_payload_is_exact_bytes_without_publisher_substring_rewri
     let mut client = TcpStream::connect(address).await.unwrap();
     publish(&mut client, "events", &binary(TARGET_A), ERROR).await;
     assert_eq!(state.lock().await.redis.snapshot().matched_count, 0);
+    client = TcpStream::connect(address).await.unwrap();
     publish(&mut client, "events", &binary(SOURCE_A), b":1\r\n").await;
     assert_eq!(state.lock().await.redis.snapshot().matched_count, 1);
     task.abort();

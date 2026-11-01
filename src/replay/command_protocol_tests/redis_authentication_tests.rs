@@ -13,7 +13,7 @@ async fn read_line(client: &mut TcpStream) -> String {
 }
 
 #[tokio::test]
-async fn reports_unobserved_redis_authentication_and_allows_authentication_then_retry() {
+async fn reports_unobserved_redis_authentication_and_reconnects_before_authenticated_retry() {
     let temp = crate::replay::policy::test_fixture::managed_tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -34,11 +34,14 @@ async fn reports_unobserved_redis_authentication_and_allows_authentication_then_
     client.write_all(b"*1\r\n$4\r\nPING\r\n").await.unwrap();
     assert_eq!(read_line(&mut client).await, "+PONG\r\n");
     client.write_all(get).await.unwrap();
-    let response = read_line(&mut client).await;
-    assert!(response.starts_with("-ERR Redis authentication state mismatch:"));
-    assert!(response.contains("target authentication was not observed"));
-    assert!(response.contains("whether it is passed to the Redis client"));
-    assert!(!response.contains("password is missing"));
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), client.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
 
     let report = wait_for_unmatched_count(&report_path, "redis", 1).await;
     let event = &report["redis"]["unmatched"][0];
@@ -46,13 +49,15 @@ async fn reports_unobserved_redis_authentication_and_allows_authentication_then_
         event["diagnostic"]["fields"],
         serde_json::json!(["authentication_not_observed"])
     );
-    assert_eq!(
-        response,
-        format!("-ERR {}\r\n", event["reason"].as_str().unwrap())
-    );
+    let reason = event["reason"].as_str().unwrap();
+    assert!(reason.contains("Redis authentication state mismatch:"));
+    assert!(reason.contains("target authentication was not observed"));
+    assert!(reason.contains("whether it is passed to the Redis client"));
+    assert!(!reason.contains("password is missing"));
     assert_eq!(report["redis"]["unused_case"].as_array().unwrap().len(), 1);
     assert!(!event.to_string().contains("private-key"));
 
+    client = TcpStream::connect(addr).await.unwrap();
     client
         .write_all(b"*2\r\n$4\r\nAUTH\r\n$14\r\nfixture-secret\r\n")
         .await
@@ -109,9 +114,13 @@ async fn other_redis_mismatches_do_not_claim_missing_authentication() {
             .write_all(b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n")
             .await
             .unwrap();
+        let mut byte = [0];
         assert_eq!(
-            read_line(&mut client).await,
-            "-ERR no recorded Redis dependency matched\r\n",
+            tokio::time::timeout(Duration::from_secs(5), client.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
             "{field}"
         );
         let report = wait_for_unmatched_count(&report_path, "redis", 1).await;

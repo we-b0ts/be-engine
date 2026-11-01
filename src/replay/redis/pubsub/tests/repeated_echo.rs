@@ -97,11 +97,7 @@ async fn repeated_broadcasts_claim_their_own_source_interval_once_with_live_payl
             .await
             .unwrap();
         }
-        assert!(
-            send(&mut client, &[b"PUBLISH", b"jobs", &actual])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &actual]).await;
         assert!(
             tokio::time::timeout(Duration::from_millis(40), read_redis_frame(&mut subscriber))
                 .await

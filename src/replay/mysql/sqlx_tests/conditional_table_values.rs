@@ -39,6 +39,7 @@ rules:
         let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let invalid_running = body("RUNNING",json!("2026-10-16T00:01:00"));
         assert!(sqlx::query(&sql("tasks_0001")).bind(invalid_running.to_string()).bind("2026-10-16 00:01:00").bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let running=body("RUNNING",Value::Null);
         assert_eq!(sqlx::query(&sql("tasks_0001")).bind(running.to_string()).bind("2026-10-16 00:01:00").bind(7_i64).execute(&mut client).await.unwrap().rows_affected(),1);
         let good = body("COMPLETED",json!("2026-10-16T00:01:00"));
@@ -50,9 +51,11 @@ rules:
             (sql("tasks_0001"),good.clone(),8),
             (sql("tasks_0001"),changed,7),
             (sql("tasks_0001"),body("COMPLETED",Value::Null),7),
-        ] {assert!(sqlx::query(&statement).bind(payload.to_string()).bind("2026-10-16 00:01:00").bind(id).execute(&mut client).await.is_err());}
+        ] {assert!(sqlx::query(&statement).bind(payload.to_string()).bind("2026-10-16 00:01:00").bind(id).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;}
         for table in ["tasks_0001","tasks_0002"] {assert_eq!(sqlx::query(&sql(table)).bind(good.to_string()).bind("2026-10-16 00:01:00").bind(7_i64).execute(&mut client).await.unwrap().rows_affected(),1);}
         assert!(sqlx::query(&sql("tasks_0001")).bind(good.to_string()).bind("2026-10-16 00:01:00").bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();let state=runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count,3);assert_eq!(state.mysql.events.unmatched_queries.len(),8);
         assert_eq!(std::fs::read(recording).unwrap(),original);task.abort();

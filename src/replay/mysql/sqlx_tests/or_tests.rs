@@ -40,6 +40,7 @@ async fn sqlx_or_groups_match_all_protocol_pairs_with_aliases_tuples_and_cached_
                         };
                         if attempt == 1 || attempt == 3 {
                             assert!(response.is_err(), "wrong branch values and exhausted recordings must fail");
+                            client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                         } else {
                             assert_eq!(response.unwrap()[0].get::<i64, _>("id"), tenant as i64);
                         }
@@ -101,6 +102,7 @@ async fn sqlx_nested_exists_in_lists_match_text_recording_with_prepared_target()
             .fetch_all(&mut client)
             .await;
         assert!(wrong.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let rows = sqlx::query(target)
             .bind(2_i64)
             .bind(3_i64)

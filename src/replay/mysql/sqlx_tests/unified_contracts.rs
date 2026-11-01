@@ -24,7 +24,8 @@ async fn sql_json_contract_preserves_statement_and_finite_consumption_over_tls()
         let mut client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         for (body, id, valid) in [(good.replace("checked","changed"),7,false),(good.clone(),8,false),(good.clone(),7,true),(good,7,false)] {
             let result = sqlx::query(sql).bind(body).bind(id).execute(&mut client).await;
-            if valid { assert_eq!(result.unwrap().rows_affected(),1); } else { assert!(result.is_err()); }
+            if valid { assert_eq!(result.unwrap().rows_affected(),1); } else { assert!(result.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await; }
         }
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
@@ -78,6 +79,15 @@ async fn mysql_json_wildcard_times_preserve_array_shape_members_and_finite_consu
                 .execute(&mut client)
                 .await;
             assert_eq!(result.is_ok(), valid, "block count {count}: {result:?}");
+            if !valid {
+                client = connect(
+                    addr,
+                    &temp
+                        .path()
+                        .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+                )
+                .await;
+            }
         }
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
@@ -147,6 +157,13 @@ async fn sql_json_response_changes_only_explicit_delivery_time() {
         assert_eq!(body["members"], json!(["a", "b", "a"]));
         assert_eq!(body["stable"], "checked");
         assert!((&mut client).fetch_one(sql).await.is_err());
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count, 1);
@@ -272,6 +289,7 @@ async fn absent_sql_json_leaf_is_inactive_and_business_values_remain_exact() {
             &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
         ).await;
         assert!((&mut client).execute("UPDATE settings SET json='{\"stable\":8}' WHERE id=7").await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert_eq!((&mut client).execute(sql).await.unwrap().rows_affected(), 1);
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
