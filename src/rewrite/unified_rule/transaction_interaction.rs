@@ -1,4 +1,4 @@
-//! Mixed API evidence preserves encrypted streams while planning ordinary bodies.
+//! Mixed API evidence preserves private headers and streams while planning ordinary bodies.
 use super::*;
 use crate::interaction::{model::InputTranscript, model::Protocol, policy::InteractionPolicy};
 use serde_json::Value;
@@ -89,10 +89,10 @@ fn mixed(scenario: &str) -> Fixture {
         .unwrap();
     crate::interaction::private::protect_output(&mut target, &target_path).unwrap();
     if scenario == "bad-source" {
-        tamper(&mut source["interaction"]["events"][0]["message"]["data"]);
+        tamper(&mut source["private_interaction_output_headers"]);
     }
     if scenario == "bad-target" {
-        tamper(&mut target["interaction"]["events"][0]["message"]["data"]);
+        tamper(&mut target["private_interaction_output_headers"]);
     }
     fixture.replace_case_responses("00000000-0000-4000-8000-000000000002", source, target);
     write(&fixture.proposal, proposal(false));
