@@ -234,6 +234,11 @@ impl ActiveCaseRegistry {
 
     pub(crate) fn begin_quiescing(&self) -> bool {
         let mut state = self.state.lock().expect("active case registry poisoned");
+        self.begin_quiescing_locked(&mut state)
+    }
+
+    /// Freeze shutdown association before a completion signal can release its Case.
+    fn begin_quiescing_locked(&self, state: &mut ActiveCaseState) -> bool {
         let changed = !state.quiescing;
         state.begin_shutdown();
         state.quiescing = true;

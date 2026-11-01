@@ -17,9 +17,12 @@ impl AppState {
         self.run_with_control_socket(None).await
     }
 
-    async fn quiesce_recording(&self, trigger: &'static str) {
-        self.inner.recording_lifecycle.mark_stopping();
+    async fn quiesce_recording(&self, reason: RecordingCompletionReason, trigger: &'static str) {
         let newly_quiescing = self.begin_case_quiescing();
+        self.inner.recording_lifecycle.mark_stopping();
+        // Persistence can yield to the last Case publisher. Its shutdown
+        // association must already be frozen before that guard is released.
+        self.recorder().set_completion_reason(reason).await;
         let timeout_ms = self.config().recording.shutdown_case_drain_timeout_ms;
         info!(
             trigger,
@@ -139,8 +142,7 @@ impl AppState {
                         Ok(reason) => reason,
                         Err(error) => break Err(error),
                     };
-                    self.recorder().set_completion_reason(reason).await;
-                    self.quiesce_recording(reason.as_str()).await;
+                    self.quiesce_recording(reason, reason.as_str()).await;
                     break Ok(());
                 }
                 _ = &mut case_limit_completion, if case_limit_grace.is_none() => {
@@ -155,21 +157,11 @@ impl AppState {
                         case_limit_grace = Some(Box::pin(tokio::time::sleep(grace)));
                         continue;
                     }
-                    self.recorder()
-                        .set_completion_reason(
-                            RecordingCompletionReason::PerApiCaseLimitReached,
-                        )
-                        .await;
-                    self.quiesce_recording("per_api_case_limit_reached").await;
+                    self.quiesce_recording(RecordingCompletionReason::PerApiCaseLimitReached, "per_api_case_limit_reached").await;
                     break Ok(());
                 }
                 _ = wait_for_optional_sleep(&mut case_limit_grace) => {
-                    self.recorder()
-                        .set_completion_reason(
-                            RecordingCompletionReason::PerApiCaseLimitReached,
-                        )
-                        .await;
-                    self.quiesce_recording("preflight_case_limit_grace_elapsed").await;
+                    self.quiesce_recording(RecordingCompletionReason::PerApiCaseLimitReached, "preflight_case_limit_grace_elapsed").await;
                     break Ok(());
                 }
                 joined = tasks.join_next(), if !tasks.is_empty() => {
@@ -347,6 +339,42 @@ mod tests {
             assert_eq!(report["status"], "completed");
             assert_eq!(report["completion_reason"], expected);
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_freezes_last_failed_case_before_waiting_for_the_manifest_lock() {
+        let (_temp, state) = runtime_fixture(false).await;
+        state.close_bootstrap("ready").await.unwrap();
+        let case = crate::recorder::CaseContext {
+            id: uuid::Uuid::new_v4(),
+            rule_name: "failed".into(),
+            uri_group: None,
+        };
+        let guard = state.try_reserve_active_case(case.clone()).unwrap();
+        guard.activate_dependencies().unwrap();
+        state.inner.active_cases.invalidate_case(
+            case.id,
+            crate::recorder::CaseInvalidation::new("original_failure", "incomplete primary"),
+        );
+        let manifest = state.recorder().run_state.lock().await;
+        let mut shutdown = Box::pin(state.clone().run_until_completion(
+            None,
+            std::future::ready(Ok(RecordingCompletionReason::ShutdownSignal)),
+        ));
+        assert!(futures_util::poll!(&mut shutdown).is_pending());
+        let before_release = state.inner.active_cases.current_targets_for_event();
+        assert_eq!(
+            before_release.phase,
+            crate::dependency::observation::CapturePhase::Shutdown
+        );
+        assert_eq!(before_release.shutdown_case_id, Some(case.id));
+        drop(before_release);
+        drop(guard);
+        let after_release = state.inner.active_cases.current_targets_for_event();
+        assert!(after_release.cases.is_empty());
+        assert_eq!(after_release.shutdown_case_id, Some(case.id));
+        drop(manifest);
+        shutdown.await.unwrap();
     }
 
     #[tokio::test]

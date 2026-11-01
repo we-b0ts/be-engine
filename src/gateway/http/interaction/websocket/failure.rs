@@ -12,6 +12,9 @@ pub(super) fn client_lost(error: &Error) -> bool {
 
 /// Never format errors that may contain frames, URLs, headers or peer text.
 pub(super) fn kind(error: &anyhow::Error) -> &'static str {
+    if let Some(error) = error.downcast_ref::<crate::interaction::socketio::AckObservationError>() {
+        return error.diagnostic_code();
+    }
     match error.downcast_ref::<Error>() {
         Some(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => "eof_without_close",
         Some(Error::Io(error)) => match error.kind() {
@@ -57,6 +60,39 @@ mod tests {
         ] {
             assert!(!client_lost(&error));
             assert!(!kind(&error.into()).contains("private"));
+        }
+    }
+
+    #[test]
+    fn acknowledgement_failures_keep_their_payload_free_protocol_reason() {
+        use crate::interaction::socketio::{AckFailureKind, AckObservationError};
+
+        for (failure, expected) in [
+            (
+                AckFailureKind::ClientIdentityInFlight,
+                "socketio_client_ack_overlap",
+            ),
+            (
+                AckFailureKind::ClientAckUnobserved,
+                "socketio_client_ack_unobserved",
+            ),
+            (
+                AckFailureKind::ClientAckNotPending,
+                "socketio_client_ack_not_pending",
+            ),
+            (
+                AckFailureKind::ServerAckNotPending,
+                "socketio_server_ack_not_pending",
+            ),
+            (
+                AckFailureKind::ServerIdentityInFlight,
+                "socketio_server_ack_overlap",
+            ),
+        ] {
+            let error = AckObservationError::new(failure, 39);
+            assert_eq!(error.ack_id, 39);
+            let error = anyhow::Error::new(error).context("bounded transport context");
+            assert_eq!(kind(&error), expected);
         }
     }
 }

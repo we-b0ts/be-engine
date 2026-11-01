@@ -3,7 +3,7 @@
 //! CLOSE can leave a closed SID; a WS CLOSE can remove that same SID instead.
 use super::*;
 
-/// Construction proves this exact Source SID was live before forwarding CLOSE.
+/// Construction proves this exact Source SID was live before transport closure.
 pub(super) struct ApplicationClose {
     uri: hyper::Uri,
     headers: hyper::HeaderMap,
@@ -74,7 +74,7 @@ impl ApplicationClose {
         Ok(Some(probe))
     }
 
-    /// Call only after forwarding CLOSE to the Source that passed the live probe.
+    /// Call after transport closure for the Source that passed the live probe.
     pub(super) async fn wait_after_close(&self, session: &SessionRef) -> Result<()> {
         loop {
             let response = self.state(session).await?;
@@ -123,6 +123,36 @@ impl ApplicationClose {
             state: native_state(status, &bytes, &self.sid),
             status,
         })
+    }
+}
+
+/// Retain a live SID proof before Source can initiate its own WS close. Preparing
+/// at that close is too late: the awaited application handler may already have
+/// removed the SID. A failed early probe cannot certify Source completion.
+#[derive(Default)]
+pub(super) struct SourceClose {
+    prepared: Option<Result<Option<ApplicationClose>>>,
+}
+
+impl SourceClose {
+    pub(super) async fn capture_live(&mut self, session: &SessionRef) {
+        if self.prepared.is_none() {
+            self.prepared = Some(ApplicationClose::prepare(session).await);
+        }
+    }
+
+    pub(super) async fn take(&mut self, session: &SessionRef) -> Result<Option<ApplicationClose>> {
+        match self.prepared.take() {
+            Some(prepared) => prepared,
+            None => ApplicationClose::prepare(session).await,
+        }
+    }
+
+    pub(super) async fn wait(&mut self, session: &SessionRef) -> Result<()> {
+        if let Some(completion) = self.take(session).await? {
+            completion.wait_after_close(session).await?;
+        }
+        Ok(())
     }
 }
 

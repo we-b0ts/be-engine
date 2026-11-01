@@ -85,8 +85,8 @@ The first admission-close or isolation boundary freezes the sole running Case,
 if present. Requests already admitted to that Case retain their original owner;
 new requests while its dependency window remains open also belong to the Case.
 After that window closes, otherwise unowned teardown requests use a separate
-`shutdown` owner with the frozen `origin_case_id` (the `post-<case_id>`
-relationship). They are stored once in the central ledger and referenced by
+`shutdown` owner with the frozen `origin_case_id`. They are stored once in the
+central ledger and referenced by
 `indexes/shutdown-scope.json`, independently of the primary Case's result.
 Declared process-task ownership and ambiguous selector failures retain priority.
 
@@ -96,6 +96,30 @@ previously completed Case or a reserved but unstarted input cannot supply the
 association later. Associated shutdown evidence does not request repository
 analysis, repair a failed Case, supply primary Replay responses, or certify a
 WholeSource pass; its unexecuted mandatory dependencies remain visible separately.
+
+Returning the primary response does not end Case ownership while asynchronous
+API or stream-tail policies still await their declared completion. This remains
+ordinary Case traffic, including during shutdown's Case drain. Runtime traffic
+between fully ended Cases remains unattributed; it cannot borrow a later Case or
+acquire shutdown association merely because its response arrives after shutdown.
+The shutdown association is frozen before awaiting manifest persistence or
+notifying failed asynchronous completion, so publication cannot release the last
+failed Case before that association is established.
+
+For recognized Python ASGI Socket.IO peers, the recorder also retains a native
+live-SID proof from the first observed WebSocket packet. A Source-initiated close
+is forwarded promptly and its close echo is flushed, but the original Case stays
+open until that exact SID confirms application disconnect completion. Redis or
+MySQL calls awaited by `on_disconnect` therefore remain Case dependencies even
+when they start after the WebSocket close. The existing cleanup budget still
+applies; unknown SIDs, unrelated errors and unconfirmed completion cannot publish
+a successful capture.
+
+Socket.IO ACK identities are released when their matching ACK is observed,
+independently of pending business completion. Reusing an acknowledged ID while
+the earlier business request awaits its terminal event is valid; reuse before
+ACK remains a transport failure. Diagnostics retain a bounded error kind and
+numeric ACK ID without recording packet payloads in logs.
 
 HTTP request waits and HTTP streaming duration share
 `recorder.http_gateway.request_timeout_ms`, default 900000 ms (900 seconds).

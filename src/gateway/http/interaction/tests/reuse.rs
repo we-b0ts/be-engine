@@ -146,6 +146,7 @@ async fn source_with_automatic_protocol_close(
     dependency: SocketAddr,
     application_closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     expected_transport: Option<crate::interaction::model::ClientTransportEnd>,
+    source_close: bool,
 ) {
     let socket = tokio_tungstenite::accept_hdr_async(stream, asgi_headers)
         .await
@@ -215,7 +216,9 @@ async fn source_with_automatic_protocol_close(
         .unwrap();
     // Engine.IO CLOSE arrives as text; a browser's WS CLOSE ends the protocol
     // reader directly. Both paths must retain the asynchronous disconnect work.
-    if let Some(message) = input.recv().await {
+    if source_close {
+        writer.lock().await.close().await.unwrap();
+    } else if let Some(message) = input.recv().await {
         assert_eq!(message, Message::Text("1".into()));
     }
     // No resource I/O exists at close; the call starts beyond the100ms window.
@@ -237,15 +240,21 @@ enum AsgiProbe {
     StaysLiveAfterClose,
 }
 
-async fn asgi_source(listener: TcpListener, dependency: SocketAddr, probe: AsgiProbe) {
-    asgi_source_transport(listener, dependency, probe, None).await;
-}
-
 async fn asgi_source_transport(
     listener: TcpListener,
     dependency: SocketAddr,
     probe: AsgiProbe,
     expected_transport: Option<crate::interaction::model::ClientTransportEnd>,
+) {
+    asgi_source_lifecycle(listener, dependency, probe, expected_transport, false).await;
+}
+
+async fn asgi_source_lifecycle(
+    listener: TcpListener,
+    dependency: SocketAddr,
+    probe: AsgiProbe,
+    expected_transport: Option<crate::interaction::model::ClientTransportEnd>,
+    source_close: bool,
 ) {
     let sessions = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::BTreeMap::<
         String,
@@ -285,6 +294,7 @@ async fn asgi_source_transport(
                     dependency,
                     closed,
                     expected_transport.filter(|_| turn == 1),
+                    source_close,
                 )
                 .await;
             } else {
@@ -421,6 +431,15 @@ async fn consecutive_cases(
     asgi_probe: Option<AsgiProbe>,
     client_close_code: Option<u16>,
 ) {
+    consecutive_cases_lifecycle(protocol, asgi_probe, client_close_code, false).await;
+}
+
+async fn consecutive_cases_lifecycle(
+    protocol: Protocol,
+    asgi_probe: Option<AsgiProbe>,
+    client_close_code: Option<u16>,
+    source_close: bool,
+) {
     let temp = tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut settings = config(temp.path(), listener.local_addr().unwrap());
@@ -438,7 +457,7 @@ async fn consecutive_cases(
     let (dependency, server, capture, observed) = redis_capture(state.clone()).await;
     let source = tokio::spawn(async move {
         if let Some(probe) = asgi_probe {
-            asgi_source(listener, dependency, probe).await;
+            asgi_source_lifecycle(listener, dependency, probe, None, source_close).await;
             return;
         }
         for turn in 1..=2 {
@@ -521,6 +540,13 @@ async fn consecutive_cases(
 }
 
 #[tokio::test]
+async fn source_websocket_close_retains_application_disconnect_dependencies_in_the_original_case() {
+    for probe in [AsgiProbe::Disconnected, AsgiProbe::RemovedAfterClose] {
+        consecutive_cases_lifecycle(Protocol::SocketIo, Some(probe), None, true).await;
+    }
+}
+
+#[tokio::test]
 async fn consecutive_sse_cases_reuse_source_and_keep_late_dependencies_in_their_case() {
     consecutive_cases(Protocol::Sse, None, None).await;
 }
@@ -553,17 +579,43 @@ async fn browser_websocket_close_retains_disconnect_dependencies_and_preserves_s
 }
 
 async fn rejected_asgi_close(probe: AsgiProbe) {
+    assert_eq!(
+        rejected_asgi_close_lifecycle(probe, false).await,
+        "interaction_transport_failed"
+    );
+}
+
+async fn rejected_asgi_close_lifecycle(probe: AsgiProbe, source_close: bool) -> String {
     let temp = tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let state = AppState::new(config(temp.path(), listener.local_addr().unwrap()))
         .await
         .unwrap();
     let (dependency, server, capture, _) = redis_capture(state.clone()).await;
-    let source = tokio::spawn(asgi_source(listener, dependency, probe));
+    let source = tokio::spawn(asgi_source_lifecycle(
+        listener,
+        dependency,
+        probe,
+        None,
+        source_close,
+    ));
     let (address, gateway) = gateway(state.clone()).await;
-    client_interaction(address, Protocol::SocketIo, 1, None, false).await;
-    let writers = state.capture_dependency_targets();
+    let client = tokio::spawn(client_interaction(
+        address,
+        Protocol::SocketIo,
+        1,
+        None,
+        false,
+    ));
+    let writers = loop {
+        let writers = state.capture_dependency_targets();
+        if !writers.cases.is_empty() {
+            break writers;
+        }
+        tokio::task::yield_now().await;
+    };
     let case = writers.cases[0].0.clone();
+    client.await.unwrap();
     drop(writers);
     assert!(
         state
@@ -579,13 +631,36 @@ async fn rejected_asgi_close(probe: AsgiProbe) {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(error["reason"], "interaction_transport_failed");
     assert!(!state.recorder().case_dir(&case).exists());
     assert!(*state.inner.interactions.source_stop.borrow());
     source.abort();
     server.abort();
     capture.abort();
     gateway.abort();
+    error["reason"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn source_close_requires_a_previously_live_sid_and_exact_application_completion() {
+    for probe in [
+        AsgiProbe::MissingFromStart,
+        AsgiProbe::WrongSidAfterClose,
+        AsgiProbe::UnrelatedBadRequestAfterClose,
+    ] {
+        assert_eq!(
+            rejected_asgi_close_lifecycle(probe, true).await,
+            "interaction_transport_failed"
+        );
+    }
+}
+
+#[tokio::test]
+async fn source_close_without_application_completion_proof_remains_failed() {
+    let reason = rejected_asgi_close_lifecycle(AsgiProbe::StaysLiveAfterClose, true).await;
+    assert!(matches!(
+        reason.as_str(),
+        "interaction_cleanup_timeout" | "interaction_transport_cleanup_timeout"
+    ));
 }
 
 #[tokio::test]

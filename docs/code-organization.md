@@ -215,8 +215,12 @@ is unclear.
   CLOSE, it also accepts its native removal after Python Engine.IO's awaited
   disconnect handler. Initial unknown SIDs, mismatched SIDs, arbitrary HTTP 400
   responses and automatic WS close echoes cannot prove completion. Native
-  statuses require complete JSON-string and SID matches. Transport failures
-  remain visible to `finish` even when the primary close was already observed;
+  statuses require complete JSON-string and SID matches.
+  `closing/SourceClose` retains the early live-SID proof for Source-initiated
+  closure. The transport flushes its native close echo before awaiting application
+  disconnect and retains its Case lifetime throughout. Probe failure remains
+  failure, and the existing finalizer owns cancellation and the cleanup budget.
+  Transport failures remain visible to `finish` even when the primary close was already observed;
   Its `disconnect` child forwards a proven complete-boundary TCP FIN/RST as a
   typed terminal input and retains exact native application confirmation. Raw
   frame truncation retains failed evidence through the existing recovery path;

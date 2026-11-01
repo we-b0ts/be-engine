@@ -14,8 +14,8 @@ use super::{
     },
     policy::InteractionPolicy,
     socketio::{
-        CompletionTracker, CompletionUpdate, EngineIoPacket, SocketIoDecoder, SocketIoKind,
-        decode_engine_io_text,
+        AckFailureKind, AckObservationError, CompletionTracker, CompletionUpdate, EngineIoPacket,
+        SocketIoDecoder, SocketIoKind, decode_engine_io_text,
     },
     stream::{StreamDecoder, StreamMessage},
 };
@@ -170,7 +170,7 @@ impl Observation {
                     action.ack_ref = Some(AckReference {
                         namespace: packet.namespace,
                         server_event_ordinal: *self.server_ack_ordinals.get(&key).ok_or_else(
-                            || anyhow::anyhow!("client ACK has no observed server-event binding"),
+                            || AckObservationError::new(AckFailureKind::ClientAckUnobserved, key.1),
                         )?,
                     });
                 }
@@ -817,6 +817,28 @@ mod tests {
                 .unwrap()
                 .compressible_gap
         );
+    }
+
+    #[test]
+    fn acknowledged_id_reuse_preserves_each_observed_input_and_unfinished_business() {
+        let mut observation =
+            Observation::new(Protocol::SocketIo, InteractionPolicy::default()).unwrap();
+        observation.output(open(), 0).unwrap();
+        observation.input(WireMessage::text("40"), 0).unwrap();
+        observation.output(WireMessage::text("40{}"), 0).unwrap();
+        for now in 1..=3 {
+            observation
+                .input(WireMessage::text("4239[\"device:register\",{}]"), now)
+                .unwrap();
+            observation
+                .output(WireMessage::text("4339[{\"success\":true}]"), now)
+                .unwrap();
+        }
+        assert_eq!(observation.pending(), vec![2, 3, 4]);
+        let (input, output) = observation.finish(EndReason::ServerEof, 4, true).unwrap();
+        assert_eq!(input.actions.len(), 4);
+        assert_eq!(output.end.pending, vec![2, 3, 4]);
+        assert!(!output.end.clean);
     }
 
     #[test]

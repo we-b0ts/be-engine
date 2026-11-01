@@ -2,7 +2,7 @@
 use super::*;
 
 #[tokio::test]
-async fn active_case_and_its_post_case_scope_keep_distinct_frozen_ownership() {
+async fn active_case_and_associated_shutdown_scope_keep_distinct_frozen_ownership() {
     let (_temp, state) = state().await;
     let case = CaseContext {
         id: Uuid::new_v4(),
@@ -18,7 +18,7 @@ async fn active_case_and_its_post_case_scope_keep_distinct_frozen_ownership() {
     state.begin_case_quiescing();
     let after = start(&state);
     // Publish in the opposite order to request starts. Completion order cannot
-    // move earlier requests into the post-Case ownership view.
+    // move earlier requests into the shutdown ownership view.
     state.record_event_for_targets(failure(), after);
     state.record_event_for_targets(failure(), during);
     state.record_event_for_targets(failure(), before);
@@ -53,6 +53,53 @@ async fn active_case_and_its_post_case_scope_keep_distinct_frozen_ownership() {
     .unwrap();
     assert_eq!(manifest.semantic_inventory.by_owner_kind["shutdown"], 1);
     assert_eq!(manifest.semantic_inventory.unattributed_dependencies, 0);
+}
+
+#[tokio::test]
+async fn inter_case_traffic_stays_unattributed_and_cannot_acquire_shutdown_ownership_later() {
+    let (_temp, state) = state().await;
+    let case = CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: "previous".into(),
+        uri_group: None,
+    };
+    let guard = state.try_reserve_active_case(case).unwrap();
+    guard.activate_dependencies().unwrap();
+    drop(guard);
+    let between_cases = start(&state);
+    let next = CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: "next".into(),
+        uri_group: None,
+    };
+    let guard = state.try_reserve_active_case(next.clone()).unwrap();
+    let reserved = start(&state);
+    guard.activate_dependencies().unwrap();
+    state.inner.active_cases.close_admission();
+    state
+        .inner
+        .active_cases
+        .drain_case_dependencies(next.id, Duration::ZERO, Duration::from_secs(1))
+        .await;
+    let closing = start(&state);
+    drop(guard);
+    // Observe old requests after the boundary: neither response time nor a
+    // newly running Case may rewrite their original inter-Case attribution.
+    state.record_event_for_targets(failure(), closing);
+    state.record_event_for_targets(failure(), reserved);
+    state.record_event_for_targets(failure(), between_cases);
+    state.recorder().finish_run().await.unwrap();
+    let rows = records(&state).await;
+    assert_eq!(rows[0]["capture"]["attribution"]["kind"], "shutdown");
+    assert_eq!(
+        rows[0]["capture"]["attribution"]["origin_case_id"],
+        next.id.to_string()
+    );
+    for row in &rows[1..] {
+        assert_eq!(row["capture"]["phase"], "runtime");
+        assert_eq!(row["capture"]["attribution"]["kind"], "unattributed");
+        assert_eq!(row["capture"]["attribution"]["reason"], "outside_admission");
+    }
 }
 
 #[tokio::test]

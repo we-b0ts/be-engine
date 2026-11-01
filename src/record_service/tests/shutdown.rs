@@ -25,7 +25,7 @@ fn sixty_second_shutdown_timeout_archives_the_incomplete_case_with_shutdown_reas
 
 #[test]
 #[ignore = "requires python3 and root or passwordless sudo for the fixed Source UID; no interception"]
-fn failed_open_case_retains_associated_post_case_dependencies_during_source_shutdown() {
+fn failed_open_case_retains_associated_shutdown_dependencies_during_source_shutdown() {
     runtime().block_on(exercise("shutdown_dependency"));
 }
 

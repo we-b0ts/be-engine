@@ -132,3 +132,85 @@ fn unprofiled_ack_is_not_silently_business_completion_and_server_rpcs_remain_pen
     );
     assert_eq!(tracker.pending(), vec![2]);
 }
+
+#[test]
+fn acknowledged_ids_can_be_reused_without_completing_unprofiled_business() {
+    let mut tracker = CompletionTracker::new(InteractionPolicy::default());
+    tracker
+        .observe_client(1, &packet("2/chat,39[\"first\"]"), 0)
+        .unwrap();
+    tracker
+        .observe_server(&packet("3/chat,39[true]"), 1)
+        .unwrap();
+    let update = tracker
+        .observe_client(2, &packet("2/chat,39[\"second\"]"), 30_000)
+        .unwrap();
+    assert_eq!(update.started, vec![2]);
+    assert_eq!(tracker.pending(), vec![1, 2]);
+    tracker
+        .observe_server(&packet("3/chat,39[true]"), 30_001)
+        .unwrap();
+    assert!(tracker.pending[&1].acked);
+    assert!(tracker.pending[&2].acked);
+    assert_eq!(tracker.pending(), vec![1, 2]);
+}
+
+#[test]
+fn an_ack_identity_still_in_flight_cannot_be_reused() {
+    let mut tracker = CompletionTracker::new(InteractionPolicy::default());
+    tracker
+        .observe_client(1, &packet("2/chat,39[\"first\"]"), 0)
+        .unwrap();
+    let error = tracker
+        .observe_client(2, &packet("2/chat,39[\"second\"]"), 1)
+        .unwrap_err();
+    assert!(error.to_string().contains("overlapping Socket.IO ACK"));
+    assert_eq!(tracker.pending(), vec![1]);
+}
+
+#[test]
+fn reused_ack_ids_keep_terminal_completion_bound_to_each_request() {
+    let policy = InteractionPolicy {
+        completion: vec![EventCompletion {
+            namespace: "/chat".into(),
+            event: "send".into(),
+            completion: CompletionRule::TerminalEvent {
+                event: "done".into(),
+                correlation: Some(CorrelationRule {
+                    input_pointer: "/0/task_id".into(),
+                    output_pointer: "/0/task_id".into(),
+                }),
+                require_ack: true,
+            },
+        }],
+        ..Default::default()
+    };
+    let mut tracker = CompletionTracker::new(policy);
+    tracker
+        .observe_client(1, &packet("2/chat,39[\"send\",{\"task_id\":1}]"), 0)
+        .unwrap();
+    tracker
+        .observe_server(&packet("3/chat,39[true]"), 1)
+        .unwrap();
+    tracker
+        .observe_client(2, &packet("2/chat,39[\"send\",{\"task_id\":2}]"), 2)
+        .unwrap();
+    tracker
+        .observe_server(&packet("3/chat,39[true]"), 3)
+        .unwrap();
+    assert_eq!(
+        tracker
+            .observe_server(&packet("2/chat,[\"done\",{\"task_id\":2}]"), 4)
+            .unwrap()
+            .completed,
+        vec![2]
+    );
+    assert_eq!(tracker.pending(), vec![1]);
+    assert_eq!(
+        tracker
+            .observe_server(&packet("2/chat,[\"done\",{\"task_id\":1}]"), 5)
+            .unwrap()
+            .completed,
+        vec![1]
+    );
+}

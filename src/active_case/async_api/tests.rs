@@ -76,6 +76,58 @@ fn drain(
 }
 
 #[tokio::test]
+async fn capture_failure_freezes_shutdown_before_failed_case_publication_releases_its_guard() {
+    let (registry, guard, id) = active(Duration::from_secs(2));
+    let request = registry.current_targets_for_http_request(true);
+    let mut incomplete = event(false);
+    if let RecorderEvent::RedisExchange(event) = &mut incomplete {
+        event.parse_warnings.push("incomplete capture".into());
+    }
+    registry.observe_async_dependency_event(&incomplete, &request, true);
+    assert!(registry.is_quiescing());
+    assert_eq!(
+        registry.invalidation_for(id).unwrap().reason,
+        "dependency_capture_incomplete"
+    );
+    drop(request);
+    drop(guard);
+    let shutdown = registry.current_targets_for_event();
+    assert!(shutdown.cases.is_empty());
+    assert_eq!(shutdown.shutdown_case_id, Some(id));
+    assert_eq!(
+        shutdown.phase,
+        crate::dependency::observation::CapturePhase::Shutdown
+    );
+}
+
+#[tokio::test]
+async fn response_returned_async_work_keeps_case_ownership_during_global_shutdown() {
+    let (registry, guard, id) = active(Duration::from_secs(2));
+    registry.select_async_response(id, Some(&serde_json::json!({"status":"queued"})));
+    registry.close_admission();
+    let draining = drain(&registry, id, Duration::from_secs(1));
+    let request = registry.current_targets_for_http_request(true);
+    assert_eq!(request.cases[0].0.id, id);
+    assert_eq!(
+        request.phase,
+        crate::dependency::observation::CapturePhase::Shutdown
+    );
+    assert_eq!(request.shutdown_case_id, Some(id));
+    registry.observe_async_dependency_event(&event(false), &request, true);
+    drop(request);
+    assert_eq!(draining.await.unwrap(), DependencyDrainResult::Drained);
+    let closing = registry.current_targets_for_http_request(true);
+    assert!(closing.cases.is_empty());
+    assert_eq!(closing.shutdown_case_id, Some(id));
+    drop(guard);
+    assert_eq!(
+        registry.current_targets_for_event().shutdown_case_id,
+        Some(id)
+    );
+    assert!(!registry.is_quiescing());
+}
+
+#[tokio::test]
 async fn unmatched_source_response_restores_ordinary_drain_after_an_early_signal() {
     let (registry, _guard, id) = active(Duration::from_secs(2));
     let rules = std::collections::BTreeMap::from([(

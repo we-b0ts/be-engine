@@ -1,6 +1,10 @@
 //! Engine.IO v4 / Socket.IO v5 framing and scoped business-completion tracking.
 //! This module never forwards, persists, schedules, or compares expected output.
 
+mod ack_error;
+
+pub(crate) use ack_error::{AckFailureKind, AckObservationError};
+
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -519,15 +523,21 @@ impl CompletionTracker {
                     !self.pending.contains_key(&sequence),
                     "duplicate Socket.IO input identity"
                 );
-                ensure!(
-                    !self
-                        .pending
-                        .values()
-                        .any(|pending| pending.namespace == packet.namespace
-                            && packet.id.is_some()
-                            && pending.ack == packet.id),
-                    "overlapping Socket.IO ACK identities"
-                );
+                // Receiving an ACK releases its wire identity even when a
+                // terminal event or an unknown business lifetime remains open.
+                if let Some(id) = packet.id
+                    && self.pending.values().any(|pending| {
+                        pending.namespace == packet.namespace
+                            && pending.ack == Some(id)
+                            && !pending.acked
+                    })
+                {
+                    return Err(AckObservationError::new(
+                        AckFailureKind::ClientIdentityInFlight,
+                        id,
+                    )
+                    .into());
+                }
                 let connecting = packet.kind == SocketIoKind::Connect;
                 ensure!(
                     !connecting
@@ -585,11 +595,11 @@ impl CompletionTracker {
                     packet.namespace.clone(),
                     packet.id.context("client ACK lacks identity")?,
                 );
-                update.completed.push(
-                    self.server_pending
-                        .remove(&key)
-                        .context("client ACK does not match a pending server event")?,
-                );
+                update
+                    .completed
+                    .push(self.server_pending.remove(&key).ok_or_else(|| {
+                        AckObservationError::new(AckFailureKind::ClientAckNotPending, key.1)
+                    })?);
             }
             SocketIoKind::Disconnect => {}
             SocketIoKind::ConnectError => bail!("client cannot send CONNECT_ERROR"),
@@ -627,9 +637,13 @@ impl CompletionTracker {
                     .pending
                     .iter_mut()
                     .find(|(_, pending)| {
-                        pending.namespace == packet.namespace && pending.ack == Some(id)
+                        pending.namespace == packet.namespace
+                            && pending.ack == Some(id)
+                            && !pending.acked
                     })
-                    .context("server ACK does not match a pending client event")?;
+                    .ok_or_else(|| {
+                        AckObservationError::new(AckFailureKind::ServerAckNotPending, id)
+                    })?;
                 matched.1.acked = true;
                 if is_complete(matched.1) {
                     let sequence = *matched.0;
@@ -680,10 +694,13 @@ impl CompletionTracker {
                 }
                 if let Some(id) = packet.id {
                     let key = (packet.namespace.clone(), id);
-                    ensure!(
-                        !self.server_pending.contains_key(&key),
-                        "duplicate pending server ACK identity"
-                    );
+                    if self.server_pending.contains_key(&key) {
+                        return Err(AckObservationError::new(
+                            AckFailureKind::ServerIdentityInFlight,
+                            id,
+                        )
+                        .into());
+                    }
                     ensure!(
                         self.server_requests < SERVER_REQUEST_BIT - 1,
                         "server request identity overflow"
