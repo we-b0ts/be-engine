@@ -29,6 +29,11 @@ impl PubSubState {
         if namespaces.is_empty() {
             return Ok(());
         }
+        let source_count = self
+            .pushes
+            .len()
+            .checked_add(self.indexed.total)
+            .context("native notification Source inventory exceeds address space")?;
         let mut entries = Vec::new();
         for (index, push) in self.pushes.iter().enumerate() {
             if !push.source.is_run_level() || push.record.rpc_request.is_some() {
@@ -54,10 +59,7 @@ impl PubSubState {
                 push.evidence.clone(),
                 push.raw.clone(),
             )? {
-                ensure!(
-                    entries.len() < 65_536,
-                    "native notification projection exceeds bound"
-                );
+                reserve_entry(&mut entries, source_count)?;
                 entries.push(entry);
             }
         }
@@ -84,18 +86,15 @@ impl PubSubState {
                         Some(lane.source.reference(entry.location)),
                         Vec::new(),
                     )? {
-                        ensure!(
-                            entries.len() < 65_536,
-                            "native notification projection exceeds bound"
-                        );
+                        reserve_entry(&mut entries, source_count)?;
                         entries.push(entry);
                     }
                 }
             }
         }
         ensure!(
-            entries.len() <= 65_536,
-            "native notification projection exceeds bound"
+            entries.len() <= source_count,
+            "native notification projection exceeds Source inventory"
         );
         // A clock inversion cannot reorder the physical Source lane to match a
         // request clock. Keep that Case's original slots unconsumed instead.
@@ -155,6 +154,19 @@ impl PubSubState {
         };
         Ok(())
     }
+}
+
+fn reserve_entry(entries: &mut Vec<Entry>, source_count: usize) -> Result<()> {
+    // Every entry refers to one original finite slot. A long recording can
+    // legitimately exceed 65536 slots; retain metadata without copying its
+    // payload or imposing an unrelated fixed recording-length limit.
+    ensure!(
+        entries.len() < source_count,
+        "native notification projection exceeds Source inventory"
+    );
+    entries
+        .try_reserve(1)
+        .context("cannot allocate native notification metadata")
 }
 
 #[allow(clippy::too_many_arguments)]

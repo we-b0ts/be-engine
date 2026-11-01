@@ -45,6 +45,31 @@ fn burst(
 }
 
 #[tokio::test]
+async fn a_native_plan_keeps_more_than_65536_original_slots_without_materializing_payloads() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut globals, _) = fixture(temp.path());
+    let notification = globals.pop().unwrap();
+    let count = 65_537;
+    globals.extend(std::iter::repeat_n(notification, count));
+    let runtime = recording::ambient_runtime(temp.path(), &[], &globals, true)
+        .await
+        .expect("a complete finite Source inventory must not hit a fixed projection-count cap");
+    let state = runtime.state.lock().await;
+    let pubsub = &state.redis.pubsub;
+    assert!(
+        pubsub.pushes.is_empty(),
+        "original notifications stay paged"
+    );
+    assert_eq!(pubsub.indexed.total, count);
+    assert_eq!(pubsub.native_clock.timing_evidence(CASE).len(), count);
+    assert!(pubsub.native_clock.needs_observer(CASE));
+    let report = pubsub.report().unwrap();
+    assert_eq!(report.recorded_pushes, count);
+    assert_eq!(report.delivered_pushes, 0);
+    assert_eq!(report.failed_pushes, 0);
+}
+
+#[tokio::test]
 async fn a_native_burst_exceeds_two_hundred_messages_per_second_without_dropping_other_rooms() {
     let temp = tempfile::tempdir().unwrap();
     // The old one-input-per-5ms poll could deliver at most 400 before this

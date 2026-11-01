@@ -110,7 +110,9 @@ is unclear.
   subscription ownership and the current request epoch. An input without an ACK
   or an explicit close ends the notification prefix, rather than invalidating
   preceding notifications. That boundary also limits delivery lifetime; later
-  actual ACK identities remain admissible without extending the prefix.
+  actual ACK identities remain admissible without extending the prefix. Native
+  plan cardinality is bounded by the original finite notification inventory;
+  long recordings retain paged payload references and bounded delivery queues.
   RESP delivery retains wire consumption and Case cancellation checks; the
   adapter and request contracts retain strict callback result comparison.
   `replay/assertion/interaction/client_ack` separately owns original client
