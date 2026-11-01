@@ -332,6 +332,7 @@ impl ReplayRuntime {
                 .context("Redis adapter self-echo index preparation failed")?;
             redis.prepare_ingress(&redis_cases)?;
             redis.prepare_native_clock(&redis_root, &redis_cases)?;
+            redis.pubsub.namespace_sessions.prepare(&redis_cases)?;
             Ok((redis, targets))
         })
         .await

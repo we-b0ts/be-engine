@@ -24,6 +24,7 @@ impl super::super::super::RedisReplayState {
     pub(in crate::replay) fn needs_native_events(&self, case: &str) -> bool {
         self.pubsub.ingress.needs_native_events(case)
             || self.pubsub.native_clock.needs_observer(case)
+            || self.pubsub.namespace_sessions.needs_observer(case)
     }
 
     pub(in crate::replay) fn native_events_begin(
@@ -33,6 +34,14 @@ impl super::super::super::RedisReplayState {
     ) -> bool {
         let enabled = self.needs_native_events(case);
         if self.pubsub.native_clock.observe_begin(case, epoch).is_err() {
+            return false;
+        }
+        if self
+            .pubsub
+            .namespace_sessions
+            .observe_begin(case, epoch)
+            .is_err()
+        {
             return false;
         }
         self.pubsub.ingress.observe_begin(case, epoch, enabled)

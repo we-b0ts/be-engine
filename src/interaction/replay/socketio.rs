@@ -259,7 +259,7 @@ pub(super) async fn execute_with_feedback(
                                             tokio::select! {
                                                 biased;
                                                 _ = crate::dependency::execution::rejected(&mut dependency_failure) => break 'session (EndReason::DependencyFailure, false),
-                                                result = tokio::time::timeout_at(lifecycle_deadline, sink.connected(&packet.namespace)) => {
+                                                result = tokio::time::timeout_at(lifecycle_deadline, sink.connected(&packet.namespace, packet.data.as_ref().and_then(|data| data.get("sid")).and_then(serde_json::Value::as_str))) => {
                                                     result.context("native namespace observation timed out")??;
                                                 }
                                             }
@@ -530,7 +530,15 @@ impl TerminalObservation<'_> {
                 }
                 EngineIoPacket::Message(packet) if packet.kind == SocketIoKind::Connect => {
                     if let Some(sink) = self.native_events {
-                        sink.connected(&packet.namespace).await?;
+                        sink.connected(
+                            &packet.namespace,
+                            packet
+                                .data
+                                .as_ref()
+                                .and_then(|data| data.get("sid"))
+                                .and_then(serde_json::Value::as_str),
+                        )
+                        .await?;
                     }
                 }
                 EngineIoPacket::Message(packet)

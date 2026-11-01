@@ -10,6 +10,7 @@ mod cancellation;
 mod compact_evidence;
 mod echo_preparation;
 mod input_timing;
+mod namespace_sessions;
 mod native_clock;
 mod repeated_echo;
 mod request_contracts;

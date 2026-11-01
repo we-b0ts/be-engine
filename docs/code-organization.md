@@ -115,6 +115,14 @@ is unclear.
   long recordings retain paged payload references and bounded delivery queues.
   RESP delivery retains wire consumption and Case cancellation checks; the
   adapter and request contracts retain strict callback result comparison.
+  `replay/redis/pubsub/namespace_sessions` owns SID-directed emit correspondence:
+  it selects only unique namespace identities from original Source protocol
+  observations, then binds them to CONNECT receipts from the actual Target
+  transport within the current Case request epoch. The input executor receives
+  no expected response. Adapter comparison copies may translate only that
+  proven room identity; business rooms, payloads, namespaces, process identity
+  bijections and finite delivery remain strict. Case transitions and cleanup
+  retire the live correspondence.
   `replay/assertion/interaction/client_ack` separately owns original client
   request provenance and exact native reply pairing for fast replay. It pairs
   only contiguous plain ACK runs whose unique namespace/id request identities

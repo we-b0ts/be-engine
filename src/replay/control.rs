@@ -230,7 +230,18 @@ pub(super) async fn handle_control_request(
                             .request_times(case)
                             .target
                             .unwrap_or_else(Utc::now);
-                        match state.redis.pubsub.native_clock.request_begin(case, epoch) {
+                        match state
+                            .redis
+                            .pubsub
+                            .native_clock
+                            .request_begin(case, epoch)
+                            .and_then(|()| {
+                                state
+                                    .redis
+                                    .pubsub
+                                    .namespace_sessions
+                                    .request_begin(case, epoch)
+                            }) {
                             Ok(()) => {
                                 state.advance_admission_epoch();
                                 serde_json::json!({"ok":true})
@@ -545,6 +556,7 @@ pub(super) async fn begin_case(
     state.set_active_case(Some(case_id.to_string()));
     state.input_timing = None;
     state.redis.pubsub.native_clock.begin_case(case_id);
+    state.redis.pubsub.namespace_sessions.begin_case();
     if let Some(policy) = &mut state.replay_policy {
         policy.begin_case(case_id);
     }
@@ -596,6 +608,7 @@ pub(super) async fn end_case(
             });
         }
         state.redis.pubsub.native_clock.close_case(case_id);
+        state.redis.pubsub.namespace_sessions.close_case(case_id);
         (
             state.case_dependency_post_response_window,
             state.cases[case_id].dir.clone(),

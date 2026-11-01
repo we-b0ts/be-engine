@@ -1,6 +1,29 @@
 //! Namespace authentication must finish before compressed business inputs arrive.
 use super::*;
 
+#[derive(Default)]
+struct NamespaceReceipts(std::sync::Mutex<Vec<(String, Option<String>)>>);
+
+impl crate::interaction::replay::NativeEventSink for NamespaceReceipts {
+    fn observe(&self, _: NativeEvent) -> futures_util::future::BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn connected<'a>(
+        &'a self,
+        namespace: &'a str,
+        sid: Option<&'a str>,
+    ) -> futures_util::future::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .unwrap()
+                .push((namespace.into(), sid.map(str::to_owned)));
+            Ok(())
+        })
+    }
+}
+
 #[tokio::test]
 async fn compressed_inputs_wait_for_actual_namespace_admission_without_recorded_barriers() {
     delayed_admission(false).await;
@@ -93,9 +116,24 @@ async fn delayed_admission(preserve_input_timing: bool) {
         .body(Full::new(Bytes::new()))
         .unwrap();
     let client = Client::builder(TokioExecutor::new()).build_http();
-    let response = execute(&client, &origin, request, &input, Duration::from_secs(1))
-        .await
-        .unwrap();
+    let receipts = std::sync::Arc::new(NamespaceReceipts::default());
+    let response = execute_with_feedback(
+        &client,
+        &origin,
+        request,
+        &input,
+        Duration::from_secs(1),
+        Feedback {
+            native_events: Some(receipts.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        *receipts.0.lock().unwrap(),
+        vec![("/local-executor".into(), Some("actual-namespace".into()))]
+    );
     assert!(response.observation.end.clean);
     assert!(
         !server.await.unwrap(),
