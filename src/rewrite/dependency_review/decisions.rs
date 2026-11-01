@@ -3,8 +3,10 @@
 //! The public per-occurrence DTO remains a projection. Workflow state keeps one
 //! immutable template per proof group so status does not allocate or clone that
 //! proof once for every notification in a large Source run.
+mod history;
 mod serde;
 mod snapshot;
+pub(in crate::rewrite) use history::DecisionHistory;
 #[cfg(test)]
 mod tests;
 
@@ -160,23 +162,5 @@ impl DecisionSet {
         retained.push(group);
         self.groups = retained;
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(in crate::rewrite) struct DecisionHistory {
-    groups: Vec<Arc<DecisionGroup>>,
-}
-
-impl DecisionHistory {
-    #[cfg(test)]
-    pub(in crate::rewrite) fn len(&self) -> usize {
-        self.groups
-            .iter()
-            .map(|group| group.exchange_ids.len())
-            .sum()
-    }
-    pub(super) fn push_group(&mut self, group: Arc<DecisionGroup>) {
-        self.groups.push(group);
     }
 }

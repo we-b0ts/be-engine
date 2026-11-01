@@ -210,12 +210,12 @@ pub use rewrite::{
     InvestigationOutcome, InvestigationResolution, ProposedAttribution, TargetInvestigation,
     TargetInvestigationResolutionSubmission, TargetInvestigationSubmission, VerificationImpact,
     VerificationRequirement, VerificationScope, apply_dependency_attribution, claim_foreign_unused,
-    dependency_attribution_api_information, dependency_attribution_batch_information,
-    dependency_attribution_candidates, dependency_attribution_context,
-    dependency_attribution_hypotheses, dependency_attribution_rules,
-    dependency_attribution_source_information, dependency_attribution_target,
-    investigate_unmatched_dependency, resolve_target_investigation, retry_dependency_batch,
-    verify_dependency_obligation,
+    compact_rewrite_decision_history, dependency_attribution_api_information,
+    dependency_attribution_batch_information, dependency_attribution_candidates,
+    dependency_attribution_context, dependency_attribution_hypotheses,
+    dependency_attribution_rules, dependency_attribution_source_information,
+    dependency_attribution_target, investigate_unmatched_dependency, resolve_target_investigation,
+    retry_dependency_batch, verify_dependency_obligation, verify_rewrite_decision_history,
 };
 
 pub use rewrite::{

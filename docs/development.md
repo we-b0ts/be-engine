@@ -191,6 +191,38 @@ The build script resolves the invoking checkout from Cargo's runtime
 `CARGO_MANIFEST_DIR`, so reusing a build-script executable across worktrees does
 not retain another checkout's revision or Git watch paths.
 
+## Coordinator decision history
+
+Coordinator state retains current workflow data, active ownership decisions and
+small ordered references to immutable historical decisions. Normal state saves
+publish new audit bodies under `.traffic-e2e/local/runtime/rewrite/decision-history/`
+before atomically replacing `state.json`. `status` and `inventory` read reference
+metadata without opening these bodies. Active ownership and verification
+receipts keep their existing semantics and exact occurrence membership.
+
+Existing inline history remains readable. After detached operations and traffic
+have finished, explicitly migrate it without advancing the workflow:
+
+```bash
+backend-rewrite-admin --target-root /absolute/target history compact
+backend-rewrite-admin --target-root /absolute/target history verify
+```
+
+Compaction takes coordinator, feedback and rule-plan locks, preserves workflow
+identity/revision and pending feedback, and keeps an original-byte backup under
+`rewrite/history/`. Retrying reuses identical archive bodies; publication failure
+leaves the previous state intact. A later ordinary state save also extracts inline
+history. Read-only queries never migrate it themselves.
+
+Verification explicitly reads the referenced bodies and checks content hashes,
+counts, proof metadata and archival workflow bindings. Missing or changed history
+is an audit error, never an empty history. Repeated occurrences, reference order
+and prior proof revisions survive migration. New decisions record their original
+workflow/recording/inventory; legacy origins remain unknown. Purpose replacement
+may inherit old references, which retain their own archival workflow identity.
+Archives and state backups must remain available independently of deleted
+recordings and old Replay output; this change does not garbage-collect them.
+
 ## Shared Container Images
 
 ### Engine binary image

@@ -2,32 +2,12 @@
 use super::*;
 use ::serde::{
     Deserializer, Serializer,
-    de::{self, MapAccess, SeqAccess, Visitor},
+    de::{self, MapAccess, Visitor},
     ser::SerializeStruct,
 };
 use std::fmt;
 
 const ACTIVE: &str = "dependency-decisions/v1";
-const HISTORY: &str = "dependency-decision-history/v1";
-
-fn history_groups<E: de::Error>(groups: Vec<DecisionGroup>) -> Result<Vec<Arc<DecisionGroup>>, E> {
-    let mut proofs = BTreeMap::new();
-    for group in &groups {
-        if group.exchange_ids.is_empty() {
-            return Err(E::custom("empty ownership history group"));
-        }
-        let key = (&group.template.proof_id, group.template.proof_revision);
-        if let Some(previous) = proofs.insert(key, &group.template)
-            && previous != &group.template
-        {
-            return Err(E::custom(
-                "contradictory historical ownership templates for one proof revision",
-            ));
-        }
-    }
-    Ok(groups.into_iter().map(Arc::new).collect())
-}
-
 fn write<S: Serializer>(
     groups: &[Arc<DecisionGroup>],
     format: &str,
@@ -46,12 +26,6 @@ impl Serialize for DecisionSet {
         write(&self.groups, ACTIVE, serializer)
     }
 }
-impl Serialize for DecisionHistory {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        write(&self.groups, HISTORY, serializer)
-    }
-}
-
 fn active_groups<E: de::Error>(groups: Vec<DecisionGroup>) -> Result<Vec<Arc<DecisionGroup>>, E> {
     let mut all = Vec::new();
     let mut templates = BTreeMap::new();
@@ -169,66 +143,5 @@ impl<'de> Visitor<'de> for ActiveVisitor {
 impl<'de> Deserialize<'de> for DecisionSet {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_map(ActiveVisitor)
-    }
-}
-
-struct HistoryVisitor;
-impl<'de> Visitor<'de> for HistoryVisitor {
-    type Value = DecisionHistory;
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("compact ownership history or its original per-occurrence sequence")
-    }
-    fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Self::Value, S::Error> {
-        let mut groups = Vec::<DecisionGroup>::new();
-        while let Some(decision) = seq.next_element::<AttributionDecision>()? {
-            let id = decision.exchange_id;
-            let template = DecisionTemplate::from_decision(decision);
-            if let Some(previous) = groups.last_mut().filter(|group| group.template == template) {
-                previous.exchange_ids.push(id);
-            } else {
-                groups.push(DecisionGroup {
-                    template,
-                    exchange_ids: vec![id],
-                });
-            }
-        }
-        Ok(DecisionHistory {
-            groups: history_groups(groups)?,
-        })
-    }
-    fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-        let mut format = None;
-        let mut groups = None;
-        while let Some(key) = map.next_key::<String>()? {
-            match key.as_str() {
-                "format" => {
-                    if format.is_some() {
-                        return Err(de::Error::duplicate_field("format"));
-                    }
-                    format = Some(map.next_value::<String>()?);
-                }
-                "groups" => {
-                    if groups.is_some() {
-                        return Err(de::Error::duplicate_field("groups"));
-                    }
-                    groups = Some(map.next_value::<Vec<DecisionGroup>>()?);
-                }
-                _ => return Err(de::Error::unknown_field(&key, &["format", "groups"])),
-            }
-        }
-        if format.as_deref() != Some(HISTORY) {
-            return Err(de::Error::custom(
-                "unsupported compact ownership history format",
-            ));
-        }
-        let groups = groups.ok_or_else(|| de::Error::missing_field("groups"))?;
-        Ok(DecisionHistory {
-            groups: history_groups(groups)?,
-        })
-    }
-}
-impl<'de> Deserialize<'de> for DecisionHistory {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(HistoryVisitor)
     }
 }

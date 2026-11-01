@@ -26,7 +26,7 @@ pub(super) fn status_details(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteCoordinationDetails> {
-    let execution = super::execution::status_action(target_root)?;
+    let execution = super::execution::status_action_for_state(target_root, state)?;
     status_details_with_execution(target_root, state, execution.as_ref())
 }
 

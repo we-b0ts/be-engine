@@ -34,6 +34,7 @@ pub use worker::model::{
 };
 pub use worker::runtime::{RewriteWorkerReportOptions, report as report_rewrite_worker};
 mod dependency_review;
+pub use store::{compact_rewrite_decision_history, verify_rewrite_decision_history};
 mod dependency_rule;
 mod verification_obligations;
 pub(crate) use dependency_review::{
