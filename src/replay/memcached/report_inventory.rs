@@ -65,6 +65,7 @@ impl MemcachedReplayState {
                 position: Position { section: 0, index },
                 visible: true,
                 value: serde_json::to_value(CommandUnusedReport {
+                    source_exchange_id: None,
                     index,
                     case_id: exchange.case_id.clone(),
                     source: exchange.source,

@@ -265,6 +265,7 @@ impl IndexedNotifications {
                     loaded_page = Some(page);
                 }
                 result.push(CommandUnusedReport {
+                    source_exchange_id: None,
                     index: entries[index - pages.page_start(page)].location.line - 1,
                     case_id: None,
                     source: lane.source_kind,

@@ -177,3 +177,57 @@ process_dependencies:
     );
     assert!(super::super::analysis::required_action(target.path(), &state).is_some());
 }
+
+#[tokio::test]
+async fn a_new_process_selector_invalidates_previously_empty_case_admission() {
+    let (target, mut state, _, original) = historical(true).await;
+    super::super::analysis::refresh_inventory(target.path(), &mut state).unwrap();
+    assert!(
+        state
+            .dependency_review
+            .unresolved_source_exchange_ids
+            .is_empty()
+    );
+    let admitted = state
+        .dependency_review
+        .case_defaults_identity
+        .clone()
+        .unwrap();
+    fs::write(
+        target.path().join(".traffic-e2e/policy.yaml"),
+        r#"format: traffic-policy/v3
+process_dependencies:
+  tasks:
+    callback_reader:
+      requests:
+        - redis:
+            resource: {protocol: redis, endpoint: 'cache.test:6379', database: 0}
+            operation: SUBSCRIBE
+            arguments: ['callback:channel:123']
+"#,
+    )
+    .unwrap();
+    // Read-only callers may still hold the prior admission cache.
+    assert!(super::super::analysis::required_action(target.path(), &state).is_some());
+    super::super::analysis::refresh_inventory(target.path(), &mut state).unwrap();
+    assert_eq!(
+        state.dependency_review.unresolved_source_exchange_ids.len(),
+        2
+    );
+    assert_ne!(
+        state.dependency_review.case_defaults_identity.as_ref(),
+        Some(&admitted)
+    );
+    assert!(super::super::analysis::required_action(target.path(), &state).is_some());
+    assert_eq!(
+        fs::read(
+            state
+                .case_source
+                .as_ref()
+                .unwrap()
+                .join("dependencies.jsonl")
+        )
+        .unwrap(),
+        original
+    );
+}

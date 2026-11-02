@@ -922,6 +922,7 @@ fn unused_iter(
                 }
         })
         .map(move |(index, exchange)| CommandUnusedReport {
+            source_exchange_id: None,
             index,
             case_id: exchange.case_id.clone(),
             source: exchange.source,

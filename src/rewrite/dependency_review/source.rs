@@ -14,6 +14,9 @@ use crate::dependency::observation::{
     CaptureMetadata, LedgerFileIdentity, MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest,
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(super) struct SourceExchange {
     pub capture: CaptureMetadata,
     pub complete: bool,
@@ -262,12 +265,21 @@ pub(super) fn resolve_unused(
         .or_else(|| event["capture"]["exchange_id"].as_str())
     {
         let id = Uuid::parse_str(id)?;
+        let original = snapshot
+            .exchanges
+            .get(&id)
+            .context("unused occurrence is outside original Source inventory")?;
         ensure!(
-            snapshot.exchanges.contains_key(&id),
-            "unused occurrence is outside original Source inventory"
+            event["command"] != "PUBSUB_PUSH"
+                || original.selector["event_type"] == "redis_pub_sub_push",
+            "unused Pub/Sub identity does not name an original notification"
         );
         return Ok(id);
     }
+    ensure!(
+        event["command"] != "PUBSUB_PUSH",
+        "unused Pub/Sub notification lacks its own Source exchange identity; run a fresh Replay to publish notification identities"
+    );
     let candidates = if protocol == "http" {
         snapshot.http.get(
             event["source_http_id"]

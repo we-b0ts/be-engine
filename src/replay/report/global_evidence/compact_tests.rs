@@ -88,6 +88,7 @@ impl Fixture {
                     if lane_index != 0 || ![0, 255, 256, 599].contains(&position) {
                         expected.push(
                             serde_json::to_value(CommandUnusedReport {
+                                source_exchange_id: None,
                                 index: entry.location.line - 1,
                                 case_id: None,
                                 source: ReplaySource::Startup,

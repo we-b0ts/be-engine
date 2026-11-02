@@ -81,6 +81,8 @@ pub(in crate::replay) struct CommandExchangeRefReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct CommandUnusedReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) source_exchange_id: Option<Uuid>,
     pub(in crate::replay) index: usize,
     pub(in crate::replay) case_id: Option<String>,
     pub(in crate::replay) source: ReplaySource,

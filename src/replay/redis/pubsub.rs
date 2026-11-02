@@ -29,6 +29,8 @@ mod tests;
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedPush {
     #[serde(default)]
+    capture: Option<PushCaptureIdentity>,
+    #[serde(default)]
     pub(super) timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) target_host: String,
     pub(super) target_port: u16,
@@ -40,6 +42,17 @@ pub(in crate::replay) struct RecordedPush {
     pub(super) response: RecordedCapture,
     pub(super) duration_ms: u64,
     pub(super) replay_safe: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PushCaptureIdentity {
+    exchange_id: Uuid,
+}
+
+impl RecordedPush {
+    fn source_exchange_id(&self) -> Option<Uuid> {
+        self.capture.as_ref().map(|capture| capture.exchange_id)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -388,6 +401,7 @@ impl PubSubState {
                 usize::MAX
             })
             .map(|(index, p)| CommandUnusedReport {
+                source_exchange_id: p.record.source_exchange_id(),
                 index: p.report_index.unwrap_or(index),
                 case_id: p.case_id.clone(),
                 source,
@@ -426,6 +440,7 @@ impl PubSubState {
             .filter(|(_, p)| p.source.is_run_level() && !p.status.is_consumed())
         {
             visitor(serde_json::to_value(CommandUnusedReport {
+                source_exchange_id: push.record.source_exchange_id(),
                 index: push.report_index.unwrap_or(index),
                 case_id: None,
                 source: push.source,

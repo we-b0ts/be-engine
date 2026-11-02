@@ -59,6 +59,7 @@ impl PubSubState {
                 position: Position { section: 1, index },
                 visible: true,
                 value: serde_json::to_value(CommandUnusedReport {
+                    source_exchange_id: push.record.source_exchange_id(),
                     index: push.report_index.unwrap_or(index),
                     case_id: None,
                     source: push.source,

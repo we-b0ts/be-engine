@@ -215,13 +215,28 @@ async fn task_proof_binds_complete_cross_protocol_scope_and_keeps_original_inven
         .unwrap(),
         bytes
     );
-    let stored = RewriteStore::new(target.path())
+    let mut stored = RewriteStore::new(target.path())
         .unwrap()
         .load()
         .unwrap()
         .unwrap();
     assert!(batch_pending(&stored)); // A real process execution still owns this debt.
     assert_eq!(stored.dependency_review.obligations.len(), 1);
+    let decisions = serde_json::to_value(&stored.dependency_review.decisions).unwrap();
+    stored.dependency_review.case_defaults_identity = None;
+    super::analysis::refresh_inventory(target.path(), &mut stored).unwrap();
+    assert_eq!(
+        serde_json::to_value(&stored.dependency_review.decisions).unwrap(),
+        decisions,
+        "admission cache rebuilding preserves current authored ownership proofs"
+    );
+    assert!(
+        stored
+            .dependency_review
+            .unresolved_source_exchange_ids
+            .is_empty()
+    );
+    assert!(required_action(target.path(), &stored).is_none());
     assert!(
         apply_dependency_attribution(options())
             .unwrap_err()
