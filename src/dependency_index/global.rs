@@ -379,10 +379,8 @@ pub(crate) fn load_global_index_cancellable(
     }
     let started = Instant::now();
     let mut next_progress = 64 * 1024 * 1024;
-    tracing::info!(
-        source_bytes = stamp.size,
-        "preparing Global dependency index"
-    );
+    let source_bytes = super::scoped::selected_bytes(path)?;
+    tracing::info!(source_bytes, "preparing Global dependency index");
     while let Some((location, raw)) = input.next()? {
         store::check_cancelled(cancelled)?;
         let record = if raw.iter().all(u8::is_ascii_whitespace) {
@@ -402,7 +400,7 @@ pub(crate) fn load_global_index_cancellable(
         if builder.offset >= next_progress {
             tracing::info!(
                 prepared_bytes = builder.offset,
-                source_bytes = stamp.size,
+                source_bytes,
                 elapsed_seconds = started.elapsed().as_secs(),
                 "preparing Global dependency index"
             );

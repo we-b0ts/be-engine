@@ -105,6 +105,9 @@ traffic-e2e diagnose dependency-index --case-source /path/to/completed/run
 
 The command reports `built`/`reused`, file count, source bytes and index location.
 It never starts a target or changes recording evidence.
+Preparation byte counts describe the selected Case or Global scope. Several
+scopes can refer to one central ledger; its full file stamp still authenticates
+their original locations and is not counted again for each scope.
 
 ## Shared Global evidence
 
