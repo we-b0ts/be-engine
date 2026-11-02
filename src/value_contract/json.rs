@@ -13,6 +13,7 @@ pub(crate) mod diagnosis;
 pub(super) mod identity;
 pub(crate) use identity::{key as identity_key, token as identity_token};
 mod native;
+mod pointers;
 mod time_fields;
 pub(crate) use super::time_copies::VerifiedTimeCopy;
 pub(crate) use native::{LeafContext, LeafObservations, NativeField, NonceIdentity, VerifiedField};
@@ -207,6 +208,9 @@ struct Comparator<'a> {
     fields: &'a [Field<'a>],
     native: &'a [NativeField<'a>],
     verified: &'a [VerifiedField<'a>],
+    field_pointers: pointers::Index<'a>,
+    native_pointers: pointers::Index<'a>,
+    verified_pointers: pointers::Index<'a>,
     time_copies: BTreeMap<(&'a str, &'a str), Vec<&'a VerifiedTimeCopy>>,
     clocks: AnchorClocks,
     remaining: usize,
@@ -278,6 +282,9 @@ fn compare_all(
         fields,
         native,
         verified,
+        field_pointers: pointers::Index::new(fields.iter().map(|field| field.pointer)),
+        native_pointers: pointers::Index::new(native.iter().map(|field| field.pointer)),
+        verified_pointers: pointers::Index::new(verified.iter().map(|field| field.pointer)),
         time_copies: time_copies
             .iter()
             .fold(BTreeMap::new(), |mut index, proof| {
@@ -374,6 +381,12 @@ pub(crate) fn pointer_observed(root: &Value, pattern: &str) -> bool {
 }
 
 fn pointer_matches(pattern: &str, pointer: &str, root: &Value) -> bool {
+    if pattern == pointer {
+        return true;
+    }
+    if !pattern.contains('*') {
+        return false;
+    }
     if pattern.split('/').count() != pointer.split('/').count() {
         return false;
     }
@@ -418,22 +431,22 @@ impl Comparator<'_> {
         }
         self.remaining -= 1;
         let selected = self
-            .fields
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| pointer_matches(f.pointer, pointer, self.source_root))
+            .field_pointers
+            .matching(pointer, self.source_root)
+            .into_iter()
+            .map(|index| (index, &self.fields[index]))
             .collect::<Vec<_>>();
         let native = self
-            .native
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| pointer_matches(field.pointer, pointer, self.source_root))
+            .native_pointers
+            .matching(pointer, self.source_root)
+            .into_iter()
+            .map(|index| (index, &self.native[index]))
             .collect::<Vec<_>>();
         let verified = self
-            .verified
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| pointer_matches(field.pointer, pointer, self.source_root))
+            .verified_pointers
+            .matching(pointer, self.source_root)
+            .into_iter()
+            .map(|index| (index, &self.verified[index]))
             .collect::<Vec<_>>();
         if selected.len() + native.len() + verified.len() > 1 {
             if selected.is_empty()

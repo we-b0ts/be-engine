@@ -54,17 +54,24 @@ async fn capture_then_sql_json_and_redis_key_preserve_fixed_values_times_and_con
         let now = chrono::Utc::now().naive_utc();
         for payload in [r#"{"name":"wrong-name","stable":1}"#, r#"{"name":"new-name","stable":2}"#] {
             assert!(sqlx::query(insert).bind("new-name").bind(payload).bind(now).execute(&mut client).await.is_err());
+            client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         }
         assert_eq!(sqlx::query(insert).bind("new-name").bind(r#"{"stable":1,"name":"new-name"}"#).bind(now).execute(&mut client).await.unwrap().rows_affected(),1);
         assert!(sqlx::query(insert).bind("new-name").bind(r#"{"name":"new-name","stable":1}"#).bind(now).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let (redis_addr,redis_task) = endpoint_listener(runtime.clone(),true).await;
-        let mut redis = tokio::net::TcpStream::connect(redis_addr).await.unwrap();
-        for (key,expected) in [("other:new-name:fixed",b"-ERR no recorded Redis dependency matched\r\n".as_slice()),("cache:wrong-name:fixed",b"-ERR no recorded Redis dependency matched\r\n".as_slice()),("cache:new-name:fixed",b":1\r\n".as_slice()),("cache:new-name:fixed",b"-ERR no recorded Redis dependency matched\r\n".as_slice())] {
+        for (key,expected) in [("other:new-name:fixed",None),("cache:wrong-name:fixed",None),("cache:new-name:fixed",Some(b":1\r\n".as_slice())),("cache:new-name:fixed",None)] {
+            let mut redis = tokio::net::TcpStream::connect(redis_addr).await.unwrap();
             redis.write_all(format!("*2\r\n$3\r\nDEL\r\n${}\r\n{key}\r\n",key.len()).as_bytes()).await.unwrap();
-            let mut response = vec![0;expected.len()];
-            redis.read_exact(&mut response).await.unwrap();
-            assert_eq!(response,expected);
+            if let Some(expected) = expected {
+                let mut response = vec![0;expected.len()];
+                redis.read_exact(&mut response).await.unwrap();
+                assert_eq!(response,expected);
+            } else {
+                let mut probe = [0];
+                assert_eq!(tokio::time::timeout(Duration::from_secs(2), redis.read(&mut probe)).await.unwrap().unwrap(),0);
+            }
         }
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count,2);
@@ -135,6 +142,7 @@ async fn sql_time_evidence_uses_committed_identity_proofs_and_retired_authoring_
         // Standard strings already have builtin time semantics. A real clock
         // error still produces unmatched evidence after the identity commits.
         assert!(sqlx::query("INSERT INTO kinds(name,json,created_at) VALUES(?,?,?)").bind("new-name").bind(r#"{"stable":1,"name":"new-name"}"#).bind((chrono::Utc::now() + chrono::Duration::seconds(30)).naive_utc()).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let report = temp.path().join("replay.json");
         {

@@ -226,12 +226,23 @@ impl PubSubState {
         exchange: &ReplayExchange,
         args: &[Vec<u8>],
     ) -> Option<(rpc::Broadcast, rpc::Broadcast)> {
-        let source = rpc::broadcast(&exchange.record.command, &exchange.args)
+        let mut source = rpc::broadcast(&exchange.record.command, &exchange.args)
             .ok()
             .flatten()?;
         let actual = rpc::broadcast(&exchange.record.command, args)
             .ok()
             .flatten()?;
+        if source.value["room"] != actual.value["room"] {
+            if !self.namespace_sessions.matches_room(
+                exchange.case_id.as_deref(),
+                &source.value["namespace"],
+                &source.value["room"],
+                &actual.value["room"],
+            ) {
+                return None;
+            }
+            source.value["room"] = actual.value["room"].clone();
+        }
         let realm = (
             TargetKey {
                 host: normalize_host(&exchange.record.target_host),

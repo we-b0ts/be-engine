@@ -6,7 +6,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -46,9 +45,7 @@ use super::report::command::{
     CommandUnusedReport,
 };
 use admission::match_memcached_request;
-use builtins::{
-    adapt_binary_get_responses, binary_error, binary_get_opcodes_match, memcached_is_unsupported,
-};
+use builtins::{adapt_binary_get_responses, binary_get_opcodes_match, memcached_is_unsupported};
 use delivery::deliver_memcached_exchange;
 use expiration::{ArgumentSnapshot, arguments_match};
 
@@ -356,16 +353,7 @@ pub(super) async fn handle_connection(
                             break;
                         }
                     }
-                    None => {
-                        if !request.noreply {
-                            reader
-                                .inner
-                                .write_all(
-                                    b"SERVER_ERROR no recorded Memcached dependency matched\r\n",
-                                )
-                                .await?;
-                        }
-                    }
+                    None => break,
                 }
             }
         }
@@ -430,12 +418,7 @@ pub(super) async fn handle_connection(
                             break;
                         }
                     }
-                    None => {
-                        reader
-                            .inner
-                            .write_all(&binary_error(frame.opcode, frame.opaque))
-                            .await?;
-                    }
+                    None => break,
                 }
             }
         }

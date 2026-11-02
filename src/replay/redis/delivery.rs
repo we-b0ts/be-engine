@@ -21,7 +21,7 @@ pub(super) async fn deliver_redis_exchange(
             state.redis.exchanges[matched.index]
                 .record
                 .lifecycle_cleanup,
-            state.input_timing.as_ref().map(|timeline| timeline.scope()),
+            super::input_timing::scope(&state),
         )
     };
     if lifecycle {
@@ -241,7 +241,9 @@ pub(super) async fn deliver_redis_exchange(
     }
     // TCP and contract commits have succeeded. An RPC callback may still be
     // pending, so complete_exchange is deliberately a separate fact.
-    super::input_timing::response_delivered(&mut state, matched, timing_scope.as_ref());
+    if matches!(matched.claim, Claim::Finite(_)) {
+        super::input_timing::response_delivered(&mut state, matched, timing_scope.as_ref());
+    }
     drop(state);
     if let Err(error) = pubsub::echo::deliver(state_ref, matched).await {
         state_ref
@@ -271,8 +273,12 @@ pub(super) async fn deliver_redis_exchange(
                 state.redis.fail_exchange(matched, error.to_string());
             }
         }
-    } else {
-        state.redis.complete_exchange(matched);
+    } else if let Some(covered) = state.redis.complete_exchange_covered(matched) {
+        super::input_timing::response_indices_delivered(
+            &mut state,
+            &covered,
+            timing_scope.as_ref(),
+        );
     }
     Ok(false)
 }

@@ -85,11 +85,7 @@ async fn selected_subscription_mirror_and_startup_alias_share_one_case_slot() {
                 first,
                 "process subscription survives Case changes"
             );
-            assert!(
-                send(&mut client, &[b"SUBSCRIBE", b"jobs"])
-                    .await
-                    .starts_with(b"-ERR")
-            );
+            send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
             let state = runtime.state.lock().await;
             assert_eq!(state.redis.exchanges.len(), 2, "mirror added no slot");
             assert_eq!(state.redis.exchanges[0].source, ReplaySource::Case);
@@ -152,11 +148,7 @@ async fn foreign_case_lookup_loads_only_exact_referenced_control_evidence() {
                 .starts_with(b"-ERR")
         );
         read(&mut client).await;
-        assert!(
-            send(&mut client, &[b"SUBSCRIBE", b"jobs"])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
         task.abort();
     }
 }
@@ -183,11 +175,7 @@ async fn mirror_without_selected_original_provides_one_exact_global_control_slot
                 .starts_with(b"-ERR")
         );
         read(&mut client).await;
-        assert!(
-            send(&mut client, &[b"SUBSCRIBE", b"jobs"])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
         assert_eq!(runtime.state.lock().await.redis.exchanges.len(), 1);
         task.abort();
     }
@@ -202,11 +190,7 @@ async fn unreferenced_mirror_does_not_promote_a_case_command_to_global() {
         .unwrap();
     runtime.state.lock().await.active_case_id = None;
     let (mut client, task) = connect(&runtime).await;
-    assert!(
-        send(&mut client, &[b"SUBSCRIBE", b"jobs"])
-            .await
-            .starts_with(b"-ERR")
-    );
+    send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
     assert!(!runtime.state.lock().await.redis.exchanges[0].subscription_alias);
     task.abort();
 }
@@ -228,12 +212,9 @@ async fn subscription_alias_preserves_selected_case_lane_barriers() {
     .await
     .unwrap();
     runtime.state.lock().await.active_case_id = None;
-    let (mut client, task) = connect(&runtime).await;
-    assert!(
-        send(&mut client, &[b"SUBSCRIBE", b"jobs"])
-            .await
-            .starts_with(b"-ERR")
-    );
+    let (mut client, mut task) = connect(&runtime).await;
+    send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
+    reconnect(&runtime, &mut client, &mut task).await;
     runtime.state.lock().await.active_case_id = Some("case".into());
     assert_eq!(
         send(&mut client, &[b"GET", b"private"]).await,
@@ -424,12 +405,9 @@ async fn rpc_only_reconnect_uses_confirmed_mirror_without_promoting_publish() {
                     .await
                     .starts_with(b"-ERR")
             );
-            let (mut client, client_task) = connect(&runtime).await;
-            assert!(
-                send(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)])
-                    .await
-                    .starts_with(b"-ERR")
-            );
+            let (mut client, mut client_task) = connect(&runtime).await;
+            send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await;
+            reconnect(&runtime, &mut client, &mut client_task).await;
             runtime.state.lock().await.active_case_id = Some("case".into());
             assert_eq!(
                 send(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await,
@@ -439,11 +417,7 @@ async fn rpc_only_reconnect_uses_confirmed_mirror_without_promoting_publish() {
             let frame = parse_pubsub_push(&received).unwrap().unwrap();
             let (identity, _) = rpc::callback(&frame.payload).unwrap().unwrap();
             assert_eq!(identity.id, 9);
-            assert!(
-                send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"])
-                    .await
-                    .starts_with(b"-ERR")
-            );
+            send_unmatched(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await;
             let state = runtime.state.lock().await;
             assert_eq!(state.redis.exchanges.len(), 2);
             assert_eq!(
@@ -501,11 +475,7 @@ async fn retained_mirror_survives_failed_or_unpublished_original_case() {
                 .starts_with(b"-ERR")
         );
         read(&mut client).await;
-        assert!(
-            send(&mut client, &[b"SUBSCRIBE", b"jobs"])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"SUBSCRIBE", b"jobs"]).await;
         let state = runtime.state.lock().await;
         assert_eq!(state.redis.events.matched_count, 1);
         assert_eq!(state.redis.global_unused_count(), 0);

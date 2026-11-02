@@ -78,13 +78,12 @@ async fn redis_rfc3339_time_rule_replays_finitely_and_rejects_changed_offsets() 
         redis_value_tests::request(
             &mut client,
             &["SET", "streaming:1", &actual],
-            if passes {
-                b"+OK\r\n"
-            } else {
-                b"-ERR no recorded Redis dependency matched\r\n"
-            },
+            if passes { b"+OK\r\n" } else { b"" },
         )
         .await;
+        if !passes {
+            client = TcpStream::connect(addr).await.unwrap();
+        }
     }
     assert_eq!(
         crate::recorder::test_io::read_to_string_sync(path).unwrap(),
@@ -198,7 +197,7 @@ async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fr
         redis_value_tests::request(
             &mut client,
             &actual.iter().map(String::as_str).collect::<Vec<_>>(),
-            b"-ERR no recorded Redis dependency matched\r\n",
+            b"",
         )
         .await;
         let report = root.join("replay.json");
@@ -262,7 +261,7 @@ async fn redis_request_contracts_discover_plan_apply_and_verify_json_jwts_and_fr
         redis_value_tests::request(
             &mut client,
             &actual.iter().map(String::as_str).collect::<Vec<_>>(),
-            b"-ERR no recorded Redis dependency matched\r\n",
+            b"",
         )
         .await;
         assert_eq!(
@@ -353,7 +352,7 @@ async fn script_and_rpush_contracts_plan_apply_and_replay_over_real_redis_client
             redis_value_tests::request(
                 &mut client,
                 &actual.iter().map(String::as_str).collect::<Vec<_>>(),
-                b"-ERR no recorded Redis dependency matched\r\n",
+                b"",
             )
             .await;
             {
@@ -406,7 +405,7 @@ async fn script_and_rpush_contracts_plan_apply_and_replay_over_real_redis_client
         redis_value_tests::request(
             &mut client,
             &actual.iter().map(String::as_str).collect::<Vec<_>>(),
-            b"-ERR no recorded Redis dependency matched\r\n",
+            b"",
         )
         .await;
         assert_eq!(

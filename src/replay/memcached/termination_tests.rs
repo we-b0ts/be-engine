@@ -1,6 +1,6 @@
 use super::super::{MysqlReplayConfig, ReplayRuntime};
 use super::*;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn start(
     prefix: &[u8],

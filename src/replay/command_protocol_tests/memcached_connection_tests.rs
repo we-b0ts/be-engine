@@ -57,11 +57,10 @@ async fn replays_memcached_binary_with_live_opaque() {
         let report = wait_for_matched_count(&report_path, "memcached", 1).await;
         assert_eq!(report["memcached"]["matched"].as_array().unwrap().len(), 1);
         client.write_all(&binary_get_request(43)).await.unwrap();
-        client.read_exact(&mut response).await.unwrap();
-        assert_ne!(
-            u16::from_be_bytes(response[6..8].try_into().unwrap()),
+        assert_eq!(
+            client.read(&mut response).await.unwrap(),
             0,
-            "finite response evidence must not be reused"
+            "a rejected finite response closes its connection"
         );
         task.abort();
     }
@@ -155,11 +154,7 @@ async fn cross_lane_memcached_matching_preserves_each_source_lane_order() {
         .await
         .unwrap();
     let mut response = vec![0_u8; 24];
-    client.read_exact(&mut response).await.unwrap();
-    assert_eq!(
-        u16::from_be_bytes(response[6..8].try_into().unwrap()),
-        0x0084
-    );
+    assert_eq!(client.read(&mut response).await.unwrap(), 0);
 
     let report = wait_for_unmatched_count(&report_path, "memcached", 1).await;
     let diagnostic = &report["memcached"]["unmatched"][0]["diagnostic"];

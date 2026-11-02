@@ -115,7 +115,7 @@ async fn http_delivery_outlives_interaction_cleanup_under_the_tail_deadline() {
 }
 
 #[tokio::test]
-async fn a_missing_http_call_remains_dirty_and_retains_the_case() {
+async fn a_missing_http_call_remains_dirty_after_releasing_the_case() {
     let temp = tempfile::tempdir().unwrap();
     let runtime = runtime(temp.path(), 30).await;
     metadata(temp.path(), 180).await;
@@ -133,7 +133,8 @@ async fn a_missing_http_call_remains_dirty_and_retains_the_case() {
             .contains("absolute request budget")
     );
     let state = runtime.state.lock().await;
-    assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
+    assert!(state.active_case_id.is_none());
+    assert!(state.dependency_tails.failure("case-a").is_some());
     let report = state.snapshot_report();
     assert!(report.matched_http_exchanges.is_empty());
     assert_eq!(report.unused_case_http_exchanges.len(), 2);
@@ -153,8 +154,8 @@ async fn a_missing_http_call_remains_dirty_and_retains_the_case() {
     assert_eq!(report["interrupted"], true);
     assert_eq!(report["complete"], false);
     assert_eq!(report["finalized"], false);
-    assert_eq!(report["active_case_id"], "case-a");
-    assert_eq!(report["cases"][0]["status"], "active");
+    assert!(report["active_case_id"].is_null());
+    assert_eq!(report["cases"][0]["status"], "ended");
     assert_eq!(report["cases"][1]["status"], "pending");
     assert_eq!(
         report["unused_case_http_exchanges"]
@@ -208,7 +209,8 @@ async fn every_case_tail_obligation_requires_real_delivery() {
     assert_eq!(ended["dirty"], true);
     assert!(started.elapsed() < Duration::from_secs(1));
     let state = runtime.state.lock().await;
-    assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
+    assert!(state.active_case_id.is_none());
+    assert!(state.dependency_tails.failure("case-a").is_some());
     assert!(state.snapshot_report().matched_http_exchanges.is_empty());
     assert_eq!(state.snapshot_report().unused_case_http_exchanges.len(), 2);
 }
@@ -253,7 +255,8 @@ async fn legacy_selected_calls_remain_strict_when_a_general_tail_and_process_rul
             "the general tail retains its own absolute budget"
         );
         let state = runtime.state.lock().await;
-        assert_eq!(state.active_case_id.as_deref(), Some("case-a"));
+        assert!(state.active_case_id.is_none());
+        assert!(state.dependency_tails.failure("case-a").is_some());
         assert!(state.snapshot_report().matched_http_exchanges.is_empty());
         assert_eq!(state.snapshot_report().unused_case_http_exchanges.len(), 2);
     }

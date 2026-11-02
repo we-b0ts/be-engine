@@ -100,6 +100,7 @@ async fn select_sql_time_matches_counts_and_rows_across_text_and_prepared_protoc
                                 rows.is_err(),
                                 "stale cutoff, changed project and exhausted evidence must fail"
                             );
+                            client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                         }
                     }
                 }

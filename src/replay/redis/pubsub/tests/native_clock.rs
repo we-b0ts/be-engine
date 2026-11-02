@@ -12,6 +12,7 @@ mod encryption;
 mod guards;
 mod heartbeats;
 mod observations;
+mod prefix;
 mod recording;
 mod routing;
 mod scale;

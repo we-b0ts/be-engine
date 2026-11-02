@@ -43,12 +43,16 @@ async fn assert_reply(client: &mut TcpStream, args: &[&str], expected: &[u8]) {
 }
 
 async fn assert_unmatched(client: &mut TcpStream, args: &[&str]) {
-    assert_reply(
-        client,
-        args,
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
+    client.write_all(&request(args)).await.unwrap();
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), client.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0,
+        "{args:?}"
+    );
 }
 
 async fn fixture(
@@ -157,8 +161,8 @@ async fn unsubscription_retains_exact_arguments_and_stateful_lane_ownership() {
     let mut other = TcpStream::connect(addr).await.unwrap();
     assert_reply(&mut owner, &["SUBSCRIBE", "events"], subscribe).await;
     assert_unmatched(&mut other, &["UNSUBSCRIBE", "events"]).await;
-    assert_unmatched(&mut owner, &["UNSUBSCRIBE", "other"]).await;
     assert_reply(&mut owner, &["UNSUBSCRIBE", "events"], unsubscribe).await;
+    other = TcpStream::connect(addr).await.unwrap();
     assert_unmatched(&mut other, &["GET", "key"]).await;
     assert_reply(&mut owner, &["GET", "key"], b"$5\r\nvalue\r\n").await;
     let report = wait_for_matched_count(&report_path, "redis", 3).await;
@@ -174,6 +178,25 @@ async fn unsubscription_retains_exact_arguments_and_stateful_lane_ownership() {
             .unwrap()
             .is_empty()
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn unsubscription_wrong_subject_closes_owner_without_consuming_confirmation() {
+    let source = Uuid::new_v4();
+    let subscribe = b"*3\r\n$9\r\nsubscribe\r\n$6\r\nevents\r\n:1\r\n";
+    let unsubscribe = b"*3\r\n$11\r\nunsubscribe\r\n$6\r\nevents\r\n:0\r\n";
+    let (_temp, report_path, addr, task) = fixture(vec![
+        exchange(source, 1, "SUBSCRIBE", &["events"], subscribe),
+        exchange(source, 2, "UNSUBSCRIBE", &["events"], unsubscribe),
+    ])
+    .await;
+    let mut owner = TcpStream::connect(addr).await.unwrap();
+    assert_reply(&mut owner, &["SUBSCRIBE", "events"], subscribe).await;
+    assert_unmatched(&mut owner, &["UNSUBSCRIBE", "other"]).await;
+    let report = wait_for_unmatched_count(&report_path, "redis", 1).await;
+    assert_eq!(report["redis"]["matched_count"], 1);
+    assert_eq!(report["redis"]["unused_case"].as_array().unwrap().len(), 1);
     task.abort();
 }
 
@@ -252,6 +275,7 @@ async fn multiple_target_connections_preserve_source_order_and_share_finite_inve
     let mut first = TcpStream::connect(addr).await.unwrap();
     let mut second = TcpStream::connect(addr).await.unwrap();
     assert_unmatched(&mut second, &["GET", "key"]).await;
+    second = TcpStream::connect(addr).await.unwrap();
     let report = wait_for_unmatched_count(&report_path, "redis", 1).await;
     assert_eq!(
         report["redis"]["unmatched"][0]["diagnostic"]["kind"],
@@ -292,12 +316,14 @@ async fn a_recorded_transaction_lane_is_owned_by_one_target_connection() {
     // A later WATCH/MULTI in the recording pins the whole lane, even its prefix.
     assert_reply(&mut owner, &["GET", "before"], b"$1\r\n1\r\n").await;
     assert_unmatched(&mut other, &["WATCH", "key"]).await;
+    other = TcpStream::connect(addr).await.unwrap();
     assert_reply(&mut owner, &["WATCH", "key"], b"+OK\r\n").await;
     assert_reply(&mut owner, &["MULTI"], b"+OK\r\n").await;
     assert_unmatched(&mut other, &["GET", "key"]).await;
-    assert_unmatched(&mut owner, &["GET", "independent"]).await;
+    other = TcpStream::connect(addr).await.unwrap();
     assert_reply(&mut owner, &["GET", "key"], b"+QUEUED\r\n").await;
     assert_reply(&mut owner, &["EXEC"], b"*1\r\n$1\r\n2\r\n").await;
+    assert_unmatched(&mut owner, &["GET", "independent"]).await;
     assert_reply(&mut other, &["GET", "independent"], b"$1\r\n3\r\n").await;
     let report = wait_for_matched_count(&report_path, "redis", 6).await;
     assert_eq!(report["redis"]["unmatched"].as_array().unwrap().len(), 3);
@@ -335,6 +361,13 @@ async fn pool_compatibility_does_not_relax_database_or_authentication() {
     )
     .await;
     assert_unmatched(&mut client, &["GET", "one"]).await;
+    client = TcpStream::connect(addr).await.unwrap();
+    assert_reply(
+        &mut client,
+        &["AUTH", "alice", "fixture-password"],
+        b"+OK\r\n",
+    )
+    .await;
     assert_reply(&mut client, &["SELECT", "2"], b"+OK\r\n").await;
     assert_reply(&mut client, &["GET", "one"], b"$1\r\n1\r\n").await;
     assert_reply(
@@ -344,6 +377,8 @@ async fn pool_compatibility_does_not_relax_database_or_authentication() {
     )
     .await;
     assert_unmatched(&mut client, &["GET", "two"]).await;
+    client = TcpStream::connect(addr).await.unwrap();
+    assert_reply(&mut client, &["SELECT", "2"], b"+OK\r\n").await;
     assert_reply(
         &mut client,
         &["AUTH", "alice", "fixture-password"],
@@ -367,7 +402,7 @@ async fn simultaneous_pool_requests_cannot_claim_the_same_exchange() {
     let mut record = exchange(Uuid::new_v4(), 1, "GET", &["key"], b"$1\r\n1\r\n");
     record["duration_ms"] = 50.into();
     let (_temp, report_path, addr, task) = fixture(vec![record]).await;
-    async fn read(addr: SocketAddr) -> Vec<u8> {
+    async fn read(addr: SocketAddr) -> Option<Vec<u8>> {
         let mut client = TcpStream::connect(addr).await.unwrap();
         client.write_all(&request(&["GET", "key"])).await.unwrap();
         let mut reader = crate::redis::BufferedReader::new(client, 1024);
@@ -378,20 +413,12 @@ async fn simultaneous_pool_requests_cannot_claim_the_same_exchange() {
         .await
         .unwrap()
         .unwrap()
-        .unwrap()
-        .raw
-        .to_vec()
+        .map(|frame| frame.raw.to_vec())
     }
     let (first, second) = tokio::join!(read(addr), read(addr));
     let mut replies = [first, second];
     replies.sort();
-    assert_eq!(
-        replies,
-        [
-            b"$1\r\n1\r\n".to_vec(),
-            b"-ERR no recorded Redis dependency matched\r\n".to_vec()
-        ]
-    );
+    assert_eq!(replies, [None, Some(b"$1\r\n1\r\n".to_vec())]);
     let report = wait_for_matched_count(&report_path, "redis", 1).await;
     assert_eq!(report["redis"]["unmatched"].as_array().unwrap().len(), 1);
     assert!(
@@ -478,6 +505,7 @@ async fn script_commands_share_source_lane_across_target_connections() {
         let mut request_args = args;
         request_args.insert(0, command);
         assert_unmatched(&mut second, &request_args).await;
+        second = TcpStream::connect(addr).await.unwrap();
         let report = wait_for_unmatched_count(&report_path, "redis", 1).await;
         assert_eq!(
             report["redis"]["unmatched"][0]["diagnostic"]["kind"],
@@ -524,11 +552,14 @@ async fn script_cache_miss_load_and_retry_replay_across_connections() {
     let mut loader = TcpStream::connect(addr).await.unwrap();
     assert_reply(&mut first, &["EVALSHA", sha, "0", "value"], missing).await;
     assert_unmatched(&mut loader, &["EVALSHA", sha, "0", "value"]).await;
+    loader = TcpStream::connect(addr).await.unwrap();
     assert_unmatched(&mut loader, &["SCRIPT", "LOAD", "return 'changed'"]).await;
+    loader = TcpStream::connect(addr).await.unwrap();
     assert_reply(&mut loader, &["SCRIPT", "LOAD", script], loaded.as_bytes()).await;
     drop(first);
     let mut retry = TcpStream::connect(addr).await.unwrap();
     assert_unmatched(&mut retry, &["EVALSHA", "wrong-sha", "0", "value"]).await;
+    retry = TcpStream::connect(addr).await.unwrap();
     assert_reply(
         &mut retry,
         &["EVALSHA", sha, "0", "value"],
@@ -571,8 +602,10 @@ async fn script_commands_in_transaction_lanes_remain_connection_bound() {
         let mut other = TcpStream::connect(addr).await.unwrap();
         assert_reply(&mut owner, &["WATCH", "key"], b"+OK\r\n").await;
         assert_unmatched(&mut other, &["MULTI"]).await;
+        other = TcpStream::connect(addr).await.unwrap();
         assert_reply(&mut owner, &["MULTI"], b"+OK\r\n").await;
         assert_unmatched(&mut other, &[command, script, "1", "key"]).await;
+        other = TcpStream::connect(addr).await.unwrap();
         assert_reply(&mut owner, &[command, script, "1", "key"], b"+QUEUED\r\n").await;
         assert_unmatched(&mut other, &["EXEC"]).await;
         assert_reply(&mut owner, &["EXEC"], b"*1\r\n:1\r\n").await;

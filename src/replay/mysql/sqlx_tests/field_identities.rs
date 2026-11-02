@@ -81,6 +81,13 @@ async fn mysql_field_ids_survive_reads_and_response_control_without_sql_template
                 .await
                 .is_err()
         );
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         assert_eq!(
             client
                 .execute(insert.replace(SOURCE, TARGET).as_str())
@@ -106,12 +113,26 @@ async fn mysql_field_ids_survive_reads_and_response_control_without_sql_template
                 .await
                 .is_err()
         );
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         assert!(
             client
                 .execute(copy.replace(HISTORICAL, TARGET).as_str())
                 .await
                 .is_err()
         );
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         assert!(
             client
                 .execute(update.replace(SOURCE, TARGET).as_str())

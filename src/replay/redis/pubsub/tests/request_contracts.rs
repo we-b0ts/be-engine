@@ -110,7 +110,7 @@ async fn rpc_request_contracts_compose_with_ack_identity_and_preserve_all_other_
         .await
         .unwrap();
         let (mut subscriber, sub_task) = connect(&runtime).await;
-        let (mut client, client_task) = connect(&runtime).await;
+        let (mut client, mut client_task) = connect(&runtime).await;
         assert_eq!(
             send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
             confirmed
@@ -160,15 +160,12 @@ async fn rpc_request_contracts_compose_with_ack_identity_and_preserve_all_other_
             let mut changed = valid.clone();
             *changed.pointer_mut(pointer).unwrap() = wrong;
             changed["host_id"] = "11111111111141118111111111111111".into();
-            assert!(
-                send(
-                    &mut client,
-                    &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()]
-                )
-                .await
-                .starts_with(b"-ERR"),
-                "accepted {pointer}, lazy={lazy}"
-            );
+            send_unmatched(
+                &mut client,
+                &[b"PUBLISH", b"jobs", &serde_json::to_vec(&changed).unwrap()],
+            )
+            .await;
+            reconnect(&runtime, &mut client, &mut client_task).await;
         }
         assert_eq!(
             send(&mut client, &[b"PUBLISH", b"jobs", &actual]).await,
@@ -179,11 +176,7 @@ async fn rpc_request_contracts_compose_with_ack_identity_and_preserve_all_other_
         let (identity, result) = rpc::callback(&frame.payload).unwrap().unwrap();
         assert_eq!((identity.host.as_str(), identity.id), (TARGET, 9));
         assert_eq!(result["args"][0]["stdout"], "example result");
-        assert!(
-            send(&mut client, &[b"PUBLISH", b"jobs", &actual])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &actual]).await;
         let state = runtime.state.lock().await;
         let snapshot = state.redis.snapshot();
         assert!(snapshot.unused_case.is_empty());

@@ -25,6 +25,7 @@ mysql:
         let text = client.fetch_one(sql).await.unwrap();
         assert!(sqlx::query("SELECT expires_at,owner FROM leases WHERE id=? FOR UPDATE")
             .bind(8_i64).fetch_one(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let prepared = sqlx::query("SELECT expires_at,owner FROM leases WHERE id=? FOR UPDATE").bind(7_i64).fetch_one(&mut client).await.unwrap();
         for row in [text,prepared] {
             let expiry: chrono::NaiveDateTime = row.get("expires_at");

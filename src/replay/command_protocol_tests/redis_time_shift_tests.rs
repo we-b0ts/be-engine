@@ -5,6 +5,18 @@ use crate::{
 };
 use serde_json::json;
 
+async fn assert_eof(client: &mut TcpStream) {
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), client.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0,
+        "engine rejection must close without a synthetic reply"
+    );
+}
+
 async fn hget(client: &mut TcpStream) -> Value {
     client
         .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
@@ -261,13 +273,7 @@ async fn redis_time_shift_scope_without_selected_read_keeps_other_reads_and_unma
         .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
         .await
         .unwrap();
-    let error = b"-ERR no recorded Redis dependency matched\r\n";
-    let mut response = vec![0; error.len()];
-    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut response))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(&response, error);
+    assert_eof(&mut client).await;
     let report = serde_json::to_value(state.lock().await.snapshot_report()).unwrap();
     assert_eq!(report["redis"]["matched_count"], 1);
     assert!(report["redis"]["matched"][0]["shared_origin"].is_null());
@@ -345,13 +351,7 @@ async fn redis_time_shift_scope_shares_multiple_reads_in_capture_order_with_fini
             .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
             .await
             .unwrap();
-        let error = b"-ERR no recorded Redis dependency matched\r\n";
-        let mut response = vec![0; error.len()];
-        tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut response))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(&response, error);
+        assert_eof(&mut client).await;
         task.abort();
     }
 }
@@ -436,13 +436,7 @@ async fn redis_time_shift_scope_plan_apply_shares_a_complete_multi_read_lane() {
         .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
         .await
         .unwrap();
-    let error = b"-ERR no recorded Redis dependency matched\r\n";
-    let mut response = vec![0; error.len()];
-    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut response))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(&response, error);
+    assert_eof(&mut client).await;
     let report = root.join("failed-replay.json");
     {
         let mut replay = state.lock().await;
@@ -584,10 +578,7 @@ async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real
         .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
         .await
         .unwrap();
-    let error = b"-ERR no recorded Redis dependency matched\r\n";
-    let mut bytes = vec![0; error.len()];
-    client.read_exact(&mut bytes).await.unwrap();
-    assert_eq!(&bytes, error);
+    assert_eof(&mut client).await;
     let report = root.join("replay.json");
     {
         let mut s = state.lock().await;
@@ -651,8 +642,7 @@ async fn redis_time_shift_plan_apply_restores_cache_reuse_across_cases_over_real
         .write_all(b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n")
         .await
         .unwrap();
-    client.read_exact(&mut bytes).await.unwrap();
-    assert_eq!(&bytes, error);
+    assert_eof(&mut client).await;
     task.abort();
 }
 
@@ -697,7 +687,6 @@ async fn redis_time_shift_scope_loads_one_sibling_read_and_preserves_finite_cons
     .unwrap();
 
     let command = b"*3\r\n$4\r\nHGET\r\n$8\r\ntoken_v2\r\n$5\r\n00123\r\n";
-    let error = b"-ERR no recorded Redis dependency matched\r\n";
     let (addr, state, task) = redis_value_tests::spawn(&consumer, Some(policy.clone())).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
     assert_eq!(
@@ -705,9 +694,7 @@ async fn redis_time_shift_scope_loads_one_sibling_read_and_preserves_finite_cons
         true
     );
     client.write_all(command).await.unwrap();
-    let mut bytes = vec![0; error.len()];
-    client.read_exact(&mut bytes).await.unwrap();
-    assert_eq!(&bytes, error);
+    assert_eof(&mut client).await;
     let failed_report = root.join("failed-replay.json");
     {
         let mut replay = state.lock().await;
@@ -795,7 +782,6 @@ async fn redis_time_shift_scope_loads_one_sibling_read_and_preserves_finite_cons
     );
     assert!(!report.to_string().contains("private-token"));
     client.write_all(command).await.unwrap();
-    client.read_exact(&mut bytes).await.unwrap();
-    assert_eq!(&bytes, error);
+    assert_eof(&mut client).await;
     task.abort();
 }

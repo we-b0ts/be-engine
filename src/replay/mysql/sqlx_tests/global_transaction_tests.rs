@@ -333,85 +333,57 @@ async fn unselected_case_members_are_global_once_and_cannot_steal_business_commi
 async fn global_transaction_errors_stay_global_and_pool_reuse_restores_case_owner() {
     tokio::time::timeout(Duration::from_secs(30), async {
         for lazy in [false, true] {
-            let fixture = Fixture::new(true, false);
-            let (addr, runtime, task) = fixture.start(lazy, &[]).await;
-            let mut background = connect(addr, &fixture.ca_path()).await;
-            sqlx::raw_sql("BEGIN")
-                .execute(&mut background)
-                .await
-                .unwrap();
-            control(&runtime, "begin", "case-a").await;
-            sqlx::query(BACKGROUND_UPDATE)
-                .execute(&mut background)
-                .await
-                .unwrap();
-            assert_eq!(control(&runtime, "end", "case-a").await["dirty"], false);
-            control(&runtime, "begin", "case-b").await;
-            for prepared in [false, true] {
-                let sql = "UPDATE jobs SET status='UNKNOWN' WHERE id=99";
-                let failed = if prepared {
-                    sqlx::query(sql).execute(&mut background).await.is_err()
+            // A rejected request closes its physical transaction. Each wire
+            // form therefore has its own real transaction and Source inventory.
+            for rejected in [Some(false), Some(true), None] {
+                let fixture = Fixture::new(true, false);
+                let (addr, runtime, task) = fixture.start(lazy, &[]).await;
+                let mut background = connect(addr, &fixture.ca_path()).await;
+                sqlx::raw_sql("BEGIN").execute(&mut background).await.unwrap();
+                control(&runtime, "begin", "case-a").await;
+                sqlx::query(BACKGROUND_UPDATE).execute(&mut background).await.unwrap();
+                assert_eq!(control(&runtime, "end", "case-a").await["dirty"], false);
+                control(&runtime, "begin", "case-b").await;
+                if let Some(prepared) = rejected {
+                    let sql = "UPDATE jobs SET status='UNKNOWN' WHERE id=99";
+                    let error = if prepared {
+                        sqlx::query(sql).execute(&mut background).await.unwrap_err()
+                    } else {
+                        sqlx::raw_sql(sql).execute(&mut background).await.unwrap_err()
+                    };
+                    assert!(error.as_database_error().is_none());
+                    let state = runtime.state.lock().await;
+                    assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+                    assert!(state.mysql.events.unmatched_queries[0].case_id.is_none());
+                    assert!(!state.mysql.case_is_dirty("case-b"));
+                    assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+                    let end = wire_index(&state, fixture.background, 12);
+                    assert!(state.mysql.exchanges[end].status.is_available(), "EOF cannot consume the unexecuted Source COMMIT");
+                    drop(state);
+                    assert!(sqlx::raw_sql("COMMIT").execute(&mut background).await.is_err());
+                    let mut business = connect(addr, &fixture.ca_path()).await;
+                    assert!(sqlx::query(BUSINESS_UPDATE).execute(&mut business).await.is_err());
+                    let state = runtime.state.lock().await;
+                    assert_eq!(state.mysql.events.unmatched_queries.len(), 2);
+                    assert_eq!(state.mysql.events.unmatched_queries[1].case_id.as_deref(), Some("case-b"));
+                    assert!(state.mysql.case_is_dirty("case-b"));
+                    assert!(state.mysql.exchanges[end].status.is_available());
                 } else {
-                    sqlx::raw_sql(sql).execute(&mut background).await.is_err()
-                };
-                assert!(failed);
+                    sqlx::raw_sql("COMMIT").execute(&mut background).await.unwrap();
+                    assert!(sqlx::query(BACKGROUND_UPDATE).execute(&mut background).await.is_err());
+                    let state = runtime.state.lock().await;
+                    assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
+                    assert_eq!(state.mysql.events.unmatched_queries[0].case_id.as_deref(), Some("case-b"),
+                        "after a successful Global COMMIT the pooled connection uses the active Case");
+                    assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
+                    assert_eq!(state.mysql.events.matched_query_count, 3);
+                    assert_provenance(&state, &fixture);
+                }
+                fixture.assert_immutable();
+                task.abort();
             }
-            {
-                let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.unmatched_queries.len(), 2);
-                assert!(
-                    state
-                        .mysql
-                        .events
-                        .unmatched_queries
-                        .iter()
-                        .all(|event| event.case_id.is_none())
-                );
-                assert!(!state.mysql.case_is_dirty("case-b"));
-                assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-            }
-            let mut business = connect(addr, &fixture.ca_path()).await;
-            assert!(
-                sqlx::query(BUSINESS_UPDATE)
-                    .execute(&mut business)
-                    .await
-                    .is_err()
-            );
-            {
-                let state = runtime.state.lock().await;
-                assert!(state.mysql.case_is_dirty("case-b"));
-                assert_eq!(
-                    state.mysql.events.unmatched_queries[2].case_id.as_deref(),
-                    Some("case-b")
-                );
-            }
-            sqlx::raw_sql("COMMIT")
-                .execute(&mut background)
-                .await
-                .unwrap();
-            assert!(
-                sqlx::query(BACKGROUND_UPDATE)
-                    .execute(&mut background)
-                    .await
-                    .is_err()
-            );
-            {
-                let state = runtime.state.lock().await;
-                assert_eq!(state.mysql.events.unmatched_queries.len(), 4);
-                assert_eq!(
-                    state.mysql.events.unmatched_queries[3].case_id.as_deref(),
-                    Some("case-b"),
-                    "the next command on a pooled connection uses the active Case"
-                );
-                assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
-                assert_provenance(&state, &fixture);
-            }
-            fixture.assert_immutable();
-            task.abort();
         }
-    })
-    .await
-    .unwrap();
+    }).await.unwrap();
 }
 
 #[tokio::test]
@@ -432,10 +404,12 @@ async fn missing_recording_run_boundary_does_not_promote_case_members() {
                     .await
                     .is_err()
             );
-            sqlx::raw_sql("COMMIT")
-                .execute(&mut background)
-                .await
-                .unwrap();
+            assert!(
+                sqlx::raw_sql("COMMIT")
+                    .execute(&mut background)
+                    .await
+                    .is_err()
+            );
             let state = runtime.state.lock().await;
             assert!(state.global_mysql_transactions().is_empty());
             let end = wire_index(&state, fixture.background, 12);
@@ -455,36 +429,54 @@ async fn missing_recording_run_boundary_does_not_promote_case_members() {
 async fn global_business_member_corrects_a_transaction_started_during_active_case() {
     tokio::time::timeout(Duration::from_secs(30), async {
         for lazy in [false, true] {
-            let fixture = Fixture::new(true, false);
-            let (addr, runtime, task) = fixture.start(lazy, &["case-b"]).await;
-            control(&runtime, "begin", "case-b").await;
-            let mut background = connect(addr, &fixture.ca_path()).await;
-            sqlx::raw_sql("BEGIN")
-                .execute(&mut background)
-                .await
-                .unwrap();
-            sqlx::query(BACKGROUND_UPDATE)
-                .execute(&mut background)
-                .await
-                .unwrap();
-            assert!(
-                sqlx::query("UPDATE jobs SET status='UNKNOWN' WHERE id=99")
+            for reject in [false, true] {
+                let fixture = Fixture::new(true, false);
+                let (addr, runtime, task) = fixture.start(lazy, &["case-b"]).await;
+                control(&runtime, "begin", "case-b").await;
+                let mut background = connect(addr, &fixture.ca_path()).await;
+                sqlx::raw_sql("BEGIN")
                     .execute(&mut background)
                     .await
-                    .is_err()
-            );
-            sqlx::raw_sql("COMMIT")
-                .execute(&mut background)
-                .await
-                .unwrap();
-            let state = runtime.state.lock().await;
-            assert_eq!(state.mysql.events.unmatched_queries.len(), 1);
-            assert!(state.mysql.events.unmatched_queries[0].case_id.is_none());
-            assert!(!state.mysql.case_is_dirty("case-b"));
-            assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
-            assert_eq!(state.mysql.events.matched_query_count, 3);
-            fixture.assert_immutable();
-            task.abort();
+                    .unwrap();
+                sqlx::query(BACKGROUND_UPDATE)
+                    .execute(&mut background)
+                    .await
+                    .unwrap();
+                if reject {
+                    let error = sqlx::query("UPDATE jobs SET status='UNKNOWN' WHERE id=99")
+                        .execute(&mut background)
+                        .await
+                        .unwrap_err();
+                    assert!(error.as_database_error().is_none());
+                } else {
+                    sqlx::raw_sql("COMMIT")
+                        .execute(&mut background)
+                        .await
+                        .unwrap();
+                }
+                let state = runtime.state.lock().await;
+                assert_eq!(
+                    state.mysql.events.unmatched_queries.len(),
+                    usize::from(reject)
+                );
+                if reject {
+                    assert!(state.mysql.events.unmatched_queries[0].case_id.is_none());
+                    let end = wire_index(&state, fixture.background, 12);
+                    assert!(
+                        state.mysql.exchanges[end].status.is_available(),
+                        "rejected transaction leaves its Source COMMIT unused"
+                    );
+                } else {
+                    assert!(state.unused_exchanges(ReplaySource::Startup).is_empty());
+                }
+                assert!(!state.mysql.case_is_dirty("case-b"));
+                assert_eq!(
+                    state.mysql.events.matched_query_count,
+                    if reject { 2 } else { 3 }
+                );
+                fixture.assert_immutable();
+                task.abort();
+            }
         }
     })
     .await

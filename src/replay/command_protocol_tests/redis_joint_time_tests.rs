@@ -3,7 +3,7 @@ use super::*;
 use crate::DynamicValueRedisTimeRule;
 use serde_json::json;
 
-const ERROR: &[u8] = b"-ERR no recorded Redis dependency matched\r\n";
+const ERROR: &[u8] = b"";
 fn item(stamp: i64) -> String {
     json!({"id":format!("item-{stamp}"),"timestamp":stamp,
         "content_key":format!("cache:payload:7:item-{stamp}"),"owner":7,"status":"open"})

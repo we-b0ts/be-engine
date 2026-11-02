@@ -168,6 +168,13 @@ dependency_rules:
                             result.is_err(),
                             "stable values, time and finite consumption remain strict"
                         );
+                        client = connect(
+                            addr,
+                            &temp
+                                .path()
+                                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+                        )
+                        .await;
                     }
                 }
                 client.close().await.unwrap();

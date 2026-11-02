@@ -32,9 +32,7 @@ async fn send(client: &mut RedisBufferedReader<TcpStream>, parts: &[&[u8]]) -> V
         .await
         .unwrap()
         .unwrap()
-        .expect("Redis response")
-        .raw
-        .to_vec()
+        .map_or_else(Vec::new, |frame| frame.raw.to_vec())
 }
 
 #[tokio::test]
@@ -129,7 +127,7 @@ json:
         .await
         .unwrap();
     let (server, _) = listener.accept().await.unwrap();
-    let task = tokio::spawn(handle_connection(
+    let mut task = tokio::spawn(handle_connection(
         server,
         ReplayTarget {
             host: "redis.test".into(),
@@ -175,8 +173,24 @@ json:
             ]
         )
         .await,
-        b"-ERR no recorded Redis dependency matched\r\n"
+        b""
     );
+    task.await.unwrap().unwrap();
+    let stream = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (server, _) = listener.accept().await.unwrap();
+    task = tokio::spawn(handle_connection(
+        server,
+        ReplayTarget {
+            host: "redis.test".into(),
+            port: 6379,
+            fake_ip: "198.18.0.1".parse().unwrap(),
+            protocol: ReplayProtocol::Redis,
+        },
+        runtime.state.clone(),
+    ));
+    client = RedisBufferedReader::new(stream, 1024 * 1024);
     assert_eq!(
         send(
             &mut client,
@@ -189,10 +203,7 @@ json:
         .await,
         b"+OK\r\n"
     );
-    assert_eq!(
-        send(&mut client, &[b"GET", b"session:1"]).await,
-        b"-ERR no recorded Redis dependency matched\r\n"
-    );
+    assert_eq!(send(&mut client, &[b"GET", b"session:1"]).await, b"");
     client.inner.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
     let state = runtime.state.lock().await;

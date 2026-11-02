@@ -46,6 +46,7 @@ async fn sqlx_tuple_in_matches_all_protocol_pairs_with_projection_and_fresh_bind
                         };
                         if attempt == 1 || attempt == 3 {
                             assert!(response.is_err(), "wrong values and exhausted evidence must fail");
+                            client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
                         } else {
                             let response = response.unwrap();
                             assert_eq!(response[0].columns().iter().map(|c| c.name()).collect::<Vec<_>>(), ["title","id"]);
@@ -99,6 +100,13 @@ async fn sqlx_tuple_prepare_is_injective_and_execute_checks_row_pairing() {
                 .await
                 .is_err()
         );
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         let row = sqlx::query(target)
             .bind(3_i32)
             .bind(2_i32)

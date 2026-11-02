@@ -87,6 +87,13 @@ async fn sqlx_count_and_constant_aliases_preserve_values_and_conditions() {
             "SELECT 2 AS present FROM tasks WHERE id=1 LIMIT 1",
         ] {
             assert!((&mut client).fetch_all(invalid).await.is_err(), "{invalid}");
+            client = connect(
+                addr,
+                &temp
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+            )
+            .await;
         }
         let count = sqlx::query("SELECT count(*) AS total FROM tasks t WHERE t.status=?")
             .bind("RUNNING")

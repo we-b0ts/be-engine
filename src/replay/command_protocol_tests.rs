@@ -29,6 +29,7 @@ mod redis_request_contract_tests;
 mod redis_scalar_identity_tests;
 mod redis_time_shift_tests;
 mod redis_value_tests;
+mod unmatched_connection_tests;
 
 #[tokio::test]
 async fn replays_redis_pipeline_in_recorded_lane_order() {
@@ -86,11 +87,13 @@ async fn reports_redis_lane_blocker_without_exposing_arguments() {
         .write_all(b"*2\r\n$3\r\nGET\r\n$15\r\nprivate-key-two\r\n")
         .await
         .unwrap();
-    let mut response = vec![0_u8; 46];
-    let response_len = client.read(&mut response).await.unwrap();
+    let mut response = [0];
     assert_eq!(
-        &response[..response_len],
-        b"-ERR no recorded Redis dependency matched\r\n"
+        tokio::time::timeout(Duration::from_secs(5), client.read(&mut response))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
     );
 
     let report = wait_for_unmatched_count(&report_path, "redis", 1).await;

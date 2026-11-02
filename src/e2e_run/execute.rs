@@ -614,7 +614,7 @@ pub(super) async fn execute_case(
     case_id: &str,
     case_dir: &Path,
     runtime: &CaseExecutionRuntime,
-) -> Result<super::case_sequence::Continuation> {
+) -> Result<()> {
     let case_index = position;
     if state
         .cases
@@ -624,7 +624,7 @@ pub(super) async fn execute_case(
         state.push_error(format!(
             "case {case_id} no longer matches run position {position}"
         ));
-        return Ok(super::case_sequence::Continuation::ReuseTarget);
+        return Ok(());
     }
     state.cases[case_index].status = CaseStatus::Running;
 
@@ -637,7 +637,7 @@ pub(super) async fn execute_case(
         state.cases[case_index].status = CaseStatus::Incomplete;
         state.push_error(format!("case {case_id} begin failed: {error:#}"));
         let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
-        return Ok(super::case_sequence::Continuation::ReuseTarget);
+        return Ok(());
     }
 
     if config.replay_loading.lazy_cases
@@ -670,15 +670,6 @@ pub(super) async fn execute_case(
             "failed to prepare replay request for case {case_id}: {error:#}"
         )),
     };
-    let continuation =
-        case_view
-            .as_ref()
-            .map_or(super::case_sequence::Continuation::ReuseTarget, |view| {
-                super::case_sequence::Continuation::after_response(
-                    view.request(),
-                    &assertion_command,
-                )
-            });
     let execution_status =
         control(state, "case_execution_status", Some(case_id), false, false).await?;
     let response_times: crate::value_contract::time_copies::DeliveredTimeCopies = if runtime
@@ -844,9 +835,10 @@ pub(super) async fn execute_case(
     };
     let replay_clean = ended.is_ok();
     if !replay_clean
+        && state.cases[case_index].execution_failure.is_none()
         && let Ok(execution_status) =
             control(state, "case_execution_status", Some(case_id), false, false).await
-        && execution_status["kind"] == "case_no_progress"
+        && execution_status["failed"] == true
     {
         super::execution_failure::record(
             &mut state.cases[case_index],
@@ -879,7 +871,7 @@ pub(super) async fn execute_case(
         );
     }
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Replaying);
-    Ok(continuation)
+    Ok(())
 }
 
 fn mark_unfinished_cases(state: &mut ActiveRunState) {

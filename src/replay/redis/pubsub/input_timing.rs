@@ -20,6 +20,7 @@ impl PubSubState {
                 entries.push(Evidence {
                     reference: DeliveryReference::NativePush(PushId::Inline(index)),
                     completed_at: at,
+                    individual: true,
                 });
             } else {
                 covered = false;

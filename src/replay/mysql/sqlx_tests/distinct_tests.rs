@@ -58,6 +58,13 @@ async fn sqlx_distinct_real_query_shape_matches_without_text_protocol_emulation(
                 sqlx::query(TARGET).fetch_all(&mut client).await.is_err(),
                 "recorded evidence is finite"
             );
+            client = connect(
+                addr,
+                &temp
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+            )
+            .await;
             client.close().await.unwrap();
             let state = runtime.state.lock().await;
             assert_eq!(state.mysql.events.matched_query_count, 2);
@@ -115,7 +122,8 @@ async fn sqlx_distinct_protocol_pairs_rebind_cached_values_and_reorder_predicate
                         let sql = format!("SELECT DISTINCT r.entity_id AS entity_id FROM resource_members r WHERE r.status = 'approved' AND (r.entity_id IS NOT NULL AND r.entity_type = 'org_department') AND r.resource_type = '{resource_type}'");
                         (&mut client).fetch_all(sql.as_str()).await
                     };
-                    if i == 1 { assert!(rows.is_err()); }
+                    if i == 1 { assert!(rows.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await; }
                     else { assert_eq!(rows.unwrap()[0].get::<String, _>("entity_id"), resource_type); }
                     let count = runtime.state.lock().await.mysql.sql_cache.compilations;
                     // The failed lookup warms any remaining source templates.

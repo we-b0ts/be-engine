@@ -70,12 +70,26 @@ async fn subquery_reads_bind_identical_values_across_all_wire_forms_without_rule
                     // Failed matches must leave the sole recorded query available.
                     for (id, user) in [(8, 42), (7, 43)] {
                         assert!(query(&mut client, target_mode, id, user).await.is_err());
+                        client = connect(
+                            addr,
+                            &temp
+                                .path()
+                                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+                        )
+                        .await;
                     }
                     let rows = query(&mut client, target_mode, 7, 42).await.unwrap();
                     assert_eq!(rows.len(), 1);
                     assert_eq!(rows[0].get::<i64, _>("total"), 13);
                     assert_eq!(rows[0].columns()[0].name(), "total");
                     assert!(query(&mut client, target_mode, 7, 42).await.is_err());
+                    client = connect(
+                        addr,
+                        &temp
+                            .path()
+                            .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+                    )
+                    .await;
                     client.close().await.unwrap();
                     let state = runtime.state.lock().await;
                     assert_eq!(state.mysql.events.matched_query_count, 1);
@@ -113,14 +127,17 @@ async fn subquery_prepared_rebinding_preserves_types_predicates_and_recorded_err
         inline("7", "42").replace(" AND task_id IN", " OR task_id IN"),
     ] {
         let error = sqlx::query(&bad).fetch_all(&mut client).await.unwrap_err();
-        assert_eq!(
-            error
-                .as_database_error()
-                .unwrap()
-                .downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
-                .number(),
-            1105
+        assert!(
+            error.as_database_error().is_none(),
+            "unmatched SQL closes the transport: {error}"
         );
+        client = connect(
+            addr,
+            &temp
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
     }
     let error = query(&mut client, 2, 7, 42).await.unwrap_err();
     assert_eq!(

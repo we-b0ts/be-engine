@@ -1,6 +1,8 @@
 //! Active-case timing grants share a monotonic clock with native dependency inputs.
 use super::*;
-use crate::interaction::replay::timing::{Advance, Clock, SocketIoTiming, cancellation};
+use crate::interaction::replay::timing::{
+    Advance, Clock, SocketIoTiming, cancellation, delivery_prefix,
+};
 use crate::replay::control::dependency_tail::RecordedReference;
 use tokio::time::Instant as MonoInstant;
 mod client;
@@ -26,43 +28,26 @@ pub(in crate::replay) enum DeliveryReference {
 pub(in crate::replay) struct Evidence {
     pub reference: DeliveryReference,
     pub completed_at: DateTime<Utc>,
+    /// Native effects retain their own retiming/coverage authority. They can
+    /// authorize compression after actual coverage, without adding a new hard
+    /// predecessor to a later business input.
+    pub individual: bool,
 }
 
 #[derive(Debug)]
 pub(in crate::replay) struct Live {
     case: String,
     epoch: DateTime<Utc>,
+    admission_epoch: u64,
     started: MonoInstant,
     clock: Clock,
     plan: source::Plan,
     mode: SocketIoTiming,
     evidence: Vec<Evidence>,
-    delivered: BTreeSet<DeliveryReference>,
     advanced: BTreeSet<u64>,
 }
 
 impl Live {
-    pub(in crate::replay) fn scope(&self) -> (String, DateTime<Utc>) {
-        (self.case.clone(), self.epoch)
-    }
-
-    pub(in crate::replay) fn delivered(
-        &mut self,
-        case: &str,
-        epoch: DateTime<Utc>,
-        reference: DeliveryReference,
-    ) {
-        if self.case == case
-            && self.epoch == epoch
-            && self
-                .evidence
-                .binary_search_by_key(&reference, |entry| entry.reference)
-                .is_ok()
-        {
-            self.delivered.insert(reference);
-        }
-    }
-
     /// None leaves unrelated or unsupported native scheduling unchanged.
     pub(in crate::replay) fn reached(
         &self,
@@ -122,13 +107,12 @@ pub(super) async fn accept(
                 .epoch(case)
                 .or_else(|| state.redis.request_contracts.request_times(case).target)
                 .unwrap_or_else(Utc::now);
-            let (mut evidence, covered) = plan
-                .source_start
-                .map(|start| state.redis.timing_evidence(case, start))
-                .unwrap_or_else(|| (Vec::new(), false));
-            // Membership is checked for every actual delivery. A large native
-            // stream must not rescan its entire immutable timing inventory per
-            // notification; cutoff checks below are independent of this order.
+            let (mut evidence, covered) = match plan.source_start {
+                Some(start) => state.redis.timing_evidence(case, start)?,
+                None => (Vec::new(), false),
+            };
+            // Keep immutable metadata ordered independently of the wire-success
+            // journal. Delivery hooks do not rescan this inventory per push.
             evidence.sort_unstable_by_key(|entry| entry.reference);
             let plan = source::Plan {
                 covered: plan.covered && covered,
@@ -151,12 +135,12 @@ pub(super) async fn accept(
             state.input_timing = Some(Live {
                 case: case.into(),
                 epoch,
+                admission_epoch: state.admission_epoch,
                 started: MonoInstant::now(),
                 clock: Clock::default(),
                 plan,
                 mode,
                 evidence,
-                delivered: BTreeSet::new(),
                 advanced: BTreeSet::new(),
             });
             return Ok(serde_json::json!({"ok":true,"epoch":epoch}));
@@ -172,7 +156,9 @@ pub(super) async fn accept(
             .as_ref()
             .context("input timeline not admitted")?;
         ensure!(
-            live.case == case && live.epoch == query.epoch,
+            live.case == case
+                && live.epoch == query.epoch
+                && live.admission_epoch == state.admission_epoch,
             "input timing request epoch changed"
         );
         let action = live
@@ -192,19 +178,27 @@ pub(super) async fn accept(
                 i64::try_from(action.offset_ms).ok()?,
             ))
         });
+        let delivered = |e: &Evidence| {
+            state
+                .redis
+                .timing_delivered(case, live.admission_epoch, e.reference)
+                || match e.reference {
+                    DeliveryReference::RedisResponse(reference) => {
+                        dependency_tail::timing_optional(&state, case, reference)
+                    }
+                    DeliveryReference::NativePush(_) => false,
+                }
+        };
         let ready = live
             .evidence
             .iter()
             .filter(|e| cutoff.is_some_and(|cutoff| e.completed_at < cutoff))
-            .all(|e| {
-                live.delivered.contains(&e.reference)
-                    || match e.reference {
-                        DeliveryReference::RedisResponse(reference) => {
-                            dependency_tail::timing_optional(&state, case, reference)
-                        }
-                        DeliveryReference::NativePush(_) => false,
-                    }
-            });
+            .all(&delivered);
+        let prefix_ready = live
+            .evidence
+            .iter()
+            .filter(|e| e.individual && cutoff.is_some_and(|cutoff| e.completed_at < cutoff))
+            .all(delivered);
         // Input offsets are floor milliseconds. A completion in that same
         // millisecond cannot prove whether it precedes or follows this input.
         let boundary_clear = cutoff.is_some_and(|cutoff| {
@@ -254,15 +248,26 @@ pub(super) async fn accept(
             .clock
             .effective_ms(action.offset_ms)
             .saturating_sub(elapsed);
-        // Delivery gates only authorize acceleration. Reaching the original
-        // deadline never turns missing/future dependencies into an infinite wait.
-        let retry = if eligible && !ready {
+        // Source dependencies completed strictly before this input form its
+        // finite delivery prefix. Slow Target handling must not turn that input
+        // into an earlier observation. Coverage of other protocols is required
+        // for compression, not for honoring these independently proven edges.
+        // Only business events wait: native ACKs can complete an RPC in this
+        // prefix, and protocol heartbeat/cancellation remain independent.
+        let prefix_pending = live.mode == SocketIoTiming::Auto
+            && !live.plan.input.policy.preserve_input_timing
+            && cutoff.is_some()
+            && delivery_prefix(action)
+            && !prefix_ready;
+        let retry = if prefix_pending {
+            10
+        } else if eligible && !ready {
             remaining.min(10)
         } else {
             remaining
         };
         Ok::<_, anyhow::Error>(
-            serde_json::json!({"ok":true,"wait_ms":retry,"ready":remaining==0,
+            serde_json::json!({"ok":true,"wait_ms":retry,"ready":remaining==0 && !prefix_pending,
             "advance":Advance {removed_ms:live.clock.removed_ms()}}),
         )
     }

@@ -57,7 +57,8 @@ async fn large_or_with_empty_names_uses_real_prepare_execute_and_projection_mapp
                             query.fetch_all(&mut client).await
                         } else { (&mut client).fetch_all(target_sql.as_str()).await };
                         if attempt == 1 { assert_eq!(response.unwrap()[0].get::<i64,_>("id"),7); }
-                        else { assert!(response.is_err(), "wrong value or exhausted evidence"); }
+                        else { assert!(response.is_err(), "wrong value or exhausted evidence");
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await; }
                     }
                     client.close().await.unwrap();
                     let state = runtime.state.lock().await;

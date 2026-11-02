@@ -10,6 +10,7 @@ mod cancellation;
 mod compact_evidence;
 mod echo_preparation;
 mod input_timing;
+mod namespace_sessions;
 mod native_clock;
 mod repeated_echo;
 mod request_contracts;
@@ -149,6 +150,34 @@ async fn send(reader: &mut RedisBufferedReader<TcpStream>, parts: &[&[u8]]) -> V
     read(reader).await
 }
 
+async fn send_unmatched(reader: &mut RedisBufferedReader<TcpStream>, parts: &[&[u8]]) {
+    reader
+        .inner
+        .write_all(&crate::redis::encode_array(parts))
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), read_redis_frame(reader))
+            .await
+            .expect("unmatched command must close its Redis connection")
+            .unwrap()
+            .is_none()
+    );
+}
+
+async fn reconnect(
+    runtime: &Arc<ReplayRuntime>,
+    reader: &mut RedisBufferedReader<TcpStream>,
+    task: &mut tokio::task::JoinHandle<Result<()>>,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), &mut *task)
+        .await
+        .expect("rejected Redis connection must finish cleanup")
+        .unwrap()
+        .unwrap();
+    (*reader, *task) = connect(runtime).await;
+}
+
 async fn read(reader: &mut RedisBufferedReader<TcpStream>) -> Vec<u8> {
     tokio::time::timeout(std::time::Duration::from_secs(2), read_redis_frame(reader))
         .await
@@ -186,21 +215,19 @@ async fn rpc_ack_crosses_real_connections_and_maps_only_protocol_identities() {
         .await
         .unwrap();
         let (mut subscriber, sub_task) = connect(&runtime).await;
-        let (mut client, client_task) = connect(&runtime).await;
+        let (mut client, mut client_task) = connect(&runtime).await;
         assert_eq!(
             send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
             confirmed
         );
         let mut wrong: Value = serde_json::from_slice(&request(TARGET, 9)).unwrap();
         wrong["data"][0]["argv"] = json!(["changed-command"]);
-        assert!(
-            send(
-                &mut client,
-                &[b"PUBLISH", b"jobs", &serde_json::to_vec(&wrong).unwrap()]
-            )
-            .await
-            .starts_with(b"-ERR")
-        );
+        send_unmatched(
+            &mut client,
+            &[b"PUBLISH", b"jobs", &serde_json::to_vec(&wrong).unwrap()],
+        )
+        .await;
+        reconnect(&runtime, &mut client, &mut client_task).await;
         let started = std::time::Instant::now();
         {
             let state = runtime.state.lock().await;
@@ -240,11 +267,7 @@ async fn rpc_ack_crosses_real_connections_and_maps_only_protocol_identities() {
         assert_eq!(identity.id, 9);
         assert_eq!(value["args"][0]["stdout"], "example result");
         // Successful delivery releases the finite call, but cannot replenish it.
-        assert!(
-            send(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await;
         let snapshot = runtime.state.lock().await.redis.snapshot();
         assert_eq!(snapshot.matched_count, 2);
         assert!(snapshot.unused_case.is_empty());
@@ -401,7 +424,7 @@ async fn rpc_callback_counters_are_bijective_and_failure_results_are_preserved()
     .await
     .unwrap();
     let (mut subscriber, sub_task) = connect(&runtime).await;
-    let (mut client, task) = connect(&runtime).await;
+    let (mut client, mut task) = connect(&runtime).await;
     assert_eq!(
         send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
         confirmation
@@ -411,20 +434,15 @@ async fn rpc_callback_counters_are_bijective_and_failure_results_are_preserved()
         b":1\r\n"
     );
     read(&mut subscriber).await;
-    assert!(
-        send(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)])
-            .await
-            .starts_with(b"-ERR")
-    );
+    send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await;
+    reconnect(&runtime, &mut client, &mut task).await;
     let changed_host = Uuid::new_v4().simple().to_string();
-    assert!(
-        send(
-            &mut client,
-            &[b"PUBLISH", b"jobs", &request(&changed_host, 10)]
-        )
-        .await
-        .starts_with(b"-ERR")
-    );
+    send_unmatched(
+        &mut client,
+        &[b"PUBLISH", b"jobs", &request(&changed_host, 10)],
+    )
+    .await;
+    reconnect(&runtime, &mut client, &mut task).await;
     assert_eq!(
         send(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 10)]).await,
         b":1\r\n"

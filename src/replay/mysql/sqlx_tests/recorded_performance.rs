@@ -91,6 +91,7 @@ async fn captured_candidate_and_evidence_performance() {
                 let start = Instant::now();
                 let mut calls = 0;
                 let mut matched = 0;
+                let mut query_times = vec![];
                 for query in workload["queries"]
                     .as_array()
                     .unwrap()
@@ -98,6 +99,7 @@ async fn captured_candidate_and_evidence_performance() {
                     .filter(|q| q["case_id"] == case)
                 {
                     calls += 1;
+                    let query_started = Instant::now();
                     let identity = ReplaySessionIdentity {
                         target: Some(serde_json::from_value(query["target"].clone()).unwrap()),
                         database: query["database"].as_str().map(str::to_owned),
@@ -162,11 +164,13 @@ async fn captured_candidate_and_evidence_performance() {
                         fingerprint
                             .update(serde_json::to_vec(&(case, command, "unmatched")).unwrap());
                     }
+                    query_times.push(json!({"call":calls,"command":command,
+                        "elapsed_ms":query_started.elapsed().as_secs_f64()*1000.}));
                 }
                 let match_ms = start.elapsed().as_secs_f64() * 1000.;
                 state.cases.get_mut(case).unwrap().status = crate::replay::ReplayCaseStatus::Ended;
                 state.active_case_id = None;
-                cases.push(json!({"case":case,"prepare_ms":prepare_ms,"match_ms":match_ms,"calls":calls,"matched":matched}));
+                cases.push(json!({"case":case,"prepare_ms":prepare_ms,"match_ms":match_ms,"calls":calls,"matched":matched,"query_times":query_times}));
             }
             let state = runtime.state.lock().await;
             let start = Instant::now();

@@ -191,7 +191,7 @@ async fn focused_finalization_rejects_actual_case_dependency_failures() {
         .unwrap();
     let mut reply = [0; 1024];
     let size = client.read(&mut reply).await.unwrap();
-    assert!(reply[..size].starts_with(b"-ERR"));
+    assert_eq!(size, 0);
     fixture.end(&fixture.cases[0], false).await;
     let (response, stopped) = fixture.command("finalize_cases", None, true).await;
     assert_eq!(response["ok"], false);

@@ -31,9 +31,6 @@ async fn global_mysql_rows_are_delivered_once_through_the_real_wire() {
     );
     read_packet(&mut client).await.unwrap().unwrap();
     write_packet_bytes(&mut client, query).await;
-    assert_eq!(
-        read_packet(&mut client).await.unwrap().unwrap().payload[0],
-        0xff
-    );
+    assert!(read_packet(&mut client).await.unwrap().is_none());
     task.abort();
 }

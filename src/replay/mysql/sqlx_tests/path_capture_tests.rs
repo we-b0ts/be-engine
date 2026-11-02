@@ -136,10 +136,11 @@ rules:
         assert!(put(addr, path, "file bytes").await.starts_with("HTTP/1.1 200"));
         let sql = source[1]["sql"].as_str().unwrap();
         assert!(client.execute(sql.replace(r#""stable":1"#, r#""stable":2"#).as_str()).await.is_err());
+        client = connect(mysql_addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert_eq!(client.execute(sql).await.unwrap().rows_affected(), 1);
         assert!(put(addr, path, "file bytes").await.starts_with("HTTP/1.1 502"));
         assert!(client.execute(sql).await.is_err());
-        client.close().await.unwrap();
+        drop(client);
         let state = runtime.state.lock().await;
         assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
         assert_eq!(state.replay_policy.as_ref().unwrap().report().dynamic_bindings.len(), 1);
@@ -251,6 +252,13 @@ async fn retired_path_authoring_preserves_evidence_and_native_http_sql_replay_is
                 .await
                 .is_err()
         );
+        client = connect(
+            mysql_addr,
+            &next
+                .path()
+                .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+        )
+        .await;
         for (bad_path, body) in [
             (path.clone(), "wrong file bytes"),
             (path.replace("_7_100", "_8_100"), "file bytes"),
@@ -293,6 +301,13 @@ async fn retired_path_authoring_preserves_evidence_and_native_http_sql_replay_is
                     .await
                     .is_err()
             );
+            client = connect(
+                mysql_addr,
+                &next
+                    .path()
+                    .join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem"),
+            )
+            .await;
         }
         assert_eq!(
             sqlx::query(sql)

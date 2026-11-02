@@ -41,7 +41,12 @@ is unclear.
   `policy/capability/coverage` admits supported protocol/role/carrier/codec
   combinations before execution, with explicit unsupported reasons. Stateful
   native effects retain their real native executor rather than a no-op generic
-  implementation.
+  implementation. `value_contract/json/pointers` indexes concrete field positions
+  once per comparison; wildcard selection retains Source array-shape checks and
+  original declaration order, before the comparator validates the strict remainder.
+  `value_contract/global/field_composition` expands Source selections once while
+  combining global and authored fields, preserving duplicate, overlap and
+  declaration-order behavior before that comparison.
 
 - `replay/preparation` binds an immutable Source scope and applicable contracts
   into a Case execution plan after native registration. `replay/native_index`
@@ -105,9 +110,22 @@ is unclear.
   events with ACK IDs. `interaction/replay/socketio/native_receipts` correlates
   actual sent inputs and received ACK metadata independently of business
   completion and fast timing; the native clock retains Source windows, original
-  subscription ownership and the current request epoch.
+  subscription ownership and the current request epoch. An input without an ACK
+  or an explicit close ends the notification prefix, rather than invalidating
+  preceding notifications. That boundary also limits delivery lifetime; later
+  actual ACK identities remain admissible without extending the prefix. Native
+  plan cardinality is bounded by the original finite notification inventory;
+  long recordings retain paged payload references and bounded delivery queues.
   RESP delivery retains wire consumption and Case cancellation checks; the
   adapter and request contracts retain strict callback result comparison.
+  `replay/redis/pubsub/namespace_sessions` owns SID-directed emit correspondence:
+  it selects only unique namespace identities from original Source protocol
+  observations, then binds them to CONNECT receipts from the actual Target
+  transport within the current Case request epoch. The input executor receives
+  no expected response. Adapter comparison copies may translate only that
+  proven room identity; business rooms, payloads, namespaces, process identity
+  bijections and finite delivery remain strict. Case transitions and cleanup
+  retire the live correspondence.
   `replay/assertion/interaction/client_ack` separately owns original client
   request provenance and exact native reply pairing for fast replay. It pairs
   only contiguous plain ACK runs whose unique namespace/id request identities
@@ -141,6 +159,12 @@ is unclear.
   response/native references and publish successful wire-delivery facts separately
   from matching and RPC completion. Supported native clocks reuse the same mapping;
   unsupported protocol delivery or recording timing retains original offsets.
+  Independently proven individual Redis delivery prefixes still gate Auto business inputs
+  without requiring compression coverage; ACKs, heartbeat and cancellation keep
+  their own native scheduling. Prefixes exclude future Source completions and
+  never infer handler completion.
+  Native coalescing/retiming retains native ownership; successful native completion
+  projects exact covered Source references into the delivery journal for compression.
   `heartbeat` records and validates the input program's causal PING/PONG bindings;
   `interaction/replay/socketio/heartbeat` schedules those responses from actual
   Target PING packets, separately from business completion barriers. Explicit
@@ -308,17 +332,20 @@ is unclear.
   Execution freezes a fresh Target/runtime-policy identity before startup and
   checks it again after execution; the cold evidence reader revalidates that
   identity, Source image revision and engine build before returning receipt refs.
-  An unclean Socket.IO/WebSocket session stops the attempt before another input;
-  ordinary shutdown/finalization preserves the failed Case and pending inventory.
-  Started-I/O drain alone cannot prove that sleeping disconnect hooks have ended.
+  A failed primary or dirty dependency result belongs to its Case. Native
+  rejection closes the affected dependency connection; the runner closes the
+  primary transport and drains accepted I/O before admitting another input.
+  The per-API failure counter, rather than a native-session failure, limits how
+  many failed Cases execute. Unused Source inventory remains unused and dirty.
   `control/dependency_tail/metadata/interaction_inventory` derives finite waits
   from a clean original Socket.IO/WebSocket completion and its Case dependencies
   when explicit tail observations are absent. It streams original metadata,
   retains the Source elapsed-time budget and post-input idle allowance, and never
-  supplies response frames to Target. A stalled native interaction retains Case
-  ownership until runner shutdown rather than admitting late calls into another
-  Case. Actual native Replay rejections retain that fence through the final
-  locked ownership release; recorded dependency errors remain ordinary replies.
+  supplies response frames to Target. A stalled native interaction records its
+  no-progress failure and drains accepted I/O before the locked ownership
+  release. Dirty evidence alone does not retain global Case ownership. An actual
+  I/O cleanup failure retains ownership; recorded dependency errors remain
+  ordinary replies.
   `metadata/references` owns the shared semantic exchange identities.
   Central observations with `semantic_required: false` do not create finite tail
   obligations. Redis protocol controls retain native Target session context,
@@ -567,7 +594,10 @@ is unclear.
   original baseline probes and complete override/transaction/restoration scopes
   during preparation. Its parent binds NEXT settings to actual Target sockets,
   observes successful deliveries through the existing transaction owner and
-  grants only proven Source restoration omission. Candidate fencing stays in
+  grants only proven Source restoration omission. Its Source proof classifies
+  complete read-only scopes; its live owner requires every original read and a
+  successful real Target end before allowing an already optional read-only
+  Source end to differ between COMMIT and ROLLBACK. Candidate fencing stays in
   the MySQL matcher; values, business transaction parity, wire completion and
   original consumption retain their existing owners.
 

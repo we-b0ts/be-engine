@@ -18,6 +18,7 @@ pub(in crate::replay) use inventory::{
 };
 mod finite_inventory;
 mod input_timing;
+pub(in crate::replay) mod namespace_sessions;
 mod notifications;
 mod report_inventory;
 pub(in crate::replay) mod subscription_evidence;
@@ -128,6 +129,7 @@ pub(in crate::replay) struct PubSubState {
     echoes: echo::Echoes,
     ingress: ingress::Ingress,
     pub(in crate::replay) native_clock: native_clock::NativeClock,
+    pub(in crate::replay) namespace_sessions: namespace_sessions::NamespaceSessions,
     case_deliveries: BTreeMap<PushId, (String, Uuid)>,
     notifications: std::collections::HashMap<(Uuid, u64), Arc<Vec<usize>>>,
     delivered: usize,

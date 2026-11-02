@@ -13,7 +13,11 @@ pub(crate) struct NativeEvent {
 
 pub(crate) trait NativeEventSink: Send + Sync {
     fn observe(&self, event: NativeEvent) -> BoxFuture<'_, Result<()>>;
-    fn connected<'a>(&'a self, _namespace: &'a str) -> BoxFuture<'a, Result<()>> {
+    fn connected<'a>(
+        &'a self,
+        _namespace: &'a str,
+        _sid: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
     fn acknowledged(&self, _sequence: u64) -> BoxFuture<'_, Result<()>> {

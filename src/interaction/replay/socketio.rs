@@ -10,7 +10,7 @@ use hyper::Request;
 use std::collections::BTreeMap;
 use tokio::time::{Duration, Instant, sleep_until};
 
-use super::timing::{Advance, cancellation, transport_cancellation};
+use super::timing::{Advance, cancellation, delivery_prefix, transport_cancellation};
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
     lifecycle::LifecycleDecision,
@@ -138,7 +138,7 @@ pub(super) async fn execute_with_feedback(
                 })
             });
         if let (Some(action), Some(timing)) = (admitted, &input_timing)
-            && action.compressible_gap
+            && (action.compressible_gap || delivery_prefix(action))
             && !cancellation(action)
             && timing_sequence != Some(action.sequence)
         {
@@ -157,7 +157,10 @@ pub(super) async fn execute_with_feedback(
                 );
             }
             if transcript.protocol == Protocol::SocketIo {
-                if input_timing.is_some() && action.compressible_gap && !cancellation(action) {
+                if input_timing.is_some()
+                    && (action.compressible_gap || delivery_prefix(action))
+                    && !cancellation(action)
+                {
                     return (timing_ready == Some(action.sequence)).then(Instant::now);
                 }
                 // Without dependency coverage no gap is eligible for acceleration.
@@ -256,7 +259,7 @@ pub(super) async fn execute_with_feedback(
                                             tokio::select! {
                                                 biased;
                                                 _ = crate::dependency::execution::rejected(&mut dependency_failure) => break 'session (EndReason::DependencyFailure, false),
-                                                result = tokio::time::timeout_at(lifecycle_deadline, sink.connected(&packet.namespace)) => {
+                                                result = tokio::time::timeout_at(lifecycle_deadline, sink.connected(&packet.namespace, packet.data.as_ref().and_then(|data| data.get("sid")).and_then(serde_json::Value::as_str))) => {
                                                     result.context("native namespace observation timed out")??;
                                                 }
                                             }
@@ -527,7 +530,15 @@ impl TerminalObservation<'_> {
                 }
                 EngineIoPacket::Message(packet) if packet.kind == SocketIoKind::Connect => {
                     if let Some(sink) = self.native_events {
-                        sink.connected(&packet.namespace).await?;
+                        sink.connected(
+                            &packet.namespace,
+                            packet
+                                .data
+                                .as_ref()
+                                .and_then(|data| data.get("sid"))
+                                .and_then(serde_json::Value::as_str),
+                        )
+                        .await?;
                     }
                 }
                 EngineIoPacket::Message(packet)

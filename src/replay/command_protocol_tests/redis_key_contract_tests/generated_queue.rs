@@ -77,11 +77,12 @@ async fn generated_queue_identities_subscribe_lpush_unsubscribe_with_strict_task
             "2ed6657d-e927-368b-95e1-2665a8aea6a2",
             "gen45678@target-host-longer",
         );
-        let error = b"-ERR no recorded Redis dependency matched\r\n";
+        let error = b"";
         if negative {
             // A JSON reference cannot invent a missing subscription capture.
             redis_value_tests::request(&mut client, &["LPUSH", "celery", &target_message], error)
                 .await;
+            client = TcpStream::connect(addr).await.unwrap();
         }
         redis_value_tests::request(
             &mut subscriber,
@@ -110,6 +111,7 @@ async fn generated_queue_identities_subscribe_lpush_unsubscribe_with_strict_task
                     error,
                 )
                 .await;
+                client = TcpStream::connect(addr).await.unwrap();
             }
         }
         redis_value_tests::request(

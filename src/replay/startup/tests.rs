@@ -100,10 +100,7 @@ async fn primary_boundary_prevents_a_case_call_from_paying_missing_startup_even_
     client.write_all(request).await.unwrap();
     let mut rejected = [0; 128];
     let count = client.read(&mut rejected).await.unwrap();
-    assert!(
-        rejected[..count].starts_with(b"-ERR"),
-        "late Case cannot borrow the startup reply"
-    );
+    assert_eq!(count, 0, "late Case cannot borrow the startup reply");
     let report = state.lock().await.snapshot_report();
     assert_eq!(
         report.startup_phase.unstarted_business_dependencies["redis"],

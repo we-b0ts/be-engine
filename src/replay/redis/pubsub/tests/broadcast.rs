@@ -45,18 +45,16 @@ async fn ordinary_broadcast_translates_only_host_and_delivers_one_finite_echo() 
             send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await,
             confirmed
         );
-        let (mut client, task) = connect(&runtime).await;
+        let (mut client, mut task) = connect(&runtime).await;
         for pointer in ["/room", "/event", "/data/0/argv/0"] {
             let mut wrong: Value = serde_json::from_slice(&actual).unwrap();
             *wrong.pointer_mut(pointer).unwrap() = "changed".into();
-            assert!(
-                send(
-                    &mut client,
-                    &[b"PUBLISH", b"jobs", &serde_json::to_vec(&wrong).unwrap()]
-                )
-                .await
-                .starts_with(b"-ERR")
-            );
+            send_unmatched(
+                &mut client,
+                &[b"PUBLISH", b"jobs", &serde_json::to_vec(&wrong).unwrap()],
+            )
+            .await;
+            reconnect(&runtime, &mut client, &mut task).await;
         }
         assert_eq!(
             send(&mut client, &[b"PUBLISH", b"jobs", &actual]).await,
@@ -68,11 +66,8 @@ async fn ordinary_broadcast_translates_only_host_and_delivers_one_finite_echo() 
             actual
         );
         let different = Uuid::new_v4().simple().to_string();
-        assert!(
-            send(&mut client, &[b"PUBLISH", b"jobs", &request(&different, 9)])
-                .await
-                .starts_with(b"-ERR")
-        );
+        send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &request(&different, 9)]).await;
+        reconnect(&runtime, &mut client, &mut task).await;
         assert_eq!(
             send(&mut client, &[b"PUBLISH", b"jobs", &request(TARGET, 9)]).await,
             b":1\r\n"

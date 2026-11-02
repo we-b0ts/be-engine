@@ -74,6 +74,7 @@ impl ReplayState {
         let observed_sql = sql;
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
+        let sql_family = candidates::sql_family(sql);
         let transaction_end = transaction.and_then(|transaction| transaction.preferred_end);
         let plain_end = matches!(
             baseline_normalized_sql.as_deref(),
@@ -139,6 +140,9 @@ impl ReplayState {
                         .into_iter()
                         .chain(candidates.as_deref().unwrap_or_default().iter().copied())
                     {
+                        if !self.mysql.candidates.permits_sql(index, sql_family) {
+                            continue;
+                        }
                         if allow_hypotheses && (foreign || project_columns || semantic) {
                             continue;
                         }

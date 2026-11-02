@@ -2,6 +2,7 @@
 //! chooses the codec and format; a known contract failure never becomes opaque.
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
+mod field_composition;
 
 use super::{
     delivery, encoded,
@@ -214,7 +215,7 @@ fn compare_selected_with_time_copies(
     copies: &[json::VerifiedTimeCopy],
     verified: &[json::VerifiedField<'_>],
 ) -> Result<Comparison> {
-    let mut fields = rules
+    let fields = rules
         .iter()
         .flat_map(|rule| {
             rule.rule
@@ -227,28 +228,7 @@ fn compare_selected_with_time_copies(
                 })
         })
         .collect::<Vec<_>>();
-    for selected in selected {
-        let pointer = &selected.pointer;
-        let contract = &selected.contract;
-        let existing = fields
-            .iter()
-            .filter(|field| {
-                delivery::select(field.pointer, source).is_ok_and(|paths| paths.contains(pointer))
-            })
-            .collect::<Vec<_>>();
-        // Compatible contextual clocks compose in the ordinary comparator.
-        // An identical non-time declaration has only one semantic owner at the
-        // leaf, while both declaration IDs retain evaluated evidence below.
-        let duplicate =
-            !existing.is_empty() && existing.iter().all(|field| field.contract == contract);
-        if !duplicate {
-            fields.push(Field {
-                rule_id: selected.rule_id,
-                pointer,
-                contract,
-            });
-        }
-    }
+    let fields = field_composition::append(source, fields, selected);
     let mut comparison =
         json::compare_with_verified_time_copies(source, target, &fields, verified, clocks, copies);
     comparison

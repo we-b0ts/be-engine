@@ -38,7 +38,7 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
     request(
         &mut client,
         &["SET", "anchor", "target-name", "EX", "60"],
-        b"-ERR no recorded Redis dependency matched\r\n",
+        b"",
     )
     .await;
     let report = temp.path().join("replay.json");
@@ -65,34 +65,22 @@ async fn redis_capture_plan_apply_replay_preserves_options_references_and_finite
     request(
         &mut client,
         &["SET", "anchor", "target-name", "EX", "61"],
-        b"-ERR no recorded Redis dependency matched\r\n",
+        b"",
     )
     .await;
-    request(
-        &mut client,
-        &["DEL", "cache:target-name:fixed"],
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
+    client = TcpStream::connect(addr).await.unwrap();
+    request(&mut client, &["DEL", "cache:target-name:fixed"], b"").await;
+    client = TcpStream::connect(addr).await.unwrap();
     request(
         &mut client,
         &["SET", "anchor", "target-name", "EX", "60"],
         b"+OK\r\n",
     )
     .await;
-    request(
-        &mut client,
-        &["DEL", "cache:wrong-name:fixed"],
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
+    request(&mut client, &["DEL", "cache:wrong-name:fixed"], b"").await;
+    client = TcpStream::connect(addr).await.unwrap();
     request(&mut client, &["DEL", "cache:target-name:fixed"], b":1\r\n").await;
-    request(
-        &mut client,
-        &["DEL", "cache:target-name:fixed"],
-        b"-ERR no recorded Redis dependency matched\r\n",
-    )
-    .await;
+    request(&mut client, &["DEL", "cache:target-name:fixed"], b"").await;
     let state = state.lock().await;
     assert!(
         state
@@ -162,13 +150,14 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
     .unwrap();
     let (addr, state, task) = spawn(&case, Some(policy.clone())).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
-    let error = b"-ERR no recorded Redis dependency matched\r\n";
+    let error = b"";
     request(
         &mut client,
         &["SET", "task:1", "target-one", "EX", "60"],
         error,
     )
     .await;
+    client = TcpStream::connect(addr).await.unwrap();
     request(
         &mut client,
         &["SET", "task:2", "target-two", "EX", "60"],
@@ -241,6 +230,7 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
         vec!["DEL", "cache:target-one"],
     ] {
         request(&mut client, &values, error).await;
+        client = TcpStream::connect(addr).await.unwrap();
     }
     request(
         &mut client,
@@ -254,6 +244,7 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
         error,
     )
     .await;
+    client = TcpStream::connect(addr).await.unwrap();
     request(
         &mut client,
         &["SET", "task:2", "target-two", "EX", "60"],
@@ -261,6 +252,7 @@ async fn redis_prefix_capture_plans_from_exact_witnesses_and_replays_multiple_ke
     )
     .await;
     request(&mut client, &["DEL", "cache:target-two"], error).await;
+    client = TcpStream::connect(addr).await.unwrap();
     request(&mut client, &["DEL", "cache:target-one"], b":1\r\n").await;
     request(&mut client, &["DEL", "cache:target-two"], b":1\r\n").await;
     request(

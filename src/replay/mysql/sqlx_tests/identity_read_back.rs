@@ -42,6 +42,7 @@ async fn mysql_identity_read_back_composes_json_time_delivery_and_finite_writes_
         let mut client = connect(addr,&case.join(".replay/ca.pem")).await;
         client.execute("INSERT INTO blocks (name,content_key) VALUES ('new','content:new')").await.unwrap();
         assert!(sqlx::query("SELECT payload FROM results_0001 WHERE id=?").bind(8_i64).fetch_one(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let row = sqlx::query("SELECT payload FROM results_0001 WHERE id=?").bind(7_i64).fetch_one(&mut client).await.unwrap();
         let mut value: Value = serde_json::from_str(row.get::<String,_>(0).as_str()).unwrap();
         assert_eq!(value["blocks"][0]["id"],"new");
@@ -60,10 +61,13 @@ async fn mysql_identity_read_back_composes_json_time_delivery_and_finite_writes_
                 _ => (),
             }
             assert!(sqlx::query("UPDATE tasks SET payload=? WHERE id=?").bind(bad.to_string()).bind(if scenario=="predicate" {8_i64}else{7_i64}).execute(&mut client).await.is_err(),"{scenario}");
+            client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         }
         assert_eq!(sqlx::query("UPDATE tasks SET payload=? WHERE id=?").bind(value.to_string()).bind(7_i64).execute(&mut client).await.unwrap().rows_affected(),1);
         assert!(sqlx::query("UPDATE tasks SET payload=? WHERE id=?").bind(value.to_string()).bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!(sqlx::query("SELECT payload FROM results_0001 WHERE id=?").bind(7_i64).fetch_one(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count,3);

@@ -12,6 +12,8 @@ pub(in crate::replay) struct Observation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     namespace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    sid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     acknowledged: Option<u64>,
 }
 
@@ -47,10 +49,14 @@ pub(crate) async fn connect(
 }
 
 impl NativeEventSink for Observer {
-    fn connected<'a>(&'a self, namespace: &'a str) -> BoxFuture<'a, Result<()>> {
+    fn connected<'a>(
+        &'a self,
+        namespace: &'a str,
+        sid: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             send(&self.socket, serde_json::json!({"command":"native_connected", "case_id":self.case,
-                "native_event":Observation {epoch:self.epoch,event:None,namespace:Some(namespace.into()),acknowledged:None}})).await?;
+                "native_event":Observation {epoch:self.epoch,event:None,namespace:Some(namespace.into()),sid:sid.map(str::to_owned),acknowledged:None}})).await?;
             Ok(())
         })
     }
@@ -59,7 +65,7 @@ impl NativeEventSink for Observer {
             send(
                 &self.socket,
                 serde_json::json!({"command":"native_event", "case_id":self.case,
-                "native_event":Observation {epoch:self.epoch,event:Some(event),namespace:None,acknowledged:None}}),
+                "native_event":Observation {epoch:self.epoch,event:Some(event),namespace:None,sid:None,acknowledged:None}}),
             )
             .await?;
             Ok(())
@@ -68,7 +74,7 @@ impl NativeEventSink for Observer {
     fn acknowledged(&self, sequence: u64) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             send(&self.socket, serde_json::json!({"command":"native_input_ack","case_id":self.case,
-                "native_event":Observation {epoch:self.epoch,event:None,namespace:None,acknowledged:Some(sequence)}})).await?;
+                "native_event":Observation {epoch:self.epoch,event:None,namespace:None,sid:None,acknowledged:Some(sequence)}})).await?;
             Ok(())
         })
     }
@@ -130,6 +136,7 @@ pub(super) async fn accept(
             .pubsub
             .native_clock
             .epoch(case)
+            .or_else(|| state.redis.pubsub.namespace_sessions.epoch(case))
             .or_else(|| state.redis.request_contracts.request_times(case).target)
             .context("native event feedback requires request admission")?;
         if request.command == "native_event_begin" {
@@ -146,7 +153,9 @@ pub(super) async fn accept(
         );
         if request.command == "native_input_ack" {
             ensure!(
-                observation.event.is_none() && observation.namespace.is_none(),
+                observation.event.is_none()
+                    && observation.namespace.is_none()
+                    && observation.sid.is_none(),
                 "input ACK carries unrelated native metadata"
             );
             let sequence = observation
@@ -177,10 +186,16 @@ pub(super) async fn accept(
                 .pubsub
                 .native_clock
                 .connected(case, epoch, namespace)?;
+            state.redis.pubsub.namespace_sessions.connected(
+                case,
+                epoch,
+                namespace,
+                observation.sid.as_deref(),
+            )?;
             return Ok(serde_json::json!({"ok":true}));
         }
         ensure!(
-            observation.namespace.is_none(),
+            observation.namespace.is_none() && observation.sid.is_none(),
             "native event observation carries a namespace boundary"
         );
         let event = observation

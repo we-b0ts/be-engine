@@ -17,6 +17,14 @@ Static lexer output uses an 8 MiB/1024-entry process cache; parameters, clocks,
 bindings and successful matches never enter it. Large statements keep their
 original uncached parsing capability.
 
+The native candidate catalog also caches conservative SQL families. Known
+SELECT, write, SET and transaction-control families exclude incompatible
+families before value contracts and witness comparisons. BEGIN/START TRANSACTION
+and COMMIT/ROLLBACK retain their respective native alias groups. Unknown syntax,
+including executable comments and CTEs, retains the original candidate path.
+This prevents driver setup requests from comparing against every business query;
+it does not bypass finite recorded setup/error responses or native constraints.
+
 Source request and response envelopes refer to original semantic record ranges,
 checksums and file identities. Recorder's existing proof selectors/locations are
 reused when available; old indexes fall back to a thin identity scan without
@@ -83,6 +91,8 @@ TRAFFIC_E2E_RECORDED_PERF_OUTPUT=/private/results.json \
 
 The same harness restores captured Case/request clocks and measures Source
 preparation, matching/metadata lookup and authenticated evidence sealing.
+Per-request matching times are reported by ordinal and command without SQL or
+parameter values, so slow driver setup can be separated from business requests.
 It reads original recordings with their genuine run boundary and confirmed
 Global subscriptions. Mutable Replay state/output are private; it does not run
 the application, change coordinator state or install host interception. Check

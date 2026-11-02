@@ -14,19 +14,30 @@ impl RedisReplayState {
     /// Response contracts use finish_delivery so their commit shares the same
     /// transaction as the terminal transition.
     pub(super) fn complete_exchange(&mut self, matched: &MatchedRedisExchange) -> bool {
-        match &matched.claim {
+        self.complete_exchange_covered(matched).is_some()
+    }
+
+    /// Return native-authorized Source coverage from this successful delivery.
+    /// Coalesced operators own this projection; a generic consumed-state scan
+    /// cannot prove which Source responses this actual write covered.
+    pub(super) fn complete_exchange_covered(
+        &mut self,
+        matched: &MatchedRedisExchange,
+    ) -> Option<Vec<usize>> {
+        let covered = match &matched.claim {
             Claim::Finite(ticket) => {
                 self.lifecycle.wire_delivered(ticket);
                 if !self
                     .lifecycle
                     .complete(ticket, &mut self.exchanges[matched.index].status)
                 {
-                    return false;
+                    return None;
                 }
                 self.exchanges[matched.index].matched_once = true;
+                vec![matched.index]
             }
             Claim::Native(kind) => {
-                match kind {
+                let covered = match kind {
                     NativeClaimKind::ActivityRefresh => {
                         self.complete_activity(matched.refresh.as_ref().expect("activity claim"))
                     }
@@ -38,14 +49,16 @@ impl RedisReplayState {
                         matched.index,
                     ),
                     NativeClaimKind::ReusableSnapshot => {
-                        self.exchanges[matched.index].matched_once = true
+                        self.exchanges[matched.index].matched_once = true;
+                        vec![matched.index]
                     }
-                }
+                };
                 self.lifecycle.notify_waiters();
+                covered
             }
-        }
+        };
         self.record_completion(matched);
-        true
+        Some(covered)
     }
 
     fn record_completion(&mut self, matched: &MatchedRedisExchange) {

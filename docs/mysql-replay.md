@@ -137,6 +137,15 @@ or invalid scopes retain the restoration obligation. Immutable recordings and
 Global probe consumption are unchanged; the probe supplies Source facts rather
 than a fabricated Target observation.
 
+For a Source transaction proven entirely read-only, COMMIT and ROLLBACK are
+equivalent ends. The original end may already be optional under the transaction
+owner. Restoration still requires every original read to finish delivery in the
+bound Target transaction, followed by a successful real COMMIT or ROLLBACK that
+leaves the socket outside a transaction. The audit reports
+`source_end_omission_proven` separately; no omitted Source end is counted as a
+Target delivery. Missing reads, failed ends, other sockets, writes and locking
+reads cannot use this read-only proof.
+
 See MySQL's [transaction characteristics](https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html)
 for the distinct SESSION and next-transaction lifetimes.
 

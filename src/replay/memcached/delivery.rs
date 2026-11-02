@@ -1,5 +1,6 @@
 //! Delay, contract materialization and successful Memcached delivery accounting.
 use super::*;
+use tokio::io::AsyncWriteExt;
 
 pub(super) async fn deliver_memcached_exchange(
     reader: &mut MemcachedBufferedReader<&mut TcpStream>,

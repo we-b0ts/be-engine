@@ -45,6 +45,7 @@ rules:
         runtime.state.lock().await.mysql.observed_at_for_test = Some(target_time);
         let mut client = connect(addr,&temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         assert!((&mut client).fetch_one("SELECT payload FROM pets WHERE id=8").await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         let row = (&mut client).fetch_one(read_sql).await.unwrap();
         let mut value: Value = serde_json::from_str(row.get::<&str,_>("payload")).unwrap();
         assert_eq!(value["spec"]["lastActiveDate"],"2026-10-22");
@@ -53,10 +54,12 @@ rules:
         let mut wrong = value.clone();
         wrong["spec"]["experience"] = json!(562239);
         assert!(sqlx::query(write_sql).bind(wrong.to_string()).bind("2026-10-22 03:13:00").bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         value["spec"]["experience"] = json!(562240);
         let updated = sqlx::query(write_sql).bind(value.to_string()).bind("2026-10-22 03:13:00").bind(7_i64).execute(&mut client).await.unwrap();
         assert_eq!(updated.rows_affected(),1);
         assert!(sqlx::query(write_sql).bind(value.to_string()).bind("2026-10-22 03:13:00").bind(7_i64).execute(&mut client).await.is_err());
+        client = connect(addr, &temp.path().join(".traffic-e2e/local/recordings/case-id/.replay/ca.pem")).await;
         client.close().await.unwrap();
         let state = runtime.state.lock().await;
         assert_eq!(state.mysql.events.matched_query_count,2);

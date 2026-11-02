@@ -53,17 +53,15 @@ async fn matched_publish_echoes_actual_payload_without_recorded_idle_or_duplicat
             .await
             .is_err()
         );
-        let (mut client, task) = connect(&runtime).await;
+        let (mut client, mut task) = connect(&runtime).await;
         let mut wrong: Value = serde_json::from_slice(&actual).unwrap();
         wrong["data"][0]["argv"] = json!(["unselected-business-change"]);
-        assert!(
-            send(
-                &mut client,
-                &[b"PUBLISH", b"jobs", &serde_json::to_vec(&wrong).unwrap()]
-            )
-            .await
-            .starts_with(b"-ERR")
-        );
+        send_unmatched(
+            &mut client,
+            &[b"PUBLISH", b"jobs", &serde_json::to_vec(&wrong).unwrap()],
+        )
+        .await;
+        reconnect(&runtime, &mut client, &mut task).await;
         assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(30),
@@ -128,7 +126,7 @@ async fn session_bindings_are_bijective_and_callbacks_use_the_live_session() {
     .unwrap();
     let (mut subscriber, sub_task) = connect(&runtime).await;
     send(&mut subscriber, &[b"SUBSCRIBE", b"jobs"]).await;
-    let (mut client, task) = connect(&runtime).await;
+    let (mut client, mut task) = connect(&runtime).await;
     let first = with_sid(&request(TARGET, 9), "live-one");
     assert_eq!(
         send(&mut client, &[b"PUBLISH", b"jobs", &first]).await,
@@ -138,22 +136,16 @@ async fn session_bindings_are_bijective_and_callbacks_use_the_live_session() {
     let payload = parse_pubsub_push(&received).unwrap().unwrap().payload;
     assert_eq!(rpc::callback(&payload).unwrap().unwrap().0.sid, "live-one");
     let collision = with_sid(&request(TARGET, 10), "live-one");
-    assert!(
-        send(&mut client, &[b"PUBLISH", b"jobs", &collision])
-            .await
-            .starts_with(b"-ERR")
-    );
+    send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &collision]).await;
+    reconnect(&runtime, &mut client, &mut task).await;
     let second = with_sid(&request(TARGET, 10), "live-two");
     assert_eq!(
         send(&mut client, &[b"PUBLISH", b"jobs", &second]).await,
         b":1\r\n"
     );
     let rebinding = with_sid(&request(TARGET, 11), "live-three");
-    assert!(
-        send(&mut client, &[b"PUBLISH", b"jobs", &rebinding])
-            .await
-            .starts_with(b"-ERR")
-    );
+    send_unmatched(&mut client, &[b"PUBLISH", b"jobs", &rebinding]).await;
+    reconnect(&runtime, &mut client, &mut task).await;
     let valid = with_sid(&request(TARGET, 11), "live-one");
     assert_eq!(
         send(&mut client, &[b"PUBLISH", b"jobs", &valid]).await,

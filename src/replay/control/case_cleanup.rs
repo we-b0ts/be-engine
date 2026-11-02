@@ -31,6 +31,7 @@ pub(super) fn mark_failed(state: &mut ReplayState, case: &str) -> Result<()> {
         .entry(case.into())
         .or_insert_with(|| TokioInstant::now() + dependency_tail::TARGET_STOP_CLEANUP_GRACE);
     state.redis.pubsub.native_clock.close_case(case);
+    state.redis.pubsub.namespace_sessions.close_case(case);
     Ok(())
 }
 
@@ -80,7 +81,6 @@ pub(super) async fn lock_for_release<'a>(
     );
     loop {
         let state = lock_drained(shared, case, deadline).await?;
-        dependency_tail::ensure_interaction_not_failed(&state, case)?;
         if state.http_ingress.try_close_case(case) {
             return Ok(state);
         }
