@@ -909,6 +909,10 @@ is unclear.
   never fall back to another report. `dependency_review/target_query` owns
   bounded authenticated independent Target request reads from those reports,
   without granting ownership, matching or formal rule proof.
+  `replay/attribution/views` publishes physical scope membership from frozen
+  ownership decisions. Unchanged scopes retain their immutable original paths
+  and native index caches; moved members rebuild both affected scopes without
+  changing original capture bytes or the attribution snapshot identity.
   `decisions` stores immutable, shared proof templates with complete finite UUID
   membership and ordered history; `decisions/serde` reads legacy occurrence
   maps/arrays and publishes compact groups. Status validates proof groups without

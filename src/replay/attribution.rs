@@ -1,15 +1,13 @@
 //! Freeze independently proven ownership into session-local reference views.
 //! Original bytes remain immutable; no proof is evaluated in request matching.
 use super::*;
-use crate::dependency::{
-    attribution::DependencyOwner,
-    observation::{SCOPE_SCHEMA, ScopeIndex, ScopeKind},
-};
-use crate::dependency_index::{recording, scoped};
+use crate::dependency::attribution::DependencyOwner;
+use crate::dependency_index::recording;
 
 mod inventory;
 #[cfg(test)]
 mod tests;
+mod views;
 
 pub(super) struct Frozen {
     pub run_value_scopes: BTreeMap<Uuid, Arc<str>>,
@@ -94,103 +92,8 @@ pub(super) fn freeze(
             frozen.run_value_scopes.insert(*exchange_id, value.clone());
         }
     }
-    let mut scopes = Vec::new();
-    for input in &manifest.inputs {
-        scopes.push(root.join(&input.path).join(scoped::CASE_SCOPE));
-    }
-    for kind in ["startup", "process", "shutdown", "unattributed"] {
-        scopes.push(root.join(format!("indexes/{kind}-scope.json")));
-    }
-    let mut locations = BTreeMap::new();
-    let mut seen = BTreeSet::new();
-    for path in scopes {
-        if !path.is_file() {
-            continue;
-        }
-        let index: ScopeIndex = serde_json::from_slice(&std::fs::read(path)?)?;
-        ensure!(
-            index.schema == SCOPE_SCHEMA,
-            "unsupported attribution scope schema"
-        );
-        for location in index.locations {
-            ensure!(
-                locations
-                    .insert(location.offset, (index.scope.clone(), location))
-                    .is_none(),
-                "Source dependency occurs in multiple ownership views"
-            );
-        }
-    }
-    let destination = output
-        .join("dependency-scopes")
-        .join(digest.trim_start_matches("sha256:"));
-    crate::dependency_index::store::private_directory(&destination)?;
-    let run_relpath = std::fs::canonicalize(&root)?.to_string_lossy().to_string();
-    let mut result: BTreeMap<String, ScopeIndex> = BTreeMap::new();
-    for (_, (captured, location)) in locations {
-        let scope = if let Some(owner) = by_exchange.get(&location.exchange_id) {
-            seen.insert(location.exchange_id);
-            match owner {
-                DependencyOwner::Case { origin_case_id, .. } => ScopeKind::Case {
-                    case_id: *origin_case_id,
-                },
-                DependencyOwner::Startup { .. } => ScopeKind::Startup,
-                DependencyOwner::Process { .. } => ScopeKind::Process,
-                DependencyOwner::Shutdown { .. } => ScopeKind::Shutdown,
-                DependencyOwner::Unattributed { .. } => ScopeKind::Unattributed,
-            }
-        } else {
-            captured
-        };
-        let key = match &scope {
-            ScopeKind::Case { case_id } => case_id.to_string(),
-            ScopeKind::Startup => "startup".into(),
-            ScopeKind::Process => "process".into(),
-            ScopeKind::Shutdown => "shutdown".into(),
-            ScopeKind::Unattributed => "unattributed".into(),
-        };
-        result
-            .entry(key)
-            .or_insert_with(|| ScopeIndex {
-                schema: SCOPE_SCHEMA.into(),
-                run_relpath: run_relpath.clone(),
-                scope,
-                locations: vec![],
-            })
-            .locations
-            .push(location);
-    }
-    ensure!(
-        seen.len() == by_exchange.len(),
-        "attribution refers to absent Source dependency evidence"
-    );
-    let keys: Vec<_> = cases
-        .keys()
-        .cloned()
-        .chain([
-            "startup".into(),
-            "process".into(),
-            "shutdown".into(),
-            "unattributed".into(),
-        ])
-        .collect();
-    for key in keys {
-        let scope = result.remove(&key).unwrap_or_else(|| ScopeIndex {
-            schema: SCOPE_SCHEMA.into(),
-            run_relpath: run_relpath.clone(),
-            scope: match key.as_str() {
-                "startup" => ScopeKind::Startup,
-                "process" => ScopeKind::Process,
-                "shutdown" => ScopeKind::Shutdown,
-                "unattributed" => ScopeKind::Unattributed,
-                _ => ScopeKind::Case {
-                    case_id: key.parse().expect("manifest Case UUID"),
-                },
-            },
-            locations: vec![],
-        });
-        let path = destination.join(format!("{key}-scope.json"));
-        std::fs::write(&path, serde_json::to_vec(&scope)?)?;
+    let paths = views::freeze(&root, &manifest, output, cases.keys(), by_exchange, &digest)?;
+    for (key, path) in paths {
         if let Some(case) = cases.get_mut(&key) {
             case.dependencies_path = path.clone();
         }

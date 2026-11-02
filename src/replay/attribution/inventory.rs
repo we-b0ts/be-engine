@@ -2,6 +2,7 @@
 use super::*;
 use crate::dependency::observation::*;
 use crate::dependency_index::RecordLocation;
+use crate::dependency_index::scoped;
 
 #[cfg(test)]
 mod tests;
