@@ -291,6 +291,31 @@ fit within **1024 UTF-8 bytes per string**, not 1024 characters. Check with
 separate while retaining the decisive Source references and identity proof in
 the submitted strings. Unknown JSON fields are rejected.
 
+### Correcting an existing Case owner
+
+An occurrence can already have a captured Case owner and still require a proven
+ownership correction. For example, a previous input's async completion may
+continue after the recorder admits the next input. The observed/admitted window
+records provenance; it does not independently prove which input produced that
+completion. Task identifiers alone are insufficient: trace the actual Source
+entrypoint, task identity, calls and exclusive occurrence scope.
+
+For a concrete Source attribution assignment or actual scope-gap investigation,
+the independent analyst can include those exact original UUIDs in a fresh-context
+decision. `apply` is not limited to the unattributed set. Use the proven origin
+Case as `owner`, its supported lifecycle rule, `impact: runtime`, and the actual
+origin API as `obligation_scope`. A foreign-unused claim returns genuinely unused
+traffic; it is not a prerequisite for an independently proved owner correction.
+
+Apply publishes an ownership overlay. It retains the immutable original capture,
+moves the selected memberships from the old Case view to the new Case view, and
+checks affected execution obligations. Do not edit the recording or scope files,
+add Target calls to consume the wrong owner's traffic, or broaden matching windows.
+If an actual Target investigation uses `cross_scope`, publish ownership proof
+before resolving that investigation, then use the new current proof revision in
+the resolution. Follow the returned action into genuine same-Source Replay;
+neither a successful apply nor a resolved investigation is an API pass.
+
 ## Acceptance and origin obligations
 
 The engine can issue `ai-verified` for an API's existing actual attempt only when
