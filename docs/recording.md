@@ -558,8 +558,12 @@ Shutdown withdraws the address, stops new adapter connections, stops Source,
 drains active requests and disconnect dependencies, finalizes Recorder, then
 removes interception rules.
 Evidence lives under
-`<data-root>/.traffic-e2e/local/artifacts/recordings/<run-id>/`; authorization and
-cookie request headers are encrypted using a persistent key in
+`<data-root>/.traffic-e2e/local/artifacts/recordings/<run-id>/`. Only request
+headers explicitly listed in `recorder.recording.encrypt_request_headers` are
+encrypted, including headers on WebSocket upgrade actions. Other headers, URIs,
+bodies and interaction messages are stored without additional encryption;
+binary values retain their protocol's explicit Base64 encoding. Historical
+encrypted interactions remain readable. Configured header encryption uses a persistent key in
 `<data-root>/.traffic-e2e/local/secrets/traffic-e2e-enc.sec`. Persist the entire
 data root across restarts. Source cannot read private evidence, the encryption
 key, or CA private key.

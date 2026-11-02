@@ -144,10 +144,7 @@ pub(super) async fn capture_case(
         deadline: tokio::time::Instant::now() + request_timeout,
     };
     let output = input.execute(&context).await?;
-    active_artifact::write_json(
-        actual_response_path,
-        &output.artifact(actual_response_path)?,
-    )
+    active_artifact::write_json(actual_response_path, &output.artifact()?)
 }
 
 pub(super) fn response_unavailable_reason(error: &anyhow::Error) -> E2eResponseUnavailableReason {

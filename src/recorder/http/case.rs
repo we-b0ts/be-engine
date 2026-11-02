@@ -48,18 +48,9 @@ pub(crate) async fn finalize_http_case(
     response: CaseResponseRecord,
     invalidation: Option<CaseInvalidation>,
 ) -> Result<()> {
-    let mut stored_request = serde_json::to_value(&request)?;
+    let stored_request = serde_json::to_value(&request)?;
     let mut stored_response = serde_json::to_value(&response)?;
-    if request.interaction.is_some() {
-        crate::interaction::private::protect_request(
-            &mut stored_request,
-            &recorder.case_dir(case).join("request.json"),
-        )?;
-        crate::interaction::private::protect_output(
-            &mut stored_response,
-            &recorder.case_dir(case).join("expected-response.json"),
-        )?;
-    }
+    crate::interaction::artifact::prepare_output(&mut stored_response);
     if let Some(invalidation) = invalidation {
         recorder
             .write_case_json(case, "request.json.invalid", &stored_request)
@@ -290,6 +281,7 @@ fn response_is_json(response: &CaseResponseRecord) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod plaintext;
     use super::*;
     use crate::recorder::capture_case_body;
     use uuid::Uuid;

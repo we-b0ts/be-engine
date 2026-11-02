@@ -152,6 +152,10 @@ is unclear.
   execution budgets; `lifecycle`, `socketio`, `stream` and `observation` own pure
   framing, completion correlation and monotonic case decisions. They do not read
   expected evidence, persist recordings or own dependency cleanup.
+  `interaction/artifact` prepares plaintext output artifacts without duplicating
+  the raw stream body. `interaction/private` reads historical encrypted input
+  and output envelopes; its old writers exist only as compatibility test fixtures.
+  New initial and upgrade request headers reuse Recorder's configured header capture.
   `interaction/replay/timing` owns the replay timing choice, monotonic Source-offset
   mapping and metadata feedback interface. `replay/control/input_timing` admits
   active-case timing queries from immutable inputs and finite dependency facts;
@@ -476,7 +480,13 @@ is unclear.
   reader; runtime candidate search does not copy complete payload pairs.
   `policy_evidence/source` owns authenticated original-record references and
   delegates envelope reconstruction to native adapters. Its `storage` sibling
-  owns bounded encrypted chunks, sealed segments and portable segment copying.
+  owns bounded traffic chunks, sealed segments and portable segment copying.
+  Its `payload` sibling stores UTF-8/Base64 bytes and configured HTTP header
+  fragments, retaining byte-exact reconstruction and historical encrypted readers.
+  `policy_evidence/authentication` owns the separate HMAC binding for plaintext
+  request candidates, reusing the encryption owner's managed engine key resolution.
+  `request_headers/evidence` selects original HTTP header byte ranges from a
+  project header policy; business bodies and response headers are not selected.
   Version-3 coverage groups authenticate the exact visited candidate membership;
   the borrowed witness index selects original identities before proof expansion.
   `policy_evidence/catalog` publishes the sealed directory separately from the

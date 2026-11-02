@@ -334,11 +334,9 @@ fn read_blob(path: &Path, session_id: &str, blob: &BlobRef, context: &Path) -> R
         envelope.id == blob.id,
         "protected policy payload identity changed"
     );
-    let payload = crate::request_headers::decrypt_evidence(
-        context,
-        &blob_label(session_id, &blob.id),
-        &envelope.encrypted,
-    )?;
+    let payload = envelope
+        .payload
+        .read(context, &blob_label(session_id, &blob.id))?;
     ensure!(
         payload.len() == blob.plaintext_bytes && digest(&payload) == blob.id,
         "policy payload plaintext fingerprint differs"

@@ -92,6 +92,10 @@ Never select or edit a running or failed recording to make verification pass.
 Persist the data root. Recordings live under
 `<data-root>/.traffic-e2e/local/artifacts/recordings/<run-id>/`; encrypted headers
 require private access to the persistent `.traffic-e2e/local/secrets` key.
+Only `recorder.recording.encrypt_request_headers` selects header encryption,
+including Socket.IO WebSocket upgrade headers. Other traffic fields and
+interaction messages are stored without additional encryption; binary values
+retain explicit Base64 encoding. Historical encrypted evidence remains readable.
 Source and Target must never read private recording evidence or key material.
 
 ## Rewrite Handoff

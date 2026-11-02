@@ -12,13 +12,16 @@ like response assertion. The original `sequence` remains available as an
 observation locator; different Source and Target sequence numbers alone do not
 prove a response mismatch.
 
-New SSE event data and incomplete frame data are stored as plaintext in the
-original recording and actual-response artifacts. Response headers retain their
-private encryption envelope; version 2 explicitly identifies plaintext SSE
-payloads. Other interaction protocols retain payload encryption. Historical
-version 1 encrypted SSE artifacts remain readable without rewriting recordings.
-The query loads each response once per page and decrypts the remaining private
-fields in memory. Plaintext payloads are not added to saved assertion
+New interaction event data, incomplete frames, close reasons, request bodies,
+URIs and response headers are stored without additional encryption in the
+original recording and actual-response artifacts. This applies to Socket.IO,
+WebSocket, SSE, NDJSON and raw streams. Binary messages retain their explicit
+Base64 encoding. Only request headers listed in the project's
+`recorder.recording.encrypt_request_headers` are encrypted, including headers
+on a Socket.IO WebSocket upgrade. No private interaction envelope is added.
+Historical version 1 encrypted interactions and version 2 SSE artifacts remain
+readable without rewriting recordings. The query loads each response once per
+page and decrypts historical private fields in memory. Payloads are not added to saved assertion
 reports, workflow state or the ordinary public diagnosis. Unreadable or
 unauthenticated evidence is `unavailable`, independently of a missing frame or
 a present JSON `null`.

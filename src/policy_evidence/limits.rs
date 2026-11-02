@@ -8,6 +8,6 @@ pub(super) const MAX_OBSERVATIONS: usize = 262_144;
 pub(super) const MAX_ASSOCIATIONS: usize = 1_048_576;
 
 // Keep publication/read capacity aligned with the larger observation inventory.
-// Payloads remain in authenticated Source references or encrypted segments;
+// Payloads remain in authenticated Source references or sealed segments;
 // this bound applies only to the private observation directory's metadata.
 pub(super) const MAX_CATALOG_BYTES: u64 = 512 * 1024 * 1024;

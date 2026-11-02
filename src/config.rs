@@ -307,6 +307,24 @@ impl AppConfig {
         Ok(document.recorder)
     }
 
+    /// Read the explicit at-rest header policy without loading runtime rules.
+    pub(crate) fn encrypted_request_header_names(path: &Path) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct HeaderPolicyDocument {
+            #[serde(default)]
+            recorder: AppConfig,
+        }
+        let raw = std::fs::read_to_string(path)?;
+        managed_fields::reject_inline(path, &raw)?;
+        let document: HeaderPolicyDocument = serde_yaml::from_str(&raw)
+            .with_context(|| format!("failed to parse header policy {}", path.display()))?;
+        document
+            .recorder
+            .recording
+            .validate_request_header_encryption()?;
+        Ok(document.recorder.recording.encrypt_request_headers)
+    }
+
     pub(crate) fn load_static(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let config = Self::read_static(path)?;

@@ -1,4 +1,4 @@
-//! Independently identified observations, shared encrypted payloads and signed
+//! Independently identified observations, shared traffic payloads and signed
 //! candidate associations. Content equality shares storage, never request identity.
 use super::*;
 use hmac::{Hmac, Mac};
@@ -172,7 +172,8 @@ pub(super) enum AssociationProof {
 #[derive(Serialize, Deserialize)]
 pub(super) struct BlobEnvelope {
     pub id: String,
-    pub encrypted: String,
+    #[serde(flatten)]
+    pub payload: StoredPayload,
 }
 
 pub(super) fn sign<T: Serialize>(key: &[u8], domain: &str, value: &T) -> Result<String> {

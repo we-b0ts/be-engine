@@ -45,7 +45,12 @@ references. Its complete private observation directory is sealed separately and
 authenticated by the session key. Readers authenticate that directory before
 expanding any proof; publication and plan freezing carry all referenced files.
 
-Actual Target payloads are encrypted in chunks of at most 1 MiB. A 64 MiB segment
+Actual Target payloads are stored without additional encryption in chunks of at
+most 1 MiB, using UTF-8 or explicit Base64 encoding. Only HTTP request header
+values selected by the project's `recorder.recording.encrypt_request_headers`
+remain encrypted; surrounding bytes, request bodies and other protocol payloads
+remain readable. Historical encrypted chunks remain supported. Session signing
+keys retain their encrypted envelopes. A 64 MiB segment
 limit rotates storage instead of omitting evidence. Sealing/publication/readers
 validate segment identities, contiguous ownership, chunk checksums, plaintext
 digests, observation roles and candidate membership. Large Source values need
@@ -55,12 +60,16 @@ API-response plans continue to use their existing Source/actual-response artifac
 references and assertion validation. A derived delivery remains explicitly
 distinct from independent Target observation.
 
+Request-contract candidates likewise store readable payloads with a
+separate HMAC over their original metadata and bytes. Removing encryption does
+not allow modified payloads, clocks or candidate ownership to authorize a plan.
+
 The observation and candidate-count bounds still protect session memory.
 One session retains at most 262,144 Source and Target observations combined,
 and 1,048,576 candidate associations. Its authenticated private directory has
 a 512 MiB metadata budget shared by publication and readers. These limits
 cover ordinary 70-100 Case API batches, including late unmatched requests;
-they do not change payload encryption, identity or completeness validation.
+they do not change header encryption, identity or completeness validation.
 The observation budget covers every Case
 in a focused API; it is not renewed or consumed separately for each Case.
 Exhausting such a bound or failing persistence leaves explicit incomplete

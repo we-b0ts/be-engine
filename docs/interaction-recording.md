@@ -430,14 +430,19 @@ recording Source.
 
 ## Sensitive evidence
 
-Connection query parameters, CONNECT payloads, business messages, cookies and
-authentication headers can contain credentials. New interaction input/output
-payloads and private connection metadata use authenticated encryption with the
-managed project key, alongside private storage and the existing service isolation.
-Loaders decrypt a caller-owned view in memory; no plaintext evidence copy is
-written. Existing encrypted request-header configuration remains effective.
-Missing keys and failed authentication fail closed. Do not publish raw decrypted
-transcripts in logs, reports or examples. Payloads are not guessed or redacted
+New interaction inputs and outputs are stored without additional payload
+encryption. Query parameters, CONNECT payloads, business messages, request bodies,
+close reasons and response headers remain readable; binary messages retain
+explicit Base64 encoding. Only request headers selected by
+`recorder.recording.encrypt_request_headers` use the managed project key,
+including headers on Socket.IO WebSocket upgrade actions. Explicit
+`redact_headers` settings keep their existing behavior. Private storage and
+service isolation remain in effect.
+
+Loaders retain authenticated in-memory decoding for historical encrypted
+transcripts without rewriting them. Missing keys and failed authentication
+still reject encrypted fields. Logs and ordinary reports retain their bounded
+projections instead of copying transcripts. Payloads are not guessed or redacted
 and then treated as replayable originals.
 
 Primary SSE/NDJSON parsing currently requires an uncompressed response. Declared

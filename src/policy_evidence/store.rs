@@ -1,4 +1,4 @@
-//! Bounded session-local observation inventory and encrypted content storage.
+//! Bounded session-local observation inventory and sealed traffic storage.
 use super::limits::{MAX_ASSOCIATIONS, MAX_OBSERVATIONS};
 use super::v2::{
     BlobEnvelope, BlobRef, CandidateAssociation, SourceObservation, TargetObservation,
@@ -54,6 +54,7 @@ struct State {
     sealed_manifest: Option<WitnessManifest>,
     compact: bool,
     segmented: Option<super::storage::Writer>,
+    header_policies: BTreeMap<PathBuf, crate::request_headers::evidence::HeaderPolicy>,
 }
 
 impl WitnessStore {
@@ -64,7 +65,7 @@ impl WitnessStore {
             state.key.clone(),
         )
     }
-    /// A compact recovery record for one genuine Target; payload bytes stay encrypted.
+    /// A compact recovery record for one genuine Target with sealed payload references.
     pub(crate) fn hypothesis_checkpoint(
         &self,
         id: &str,
@@ -196,6 +197,7 @@ impl WitnessStore {
                 sealed_manifest: None,
                 compact: false,
                 segmented: None,
+                header_policies: Default::default(),
             })),
         })
     }
@@ -440,39 +442,37 @@ impl State {
         Ok(())
     }
     fn blob(&mut self, context: &Path, payload: &[u8]) -> Result<Option<usize>> {
-        if self.segmented.is_some() {
-            let id = digest(payload);
-            if let Some(index) = self.blobs.get(&id) {
-                return Ok(Some(*index));
-            }
-            self.ensure_key(context)?;
-            let blob =
-                self.segmented
-                    .as_mut()
-                    .unwrap()
-                    .write(&self.graph.session_id, context, payload)?;
-            let index = self.graph.blobs.len();
-            self.graph.payload_bytes += payload.len();
-            self.graph.blobs.push(blob);
-            self.blobs.insert(id, index);
-            return Ok(Some(index));
-        }
-        if payload.len() > MAX_PAYLOAD {
+        if self.segmented.is_none() && payload.len() > MAX_PAYLOAD {
             return Ok(None);
         }
         let id = digest(payload);
         if let Some(index) = self.blobs.get(&id) {
             return Ok(Some(*index));
         }
+        if !self.header_policies.contains_key(context) {
+            self.header_policies.insert(
+                context.to_path_buf(),
+                crate::request_headers::evidence::HeaderPolicy::load(context)?,
+            );
+        }
+        let headers = self.header_policies[context].ranges(payload)?;
+        if self.segmented.is_some() {
+            self.ensure_key(context)?;
+            let blob = self
+                .segmented
+                .as_mut()
+                .unwrap()
+                .write(context, payload, &headers)?;
+            let index = self.graph.blobs.len();
+            self.graph.payload_bytes += payload.len();
+            self.graph.blobs.push(blob);
+            self.blobs.insert(id, index);
+            return Ok(Some(index));
+        }
         self.ensure_key(context)?;
-        let encrypted = crate::request_headers::encrypt_evidence(
-            context,
-            &v2::blob_label(&self.graph.session_id, &id),
-            payload,
-        )?;
         let mut bytes = serde_json::to_vec(&BlobEnvelope {
             id: id.clone(),
-            encrypted,
+            payload: StoredPayload::capture(payload, 0, &headers, context)?,
         })?;
         bytes.push(b'\n');
         let length = u64::try_from(bytes.len())?;

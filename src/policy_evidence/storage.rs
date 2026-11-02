@@ -1,4 +1,4 @@
-//! Bounded encrypted chunks in sealed segments. A segment limit rotates storage;
+//! Bounded traffic chunks in sealed segments. A segment limit rotates storage;
 //! it never drops an observation or truncates a value.
 use super::v2::{BlobEnvelope, BlobRef};
 use super::*;
@@ -104,26 +104,25 @@ impl Writer {
     }
     pub(super) fn write(
         &mut self,
-        session: &str,
         context: &Path,
         payload: &[u8],
+        headers: &[crate::request_headers::evidence::HeaderValueRange],
     ) -> Result<BlobRef> {
         let mut chunks = Vec::new();
         // Empty payloads still have one authenticated physical chunk.
-        for chunk in payload.chunks(CHUNK_BYTES).chain(if payload.is_empty() {
-            Some(&[][..])
-        } else {
-            None
-        }) {
+        for (index, chunk) in payload
+            .chunks(CHUNK_BYTES)
+            .chain(if payload.is_empty() {
+                Some(&[][..])
+            } else {
+                None
+            })
+            .enumerate()
+        {
             let id = digest(chunk);
-            let encrypted = crate::request_headers::encrypt_evidence(
-                context,
-                &super::v2::blob_label(session, &id),
-                chunk,
-            )?;
             let mut bytes = serde_json::to_vec(&BlobEnvelope {
                 id: id.clone(),
-                encrypted,
+                payload: StoredPayload::capture(chunk, index * CHUNK_BYTES, headers, context)?,
             })?;
             bytes.push(b'\n');
             if self.bytes + bytes.len() as u64 > self.limit {
@@ -259,11 +258,9 @@ pub(super) fn read(path: &Path, session: &str, blob: &BlobRef, context: &Path) -
         ensure!(digest(&bytes) == chunk.sha256, "policy chunk changed");
         let envelope: BlobEnvelope = serde_json::from_slice(&bytes)?;
         ensure!(envelope.id == chunk.id, "policy chunk identity changed");
-        let bytes = crate::request_headers::decrypt_evidence(
-            context,
-            &super::v2::blob_label(session, &chunk.id),
-            &envelope.encrypted,
-        )?;
+        let bytes = envelope
+            .payload
+            .read(context, &super::v2::blob_label(session, &chunk.id))?;
         ensure!(
             bytes.len() == chunk.plaintext_bytes && digest(&bytes) == chunk.id,
             "policy chunk plaintext changed"

@@ -1,5 +1,6 @@
 //! Connection-scoped input transcripts, protocol observations and bounded lifetimes.
 
+pub(crate) mod artifact;
 mod heartbeat;
 pub mod lifecycle;
 pub mod model;

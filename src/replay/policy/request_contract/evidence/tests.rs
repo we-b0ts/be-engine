@@ -13,6 +13,48 @@ struct Fixture {
     events: Vec<Value>,
 }
 
+#[test]
+fn new_candidate_payloads_are_plaintext_and_legacy_candidates_still_load_privately() {
+    let mut fixture = Fixture::new();
+    fixture.candidate("SET", &["key", "\"old\""], &["key", "\"new\""]);
+    let candidate = fixture.runtime.candidates().pop().unwrap();
+    let actual = candidate.actual(&fixture.case).unwrap();
+    let encoded = serde_json::to_value(&candidate).unwrap();
+    assert!(encoded.get("encrypted_target").is_none());
+    assert!(encoded.get("encrypted").is_none());
+    assert_eq!(encoded["encoding"], "utf8");
+    let mut tampered = candidate.clone();
+    tampered.command = "RPUSH".into();
+    assert!(tampered.actual(&fixture.case).is_err());
+    let mut unsigned = candidate.clone();
+    unsigned.authentication.clear();
+    assert!(unsigned.actual(&fixture.case).is_err());
+    let mut old = encoded.clone();
+    old.as_object_mut().unwrap().remove("encoding");
+    old.as_object_mut().unwrap().remove("data");
+    old.as_object_mut().unwrap().remove("authentication");
+    old["encrypted_target"] = json!(
+        crate::request_headers::encrypt_evidence(&fixture.case, &candidate.label(), &actual,)
+            .unwrap()
+    );
+    let restored: Candidate = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(restored.actual(&fixture.case).unwrap(), actual);
+    let projected =
+        discover(&json!({"replay_policy":{"request_contract_candidates":[encoded, old]}}));
+    for item in projected.as_array().unwrap() {
+        for field in [
+            "data",
+            "encoding",
+            "parts",
+            "encrypted_target",
+            "encrypted",
+            "authentication",
+        ] {
+            assert!(item.get(field).is_none());
+        }
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
@@ -371,12 +413,7 @@ json:
             .push(exchange("PUBLISH", &["events", &source]));
         fixture.report().unwrap();
         let candidate = fixture.runtime.candidates().pop().unwrap();
-        let protected = crate::request_headers::decrypt_evidence(
-            &fixture.case,
-            &candidate.label(),
-            &candidate.encrypted_target,
-        )
-        .unwrap();
+        let protected = candidate.actual(&fixture.case).unwrap();
         assert_eq!(fingerprint(&protected), candidate.target_fingerprint);
         let actual: Vec<Vec<u8>> = serde_json::from_slice(&protected).unwrap();
         let source = fixture.events[0]["args"]

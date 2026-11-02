@@ -185,7 +185,7 @@ pub fn query_rewrite_witness_for_scope(
         "source_document_count":source.len(),"target_document_count":target.as_ref().map(Vec::len),
         "source":observe(source.get(value_index).map(Vec::as_slice)),
         "target":if independent {observe(target.as_ref().and_then(|values| values.get(value_index)).map(Vec::as_slice))} else {json!({"presence":"unavailable","reason":"witness is not an independent Target observation"})},
-        "recorded_request_context":{"header_names":header_names,"headers_encrypted_at_rest":raw_request.get("private_headers").is_some()}
+        "recorded_request_context":{"header_names":header_names,"headers_encrypted_at_rest":crate::request_headers::has_encrypted_request_headers(&raw_request)}
     });
     if protocol == Protocol::Mysql {
         facts["sql_value_selection"] = json!({

@@ -3,7 +3,7 @@ mod clocks;
 mod indexed_storage;
 mod observations;
 
-fn setup() -> (tempfile::TempDir, PathBuf, WitnessStore, WitnessMetadata) {
+pub(super) fn setup() -> (tempfile::TempDir, PathBuf, WitnessStore, WitnessMetadata) {
     let temp = tempfile::tempdir().unwrap();
     let local = temp.path().join(".traffic-e2e/local");
     std::fs::create_dir_all(local.join("secrets")).unwrap();
@@ -84,7 +84,7 @@ fn sealed_private_witnesses_preserve_roles_bytes_and_complete_coverage() {
     let report = artifacts.join("replay.json");
     let path = verify(&report, &manifest).unwrap();
     assert!(
-        !String::from_utf8_lossy(&std::fs::read(&path).unwrap()).contains("private-source-body")
+        String::from_utf8_lossy(&std::fs::read(&path).unwrap()).contains("private-source-body")
     );
     assert!(
         !serde_json::to_string(&manifest)
