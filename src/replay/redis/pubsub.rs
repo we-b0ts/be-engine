@@ -237,8 +237,8 @@ impl PubSubState {
         self.bindings.index(&record, source, case_id, index)?;
         if record.rpc_request.is_none() {
             ensure!(
-                source.is_run_level(),
-                "uncorrelated Redis Pub/Sub notifications require Global process ownership"
+                source.is_run_level() || source == ReplaySource::Case && case_id.is_some(),
+                "Redis Pub/Sub notifications require their original Case or run owner"
             );
             Arc::make_mut(
                 self.notifications

@@ -105,6 +105,7 @@ fn validate_scope(
             .get(id)
             .filter(|decision| rules::current(decision, &active))
             .map(|decision| &decision.owner)
+            .or_else(|| source.case_defaults.get(id))
             .unwrap_or(&event.capture.attribution);
         match (&obligation.scope, owner) {
             (

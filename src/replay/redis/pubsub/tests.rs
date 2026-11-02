@@ -7,6 +7,7 @@ use tokio::net::TcpListener;
 mod adapter_echo;
 mod broadcast;
 mod cancellation;
+mod case_inputs;
 mod compact_evidence;
 mod echo_preparation;
 mod input_timing;

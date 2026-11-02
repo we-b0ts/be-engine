@@ -26,6 +26,7 @@ pub(super) fn observe(
             .decisions
             .get(id)
             .map(|decision| &decision.owner)
+            .or_else(|| source.case_defaults.get(id))
             .or_else(|| {
                 source
                     .exchanges

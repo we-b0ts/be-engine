@@ -31,8 +31,22 @@ pub(in crate::recorder::redis) fn capture(
 ) -> Result<CapturedPush> {
     let pending = super::super::rpc::take(state, context, push);
     let (reference, targets, duration_ms) = match pending {
-        Some((reference, targets, elapsed)) => (Some(reference), targets, elapsed),
-        None => (None, None, elapsed_ms),
+        Some((reference, targets, elapsed)) => (
+            Some(reference),
+            targets.unwrap_or_else(|| state.inner.active_cases.unattributed_observation_targets()),
+            elapsed,
+        ),
+        // Ordinary received inputs use the same admission window as other
+        // dependencies. Explicit process rules still take priority at enqueue.
+        // A correlated late RPC reply above must retain its original owner.
+        None => (
+            None,
+            state
+                .inner
+                .active_cases
+                .current_targets_for_request_with_tail(false),
+            elapsed_ms,
+        ),
     };
     let response = capture_body(&bytes, state.config().recording.max_body_bytes);
     Ok(CapturedPush {
@@ -50,7 +64,6 @@ pub(in crate::recorder::redis) fn capture(
             duration_ms,
         },
         bytes,
-        targets: targets
-            .unwrap_or_else(|| state.inner.active_cases.unattributed_observation_targets()),
+        targets,
     })
 }

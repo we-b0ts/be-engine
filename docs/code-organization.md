@@ -897,6 +897,11 @@ is unclear.
   membership and ordered history; `decisions/serde` reads legacy occurrence
   maps/arrays and publishes compact groups. Status validates proof groups without
   expanding per-occurrence DTOs; the Replay overlay owns that explicit projection.
+  `case_defaults` restores ordinary Case admission for historical unowned
+  notification inputs from authenticated capture clocks and observed Case identity.
+  It preserves process-selector priority and original bytes, independently of
+  authored proofs and consumption. Analysis, context and frozen Replay scope use
+  this same default; current proofs can explicitly supersede it.
   `rewrite/unified_rule/attribution` admits Source-only ownership/lifecycle plans
   before Replay, without inventing a Target attempt. Its execution identity and
   preflight stay distinct from actual API and batch witnesses; value/sharing

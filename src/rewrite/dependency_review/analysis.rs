@@ -4,7 +4,7 @@ use crate::rewrite::model::{RewriteAction, RewriteInputRequiredReason, RewriteSt
 use anyhow::Result;
 use std::{collections::BTreeMap, path::Path};
 
-pub(super) fn refresh_inventory(state: &mut RewriteState) -> Result<()> {
+pub(super) fn refresh_inventory(root: &Path, state: &mut RewriteState) -> Result<()> {
     if state.case_source.is_none() {
         return Ok(());
     }
@@ -13,7 +13,12 @@ pub(super) fn refresh_inventory(state: &mut RewriteState) -> Result<()> {
         // requirement; unrelated read-only diagnostics remain available.
         return Ok(());
     };
-    if unattributed == 0 {
+    let defaults = super::case_defaults::load(state.case_source.as_ref().unwrap(), Some(root))?;
+    state
+        .dependency_review
+        .unresolved_source_exchange_ids
+        .retain(|id| !defaults.contains_key(id));
+    if unattributed == defaults.len() as u64 {
         // Inventory admission is mechanical, not a claim that the repository was
         // analyzed or that any dependency was consumed successfully.
         state.dependency_review.recording_run_id = Some(state.recording_run_id.clone());
@@ -34,6 +39,8 @@ fn ownerless(root: &Path, state: &RewriteState) -> Result<u64> {
     if captured == 0 {
         return Ok(0);
     }
+    let defaults = super::case_defaults::load(state.case_source.as_ref().unwrap(), Some(root))?;
+    let captured = captured.saturating_sub(defaults.len() as u64);
     if !state.dependency_review.decisions.is_empty() {
         let active = super::rules::fingerprints(&super::rules::load(root)?)?;
         if state
@@ -54,7 +61,12 @@ fn ownerless(root: &Path, state: &RewriteState) -> Result<u64> {
     if state.dependency_review.recording_run_id.as_deref() == Some(&state.recording_run_id)
         && state.dependency_review.source_inventory_id.as_deref() == Some(&identity)
     {
-        Ok(state.dependency_review.unresolved_source_exchange_ids.len() as u64)
+        Ok(state
+            .dependency_review
+            .unresolved_source_exchange_ids
+            .iter()
+            .filter(|id| !defaults.contains_key(id))
+            .count() as u64)
     } else {
         Ok(captured)
     }

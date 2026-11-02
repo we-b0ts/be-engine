@@ -3,7 +3,10 @@ use super::{
     decisions::{DecisionSet, DecisionTemplate},
     rules, source,
 };
-use crate::{dependency::attribution::AttributionDecision, rewrite::store::RewriteStore};
+use crate::{
+    dependency::attribution::{AttributionDecision, DependencyOwner},
+    rewrite::store::RewriteStore,
+};
 use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeMap, path::Path};
 
@@ -12,6 +15,7 @@ struct Current {
     source_revision: Option<String>,
     inventory: String,
     rules: BTreeMap<String, String>,
+    case_defaults: BTreeMap<uuid::Uuid, DependencyOwner>,
 }
 impl Current {
     fn eligible(&self, decision: &DecisionTemplate) -> bool {
@@ -19,12 +23,20 @@ impl Current {
             && rules::current(decision, &self.rules)
     }
     fn identity(&self, run: &str) -> Result<String> {
-        self.decisions.snapshot(
+        let identity = self.decisions.snapshot(
             run,
             self.source_revision.as_deref(),
             &self.inventory,
             |decision| self.eligible(decision),
-        )
+        )?;
+        if self.case_defaults.is_empty() {
+            return Ok(identity);
+        }
+        Ok(crate::policy_evidence::digest(&serde_json::to_vec(&(
+            "case-window-notification-ownership/v1",
+            identity,
+            &self.case_defaults,
+        ))?))
     }
     fn expand(&self) -> Vec<AttributionDecision> {
         let mut values = self
@@ -54,6 +66,7 @@ fn current(target: Option<&Path>, explicit_source: Option<&Path>, run: &str) -> 
         .or(fallback.as_deref())
         .context("ownership snapshot has no current Source recording")?;
     let inventory = source::inventory_at(source_path, run)?.0;
+    let case_defaults = super::case_defaults::load(source_path, target)?;
     let source_revision = state
         .as_ref()
         .and_then(|state| state.source_revision.clone());
@@ -81,6 +94,7 @@ fn current(target: Option<&Path>, explicit_source: Option<&Path>, run: &str) -> 
         source_revision,
         inventory,
         rules,
+        case_defaults,
     })
 }
 
@@ -105,8 +119,12 @@ pub(in crate::rewrite) fn frozen(
     target: Option<&Path>,
     source: &Path,
     run: &str,
-) -> Result<(Vec<AttributionDecision>, String)> {
+) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
     let current = current(target, Some(source), run)?;
     let identity = current.identity(run)?;
-    Ok((current.expand(), identity))
+    let mut owners = current.case_defaults.clone();
+    for decision in current.expand() {
+        owners.insert(decision.exchange_id, decision.owner);
+    }
+    Ok((owners, identity))
 }

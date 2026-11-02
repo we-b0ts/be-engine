@@ -1,6 +1,6 @@
 //! One off-path, cached closure check of mandatory facts and original scope views.
 use super::*;
-use crate::dependency::{attribution::AttributionDecision, observation::*};
+use crate::dependency::observation::*;
 use crate::dependency_index::RecordLocation;
 
 #[cfg(test)]
@@ -9,7 +9,7 @@ mod tests;
 pub(super) fn effective(
     root: &Path,
     manifest: &RecordingManifest,
-    decisions: &[AttributionDecision],
+    decisions: &BTreeMap<Uuid, DependencyOwner>,
 ) -> Result<SemanticInventory> {
     let key = crate::policy_evidence::digest(&serde_json::to_vec(&(
         "mandatory-scope-coverage/v3",
@@ -33,10 +33,6 @@ pub(super) fn effective(
     // Closure needs one fact at a time, not a second full-ledger FileIndex
     // alongside the protocol-owned paged Global inventories.
     let mut input = crate::dependency_index::RecordStream::open(&root.join("dependencies.jsonl"))?;
-    let owners: BTreeMap<_, _> = decisions
-        .iter()
-        .map(|decision| (decision.exchange_id, &decision.owner))
-        .collect();
     let mut inventory = SemanticInventory::default();
     let mut captured = SemanticInventory::default();
     let mut identities = BTreeSet::new();
@@ -102,9 +98,8 @@ pub(super) fn effective(
             "Source scope does not identify its original physical effect"
         );
         captured.observe_mandatory(&selector, &capture.attribution);
-        let owner = owners
+        let owner = decisions
             .get(&capture.exchange_id)
-            .copied()
             .unwrap_or(&capture.attribution);
         inventory.observe_mandatory(&selector, owner);
     }

@@ -221,7 +221,7 @@ pub(super) fn bind(
             .context("async origin scope absent")?;
             scope.select_response(response.as_ref());
             let mut observations = source.exchanges.iter().filter(|(id,event)|proposal.source_exchange_ids.contains(id)
-                || matches!(event.capture.attribution,DependencyOwner::Case{origin_case_id:origin,..} if origin==*origin_case_id)
+                || matches!(source.case_defaults.get(id).unwrap_or(&event.capture.attribution),DependencyOwner::Case{origin_case_id:origin,..} if origin==origin_case_id)
                 || state.dependency_review.decisions.get(id).is_some_and(|decision|current(decision,&active)
                     && matches!(decision.owner,DependencyOwner::Case{origin_case_id:origin,..} if origin==*origin_case_id)))
                 .collect::<Vec<_>>();

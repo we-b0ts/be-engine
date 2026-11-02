@@ -30,6 +30,7 @@ pub(super) struct SourceSnapshot {
     pub inputs: BTreeMap<Uuid, PathBuf>,
     pub epochs: BTreeSet<Uuid>,
     pub discovery: crate::dependency_index::reconciliation::Catalog,
+    pub case_defaults: BTreeMap<Uuid, crate::dependency::attribution::DependencyOwner>,
     files: BTreeMap<PathBuf, LedgerFileIdentity>,
     central_path: PathBuf,
     central_stamp: crate::dependency_index::FileStamp,
@@ -96,6 +97,9 @@ pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
     );
     let path = root.join("dependencies.jsonl");
     let index = crate::dependency_index::load_file(&path)?;
+    let target = root
+        .ancestors()
+        .find(|path| path.join(".traffic-e2e").is_dir());
     let mut snapshot = SourceSnapshot {
         identity: digest(&bytes),
         exchanges: BTreeMap::new(),
@@ -105,6 +109,7 @@ pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
         inputs: BTreeMap::new(),
         epochs: manifest.process_epochs.into_iter().collect(),
         discovery: crate::dependency_index::reconciliation::Catalog::from_index(&index)?,
+        case_defaults: super::case_defaults::load(&root, target)?,
         files: manifest
             .files
             .iter()

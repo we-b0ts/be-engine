@@ -57,17 +57,11 @@ pub(super) fn freeze(
     if decisions.is_empty() {
         return Ok(frozen);
     }
-    let mut by_exchange = BTreeMap::new();
+    let by_exchange = &decisions;
     let mut value_scopes = BTreeMap::<String, Arc<str>>::new();
-    for decision in &decisions {
-        decision.owner.validate()?;
-        ensure!(
-            by_exchange
-                .insert(decision.exchange_id, &decision.owner)
-                .is_none(),
-            "conflicting frozen attribution decisions"
-        );
-        match &decision.owner {
+    for (exchange_id, owner) in &decisions {
+        owner.validate()?;
+        match owner {
             DependencyOwner::Startup { process_epoch, .. }
             | DependencyOwner::Process { process_epoch, .. } => ensure!(
                 manifest.process_epochs.contains(process_epoch),
@@ -93,13 +87,11 @@ pub(super) fn freeze(
             ),
             DependencyOwner::Unattributed { .. } => {}
         }
-        if let Some(scope) = run_value_scope(&decision.owner) {
+        if let Some(scope) = run_value_scope(owner) {
             let value = value_scopes
                 .entry(scope.clone())
                 .or_insert_with(|| Arc::from(scope));
-            frozen
-                .run_value_scopes
-                .insert(decision.exchange_id, value.clone());
+            frozen.run_value_scopes.insert(*exchange_id, value.clone());
         }
     }
     let mut scopes = Vec::new();

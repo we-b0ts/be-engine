@@ -209,6 +209,7 @@ fn occurrence_information(
     let entries = unused.iter().skip(offset).take(PAGE).map(|id| {
         let event = &source.exchanges[id];
         json!({"source_exchange_id":id,"captured_owner":event.capture.attribution,
+            "default_case_attribution":source.case_defaults.get(id),
             "effective_attribution":state.dependency_review.decisions.get(id).map(|decision|decision.decision(*id)),"capture_complete":event.complete,
             "source_query":crate::rewrite::action::command(root,vec!["dependency-attribution".into(),"source".into(),"--exchange-id".into(),id.to_string()],vec![])})
     }).collect::<Vec<_>>();

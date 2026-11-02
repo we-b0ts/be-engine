@@ -2,6 +2,7 @@
 mod analysis;
 mod batch;
 mod batch_verification;
+mod case_defaults;
 mod decisions;
 mod investigations;
 mod model;
@@ -30,7 +31,9 @@ use super::{
     store::RewriteStore,
     verification_obligations::{ScopeObligation, VerificationScope},
 };
-use crate::dependency::attribution::{AttributionDecision, DependencyOwner};
+#[cfg(test)]
+use crate::dependency::attribution::AttributionDecision;
+use crate::dependency::attribution::DependencyOwner;
 pub(super) use analysis::required_action;
 pub use batch::{dependency_attribution_batch_information, retry_dependency_batch};
 pub(super) use batch::{required_action as batch_action, run as run_batch};
@@ -109,7 +112,7 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
         }
     }
     investigations::refresh(state);
-    analysis::refresh_inventory(state)?;
+    analysis::refresh_inventory(root, state)?;
     if !state.dependency_review.receipts.is_empty() {
         verification::invalidate_receipts(root, state)?;
     }
@@ -193,6 +196,7 @@ fn context_for(
                     DependencyOwner::Unattributed { .. }
                 )
                 && !decisions.contains_key(id)
+                && !source.case_defaults.contains_key(id)
         })
         .map(|(id, _)| *id)
         .collect();
@@ -453,6 +457,7 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
                     DependencyOwner::Unattributed { .. }
                 )
                 && !state.dependency_review.decisions.contains_key(id)
+                && !original.case_defaults.contains_key(id)
         })
         .map(|(id, _)| *id)
         .collect();
@@ -601,7 +606,7 @@ pub(crate) fn freeze_dependency_attribution(
     target: Option<&Path>,
     source: &Path,
     recording_run: &str,
-) -> Result<(Vec<AttributionDecision>, String)> {
+) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
     snapshot::frozen(target, source, recording_run)
 }
 
@@ -705,6 +710,7 @@ pub fn dependency_attribution_source_information(
         json!({"schema":SCHEMA,"recording_run_id":state.recording_run_id,"source_inventory_id":inventory.identity,
         "source_exchange_id":id,"capture":event.capture,"capture_complete":event.complete,
         "effective_attribution":state.dependency_review.decisions.get(&id).map(|decision|decision.decision(id)),
+        "default_case_attribution":inventory.case_defaults.get(&id),
         "request_shape":{"event_type":metadata["event_type"],"operation":metadata["command"].as_str().or_else(||metadata["method"].as_str()),
             "endpoint":{"host":metadata["target_host"],"port":metadata["target_port"]},
             "args_count":metadata["args"].as_array().map(Vec::len),"params_count":metadata["params"].as_array().map(Vec::len),

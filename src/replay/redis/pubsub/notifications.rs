@@ -142,7 +142,7 @@ async fn deliver(
     let Some(state) = weak.upgrade() else {
         return false;
     };
-    let (reference, inline) = {
+    let (reference, inline, case_id, request_epoch) = {
         let mut replay = state.lock().await;
         if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
             return false;
@@ -156,19 +156,33 @@ async fn deliver(
         }
         match id {
             PushId::Inline(index) => {
-                let push = &mut replay.redis.pubsub.pushes[index];
+                let push = &replay.redis.pubsub.pushes[index];
                 if !push.status.is_available() {
                     return true;
                 }
-                push.status = ReplayExchangeStatus::Responding;
-                (push.evidence.clone(), push.raw.clone())
+                let case = push.case_id.clone();
+                let reference = push.evidence.clone();
+                let raw = push.raw.clone();
+                let epoch = if let Some(case) = &case {
+                    if replay.active_case_id.as_ref() != Some(case) || replay.target_session_stopped
+                    {
+                        return true;
+                    }
+                    let epoch = replay.redis.request_contracts.request_times(case).target;
+                    replay.redis.pubsub.reserve_case_push(id, case, job.client);
+                    epoch
+                } else {
+                    replay.redis.pubsub.reserve_push(id);
+                    None
+                };
+                (reference, raw, case, epoch)
             }
             PushId::Indexed { lane, index } => {
                 if !replay.redis.pubsub.indexed.available(lane, index) {
                     return true;
                 }
                 replay.redis.pubsub.indexed.responding(lane, index);
-                (reference, Vec::new())
+                (reference, Vec::new(), None, None)
             }
         }
     };
@@ -190,26 +204,39 @@ async fn deliver(
         }
     };
     let mut replay = state.lock().await;
-    if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
+    let delivery = Delivery {
+        case_id,
+        push: id,
+        bytes,
+        matched: None,
+        request_epoch,
+    };
+    if replay.finalized_at.is_some()
+        || !replay.redis.pubsub.is_subscribed(job.client, id)
+        || !delivery.case_is_current(&replay)
+    {
+        fail(
+            &mut replay,
+            id,
+            "notification Case or subscription ended before queueing".into(),
+        );
         return false;
     }
-    if job
-        .sender
-        .try_send(Delivery {
-            case_id: None,
-            push: id,
-            bytes,
-            matched: None,
-            request_epoch: None,
-        })
-        .is_err()
-    {
+    if job.sender.try_send(delivery).is_err() {
         fail(&mut replay, id, "notification delivery queue full".into());
     }
     true
 }
 
 fn fail(replay: &mut ReplayState, id: PushId, reason: String) {
+    let case = match id {
+        PushId::Inline(index) => replay.redis.pubsub.pushes[index].case_id.clone(),
+        PushId::Indexed { .. } => None,
+    };
+    if case.is_some() {
+        replay.redis.fail_pubsub_input(id, case.as_deref(), &reason);
+        return;
+    }
     replay.redis.pubsub.fail(id);
     let record = match id {
         PushId::Inline(index) => &replay.redis.pubsub.pushes[index].record,

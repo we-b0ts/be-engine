@@ -75,6 +75,22 @@ engine does not infer redaction or put message payloads in diagnostic reports.
 
 ## Source-proven notification ownership
 
+Ordinary notifications use the same active Case admission as other dependencies.
+Configured process-task selectors take priority. Notifications between Cases,
+unassociated shutdown traffic and explicit implementation-worker ownership
+returns require attribution analysis; being Pub/Sub does not itself require it.
+Correlated RPC replies retain their original publisher's Case and cannot borrow
+a later active Case. Replay accepts Case-owned ordinary notifications as finite
+inputs and checks their original subscription, active Case and actual wire delivery.
+
+For sealed recordings produced before ordinary notification admission, the engine
+projects unowned runtime pushes with an observed Case into that Case's recorded
+primary request/response window. Existing process selectors, correlated RPC replies,
+ambiguous observations and inputs outside the window retain their existing scope.
+This projection is authenticated and bound into the Replay ownership snapshot;
+it does not rewrite Source files, invent a Source proof or certify consumption.
+Existing complete recordings need a fresh Replay, not recapture.
+
 A real Source subscriber receive task can own its received inputs without
 claiming to identify the external publisher. Declare its complete input scope
 with its real Redis subscription command and exact arguments:
