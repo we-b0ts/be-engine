@@ -55,9 +55,20 @@ error = (target_value - source_value) - delta
 abs(error) <= tolerance
 ```
 
-The common tolerance remains five seconds. It is distinct from representation
-precision and does not expand to API duration. Calendar values instead preserve
-their exact local-day distance from the corresponding event's date.
+For shared JSON timestamp fields, including built-in textual timestamps, the
+tolerance is `max(source_elapsed, target_elapsed) + 2 seconds`. Each elapsed
+interval runs from its independent API request start to the current comparison
+event. The two seconds allow clock error, including when elapsed time already
+exceeds five seconds. Millisecond requests therefore retain a budget close to
+two seconds. Missing or reversed request observations grant no elapsed budget;
+missing event clocks still fail. The budget is independent of fast delivery
+and never uses a future frame or completion to authorize an earlier event.
+
+This remains a difference check: a timestamp may retain a business offset
+outside the request interval. Representation precision, duration contracts,
+request-window/signature/JWT checks and calendar relations keep their own
+validation. Calendar values preserve their exact local-day distance from the
+corresponding event's date.
 
 Automatic recognition grants comparison semantics only. Ordinary dependency
 payloads retain their original recorded bytes, including standard date strings.

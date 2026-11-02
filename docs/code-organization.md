@@ -76,7 +76,10 @@ is unclear.
   their existing owners.
 
 - `value_contract/time` owns standard temporal recognition, representation,
-  relative-clock comparison and the common tolerance. `policy/time_defaults`
+  relative-clock comparison and elapsed timestamp budgets with a two-second
+  clock allowance. `value_contract/json` supplies the independent API starts
+  and current comparison clocks; the kernel accepts no delivery-speed flag or
+  guessed business generation anchor. `policy/time_defaults`
   owns the project-wide civil offset. Callers supply dependency request or
   response-event clocks through `AnchorClocks`; explicit request and delivery
   provenance remain separate. Protocol adapters retain native value framing.
@@ -466,7 +469,8 @@ is unclear.
   publishes it only on successful delivery; MySQL/Redis reuse their read hooks.
   The private response control snapshot carries no payloads. The SSE adapter
   checks delivery-before-frame causality against the independent stream starts;
-  it cannot choose an arbitrary dependency clock or change local time tolerance.
+  it cannot choose an arbitrary dependency clock or borrow a future frame's
+  elapsed timestamp budget.
 - `policy_evidence` owns authenticated private payload witnesses, complete
   coverage accounting, sealing and publication of their relative artifacts.
   Public reports retain role/identity/digest metadata without payload bodies.

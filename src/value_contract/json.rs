@@ -839,9 +839,11 @@ fn compare_time(
     source: &Value,
     target: &Value,
     config: &crate::policy::TimeContract,
-    clocks: ClockPair,
+    context: AnchorClocks,
+    anchor: TimeAnchor,
 ) -> Result<(i128, i128), TimeError> {
     let pair = parse_time_pair(source, target, config)?;
+    let clocks = context.get(anchor);
     let mode = match config.relation {
         TimeRelation::RequestWindow => time::TimeMode::RequestWindow,
         TimeRelation::PreserveOffset => time::TimeMode::PreserveRelative,
@@ -858,8 +860,9 @@ fn compare_time(
             clocks,
         );
     }
+    let tolerance_nanos = time::timestamp_tolerance_nanos(context.case, clocks);
     let clocks = time::timestamp_clocks(source, target, core_format(config.format)?, clocks);
-    time::compare_timestamp_nanos(pair.0, pair.1, mode, clocks)?;
+    time::compare_timestamp_nanos_with_tolerance(pair.0, pair.1, mode, clocks, tolerance_nanos)?;
     Ok(pair)
 }
 
