@@ -297,7 +297,7 @@ fn global_time_delivery_and_optional_fields_preserve_unselected_values() {
 }
 
 #[test]
-fn historical_global_json_time_can_be_copied_only_after_the_real_read_is_published() {
+fn historical_global_json_time_without_api_clocks_needs_a_published_read_copy() {
     let owner = owner();
     let target = TargetKey {
         host: "cache.test".into(),
@@ -335,6 +335,9 @@ fn historical_global_json_time_can_be_copied_only_after_the_real_read_is_publish
     let delivered = delivery
         .render(DateTime::from_timestamp(2001, 0).unwrap())
         .unwrap();
+    // Without API origins the elapsed allowance is unavailable; only a real
+    // delivered-copy proof can validate this historical value at the later write.
+    owner.set_request_times("case", Default::default());
     let mut write = super::super::RedisRequestContext::without_exchange("case", &target, 0, "SET");
     write.recorded_at = DateTime::from_timestamp(1100, 0);
     write.actual_at = DateTime::from_timestamp(2250, 0);

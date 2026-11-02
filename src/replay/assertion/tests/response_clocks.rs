@@ -35,9 +35,13 @@ fn ordinary_response_time_uses_completion_when_api_durations_differ() {
     assert!(report.passed, "{:?}", report.differences);
     assert_eq!(fs::read(expected_path).unwrap(), before);
 
-    // This value preserves request-start offset but misses the response event
-    // by 200 seconds. A slower API does not extend the fixed time tolerance.
+    // A timestamp sampled earlier in the request may be reused at completion.
     let (_temp, options) = response_case(2100);
+    let report = assert_recorded_response(options).unwrap();
+    assert!(report.passed, "{:?}", report.differences);
+
+    // The 303-second error exceeds the 300-second elapsed budget plus 2 seconds.
+    let (_temp, options) = response_case(1997);
     let report = assert_recorded_response(options).unwrap();
     assert!(!report.passed);
     assert!(report.differences.iter().any(|difference| {

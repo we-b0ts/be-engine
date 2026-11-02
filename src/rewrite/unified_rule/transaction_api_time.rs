@@ -128,8 +128,8 @@ fn api_time_preflight_requires_each_response_clock_without_request_fallback() {
 }
 
 #[test]
-fn api_time_preflight_uses_unequal_response_latency_and_not_request_delta() {
-    for target_offset in [150, 90] {
+fn api_time_preflight_bounds_unequal_response_latency_without_a_generation_anchor() {
+    for target_offset in [150, 243] {
         let fixture = fixture();
         fixture.replace_responses(
             json!({"status":200,"body":body(response(30)),"timestamp":"2026-10-16T00:00:30Z"}),

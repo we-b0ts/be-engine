@@ -293,7 +293,7 @@ fn format_drafts_deduplicate_across_api_and_carrier_positions() {
 }
 
 #[test]
-fn response_drafts_use_observed_completion_delta_and_never_borrow_request_clocks() {
+fn response_drafts_allow_elapsed_sampling_without_borrowing_missing_event_clocks() {
     let pair = |source, target| crate::value_contract::time::ClockPair {
         source: chrono::DateTime::from_timestamp(source, 0),
         target: chrono::DateTime::from_timestamp(target, 0),
@@ -323,9 +323,6 @@ fn response_drafts_use_observed_completion_delta_and_never_borrow_request_clocks
                 0,
             )
             .unwrap();
-        assert_eq!(
-            drafts.candidates().len(),
-            usize::from(completion_available && target == 1_792_108_950)
-        );
+        assert_eq!(drafts.candidates().len(), usize::from(completion_available));
     }
 }

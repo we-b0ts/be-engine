@@ -50,6 +50,89 @@ json:
 }
 
 #[test]
+fn sse_reused_created_at_uses_elapsed_to_each_frame_in_either_execution() {
+    use crate::interaction::model::{EndObservation, EndReason, OutputEvent, TRANSCRIPT_VERSION};
+    use crate::value_contract::time::ClockPair;
+    let compiled = crate::policy::parse_and_compile_policy(
+        "format: traffic-policy/v3\njson:\n  fields:\n    /response/created_at: {kind: time, formats: [unix_seconds]}\n",
+    ).unwrap();
+    let observation = |created, end_ms| OutputObservation {
+        version: TRANSCRIPT_VERSION,
+        protocol: Protocol::Sse,
+        events: [10, end_ms]
+            .into_iter()
+            .enumerate()
+            .map(|(index, offset_ms)| OutputEvent {
+                sequence: index as u64,
+                offset_ms,
+                heartbeat: false,
+                message: WireMessage::text(
+                    serde_json::to_string(&SseEvent {
+                        event: Some(
+                            if index == 0 {
+                                "response.created"
+                            } else {
+                                "response.completed"
+                            }
+                            .into(),
+                        ),
+                        id: None,
+                        retry: None,
+                        data: json!({"response":{"created_at":created},"stable":true}).to_string(),
+                    })
+                    .unwrap(),
+                ),
+            })
+            .collect(),
+        end: EndObservation {
+            reason: EndReason::ServerEof,
+            offset_ms: end_ms + 1,
+            pending: vec![],
+            clean: true,
+            partial_message: None,
+            close: None,
+        },
+    };
+    let requests = ClockPair {
+        source: chrono::DateTime::from_timestamp(1000, 0),
+        target: chrono::DateTime::from_timestamp(2000, 0),
+    };
+    let streams = ClockPair {
+        source: chrono::DateTime::from_timestamp(1003, 0),
+        target: chrono::DateTime::from_timestamp(2003, 0),
+    };
+    let compare = |source: &OutputObservation, target: &OutputObservation, requests| {
+        super::super::compare_outputs_global(
+            Some(source),
+            Some(target),
+            compiled.global_json.as_ref(),
+            streams,
+            requests,
+        )
+        .unwrap()
+    };
+    for (source_ms, target_ms) in [(300000, 2000), (2000, 300000), (300000, 300000)] {
+        for offset in [0, 86400, -86400] {
+            let source = observation(1001 + offset, source_ms);
+            let target = observation(2001 + offset, target_ms);
+            let result = compare(&source, &target, requests);
+            assert!(result.passed(), "{:?}", result.differences);
+        }
+    }
+    let source = observation(1001, 300000);
+    let target = observation(2001, 2000);
+    assert!(!compare(&source, &target, Default::default()).passed());
+    let early_error = compare(&source, &observation(2010, 2000), requests);
+    assert!(
+        early_error
+            .differences
+            .iter()
+            .any(|diff| diff.pointer == "$interaction/events/0/sse/data/response/created_at"),
+        "a later frame's elapsed budget cannot authorize an early timestamp"
+    );
+}
+
+#[test]
 fn primary_sse_reuses_delivered_times_without_rebasing_local_times_or_future_reads() {
     use crate::interaction::model::{EndObservation, EndReason, OutputEvent, TRANSCRIPT_VERSION};
     use crate::value_contract::{

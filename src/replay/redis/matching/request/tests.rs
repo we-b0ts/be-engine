@@ -169,7 +169,7 @@ json:
         "case",
         crate::replay::assertion::RequestTimes {
             source: DateTime::from_timestamp(1000, 0),
-            target: DateTime::from_timestamp(2000, 0),
+            target: Some(chrono::Utc::now()),
         },
     );
     let mut state = RedisReplayState {
