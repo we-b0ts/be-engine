@@ -477,16 +477,28 @@ fn process_matches(
     Ok(covered)
 }
 
+pub(super) fn empty_claim_groups(policy: &CompiledPolicy) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut result = BTreeMap::new();
+    for group in groups(policy)? {
+        if let Some(task) = group["source_task"].as_str() {
+            result.insert(task.into(), Vec::new());
+        }
+    }
+    Ok(result)
+}
+
 pub(super) fn claim_groups(
     policy: &CompiledPolicy,
     source: &SourceSnapshot,
     claims: &[super::model::ForeignUnusedClaim],
 ) -> Result<BTreeMap<String, Vec<String>>> {
-    let mut result = BTreeMap::new();
-    for group in groups(policy)? {
-        let Some(task) = group["source_task"].as_str() else {
-            continue;
-        };
+    let mut result = empty_claim_groups(policy)?;
+    // Without ownership returns no Source occurrence can contribute an edge.
+    // Formal ownership binding retains its independent complete Source proof.
+    if claims.is_empty() {
+        return Ok(result);
+    }
+    for (task, related) in &mut result {
         let rules = policy
             .native
             .iter()
@@ -497,12 +509,11 @@ pub(super) fn claim_groups(
             .cloned()
             .collect::<Vec<_>>();
         let selected = process_matches(source, &rules, None)?;
-        let related = claims
+        *related = claims
             .iter()
             .filter(|claim| !claim.source_exchange_ids.is_disjoint(&selected))
             .map(|claim| claim.id.clone())
             .collect();
-        result.insert(task.into(), related);
     }
     Ok(result)
 }

@@ -104,6 +104,49 @@ async fn fixture(count: usize) -> (tempfile::TempDir, RewriteState) {
 }
 
 #[tokio::test]
+async fn ownerless_context_matches_full_source_before_and_after_admission_inventory_is_cached() {
+    let (target, mut state) = fixture(2).await;
+    let full = context_for(target.path(), &state, &source::load(&state).unwrap()).unwrap();
+    assert_eq!(full.unattributed_exchange_ids.len(), 3);
+    for cached in [false, true] {
+        if cached {
+            analysis::refresh_inventory(target.path(), &mut state).unwrap();
+        }
+        let (identity, ids) = analysis::review_inventory(target.path(), &state).unwrap();
+        let bounded =
+            context_from_inventory(target.path(), &state, &identity, ids.into_owned()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&bounded).unwrap(),
+            serde_json::to_value(&full).unwrap()
+        );
+    }
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let context = super::super::RewriteContext {
+        target_root: target.path().into(),
+    };
+    assert_eq!(
+        dependency_attribution_context(context.clone())
+            .unwrap()
+            .unattributed_exchange_ids
+            .len(),
+        3
+    );
+    // Even a warmed admission projection cannot hide a changed sealed artifact.
+    let central = state
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("dependencies.jsonl");
+    let mut bytes = fs::read(&central).unwrap();
+    bytes.push(b'\n');
+    fs::write(central, bytes).unwrap();
+    assert!(dependency_attribution_context(context).is_err());
+}
+
+#[tokio::test]
 async fn single_source_information_preserves_sealed_physical_identity_and_shape() {
     let (target, state) = fixture(2).await;
     let source = source::load(&state).unwrap();

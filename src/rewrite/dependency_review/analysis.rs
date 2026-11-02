@@ -2,8 +2,9 @@
 use super::{model::ClaimStatus, source};
 use crate::dependency::{attribution::DependencyOwner, observation::CaptureMetadata};
 use crate::rewrite::model::{RewriteAction, RewriteInputRequiredReason, RewriteState};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
@@ -118,20 +119,37 @@ fn unresolved(
 }
 
 fn ownerless(root: &Path, state: &RewriteState) -> Result<u64> {
-    let Some(source_path) = &state.case_source else {
+    if state.case_source.is_none() {
         return Ok(0);
-    };
+    }
+    Ok(review_inventory(root, state)?.1.len() as u64)
+}
+
+/// The same sealed admission inventory serves status and read-only context.
+/// It does not establish rule coverage or authorize an ownership decision.
+pub(super) fn review_inventory<'a>(
+    root: &Path,
+    state: &'a RewriteState,
+) -> Result<(String, Cow<'a, BTreeSet<Uuid>>)> {
+    let source_path = state
+        .case_source
+        .as_deref()
+        .context("workflow has no Source recording")?;
     let (identity, captured) = source::inventory(state)?;
     if captured == 0 {
-        return Ok(0);
+        return Ok((identity, Cow::Owned(BTreeSet::new())));
     }
     let defaults = super::case_defaults::load(source_path, Some(root))?;
     if cache_current(state, &identity, &defaults_identity(&defaults)?)
         && decisions_current(root, state)?
     {
-        return Ok(state.dependency_review.unresolved_source_exchange_ids.len() as u64);
+        return Ok((
+            identity,
+            Cow::Borrowed(&state.dependency_review.unresolved_source_exchange_ids),
+        ));
     }
-    Ok(unresolved(root, state, &identity, &defaults)?.len() as u64)
+    let ids = unresolved(root, state, &identity, &defaults)?;
+    Ok((identity, Cow::Owned(ids)))
 }
 
 pub(in crate::rewrite) fn required_action(

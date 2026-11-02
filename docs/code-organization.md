@@ -905,7 +905,12 @@ is unclear.
   conditional API receipts and explicit owner verification debt. Its `analysis`
   child selects concrete ownerless/disputed Source work and gates formal Replay
   until supported owner rules resolve it. Known-owned batch changes need no
-  analyst; `investigations/resolution` publishes the existing API implementer's
+  analyst. Read-only attribution context without ownership returns reuses this
+  sealed admission inventory and projects empty task/claim relationships;
+  original Source graphs and rule coverage remain mandatory for actual ownership
+  application or contexts with disputed claims. It does not scan unrelated
+  process payloads merely to display an empty relationship. The
+  `investigations/resolution` child publishes the existing API implementer's
   current-attempt diagnosis of its owned missing traffic.
   `dependency_review/source/lookup` streams sealed scope locators and reads only
   the requested Source identity's authenticated central rows. Its `scope` child
