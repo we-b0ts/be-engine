@@ -30,6 +30,10 @@ impl WaitRegistration {
             _=tokio::time::sleep(Duration::from_millis(100))=>WaitOutcome::Poll,
         }
     }
+
+    pub(in crate::replay) async fn changed(mut self) {
+        (&mut self.changed).await;
+    }
 }
 
 #[derive(Debug, Clone)]

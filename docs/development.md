@@ -1948,6 +1948,10 @@ max_implementers: 16
 auto_next: false
 # Skip previously passed cases during repair Replay; final revalidation stays full.
 retry_failed_only: false
+# Optional: cap successful stream input intervals; omitted preserves Source timing.
+# replay_timing: fast
+# Per-interval cap in fast mode, in milliseconds (0 removes artificial waits).
+replay_interval_cap_ms: 5
 # Omitted or empty only selects every API in the recorded inventory.
 only:
   - "/api/users/*"
@@ -1971,6 +1975,25 @@ can supply those outcomes when its complete Source/API inventory matches.
 There is no scan, restoration or separate ledger for older attempts. Missing
 latest evidence starts a full baseline. The setting defaults to false and can be changed
 between attempts without changing target fingerprints.
+
+Set `replay_timing: fast` to shorten artificial input waits for ordinary Case
+Redis Pub/Sub messages and complete successful HTTP dependency streams. Each
+recorded interval becomes `min(recorded interval, replay_interval_cap_ms)`;
+the cap defaults to 5 ms and accepts 0. Pub/Sub includes subscription-to-first-push
+and adjacent push intervals. HTTP includes request-to-headers, headers-to-first-chunk,
+adjacent chunks and final-chunk-to-EOF. Compressed offsets accumulate those
+individual gaps, preserving shorter gaps, payload order, framing and trailers.
+Target processing and dependency calls initiated by Target retain their real
+execution time. Process-owned Pub/Sub and abnormal or interrupted HTTP streams
+retain their existing lifecycle timing.
+
+`replay_timing: recorded` preserves Source stream timing; omitting it has the same
+behavior. The low-level equivalents are
+`traffic-e2e replay --stream-timing fast --stream-interval-cap-ms 5`.
+These settings reuse existing recordings. Mode and active fast-mode cap are
+bound to executed Replay identity, and changing either requires fresh passing
+evidence and resets previously passed repair-case skips. They remain excluded
+from target and code fingerprints.
 
 Skipped passes are scheduling history, never fresh response or dependency
 evidence. `diagnosis.case_selection` reports available, selected and skipped

@@ -53,18 +53,21 @@ pub(super) async fn response(
         .and_then(|s| StatusCode::from_u16(s).ok())
         .context("stream response status missing")?;
     let mut stream = stream.clone();
-    if state.lock().await.http_stream_timing == crate::replay::ReplayHttpStreamTiming::Fast
+    let (timing, interval_cap_ms) = {
+        let replay = state.lock().await;
+        (
+            replay.stream_timing.unwrap_or_default(),
+            replay.stream_interval_cap_ms,
+        )
+    };
+    if timing == crate::replay::ReplayStreamTiming::Fast
         && stream.complete
         && status.is_success()
         && record.lifecycle_stop.is_none()
         && client_prefix.is_none()
         && server_close.is_none()
     {
-        stream.headers_ms = 0;
-        stream.end_ms = 0;
-        for chunk in &mut stream.chunks {
-            chunk.at_ms = 0;
-        }
+        cap_stream_intervals(&mut stream, interval_cap_ms);
     }
     tokio::time::sleep_until(started + std::time::Duration::from_millis(stream.headers_ms)).await;
     let payload_len = payload.len();
@@ -104,6 +107,18 @@ pub(super) async fn response(
         response.headers_mut().remove(CONTENT_LENGTH);
     }
     Ok(response)
+}
+
+fn cap_stream_intervals(stream: &mut ResponseStream, interval_cap_ms: u64) {
+    let mut previous_source_ms = stream.headers_ms;
+    let mut delivered_ms = stream.headers_ms.min(interval_cap_ms);
+    stream.headers_ms = delivered_ms;
+    for chunk in &mut stream.chunks {
+        delivered_ms += (chunk.at_ms - previous_source_ms).min(interval_cap_ms);
+        previous_source_ms = chunk.at_ms;
+        chunk.at_ms = delivered_ms;
+    }
+    stream.end_ms = delivered_ms + (stream.end_ms - previous_source_ms).min(interval_cap_ms);
 }
 
 struct TimedBody {

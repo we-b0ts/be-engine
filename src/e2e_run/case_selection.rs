@@ -21,6 +21,10 @@ pub(crate) struct ReplayIteration {
 pub(super) struct CaseSelection {
     workflow_id: String,
     final_round: bool,
+    #[serde(default)]
+    replay_timing: Option<crate::replay::ReplayStreamTiming>,
+    #[serde(default = "default_stream_interval_cap_ms")]
+    replay_interval_cap_ms: u64,
     groups: BTreeMap<String, GroupSelection>,
     pub(super) skipped_passed_case_ids: BTreeSet<String>,
 }
@@ -31,7 +35,24 @@ struct GroupSelection {
     case_ids: BTreeSet<String>,
 }
 
+fn default_stream_interval_cap_ms() -> u64 {
+    crate::replay::DEFAULT_REPLAY_STREAM_INTERVAL_CAP_MS
+}
+
 impl CaseSelection {
+    pub(super) fn validate_stream_timing(
+        &self,
+        config: &super::model::ResolvedProjectConfig,
+    ) -> Result<()> {
+        ensure!(
+            self.replay_timing == config.replay_stream_timing
+                && (self.replay_timing != Some(crate::replay::ReplayStreamTiming::Fast)
+                    || self.replay_interval_cap_ms == config.replay_stream_interval_cap_ms),
+            "Case selection stream timing differs from the resolved Replay runtime; start a fresh attempt"
+        );
+        Ok(())
+    }
+
     pub(super) fn completed_workflow(&self) -> Result<&str> {
         ensure!(
             self.final_round
@@ -60,12 +81,13 @@ pub(super) fn prepare(
     let Some(iteration) = iteration else {
         return Ok(None);
     };
-    let retry = crate::config::regression::RegressionScope::load(&layout.target_root)?
-        .retry_failed_only
-        && !iteration.final_round;
+    let regression = crate::config::regression::RegressionScope::load(&layout.target_root)?;
+    let retry = regression.retry_failed_only && !iteration.final_round;
     let mut selection = CaseSelection {
         workflow_id: iteration.workflow_id.clone(),
         final_round: iteration.final_round,
+        replay_timing: regression.replay_timing,
+        replay_interval_cap_ms: regression.replay_interval_cap_ms,
         groups: BTreeMap::new(),
         skipped_passed_case_ids: BTreeSet::new(),
     };
@@ -98,6 +120,15 @@ pub(super) fn prepare(
             .case_selection
             .as_ref()
             .is_some_and(|selection| selection.workflow_id != iteration.workflow_id)
+            || previous
+                .case_selection
+                .as_ref()
+                .and_then(|selection| selection.replay_timing)
+                != regression.replay_timing
+            || regression.replay_timing == Some(crate::replay::ReplayStreamTiming::Fast)
+                && previous.case_selection.as_ref().is_none_or(|selection| {
+                    selection.replay_interval_cap_ms != regression.replay_interval_cap_ms
+                })
             || !previous.status.is_terminal()
             || previous.run_key != layout.run_key
             || previous.case_source != inventory.case_source

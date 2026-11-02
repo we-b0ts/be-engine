@@ -148,6 +148,7 @@ pub struct ReplayConfig {
 
 pub const DEFAULT_REPLAY_CASE_DEPENDENCY_POST_RESPONSE_WINDOW_MS: u64 = 0;
 pub const DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS: u64 = 2_000;
+pub const DEFAULT_REPLAY_STREAM_INTERVAL_CAP_MS: u64 = 5;
 
 #[derive(
     Debug,
@@ -161,7 +162,7 @@ pub const DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS: u64 = 2_000;
     clap::ValueEnum,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum ReplayHttpStreamTiming {
+pub enum ReplayStreamTiming {
     Fast,
     #[default]
     Recorded,
@@ -170,7 +171,8 @@ pub enum ReplayHttpStreamTiming {
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayLifecycleConfig {
     pub pre_match: bool,
-    pub http_stream_timing: ReplayHttpStreamTiming,
+    pub stream_timing: Option<ReplayStreamTiming>,
+    pub stream_interval_cap_ms: u64,
     pub case_no_progress_timeout: std::time::Duration,
     pub request_timeout: std::time::Duration,
     pub case_dependency_post_response_window: std::time::Duration,
@@ -181,7 +183,8 @@ impl Default for ReplayLifecycleConfig {
     fn default() -> Self {
         Self {
             pre_match: false,
-            http_stream_timing: ReplayHttpStreamTiming::Recorded,
+            stream_timing: None,
+            stream_interval_cap_ms: DEFAULT_REPLAY_STREAM_INTERVAL_CAP_MS,
             case_no_progress_timeout: std::time::Duration::from_millis(
                 DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS,
             ),
@@ -452,7 +455,8 @@ struct ReplayState {
     startup_phase: startup::StartupPhase,
     dependency_attribution_snapshot: Option<String>,
     input_timing: Option<control::input_timing::Live>,
-    http_stream_timing: ReplayHttpStreamTiming,
+    stream_timing: Option<ReplayStreamTiming>,
+    stream_interval_cap_ms: u64,
     http_ingress: http::ingress::HttpIngress,
     target_observations: target_observation::TargetObservations,
     case_cleanup: control::case_cleanup::CaseCleanup,

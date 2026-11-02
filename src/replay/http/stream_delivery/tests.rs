@@ -50,6 +50,11 @@ async fn dependency_stream_target_cancellation_is_dirty_and_not_consumed() {
 
 #[tokio::test]
 async fn fast_delivery_removes_long_recorded_gaps_and_preserves_chunks_and_eof() {
+    exercise_fast_delivery(0).await;
+    exercise_fast_delivery(50).await;
+}
+
+async fn exercise_fast_delivery(cap: u64) {
     let temp = tempfile::tempdir().unwrap();
     let case = temp.path().join("fast-stream");
     tokio::fs::create_dir_all(&case).await.unwrap();
@@ -64,7 +69,12 @@ async fn fast_delivery_removes_long_recorded_gaps_and_preserves_chunks_and_eof()
         .unwrap();
     let (address, runtime, task) =
         crate::replay::http::tests::spawn_http_replay(&case, vec![]).await;
-    runtime.state.lock().await.http_stream_timing = crate::replay::ReplayHttpStreamTiming::Fast;
+    {
+        let mut state = runtime.state.lock().await;
+        state.stream_timing = Some(crate::replay::ReplayStreamTiming::Fast);
+        state.stream_interval_cap_ms = cap;
+    }
+    let started = tokio::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(1),async {
         let mut client=TcpStream::connect(address).await.unwrap();
         client.write_all(b"POST /stream HTTP/1.1\r\nHost: stream.test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
@@ -74,6 +84,7 @@ async fn fast_delivery_removes_long_recorded_gaps_and_preserves_chunks_and_eof()
         assert_eq!(chunk(&mut client).await,b"two");
         assert!(chunk(&mut client).await.is_empty());
     }).await.unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(cap * 4));
     assert_eq!(
         tokio::fs::read_to_string(case.join("dependencies.jsonl"))
             .await
@@ -81,6 +92,33 @@ async fn fast_delivery_removes_long_recorded_gaps_and_preserves_chunks_and_eof()
         source
     );
     task.abort();
+}
+
+#[test]
+fn fast_stream_caps_individual_intervals_instead_of_absolute_offsets() {
+    let mut stream: ResponseStream = serde_json::from_value(json!({
+        "version":1,"headers_ms":100,"chunks":[
+            {"at_ms":102,"start":0,"end":3},
+            {"at_ms":500,"start":3,"end":6}
+        ],"end_ms":501,"complete":true
+    }))
+    .unwrap();
+    cap_stream_intervals(&mut stream, 5);
+    assert_eq!(stream.headers_ms, 5);
+    assert_eq!(
+        stream
+            .chunks
+            .iter()
+            .map(|chunk| chunk.at_ms)
+            .collect::<Vec<_>>(),
+        [7, 12]
+    );
+    assert_eq!(stream.end_ms, 13);
+    stream.validate(6).unwrap();
+    cap_stream_intervals(&mut stream, 0);
+    assert_eq!(stream.headers_ms, 0);
+    assert!(stream.chunks.iter().all(|chunk| chunk.at_ms == 0));
+    assert_eq!(stream.end_ms, 0);
 }
 
 async fn exercise(cancel: bool) {

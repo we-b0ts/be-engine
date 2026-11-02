@@ -57,7 +57,6 @@ contract and must not be confused with an SDK metadata observation.
 project:
   replay:
     pre_match: true
-    http_stream_timing: fast
 ```
 
 Set `pre_match: false` for strict rejection without hypotheses. Low-level replay
@@ -66,9 +65,20 @@ using the library lifecycle API retain strict defaults unless they opt in.
 
 ## Streaming dependency timing
 
-Managed Replay defaults to `http_stream_timing: recorded`. Opt into `fast` for
-time-insensitive streams: complete successful HTTP dependency streams deliver
-their recorded headers, chunks and EOF without sleeping through recorded offsets.
+Managed Replay defaults to recorded timing. For time-insensitive streams, set
+these local `.traffic-e2e/regression.yaml` options:
+
+```yaml
+replay_timing: fast
+replay_interval_cap_ms: 5
+```
+
+Fast Replay replaces each complete successful HTTP stream interval with the
+smaller of its recorded duration and the cap: request-to-headers,
+headers-to-first-chunk, adjacent chunks and final-chunk-to-EOF. Ordinary Case Redis
+Pub/Sub applies the same cap to subscription-to-first-push and adjacent pushes.
+The cap defaults to 5 ms and accepts 0. Each compressed gap accumulates into the
+next offset; Target execution and Target-initiated calls keep their real time.
 Byte contents, chunk order, trailers,
 backpressure and real transport completion remain checked. Original stream
 metadata and recorded clocks are never rewritten.
@@ -79,8 +89,10 @@ prefix. Keep `recorded` for elapsed-time checks, debounced persistence, heartbea
 cancellation races and timeout behavior. Compressing arrival gaps can change the
 number and order of native dependency calls; such mismatches remain failures or
 dirty evidence and cannot be waived as an expected consequence of acceleration.
-Low-level replay accepts
-`--http-stream-timing fast|recorded` and retains recorded timing by default.
+Low-level replay accepts `--stream-timing fast|recorded` and
+`--stream-interval-cap-ms 5`, retaining recorded timing by default. The removed
+HTTP-only timing key and flag are rejected. Existing recordings remain usable;
+changing mode or the active fast cap requires new passing execution evidence.
 
 ## Exact Source dependency references
 

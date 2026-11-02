@@ -1252,6 +1252,13 @@ is unclear.
   state; `artifacts` retains ownership of manifest and recorded-case validation.
   `config/regression` owns the separate ignored YAML schema, route-level matching
   and defaults, using the shared scope grammar without depending on rewrite state.
+  Its optional stream timing mode and interval cap flow through `e2e_run/config`
+  and `e2e_run/runtime` into Replay lifecycle state. Protocol delivery owns gap
+  compression; configuration resolution does not rewrite recorded evidence.
+  `rewrite/fingerprint` binds the mode and effective fast cap to execution
+  identity, and `e2e_run/case_selection` keeps passed-case history within that timing.
+  `e2e_run/execute/timing_guard` checks resolved and selected timing before
+  freezing execution identity and launching Replay after asynchronous preparation.
   `transition.rs` classifies Replay results and leaves parked-slice completion
   scheduling to the root coordinator. `progress_publication.rs` owns
   the final delivery publication gate for the selected regression scope.

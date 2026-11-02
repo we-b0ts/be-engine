@@ -28,6 +28,8 @@ use crate::case_group::{
 };
 use crate::replay::{ResponseAssertionOptions, ResponseAssertionRuntime, validate_replay_policy};
 
+pub(super) mod timing_guard;
+
 pub(super) struct CaseExecutionRuntime {
     pub(super) request_rules: Arc<crate::request_rules::RequestRuleRuntime>,
     pub(super) response_assertions: Option<ResponseAssertionRuntime>,
@@ -456,9 +458,7 @@ async fn run_active(
     state: &mut ActiveRunState,
     finalization: crate::replay::FinalizationScope,
 ) -> Result<()> {
-    state.executed_replay_identity = Some(crate::rewrite::batch_execution_identity(
-        &layout.target_root,
-    )?);
+    timing_guard::freeze(config, &layout.target_root, state)?;
     store::write_active(layout, state)?;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::PreparingIndex);
     let index_deadline = tokio::time::Instant::now()
@@ -485,6 +485,7 @@ async fn run_active(
         .context("MySQL Source ownership preparation task failed")??;
     let _ = active_progress::write(layout, state, ActiveProgressPhase::Building);
     let target_image = build_target_image(config, layout).await?;
+    timing_guard::before_spawn(config, &layout.target_root, state)?;
     let mut replay =
         spawn_replay(config, layout, inventory, state).context("Replay startup failed")?;
     state.replay_pid = replay.id();

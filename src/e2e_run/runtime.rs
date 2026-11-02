@@ -102,12 +102,7 @@ pub(super) fn spawn_replay(
     if config.replay_pre_match {
         command.arg("--pre-match");
     }
-    command
-        .arg("--http-stream-timing")
-        .arg(match config.replay_http_stream_timing {
-            crate::replay::ReplayHttpStreamTiming::Fast => "fast",
-            crate::replay::ReplayHttpStreamTiming::Recorded => "recorded",
-        });
+    command.args(replay_stream_timing_args(config));
     if config.replay_loading.lazy_cases {
         command.arg("--lazy-case-dependencies");
     }
@@ -139,6 +134,21 @@ fn recorder_config_args(config: &ResolvedProjectConfig) -> Vec<OsString> {
         OsString::from("--recorder-config"),
         config.recorder_config.as_os_str().to_owned(),
     ]
+}
+
+fn replay_stream_timing_args(config: &ResolvedProjectConfig) -> Vec<OsString> {
+    config.replay_stream_timing.map_or_else(Vec::new, |timing| {
+        vec![
+            "--stream-timing".into(),
+            match timing {
+                crate::replay::ReplayStreamTiming::Fast => "fast",
+                crate::replay::ReplayStreamTiming::Recorded => "recorded",
+            }
+            .into(),
+            "--stream-interval-cap-ms".into(),
+            config.replay_stream_interval_cap_ms.to_string().into(),
+        ]
+    })
 }
 
 fn replay_api_args(inventory: &CaseGroupInventory) -> Vec<OsString> {
@@ -670,7 +680,8 @@ mod tests {
         ResolvedProjectConfig {
             replay_case_no_progress_timeout: Duration::from_secs(5),
             replay_pre_match: true,
-            replay_http_stream_timing: Default::default(),
+            replay_stream_timing: None,
+            replay_stream_interval_cap_ms: crate::replay::DEFAULT_REPLAY_STREAM_INTERVAL_CAP_MS,
             replay_socketio_timing: Default::default(),
             target_dockerfile,
             target_build_contexts: Vec::new(),
@@ -797,6 +808,27 @@ mod tests {
                 OsString::from("/target/config/project.yaml"),
             ]
         );
+    }
+
+    #[test]
+    fn managed_replay_passes_only_explicit_regression_stream_timing() {
+        use crate::replay::ReplayStreamTiming::{Fast, Recorded};
+        let mut config = resolved_project(PathBuf::from("/target/Dockerfile"));
+        assert!(replay_stream_timing_args(&config).is_empty());
+        for (mode, value) in [(Fast, "fast"), (Recorded, "recorded")] {
+            config.replay_stream_timing = Some(mode);
+            assert_eq!(
+                replay_stream_timing_args(&config),
+                vec![
+                    OsString::from("--stream-timing"),
+                    OsString::from(value),
+                    OsString::from("--stream-interval-cap-ms"),
+                    OsString::from("5")
+                ]
+            );
+        }
+        config.replay_stream_interval_cap_ms = 0;
+        assert_eq!(replay_stream_timing_args(&config).last().unwrap(), "0");
     }
 
     #[test]
