@@ -80,8 +80,12 @@ pub fn dependency_attribution_target(
     );
     let (root, store) = super::open(&context_options.target_root)?;
     let state = store.load()?.context("rewrite workflow absent")?;
+    let focused = state
+        .group_id
+        .as_deref()
+        .zip(state.active_issue.as_ref().map(|issue| issue.attempt));
     let reference =
-        crate::e2e_run::batch_diagnostic_report(context(&root, &state)?, Some(session))?;
+        crate::e2e_run::session_diagnostic_report(context(&root, &state)?, session, focused)?;
     let bytes = fs::read(&reference.path)?;
     let report: Value = serde_json::from_slice(&bytes)?;
     ensure!(

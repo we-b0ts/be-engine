@@ -903,6 +903,12 @@ is unclear.
   UUID locations. Incomplete locator partitions retain the full metadata fallback.
   Lookup shares physical-effect folding with the full Source proof loader;
   diagnostic lookup never certifies attribution.
+  `e2e_run/diagnostic_report` resolves published reports by exact session, either
+  an archived actual batch or the current finalized focused API attempt. It
+  retains Source, attempt, inventory and publication guards; malformed archives
+  never fall back to another report. `dependency_review/target_query` owns
+  bounded authenticated independent Target request reads from those reports,
+  without granting ownership, matching or formal rule proof.
   `decisions` stores immutable, shared proof templates with complete finite UUID
   membership and ordered history; `decisions/serde` reads legacy occurrence
   maps/arrays and publishes compact groups. Status validates proof groups without
