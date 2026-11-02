@@ -26,6 +26,16 @@ pub(in crate::rewrite) fn inventory(
             let report_worker =
                 runtime::report_command_for_scope(target_root, state, &scope, false);
             RewriteWorkerInventoryItem {
+                delivery_commit: state
+                    .worker_bindings
+                    .get(&scope.binding_key())
+                    .and_then(|b| b.review_report.as_ref())
+                    .map(|r| r.head_revision.clone()),
+                worker_worktree: state
+                    .worker_bindings
+                    .get(&scope.binding_key())
+                    .and_then(|b| b.review_assignment.as_ref())
+                    .map(|a| a.worktree.clone()),
                 coverage: runtime::coverage(state, &scope),
                 observed_at: observation.map(|value| value.observed_at.clone()),
                 handoff_id: observation.and_then(|value| value.handoff_id.clone()),
@@ -109,22 +119,12 @@ pub(in crate::rewrite) fn scope_action(
         },
         Coverage::IntegrationRequired => RewriteAction::IntegrationRequired {
             summary: format!(
-                "ready handoffs await integration; the current action entry is {}. Select batch members from inventory and use commands.export_batch to export their exact delivery metadata and check command for the code integrator. This action names one entry, not the complete in-flight integration batch. Keep prior integrated code as the base and review the complete candidate before reporting integrated. A batch may include current integrated handoffs plus ready handoffs; report integrated only for those still handoff_ready. For a confirmed defect before Replay, use commands.report_rework with this original handoff ID and review report after the active operation releases the resource; it resumes the same worker on a new dispatch without rewriting the accepted delivery or requiring a failed Replay",
+                "ready handoffs await integration; the current entry is {}. Select ready deliveries and their exact delivery_commit from inventory. The integrator merges them and resolves conflicts, then returns the candidate commit without review check or repository quality gates. The coordinator publishes that exact commit and reports integrated with --delivery-commit and each original handoff ID. Preserve already integrated handoffs. A confirmed integration defect can be returned through commands.report_rework. Source review, line limits and isolation checks run once on the final candidate before full revalidation",
                 scope.label()
             ),
             handoff_id: runtime::observation(state, scope)
                 .and_then(|value| value.handoff_id.clone())
                 .expect("ready handoff has an identity"),
-            export_batch: action::command(
-                target_root,
-                vec![
-                    "review".into(),
-                    "batch".into(),
-                    "--api".into(),
-                    scope.binding_key(),
-                ],
-                vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()],
-            ),
             report_worker: runtime::report_command_for_scope(target_root, state, scope, true),
             report_rework: runtime::rework_command_for_scope(target_root, state, scope),
             worker,

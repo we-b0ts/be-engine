@@ -1,5 +1,4 @@
 use super::*;
-use crate::rewrite::model::RewritePhase;
 
 pub(super) fn reuse_evidence(
     canonical_root: &Path,
@@ -92,72 +91,28 @@ pub(in crate::rewrite) fn admission_current(root: &Path, state: &RewriteState) -
     unchanged_purpose_baseline(root, state) || terminal_current(root, state)
 }
 
+/// Source findings exist only after final review. Repairs can be handed off and
+/// integrated without another source review; final admission checks them again.
 pub(in crate::rewrite) fn required_action(
     root: &Path,
     state: &RewriteState,
 ) -> Result<Option<RewriteAction>> {
-    let terminal = state.phase == RewritePhase::SliceComplete
-        && !state.api_inventory.is_empty()
-        && state.api_inventory.iter().all(|a| a.status.is_done());
-    let ready = super::super::rule_replay::any_ready(state)
-        || super::super::engine_retry::any_pending(state)
-        || worker::runtime::scopes(state)
-            .iter()
-            .any(|scope| worker::runtime::acceptance_ready(state, scope));
-    let review_required = requires_delivery_review(root, state);
-    let revalidation = review_required && (state.phase == RewritePhase::ApiPending);
-    if !terminal && !ready && !revalidation && state.source_review_rework.is_empty() {
-        return Ok(None);
-    }
-    let report = current(root, state)?;
-    if admission_current(root, state) {
-        return Ok(None);
-    }
-    if report.as_ref().is_some_and(|r| rework_pending(state, r)) {
-        return Ok(Some(rework_wait(root)));
-    }
-    if !terminal && !ready && !revalidation {
-        return Ok(None);
-    }
-    Ok(Some(review_action(root, report.as_ref())))
+    let waiting = state.source_review_rework.keys().any(|key| {
+        worker::runtime::scopes(state).iter().any(|scope| {
+            scope.binding_key() == *key && !worker::runtime::acceptance_ready(state, scope)
+        })
+    });
+    Ok(waiting.then(|| rework_wait(root)))
 }
 
-#[cfg(test)]
-#[path = "verification_tests.rs"]
-mod verification_tests;
-
-/// Coordinator admission only. Missing or stale receipts return an integrator
-/// assignment; status/next never execute quality commands themselves.
+/// Ordinary Replay never requires a source-review receipt. The separate final
+/// pre-revalidation gate remains authoritative for the complete candidate.
 pub(in crate::rewrite) fn gate(
     root: &Path,
     state: &RewriteState,
     _pr_base: &str,
 ) -> Result<Option<RewriteAction>> {
-    if admission_current(root, state) {
-        return Ok(None);
-    }
-    let report = current(root, state)?;
-    if report.as_ref().is_some_and(|r| rework_pending(state, r)) {
-        return Ok(Some(rework_wait(root)));
-    }
-    Ok(Some(review_action(root, report.as_ref())))
-}
-
-fn rework_pending(state: &RewriteState, report: &RewriteReviewReport) -> bool {
-    worker::runtime::scopes(state).iter().any(|scope| {
-        !worker::runtime::acceptance_ready(state, scope)
-            && state
-                .source_review_rework
-                .get(&scope.binding_key())
-                .is_some_and(|route| {
-                    // Unrelated integrations change the report fingerprint without
-                    // changing the finding already assigned to this worker.
-                    report
-                        .findings
-                        .iter()
-                        .any(|f| route.findings.contains_key(&f.id))
-                })
-    })
+    required_action(root, state)
 }
 
 pub(in crate::rewrite) fn is_rework_wait(action: &RewriteAction) -> bool {
@@ -175,17 +130,6 @@ fn rework_wait(root: &Path) -> RewriteAction {
     }
 }
 
-pub(super) fn review_action(root: &Path, report: Option<&RewriteReviewReport>) -> RewriteAction {
-    RewriteAction::SourceReviewRequired {
-        summary: match report.map(|r| r.status) {
-            Some(ReviewStatus::ChangesRequired) => "source review found code changes required; inspect review show. The code integrator fixes routine formatting and Clippy failures in its assigned worktree and reruns complete integration review. Route findings requiring API behavior decisions with review rework to their owning work item",
-            Some(ReviewStatus::EvidenceRequired) => "inspect review show; investigate each spawn and rerun review check --evidence with startup/request ownership evidence",
-            Some(ReviewStatus::Passed) => "publish the reviewed candidate and accept its engine source/isolation receipt before advancing verification; the integrator executes the configured quality_check before final pre-revalidation review",
-            _ => "refresh the global quality receipt: prepare the code integrator worktree at the current canonical commit, preserving unfinished work, and delegate commands.check to the code integrator without a scope, --handoff-id or --batch-handoffs. Complete review checks the whole candidate; receipt expiry does not undo existing handoff integrations. If no new changes are needed, review that exact commit without an empty merge. Otherwise publish the exact passing candidate, then execute commands.accept before advancing verification",
-        }.into(),
-        check: action::command(root, vec!["review".into(), "check".into(), "--integration".into()], vec!["BACKEND_REWRITE_REVIEW_WORKTREE".into()]),
-        accept: action::command(root, vec!["review".into(), "accept".into()], vec!["BACKEND_REWRITE_REVIEW_REPORT".into()]),
-        show: action::command(root, vec!["review".into(), "show".into()], Vec::new()),
-        rework: action::command(root, vec!["review".into(), "rework".into()], vec!["BACKEND_REWRITE_REVIEW_FINDING".into(), "BACKEND_REWRITE_REVIEW_OWNER".into()]),
-    }
-}
+#[cfg(test)]
+#[path = "verification_tests.rs"]
+mod verification_tests;

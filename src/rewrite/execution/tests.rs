@@ -204,6 +204,7 @@ fn failed_execution_waits_for_explicit_retry_while_workers_remain_dispatchable()
     })
     .unwrap();
     worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
+        delivery_commit: None,
         review_report: None,
         target_root: target.path().into(),
         agent_handle: "runtime-worker".into(),
@@ -387,6 +388,7 @@ fn worker_actions_and_feedback_retain_auto_next_observability_while_replay_is_bu
             agent_name: None,
         })?;
         let feedback = worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
+            delivery_commit: None,
             target_root: target.path().into(),
             agent_handle: "background-worker".into(),
             activity: worker::model::RewriteWorkerActivity::Running,

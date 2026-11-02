@@ -12,7 +12,7 @@ pub struct RewriteEvidenceContext {
     pub revision: u64,
     pub recording_run_id: String,
     pub worker: RewriteWorkerDispatchView,
-    pub review: crate::rewrite::review::ReviewContext,
+    pub delivery: crate::rewrite::review::DeliveryContext,
 }
 
 #[derive(Debug, Clone, Serialize)]

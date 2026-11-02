@@ -212,7 +212,7 @@ async fn integrated_handoff_can_advance_while_another_api_waits_for_system_repai
     store.save(&state).unwrap();
     assert!(matches!(
         status(target.path()).action,
-        RewriteAction::SourceReviewRequired { .. }
+        RewriteAction::AdvanceRequired { .. }
     ));
     let result = rewrite::next_rewrite(rewrite::RewriteNextOptions {
         target_root: target.path().into(),
@@ -220,17 +220,15 @@ async fn integrated_handoff_can_advance_while_another_api_waits_for_system_repai
         source_route: None,
     })
     .await
-    .unwrap();
-    assert!(matches!(
-        result.action,
-        RewriteAction::SourceReviewRequired { .. }
-    ));
+    .unwrap_err();
+    assert!(result.to_string().contains("case source"));
     let state = store.load().unwrap().unwrap();
-    assert_eq!(state.api, "GET /revalidate-0");
-    assert_eq!(
-        repair_slice,
-        serde_json::to_value(&state.active_slice).unwrap()
-    );
+    let repair = if state.api == "GET /revalidate-0" {
+        &state.active_slice
+    } else {
+        &state.parked_slices["GET /revalidate-0"]
+    };
+    assert_eq!(repair_slice, serde_json::to_value(repair).unwrap());
 }
 
 #[test]
@@ -337,6 +335,7 @@ async fn wait_wakes_for_reported_worker_interruption_before_its_deadline() {
     let report = async {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
+            delivery_commit: None,
             review_report: None,
             target_root: target.path().into(),
             agent_handle: format!("test-subagent-handle:{}", scope.binding_key()),

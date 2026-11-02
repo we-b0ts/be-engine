@@ -60,6 +60,7 @@ fn applied_rule_survives_restart_and_does_not_require_a_worker_handoff() {
         .clone()
         .unwrap();
     worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: target.path().into(),
         agent_handle,
         activity: worker::model::RewriteWorkerActivity::Idle,
@@ -84,7 +85,7 @@ fn applied_rule_survives_restart_and_does_not_require_a_worker_handoff() {
     .unwrap();
     assert!(matches!(
         status.action,
-        RewriteAction::SourceReviewRequired { .. }
+        RewriteAction::AdvanceRequired { .. }
     ));
     assert!(!status.terminal_allowed);
     let details = rewrite::coordination::status_details(target.path(), &loaded).unwrap();
@@ -92,7 +93,7 @@ fn applied_rule_survives_restart_and_does_not_require_a_worker_handoff() {
 }
 
 #[tokio::test]
-async fn parked_rule_replay_is_selected_and_keeps_the_review_gate() {
+async fn parked_rule_replay_prepares_without_the_review_gate() {
     let target = configured_target();
     let mut state = implementation_state_with_inventory(false);
     worker::confirm_current_for_test(&mut state);
@@ -135,11 +136,8 @@ async fn parked_rule_replay_is_selected_and_keeps_the_review_gate() {
         source_route: None,
     })
     .await
-    .unwrap();
-    assert!(matches!(
-        result.action,
-        RewriteAction::SourceReviewRequired { .. }
-    ));
+    .unwrap_err();
+    assert!(result.to_string().contains("case source"), "{result:#}");
     assert!(state.parked_slices[api].rule_replay_pending);
 }
 
@@ -189,7 +187,7 @@ async fn parked_method_rule_replay_does_not_loop_on_the_other_method_after_skips
     )
     .unwrap();
     assert!(
-        matches!(scoped.action, RewriteAction::SourceReviewRequired { .. }),
+        matches!(scoped.action, RewriteAction::AdvanceRequired { .. }),
         "{:?}",
         scoped.action
     );
@@ -199,11 +197,8 @@ async fn parked_method_rule_replay_does_not_loop_on_the_other_method_after_skips
         source_route: None,
     })
     .await
-    .unwrap();
-    assert!(matches!(
-        result.action,
-        RewriteAction::SourceReviewRequired { .. }
-    ));
+    .unwrap_err();
+    assert!(result.to_string().contains("case source"), "{result:#}");
     let saved = store.load().unwrap().unwrap();
     assert_eq!(saved.api, api);
     assert!(saved.rule_replay_pending);

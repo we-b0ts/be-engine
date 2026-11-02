@@ -207,6 +207,7 @@ pub(super) fn prepare_delivery(
         handoff_id: report.head_revision,
     };
     let delivery = RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: root.into(),
         agent_handle: handle,
         activity: RewriteWorkerActivity::HandoffReady,
@@ -433,14 +434,9 @@ fn six_integrated_handoffs_and_one_new_delivery_review_and_admit_as_one_candidat
     assert_eq!(report.status, ReviewStatus::Passed);
     assert_eq!(report.integration.as_ref().unwrap().handoffs.len(), 7);
     assert_eq!(report.base_revision, initial_report.head_revision);
-    for index in 0..7 {
-        assert!(
-            report
-                .files
-                .contains_key(Path::new(&format!("src/incremental_{index}.rs")))
-        );
-    }
-    assert!(report.quality.as_ref().unwrap().passed());
+    assert!(report.files.is_empty());
+    assert!(report.quality.is_none());
+    assert_eq!(report.required_gates, ["delivery-identity"]);
     // Checking does not publish or acknowledge the new delivery.
     assert_eq!(candidate::head(root).unwrap(), initial_report.head_revision);
     assert_eq!(
@@ -549,6 +545,7 @@ fn one_published_batch_review_admits_two_handoffs_independently() {
         assert_eq!(worker_report.status, ReviewStatus::Passed);
         let handoff_id = worker_report.head_revision.clone();
         worker::runtime::report(RewriteWorkerReportOptions {
+            delivery_commit: None,
             target_root: target.path().into(),
             agent_handle: handle.clone(),
             activity: RewriteWorkerActivity::HandoffReady,
@@ -592,6 +589,7 @@ fn one_published_batch_review_admits_two_handoffs_independently() {
 
     for (index, (handle, handoff_id, _)) in deliveries.iter().enumerate() {
         let receipt = RewriteWorkerReportOptions {
+            delivery_commit: None,
             target_root: target.path().into(),
             agent_handle: handle.clone(),
             activity: RewriteWorkerActivity::Integrated,

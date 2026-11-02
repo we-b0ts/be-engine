@@ -185,7 +185,7 @@ pub(super) fn report(
             workflow_id: state.workflow_id.clone(),
             revision: state.revision,
             recording_run_id: state.recording_run_id.clone(),
-            review: crate::rewrite::review::context(target_root, state, &scope),
+            delivery: crate::rewrite::review::context(target_root, state, &scope),
             worker: worker::dispatch_view(state, scope.clone(), None),
         })),
         evidence_id,
@@ -204,7 +204,7 @@ pub(super) fn report(
         } else if let Some(failures) = execution_failures {
             super::execution::guidance(failures.as_array().expect("nonempty execution failures"))
         } else if issue.kind == crate::rewrite::RewriteIssueKind::TargetQuality {
-            "Read context.review.integrated_findings, fix the assigned quality finding, then run context.review.check for this dispatch before handoff.".to_string()
+            "Read context.delivery.required_repairs, fix the assigned finding, then commit and return the exact delivery_commit with its original dispatch and lease identities.".to_string()
         } else { match scope {
             RewriteWorkScope::Api { .. } =>
                 "Inspect this issue and execute the relevant returned queries before tracing source and target behavior.",

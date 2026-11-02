@@ -23,15 +23,15 @@ workflow agent role and is never workflow authority.
 | Actor | Identity | Owns | Must not do |
 | --- | --- | --- | --- |
 | Rewrite engine | `backend-rewrite` and `traffic-e2e` | Workflow state, legal action selection, evidence identity, traffic serialization, verification, and terminal eligibility | Invent task-runtime state or perform source diagnosis |
-| Rewrite coordinator | Main/root `coordinator` task | Execute engine actions, dispatch and reconcile agents, apply coordinator-owned inputs, publish reviewed integration candidates, invoke acceptance, and deliver | Diagnose business source, edit target code, or mark work complete from an agent report |
+| Rewrite coordinator | Main/root `coordinator` task | Execute engine actions, dispatch and reconcile agents, apply coordinator-owned inputs, publish exact integration candidates, invoke acceptance, and deliver | Diagnose business source, edit target code, or mark work complete from an agent report |
 | Repository analyst | `repository-analyst` assignment | Analyze source routes, modules and cross-API/task dependency attribution read-only; return independent Source ownership proofs | Edit code or configuration, bind an implementer, run Replay, or mutate workflow state |
-| API implementer | Fixed `api-implementer-N` slot | Process assigned same-group API batches one API at a time, run per-API local review, and return reviewed subsets that may span assigned groups | Mutate workflow state, publish to the canonical target, or accept its own work |
-| Code integrator | `code-integrator` assignment | Prepare one retained integration/review candidate, resolve assigned conflicts and routine quality issues, run candidate review, and return a version-bound result | Act as an API implementer, mutate engine state, or report implementation-worker activity |
+| API implementer | Fixed `api-implementer-N` slot | Implement Source-correct APIs one at a time and return committed subsets without review check | Mutate workflow state, publish to the canonical target, or accept its own work |
+| Code integrator | `code-integrator` assignment | Merge accepted deliveries, resolve conflicts and return an exact candidate; consolidated review uses a separate final-stage assignment | Act as an API implementer, mutate engine state, or report implementation-worker activity |
 | API expert | Engine-requested `api-expert` assignment | Investigate one reserved API read-only and return evidence-backed findings for its existing API implementer | Edit code, own the API, mutate workflow state, or satisfy implementation/acceptance gates |
 
 Follow your role's validation instructions: the
 [API implementer entrypoint](references/api-implementer.md#start) owns implementer
-local checks, and the
+focused implementation checks, and the
 [integrator final review](references/code-integrator.md#final-pre-revalidation-review)
 owns the engine-requested final checks and reporting.
 

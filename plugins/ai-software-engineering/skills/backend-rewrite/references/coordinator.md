@@ -108,8 +108,8 @@ listed protocol before handling that action.
 | `implementer_dispatch_required` | Create/resume the fixed slot and confirm its exact same-group API batch | API implementer | [fixed implementers](coordinator-implementers.md) |
 | `implementation_required`, `worker_status_required` | Dispatch/resume/query the bound implementer and report actual runtime observations | API implementer | [agent protocol](coordinator-agent-protocol.md) |
 | `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
-| `integration_required` | Retain identity, publish only the reviewed candidate, then report integration | Code integrator | [integration](coordinator-integration.md) |
-| `source_review_required`, `target_quality_required` | Delegate ordinary candidate review or rework and admit only a matching report | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
+| `integration_required` | Retain identity, publish the exact merged candidate, then report integration without review check | Code integrator | [integration](coordinator-integration.md) |
+| `source_review_required`, `target_quality_required` | Reconcile legacy requests; ordinary source review is deferred to final pre-revalidation | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
 | `pre_revalidation_review_required` | Delegate the configured quality requirement and final reporting command, publish the exact candidate, and accept its final-stage receipt | Code integrator | [final review](coordinator-review.md#final-review-before-full-revalidation) |
 | `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer worker | [rule actions](coordinator-rule-actions.md) |
 | `input_required` | Resolve only the named input and resume the retained invocation | Delegate semantic/source questions to the owning API implementer or code integrator | [input handling](#input_required) and, for startup inputs, [startup inputs](coordinator-startup-inputs.md) |
@@ -243,7 +243,7 @@ adopt completed external traffic -> identify patterns for new uncovered APIs
     -> stable API inventory -> finish incremental module analysis and grouping
     -> freeze group Replay round -> replay every admitted API, save each result
     -> dispatch same-group failure batch to its fixed implementer slot
-    -> reviewed partial handoff (one/many APIs, possibly across assigned groups)
+    -> committed partial handoff (one/many APIs, possibly across assigned groups)
     -> integrate exact deliveries -> group acceptance Replay
     -> repeat failures or continue other groups
     -> final quality-check review -> one complete actual batch session
@@ -424,27 +424,14 @@ record uses the existing recovery action.
 
 ### `source_review_required`
 
-Worker handoffs require current source/isolation reports. Ordinary integration
-handoffs require the candidate's stage-bound source/isolation report, without
-mandatory fmt, workspace tests or Clippy. API workers build/debug and run
-relevant tests as needed and do not need Clippy. A `source_review_required`
-action requests candidate
-review, evidence or worker rework through
-[coordinator-review.md](coordinator-review.md). It is actionable work, not an execution
-failure. Return to global status after handling it. A new purpose trusts the
-committed `pr_base` snapshot: adopt external evidence and run initial Replay
-without source review.
-An unchanged purpose baseline does not require ordinary source review;
-historical ordinary review files do not change that. Once code/configuration
-changes relative to that baseline, verification requires a current accepted
-integration report even when no API remains in implementation. This exemption
-does not replace the separate final pre-revalidation gate. Delegate checks to
-the integrator; the coordinator consumes reports and does not run the quality
-suite itself.
-Once a finding has been routed, worker dispatch, status and integration take
-priority. With no such action ready, `wait_required` on `source_review_rework`
-waits for that repair; follow `commands.wait` and runtime events. Scoped status
-continues exposing each worker's own handoff commands.
+Ordinary worker and integration delivery no longer request this gate. Submit
+committed delivery identities, publish the integrator's exact candidate, and
+report integration without review check. Consolidated Source/isolation, file
+size and asynchronous ownership checks run only at
+`pre_revalidation_review_required`. Reconcile a retained legacy request with
+current status rather than restarting a per-delivery check cycle. Source
+findings routed from final review still use the existing repair protocol in
+[coordinator-review.md](coordinator-review.md).
 
 ### `pre_revalidation_review_required`
 
@@ -471,15 +458,11 @@ remain pending, and historical API receipts cannot substitute for the session.
 
 This legacy action/command no longer executes quality checks in the coordinator.
 `target-quality run` validates an already accepted current quality receipt.
-Obtain missing or stale proof through `source_review_required` and the retained
-code integrator, then admit its exact published report. Do not hot-loop a legacy
-quality retry or use its arguments to waive missing candidate proof.
-
-`review check` in both delivery worktrees runs the mandatory isolation gate even
-with no configured repository checks, including source-sensitive public domains
-such as `demo.test`. The assignee handles findings and evidence before delivery.
-Review reports freeze code, configuration, rules and relevant runtime inputs;
-changes require a new report before the coordinator can advance.
+Ordinary Replay no longer waits for source-review receipts. Follow current
+status; final proof is issued only by `pre_revalidation_review_required`.
+Source/Replay-isolation, public-domain hardcodes, file-size and spawn-ownership
+checks are consolidated there. Ordinary integration only merges and resolves
+conflicts; identity admission never executes source review or repository tools.
 
 ### `system_repair_required` and `recovery_required`
 
@@ -545,7 +528,7 @@ APIs only once its round completes, before starting the next group's Replay.
 At group boundaries, prioritize APIs with no Replay attempts over integration,
 acceptance Replay and pending refreshes with prior attempts. Resume integration
 and acceptance when no eligible first attempt remains, preserving rule, review
-and repair gates. Acceptance rounds include only exact reviewed/integrated or
+and repair gates. Acceptance rounds include only exact committed/integrated or
 otherwise admitted API methods; an
 unhanded sibling does not acquire Replay permission through group membership.
 Infrastructure interruption preserves completed results and unfinished membership.
@@ -587,7 +570,7 @@ for external evidence handoff.
 ## Completion Invariants
 
 Keep worker handoff, work-item completion, and workflow completion distinct. A
-worker handoff supplies a reviewed code version, local results, and required inputs; only integrated
+worker handoff supplies a committed code version, local results, and required inputs; only integrated
 acceptance can complete its API. Later integrated changes may
 make that item `revalidation_pending`. Retain API delivery identities independently of the checkout. Accepted handoffs
 release only their API leases; the slot/worktree can continue assigned work.

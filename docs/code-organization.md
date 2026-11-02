@@ -1274,25 +1274,16 @@ is unclear.
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress
   updates as configuration changes.
-- Within `rewrite`, `quality.rs` owns delivery-time isolation and explicit worker,
-  integration and final pre-revalidation receipt scope and policy identities.
-  Worker and ordinary integration stages run source/isolation checks without
-  mandatory repository commands. The existing final stage binds the agent's
-  successful `quality_check` attestation to the frozen candidate; the integrator
-  executes the project-configured tool across the target and managed directories.
-  Review never executes fmt, tests, Clippy or other repository commands. The
-  configured tool and stage bind receipt validation and policy identity.
-  Worker receipts cannot satisfy integration admission; ordinary integration
-  receipts cannot satisfy the final gate. Historical command DTOs remain readable
-  but do not grant current admission. `target_quality.rs` is a
-  compatibility boundary for validation of an
-  already admitted receipt; it never executes repository checks. The
-  `target_replay_isolation` module, owned by `quality`, owns the mandatory,
-  deterministic scan that prevents production Rust source from consuming
-  Replay-only hostnames, fake addresses, private runtime state, or recording
-  artifacts. Keep this product-policy gate separate from the generic
-  code-organization checker. Repository instructions may add development checks
-  but cannot replace or disable this engine standard.
+- Within `rewrite`, `quality.rs` owns final source/isolation policy and the
+  final agent-owned quality-check attestation. Ordinary delivery captures exact
+  identity without scanning source or executing repository commands. Clippy and
+  other lint run only in the consolidated final assignment. The final receipt
+  binds the configured tool, committed candidate, build inputs and workflow scope.
+  Historical worker/integration quality receipts remain readable but cannot
+  authorize final revalidation. `target_quality.rs` is a legacy admission boundary
+  that never launches repository checks. `target_replay_isolation`, owned by
+  `quality`, prevents production code from consuming private replay addresses,
+  runtime state and recordings; it runs during final pre-revalidation review.
 - `rewrite/source_diff.rs` owns the Git source-diff boundary shared by Replay
   isolation and source review, including committed/worktree/untracked files and
   rename handling. Its `layout` child maps a target project nested below the Git
@@ -1305,8 +1296,11 @@ is unclear.
   reads and PR-base resolution only within a status/inventory query, keyed by
   directory and exact arguments. Other Git commands, including output-file
   writes, invalidate those reads; later queries inspect Git again.
-  `rewrite/review` owns the complete worker/integrator review
-  pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
+  `rewrite/review` owns final source review, spawn evidence, receipt admission
+  and quality rework routing. Its `delivery` child captures exact worker and
+  published integration identities without source scans or repository commands.
+  Ordinary review check is a successful no-op for code quality; dispatch,
+  committed-code and publication checks remain delivery responsibilities. Its `scan`
   child owns Rust syntax findings and complete-file line limits.
   Its spawn scan recognizes compiler-enforced file/item test configuration and
   Tokio test functions; extracted test files declare their own inner cfg rather

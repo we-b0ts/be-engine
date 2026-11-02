@@ -263,6 +263,7 @@ fn legacy_binding_starts_on_normal_feedback_without_a_timestamp_api() {
     assert!(required_action(target.path(), &legacy, None).is_none());
     store.save(&legacy).unwrap();
     worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: target.path().into(),
         agent_handle: "test-subagent-handle:/api".into(),
         activity: worker::model::RewriteWorkerActivity::Running,
@@ -495,6 +496,7 @@ fn recent_integration_resets_the_timer_but_idle_resume_does_not() {
     assert_eq!(due_api(&state, Utc::now()).as_deref(), Some("/api"));
     store.save(&state).unwrap();
     worker::runtime::report(worker::runtime::RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: target.path().into(),
         agent_handle: "test-subagent-handle:/api".into(),
         activity: worker::model::RewriteWorkerActivity::Idle,

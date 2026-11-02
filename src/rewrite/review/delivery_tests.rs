@@ -5,6 +5,8 @@ mod batch;
 mod batch_export;
 #[path = "delivery_tests/quality_scope.rs"]
 mod quality_scope;
+mod without_review;
+use super::tests::legacy_source_review as check;
 use super::*;
 use crate::rewrite::worker::model::RewriteWorkerActivity;
 use crate::rewrite::worker::runtime::RewriteWorkerReportOptions;
@@ -88,6 +90,7 @@ fn delivery(
     report: &RewriteReviewReport,
 ) -> RewriteWorkerReportOptions {
     RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: root.into(),
         agent_handle: "delivery-worker".into(),
         activity: RewriteWorkerActivity::HandoffReady,
@@ -310,7 +313,7 @@ fn integration_requires_its_own_review_and_preserves_canonical_private_runtime()
     let before_state = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
     let before_receipt = fs::read(integrated_path(target.path())).unwrap();
     handoff.review_report = None;
-    assert!(worker::runtime::report(handoff.clone()).is_err());
+    worker::runtime::report(handoff.clone()).unwrap();
     for duplicate_report in [
         Some(reviewed.report_path.clone()),
         Some(reviewed.report_path),
@@ -448,14 +451,14 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     );
     let store = RewriteStore::new(target.path()).unwrap();
     let state = store.load().unwrap().unwrap();
-    assert!(gate(target.path(), &state, "master").unwrap().is_some());
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
     assert!(!counter.exists());
     let candidate = worktree(target.path(), directory.path(), "candidate");
     commit_code(&candidate);
     let reviewed = check(options(target.path(), &candidate, None)).unwrap();
     assert_eq!(reviewed.status, ReviewStatus::Passed);
     assert!(!counter.exists());
-    assert!(gate(target.path(), &state, "master").unwrap().is_some());
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
     git(
         target.path(),
         &["merge", "--ff-only", &reviewed.head_revision],
@@ -569,11 +572,11 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
         ],
     );
     assert!(!terminal_current(target.path(), &state));
-    assert!(gate(target.path(), &state, "master").unwrap().is_some());
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
     assert!(!counter.exists());
 
     fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 3 }\n").unwrap();
-    assert!(gate(target.path(), &state, "master").unwrap().is_some());
+    assert!(gate(target.path(), &state, "master").unwrap().is_none());
     crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
         target_root: target.path().into(),
     })
@@ -590,7 +593,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     assert!(!terminal_current(target.path(), &revalidation));
     assert!(matches!(
         required_action(target.path(), &revalidation).unwrap(),
-        Some(RewriteAction::SourceReviewRequired { .. })
+        None
     ));
     let status = crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
         target_root: target.path().into(),
@@ -598,7 +601,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     .unwrap();
     assert!(matches!(
         status.action,
-        RewriteAction::SourceReviewRequired { .. }
+        RewriteAction::AdvanceRequired { .. }
     ));
     assert!(!counter.exists());
 
@@ -610,7 +613,7 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     .unwrap();
     assert!(matches!(
         status.action,
-        RewriteAction::SourceReviewRequired { .. }
+        RewriteAction::AdvanceRequired { .. }
     ));
     assert!(!counter.exists());
 }
@@ -633,7 +636,7 @@ fn external_change_can_refresh_review_at_the_canonical_commit_without_another_me
     store.save(&state).unwrap();
     assert!(matches!(
         required_action(target.path(), &state).unwrap(),
-        Some(RewriteAction::SourceReviewRequired { .. })
+        None
     ));
     assert!(check(options(target.path(), &integration, None)).is_err());
 

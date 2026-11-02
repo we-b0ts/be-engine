@@ -441,6 +441,7 @@ fn previous_workers_are_retired_without_query_and_late_feedback_is_rejected() {
     assert!(store.load().unwrap().unwrap().worker_bindings.is_empty());
     assert!(
         worker::runtime::report(rewrite::RewriteWorkerReportOptions {
+            delivery_commit: None,
             target_root: target.path().into(),
             agent_handle: "old-worker".into(),
             activity: rewrite::RewriteWorkerActivity::Running,

@@ -33,6 +33,7 @@ fn rust_project(root: &Path, source: &str) {
 
 fn handoff(root: &Path, report: &RewriteReviewReport) -> RewriteWorkerReportOptions {
     RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: root.into(),
         agent_handle: "review-worker".into(),
         activity: RewriteWorkerActivity::HandoffReady,
@@ -121,11 +122,7 @@ fn ordinary_worker_and_integration_review_do_not_run_repository_commands() {
         assert!(quality.commands.is_empty());
         assert!(!target.path().join("target").exists());
         assert!(!quality_logs.exists());
-        assert!(
-            integrated
-                .next_step
-                .contains("ordinary review does not run fmt, tests or Clippy")
-        );
+        assert!(integrated.next_step.contains("No review check is needed"));
         delivery.activity = RewriteWorkerActivity::Integrated;
         delivery.review_report = Some(integrated.report_path);
         worker::runtime::report(delivery).unwrap();

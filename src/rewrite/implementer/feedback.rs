@@ -102,6 +102,7 @@ pub fn confirm(options: ImplementerConfirmOptions) -> Result<RewriteActionEnvelo
             &mut state,
             &scope,
             &worker::runtime::RewriteWorkerReportOptions {
+                delivery_commit: None,
                 target_root: root.clone(),
                 agent_handle: options.agent_handle.clone(),
                 activity: Activity::Queued,
@@ -252,6 +253,7 @@ pub fn report(options: ImplementerReportOptions) -> Result<RewriteActionEnvelope
         &mut state,
         &scope,
         &worker::runtime::RewriteWorkerReportOptions {
+            delivery_commit: None,
             target_root: root.clone(),
             agent_handle: options.agent_handle,
             activity: options.activity,
@@ -337,7 +339,15 @@ pub fn handoff(options: ImplementerHandoffOptions) -> Result<RewriteActionEnvelo
                         )),
             "handoff id already identifies another API"
         );
-        let report = review::accept_handoff(&root, &state, &scope, Some(&item.review_report))?;
+        let report = if let Some(commit) = item.delivery_commit.as_deref() {
+            review::delivery::worker(&root, &state, &scope, commit)?
+        } else {
+            ensure!(
+                !item.review_report.as_os_str().is_empty(),
+                "delivery_commit is required for an implementer handoff"
+            );
+            review::accept_handoff(&root, &state, &scope, Some(&item.review_report))?
+        };
         ensure!(
             fingerprint::matches_revision(&report.worktree, &report.head_revision)?,
             "commit all reviewed managed code before handing off a reusable implementer worktree"
@@ -352,6 +362,7 @@ pub fn handoff(options: ImplementerHandoffOptions) -> Result<RewriteActionEnvelo
             &mut state,
             &scope,
             &worker::runtime::RewriteWorkerReportOptions {
+                delivery_commit: None,
                 target_root: root.clone(),
                 agent_handle: options.agent_handle.clone(),
                 activity: Activity::HandoffReady,

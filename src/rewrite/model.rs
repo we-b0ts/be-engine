@@ -714,7 +714,6 @@ pub enum RewriteAction {
         summary: String,
         worker: RewriteWorkerDispatchView,
         handoff_id: String,
-        export_batch: RewriteCommandSpec,
         report_worker: RewriteCommandSpec,
         report_rework: RewriteCommandSpec,
     },

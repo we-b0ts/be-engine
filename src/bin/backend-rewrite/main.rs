@@ -358,7 +358,14 @@ fn parse_api_scope(value: &str) -> Result<String> {
 
 #[derive(Debug, Args)]
 struct WorkerReportArgs {
-    /// Original review report for handoff_ready, integrated or rework_required.
+    /// Exact committed delivery; integration requires this commit already published.
+    #[arg(
+        long,
+        env = "BACKEND_REWRITE_DELIVERY_COMMIT",
+        conflicts_with = "review_report"
+    )]
+    delivery_commit: Option<String>,
+    /// Previously generated receipt for an outstanding legacy delivery.
     #[arg(long, env = "BACKEND_REWRITE_WORKER_REVIEW_REPORT")]
     review_report: Option<PathBuf>,
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
@@ -608,6 +615,7 @@ async fn run(cli: Cli) -> Result<()> {
             ),
             WorkerCommand::Report(args) => print_json(
                 &report_rewrite_worker(RewriteWorkerReportOptions {
+                    delivery_commit: args.delivery_commit,
                     target_root,
                     agent_handle: args.agent_handle,
                     activity: args.activity.parse()?,

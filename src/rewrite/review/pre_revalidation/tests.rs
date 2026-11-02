@@ -85,6 +85,30 @@ fn accepted(root: &Path) -> RewriteReviewReport {
     report
 }
 
+#[test]
+fn ordinary_noop_does_not_replace_or_invalidate_an_accepted_final_review() {
+    let target = target(false);
+    let root = target.path();
+    accepted(root);
+    let before = fs::read(super::super::integrated_path(root)).unwrap();
+    let state_before = serde_json::to_value(load(root)).unwrap();
+    let mut ordinary = options(root, root);
+    ordinary.quality_check = None;
+    ordinary.integration = true;
+    ordinary.evidence = Some(root.join("no-evidence-needed.json"));
+    let report = super::super::check(ordinary).unwrap();
+    assert_eq!(report.status, ReviewStatus::Passed);
+    assert_eq!(report.required_gates, ["delivery-identity"]);
+    assert!(report.files.is_empty() && report.findings.is_empty() && report.quality.is_none());
+    assert!(report.next_step.contains("No review check is needed"));
+    assert_eq!(
+        fs::read(super::super::integrated_path(root)).unwrap(),
+        before
+    );
+    assert_eq!(serde_json::to_value(load(root)).unwrap(), state_before);
+    assert!(current(root, &load(root)));
+}
+
 fn complete_current(root: &Path, state: &mut RewriteState) {
     state.phase = RewritePhase::SliceComplete;
     state.e2e_current = true;

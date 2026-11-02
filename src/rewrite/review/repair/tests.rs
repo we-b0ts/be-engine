@@ -1,4 +1,5 @@
 use super::*;
+use crate::rewrite::review::tests::legacy_source_review as check;
 use crate::rewrite::worker::tests::{configured_target, implementation_state_with_inventory};
 
 fn git(root: &Path, arguments: &[&str]) {

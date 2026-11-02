@@ -102,9 +102,10 @@ default context to the outer Git repository, or infer sibling paths that the
 project configuration does not declare.
 
 Configure `project.delivery.quality_check` with the final quality tool identifier
-(default `cargo-clippy`; other languages use their project tool). All
-`review check` stages own Source, Replay-isolation and identity checks without
-executing repository quality commands. At the existing final pre-revalidation
+(default `cargo-clippy`; other languages use their project tool). Worker handoff
+and ordinary integration bind committed deliveries without review check.
+Source, Replay-isolation, line-limit and spawn checks run at final pre-revalidation.
+At that final
 stage, the integrator executes the configured tool on the final committed
 candidate, then reports success through `review check --pre-revalidation
 --quality-check TOOL` in its assigned worktree. The engine records a

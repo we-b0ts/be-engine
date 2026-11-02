@@ -1,5 +1,11 @@
+//! Historical source-review receipt compatibility and inspection primitives.
 use super::*;
+use legacy_source_review as check;
+
+#[path = "tests/legacy_receipt.rs"]
+mod legacy_receipt;
 use crate::rewrite::worker::tests::{configured_target, implementation_state_with_inventory};
+pub(in crate::rewrite) use legacy_receipt::inspect as legacy_source_review;
 
 #[path = "tests/worker_quality.rs"]
 mod worker_quality;
@@ -146,6 +152,7 @@ fn handoff_requires_current_review_without_advancing_worker_state_on_rejection()
     let (target, scope) = setup();
     let store = RewriteStore::new(target.path()).unwrap();
     let mut opts = worker::runtime::RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: target.path().into(),
         agent_handle: "review-worker".into(),
         activity: worker::model::RewriteWorkerActivity::HandoffReady,
@@ -327,6 +334,7 @@ fn assigned_worktree_delivery(route_workers: bool) {
             .exists()
     );
     let mut delivery = worker::runtime::RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: target.path().into(),
         agent_handle: "separate-worker".into(),
         activity: worker::model::RewriteWorkerActivity::HandoffReady,
@@ -397,7 +405,7 @@ fn assigned_worktree_delivery(route_workers: bool) {
     fs::write(target.path().join("src/lib.rs"), "fn main() { start(); }\nfn start() { tokio::spawn(async {}); }\nfn response() { start(); }\n").unwrap();
     assert!(matches!(
         gate(target.path(), &store.load().unwrap().unwrap(), "master").unwrap(),
-        Some(RewriteAction::SourceReviewRequired { .. })
+        None
     ));
     assert!(show(target.path().into()).is_err());
     assert_eq!(
@@ -815,6 +823,7 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
     })
     .unwrap();
     let mut feedback = worker::runtime::RewriteWorkerReportOptions {
+        delivery_commit: None,
         target_root: target.path().into(),
         agent_handle: "repair-worker".into(),
         activity: Activity::Running,
@@ -850,7 +859,7 @@ fn routed_review_waits_for_worker_and_keeps_handoff_and_integration_available() 
     );
     assert_eq!(
         context(target.path(), &saved, &scope)
-            .rework
+            .required_repairs
             .unwrap()
             .findings
             .len(),

@@ -4,18 +4,27 @@ Read when your assignment requires checking changed target code or supplying
 source evidence. This reference defines source rules and evidence format only.
 Use your role's entrypoint for report execution and handoff.
 
-`backend-rewrite review check` applies the same source and Replay-isolation
-rules to worker, integration and final pre-revalidation candidates. Worker and
-ordinary integration review do not execute mandatory fmt, workspace tests or
-Clippy. Implementers build/debug and run relevant tests as needed; they do not
-need Clippy. Before final full revalidation the integrator executes the
-engine-required `quality_check` on the final committed candidate, then reports
-success through `review check --pre-revalidation --quality-check TOOL
---worktree ...`. That command performs Source/isolation checks and binds the
-agent's successful check to the candidate; it never executes repository quality
-commands. An ordinary integration report cannot replace that final receipt.
+Outside pre-revalidation, `review check` returns success and explains that no
+check is needed. It captures delivery identity only and performs no source scan
+or repository checks.
 
-All modes scan the whole PR, including code inherited before worker dispatch.
+`backend-rewrite review check --pre-revalidation` applies Source and
+Replay-isolation rules to the final candidate. Implementer handoff and ordinary
+integration do not call review check, enforce file-size gates, or require spawn
+ownership evidence or a quality report. They submit exact committed deliveries;
+the engine captures and validates identity without source scans or repository
+commands. Implementers own business behavior; integrators own merges/conflicts.
+
+Before final full revalidation, the final-review assignment consolidates file
+splits, asynchronous task ownership, Source/isolation, formatting and required
+quality/tests. The configured quality tool is run on the final committed code,
+then reported with `review check --pre-revalidation --quality-check TOOL
+--worktree ...`. The engine records that result without executing repository
+tools. Commit review corrections and refresh affected checks before publishing
+and admitting the exact final candidate. Full revalidation covers that version;
+ordinary delivery receipts and historical API successes cannot replace it.
+
+Final review scans the whole PR, including code inherited before worker dispatch.
 `validation.scan_base_revision` is the merge base with the configured PR base;
 `base_revision` identifies the delivery base and does not narrow the scan.
 Keep the scan scope and supply current truthful evidence for inherited spawn
@@ -37,7 +46,7 @@ modules/functions. The full-file line limit still includes their lines. It does
 not prove a call graph or discover every macro/wrapper. When changing callers of
 an existing task launcher, inspect its ownership even if no new spawn is found.
 
-All review stages also check Replay isolation. The final pre-revalidation
+The final review also checks Replay isolation. The final pre-revalidation
 command records the integrator's successful quality check for the target and
 managed projects without running that tool.
 Source-sensitive
@@ -89,7 +98,7 @@ into evidence, including leading components such as `../backend-rs/`.
 
 Use this exception only when API-implementer or integration review identifies a
 `replay-isolation` public-domain finding. Inspect source and prepare exact
-evidence in the assigned worktree, then repeat that worktree's `review check`
+evidence in the assigned worktree, then repeat the final candidate's `review check --pre-revalidation`
 with the proven mappings. Report acceptance and traffic verification remain
 coordinator-owned.
 

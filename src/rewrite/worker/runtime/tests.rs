@@ -45,6 +45,7 @@ fn options(
         _ => None,
     };
     RewriteWorkerReportOptions {
+        delivery_commit: None,
         review_report,
         target_root: target.to_path_buf(),
         agent_handle: "actual-worker-a".into(),
