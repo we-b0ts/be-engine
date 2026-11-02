@@ -2628,6 +2628,11 @@ does not remain in the pending tail inventory, and remains separately reported
 as an omission rather than fabricated consumption. Missing business reads,
 locking transactions and unproved write/commit boundaries stay mandatory.
 An optional command that Target has started must finish its actual delivery.
+Complete ordinary row-lock SELECTs retain a strict real Target transaction.
+Once that lock lifetime and every other Source transaction are covered, the
+driver's default autocommit setting may use the same equivalence proof. Session
+variables, named locks, output writes and unknown effects retain the original
+setup requirement; an autocommit locking read cannot replace a real transaction.
 The captured HTTP completion resource remains strict, including when another
 HTTP read is allowed as shared initialization.
 

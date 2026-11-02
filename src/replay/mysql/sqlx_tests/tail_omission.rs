@@ -192,6 +192,48 @@ async fn finite_inventory_accepts_a_proven_native_autocommit_write_and_its_sessi
 }
 
 #[tokio::test]
+async fn finite_inventory_accepts_setup_equivalence_after_real_row_lock_and_commit_delivery() {
+    let mut records = super::autocommit_tests::cold_records();
+    records[1]["sql"] = json!("SELECT id FROM users WHERE id=1 FOR UPDATE");
+    records[2]["sql"] = json!("COMMIT");
+    let (temp, address, runtime, serving) = fixture(&records, false).await;
+    prepare_tail(&temp, &runtime, &records).await;
+    let original = std::fs::read(case_dependencies(&temp)).unwrap();
+    let mut client = connect(address, &ca(&temp)).await;
+    let mut transaction = client.begin().await.unwrap();
+    sqlx::query("SELECT id FROM users WHERE id=? FOR UPDATE")
+        .bind(1_i32)
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+    {
+        let state = runtime.state.lock().await;
+        assert_eq!(state.transaction_equivalent_autocommit().len(), 0);
+        assert_eq!(state.allowed_unused_commits().len(), 0);
+    }
+    transaction.commit().await.unwrap();
+    let ended = end_case(&command("end"), runtime.state.clone()).await;
+    assert_eq!(ended["ok"], true, "{ended}");
+    let state = runtime.state.lock().await;
+    assert!(state.dependency_tails.failures().is_empty());
+    assert_eq!(state.transaction_equivalent_autocommit().len(), 1);
+    assert_eq!(state.allowed_unused_rollbacks().len(), 1);
+    assert_eq!(state.mysql.events.matched_query_count, 2);
+    assert_eq!(
+        state
+            .mysql
+            .exchanges
+            .iter()
+            .filter(|exchange| exchange.status.is_consumed())
+            .count(),
+        2
+    );
+    assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+    assert_eq!(std::fs::read(case_dependencies(&temp)).unwrap(), original);
+    serving.abort();
+}
+
+#[tokio::test]
 async fn a_started_optional_rollback_retains_real_io_until_delivery_finishes() {
     let mut records = super::autocommit_tests::cold_records();
     records[2]["duration_ms"] = json!(250);

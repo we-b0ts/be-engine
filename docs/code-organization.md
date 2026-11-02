@@ -92,6 +92,12 @@ is unclear.
   observations. Native registration and Source transaction/read-span proof use
   that same boundary; business SQL, AUTOCOMMIT, errors and status-changing or
   unknown session effects retain their existing finite contracts.
+  `transaction_equivalence/source/locking_read` identifies complete ordinary
+  row-lock SELECTs as transaction-local effects. Their strict same-socket
+  transaction and actual end remain mandatory; after all Source transactions
+  have real coverage, they no longer block default-autocommit equivalence.
+  Session variables, named locks, output writes and unknown/nested effects
+  retain the original conservative setup requirement.
 
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
