@@ -271,6 +271,10 @@ is unclear.
   for real Target consumption within the absolute case budget. Protocol modules
   retain their own exchange identities and termination validation; native
   `finite_inventory` adapters expose delivery state without consuming exchanges.
+  Native MySQL setup/cleanup and transaction-equivalence proofs also apply to
+  async finite references. The adapter retains those omissions separately from
+  consumption; ordinary business statements, locking reads and unfinished real
+  deliveries remain mandatory. HTTP completion resources retain strict references.
   Kafka inventories retain each produce/delivery effect's semantic sequence in
   addition to its physical request sequence. Async metadata version 2 separates
   capture completeness from business completion; incomplete Source business

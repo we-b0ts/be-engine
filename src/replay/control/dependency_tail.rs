@@ -156,10 +156,11 @@ fn exchange_status(
 }
 
 fn permits_unstarted_omission(state: &ReplayState, selected: &SelectedExchange) -> bool {
-    !selected.strict_reference
-        && selected
-            .exchange
-            .permits_unstarted_omission(state, selected.shared_initialization)
+    selected.exchange.permits_unstarted_omission(
+        state,
+        selected.shared_initialization,
+        selected.strict_reference,
+    )
 }
 
 /// Prepare immutable references before activation, without starting a Target

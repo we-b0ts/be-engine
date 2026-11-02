@@ -2622,6 +2622,15 @@ Case dependency completions renew the idle clock. Unrelated process activity
 does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
 CLI exposes the same setting as `--case-no-progress-timeout-ms`.
 
+Finite async references retain MySQL's native setup/cleanup and complete
+transaction-equivalence proofs. A proven unstarted session-control omission
+does not remain in the pending tail inventory, and remains separately reported
+as an omission rather than fabricated consumption. Missing business reads,
+locking transactions and unproved write/commit boundaries stay mandatory.
+An optional command that Target has started must finish its actual delivery.
+The captured HTTP completion resource remains strict, including when another
+HTTP read is allowed as shared initialization.
+
 On expiry, only the current Case records `case_no_progress` and ends incomplete.
 Its message leads with the number of recorded dependencies left unconsumed and
 asks Target implementers to check the corresponding calls. The idle wait and
