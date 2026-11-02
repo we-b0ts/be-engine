@@ -83,14 +83,7 @@ pub(super) fn inventory_at(path: &Path, run_id: &str) -> Result<(String, u64)> {
     ))
 }
 
-fn sealed_index(
-    state: &RewriteState,
-) -> Result<(
-    PathBuf,
-    Vec<u8>,
-    RecordingManifest,
-    crate::dependency_index::FileIndex,
-)> {
+fn sealed_manifest(state: &RewriteState) -> Result<(PathBuf, Vec<u8>, RecordingManifest)> {
     let root = recording_root(
         state
             .case_source
@@ -107,6 +100,18 @@ fn sealed_index(
         manifest.run_id == state.recording_run_id,
         "attribution Source recording identity changed"
     );
+    Ok((root, bytes, manifest))
+}
+
+fn sealed_index(
+    state: &RewriteState,
+) -> Result<(
+    PathBuf,
+    Vec<u8>,
+    RecordingManifest,
+    crate::dependency_index::FileIndex,
+)> {
+    let (root, bytes, manifest) = sealed_manifest(state)?;
     let path = root.join("dependencies.jsonl");
     let index = crate::dependency_index::load_file(&path)?;
     let identity = manifest
