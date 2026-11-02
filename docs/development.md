@@ -617,9 +617,10 @@ projects can enable the same request-header encryption. The low-level
 headers without encryption; low-level callers must explicitly configure
 `encrypt_request_headers` and provide the encryption key when needed:
 
-```toml
-[recording]
-encrypt_request_headers = ["authorization"]
+```yaml
+recorder:
+  recording:
+    encrypt_request_headers: [authorization]
 ```
 
 JWT expiration between recording and Replay can be handled by an explicit
@@ -635,7 +636,14 @@ directory is mode `0700` and the strict Base64-encoded 32-byte key is mode
 only when the managed key is absent; a later mismatch is rejected.
 
 The configured request header value is written only as versioned ciphertext in
-`request.json`. Request encryption takes precedence over any explicitly configured
+`request.json`, dependency captures and stored HTTP request witnesses. Socket.IO
+WebSocket upgrade headers use the same configured list. All other traffic data,
+including interaction messages, request bodies, query strings and response
+headers, is stored without additional encryption. Binary values retain explicit
+Base64 encoding. Historical encrypted interactions and witnesses remain readable;
+existing recordings are never rewritten. Witness checksums, session signatures
+and encrypted signing-key envelopes retain their integrity role.
+Request encryption takes precedence over any explicitly configured
 redaction; response headers follow `redact_headers`. Missing,
 invalid, or wrong managed key material blocks Replay. The system passes the key
 only to Recorder processes; it is never injected into source,

@@ -1,13 +1,16 @@
-//! Authenticated private interaction payloads; routing and timing stay inspectable.
+//! Compatibility reader for historical authenticated interaction payloads.
 use crate::request_headers::EvidenceCipher;
 use anyhow::{Context, Result, ensure};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use std::path::Path;
 
 const PREFIX: &str = "traffic-e2e:enc:";
 const OUTPUT_ENVELOPE: &str = "private_interaction_output";
 const PRIVATE_HEADERS: &str = "x-traffic-e2e-private-headers";
 
+#[cfg(test)]
 pub(crate) fn protect_request(request: &mut Value, path: &Path) -> Result<()> {
     if request.get("interaction").is_none_or(Value::is_null) {
         return Ok(());
@@ -181,6 +184,7 @@ pub(crate) fn decrypt_request(request: &mut Value, path: &Path) -> Result<bool> 
     Ok(changed)
 }
 
+#[cfg(test)]
 pub(crate) fn protect_output(response: &mut Value, path: &Path) -> Result<()> {
     if response.get("interaction").is_none_or(Value::is_null)
         || response.get(OUTPUT_ENVELOPE).is_some()
@@ -367,6 +371,7 @@ fn visit_events(
     Ok(())
 }
 
+#[cfg(test)]
 fn protect_string(value: &mut Value, cipher: &EvidenceCipher, label: &str) -> Result<()> {
     let text = value
         .as_str()
@@ -390,6 +395,7 @@ fn decrypt_string(value: &mut Value, cipher: &EvidenceCipher, label: &str) -> Re
     Ok(true)
 }
 
+#[cfg(test)]
 fn encrypt(cipher: &EvidenceCipher, label: &str, bytes: &[u8]) -> Result<String> {
     let encrypted = cipher.encrypt(label, bytes)?;
     ensure!(

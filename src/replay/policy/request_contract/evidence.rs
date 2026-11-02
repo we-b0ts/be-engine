@@ -1,4 +1,4 @@
-//! Bounded encrypted target-request witnesses; public discovery exposes selectors only.
+//! Bounded target-request witnesses; public discovery exposes selectors only.
 use super::super::config::fingerprint;
 use super::*;
 use serde::{Deserialize, Serialize};
@@ -17,9 +17,29 @@ pub(in crate::replay) struct Candidate {
     pub source_fingerprint: String,
     pub target_fingerprint: String,
     pub actual_anchor: DateTime<Utc>,
-    pub encrypted_target: String,
+    #[serde(flatten)]
+    pub payload: crate::policy_evidence::StoredPayload,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub authentication: String,
 }
 impl Candidate {
+    fn actual(&self, context: &Path) -> Result<Vec<u8>> {
+        let bytes = self.payload.read(context, &self.label())?;
+        if !matches!(
+            self.payload,
+            crate::policy_evidence::StoredPayload::Encrypted { .. }
+        ) || !self.authentication.is_empty()
+        {
+            crate::policy_evidence::authentication::verify(
+                context,
+                &self.label(),
+                &bytes,
+                &self.authentication,
+            )?;
+        }
+        Ok(bytes)
+    }
+
     fn label(&self) -> String {
         let metadata = serde_json::to_string(&(
             &self.case_id,
@@ -161,6 +181,16 @@ impl RequestContracts {
         let Some(actual_anchor) = actual_started_at else {
             return;
         };
+        let Ok(headers) = crate::request_headers::evidence::HeaderPolicy::load(&anchor.dir)
+            .and_then(|policy| policy.ranges(actual))
+        else {
+            return;
+        };
+        let Ok(payload) =
+            crate::policy_evidence::StoredPayload::capture(actual, 0, &headers, &anchor.dir)
+        else {
+            return;
+        };
         let mut candidate = Candidate {
             case_id: case.into(),
             capability: capability.into(),
@@ -172,14 +202,15 @@ impl RequestContracts {
             source_fingerprint: fingerprint(source),
             target_fingerprint: fingerprint(actual),
             actual_anchor,
-            encrypted_target: String::new(),
+            payload,
+            authentication: String::new(),
         };
-        let Ok(encrypted_target) =
-            crate::request_headers::encrypt_evidence(&anchor.dir, &candidate.label(), actual)
+        let Ok(authentication) =
+            crate::policy_evidence::authentication::sign(&anchor.dir, &candidate.label(), actual)
         else {
             return;
         };
-        candidate.encrypted_target = encrypted_target;
+        candidate.authentication = authentication;
         let mut state = self.state.lock().expect("request contracts");
         if state.candidates.len() < 64
             && !state.candidates.iter().any(|c| {
@@ -202,10 +233,16 @@ pub(crate) fn discover(report: &Value) -> Value {
             .filter_map(|candidate| serde_json::from_value::<Candidate>(candidate.clone()).ok())
             .map(|candidate| {
                 let mut candidate = serde_json::to_value(candidate).expect("candidate projection");
-                candidate
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("encrypted_target");
+                for field in [
+                    "encrypted_target",
+                    "encrypted",
+                    "encoding",
+                    "data",
+                    "parts",
+                    "authentication",
+                ] {
+                    candidate.as_object_mut().unwrap().remove(field);
+                }
                 candidate
             })
             .collect(),
@@ -335,11 +372,7 @@ pub(in crate::replay::policy) fn verify_capture(
                     conditions: BTreeSet::from([rule.id.clone()]),
                 },
             );
-        let actual = crate::request_headers::decrypt_evidence(
-            &dir,
-            &candidate.label(),
-            &candidate.encrypted_target,
-        )?;
+        let actual = candidate.actual(&dir)?;
         ensure!(
             fingerprint(&actual) == candidate.target_fingerprint,
             "request witness target fingerprint differs"

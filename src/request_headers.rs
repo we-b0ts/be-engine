@@ -10,6 +10,8 @@ use base64::engine::general_purpose::STANDARD;
 use hyper::HeaderMap;
 use serde_json::Value;
 
+pub(crate) mod evidence;
+
 pub(crate) const ENCRYPTION_KEY_ENV: &str = "TRAFFIC_E2E_ENCRYPTION_KEY_B64";
 
 const ENCRYPTED_VALUE_PREFIX: &str = "traffic-e2e:enc:v1:aes-256-gcm:";
@@ -150,12 +152,17 @@ fn decrypt_request_payload(raw: &[u8], request_path: Option<&Path>) -> Result<Op
         );
         false
     };
-    if let Some(headers) = request.get_mut("headers").and_then(Value::as_object_mut)
-        && headers.values().any(contains_encrypted_value)
+    changed |= decrypt_header_snapshot(request.get_mut("headers"), request_path)?;
+    if let Some(actions) = request
+        .pointer_mut("/interaction/actions")
+        .and_then(Value::as_array_mut)
     {
-        let cipher = RequestHeaderCipher::from_environment_or_request_path(request_path)?;
-        decrypt_headers(headers, &cipher)?;
-        changed = true;
+        for action in actions {
+            if action.pointer("/action/kind").and_then(Value::as_str) == Some("upgrade") {
+                changed |=
+                    decrypt_header_snapshot(action.pointer_mut("/action/headers"), request_path)?;
+            }
+        }
     }
     if !changed {
         return Ok(None);
@@ -164,6 +171,20 @@ fn decrypt_request_payload(raw: &[u8], request_path: Option<&Path>) -> Result<Op
         serde_json::to_vec_pretty(&request).context("failed to serialize decrypted request")?;
     payload.push(b'\n');
     Ok(Some(payload))
+}
+
+fn decrypt_header_snapshot(value: Option<&mut Value>, path: Option<&Path>) -> Result<bool> {
+    let Some(headers) = value.and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+    if !headers.values().any(contains_encrypted_value) {
+        return Ok(false);
+    }
+    decrypt_headers(
+        headers,
+        &RequestHeaderCipher::from_environment_or_request_path(path)?,
+    )?;
+    Ok(true)
 }
 
 /// Decode a caller-owned immutable view without creating plaintext evidence files.
@@ -205,12 +226,32 @@ fn contains_encrypted_value(value: &Value) -> bool {
     })
 }
 
+pub(crate) fn has_encrypted_request_headers(request: &Value) -> bool {
+    let encrypted = |headers: Option<&Value>| {
+        headers
+            .and_then(Value::as_object)
+            .is_some_and(|headers| headers.values().any(contains_encrypted_value))
+    };
+    request.get("private_headers").is_some()
+        || encrypted(request.get("headers"))
+        || request
+            .pointer("/interaction/actions")
+            .and_then(Value::as_array)
+            .is_some_and(|actions| {
+                actions.iter().any(|action| {
+                    action.pointer("/action/kind").and_then(Value::as_str) == Some("upgrade")
+                        && encrypted(action.pointer("/action/headers"))
+                })
+            })
+}
+
 fn normalize_names(names: &[String]) -> HashSet<String> {
     names.iter().map(|name| name.to_ascii_lowercase()).collect()
 }
 
 struct RequestHeaderCipher {
     cipher: Aes256Gcm,
+    key: [u8; AES_256_KEY_BYTES],
 }
 
 impl RequestHeaderCipher {
@@ -266,6 +307,7 @@ impl RequestHeaderCipher {
     fn from_key(key: &[u8; AES_256_KEY_BYTES]) -> Self {
         Self {
             cipher: Aes256Gcm::new_from_slice(key).expect("AES-256 key has a fixed valid length"),
+            key: *key,
         }
     }
 
@@ -324,7 +366,7 @@ impl RequestHeaderCipher {
     }
 }
 
-/// Reuse the managed authenticated cipher for private dependency request witnesses.
+/// Managed cipher for historical interaction readers and compatibility fixtures.
 pub(crate) struct EvidenceCipher(RequestHeaderCipher);
 
 impl EvidenceCipher {
@@ -334,6 +376,7 @@ impl EvidenceCipher {
         )?))
     }
 
+    #[cfg(test)]
     pub(crate) fn encrypt(&self, label: &str, bytes: &[u8]) -> Result<String> {
         self.0.encrypt(label, bytes)
     }
@@ -341,6 +384,11 @@ impl EvidenceCipher {
     pub(crate) fn decrypt(&self, label: &str, value: &str) -> Result<Vec<u8>> {
         self.0.decrypt(label, value)
     }
+}
+
+/// Engine-only key resolution shared with evidence integrity authentication.
+pub(crate) fn managed_evidence_key(path: &Path) -> Result<[u8; AES_256_KEY_BYTES]> {
+    Ok(RequestHeaderCipher::from_environment_or_request_path(Some(path))?.key)
 }
 
 pub(crate) fn encrypt_evidence(path: &Path, label: &str, bytes: &[u8]) -> Result<String> {

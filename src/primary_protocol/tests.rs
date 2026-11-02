@@ -69,7 +69,7 @@ async fn http_static_adapter_executes_real_input_and_retains_independent_clocks(
         .execute(&context(&request_path, &session, &origin, None))
         .await
         .unwrap();
-    let artifact = output.artifact(&temp.path().join("actual.json")).unwrap();
+    let artifact = output.artifact().unwrap();
     assert_eq!(artifact["status"], 201);
     assert_eq!(artifact["body"]["data"], "actual");
     assert_eq!(
@@ -167,7 +167,7 @@ async fn motan_versions_use_real_wire_and_typed_identity_without_expected_eviden
         assert_eq!(*response_frame, expected_frame);
         assert!(output.response_completed_at.unwrap() >= body_released_at);
         assert_eq!(
-            output.artifact(&temp.path().join("actual.json")).unwrap()["primary"]["api"]["protocol"],
+            output.artifact().unwrap()["primary"]["api"]["protocol"],
             "motan"
         );
     }

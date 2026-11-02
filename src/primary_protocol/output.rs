@@ -100,7 +100,7 @@ impl CapturedBody {
 }
 
 impl PrimaryOutput {
-    pub(crate) fn artifact(&self, path: &std::path::Path) -> anyhow::Result<serde_json::Value> {
+    pub(crate) fn artifact(&self) -> anyhow::Result<serde_json::Value> {
         let empty_rules = Vec::new();
         let metadata = || PrimaryMetadata {
             api: self.api.clone(),
@@ -143,7 +143,10 @@ impl PrimaryOutput {
             },
         };
         let mut value = serde_json::to_value(response)?;
-        crate::interaction::private::protect_output(&mut value, path)?;
+        crate::interaction::artifact::prepare_output(&mut value);
         Ok(value)
     }
 }
+
+#[cfg(test)]
+mod tests;

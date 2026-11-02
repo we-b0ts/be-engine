@@ -10,9 +10,12 @@ use sha2::{Digest, Sha256};
 
 use crate::policy::{Resource, Slot, Surface};
 
+pub(crate) mod authentication;
 mod catalog;
 pub(crate) mod hypotheses;
 mod limits;
+mod payload;
+pub(crate) use payload::StoredPayload;
 mod source;
 mod storage;
 mod store;

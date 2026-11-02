@@ -126,15 +126,10 @@ pub(super) async fn dispatch(
         "upstream negotiated unsupported WebSocket compression"
     );
     if !initial {
-        let mut recorded_headers = crate::recorder::HeaderMapSnapshot::new();
-        for (name, value) in &parts.headers {
-            recorded_headers.entry(name.to_string()).or_default().push(
-                value
-                    .to_str()
-                    .context("WebSocket upgrade header is not UTF-8")?
-                    .to_owned(),
-            );
-        }
+        let recorded_headers = session
+            .state
+            .recorder()
+            .capture_request_headers(&parts.headers)?;
         session
             .observation
             .lock()
