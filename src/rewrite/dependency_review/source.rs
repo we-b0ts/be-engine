@@ -13,6 +13,8 @@ use super::super::model::RewriteState;
 use crate::dependency::observation::{
     CaptureMetadata, LedgerFileIdentity, MANIFEST_FILE, RECORDING_SCHEMA, RecordingManifest,
 };
+mod lookup;
+pub(super) use lookup::information;
 
 #[cfg(test)]
 mod tests;
@@ -81,7 +83,14 @@ pub(super) fn inventory_at(path: &Path, run_id: &str) -> Result<(String, u64)> {
     ))
 }
 
-pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
+fn sealed_index(
+    state: &RewriteState,
+) -> Result<(
+    PathBuf,
+    Vec<u8>,
+    RecordingManifest,
+    crate::dependency_index::FileIndex,
+)> {
     let root = recording_root(
         state
             .case_source
@@ -100,6 +109,23 @@ pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
     );
     let path = root.join("dependencies.jsonl");
     let index = crate::dependency_index::load_file(&path)?;
+    let identity = manifest
+        .files
+        .iter()
+        .find(|file| file.path == "dependencies.jsonl")
+        .context("Source manifest omits the central dependency file")?;
+    ensure!(
+        identity.length == index.stamp.size
+            && identity.sha256.trim_start_matches("sha256:")
+                == index.sha256.trim_start_matches("sha256:"),
+        "Source central dependency content differs from sealed manifest"
+    );
+    Ok((root, bytes, manifest, index))
+}
+
+pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
+    let (root, bytes, manifest, index) = sealed_index(state)?;
+    let path = root.join("dependencies.jsonl");
     let target = root
         .ancestors()
         .find(|path| path.join(".traffic-e2e").is_dir());
@@ -121,17 +147,6 @@ pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
         central_path: path.clone(),
         central_stamp: index.stamp.clone(),
     };
-    let identity = manifest
-        .files
-        .iter()
-        .find(|file| file.path == "dependencies.jsonl")
-        .context("Source manifest omits the central dependency file")?;
-    ensure!(
-        identity.length == index.stamp.size
-            && identity.sha256.trim_start_matches("sha256:")
-                == index.sha256.trim_start_matches("sha256:"),
-        "Source central dependency content differs from sealed manifest"
-    );
     for record in index
         .proof_records
         .as_ref()
@@ -163,33 +178,12 @@ pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
         {
             snapshot.http.entry(http_id.into()).or_default().insert(id);
         }
-        let complete = event["_capture_complete"] == true;
-        match snapshot.exchanges.entry(id) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(SourceExchange {
-                    capture,
-                    complete,
-                    selector: event.clone(),
-                    location: record.location.clone(),
-                });
-            }
-            std::collections::btree_map::Entry::Occupied(mut entry) => {
-                let previous = entry.get_mut();
-                ensure!(
-                    previous.capture.process_epoch == capture.process_epoch
-                        && previous.capture.protocol_ref == capture.protocol_ref
-                        && previous.capture.started_at == capture.started_at
-                        && previous.capture.attribution == capture.attribution,
-                    "one physical Source exchange has contradictory capture identity or ownership"
-                );
-                previous.complete &= complete;
-                if capture.semantic_required && !previous.capture.semantic_required {
-                    previous.capture = capture;
-                    previous.selector = event.clone();
-                    previous.location = record.location.clone();
-                }
-            }
-        }
+        observe_exchange(
+            &mut snapshot.exchanges,
+            capture,
+            &record.selector,
+            &record.location,
+        )?;
     }
     for input in manifest.inputs {
         if !input.complete {
@@ -223,6 +217,42 @@ pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
             .insert(input.case_id, root.join(&input.path));
     }
     Ok(snapshot)
+}
+
+fn observe_exchange(
+    exchanges: &mut BTreeMap<Uuid, SourceExchange>,
+    capture: CaptureMetadata,
+    selector: &Value,
+    location: &crate::dependency_index::RecordLocation,
+) -> Result<()> {
+    let complete = selector["_capture_complete"] == true;
+    match exchanges.entry(capture.exchange_id) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(SourceExchange {
+                capture,
+                complete,
+                selector: selector.clone(),
+                location: location.clone(),
+            });
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            let previous = entry.get_mut();
+            ensure!(
+                previous.capture.process_epoch == capture.process_epoch
+                    && previous.capture.protocol_ref == capture.protocol_ref
+                    && previous.capture.started_at == capture.started_at
+                    && previous.capture.attribution == capture.attribution,
+                "one physical Source exchange has contradictory capture identity or ownership"
+            );
+            previous.complete &= complete;
+            if capture.semantic_required && !previous.capture.semantic_required {
+                previous.capture = capture;
+                previous.selector = selector.clone();
+                previous.location = location.clone();
+            }
+        }
+    }
+    Ok(())
 }
 
 impl SourceSnapshot {

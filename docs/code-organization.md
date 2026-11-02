@@ -897,6 +897,10 @@ is unclear.
   until supported owner rules resolve it. Known-owned batch changes need no
   analyst; `investigations/resolution` publishes the existing API implementer's
   current-attempt diagnosis of its owned missing traffic.
+  `dependency_review/source/lookup` serves one Source identity from the sealed
+  metadata index without constructing whole-run discovery or ownership maps.
+  It shares central-file authentication and physical-effect folding with the
+  full Source proof loader; diagnostic lookup never certifies attribution.
   `decisions` stores immutable, shared proof templates with complete finite UUID
   membership and ordered history; `decisions/serde` reads legacy occurrence
   maps/arrays and publishes compact groups. Status validates proof groups without

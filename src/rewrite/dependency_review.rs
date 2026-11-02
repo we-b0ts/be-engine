@@ -699,18 +699,15 @@ pub fn dependency_attribution_source_information(
 ) -> Result<Value> {
     let (root, store) = open(&context.target_root)?;
     let state = store.load()?.context("rewrite workflow absent")?;
-    let inventory = source::load(&state)?;
     let id = id.parse::<uuid::Uuid>()?;
-    let event = inventory
-        .exchanges
-        .get(&id)
-        .context("Source exchange is outside this immutable recording")?;
+    let information = source::information(&state, id)?;
+    let event = &information.exchange;
     let metadata = &event.selector;
     Ok(
-        json!({"schema":SCHEMA,"recording_run_id":state.recording_run_id,"source_inventory_id":inventory.identity,
+        json!({"schema":SCHEMA,"recording_run_id":state.recording_run_id,"source_inventory_id":information.identity,
         "source_exchange_id":id,"capture":event.capture,"capture_complete":event.complete,
         "effective_attribution":state.dependency_review.decisions.get(&id).map(|decision|decision.decision(id)),
-        "default_case_attribution":inventory.case_defaults.get(&id),
+        "default_case_attribution":information.case_default,
         "request_shape":{"event_type":metadata["event_type"],"operation":metadata["command"].as_str().or_else(||metadata["method"].as_str()),
             "endpoint":{"host":metadata["target_host"],"port":metadata["target_port"]},
             "args_count":metadata["args"].as_array().map(Vec::len),"params_count":metadata["params"].as_array().map(Vec::len),

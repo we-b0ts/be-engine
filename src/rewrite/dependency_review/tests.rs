@@ -103,6 +103,69 @@ async fn fixture(count: usize) -> (tempfile::TempDir, RewriteState) {
     (target, state)
 }
 
+#[tokio::test]
+async fn single_source_information_preserves_sealed_physical_identity_and_shape() {
+    let (target, state) = fixture(2).await;
+    let source = source::load(&state).unwrap();
+    for (id, expected) in &source.exchanges {
+        let actual = dependency_attribution_source_information(
+            super::super::RewriteContext {
+                target_root: target.path().into(),
+            },
+            &id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(actual["source_inventory_id"], source.identity);
+        assert_eq!(
+            actual["capture"],
+            serde_json::to_value(&expected.capture).unwrap()
+        );
+        assert_eq!(actual["capture_complete"], expected.complete);
+        assert_eq!(
+            actual["request_shape"]["event_type"],
+            expected.selector["event_type"]
+        );
+        assert!(actual.get("selector").is_none());
+        assert!(actual["request_shape"].get("args").is_none());
+        assert!(actual.get("response").is_none());
+    }
+    assert!(
+        dependency_attribution_source_information(
+            super::super::RewriteContext {
+                target_root: target.path().into()
+            },
+            &Uuid::new_v4().to_string(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("outside this immutable recording")
+    );
+
+    // A warmed index cannot authenticate bytes modified after the recording seal.
+    let path = state
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("dependencies.jsonl");
+    let mut bytes = fs::read(&path).unwrap();
+    let position = bytes
+        .windows(b"refresh".len())
+        .position(|w| w == b"refresh")
+        .unwrap();
+    bytes[position] = b'R';
+    fs::write(path, bytes).unwrap();
+    assert!(
+        dependency_attribution_source_information(
+            super::super::RewriteContext {
+                target_root: target.path().into()
+            },
+            &source.exchanges.keys().next().unwrap().to_string(),
+        )
+        .is_err(),
+        "a warmed lookup must reject modified sealed Source bytes"
+    );
+}
+
 fn proposal(
     source: &source::SourceSnapshot,
     policy: &crate::policy::CompiledPolicy,
