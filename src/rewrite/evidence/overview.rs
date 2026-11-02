@@ -4,9 +4,11 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::json;
 
+use super::super::fingerprint;
 use super::super::model::{RewriteIssue, RewriteState};
 use super::super::work_scope::RewriteWorkScope;
-use super::super::{fingerprint, worker};
+#[cfg(test)]
+use super::super::worker;
 use super::RewriteEvidenceReport;
 
 const QUERY_OVERVIEW: &str = "overview";
@@ -180,14 +182,7 @@ pub(super) fn report(
     );
     Ok(RewriteEvidenceReport {
         schema_version: 4,
-        context: Some(Box::new(super::super::evidence_model::RewriteEvidenceContext {
-            target_root: target_root.to_path_buf(),
-            workflow_id: state.workflow_id.clone(),
-            revision: state.revision,
-            recording_run_id: state.recording_run_id.clone(),
-            delivery: crate::rewrite::review::context(target_root, state, &scope),
-            worker: worker::dispatch_view(state, scope.clone(), None),
-        })),
+        context: Some(super::report::context(target_root, state, &scope)),
         evidence_id,
         issue_id: issue.id.clone(),
         query: QUERY_OVERVIEW.to_string(),

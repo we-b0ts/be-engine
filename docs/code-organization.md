@@ -374,6 +374,11 @@ is unclear.
   `rewrite/evidence/witness` owns bounded, assignment-bound access to authenticated
   dependency witness values and recorded input header names. It reuses native
   carrier extraction without applying rules or changing match outcomes.
+  `rewrite/evidence/report` wraps selected diagnostic facts with the same current
+  assignment and delivery context as an overview, without constructing and
+  discarding the whole API ownership graph. Protected witness and Redis argument
+  queries retain their own assignment, attempt, native identity and authentication
+  checks before creating that envelope.
   Its MySQL selector reads one authenticated materialized SQL cell; the pure
   `replay/mysql/contracts/value_view` adapter reuses bounded native parameter
   decoding and physical field resolution. It does not pair statements or
