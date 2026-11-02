@@ -147,6 +147,62 @@ async fn ownerless_context_matches_full_source_before_and_after_admission_invent
 }
 
 #[tokio::test]
+async fn unused_occurrence_projection_matches_full_source_and_retains_seal_checks() {
+    let (_target, state) = fixture(2).await;
+    let full = source::load(&state).unwrap();
+    let projected = source::occurrences::load(&state).unwrap();
+    assert_eq!(projected.identity, full.identity);
+    assert_eq!(projected.apis, full.apis);
+    assert_eq!(projected.case_defaults, full.case_defaults);
+    assert_eq!(projected.exchanges.len(), full.exchanges.len());
+    for (id, expected) in &full.exchanges {
+        let actual = &projected.exchanges[id];
+        assert_eq!(
+            serde_json::to_value(&actual.capture).unwrap(),
+            serde_json::to_value(&expected.capture).unwrap()
+        );
+        assert_eq!(actual.complete, expected.complete);
+        assert_eq!(
+            actual.selector["event_type"],
+            expected.selector["event_type"]
+        );
+        assert!(actual.selector.get("uri").is_none());
+        assert!(actual.selector.get("args").is_none());
+    }
+    let http = full
+        .http
+        .keys()
+        .map(|id| json!({"case_id":"selected","source_http_id":id}))
+        .collect::<Vec<_>>();
+    let redis = full
+        .native
+        .keys()
+        .filter(|(protocol, _, _)| protocol == "redis")
+        .map(|(_, connection, sequence)| {
+            json!({"case_id":"selected","connection_id":connection,"sequence":sequence,"command":"GET"})
+        })
+        .collect::<Vec<_>>();
+    let report = json!({"unused_case_http_exchanges":http,"redis":{"unused_case":redis},
+        "unused_case_exchanges":[{"case_id":"other","source_exchange_id":Uuid::new_v4()}]});
+    let selected = BTreeSet::from(["selected".into()]);
+    let expected = source::unused(&full, &report, &selected).unwrap();
+    assert_eq!(expected.len(), 3);
+    assert_eq!(projected.unused(&report, &selected).unwrap(), expected);
+    let unknown = json!({"unused_case_exchanges":[{
+        "case_id":"selected","source_exchange_id":Uuid::new_v4()}]});
+    assert!(projected.unused(&unknown, &selected).is_err());
+    let central = state
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("dependencies.jsonl");
+    let mut bytes = fs::read(&central).unwrap();
+    bytes.push(b'\n');
+    fs::write(central, bytes).unwrap();
+    assert!(source::occurrences::load(&state).is_err());
+}
+
+#[tokio::test]
 async fn single_source_information_preserves_sealed_physical_identity_and_shape() {
     let (target, state) = fixture(2).await;
     let source = source::load(&state).unwrap();

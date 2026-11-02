@@ -923,6 +923,12 @@ is unclear.
   UUID locations. Incomplete locator partitions retain the full metadata fallback.
   Lookup shares physical-effect folding with the full Source proof loader;
   diagnostic lookup never certifies attribution.
+  Its `occurrences` sibling streams original sealed records into only capture
+  completeness and exact native/HTTP identity metadata for paged API diagnostics.
+  It shares physical-effect folding, input-route authentication and unused-reference
+  resolution with the full Source loader, without constructing discovery graphs
+  or retaining SQL and payload selectors. Actual attribution proof still uses
+  the full Source snapshot.
   `e2e_run/diagnostic_report` resolves published reports by exact session, either
   an archived actual batch or the current finalized focused API attempt. It
   retains Source, attempt, inventory and publication guards; malformed archives

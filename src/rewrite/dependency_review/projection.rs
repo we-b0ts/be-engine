@@ -197,14 +197,14 @@ fn occurrence_information(
     report: &Value,
     offset: usize,
 ) -> Result<Value> {
-    let source = super::source::load(state)?;
+    let source = super::source::occurrences::load(state)?;
     let selected = source
         .apis
         .iter()
         .filter(|(_, method)| method.as_str() == api)
         .map(|(id, _)| id.to_string())
         .collect();
-    let unused = super::source::unused(&source, report, &selected)?;
+    let unused = source.unused(report, &selected)?;
     let targets = super::investigations::unmatched_observations(report, &selected);
     let entries = unused.iter().skip(offset).take(PAGE).map(|id| {
         let event = &source.exchanges[id];

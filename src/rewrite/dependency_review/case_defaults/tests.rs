@@ -3,6 +3,7 @@ use crate::recorder::{CaseContext, RecorderEvent, RedisPubSubPushEvent, capture_
 use crate::rewrite::{RewriteContext, model::RewriteState, store::RewriteStore};
 use crate::{AppConfig, AppState};
 use serde_json::json;
+use std::collections::BTreeSet;
 
 async fn historical(inside_window: bool) -> (tempfile::TempDir, RewriteState, Uuid, Vec<u8>) {
     let target = crate::rewrite::worker::tests::configured_target();
@@ -86,6 +87,42 @@ async fn historical(inside_window: bool) -> (tempfile::TempDir, RewriteState, Uu
         .unwrap();
     let bytes = fs::read(app.recorder().run_dir.join("dependencies.jsonl")).unwrap();
     (target, state, case.id, bytes)
+}
+
+#[tokio::test]
+async fn unused_occurrence_projection_preserves_input_routes_and_notification_identities() {
+    let (_target, state, case, _) = historical(true).await;
+    let full = super::super::source::load(&state).unwrap();
+    let projected = super::super::source::occurrences::load(&state).unwrap();
+    assert_eq!(projected.apis, full.apis);
+    assert_eq!(projected.apis[&case], "POST /responses");
+    assert_eq!(projected.case_defaults, full.case_defaults);
+    let notifications = full
+        .exchanges
+        .iter()
+        .filter(|(_, event)| event.selector["event_type"] == "redis_pub_sub_push")
+        .map(|(id, _)| {
+            json!({"case_id":case.to_string(),"command":"PUBSUB_PUSH","source_exchange_id":id})
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(notifications.len(), 2);
+    let report = json!({"redis":{"unused_case":notifications}});
+    let selected = BTreeSet::from([case.to_string()]);
+    assert_eq!(
+        projected.unused(&report, &selected).unwrap(),
+        super::super::source::unused(&full, &report, &selected).unwrap()
+    );
+    let mut missing = report.clone();
+    missing["redis"]["unused_case"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("source_exchange_id");
+    assert!(projected.unused(&missing, &selected).is_err());
+    let path = full.inputs[&case].join("request.json");
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.push(b' ');
+    fs::write(path, bytes).unwrap();
+    assert!(super::super::source::occurrences::load(&state).is_err());
 }
 
 #[tokio::test]
