@@ -74,6 +74,12 @@ pub(in crate::rewrite) fn information(root: &Path, state: &RewriteState) -> Resu
         json!({"evidence_id":id,"scope":"source_attribution","owner":"coordinator",
         "target_observations":false,"accepted":false,
         "allowed":"Source-proven process task ownership and async_api lifecycle rules only; apply independent attribution proof afterwards, then execute genuine Replay",
+        "after_analysis":{
+            "missing_or_incomplete_policy":"Return a minimal Source-proven rule proposal. The coordinator plans and applies it with this evidence, obtains fresh attribution context, then applies the independent exact-occurrence proof.",
+            "existing_policy_sufficient":"Identify the effective rules and explain why they cover the Source path. No unchanged plan/apply is required; retain exact-occurrence proof for historical recordings or policy-execution gaps.",
+            "async_api_scope":"Declare request/response triggers and complete terminal end conditions for future recording; do not enumerate intermediate dependency requests.",
+            "unavailable_terminal_or_execution_gap":"Report the concrete evidence and remaining recording obligations. Continue the supported independent attribution and genuine Replay path; do not invent a terminal event or add an engine-repair prerequisite."
+        },
         "plan_command":action::command(root,vec!["rule".into(),"plan".into(),"--file".into(),"<source-owner-rule.yaml>".into(),"--evidence".into(),id],vec![])}),
     )
 }

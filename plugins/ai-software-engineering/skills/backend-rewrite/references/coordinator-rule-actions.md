@@ -1,8 +1,9 @@
 # Coordinator Rule Actions
 
-Only the confirmed workflow coordinator plans/applies rules. Require the worker's
-Source conclusions and exact proposed selectors; return semantic questions to the
-Source owner. Follow the [shared rule evidence contract](rule-policy.md): relevant
+Only the confirmed workflow coordinator plans/applies rules. Require the assigned
+API implementer's or repository analyst's Source conclusions and exact proposed
+selectors; return semantic questions to the Source owner. Follow the
+[shared rule evidence contract](rule-policy.md): relevant
 API `rule_hints`, queries, planners and current actions drive the work. Rules live
 in the single file named by `project.policy`; default
 `.traffic-e2e/policy.yaml`. Declare one global JSON field-format map under
@@ -293,14 +294,36 @@ an exact recording omission and interception/response-IP-URL rewrite inputs.
 returned `show --api` view and coordinator `resolve` command to publish that
 implementer's conclusion. Unmatched or startup dirty alone is not analyst work.
 
-Use `dependency-attribution rules` to inspect complete effective task/lifecycle
-groups. Publish Source-proven process/async rules through unified rule plan/apply
-first. Before any actual Replay exists, use the context's exact `rule_planning`
-Source-only evidence token and command; do not fabricate API attempts or apply
-value waivers through attribution planning. Obtain fresh attribution context,
-then apply the independent analyst
-submission with the exact policy fingerprint, rule IDs, Source inventory and
-expected revision. Names or exclusion evidence alone cannot authorize a pass.
+Use `dependency-attribution rules` for effective task/lifecycle group identities
+and the async `scenarios` with their current triggers and ends. Inspect other
+relevant declarations in `project.policy` and include them in the analyst
+assignment. After tracing the Source branches,
+retries and cleanup, require an explicit rule assessment alongside the ownership
+proof. Keep the assessment and any rule proposal in the analyst's accompanying
+result; the `dependency-attribution/v3` submission keeps its existing schema:
+
+- An existing rule covers the actual trigger and complete end: reuse it. No
+  byte-identical plan/apply is needed merely because another batch needs proof.
+- A rule is missing or its trigger/end is incomplete, and Source proves a
+  supported correction: obtain the smallest rule proposal and its Source
+  justification. For an async API, declare only the trigger conditions and end
+  resources; do not enumerate intermediate SQL, Redis or HTTP requests.
+- Source does not establish a supported complete end, or an adequate rule has an
+  execution gap: retain the concrete limitation and use ordinary independent
+  per-occurrence attribution where supported. Keep effective rule bindings,
+  Source proof and genuine Replay/capture obligations. Policy or engine repair
+  does not introduce an additional gate on that existing fallback.
+
+For a supported correction, publish the Source-proven process/async rule through
+unified rule plan/apply before applying the attribution proof. Merely binding an
+existing rule does not close a diagnosed missing or incomplete rule proposal.
+Use the context's exact `rule_planning` Source-only evidence token and command;
+no actual Replay is required to obtain that planning evidence. Review and apply
+the returned plan, obtain fresh attribution context, and bind the analyst's
+submission to its exact policy fingerprint, rule IDs, Source inventory and
+expected revision. Do not reuse the pre-apply context, fabricate API attempts or
+apply value waivers through attribution planning. Names or exclusion evidence
+alone cannot authorize a pass.
 
 `dependency-attribution show --api <canonical-route>` is the factual Target view
 for all method contracts, hypotheses, original Source IDs, actual unmatched

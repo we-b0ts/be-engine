@@ -88,7 +88,8 @@ pub(super) fn groups(policy: &CompiledPolicy) -> Result<Vec<Value>> {
     for (api, rules) in &policy.async_api {
         groups.push(json!({"kind":"async_api","api":crate::rewrite::api_selector::public_api(api),
         "method_api":api,"rule_id":async_id(api),"fingerprint":source::digest(&serde_json::to_vec(rules)?),
-        "scenario_count":rules.len(),"dependency_requests":"automatically captured until the declared end; no intermediate request list"}));
+        "scenario_count":rules.len(),"scenarios":rules,
+        "dependency_requests":"automatically captured until the declared end; no intermediate request list"}));
     }
     Ok(groups)
 }
