@@ -401,7 +401,7 @@ impl RedisReplayState {
             if !self
                 .connection_scopes
                 .matches(representative, case, connection)
-                || !self.arguments_match(representative, &key_arguments)
+                || !self.observation_arguments_match(representative, &key_arguments)
             {
                 continue;
             }
@@ -459,7 +459,7 @@ impl RedisReplayState {
                         prefix.contains(&(exchange.record.connection_id, exchange.record.sequence))
                             && exchange.status.is_available()
                             && self.connection_scopes.matches(exchange, case, connection)
-                            && self.arguments_match(exchange, args)
+                            && self.observation_arguments_match(exchange, args)
                     },
                 );
                 let candidate = match candidate {
@@ -501,7 +501,7 @@ impl RedisReplayState {
                     "current key state has no Source observation witness; cannot borrow a future lifetime",
                 ));
             };
-            if !self.arguments_match(&self.exchanges[index], args) {
+            if !self.observation_arguments_match(&self.exchanges[index], args) {
                 return Err(reject(
                     "TTL arguments differ from the proven Source refresh",
                 ));

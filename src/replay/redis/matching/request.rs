@@ -11,6 +11,25 @@ impl RedisReplayState {
         original_source: &[Vec<u8>],
         original_actual: &[Vec<u8>],
     ) -> Option<Result<Decision>> {
+        self.request_preview_with_hypotheses(
+            exchange,
+            source,
+            actual,
+            original_source,
+            original_actual,
+            true,
+        )
+    }
+
+    pub(super) fn request_preview_with_hypotheses(
+        &self,
+        exchange: &ReplayExchange,
+        source: &[Vec<u8>],
+        actual: &[Vec<u8>],
+        original_source: &[Vec<u8>],
+        original_actual: &[Vec<u8>],
+        allow_hypotheses: bool,
+    ) -> Option<Result<Decision>> {
         if exchange.source.is_run_owned() && exchange.shared_rule_id.is_none() {
             let capture = exchange.record.capture.as_ref()?;
             let scope = self
@@ -93,7 +112,7 @@ impl RedisReplayState {
         };
         let actual = expiration.as_deref().unwrap_or(actual);
         let preview = |source: &[Vec<u8>], actual: &[Vec<u8>]| {
-            let owner = if self.request_contracts.pre_match_enabled() {
+            let mut owner = if allow_hypotheses && self.request_contracts.pre_match_enabled() {
                 self.request_contracts
                 .with_hypothesis_context(crate::replay::policy::request_contract::HypothesisContext {
                     carrier: "redis_args".into(),
@@ -103,6 +122,11 @@ impl RedisReplayState {
             } else {
                 self.request_contracts.clone()
             };
+            if !allow_hypotheses {
+                // Owner lookup must neither construct speculative key contracts
+                // nor append their witness/journal work for every future key.
+                owner.configure_pre_match(false);
+            }
             owner.preview_redis_context(&context, source, actual)
         };
         preview(source, actual)

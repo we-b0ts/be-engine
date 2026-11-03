@@ -147,6 +147,12 @@ identity translation. A rejected current-state read can prevent later block
 creation, and an exhausted per-batch refresh can stop the rest of that batch.
 Response/SSE equality does not establish dependency convergence.
 
+State-observation ownership uses exact keys, declared contracts or previously
+accepted identity correspondences. A pre-match key hypothesis remains diagnostic
+evidence and cannot select a native state owner. In particular, an uncreated key
+with a similar generated suffix cannot reject another key's established lifetime
+or lend its future refresh witness to the current request.
+
 Use the normal native rule planner and Source preflight. Existing finite
 read-back and read-commutation rules retain their semantics unless explicitly
 updated. New or updated policy requires fresh genuine Replay; Source self

@@ -5,6 +5,7 @@ mod applicability;
 mod case_scope;
 mod foreign_reads;
 mod pooled_order;
+mod provisional_keys;
 
 #[test]
 fn concurrent_identity_reads_retain_their_state_transition_causal_fence() {
