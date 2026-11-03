@@ -97,17 +97,19 @@ fn nil_omission_preserves_set_and_read_back_correspondence() {
 }
 
 #[test]
-fn zero_nil_calls_do_not_discard_ordinary_loop_body_writes() {
+fn terminal_observation_waits_for_real_loop_body_writes() {
     let events = [
         event(1, "GET", &[b"poll:1"], b"$-1\r\n"),
         event(2, "SET", &[b"business:1", b"effect"], b"+OK\r\n"),
         event(3, "GET", &[b"poll:1"], b"$4\r\ndone\r\n"),
     ];
     let (_root, mut s) = state_with_policy(&events, policy(true));
-    assert_eq!(perform(&mut s, "GET", &[b"poll:1"]), b"$4\r\ndone\r\n");
+    assert_eq!(perform(&mut s, "GET", &[b"poll:1"]), b"$-1\r\n");
     assert!(s.case_is_dirty("case"));
     assert_eq!(s.snapshot().unused_case[0].command, "SET");
     perform(&mut s, "SET", &[b"business:1", b"effect"]);
+    assert!(s.case_is_dirty("case"));
+    assert_eq!(perform(&mut s, "GET", &[b"poll:1"]), b"$4\r\ndone\r\n");
     assert!(!s.case_is_dirty("case"));
 }
 

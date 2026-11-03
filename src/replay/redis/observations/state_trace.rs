@@ -4,6 +4,7 @@ use super::*;
 /// A read-only key can be observed absent, or reach one stable terminal value.
 /// Actual DEL boundaries remain finite, including multi-key cleanup.
 pub(super) fn read_only(
+    state: &RedisReplayState,
     mut profile: Profile,
     timeline: &[(usize, &ReplayExchange)],
 ) -> Result<Profile> {
@@ -60,6 +61,22 @@ pub(super) fn read_only(
                     profile.epochs.push(Epoch {
                         mutation: gate,
                         observations: vec![],
+                        // Polling cannot observe completion before required
+                        // earlier work on the Source lane has actually run.
+                        predecessors: state
+                            .exchanges
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, earlier)| {
+                                earlier.source == ReplaySource::Case
+                                    && earlier.case_id.as_deref() == Some(profile.case.as_str())
+                                    && earlier.record.connection_id == exchange.record.connection_id
+                                    && earlier.record.sequence < exchange.record.sequence
+                                    && !(earlier.record.command == "GET"
+                                        && earlier.args == [profile.key.clone()])
+                            })
+                            .map(|(index, _)| index)
+                            .collect(),
                     });
                     reads.clear();
                 }

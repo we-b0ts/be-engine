@@ -75,6 +75,7 @@ pub(super) fn prepare(
         epochs: vec![Epoch {
             mutation: None,
             observations: vec![],
+            predecessors: vec![],
         }],
         valid_for_seconds: None,
         prepared_at: chrono::Utc::now(),
@@ -124,7 +125,7 @@ pub(super) fn prepare(
     }
     timeline.sort_by_key(|(index, e)| (e.record.started_at(), *index));
     if kind == Kind::StateRead && !has_owned_set(state, case, seed)? {
-        return super::state_trace::read_only(profile, &timeline).map(Some);
+        return super::state_trace::read_only(state, profile, &timeline).map(Some);
     }
     if kind == Kind::AbsentRead {
         super::absence::validate_causal_order(&timeline)?;
@@ -458,6 +459,7 @@ pub(super) fn new_epoch(profile: &mut Profile, mutation: usize) -> Result<()> {
     profile.epochs.push(Epoch {
         mutation: Some(mutation),
         observations: vec![],
+        predecessors: vec![],
     });
     Ok(())
 }

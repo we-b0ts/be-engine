@@ -55,8 +55,9 @@ The loop declaration never erases those obligations.
 
 A read-only key may have 0..N transient nil reads followed by one stable terminal
 value. Source must prove the nil-to-value causal boundary. A Target read can
-observe that terminal value immediately; the nil reads are optional and the
-terminal value still requires real successful delivery. Without a terminal
+observe that terminal value once required preceding Source-lane work has run;
+otherwise it still observes nil. The nil reads are optional and the terminal
+value still requires real successful delivery. Without a terminal
 Source witness, the engine cannot return one. If Source contains owned SETs,
 the live SET/DEL claims gate state changes; future values cannot be borrowed.
 Unknown historical values before an owned SET retain finite matching.

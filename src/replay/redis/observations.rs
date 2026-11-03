@@ -42,6 +42,7 @@ impl Kind {
 struct Epoch {
     mutation: Option<usize>,
     observations: Vec<usize>,
+    predecessors: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -409,7 +410,10 @@ impl RedisReplayState {
                 .iter()
                 .rev()
                 .find(|epoch| {
-                    epoch.mutation.is_none_or(|i| {
+                    epoch.predecessors.iter().all(|&i| {
+                        !self.exchanges[i].requires_delivery()
+                            || self.exchanges[i].satisfies_lane_order()
+                    }) && epoch.mutation.is_none_or(|i| {
                         matches!(
                             self.exchanges[i].status,
                             ReplayExchangeStatus::Consumed | ReplayExchangeStatus::Responding
