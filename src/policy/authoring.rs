@@ -1,5 +1,6 @@
 //! The unified transaction owns policy authoring; historical DTOs only recover journals.
 mod api;
+mod async_api;
 mod contracts;
 mod dependency_lifetimes;
 mod document;
@@ -42,6 +43,7 @@ pub fn require_source_proofs(document: &crate::policy::TrafficPolicy) -> anyhow:
         let mut value = serde_yaml::to_value(rule)?;
         walk::require_source_proof(&mut value, document.source_revision.as_deref())?;
     }
+    async_api::require(document.async_api.as_ref())?;
     Ok(())
 }
 

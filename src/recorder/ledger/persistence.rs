@@ -15,6 +15,9 @@ use crate::recorder::{GlobalDependencyAttribution, RecorderEvent};
 
 use super::LifecycleRecord;
 
+#[path = "ownership.rs"]
+mod ownership;
+
 pub(in crate::recorder) struct LedgerWriter {
     root: PathBuf,
     process_epoch: Uuid,
@@ -39,6 +42,7 @@ pub(in crate::recorder) struct LedgerWriter {
     sealed: bool,
     process_dependency_tasks: BTreeMap<String, String>,
     semantic_inventory: SemanticInventory,
+    ownership_rules: BTreeMap<String, crate::policy::AsyncApiRules>,
 }
 
 impl LedgerWriter {
@@ -73,6 +77,7 @@ impl LedgerWriter {
             sealed: false,
             process_dependency_tasks: BTreeMap::new(),
             semantic_inventory: SemanticInventory::default(),
+            ownership_rules: BTreeMap::new(),
         }
     }
 
@@ -80,9 +85,11 @@ impl LedgerWriter {
         &mut self,
         identity: String,
         process_dependency_tasks: BTreeMap<String, String>,
+        ownership_rules: BTreeMap<String, crate::policy::AsyncApiRules>,
     ) {
         self.capture_policy_identity = identity;
         self.process_dependency_tasks = process_dependency_tasks;
+        self.ownership_rules = ownership_rules;
     }
 
     pub(in crate::recorder) fn set_source_artifact_identity(
@@ -476,6 +483,7 @@ impl LedgerWriter {
             .append(&self.root.join("dependencies.jsonl"), b"")
             .await?;
         files.flush_all().await?;
+        self.apply_declared_ownership().await?;
         self.global_scopes().await?;
         let inputs = self
             .inputs
@@ -504,6 +512,7 @@ impl LedgerWriter {
             "indexes/unattributed-scope.json",
             "recording-network.json",
             "dependencies-debug.jsonl",
+            "dependency-ownership.json",
         ] {
             let path = self.root.join(name);
             if path.is_file() {

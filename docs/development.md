@@ -9,6 +9,8 @@ relationships and stateful protocol effects retain explicit rules.
 
 API-triggered asynchronous process traffic uses [API-origin rules](api-triggered-process-traffic.md),
 including request-body conditions, recorded identity capture and old-recording reclassification.
+Finite API-owned asynchronous descendants use [reusable async ownership](async-api-ownership.md),
+including cross-Case attribution, capture-policy provenance and manual proof fallback.
 
 MySQL replay driver compatibility and process-owned read rules are documented in
 [mysql-replay.md](mysql-replay.md).

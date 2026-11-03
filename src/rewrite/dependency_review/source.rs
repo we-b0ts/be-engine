@@ -147,7 +147,7 @@ pub(super) fn load(state: &RewriteState) -> Result<SourceSnapshot> {
         inputs: BTreeMap::new(),
         epochs: manifest.process_epochs.iter().copied().collect(),
         discovery: crate::dependency_index::reconciliation::Catalog::from_index(&index)?,
-        case_defaults: super::case_defaults::load(&root, target)?,
+        case_defaults: super::scope_defaults::load(&root, target)?.owners,
         files: manifest
             .files
             .iter()

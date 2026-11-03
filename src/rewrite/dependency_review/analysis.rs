@@ -21,12 +21,12 @@ pub(super) fn refresh_inventory(root: &Path, state: &mut RewriteState) -> Result
         // requirement; unrelated read-only diagnostics remain available.
         return Ok(());
     };
-    let defaults = super::case_defaults::load(source_path, Some(root))?;
-    let default_identity = defaults_identity(&defaults)?;
+    let defaults = super::scope_defaults::load(source_path, Some(root))?;
+    let default_identity = defaults.identity()?;
     if cache_current(state, &identity, &default_identity) && decisions_current(root, state)? {
         return Ok(());
     }
-    let unresolved = unresolved(root, state, &identity, &defaults)?;
+    let unresolved = unresolved(root, state, &identity, &defaults.owners)?;
     // Admission is mechanical. A changed default must restore previously
     // removed IDs instead of trusting an old empty ownership review.
     state.dependency_review.recording_run_id = Some(state.recording_run_id.clone());
@@ -34,13 +34,6 @@ pub(super) fn refresh_inventory(root: &Path, state: &mut RewriteState) -> Result
     state.dependency_review.case_defaults_identity = Some(default_identity);
     state.dependency_review.unresolved_source_exchange_ids = unresolved;
     Ok(())
-}
-
-fn defaults_identity(defaults: &CaseDefaults) -> Result<String> {
-    Ok(crate::policy_evidence::digest(&serde_json::to_vec(&(
-        "case-default-admission/v1",
-        defaults,
-    ))?))
 }
 
 fn cache_current(state: &RewriteState, inventory: &str, defaults: &str) -> bool {
@@ -75,7 +68,11 @@ fn unresolved(
         .as_ref()
         .expect("Source inventory present");
     let (recording, manifest) = crate::dependency_index::recording::manifest(source_path)?;
-    if manifest.semantic_inventory.unattributed_dependencies == 0 {
+    if manifest.semantic_inventory.unattributed_dependencies == 0
+        && !defaults
+            .values()
+            .any(|owner| matches!(owner, DependencyOwner::Unattributed { .. }))
+    {
         return Ok(BTreeSet::new());
     }
     crate::dependency_index::recording::authenticate(&recording)?;
@@ -100,7 +97,13 @@ fn unresolved(
     let mut input = crate::dependency_index::RecordStream::open(
         &recording.join("indexes/unattributed-scope.json"),
     )?;
-    let mut unresolved = BTreeSet::new();
+    let mut unresolved = defaults
+        .iter()
+        .filter_map(|(id, owner)| {
+            (matches!(owner, DependencyOwner::Unattributed { .. }) && !proved.contains(id))
+                .then_some(*id)
+        })
+        .collect::<BTreeSet<_>>();
     while let Some((_, bytes)) = input.next()? {
         if bytes.iter().all(u8::is_ascii_whitespace) {
             continue;
@@ -109,7 +112,9 @@ fn unresolved(
         let capture: CaptureMetadata = serde_json::from_value(event["capture"].clone())?;
         if capture.semantic_required
             && matches!(capture.attribution, DependencyOwner::Unattributed { .. })
-            && !defaults.contains_key(&capture.exchange_id)
+            && !defaults
+                .get(&capture.exchange_id)
+                .is_some_and(|owner| !matches!(owner, DependencyOwner::Unattributed { .. }))
             && !proved.contains(&capture.exchange_id)
         {
             unresolved.insert(capture.exchange_id);
@@ -135,20 +140,15 @@ pub(super) fn review_inventory<'a>(
         .case_source
         .as_deref()
         .context("workflow has no Source recording")?;
-    let (identity, captured) = source::inventory(state)?;
-    if captured == 0 {
-        return Ok((identity, Cow::Owned(BTreeSet::new())));
-    }
-    let defaults = super::case_defaults::load(source_path, Some(root))?;
-    if cache_current(state, &identity, &defaults_identity(&defaults)?)
-        && decisions_current(root, state)?
-    {
+    let (identity, _) = source::inventory(state)?;
+    let defaults = super::scope_defaults::load(source_path, Some(root))?;
+    if cache_current(state, &identity, &defaults.identity()?) && decisions_current(root, state)? {
         return Ok((
             identity,
             Cow::Borrowed(&state.dependency_review.unresolved_source_exchange_ids),
         ));
     }
-    let ids = unresolved(root, state, &identity, &defaults)?;
+    let ids = unresolved(root, state, &identity, &defaults.owners)?;
     Ok((identity, Cow::Owned(ids)))
 }
 

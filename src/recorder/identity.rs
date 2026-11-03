@@ -19,7 +19,11 @@ impl Recorder {
         ))?;
         let identity = crate::policy_evidence::digest(&bytes);
         self.writer
-            .set_capture_policy_identity(identity.clone(), config.process_dependency_tasks.clone())
+            .set_capture_policy_identity(
+                identity.clone(),
+                config.process_dependency_tasks.clone(),
+                config.async_api.clone(),
+            )
             .await?;
         self.capture_policy_identity = identity;
         Ok(())

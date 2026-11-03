@@ -38,7 +38,7 @@ pub(super) fn fingerprints(policy: &CompiledPolicy) -> Result<BTreeMap<String, S
         .map(|rule| (rule.rule.id.clone(), rule.fingerprint.clone()))
         .collect::<BTreeMap<_, _>>();
     for (api, rules) in &policy.async_api {
-        values.insert(async_id(api), source::digest(&serde_json::to_vec(rules)?));
+        values.insert(async_id(api), crate::policy::async_rules_fingerprint(rules));
     }
     Ok(values)
 }
@@ -86,9 +86,24 @@ pub(super) fn groups(policy: &CompiledPolicy) -> Result<Vec<Value>> {
     let mut groups = tasks.into_iter().map(|(task,rules)|json!({"kind":"process_task","source_task":task,
         "rules":rules,"association":"declared selector scope; individual occurrence ownership still requires independent Source proof"})).collect::<Vec<_>>();
     for (api, rules) in &policy.async_api {
+        let ownership = rules
+            .iter()
+            .enumerate()
+            .filter_map(|(index, rule)| {
+                let contract = rule.ownership.as_ref()?;
+                Some(json!({"scenario_index":index,
+                "origin":"unique_committed_source_insert_tuple",
+                "identity_count":contract.origin.bindings.len(),
+                "request_selectors":contract.requests.len(),
+                "finite_consumption_required":true,
+                "online_completion_proved":false}))
+            })
+            .collect::<Vec<_>>();
         groups.push(json!({"kind":"async_api","api":crate::rewrite::api_selector::public_api(api),
-        "method_api":api,"rule_id":async_id(api),"fingerprint":source::digest(&serde_json::to_vec(rules)?),
-        "scenario_count":rules.len(),"dependency_requests":"automatically captured until the declared end; no intermediate request list"}));
+        "method_api":api,"rule_id":async_id(api),"fingerprint":crate::policy::async_rules_fingerprint(rules),
+        "scenario_count":rules.len(),
+        "dependency_requests":"lifecycle captures until the declared end; explicit ownership contracts classify only proven finite descendants",
+        "ownership":ownership,"manual_attribution_available":true}));
     }
     Ok(groups)
 }

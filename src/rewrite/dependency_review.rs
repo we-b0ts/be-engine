@@ -2,14 +2,17 @@
 mod analysis;
 mod batch;
 mod batch_verification;
+mod capture_policy;
 mod case_defaults;
 mod decisions;
 mod investigations;
 mod model;
 mod ownership_impact;
+mod policy_ownership;
 mod projection;
 mod queries;
 mod rules;
+mod scope_defaults;
 mod snapshot;
 mod source;
 mod target_query;
@@ -143,6 +146,13 @@ pub fn dependency_attribution_context(
     };
     context.effective_policy_fingerprint = policy.fingerprints.full.clone();
     context.rule_groups = rules::groups(&policy)?;
+    context.async_capture_policy = capture_policy::information(&state, &policy)?;
+    context.policy_ownership = state
+        .case_source
+        .as_deref()
+        .map(|source| scope_defaults::load(source, Some(&root)).map(|defaults| defaults.diagnostic))
+        .transpose()?
+        .unwrap_or(Value::Null);
     let apis = context
         .claims
         .iter()
@@ -181,7 +191,10 @@ fn context_for(
         .dependency_review
         .decisions
         .iter()
-        .filter(|(_, decision)| rules::current(decision, &active_rules))
+        .filter(|(_, decision)| {
+            rules::current(decision, &active_rules)
+                && Some(decision.proof.source_revision.as_str()) == state.source_revision.as_deref()
+        })
         .collect::<BTreeMap<_, _>>();
     let unattributed_exchange_ids = source
         .exchanges
@@ -189,11 +202,13 @@ fn context_for(
         .filter(|(id, event)| {
             event.capture.semantic_required
                 && matches!(
-                    event.capture.attribution,
+                    source
+                        .case_defaults
+                        .get(id)
+                        .unwrap_or(&event.capture.attribution),
                     DependencyOwner::Unattributed { .. }
                 )
                 && !decisions.contains_key(id)
-                && !source.case_defaults.contains_key(id)
         })
         .map(|(id, _)| *id)
         .collect();
@@ -235,6 +250,8 @@ fn context_from_inventory(
         evidence_commands: vec![],
         effective_policy_fingerprint: String::new(),
         rule_groups: vec![],
+        async_capture_policy: Value::Null,
+        policy_ownership: Value::Null,
         rule_planning: crate::rewrite::unified_rule::attribution::information(root, state)?,
         unattributed_exchange_ids,
         obligations: state
@@ -467,20 +484,10 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
     state.dependency_review.revision = next_revision;
     state.dependency_review.recording_run_id = Some(state.recording_run_id.clone());
     state.dependency_review.source_inventory_id = Some(original.identity.clone());
-    state.dependency_review.unresolved_source_exchange_ids = original
-        .exchanges
-        .iter()
-        .filter(|(id, event)| {
-            event.capture.semantic_required
-                && matches!(
-                    event.capture.attribution,
-                    DependencyOwner::Unattributed { .. }
-                )
-                && !state.dependency_review.decisions.contains_key(id)
-                && !original.case_defaults.contains_key(id)
-        })
-        .map(|(id, _)| *id)
-        .collect();
+    // Reuse the complete effective view. A policy ambiguity can be physically
+    // Case-owned, and a partial manual proof must not clear its remaining IDs.
+    state.dependency_review.case_defaults_identity = None;
+    analysis::refresh_inventory(&root, &mut state)?;
     ownership_impact::invalidate(
         &root,
         &mut state,
@@ -628,6 +635,13 @@ pub(crate) fn freeze_dependency_attribution(
     recording_run: &str,
 ) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
     snapshot::frozen(target, source, recording_run)
+}
+
+pub(in crate::rewrite) fn assess_async_ownership(
+    source: &Path,
+    rules: &BTreeMap<String, crate::policy::AsyncApiRules>,
+) -> Result<Value> {
+    Ok(policy_ownership::materialize(source, rules)?.diagnostic)
 }
 
 pub(super) fn batch_pending(state: &RewriteState) -> bool {

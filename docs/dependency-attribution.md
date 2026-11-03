@@ -40,6 +40,39 @@ obligations. Follow returned pagination commands. SQL/Redis arguments and raw
 payloads stay in protected evidence queries; summary output contains identities,
 coordinates, shapes and digests.
 
+`dependency-attribution context` also returns `async_capture_policy`, a bounded
+comparison of sealed asynchronous observation receipts and the current effective
+declarations. New recordings retain the actual API rule-group fingerprint,
+selected scenario fingerprint and terminal selector digests; these identities
+contain no request/response payloads or raw SQL, Redis keys or HTTP endpoints.
+`same_rule`, `different_rule` and `current_rule_absent` describe declaration
+identity only. A changed group can retain the same scenario at its original
+index; neither comparison reruns current request/response scenario selection.
+Older observations without the receipt, or without a known receipt version,
+report `unknown`. Inputs without an asynchronous observation are counted
+separately and do not prove that a scenario was selected or absent. A different
+rule does not establish when it was applied, and a matching rule does not prove
+capture completeness or correct ownership. The run-level capture digest is
+retained separately rather than compared to an unrelated current policy digest.
+
+This diagnostic does not gate ordinary Source-proven attribution. Existing
+per-batch ownership submissions remain available for historical recordings,
+uncovered cases and engine defects while a reusable policy or engine correction
+is prepared. Their complete evidence, immutable Source scope, current rule
+bindings and genuine Replay obligations remain unchanged.
+
+Reusable async ownership proposals require their own local Source proof. The
+unified plan freezes the complete selected API/scenario declarations and their
+explanations independently, verifies them against the runtime permissions at
+apply, and includes their Source summaries in the reviewable plan. Runtime
+policy omits those explanations; changing explanatory text alone does not
+change capture, runtime or classification permission identities. Plan/apply
+retains its ordinary current-Source identity and stale checks. The declaration
+can continue across Source versions, like an existing task/lifecycle policy;
+it is not an assertion that an entrypoint-file digest proves the full running
+Source code or that future code preserves the reviewed ownership. New unmatched
+or ambiguous paths retain their analysis and actual Replay obligations.
+
 ## Implementer claims
 
 An API implementer owns its API behavior, including any traffic it reports as

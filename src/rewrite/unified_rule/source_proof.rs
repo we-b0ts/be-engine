@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::policy::{PolicyRule, TrafficPolicy};
 
+mod async_ownership;
+
 /// Check the submitted proposal before owner-local inheritance resolves it.
 /// An explicit state-epoch permission requires its own local Source evidence.
 pub(super) fn validate_proposal(input: &str) -> Result<()> {
@@ -19,6 +21,7 @@ pub(super) fn validate_proposal(input: &str) -> Result<()> {
     let revision = value
         .get("source_revision")
         .and_then(serde_yaml::Value::as_str);
+    async_ownership::validate_proposal(value, revision)?;
     let mut rules = vec![];
     if value.get("rules").is_some() || value.get("format").is_some() {
         if let Some(entries) = value.get("rules").and_then(serde_yaml::Value::as_sequence) {
@@ -178,6 +181,8 @@ pub(super) fn validate_proposal(input: &str) -> Result<()> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct SourceProofSnapshot {
     rules: Vec<PolicyRule>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    async_api: std::collections::BTreeMap<String, crate::policy::AsyncApiRules>,
     sha256: String,
 }
 
@@ -188,13 +193,18 @@ impl SourceProofSnapshot {
     pub(super) fn capture(document: &TrafficPolicy) -> Result<Self> {
         crate::policy::require_source_proofs(document)?;
         let rules = crate::policy::effective_rules(document)?;
-        let sha256 = crate::policy_evidence::digest(&serde_json::to_vec(&rules)?);
-        Ok(Self { rules, sha256 })
+        let async_api = async_ownership::capture(document)?;
+        let sha256 = Self::identity(&rules, &async_api)?;
+        Ok(Self {
+            rules,
+            async_api,
+            sha256,
+        })
     }
 
     pub(super) fn verify(&self, policy: &crate::policy::CompiledPolicy) -> Result<()> {
         ensure!(
-            crate::policy_evidence::digest(&serde_json::to_vec(&self.rules)?) == self.sha256,
+            Self::identity(&self.rules, &self.async_api)? == self.sha256,
             "plan Source proof snapshot changed"
         );
         let document = TrafficPolicy {
@@ -202,6 +212,7 @@ impl SourceProofSnapshot {
             ..Default::default()
         };
         crate::policy::require_source_proofs(&document)?;
+        async_ownership::verify(&self.async_api, policy)?;
         for rule in &self.rules {
             match rule {
                 PolicyRule::Native(rule) => {
@@ -237,7 +248,22 @@ impl SourceProofSnapshot {
             .filter(|rule| selected.contains(rule.id()))
             .filter_map(|rule| rule.proof())
             .map(|proof| format!("{}: {}", proof.source, proof.fact))
+            .chain(async_ownership::summary(&self.async_api, selected))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn identity(
+        rules: &[PolicyRule],
+        async_api: &std::collections::BTreeMap<String, crate::policy::AsyncApiRules>,
+    ) -> Result<String> {
+        // Old persisted plans retain their established digest and decode with
+        // an empty optional async snapshot.
+        let bytes = if async_api.is_empty() {
+            serde_json::to_vec(rules)?
+        } else {
+            serde_json::to_vec(&(rules, async_api))?
+        };
+        Ok(crate::policy_evidence::digest(&bytes))
     }
 }

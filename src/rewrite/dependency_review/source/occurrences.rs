@@ -35,7 +35,7 @@ pub(in crate::rewrite::dependency_review) fn load(state: &RewriteState) -> Resul
         identity: digest(&bytes),
         exchanges: BTreeMap::new(),
         apis,
-        case_defaults: super::super::case_defaults::load(&root, target)?,
+        case_defaults: super::super::scope_defaults::load(&root, target)?.owners,
         native: BTreeMap::new(),
         http: BTreeMap::new(),
     };

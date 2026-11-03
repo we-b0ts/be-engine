@@ -95,14 +95,19 @@ pub(super) fn merge_with_replacements(
         }
     }
     if let Some(apis) = &proposed.async_api {
+        // The plan has already frozen local explanations independently. New
+        // runtime groups must not inherit a historical document header as the
+        // revision of their current-Source proof.
+        let apis = crate::policy::async_runtime_declarations(apis);
         if replace.contains("async_api") {
-            candidate.async_api = Some(apis.clone());
+            candidate.async_api = Some(apis);
         } else if !apis.is_empty() {
             let current = candidate.async_api.get_or_insert_default();
-            for (api, rule) in apis {
+            for (api, rule) in &apis {
                 if let Some(existing) = current.get(api) {
                     ensure!(
-                        existing == rule,
+                        crate::policy::async_rules_fingerprint(existing)
+                            == crate::policy::async_rules_fingerprint(rule),
                         "existing async API contract cannot be changed by an additive proposal"
                     );
                 } else {

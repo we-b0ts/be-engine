@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+mod async_ownership;
+
 fn proposal() -> serde_json::Value {
     json!({"format":"traffic-policy/v3","rules":[{
         "id":"append","match":{"resource":{"protocol":"redis","endpoint":"cache.test:6379","database":0},"operation":"APPEND","key":{"kind":"exact","value":"proof"}},

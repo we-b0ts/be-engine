@@ -54,6 +54,16 @@ is unclear.
   matching, original captures, or consumption. Ambiguous native sequences remain
   unattributed; application async ownership still requires its independent proof.
 
+- `source_ownership` executes explicit Source-backed async origin and request
+  contracts. Its native adapters retain exact request identity, complete transaction
+  closure and finite script preludes; its bounded hints are separate from complete
+  unresolved membership. `recorder/ledger/ownership` publishes derived new-capture
+  scopes before sealing, while `rewrite/dependency_review/policy_ownership` owns
+  authenticated historical materialization and its cache. The scope composer keeps
+  manual proof precedence and does not turn either path into delivery or full
+  asynchronous completion evidence. `policy/async_api/provenance` owns canonical
+  recorded declaration identities independently of application explanation text.
+
 - `replay/preparation` binds an immutable Source scope and applicable contracts
   into a Case execution plan after native registration. `replay/native_index`
   owns ordered postings and immutable lane membership; HTTP, Redis and MySQL

@@ -51,6 +51,8 @@ pub struct Preflight {
     pub pending_effect_evidence: BTreeSet<String>,
     #[serde(default)]
     pub stateful_target_obligations: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_ownership: Option<Value>,
     #[serde(default)]
     source_scope: Option<source::SourceRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

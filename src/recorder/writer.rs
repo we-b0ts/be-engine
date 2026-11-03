@@ -30,6 +30,7 @@ enum WriterCommand {
     CapturePolicyIdentity {
         identity: String,
         process_dependency_tasks: std::collections::BTreeMap<String, String>,
+        async_api: std::collections::BTreeMap<String, crate::policy::AsyncApiRules>,
         ack: WriterAck,
     },
     SourceArtifactIdentity {
@@ -149,10 +150,12 @@ impl RecorderWriter {
         &self,
         identity: String,
         process_dependency_tasks: std::collections::BTreeMap<String, String>,
+        async_api: std::collections::BTreeMap<String, crate::policy::AsyncApiRules>,
     ) -> Result<()> {
         self.request(|ack| WriterCommand::CapturePolicyIdentity {
             identity,
             process_dependency_tasks,
+            async_api,
             ack,
         })
         .await
@@ -365,11 +368,12 @@ async fn process_command(
         WriterCommand::CapturePolicyIdentity {
             identity,
             process_dependency_tasks,
+            async_api,
             ack,
         } => {
             state
                 .ledger
-                .set_capture_policy_identity(identity, process_dependency_tasks);
+                .set_capture_policy_identity(identity, process_dependency_tasks, async_api);
             acknowledge(ack, Ok(()), failure);
         }
         WriterCommand::SourceArtifactIdentity { identity, ack } => {

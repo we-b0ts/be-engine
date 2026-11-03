@@ -118,6 +118,10 @@ async fn queued(timing: Timing) {
         let report: Value = serde_json::from_slice(&tokio::fs::read(directory.join("async-api-observation.json")).await.unwrap()).unwrap();
         assert_eq!(report["end_reason"], "resource");
         assert_eq!(report["scenario_index"], 0);
+        let receipt = crate::policy::AsyncRuleProvenance::selected(
+            "POST /jobs", &state.config().async_api["POST /jobs"], 0
+        ).unwrap();
+        assert_eq!(report["policy_provenance"], serde_json::to_value(receipt).unwrap());
         assert_eq!(report["inventory_complete"], true);
         assert_eq!(report["completed_refs"].as_array().unwrap().len(), 1);
         assert!(!state.inner.active_cases.is_quiescing());
