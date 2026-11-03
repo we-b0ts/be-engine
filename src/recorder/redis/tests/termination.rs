@@ -121,6 +121,61 @@ async fn client_write_half_close_still_receives_complete_response() {
 }
 
 #[tokio::test]
+async fn client_reset_after_completed_response_does_not_invalidate_case() {
+    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    let case = test_case("cancelled-stream");
+    let guard = state.try_reserve_active_case(case.clone()).unwrap();
+    state.activate_case_dependencies(&guard).unwrap();
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let handler = spawn_handler(
+        proxy_client,
+        proxy_upstream,
+        state.clone(),
+        upstream.peer_addr().unwrap(),
+    );
+    client.write_all(GET).await.unwrap();
+    upstream.read_exact(&mut vec![0; GET.len()]).await.unwrap();
+    let response = b"$5\r\nvalue\r\n";
+    upstream.write_all(response).await.unwrap();
+    client.read_exact(&mut [0; 11]).await.unwrap();
+
+    // The request reader ends on FIN. The later RST closes the response
+    // direction before the server's EOF reaches the ordered writer.
+    client.shutdown().await.unwrap();
+    assert_eq!(upstream.read(&mut [0]).await.unwrap(), 0);
+    enable_abortive_close(&client);
+    drop(client);
+    upstream.shutdown().await.unwrap();
+    drop(upstream);
+    finish(handler).await;
+
+    let records = records(&state).await;
+    let exchanges: Vec<_> = records
+        .iter()
+        .filter(|r| r["event_type"] == "redis_exchange")
+        .collect();
+    assert_eq!(exchanges.len(), 1);
+    assert_eq!(exchanges[0]["outcome"], "response");
+    assert_eq!(exchanges[0]["replay_safe"], true);
+    assert!(records.iter().all(|r| r["event_type"] != "proxy_error"));
+    let closed = records
+        .iter()
+        .find(|r| r["event_type"] == "redis_connection" && r["phase"] == "closed")
+        .unwrap();
+    assert_eq!(closed["replay_safe"], true);
+    assert!(closed["error"].is_null());
+    assert!(
+        state
+            .recorder()
+            .case_dependency_safety_issue(&case)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn partial_response_eof_preserves_pipeline_order_and_prefix() {
     let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
     let (mut client, proxy_client) = tcp_pair().await;
