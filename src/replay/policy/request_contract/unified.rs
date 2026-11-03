@@ -293,7 +293,7 @@ impl RequestContracts {
                     | crate::policy::NativeEffect::RedisExpiryRefresh(_)
                     | crate::policy::NativeEffect::RedisActivityRefresh(_)
                     | crate::policy::NativeEffect::RedisReadCommutation(_)
-                    | crate::policy::NativeEffect::RedisReadObservation
+                    | crate::policy::NativeEffect::RedisReadObservation(_)
                     | crate::policy::NativeEffect::RedisSequence(_)
                     | crate::policy::NativeEffect::FiniteSharing(
                         crate::policy::native::FiniteSharingEffect::Redis { .. }

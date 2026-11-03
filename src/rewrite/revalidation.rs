@@ -14,12 +14,14 @@ use super::store::RewriteStore;
 use super::{action, fingerprint, inventory, traffic_operation};
 
 const MAX_REASON_BYTES: usize = 512;
+mod focused;
 
 #[derive(Debug, Clone)]
 pub struct RewriteRevalidationRequestOptions {
     pub target_root: PathBuf,
     pub apis: Vec<RewriteApiSelector>,
     pub reason: String,
+    pub focused: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,6 +30,7 @@ pub struct RewriteRevalidationRequestReport {
     pub target_fingerprint: String,
     pub requested_apis: Vec<String>,
     pub reason: String,
+    pub focused: bool,
     pub next: RewriteActionEnvelope,
 }
 
@@ -69,7 +72,9 @@ pub fn request(
         if matches!(selector, RewriteApiSelector::Route(_)) {
             methods.retain(|api| {
                 state.api_inventory.iter().any(|item| {
-                    item.api == *api && item.status == RewriteApiStatus::RevalidationPending
+                    item.api == *api
+                        && (item.status == RewriteApiStatus::RevalidationPending
+                            || options.focused && focused::eligible(&state, item))
                 })
             });
             ensure!(
@@ -80,7 +85,11 @@ pub fn request(
         requested.extend(methods);
     }
     let requested = requested.into_iter().collect::<Vec<_>>();
-    validate_requested(&state, &requested, &target_fingerprint)?;
+    if options.focused {
+        focused::request(&mut state, &requested)?;
+    } else {
+        validate_requested(&state, &requested, &target_fingerprint)?;
+    }
 
     let first = requested
         .first()
@@ -102,8 +111,13 @@ pub fn request(
             .into_iter()
             .collect(),
         reason: options.reason,
+        focused: options.focused,
         next,
     })
+}
+
+pub(in crate::rewrite) fn focused_replay_available(state: &RewriteState) -> bool {
+    focused::available(state)
 }
 
 pub(super) fn deferred_status_envelope(
@@ -315,6 +329,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             apis: vec!["/a".parse().unwrap()],
             reason: "shared response mapper changed".to_string(),
+            focused: false,
         })
         .unwrap();
 
@@ -405,7 +420,7 @@ mod tests {
         ));
     }
 
-    fn configured_target() -> tempfile::TempDir {
+    pub(super) fn configured_target() -> tempfile::TempDir {
         let target = tempfile::tempdir().unwrap();
         fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
         fs::create_dir_all(target.path().join("src")).unwrap();

@@ -17,7 +17,7 @@ fn recorded_marker_closes_initial_expiry_without_source_refresh_calls() {
         .filter(|e| e["event_type"] == "redis_exchange")
         .collect::<Vec<_>>();
     let policy = json!({"format":"traffic-policy/v3",
-        "redis":{"keys":{&key:{"kind":"identity","formats":["string"],"read_back":true,"expiry_refresh":true}}}});
+        "redis":{"keys":{&key:{"kind":"identity","formats":["string"],"read_back":true,"state":{"expire":"refresh"}}}}});
     // First prove against the complete unedited Case, including other keys/scripts.
     let (_complete, mut complete) = state_with_policy(&events, policy.clone());
     complete.prepare_observations("case").unwrap();

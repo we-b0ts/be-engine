@@ -123,12 +123,13 @@ write the same unified policy atomically. They are not value relaxations.
 
 ## Redis Key Behavior And Dependency Lifetimes
 
-Declare `append_stream: true`, `read_commutation: true`, `expiry_refresh: true`
+Declare `state.append: concatenate`, `read_commutation: true`, `state.expire: refresh`
 or scalar identity `read_back: true` on a bounded `redis.keys` pattern. No API,
 resource alias or database selector is needed. The engine retains actual
 endpoint/database/authentication partitions and complete causal Source proof.
 APPEND preserves all ordered bytes and read/reset fences; finite nil polling
-retains its call counts; positive TTL refresh retains exact TTLs; current-ID
+retains its call counts; explicit state.get permits variable observations and
+transient nil permits 0..N nil reads; positive TTL refresh retains exact TTLs; current-ID
 read-back cannot borrow a future/deleted identity. Historical reads before an
 owned successful SET stay finite. Inspect the earliest Target admission error.
 
@@ -139,7 +140,13 @@ root `json.fields`. Do not author bindings, shared clock groups or relations.
 See [key declarations](../../../../../docs/redis-key-contracts.md),
 [APPEND](../../../../../docs/redis-append-stream.md),
 [read-back](../../../../../docs/redis-read-back.md) and
-[state observations](../../../../../docs/redis-state-observations.md).
+[state contracts](../../../../../docs/redis-state-contracts.md).
+
+A redis_loop_state hint identifies a possible Source loop, polling/retry body or
+debounce flush. Have the implementer prove the full condition, body, writers and
+cleanup before selecting each key-local effect. Business writes remain required;
+allowed_state_omissions reports skipped nil observations separately from actual
+delivery. Use current issue detail evidence for plan/apply and fresh fast Replay.
 
 Keep dependency lifetime classification separate from formats:
 
@@ -376,3 +383,10 @@ bounded `target` queries. Do not publish private queried values in summaries or
 equate authenticated observations with Source ownership or consumption. Only the
 engine's current complete-session receipt closes final batch verification. See
 [dependency attribution](../../../../../docs/dependency-attribution.md).
+
+For a policy update after ordinary API completion, `verification request --focused
+--api <route> --reason <policy-change>` requests fresh API Replay without entering
+final acceptance. It can also retire idle final admission blocked on recording
+completeness. Follow its returned action; preserve the complete final Source gate,
+active repair issues and all outstanding obligations. See
+[Redis state contracts](../../../../../docs/redis-state-contracts.md).

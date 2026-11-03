@@ -111,6 +111,10 @@ pub(in crate::replay) struct CommandProtocolReport {
     pub(in crate::replay) state_observations:
         Vec<crate::replay::redis::observations::ObservationAudit>,
     pub(in crate::replay) state_observations_omitted: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) allowed_state_omissions:
+        Vec<crate::replay::redis::observations::omissions::OmissionAudit>,
+    pub(in crate::replay) allowed_state_omissions_omitted: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) target_event_index_scope: Option<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

@@ -1,4 +1,4 @@
-//! Finite nil ordering can compose with read-back, whose wire adapter preserves nil.
+//! Observation count/order permissions compose with independent read-back rendering.
 use super::*;
 use crate::policy::CompiledNativeRule;
 
@@ -27,11 +27,16 @@ pub(super) fn compatible_read_back(
     let read_back = match (left, right) {
         (NativeEffect::RedisReadCommutation(_), read_back)
         | (read_back, NativeEffect::RedisReadCommutation(_)) => read_back,
+        (NativeEffect::RedisReadObservation(effect), read_back)
+        | (read_back, NativeEffect::RedisReadObservation(effect))
+            if effect.state_values =>
+        {
+            read_back
+        }
         _ => return false,
     };
-    // Source preparation still requires every selected GET to be nil and
-    // rejects all writers. GET read-back only transforms bulk payloads, never
-    // RESP nil, so it cannot change the observation authorizing commutation.
+    // Native observation proof owns state and counts. Read-back renders only
+    // authenticated current SET values and preserves RESP nil.
     read_back
         .redis_read_back()
         .iter()

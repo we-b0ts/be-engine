@@ -255,7 +255,7 @@ pub fn native_field_claims(rule: &NativeRule) -> Vec<NativeFieldClaim> {
             );
         }
         NativeEffect::RedisReadCommutation(_)
-        | NativeEffect::RedisReadObservation
+        | NativeEffect::RedisReadObservation(_)
         | NativeEffect::RedisExpiryRefresh(_) => {
             // The proof requires an unchanged nil response. Another delivery
             // owner must not rewrite that observation or authorize it twice.

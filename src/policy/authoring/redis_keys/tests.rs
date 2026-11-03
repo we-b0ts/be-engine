@@ -10,9 +10,9 @@ fn policy(keys: Value) -> Value {
 #[test]
 fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_bindings() {
     let raw = policy(json!({
-        "chat:streaming:*":{"append_stream":true,"expiry_refresh":true},
+        "chat:streaming:*":{"state":{"append":"concatenate","expire":"refresh"}},
         "chat:cancel:*":{"read_commutation":true},
-        "task:cancel:*":{"read_observation":true},
+        "task:cancel:*":{"state":{"get":{"transient":["nil"]}}},
         "chat:streaming:text_block:*":{"kind":"identity",
             "formats":[{"prefix":"text-","format":"decimal"}],"read_back":true}
     }));
@@ -28,16 +28,16 @@ fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_binding
     let authored: Value = serde_yaml::from_str(&rendered).unwrap();
     assert!(authored["redis"].get("rules").is_none());
     assert_eq!(
-        authored["redis"]["keys"]["task:cancel:*"]["read_observation"],
-        true
+        authored["redis"]["keys"]["task:cancel:*"]["state"]["get"]["transient"],
+        json!(["nil"])
     );
     assert_eq!(
-        authored["redis"]["keys"]["chat:streaming:*"]["append_stream"],
-        true
+        authored["redis"]["keys"]["chat:streaming:*"]["state"]["append"],
+        "concatenate"
     );
     assert_eq!(
-        authored["redis"]["keys"]["chat:streaming:*"]["expiry_refresh"],
-        true
+        authored["redis"]["keys"]["chat:streaming:*"]["state"]["expire"],
+        "refresh"
     );
     assert_eq!(
         authored["redis"]["keys"]["chat:streaming:text_block:*"]["read_back"],
@@ -64,7 +64,7 @@ fn key_behaviors_compile_to_existing_owners_and_roundtrip_without_api_or_binding
 
 #[test]
 fn global_key_permissions_do_not_depend_on_resource_aliases() {
-    let first = policy(json!({"content:*":{"append_stream":true}}));
+    let first = policy(json!({"content:*":{"state":{"append":"concatenate"}}}));
     let parsed = parse_policy(&first.to_string()).unwrap();
     let compiled = compile_policy(&parsed).unwrap();
     let mut second = first.clone();
@@ -101,19 +101,19 @@ fn nil_commutation_addition_preserves_the_existing_read_back_rule() {
 #[test]
 fn malformed_and_duplicate_key_permissions_are_rejected() {
     for keys in [
-        json!({"content:*":{"resource":"missing","append_stream":true}}),
-        json!({"content:*":{"database":0,"append_stream":true}}),
+        json!({"content:*":{"resource":"missing","state":{"append":"concatenate"}}}),
+        json!({"content:*":{"database":0,"state":{"append":"concatenate"}}}),
         json!({"content:*":{"append_stream":false}}),
         json!({"content:*":{"read_observation":false}}),
         json!({"content:*":{"append_stream":"true"}}),
-        json!({"content:*":{"append_stream":true,"api":"POST /items"}}),
-        json!({"*":{"append_stream":true}}),
-        json!({"a*b*c":{"append_stream":true}}),
+        json!({"content:*":{"state":{"append":"concatenate"},"api":"POST /items"}}),
+        json!({"*":{"state":{"append":"concatenate"}}}),
+        json!({"a*b*c":{"state":{"append":"concatenate"}}}),
         json!({"content:*":{"read_back":true}}),
         json!({"content:*":{"kind":"time","formats":["unix_seconds"],"read_back":true}}),
         json!({"content:*":{"finite_sharing":{"operation":"HGET"}}}),
-        json!({"content:*":{"append_stream":true},
-            "content:part:*":{"append_stream":true}}),
+        json!({"content:*":{"state":{"append":"concatenate"}},
+            "content:part:*":{"state":{"append":"concatenate"}}}),
     ] {
         assert!(
             parse_policy(&policy(keys.clone()).to_string()).is_err(),
@@ -122,13 +122,13 @@ fn malformed_and_duplicate_key_permissions_are_rejected() {
     }
     let duplicate = "format: traffic-policy/v3\nredis:\n  keys:\n    content: {resource: cache, append_stream: true, append_stream: true}\nresources:\n  cache: {protocol: redis, endpoint: 'cache.test:6379', database: 0}\n";
     assert!(parse_policy(duplicate).is_err());
-    let named = policy(json!({"content:*":{"resource":"cache","append_stream":true}}));
+    let named = policy(json!({"content:*":{"resource":"cache","state":{"append":"concatenate"}}}));
     assert!(parse_policy(&named.to_string()).is_err());
 }
 
 #[test]
 fn supplied_plan_proof_stays_real_and_runtime_rendering_omits_it() {
-    let mut raw = policy(json!({"content:*":{"append_stream":true}}));
+    let mut raw = policy(json!({"content:*":{"state":{"append":"concatenate"}}}));
     let missing = parse_policy(&raw.to_string()).unwrap();
     assert!(crate::policy::require_source_proofs(&missing).is_err());
     raw["redis"]["keys"]["content:*"]["proof"] =
@@ -143,3 +143,4 @@ fn supplied_plan_proof_stays_real_and_runtime_rendering_omits_it() {
 }
 
 mod commands;
+mod state;

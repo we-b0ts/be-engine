@@ -136,7 +136,8 @@ impl NativeEffect {
             Self::RedisSequence(_) => "atomic_request_sequence",
             Self::RedisAppendStream => "append_stream_equivalence",
             Self::RedisReadCommutation(_) => "finite_read_commutation",
-            Self::RedisReadObservation => "key_lifetime_absent_read",
+            Self::RedisReadObservation(effect) if effect.state_values => "key_state_observation",
+            Self::RedisReadObservation(_) => "key_lifetime_absent_read",
             Self::RedisExpiryRefresh(_) => "key_lifetime_expiry_refresh",
             Self::RedisActivityRefresh(_) => "key_lifetime_activity_refresh",
             Self::ResponseJwt(_) => "signed_response",
@@ -265,8 +266,14 @@ fn validate_effect(rule: &NativeRule) -> Result<()> {
         NativeEffect::RedisSequence(sequence) => validate_sequence(rule, sequence),
         NativeEffect::RedisActivityRefresh(effect) => activity_refresh::validate(rule, effect),
         NativeEffect::RedisReadCommutation(_)
-        | NativeEffect::RedisReadObservation
+        | NativeEffect::RedisReadObservation(_)
         | NativeEffect::RedisExpiryRefresh(_) => {
+            if let NativeEffect::RedisReadObservation(effect) = &rule.effect {
+                ensure!(
+                    !effect.transient_nil || effect.state_values,
+                    "transient nil permission requires the complete key-state contract"
+                );
+            }
             if selector.resource.is_none() {
                 validate_discovered_redis_key(selector)?;
             } else {

@@ -7,10 +7,14 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 use sha2::{Digest, Sha256};
 mod absence;
 mod closed_expiry;
+pub(in crate::replay) mod omissions;
 #[cfg(test)]
 mod recorded_tests;
 mod refresh_barrier;
 mod source;
+#[cfg(test)]
+mod state_tests;
+mod state_trace;
 pub(super) use source::validate_causal_order;
 #[cfg(test)]
 pub(super) mod tests;
@@ -23,13 +27,14 @@ const MAX_CALLS: usize = 4096;
 #[serde(rename_all = "snake_case")]
 enum Kind {
     Read,
+    StateRead,
     AbsentRead,
     Expiry,
 }
 
 impl Kind {
     fn is_read(self) -> bool {
-        matches!(self, Self::Read | Self::AbsentRead)
+        matches!(self, Self::Read | Self::StateRead | Self::AbsentRead)
     }
 }
 
@@ -37,6 +42,7 @@ impl Kind {
 struct Epoch {
     mutation: Option<usize>,
     observations: Vec<usize>,
+    predecessors: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -44,6 +50,7 @@ struct Profile {
     case: String,
     rule: String,
     kind: Kind,
+    transient_nil: bool,
     target: TargetKey,
     database: i64,
     username: Option<String>,
@@ -121,7 +128,11 @@ impl Observations {
     pub(super) fn native_rule(&self, index: usize) -> Option<&str> {
         self.owners.get(&index).and_then(|&(p, _)| {
             let profile = &self.profiles[p];
-            matches!(profile.kind, Kind::Expiry | Kind::AbsentRead).then_some(profile.rule.as_str())
+            matches!(
+                profile.kind,
+                Kind::Expiry | Kind::AbsentRead | Kind::StateRead
+            )
+            .then_some(profile.rule.as_str())
         })
     }
     pub(super) fn check_case_addition(
@@ -158,7 +169,7 @@ impl Observations {
 fn selected(effect: &NativeEffect) -> bool {
     matches!(
         effect,
-        NativeEffect::RedisExpiryRefresh(_) | NativeEffect::RedisReadObservation
+        NativeEffect::RedisExpiryRefresh(_) | NativeEffect::RedisReadObservation(_)
     ) || effect
         .redis_read_back()
         .iter()
@@ -166,7 +177,14 @@ fn selected(effect: &NativeEffect) -> bool {
 }
 
 impl RedisReplayState {
-    pub(super) fn prepare_observations(&mut self, case: &str) -> Result<()> {
+    pub(in crate::replay) fn prepare_optional_observations(&mut self, case: &str) -> Result<()> {
+        if self.request_contracts.compiled_rules().is_some_and(|compiled| compiled.native.iter().any(|rule| matches!(&rule.rule.effect, NativeEffect::RedisReadObservation(effect) if effect.transient_nil))) {
+            self.prepare_observations(case)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::replay) fn prepare_observations(&mut self, case: &str) -> Result<()> {
         if self.observations.prepared.contains(case) {
             return Ok(());
         }
@@ -190,9 +208,13 @@ impl RedisReplayState {
                 {
                     Kind::Expiry
                 } else if seed.record.command == "GET"
-                    && matches!(rule.effect, NativeEffect::RedisReadObservation)
+                    && let NativeEffect::RedisReadObservation(effect) = &rule.effect
                 {
-                    Kind::AbsentRead
+                    if effect.state_values {
+                        Kind::StateRead
+                    } else {
+                        Kind::AbsentRead
+                    }
                 } else if seed.record.command == "GET"
                     && rule
                         .effect
@@ -236,7 +258,8 @@ impl RedisReplayState {
                 if kind == Kind::Read && !source::has_owned_set(self, case, seed)? {
                     continue;
                 }
-                let prepared = source::prepare(self, case, &rule.id, kind, seed);
+                let transient_nil = matches!(&rule.effect, NativeEffect::RedisReadObservation(effect) if effect.transient_nil);
+                let prepared = source::prepare(self, case, &rule.id, kind, seed, transient_nil);
                 // A SET without a complete closed-scalar proof grants nothing.
                 // Any actual Source EXPIRE still requires its existing full proof.
                 if seed.record.command == "SET" && kind == Kind::Expiry && prepared.is_err() {
@@ -258,6 +281,30 @@ impl RedisReplayState {
                 }
             }
         }
+        // Count semantics have one owner; raw read-back remains the value adapter.
+        let state_keys = profiles
+            .iter()
+            .filter(|p| p.kind == Kind::StateRead)
+            .map(|p| {
+                (
+                    p.target.clone(),
+                    p.database,
+                    p.username.clone(),
+                    p.resp_version,
+                    p.key.clone(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        profiles.retain(|p| {
+            p.kind != Kind::Read
+                || !state_keys.contains(&(
+                    p.target.clone(),
+                    p.database,
+                    p.username.clone(),
+                    p.resp_version,
+                    p.key.clone(),
+                ))
+        });
         ensure!(
             profiles
                 .iter()
@@ -282,6 +329,13 @@ impl RedisReplayState {
                     && self.exchanges[i].observation_rule.is_none()),
             "state observations overlap another observation owner"
         );
+        let optional = profiles
+            .iter()
+            .filter(|p| p.transient_nil)
+            .flat_map(|p| &p.epochs)
+            .flat_map(|e| &e.observations)
+            .map(|&index| Ok((index, self.exchanges[index].response_bytes()? == b"$-1\r\n")))
+            .collect::<Result<BTreeMap<_, _>>>()?;
         // All Source proofs must succeed before any lane permission is installed.
         for profile in profiles {
             let owner = self.observations.profiles.len();
@@ -289,6 +343,10 @@ impl RedisReplayState {
             for (epoch, entry) in profile.epochs.iter().enumerate() {
                 for &index in &entry.observations {
                     self.exchanges[index].observation_rule = Some(profile.rule.clone());
+                    if optional.get(&index) == Some(&true) {
+                        self.exchanges[index].optional_observation_rule =
+                            Some(profile.rule.clone());
+                    }
                     self.observations.owners.insert(index, (owner, epoch));
                 }
             }
@@ -352,7 +410,10 @@ impl RedisReplayState {
                 .iter()
                 .rev()
                 .find(|epoch| {
-                    epoch.mutation.is_none_or(|i| {
+                    epoch.predecessors.iter().all(|&i| {
+                        !self.exchanges[i].requires_delivery()
+                            || self.exchanges[i].satisfies_lane_order()
+                    }) && epoch.mutation.is_none_or(|i| {
                         matches!(
                             self.exchanges[i].status,
                             ReplayExchangeStatus::Consumed | ReplayExchangeStatus::Responding

@@ -2,13 +2,13 @@
 
 Redis `APPEND key value` appends bytes to a string and returns its new byte
 length. Applications may buffer streaming text before calling it. A Source-proven
-`append_stream: true` permits different nonempty chunk boundaries while
+`state.append: concatenate` permits different nonempty chunk boundaries while
 preserving the ordered bytes. Declare a bounded key family:
 
 ```yaml
 redis:
   keys:
-    'content:*': {append_stream: true}
+    'content:*': {state: {append: concatenate}}
 ```
 
 In an annotated plan proposal, attach independent Source proof of the selected

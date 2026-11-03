@@ -17,6 +17,9 @@ impl ReplayState {
         self.http_candidates.register(&self.http_exchanges);
         self.mysql.prepare_candidates();
         self.redis.prepare_candidates();
+        // Optional loop observations need their immutable Source proof even
+        // when Target executes zero iterations and sends no Redis command.
+        self.redis.prepare_optional_observations(case)?;
         let native = NativeCaseRefs {
             http: self.http_candidates.case_members(case),
             redis: self.redis.prepared_case_members(case),

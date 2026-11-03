@@ -11,7 +11,7 @@ json:
 redis:
   keys:
     'chat:task_streaming:*':
-      activity_refresh: {fields: [/last_activity_at]}
+      state: {set: {reduce: last, fields: [/last_activity_at]}}
 ```
 
 An annotated proposal also supplies independent Source file/symbol proof on the

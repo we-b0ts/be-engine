@@ -12,7 +12,7 @@ fn event(sequence: usize, command: &str, response: &[u8]) -> Value {
 
 #[test]
 fn absent_read_observation_plan_apply_freezes_boundaries_and_requires_fresh_replay() {
-    for scenario in ["valid", "non_nil", "unbounded", "stale", "replace"] {
+    for scenario in ["valid", "non_nil", "unsupported", "stale", "replace"] {
         let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |root, source| {
             if scenario == "replace" {
                 write(
@@ -32,8 +32,8 @@ fn absent_read_observation_plan_apply_freezes_boundaries_and_requires_fresh_repl
             if scenario == "non_nil" {
                 events[1]["response"] = raw_body(b"$4\r\ntrue\r\n");
             }
-            if scenario == "unbounded" {
-                events.pop();
+            if scenario == "unsupported" {
+                events.push(event(4, "TTL", b":100\r\n"));
             }
             fs::write(
                 source.join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl"),
@@ -46,7 +46,7 @@ fn absent_read_observation_plan_apply_freezes_boundaries_and_requires_fresh_repl
             vec![]
         });
         let policy = json!({"format":"traffic-policy/v3", "redis":{"keys":{
-            "cancel:*":{"read_observation":true,"proof":{"source":"session.py:10-40",
+            "cancel:*":{"state":{"get":{"transient":["nil"]}},"proof":{"source":"session.py:10-40",
                 "fact":"Independent cancellation polling reads nil between successful registration and cleanup deletions; the full Source lifetime is captured"}}
         }}});
         let proposal = if scenario == "replace" {
@@ -64,7 +64,7 @@ fn absent_read_observation_plan_apply_freezes_boundaries_and_requires_fresh_repl
             .join("apis/api/00000000-0000-4000-8000-000000000001/dependencies.jsonl");
         let original = fs::read(&dependencies).unwrap();
         let plan = fixture.plan();
-        if matches!(scenario, "non_nil" | "unbounded") {
+        if matches!(scenario, "non_nil" | "unsupported") {
             assert!(plan.is_err(), "{scenario}");
             continue;
         }

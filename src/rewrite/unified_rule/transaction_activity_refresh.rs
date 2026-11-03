@@ -48,7 +48,7 @@ fn fixture() -> Fixture {
     write(
         &fixture.proposal,
         json!({"format":"traffic-policy/v3","redis":{"keys":{
-            "activity:*":{"activity_refresh":{"fields":["/last_activity_at"]},
+            "activity:*":{"state":{"set":{"reduce":"last","fields":["/last_activity_at"]}},
                 "proof":{"source":"session.py:touch","fact":"Source reads current metadata, refreshes only its timestamp and preserves fixed TTL inside an owned lifetime"}}
         }}}),
     );
@@ -98,7 +98,7 @@ fn activity_refresh_public_plan_apply_requires_source_proof_and_fresh_replay() {
             assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
             assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
             let policy = fs::read_to_string(fixture.policy()).unwrap();
-            assert!(policy.contains("activity_refresh"));
+            assert!(policy.contains("reduce: last"));
             assert!(!policy.contains("session.py:touch"));
             let compiled = crate::policy::parse_policy(&policy)
                 .and_then(|p| crate::policy::compile_policy(&p))

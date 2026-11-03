@@ -92,6 +92,9 @@ impl RedisReplayState {
                 || record.session_setup
                 || exchange.reusable_snapshot
                 || record.cache_snapshot_hit
+                // A proven transient observation may be omitted. It is not a
+                // delivery prerequisite and never receives a wire-success receipt.
+                || exchange.optional_observation_rule.is_some()
             {
                 continue;
             }

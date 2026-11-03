@@ -51,11 +51,13 @@ pub(super) fn prepare(
     rule: &str,
     kind: Kind,
     seed: &ReplayExchange,
+    transient_nil: bool,
 ) -> Result<Option<Profile>> {
     let mut profile = Profile {
         case: case.into(),
         rule: rule.into(),
         kind,
+        transient_nil,
         target: TargetKey {
             host: seed.record.target_host.clone(),
             port: seed.record.target_port,
@@ -73,6 +75,7 @@ pub(super) fn prepare(
         epochs: vec![Epoch {
             mutation: None,
             observations: vec![],
+            predecessors: vec![],
         }],
         valid_for_seconds: None,
         prepared_at: chrono::Utc::now(),
@@ -121,6 +124,9 @@ pub(super) fn prepare(
         timeline.push((index, e));
     }
     timeline.sort_by_key(|(index, e)| (e.record.started_at(), *index));
+    if kind == Kind::StateRead && !has_owned_set(state, case, seed)? {
+        return super::state_trace::read_only(state, profile, &timeline).map(Some);
+    }
     if kind == Kind::AbsentRead {
         super::absence::validate_causal_order(&timeline)?;
     } else {
@@ -129,7 +135,7 @@ pub(super) fn prepare(
     if kind == Kind::AbsentRead {
         super::absence::prepare(&mut profile, &mut timeline)?;
     }
-    if kind == Kind::Read {
+    if matches!(kind, Kind::Read | Kind::StateRead) {
         let mut first_set = None;
         for (position, (_, exchange)) in timeline.iter().enumerate() {
             if supported_set(exchange, &profile.key) && exchange.response_bytes()? == b"+OK\r\n" {
@@ -445,7 +451,7 @@ pub(super) fn require_causal_order(before: &ReplayExchange, after: &ReplayExchan
     Ok(())
 }
 
-fn new_epoch(profile: &mut Profile, mutation: usize) -> Result<()> {
+pub(super) fn new_epoch(profile: &mut Profile, mutation: usize) -> Result<()> {
     ensure!(
         profile.epochs.len() < 1024,
         "state observations exceed Source lifetime limit"
@@ -453,6 +459,7 @@ fn new_epoch(profile: &mut Profile, mutation: usize) -> Result<()> {
     profile.epochs.push(Epoch {
         mutation: Some(mutation),
         observations: vec![],
+        predecessors: vec![],
     });
     Ok(())
 }
@@ -487,7 +494,7 @@ fn positive_ttl(profile: &mut Profile, unit: &[u8], value: &[u8]) -> Result<()> 
     Ok(())
 }
 
-fn integer(bytes: &[u8]) -> Result<i64> {
+pub(super) fn integer(bytes: &[u8]) -> Result<i64> {
     let value = bytes
         .strip_prefix(b":")
         .and_then(|v| v.strip_suffix(b"\r\n"))

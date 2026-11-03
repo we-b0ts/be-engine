@@ -59,7 +59,7 @@ fn physical_key_and_command_formats_roundtrip_without_authored_sequence_or_bindi
 
 #[test]
 fn streaming_key_requires_no_named_resource_and_stays_on_one_line() {
-    let mut raw = policy(json!({"chat:*":{"append_stream":true,"expiry_refresh":true}}));
+    let mut raw = policy(json!({"chat:*":{"state":{"append":"concatenate","expire":"refresh"}}}));
     raw.as_object_mut().unwrap().remove("resources");
     let policy = parse_policy(&raw.to_string()).unwrap();
     let compiled = compile_policy(&policy).unwrap();
@@ -71,10 +71,10 @@ fn streaming_key_requires_no_named_resource_and_stays_on_one_line() {
             .all(|rule| rule.rule.selector.resource.is_none())
     );
     let rendered = render_policy(&policy).unwrap();
-    assert!(
-        rendered.contains("chat:*: {append_stream: true, expiry_refresh: true}")
-            || rendered.contains("chat:*: {expiry_refresh: true, append_stream: true}"),
-        "{rendered}"
+    let authored: Value = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(
+        authored["redis"]["keys"]["chat:*"]["state"],
+        json!({"append":"concatenate","expire":"refresh"})
     );
     assert_eq!(
         compile_policy(&parse_policy(&rendered).unwrap())

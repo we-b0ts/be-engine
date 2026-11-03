@@ -9,12 +9,16 @@ content bytes.
 
 ## Current generated identity
 
-Declare the scalar identity format and `read_back: true` on one key pattern:
+Declare the scalar identity format, `read_back: true` and `state.get` on one key pattern:
 
 ```yaml
 redis:
   keys:
-    'task:current:*': {kind: identity, formats: [uuid], read_back: true}
+    'task:current:*':
+      kind: identity
+      formats: [uuid]
+      read_back: true
+      state: {get: observe}
 ```
 
 The engine retains actual Case, endpoint, database, authentication and protocol
@@ -48,14 +52,15 @@ identity already bound by the matched SET. It cannot take an identity from a
 future SET or return a previous identity after DEL. Repeated GETs in that state
 can use the same Source witness; one successfully delivered GET covers the
 equivalent Source observations of that state. A state never observed by Target
-still has unused Source reads. All mutations retain ordinary finite matching.
+still has unused Source reads, except explicit `get: {transient: [nil]}` observations;
+see [state contracts](redis-state-contracts.md). All mutations retain ordinary finite matching.
 
 ## Positive TTL refresh
 
 ```yaml
 redis:
   keys:
-    'task:stream:*': {expiry_refresh: true}
+    'task:stream:*': {state: {expire: refresh}}
 ```
 
 The proposed key proof must establish one fixed positive TTL and the selected

@@ -109,16 +109,15 @@ fn state_epoch_permissions_require_separate_local_source_evidence_in_the_submitt
 #[test]
 fn compact_redis_key_behaviors_require_their_own_source_proof_in_a_plan() {
     for behavior in [
-        "append_stream",
+        "state",
         "read_commutation",
-        "read_observation",
-        "expiry_refresh",
         "read_back",
         "commands",
         "key_format",
     ] {
         let mut entry = json!({});
         entry[behavior] = match behavior {
+            "state" => json!({"get":{"transient":["nil"]}}),
             "commands" => json!(["SET"]),
             "key_format" => json!({"kind":"identity","formats":["uuid"]}),
             _ => json!(true),

@@ -36,7 +36,7 @@ pub(in crate::replay::redis) fn refresh_rule() -> Value {
       "effect":{"kind":"redis_expiry_refresh"},"proof":{"source":"session.py:20","fact":"Every buffered append refreshes the same positive TTL; scheduling changes refresh counts without exposing expiry"}})
 }
 
-fn perform(state: &mut RedisReplayState, command: &str, args: &[&[u8]]) -> Vec<u8> {
+pub(super) fn perform(state: &mut RedisReplayState, command: &str, args: &[&[u8]]) -> Vec<u8> {
     let matched = request(state, command, args).unwrap();
     let response = matched.response.clone();
     state.complete_exchange(&matched);

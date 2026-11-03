@@ -140,6 +140,18 @@ pub struct RedisSequenceEffect {
 #[serde(deny_unknown_fields)]
 pub struct RedisReadCommutationEffect {}
 
+/// Read-count equivalence is independent of write/read value correspondence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisReadObservationEffect {
+    /// A complete key trace, including read-only initial states, supplies the proof.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub state_values: bool,
+    /// Source-proven nil observations are transient and may occur zero times.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transient_nil: bool,
+}
+
 /// Explicitly normalize successful fixed-TTL refreshes within one key lifetime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

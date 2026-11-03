@@ -695,6 +695,11 @@ is unclear.
   Global and explicit session setup retain connection-wide constraints.
   Native command matching and
   delivery retain connection eligibility, claims and finite consumption.
+  `policy/authoring/redis_keys/state` lowers key-local GET/APPEND/SET/EXPIRE
+  contracts to native effect owners. `redis/observations/state_trace` proves
+  read-only state epochs; `omissions` reports optional nil observations separately
+  from actual delivery, finite mutation claims and timing receipts. Rule evidence
+  guidance exposes loop candidates without inferring Source intent.
   `redis/observations` owns explicit SET/DEL state observations and positive TTL
   refresh equivalence. Its `source` child validates complete, isolated key
   lifetimes before installing observation permissions; an initial successful
@@ -1314,6 +1319,10 @@ is unclear.
   workers. Recognizing static routes or repeating existing patterns advances the
   catalog while preserving capture policy bytes, identities and proofs.
   `work_scope.rs` owns the API worker scope identity.
+  `revalidation/focused` owns explicit ordinary replay of prior API successes,
+  including retirement of idle final-sweep admission. It preserves all Source
+  evidence and outstanding final obligations; final completeness stays with
+  `dependency_review/batch`.
   `revalidation.rs` owns the coordinator's explicit verification request
   boundary and projection for deferred API status. Requests and scoped Next obey
   the same round gate and cannot turn stale successes into first-pass work.

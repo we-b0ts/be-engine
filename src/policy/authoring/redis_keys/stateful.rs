@@ -32,7 +32,7 @@ pub(super) fn lower_read_back(resource: Option<&Resource>, proof: Option<&Proof>
                 write_operation: "SET".into(),
                 argument_index: 1,
                 json_pointers: vec![],
-                state_epochs: true,
+                state_epochs: false,
             },
             proof: proof.cloned(),
         }],
@@ -79,7 +79,7 @@ mod tests {
         let NativeEffect::Identity(identity) = &mut effect else {
             unreachable!()
         };
-        identity.read_back[0].contract.state_epochs = false;
+        identity.read_back[0].contract.state_epochs = true;
         assert!(!is_read_back(&effect, Some(&resource)));
         let mut other = resource.clone();
         other.endpoint.port += 1;

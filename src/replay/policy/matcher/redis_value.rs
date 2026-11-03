@@ -13,7 +13,7 @@ impl ReplayPolicyRuntime {
                     r.rule.effect,
                     crate::policy::NativeEffect::RedisAppendStream
                         | crate::policy::NativeEffect::RedisReadCommutation(_)
-                        | crate::policy::NativeEffect::RedisReadObservation
+                        | crate::policy::NativeEffect::RedisReadObservation(_)
                         | crate::policy::NativeEffect::RedisExpiryRefresh(_)
                         | crate::policy::NativeEffect::RedisActivityRefresh(_)
                 )
@@ -30,7 +30,7 @@ impl ReplayPolicyRuntime {
                         crate::policy::NativeEffect::RedisReadCommutation(_) => {
                             "redis_read_commutation"
                         }
-                        crate::policy::NativeEffect::RedisReadObservation => {
+                        crate::policy::NativeEffect::RedisReadObservation(_) => {
                             "redis_read_observation"
                         }
                         crate::policy::NativeEffect::RedisExpiryRefresh(_) => {

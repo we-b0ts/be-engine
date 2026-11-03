@@ -173,6 +173,43 @@ async fn inventory_membership_cannot_replace_actual_inputs_or_hide_failed_unsele
 }
 
 #[tokio::test]
+async fn incomplete_final_source_offers_focused_replay_without_changing_the_seal() {
+    let (target, mut state) = recording(&[("GET /api", "/api")], true).await;
+    state.current_api_index = None;
+    let root = state.case_source.as_ref().unwrap();
+    let path = root.join(MANIFEST_FILE);
+    let original = fs::read(&path).unwrap();
+    let (summary, required) = blocked(source_block(target.path(), &state));
+    assert!(summary.contains("every sealed Source input to be complete"));
+    assert!(
+        required
+            .iter()
+            .any(|hint| hint.contains("verification request --focused --api /api"))
+    );
+    crate::rewrite::store::RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let report =
+        crate::rewrite::revalidation::request(crate::rewrite::RewriteRevalidationRequestOptions {
+            target_root: target.path().into(),
+            apis: vec!["/api".parse().unwrap()],
+            reason: "policy changed; replay the prior API contracts".into(),
+            focused: true,
+        })
+        .unwrap();
+    assert!(
+        matches!(report.next.action, RewriteAction::AdvanceRequired { .. }),
+        "{:?}",
+        report.next.action
+    );
+    assert_eq!(fs::read(path).unwrap(), original);
+    // Focused API admission never supplies a final receipt or repairs capture.
+    let (summary, _) = blocked(source_block(target.path(), &state));
+    assert!(summary.contains("every sealed Source input to be complete"));
+}
+
+#[tokio::test]
 async fn coverage_keeps_sealed_input_authentication_and_run_identity_checks() {
     let (target, mut state) = recording(&[("GET /api", "/api")], false).await;
     assert!(source_block(target.path(), &state).is_none());

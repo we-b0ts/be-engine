@@ -96,6 +96,11 @@ pub(crate) fn validate_native_source_dependencies(
         }
     }
     runtime.request_contracts.finish_source_session()?;
+    // A value-only read-back needs a real Source write/read proof even when
+    // observation-count ownership belongs to a separate state contract.
+    for proof in runtime.request_contracts.read_back_report() {
+        *checked.rules.entry(proof.rule_id).or_default() += 1;
+    }
     for row in runtime.report().dependency_rules {
         if row.matches > 0 {
             *checked.rules.entry(row.id).or_default() += row.matches;
@@ -143,7 +148,7 @@ fn dependency_effect(effect: &NativeEffect) -> bool {
         NativeEffect::Identity(_)
             | NativeEffect::RedisAppendStream
             | NativeEffect::RedisReadCommutation(_)
-            | NativeEffect::RedisReadObservation
+            | NativeEffect::RedisReadObservation(_)
             | NativeEffect::RedisExpiryRefresh(_)
             | NativeEffect::RedisActivityRefresh(_)
             | NativeEffect::RedisSequence(_)
