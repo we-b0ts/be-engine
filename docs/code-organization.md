@@ -48,6 +48,12 @@ is unclear.
   combining global and authored fields, preserving duplicate, overlap and
   declaration-order behavior before that comparison.
 
+- `rewrite/dependency_review/case_defaults` restores mechanical ownership from
+  sealed input and protocol evidence. Its `mysql` child proves finite session
+  rollback tails from complete same-Case wire transactions, without changing
+  matching, original captures, or consumption. Ambiguous native sequences remain
+  unattributed; application async ownership still requires its independent proof.
+
 - `replay/preparation` binds an immutable Source scope and applicable contracts
   into a Case execution plan after native registration. `replay/native_index`
   owns ordered postings and immutable lane membership; HTTP, Redis and MySQL

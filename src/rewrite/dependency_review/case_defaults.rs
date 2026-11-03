@@ -1,5 +1,6 @@
-//! Restore ordinary Case admission for historical unowned notification inputs.
+//! Restore ordinary Case admission from finite original input/protocol evidence.
 //! These are mechanical scope defaults, never authored Source proofs or delivery.
+mod mysql;
 use crate::dependency::{
     attribution::DependencyOwner,
     observation::{CaptureMetadata, CapturePhase},
@@ -34,11 +35,15 @@ pub(super) fn load(
     let path = root.join("indexes/unattributed-scope.json");
     let mut input = crate::dependency_index::RecordStream::open(&path)?;
     let mut candidates = Vec::new();
+    let mut mysql_events = Vec::new();
     while let Some((_, line)) = input.next()? {
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
         let event: Value = serde_json::from_slice(line)?;
+        if let Some(frame) = mysql::Frame::read(&event, None, &BTreeMap::new())? {
+            mysql_events.push(frame);
+        }
         if let Some(capture) = candidate(&event)?
             && !process.iter().any(|rule| {
                 matches!(rule,
@@ -49,12 +54,12 @@ pub(super) fn load(
             candidates.push(capture);
         }
     }
-    if candidates.is_empty() {
+    if candidates.is_empty() && !mysql_events.iter().any(mysql::Frame::candidate) {
         return Ok(BTreeMap::new());
     }
     recording::authenticate(&root)?;
     let key = crate::policy_evidence::digest(&serde_json::to_vec(&(
-        "case-window-notification-ownership/v1",
+        "case-native-admission-ownership/v2",
         &manifest,
         &process,
     ))?);
@@ -117,6 +122,7 @@ pub(super) fn load(
             }
         }
     }
+    mysql::extend(&root, &manifest, &windows, mysql_events, &mut defaults)?;
     store::write_json(&cache, &defaults)?;
     Ok(defaults)
 }

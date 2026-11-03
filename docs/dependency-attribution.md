@@ -316,6 +316,16 @@ before resolving that investigation, then use the new current proof revision in
 the resolution. Follow the returned action into genuine same-Source Replay;
 neither a successful apply nor a resolved investigation is an API pass.
 
+Ordinary MySQL session cleanup does not require an application `async_api` rule.
+The engine can restore native Case membership when a complete, consecutive wire
+transaction has one original admitted Case and its members fall within that
+input's primary capture window. Its successful zero-effect `ROLLBACK` and at most
+one immediately adjacent idle rollback inherit that Case, with the observed Case,
+resource, process epoch and status continuity checked. Gaps, unknown or mixed
+members, incomplete responses and ambiguous wire identities retain attribution
+debt. This restores protocol closure without changing original facts, request
+matching, or delivery requirements.
+
 ## Acceptance and origin obligations
 
 The engine can issue `ai-verified` for an API's existing actual attempt only when
