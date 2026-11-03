@@ -403,10 +403,11 @@ fn assigned_worktree_delivery(route_workers: bool) {
     assert_eq!(show(target.path().into()).unwrap().evidence.spawns.len(), 1);
     let previous_report = fs::read(integrated_path(target.path())).unwrap();
     fs::write(target.path().join("src/lib.rs"), "fn main() { start(); }\nfn start() { tokio::spawn(async {}); }\nfn response() { start(); }\n").unwrap();
-    assert!(matches!(
-        gate(target.path(), &store.load().unwrap().unwrap(), "master").unwrap(),
-        None
-    ));
+    assert!(
+        gate(target.path(), &store.load().unwrap().unwrap(), "master")
+            .unwrap()
+            .is_none()
+    );
     assert!(show(target.path().into()).is_err());
     assert_eq!(
         fs::read(integrated_path(target.path())).unwrap(),

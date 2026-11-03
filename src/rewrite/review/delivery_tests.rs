@@ -591,10 +591,11 @@ fn coordinator_status_and_admission_never_execute_quality_commands() {
     revalidation.phase = crate::rewrite::RewritePhase::ApiPending;
     store.save(&revalidation).unwrap();
     assert!(!terminal_current(target.path(), &revalidation));
-    assert!(matches!(
-        required_action(target.path(), &revalidation).unwrap(),
-        None
-    ));
+    assert!(
+        required_action(target.path(), &revalidation)
+            .unwrap()
+            .is_none()
+    );
     let status = crate::rewrite::status_rewrite(crate::rewrite::RewriteContext {
         target_root: target.path().into(),
     })
@@ -634,10 +635,7 @@ fn external_change_can_refresh_review_at_the_canonical_commit_without_another_me
     let mut state = store.load().unwrap().unwrap();
     state.phase = crate::rewrite::RewritePhase::ApiPending;
     store.save(&state).unwrap();
-    assert!(matches!(
-        required_action(target.path(), &state).unwrap(),
-        None
-    ));
+    assert!(required_action(target.path(), &state).unwrap().is_none());
     assert!(check(options(target.path(), &integration, None)).is_err());
 
     git(&integration, &["merge", "--ff-only", &published]);
