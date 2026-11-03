@@ -198,7 +198,7 @@ fn input_routes(
             directory.join("request.json")
         };
         ensure!(
-            fs::canonicalize(&path)?.starts_with(fs::canonicalize(&root)?),
+            fs::canonicalize(&path)?.starts_with(fs::canonicalize(root)?),
             "Source input escapes recording boundary"
         );
         let request: Value = serde_json::from_slice(&read_input(files, &path)?)?;
