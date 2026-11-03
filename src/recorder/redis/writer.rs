@@ -152,10 +152,19 @@ pub(super) async fn run_ordered_writer(
                 // It is not another peer FIN/RST, and repeating the shutdown
                 // can turn an idle clean connection into a false capture error.
                 if !termination.engine_stopped() {
-                    if reset {
-                        client_control.reset()?;
+                    let close = if reset {
+                        client_control.reset()
                     } else {
-                        client_control.shutdown_write()?;
+                        client_control.shutdown_write()
+                    };
+                    // A client can reset after its request half closes, before
+                    // this server end arrives. Closing that socket is idempotent;
+                    // NotConnected supplies no new peer-termination evidence for
+                    // the pending exchanges processed below.
+                    if let Err(error) = close
+                        && error.kind() != std::io::ErrorKind::NotConnected
+                    {
+                        return Err(error.into());
                     }
                 }
                 client_open = false;
@@ -243,8 +252,10 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     #[tokio::test]
-    async fn recorder_stop_does_not_repeat_shutdown_on_an_already_disconnected_idle_socket() {
-        for engine_stop in [false, true] {
+    async fn disconnected_client_close_does_not_invent_peer_completion() {
+        for (engine_stop, pending_request) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let temp = tempfile::tempdir().unwrap();
             let mut config = crate::AppConfig::default();
             config.recording.output_dir = temp.path().join("recordings");
@@ -269,9 +280,50 @@ mod tests {
             if engine_stop {
                 termination.observe_engine_stop();
             }
+            let connection = Uuid::new_v4();
+            let exchanges = if pending_request {
+                let command = RedisCommand {
+                    name: "GET".into(),
+                    args: vec![b"key".to_vec()],
+                };
+                let targets = state.capture_dependency_request(
+                    crate::recorder::request::DependencyRequest::Redis {
+                        target_port: 6379,
+                        command: &command.name,
+                        args: &command.args,
+                    },
+                );
+                targets.bind_protocol(crate::dependency::observation::ProtocolRef::Redis {
+                    connection_id: connection,
+                    sequence: 1,
+                });
+                vec![PendingRedisExchange {
+                    targets,
+                    sequence: 1,
+                    recorded_args: command.args.clone(),
+                    command,
+                    session: RedisSession {
+                        resp_version: 2,
+                        database: 0,
+                        username: None,
+                        subscriptions: pubsub::Subscriptions::default(),
+                    },
+                    session_setup: false,
+                    replay_safe: true,
+                    warnings: Vec::new(),
+                    cache_snapshot_rule: None,
+                    cache_snapshot_key: None,
+                    cache_snapshot_hit: false,
+                    started: Instant::now(),
+                    request_started_at: Utc::now(),
+                    ended_at: None,
+                }]
+            } else {
+                vec![]
+            };
             let (tx, rx) = mpsc::channel(1);
             tx.send(RedisOutput::Terminated {
-                exchanges: vec![],
+                exchanges,
                 response: Bytes::new(),
                 reset: false,
             })
@@ -285,7 +337,6 @@ mod tests {
                 target_addr: "127.0.0.1:6379".into(),
                 upstream_addr: "127.0.0.1:6379".into(),
             };
-            let connection = Uuid::new_v4();
             let health = Arc::new(ConnectionCaptureHealth::new(
                 connection,
                 "redis",
@@ -295,26 +346,32 @@ mod tests {
             let result = run_ordered_writer(
                 Arc::new(Mutex::new(write)),
                 rx,
-                state,
+                state.clone(),
                 context,
                 connection,
-                termination,
+                termination.clone(),
                 4096,
                 control,
                 health,
             )
             .await;
-            if engine_stop {
-                assert_eq!(result.unwrap(), (0, true));
-            } else {
-                assert_eq!(
-                    result
-                        .unwrap_err()
-                        .downcast_ref::<std::io::Error>()
-                        .unwrap()
-                        .kind(),
-                    std::io::ErrorKind::NotConnected
-                );
+            assert_eq!(result.unwrap(), (0, !pending_request));
+            assert!(termination.peer_snapshot().is_none());
+            if pending_request {
+                state.recorder().flush_traffic().await.unwrap();
+                let raw = crate::recorder::test_io::read_to_string(
+                    state.recorder().run_dir.join("traffic.jsonl"),
+                )
+                .await
+                .unwrap();
+                let exchange = raw
+                    .lines()
+                    .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                    .find(|row| row["event_type"] == "redis_exchange")
+                    .unwrap();
+                assert_eq!(exchange["replay_safe"], false);
+                assert_eq!(exchange["outcome"], "response");
+                assert!(!exchange["parse_warnings"].as_array().unwrap().is_empty());
             }
         }
     }

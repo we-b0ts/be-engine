@@ -49,6 +49,13 @@ tasks or a shared output queue must not delay that propagation until Source
 reaches its own timeout. Flush preceding forwarded bytes in order. A client
 write-half close must still allow a server response to reach that client.
 
+Redis's ordered response writer can receive server EOF after the client has
+already reset its response direction. A close operation returning `NotConnected`
+then means the socket is already closed, rather than a new capture failure.
+This applies only to explicit socket close control, not response writes, and
+does not establish a peer termination. Pending exchanges still require their
+independently observed end and supported response-prefix evidence.
+
 TCP reset must remain distinguishable from orderly EOF. The Linux transport
 control disconnects the socket with `AF_UNSPEC`; this reaches the peer even while
 split IO, TLS wrappers or recovery registration retain duplicated descriptors.
