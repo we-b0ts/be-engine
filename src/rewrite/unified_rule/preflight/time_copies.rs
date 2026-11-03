@@ -126,7 +126,19 @@ pub(super) fn observe_global(
     event: &Value,
     source: &[u8],
     policy: &CompiledPolicy,
+    evidence: ReadEvidence<'_>,
+) -> Result<()> {
+    observe_global_with_retiming(store, case, event, source, policy, evidence, None)
+}
+
+pub(super) fn observe_global_with_retiming(
+    store: &mut TimeCopyStore,
+    case: &str,
+    event: &Value,
+    source: &[u8],
+    policy: &CompiledPolicy,
     mut evidence: ReadEvidence<'_>,
+    mut retiming: Option<&mut super::input_retiming::Inputs>,
 ) -> Result<()> {
     // The live hooks capture only successfully delivered, ordinary Case reads.
     // A protected payload does not grant snapshot or shared-inventory ownership.
@@ -210,6 +222,9 @@ pub(super) fn observe_global(
                           source: &Value,
                           target: &Value,
                           time: &crate::policy::TimeContract| {
+            if let Some(inputs) = &mut retiming {
+                inputs.observe(before_path, source, target, time, &witness)?;
+            }
             records.push(TimeCopyRecord::new_time(
                 time,
                 before,

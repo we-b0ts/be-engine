@@ -32,6 +32,7 @@ fn json_active(policy: &CompiledPolicy, selected: &BTreeSet<String>) -> bool {
 pub(super) fn verify(
     root: &Path,
     bundle: &mut Bundle,
+    previous: &CompiledPolicy,
     policy: &CompiledPolicy,
     selected: &BTreeSet<String>,
     result: &mut Preflight,
@@ -65,6 +66,51 @@ pub(super) fn verify(
     let mut candidates = candidate_pairs::Candidates::default();
     for (case, directory) in bundle.cases.clone() {
         let request = bundle.request(&directory.join("request.json"))?;
+        let trace = bundle.dependency_path(&directory)?;
+        bundle.freeze(&trace)?;
+        let mut metadata = crate::replay::MysqlInferenceMetadata::default();
+        let mut inputs = super::input_retiming::Inputs::new(previous, policy);
+        let mut delivered = TimeCopyStore::default();
+        delivered.begin_case(&case);
+        visit(&trace, |event| {
+            metadata.observe_event(event)?;
+            if inputs.enabled()
+                && matches!(
+                    dependency::protocol(event),
+                    Some(Protocol::Mysql | Protocol::Redis)
+                )
+                && has_surface(event, Surface::DependencyResponse)
+                && let (Some(index), Some(private), Some(identity)) = (
+                    index.as_ref(),
+                    private.as_deref(),
+                    time_copies::identity(&case, event),
+                )
+            {
+                let raw =
+                    dependency::source_witness(Surface::DependencyResponse, event, &directory)?;
+                time_copies::observe_global_with_retiming(
+                    &mut delivered,
+                    &case,
+                    event,
+                    &raw,
+                    policy,
+                    time_copies::ReadEvidence {
+                        private,
+                        directory: &directory,
+                        report: &bundle.replay,
+                        case_started: timestamp(&request["timestamp"]),
+                        responses: index
+                            .for_source(Surface::DependencyResponse, &identity)
+                            .collect(),
+                        requests: index
+                            .for_source(Surface::DependencyRequest, &identity)
+                            .collect(),
+                    },
+                    Some(&mut inputs),
+                )?;
+            }
+            Ok(())
+        })?;
         if selected.contains(crate::policy::GLOBAL_HTTP_ID)
             && let Some(http) = &policy.http
         {
@@ -72,16 +118,12 @@ pub(super) fn verify(
         }
         if json_active(policy, selected) {
             primary(
-                root, bundle, &case, &directory, &request, policy, selected, result,
+                root, bundle, &case, &directory, &request, policy, selected, result, &inputs,
             )
             .with_context(|| {
                 format!("global format primary validation: case={case}, surface=api.response")
             })?;
         }
-        let trace = bundle.dependency_path(&directory)?;
-        bundle.freeze(&trace)?;
-        let mut metadata = crate::replay::MysqlInferenceMetadata::default();
-        visit(&trace, |event| metadata.observe_event(event))?;
         let mut copies = TimeCopyStore::default();
         copies.begin_case(&case);
         visit(&trace, |event| {
@@ -181,7 +223,17 @@ pub(super) fn verify(
                             "phase=independent_target_validation, surface={surface:?}, witness_id={}, slot={:?}",
                             witness.id, witness.metadata.slot
                         ));
-                        let count = if matches!(
+                        let count = if checked.is_err()
+                            && surface == Surface::DependencyRequest
+                            && inputs.precedes(witness)
+                        {
+                            // This is not validation under the proposed input.
+                            // Preserve the protected observation as an explicit
+                            // fresh-execution obligation, with no positive count.
+                            super::input_retiming::Inputs::defer(&case, surface, Some(witness), result);
+                            candidates.defer(witness)?;
+                            0
+                        } else if matches!(
                             dependency::protocol(event),
                             Some(Protocol::Mysql | Protocol::Redis)
                         )
@@ -377,6 +429,7 @@ fn primary(
     policy: &CompiledPolicy,
     selected: &BTreeSet<String>,
     result: &mut Preflight,
+    inputs: &super::input_retiming::Inputs,
 ) -> Result<()> {
     let plan = policy.global_json.as_ref().expect("selected global JSON");
     // Native owners compose into this comparison but their usage is recorded
@@ -461,22 +514,36 @@ fn primary(
         return Ok(());
     };
     let clocks = AnchorClocks::for_response(pair.request_times, pair.times);
-    let mut checked = compare_body(
-        &pair.source,
-        pair.target
-            .as_deref()
-            .context("global JSON Target body unavailable")?,
-        clocks,
-    )?;
-    checked.merge_and_validate(crate::replay::compare_interaction_global(
-        pair.source_interaction.as_ref(),
-        pair.target_interaction.as_ref(),
-        Some(plan),
-        pair.interaction_times,
-        pair.request_times,
-    )?);
-    let checked = valid_count(&checked, &selected)
-        .context("phase=independent_target_validation, document=body_or_interaction")?;
+    let checked = (|| -> Result<usize> {
+        let mut checked = compare_body(
+            &pair.source,
+            pair.target
+                .as_deref()
+                .context("global JSON Target body unavailable")?,
+            clocks,
+        )?;
+        checked.merge_and_validate(crate::replay::compare_interaction_global(
+            pair.source_interaction.as_ref(),
+            pair.target_interaction.as_ref(),
+            Some(plan),
+            pair.interaction_times,
+            pair.request_times,
+        )?);
+        valid_count(&checked, &selected)
+            .context("phase=independent_target_validation, document=body_or_interaction")
+    })();
+    let checked = match checked {
+        Err(_)
+            if inputs.precedes_response(ClockPair {
+                source: pair.times.source,
+                target: pair.times.target,
+            }) =>
+        {
+            super::input_retiming::Inputs::defer(case, Surface::ApiResponse, None, result);
+            return Ok(());
+        }
+        other => other?,
+    };
     if relevant || checked > 0 {
         result.independent_target_validations += 1;
     }

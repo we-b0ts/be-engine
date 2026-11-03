@@ -1583,11 +1583,17 @@ explicit repository-wide audit.
 
 - `rewrite/unified_rule/manifest/eligibility` permits a finalized partial attempt
   to revoke existing bounded key-local Redis read-back permissions or revise
-  formats on existing JSON identity fields. Identity revisions preserve the
-  exact field set, kind and literal prefixes; every other compiled owner and
+  formats on existing JSON identity fields, or add missing JSON time fields.
+  Time additions preserve every existing field, clock and other owner.
+  Identity revisions preserve the exact field set, kind and literal prefixes;
+  every other compiled owner and
   signature remains identical. Other additions and modifications retain the
   complete-attempt requirement. Full Source freezing, independent Target
   preflight, policy CAS and fresh genuine Replay remain with the normal planner.
+  `preflight/input_retiming` retains unvalidated old execution after proven
+  changes to completed time inputs. It consumes the native read-provenance
+  adapter's authenticated receipts and both causal cutoffs; it grants no runtime
+  comparison permission or positive validation for those observations.
 
 - `rewrite/case_dependencies` owns bounded, read-only per-target dependency
   projections. Its `mysql` child owns query, parameter, connection, and response
@@ -1894,7 +1900,8 @@ explicit repository-wide audit.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
   `manifest/eligibility` owns narrow finalized-partial format changes: Redis
-  scalar identities and existing JSON identity representations retain every
+  scalar identities, existing JSON identity representations and additive JSON
+  time declarations retain every
   other compiled permission and pass the same complete preflight and stale
   checks. Eligibility never certifies an incomplete Replay.
   Its `change` child admits explicit replacement sets, preserving unselected

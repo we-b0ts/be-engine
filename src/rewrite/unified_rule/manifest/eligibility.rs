@@ -25,7 +25,10 @@ pub(super) fn removes_only_read_back(before: &CompiledPolicy, after: &CompiledPo
 /// Narrow identity format changes retain Source-wide validation and independent
 /// Target preflight. They never certify the unfinished Replay.
 pub(super) fn allows_partial(before: &CompiledPolicy, after: &CompiledPolicy) -> bool {
-    if removes_only_read_back(before, after) || changes_only_redis_identities(before, after) {
+    if removes_only_read_back(before, after)
+        || changes_only_redis_identities(before, after)
+        || adds_only_json_times(before, after)
+    {
         return true;
     }
     let (Some(old), Some(new)) = (&before.global_json, &after.global_json) else {
@@ -42,6 +45,36 @@ pub(super) fn allows_partial(before: &CompiledPolicy, after: &CompiledPolicy) ->
         if !same_identity_prefixes(old, new) {
             return false;
         }
+    }
+    let mut expected = before.clone();
+    let json = expected.global_json.as_mut().unwrap();
+    json.fields = new.fields.clone();
+    json.fingerprint = new.fingerprint.clone();
+    expected.fingerprints = after.fingerprints.clone();
+    expected == *after
+}
+
+/// A calendar-state read can change the business branch before an attempt
+/// finishes. Permit its missing declaration to reach the ordinary planner;
+/// Source validation, independent Target checks and fresh Replay still apply.
+pub(in crate::rewrite::unified_rule) fn adds_only_json_times(
+    before: &CompiledPolicy,
+    after: &CompiledPolicy,
+) -> bool {
+    let (Some(old), Some(new)) = (&before.global_json, &after.global_json) else {
+        return false;
+    };
+    if old.fields.len() >= new.fields.len()
+        || old
+            .fields
+            .iter()
+            .any(|(pointer, field)| new.fields.get(pointer) != Some(field))
+        || new.fields.iter().any(|(pointer, field)| {
+            !old.fields.contains_key(pointer)
+                && !matches!(field, crate::policy::GlobalField::Time { .. })
+        })
+    {
+        return false;
     }
     let mut expected = before.clone();
     let json = expected.global_json.as_mut().unwrap();
@@ -107,6 +140,67 @@ fn changes_only_redis_identities(before: &CompiledPolicy, after: &CompiledPolicy
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn partial_json_time_additions_preserve_existing_fields_clocks_and_other_owners() {
+        let original = json!({"format":"traffic-policy/v3","json":{"fields":{
+            "/id":{"kind":"identity","formats":["decimal"]},
+            "/at":{"kind":"time","formats":["unix_seconds"]}
+        }}});
+        let parse =
+            |value: &Value| crate::policy::parse_and_compile_policy(&value.to_string()).unwrap();
+        let before = parse(&original);
+        for scenario in [
+            "calendar",
+            "timestamp",
+            "noop",
+            "replace",
+            "delete",
+            "identity",
+            "clock",
+            "http",
+        ] {
+            let mut value = original.clone();
+            value["json"]["fields"]["/day"] =
+                json!({"kind":"time","formats":[{"format":"calendar_date","utc_offset":"+08:00"}]});
+            match scenario {
+                "timestamp" => {
+                    value["json"]["fields"]["/day"] =
+                        json!({"kind":"time","formats":["unix_milliseconds"]})
+                }
+                "noop" => value = original.clone(),
+                "replace" => {
+                    value["json"]["fields"]["/at"]["formats"] = json!(["unix_milliseconds"])
+                }
+                "delete" => {
+                    value["json"]["fields"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("/id");
+                }
+                "identity" => {
+                    value["json"]["fields"]["/new"] =
+                        json!({"kind":"identity","formats":["decimal"]})
+                }
+                "clock" => value["time"] = json!({"default_utc_offset":"+00:00"}),
+                "http" => {
+                    value["http"] =
+                        json!({"headers":{"x-id":{"kind":"identity","formats":["uuid"]}}})
+                }
+                _ => {}
+            }
+            assert_eq!(
+                adds_only_json_times(&before, &parse(&value)),
+                matches!(scenario, "calendar" | "timestamp"),
+                "{scenario}"
+            );
+        }
+        let empty = parse(&json!({"format":"traffic-policy/v3"}));
+        let first = parse(&json!({"format":"traffic-policy/v3","json":{"fields":{
+            "/day":{"kind":"time","formats":[{"format":"calendar_date","utc_offset":"+08:00"}]}
+        }}}));
+        assert!(allows_partial(&empty, &first));
+    }
 
     fn compile(redis: Value) -> CompiledPolicy {
         crate::policy::parse_and_compile_policy(
