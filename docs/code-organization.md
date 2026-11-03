@@ -210,12 +210,27 @@ is unclear.
   selector and captured-identity matching without changing dependency ownership.
   `policy/async_api` owns ordered Source request/response scenarios and
   terminal-resource syntax, including legacy single-scenario input.
+  Its `redis_publish` child validates exact terminal channels and literal JSON
+  message predicates without changing the existing key-based declarations.
+  Its `redis_response` child owns optional native `any`/`nil` reply conditions
+  and canonical serialization that preserves omitted/default-any fingerprints.
   `recorder/async_api/selection` owns first-matching scenario selection and
-  independent early signals; `recorder/async_api` matches complete observed
+  independent early signals and fresh end generations; `recorder/async_api` matches complete observed
   SQL, Redis operations or successful HTTP exchanges;
   its `recorded` adapter reads immutable semantic JSONL through the same
   completion and occurrence checks. `redis/key_slots` owns physical key
   positions shared by recording completion and replay identity translation.
+  `recorder/async_api/publish` shares complete native PUBLISH and JSON-message
+  terminal matching between live recording and immutable recorded evidence;
+  channels are not physical Redis keys.
+  `recorder/async_api/response` validates complete native Redis replies for live
+  and recorded end matching; missing captures never serve as nil evidence.
+  `recorder/async_api/redis_event` owns lazy parsing shared by all end selectors
+  and early scenarios for one exchange, including cached unsuccessful parses.
+  `recorder/async_api/templates` prepares immutable key and SQL patterns once per
+  Case scenario matcher; clones share that bounded cache without a global index.
+  Matched ends and pending transactional matches use fixed-size bitmaps;
+  `recorder/async_api/transaction` releases matches only at a proven commit.
   `recorder/connect_failure` records actual failed upstream connects and the
   explicit client reset delivered by Recorder. `replay/connect_failure` owns
   finite case/endpoint matching and faithful timed transport delivery; neither
@@ -223,8 +238,18 @@ is unclear.
   `replay/network_access` loads the finalized network contract and owns strict
   endpoint admission and DNS-only availability; `replay/dns` retains DNS wire
   parsing and response delivery without inventing reachable DNS-only endpoints.
-  `active_case/async_api` retains early completion signals, the common request
-  deadline and normal Source-stop/drain behavior. Asynchronous completion keeps
+  `active_case/async_api` retains early completion signals, waits without an
+  absolute deadline after the primary response, and handles explicit shutdown
+  or capture failure through Source-stop/drain behavior. Its `ending` child owns the
+  fixed one-second probe after a fresh partial match and waits for another
+  fresh end after any subsequent relevant request starts. A five-minute business
+  I/O idle fallback closes an uncovered ending normally without stopping Source
+  or asserting business completion. Once all ends match, admission closes
+  immediately and admitted requests drain; a single end follows that same rule.
+  Request-start generations
+  belong to `active_case/activity` and true I/O tokens in `stream_tail`; writer
+  reservations and request completions do not represent new requests. Probe
+  closure shares the registry admission lock. Asynchronous completion keeps
   ordinary dependency ownership and never authorizes process-owned exclusions.
   Its exact cleanup inventory distinguishes post-Source-stop transport cleanup
   from complete business failures. `replay/lifecycle_cleanup` admits only those
@@ -959,6 +984,10 @@ is unclear.
   preflight stay distinct from actual API and batch witnesses; value/sharing
   permissions retain their execution evidence requirements. `rewrite/fingerprint`
   separates executed behavior identity from pure classification changes.
+  Pending-plan status projection shares the already validated idle action
+  between coordination counts and the returned action. Artifact verification
+  and rule application still read and hash their complete evidence; no file
+  metadata cache grants verification authority.
   `rewrite/plan_recovery` retires a pending rule with unavailable Replay evidence
   and requests fresh verification while returning its selector and source proof.
 - `replay/assertion/time` adapts response time configuration and diagnostics to
@@ -1790,8 +1819,11 @@ explicit repository-wide audit.
   and the separate `http.response_rewrite` acquisition list. Both lower to existing native owners, preserve Source proofs
   and fold only lossless canonical forms. Ordered capture precedence remains
   independent of generated IDs and rendering groups.
-  `policy/authoring/recording` owns case path selection and its original Source
-  revision/capture identity; the document renderer writes this section last.
+  `policy/authoring/recording` groups independent async lifecycle and case path
+  declarations. Only case paths lower to HTTP acquisition with their original
+  Source revision/capture identity. The document adapter accepts the legacy
+  root async spelling, rejects dual declarations, and writes one final recording
+  section with `async_api` before `case_paths`; compiled identities stay unchanged.
 - `policy/global_json/template` validates global string layouts and typed slot
   formats. `value_contract/global_protocol/template` owns Source-only layout
   selection, exact literals, token validation and staged complete identities.

@@ -25,7 +25,9 @@ pub(crate) fn render_updated(
         return Ok(original.into());
     }
     let raw: serde_yaml::Value = serde_yaml::from_str(original)?;
-    let single_recording_owner = raw.get("recording").is_some()
+    let single_recording_owner = raw
+        .get("recording")
+        .is_some_and(|recording| recording.get("case_paths").is_some())
         && document
             .rules
             .iter()

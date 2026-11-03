@@ -16,11 +16,6 @@ impl AppState {
         command: &str,
         key: Option<&[u8]>,
     ) -> DependencyTargets {
-        let targets =
-            self.capture_dependency_start(crate::dependency::observation::ProtocolRef::Memcached {
-                connection_id,
-                sequence,
-            });
         let rules = if command.eq_ignore_ascii_case("get") {
             key.map(|key| {
                 self.inner
@@ -31,6 +26,11 @@ impl AppState {
         } else {
             Vec::new()
         };
+        let targets = self.process_observation_targets(&rules, true);
+        targets.bind_protocol(crate::dependency::observation::ProtocolRef::Memcached {
+            connection_id,
+            sequence,
+        });
         crate::recorder::process_classification::classify(
             targets,
             rules,
@@ -46,16 +46,16 @@ impl AppState {
         group: Option<&str>,
         heartbeat: bool,
     ) -> DependencyTargets {
-        let targets =
-            self.capture_dependency_start(crate::dependency::observation::ProtocolRef::Motan {
-                connection_id,
-                sequence,
-            });
         let rules = self.config().process_owned_dependencies.iter().filter(|rule|
             !heartbeat && matches!(rule,BackgroundDependencyRuleConfig::Motan{group:expected,interface_name,method_name,..}
                 if group==Some(expected.as_str()) && identity.interface_name.as_deref()==Some(interface_name)
                     && identity.method_name.as_deref()==Some(method_name)))
             .map(|rule|rule.name().to_owned()).collect::<Vec<_>>();
+        let targets = self.process_observation_targets(&rules, !heartbeat);
+        targets.bind_protocol(crate::dependency::observation::ProtocolRef::Motan {
+            connection_id,
+            sequence,
+        });
         crate::recorder::process_classification::classify(
             targets,
             rules,
@@ -76,10 +76,14 @@ impl AppState {
             .filter(|rule| rule.matches_http_request(method.as_str(), uri, authority))
             .map(|rule| rule.name().to_owned())
             .collect::<Vec<_>>();
+        let definite = crate::recorder::process_classification::definite_process(
+            &process_owned,
+            &self.config().process_dependency_tasks,
+        );
         let targets = self
             .inner
             .active_cases
-            .current_targets_for_http_request(process_owned.is_empty());
+            .current_targets_for_http_request(!definite);
         crate::recorder::process_classification::classify(
             targets,
             process_owned,
@@ -100,15 +104,22 @@ impl AppState {
                 crate::redis::is_client_library_info(command, args)
             }
         };
-        let targets = self
-            .inner
-            .active_cases
-            .current_targets_for_request_with_tail(process_owned.is_empty() && !metadata_only);
+        let targets = self.process_observation_targets(&process_owned, !metadata_only);
         crate::recorder::process_classification::classify(
             targets,
             process_owned,
             &self.config().process_dependency_tasks,
         )
+    }
+
+    fn process_observation_targets(&self, rules: &[String], business: bool) -> DependencyTargets {
+        let definite = crate::recorder::process_classification::definite_process(
+            rules,
+            &self.config().process_dependency_tasks,
+        );
+        self.inner
+            .active_cases
+            .current_targets_for_request_with_tail(business && !definite)
     }
 
     fn stream_tail_process_rules(&self, request: &DependencyRequest<'_>) -> Vec<String> {

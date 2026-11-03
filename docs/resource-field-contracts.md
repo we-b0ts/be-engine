@@ -431,14 +431,18 @@ Whole-section replacement is explicit through `traffic-policy-change/v1`
 The plan reports declaration additions, changes and removals before publication.
 Additional native effects retain their own explicit plan/apply lifecycle.
 
-Recording lifecycle is separate from value formats. `async_api` matches the
+Recording lifecycle is separate from value formats. `recording.async_api` matches the
 original API and literal Source request/response JSON fields, selecting the
-first matching scenario in its ordered array, then retains the case until a
-declared successful resource, an ordinary dependency access failure or the
-engine's existing request deadline. HTTP terminals require a complete successful
+first matching scenario in its ordered array. All matched ends close admission
+immediately and drain; partial matches permit a one-second probe, while a new
+request requires another end or five-minute business-idle fallback. An uncovered
+end saves the Case normally without stopping Source or asserting business
+completion. Actual capture failure and explicit stopping retain their own behavior.
+HTTP terminals require a complete successful
 exchange at the declared endpoint, method and path. A Redis end's bounded `occurrence`
-counts successful commands for one physical resource. Lifecycle changes affect
-capture fingerprints and require fresh recording evidence. Existing complete
+counts successful commands for one physical resource. Lifecycle behavior changes
+affect capture fingerprints; moving the compatible root declaration under
+`recording` alone does not. Existing complete
 Source cases can still replay when their immutable dependency inventory proves
 the configured completion; Replay waits for real Target consumption of that
 finite inventory. See [recording](recording.md).

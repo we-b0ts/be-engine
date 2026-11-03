@@ -41,7 +41,7 @@ fn dependency(connection: Uuid, duration_ms: u64) -> Value {
         "sequence":1, "target_host":"redis.test", "target_port":6379,
         "resp_version":2, "database":0, "command":"GET", "args":[capture("key")],
         "response_kind":"simple_string", "response":capture("+OK\r\n"),
-        "duration_ms":duration_ms, "replay_safe":true, "outcome":"response"
+        "duration_ms":duration_ms, "replay_safe":true, "outcome":"response", "parse_warnings":[]
     })
 }
 

@@ -35,19 +35,29 @@ pub(super) fn status_details_with_execution(
     state: &RewriteState,
     execution: Option<&RewriteAction>,
 ) -> Result<RewriteCoordinationDetails> {
+    Ok(status_projection_with_execution(target_root, state, execution)?.0)
+}
+
+/// Counts and the pending-plan action share one complete evidence validation.
+/// The returned action is only a read projection; Apply validates again.
+pub(super) fn status_projection_with_execution(
+    target_root: &Path,
+    state: &RewriteState,
+    execution: Option<&RewriteAction>,
+) -> Result<(RewriteCoordinationDetails, Option<RewriteAction>)> {
     if state.revalidation_round.is_some() {
         let mut projected = state.clone();
         if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
-            return status_details_with_execution(target_root, &projected, execution);
+            return status_projection_with_execution(target_root, &projected, execution);
         }
     }
     let busy = resources_busy(target_root)? || super::execution::snapshot_blocks_replay(execution);
-    let base = super::action::status_base(target_root, state)?;
+    let (base, plan) = super::action::status_base_projection(target_root, state)?;
     if matches!(base, RewriteAction::RepositoryAnalysisRequired { .. }) {
-        return Ok(single_ready("repository_analysis", 1));
+        return Ok((single_ready("repository_analysis", 1), None));
     }
     if matches!(base, RewriteAction::DependencyAttributionRequired { .. }) {
-        return Ok(single_ready("dependency_attribution", 1));
+        return Ok((single_ready("dependency_attribution", 1), None));
     }
     let failed = matches!(execution, Some(RewriteAction::ExecutionFailed { .. }));
     let selected = if state.revalidation_round.is_none()
@@ -64,6 +74,9 @@ pub(super) fn status_details_with_execution(
         .or_else(|| super::worker::scheduler::global_action(target_root, state, true))
         .or_else(|| execution.cloned())
         .unwrap_or_else(|| base.clone())
+    } else if plan.is_some() {
+        // This exact idle action was already validated by status_base_projection.
+        base.clone()
     } else {
         super::action::select_action(target_root, state, base.clone())
     };
@@ -81,7 +94,7 @@ pub(super) fn status_details_with_execution(
         result.ready.remove("wait");
         add(&mut result.ready, "recover_workflow", 1);
     }
-    Ok(result)
+    Ok((result, plan))
 }
 
 pub(super) fn resources_busy(target_root: &Path) -> Result<bool> {

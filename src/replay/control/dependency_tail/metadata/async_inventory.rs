@@ -72,7 +72,8 @@ pub(super) async fn from_scope(
         .try_into()
         .context("async API request budget exceeds its bound")?;
     Ok(Some(Metadata {
-        business_complete: true,
+        recorded_idle_completion: false,
+        normal_completion: true,
         request_timeout_ms,
         interaction_post_input_ms: None,
         strict_references: references.clone(),

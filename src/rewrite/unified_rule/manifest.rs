@@ -14,8 +14,14 @@ use sha2::{Digest, Sha256};
 use super::super::{fingerprint, model::RewriteState};
 
 mod batch;
+#[cfg(test)]
+mod capture_stats;
 mod eligibility;
 mod primary;
+#[cfg(test)]
+pub(in crate::rewrite) use capture_stats::{
+    capture_stats as artifact_capture_stats, reset_capture_stats as reset_artifact_capture_stats,
+};
 pub(super) use primary::PrimaryResponse;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,6 +33,8 @@ pub struct Artifact {
 
 impl Artifact {
     pub(super) fn capture(path: &Path) -> Result<Self> {
+        #[cfg(test)]
+        capture_stats::note_capture(path);
         ensure!(
             !path.components().any(|c| c.as_os_str() == ".active"),
             "rule evidence must be finalized and published"
@@ -38,6 +46,8 @@ impl Artifact {
                 "rule scope evidence requires a regular immutable view"
             );
             let bytes = crate::dependency_index::scoped::read_bytes(path)?;
+            #[cfg(test)]
+            capture_stats::note_captured_bytes(path, bytes.len() as u64);
             return Ok(Self {
                 path: path.into(),
                 sha256: crate::policy_evidence::digest(&bytes),
@@ -69,6 +79,8 @@ impl Artifact {
             length == metadata.len(),
             "rule evidence changed during hashing"
         );
+        #[cfg(test)]
+        capture_stats::note_captured_bytes(path, length);
         Ok(Self {
             path: path.into(),
             sha256: format!("sha256:{:x}", hash.finalize()),

@@ -1,22 +1,21 @@
 use super::*;
 use crate::policy::{AsyncMysqlEnd, AsyncRedisEnd};
 use crate::recorder::{
-    MysqlExchangeEvent, MysqlExchangeResponse, RedisExchangeEvent, capture_body,
+    MysqlExchangeEvent, MysqlExchangeResponse, MysqlValue, RedisExchangeEvent, capture_body,
 };
 use hyper::Method;
 use serde_json::json;
 use uuid::Uuid;
 
+mod completion;
+
 fn scope(end: Vec<AsyncEnd>) -> ResourceScope {
-    ResourceScope {
-        rule: AsyncApiRule {
-            when: BTreeMap::from([("/background".into(), json!(true))]),
-            when_response: Default::default(),
-            unless_response: Default::default(),
-            end,
-        },
-        progress: Default::default(),
-    }
+    ResourceScope::new(AsyncApiRule {
+        when: BTreeMap::from([("/background".into(), json!(true))]),
+        when_response: Default::default(),
+        unless_response: Default::default(),
+        end,
+    })
 }
 
 pub(crate) fn redis(operation: &str, key: &[u8]) -> RecorderEvent {
@@ -239,6 +238,7 @@ fn redis_terminal_uses_physical_scope_and_any_end_resource_can_finish() {
     let scope = scope(vec![
         end(),
         AsyncEnd::Redis(AsyncRedisEnd {
+            when_response: Default::default(),
             operation: "DEL".into(),
             occurrence: 1,
             key: "done:*".into(),
@@ -349,6 +349,7 @@ fn client_info_error() -> RecorderEvent {
 #[test]
 fn optional_redis_client_metadata_error_does_not_replace_two_del_completion() {
     let scope = scope(vec![AsyncEnd::Redis(AsyncRedisEnd {
+        when_response: Default::default(),
         operation: "DEL".into(),
         occurrence: 2,
         key: "chat:cancel:*".into(),
@@ -411,6 +412,7 @@ fn complete_setup_errors_allow_retries_while_truncation_requires_isolation() {
 #[test]
 fn redis_occurrences_are_successful_unique_exchanges_for_the_same_physical_key() {
     let scope = scope(vec![AsyncEnd::Redis(AsyncRedisEnd {
+        when_response: Default::default(),
         operation: "DEL".into(),
         occurrence: 2,
         key: "done:*".into(),
@@ -440,6 +442,7 @@ fn redis_occurrences_are_successful_unique_exchanges_for_the_same_physical_key()
 #[test]
 fn redis_occurrence_progress_bounds_all_observations_and_does_not_retain_keys() {
     let scope = scope(vec![AsyncEnd::Redis(AsyncRedisEnd {
+        when_response: Default::default(),
         operation: "DEL".into(),
         occurrence: 2,
         key: "done:*".into(),
@@ -471,6 +474,7 @@ fn immutable_recorded_terminal_uses_the_same_occurrence_and_prepared_sql_semanti
     let scope = scope(vec![
         end(),
         AsyncEnd::Redis(AsyncRedisEnd {
+            when_response: Default::default(),
             operation: "DEL".into(),
             occurrence: 2,
             key: "done:*".into(),
@@ -524,6 +528,7 @@ fn immutable_recorded_terminal_uses_the_same_occurrence_and_prepared_sql_semanti
 #[test]
 fn redis_terminal_matches_only_protocol_keys_including_multikey_and_script_slots() {
     let del = scope(vec![AsyncEnd::Redis(AsyncRedisEnd {
+        when_response: Default::default(),
         operation: "DEL".into(),
         occurrence: 1,
         key: "done:*".into(),
@@ -536,6 +541,7 @@ fn redis_terminal_matches_only_protocol_keys_including_multikey_and_script_slots
     }
     assert!(del.observe(&multiple).is_some());
     let script = scope(vec![AsyncEnd::Redis(AsyncRedisEnd {
+        when_response: Default::default(),
         operation: "EVALSHA".into(),
         occurrence: 1,
         key: "done:*".into(),
@@ -559,6 +565,7 @@ fn redis_terminal_matches_only_protocol_keys_including_multikey_and_script_slots
         "ARGV is never a physical key"
     );
     let echo = scope(vec![AsyncEnd::Redis(AsyncRedisEnd {
+        when_response: Default::default(),
         operation: "ECHO".into(),
         occurrence: 1,
         key: "done:*".into(),

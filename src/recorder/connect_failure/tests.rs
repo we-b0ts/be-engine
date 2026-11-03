@@ -65,6 +65,7 @@ async fn pending_real_connect_is_cancelled_by_source_stop_without_inventing_upst
         std::task::Poll::Ready(())
     })
     .await;
+    state.begin_case_quiescing();
     let (result, invalidation) = tokio::join!(
         connecting.as_mut(),
         state.drain_active_case_dependencies(case.id)
@@ -82,9 +83,9 @@ async fn pending_real_connect_is_cancelled_by_source_stop_without_inventing_upst
         .async_api_report(case.id)
         .unwrap()
         .1;
-    assert_eq!(report["end_reason"], "timeout");
+    assert_eq!(report["end_reason"], "stopped");
     assert_eq!(report["source_stop_required"], true);
-    assert!(report["source_stop_after_ms"].as_u64().unwrap() >= 20);
+    assert!(report["source_stop_after_ms"].as_u64().is_some());
     assert_eq!(report["completed_refs"].as_array().unwrap().len(), 1);
     assert_eq!(report["cleanup_refs"], report["completed_refs"]);
     assert!(
@@ -169,6 +170,7 @@ async fn refused_upstream_is_a_complete_async_dependency_with_a_real_client_rese
         .unwrap()
         .unwrap_err();
     assert_eq!(observed.kind(), io::ErrorKind::ConnectionReset);
+    state.begin_case_quiescing();
     assert_eq!(state.drain_active_case_dependencies(case.id).await, None);
     let report = state
         .inner
@@ -176,7 +178,7 @@ async fn refused_upstream_is_a_complete_async_dependency_with_a_real_client_rese
         .async_api_report(case.id)
         .unwrap()
         .1;
-    assert_eq!(report["end_reason"], "timeout");
+    assert_eq!(report["end_reason"], "stopped");
     assert_eq!(report["capture_complete"], true);
     assert_eq!(report["business_complete"], false);
     assert_eq!(report["business_completion"], "unobserved");

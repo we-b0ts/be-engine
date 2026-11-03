@@ -128,8 +128,21 @@ rerun initialization.
   behavior to manufacture a pass, or replace engine aggregation with scripts.
 - Rule diagnosis and source proof belong to the API implementer for its API,
   or to the repository analyst for assigned independent dependency attribution.
-  Async lifecycle proposals describe the trigger and end, without enumerating
-  intermediate business requests. Planning, application, and fresh verification
+  After ownership analysis, async lifecycle proposals describe the scenario and
+  end templates, reply/message conditions and occurrence counts from its complete
+  effective Case tail under `recording.async_api`, before independent optional
+  `recording.case_paths`, without enumerating intermediate business requests. Any
+  end can enter ending; once all ends match, close admission immediately and drain
+  admitted requests with no silence interval. A single end follows the same rule.
+  Partial matches permit a fixed one-second probe.
+  A subsequent relevant request start requires a fresh end before closure can
+  become eligible again; another one-second silence cannot close the Case. There is no
+  absolute deadline after the complete primary response. Without a fresh end,
+  five minutes of relevant business I/O silence and no relevant request in flight
+  close the Case normally with completion unobserved, keeping Source running for
+  rule analysis. Explicit shutdown or actual capture
+  failure can interrupt observation; primary HTTP transport timeout is separate.
+  Planning, application, and fresh verification
   follow the coordinator's rule protocol.
   Follow the [shared rule evidence contract](references/rule-policy.md): current
   API hints, evidence queries and legal actions drive rule work.

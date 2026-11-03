@@ -36,9 +36,14 @@ group for ordinary formats. See [global field formats](resource-field-contracts.
 Dependency lifetimes remain separate from content. `localcache.requests`
 identifies finite process initialization reads; HTTP entries require a host.
 `process_dependencies.tasks.<actual-Source-task-name>.requests` groups real
-process work across protocols and requires root `source_revision`. `async_api`
-records an asynchronous API as one complete finite case through its end resource,
-dependency failure or engine deadline. These are not payload exemptions.
+process work across protocols and requires root `source_revision`.
+`recording.async_api` defines asynchronous Case capture boundaries: all matched
+ends close admission immediately; partial matches permit a one-second probe,
+and a new request requires another end or five-minute business-idle fallback.
+An uncovered end saves the idle Case normally without stopping Source. Actual
+capture failures and explicit stopping retain their own behavior. These are not
+payload exemptions. The old root `async_api` remains a compatible input spelling;
+canonical output nests it under `recording`, before optional `case_paths`.
 
 Native rules remain for uncovered compound formats, typed PB schemas,
 cryptographic transformations and additional causal checks. Multipart, DOCX,
@@ -55,7 +60,7 @@ independent Source evidence; facts are bounded to 200 UTF-8 bytes and sources to
 three file references. Root `source_revision` is an immutable Source identity.
 Unknown fields, duplicate declarations, unsupported combinations and conflicting
 ownership reject before execution. Content rules are not first-match-wins;
-`async_api` explicitly selects the first matching lifecycle scenario per API.
+`recording.async_api` explicitly selects the first matching lifecycle scenario per API.
 
 See [unified rule contracts](unified-rule-contracts.md) for all three surfaces,
 JSON/PB reuse, native examples, module boundaries, precision, evidence and plan

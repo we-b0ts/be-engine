@@ -35,6 +35,7 @@ fn completion_formats_preserve_explicit_databases_and_refresh_capture_and_replay
             .all(|end| match end {
                 AsyncEnd::Mysql(end) => end.database.is_none(),
                 AsyncEnd::Redis(end) => end.database.is_none(),
+                AsyncEnd::RedisPublish(end) => end.database.is_none(),
                 AsyncEnd::Http(_) => false,
             })
     );

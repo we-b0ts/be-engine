@@ -1,6 +1,6 @@
-//! Recording scope declarations reuse the native Source acquisition owner.
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+//! Recording authoring groups async lifecycles and optional HTTP acquisition.
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml::{Mapping, Value};
 
 use crate::policy::native::CaptureHttpEffect;
@@ -11,11 +11,34 @@ const DEFAULT_NAME: &str = "source-capture-http";
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Declaration {
-    pub case_paths: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_async_api",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub async_api: Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRules>>,
+    #[serde(
+        default,
+        deserialize_with = "optional_case_paths",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub case_paths: Option<Vec<String>>,
     #[serde(default = "default_name", skip_serializing_if = "is_default_name")]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proof: Option<Proof>,
+}
+
+pub(super) fn optional_async_api<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRules>>, D::Error> {
+    crate::policy::strict_map::unique_map(deserializer).map(Some)
+}
+
+fn optional_case_paths<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error> {
+    Vec::deserialize(deserializer).map(Some)
 }
 
 fn default_name() -> String {
@@ -34,7 +57,10 @@ fn lower(declaration: &Declaration, revision: Option<&str>) -> Result<NativeRule
         selector: NativeMatch::default(),
         effect: NativeEffect::CaptureHttp(CaptureHttpEffect {
             source_revision: revision.into(),
-            case_paths: declaration.case_paths.clone(),
+            case_paths: declaration
+                .case_paths
+                .clone()
+                .context("recording HTTP acquisition requires case_paths")?,
         }),
         proof: declaration.proof.clone(),
         when: None,
@@ -52,6 +78,17 @@ pub(super) fn expand(
     let Some(declaration) = declaration else {
         return Ok(vec![]);
     };
+    if declaration.case_paths.is_none() {
+        ensure!(
+            declaration.async_api.is_some(),
+            "recording requires async_api or case_paths"
+        );
+        ensure!(
+            is_default_name(&declaration.name) && declaration.proof.is_none(),
+            "recording name and proof describe HTTP acquisition and require case_paths"
+        );
+        return Ok(vec![]);
+    }
     Ok(vec![serde_yaml::to_value(lower(&declaration, revision)?)?])
 }
 
@@ -77,11 +114,17 @@ pub(super) fn compact(
     let NativeEffect::CaptureHttp(effect) = &native.effect else {
         return Ok(false);
     };
-    if revision != Some(effect.source_revision.as_str()) || root.contains_key("recording") {
+    if revision != Some(effect.source_revision.as_str())
+        || root
+            .get("recording")
+            .and_then(Value::as_mapping)
+            .is_some_and(|recording| recording.contains_key("case_paths"))
+    {
         return Ok(false);
     }
     let declaration = Declaration {
-        case_paths: effect.case_paths.clone(),
+        async_api: None,
+        case_paths: Some(effect.case_paths.clone()),
         name: native.id.clone(),
         proof: None,
     };
@@ -93,9 +136,21 @@ pub(super) fn compact(
     if runtime != canonical {
         return Ok(false);
     }
-    root.insert("recording".into(), serde_yaml::to_value(declaration)?);
+    let value = serde_yaml::to_value(declaration)?;
+    root.entry(Value::String("recording".into()))
+        .or_insert_with(|| Value::Mapping(Mapping::new()))
+        .as_mapping_mut()
+        .context("recording authoring must be a mapping")?
+        .extend(
+            value
+                .as_mapping()
+                .expect("typed recording declaration")
+                .clone(),
+        );
     Ok(true)
 }
 
+#[cfg(test)]
+mod async_api_tests;
 #[cfg(test)]
 mod tests;

@@ -197,6 +197,40 @@ mod tests {
         assert!(parse(&absent.to_string()).is_err());
     }
 
+    #[test]
+    fn async_replacement_keeps_its_logical_section_with_nested_recording_payload() {
+        let mut current = super::super::parse_proposal(
+            &json!({"format":"traffic-policy/v3","async_api":{"POST /jobs":{
+                "end":[{"redis":{"operation":"DEL","key":"done:*"}}]}}})
+            .to_string(),
+        )
+        .unwrap();
+        let change = json!({"format":CHANGE_FORMAT,"replace_sections":["async_api"],
+            "policy":{"format":"traffic-policy/v3","recording":{"async_api":{}}}});
+        let parsed = parse(&change.to_string()).unwrap();
+        assert_eq!(
+            parsed.replace_sections,
+            BTreeSet::from(["async_api".into()])
+        );
+        assert!(
+            super::super::declarations::merge_with_replacements(
+                &mut current,
+                &parsed.policy,
+                &parsed.replace_sections
+            )
+            .unwrap()
+        );
+        assert!(current.async_api.as_ref().unwrap().is_empty());
+        let rendered = crate::policy::render_policy(&current).unwrap();
+        assert_eq!(super::super::parse_proposal(&rendered).unwrap(), current);
+        let mut invalid = change.clone();
+        invalid["replace_sections"] = json!(["recording.async_api"]);
+        assert!(parse(&invalid.to_string()).is_err());
+        let mut conflicting = change;
+        conflicting["policy"]["async_api"] = json!({});
+        assert!(parse(&conflicting.to_string()).is_err());
+    }
+
     fn rule(id: &str, api: &str) -> serde_json::Value {
         json!({"id":id,"match":{"api":api},
             "effect":{"kind":"response_header_date","header":"content-disposition","parameter":"filename","format":"%Y-%m-%d"},

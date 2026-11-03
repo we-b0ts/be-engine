@@ -5,6 +5,11 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+mod redis_publish;
+mod redis_response;
+pub use redis_publish::AsyncRedisPublishEnd;
+pub use redis_response::AsyncRedisResponse;
+
 pub const ASYNC_API_ID: &str = "capture.async_api";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +62,7 @@ impl std::ops::Deref for AsyncApiRules {
 pub enum AsyncEnd {
     Mysql(AsyncMysqlEnd),
     Redis(AsyncRedisEnd),
+    RedisPublish(AsyncRedisPublishEnd),
     Http(AsyncHttpEnd),
 }
 
@@ -66,9 +72,16 @@ struct AsyncEndDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mysql: Option<AsyncMysqlEnd>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    redis: Option<AsyncRedisEnd>,
+    redis: Option<RedisEndDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     http: Option<AsyncHttpEnd>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum RedisEndDocument {
+    Key(AsyncRedisEnd),
+    Publish(AsyncRedisPublishEnd),
 }
 
 impl TryFrom<AsyncEndDocument> for AsyncEnd {
@@ -77,7 +90,8 @@ impl TryFrom<AsyncEndDocument> for AsyncEnd {
     fn try_from(document: AsyncEndDocument) -> std::result::Result<Self, Self::Error> {
         match (document.mysql, document.redis, document.http) {
             (Some(end), None, None) => Ok(Self::Mysql(end)),
-            (None, Some(end), None) => Ok(Self::Redis(end)),
+            (None, Some(RedisEndDocument::Key(end)), None) => Ok(Self::Redis(end)),
+            (None, Some(RedisEndDocument::Publish(end)), None) => Ok(Self::RedisPublish(end)),
             (None, None, Some(end)) => Ok(Self::Http(end)),
             _ => {
                 Err("async terminal resource requires exactly one mysql, redis or http declaration")
@@ -96,7 +110,12 @@ impl From<AsyncEnd> for AsyncEndDocument {
             },
             AsyncEnd::Redis(redis) => Self {
                 mysql: None,
-                redis: Some(redis),
+                redis: Some(RedisEndDocument::Key(redis)),
+                http: None,
+            },
+            AsyncEnd::RedisPublish(redis) => Self {
+                mysql: None,
+                redis: Some(RedisEndDocument::Publish(redis)),
                 http: None,
             },
             AsyncEnd::Http(http) => Self {
@@ -123,6 +142,8 @@ pub struct AsyncRedisEnd {
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub occurrence: usize,
     pub key: String,
+    #[serde(default, skip_serializing_if = "AsyncRedisResponse::is_any")]
+    pub when_response: AsyncRedisResponse,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,6 +276,7 @@ pub fn compile_async_api(
                             endpoint.validate()?;
                         }
                     }
+                    AsyncEnd::RedisPublish(end) => redis_publish::validate(end)?,
                     AsyncEnd::Http(end) => {
                         let method: hyper::Method = end
                             .method

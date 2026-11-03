@@ -146,10 +146,10 @@ fn initialized_report(
     api: Option<&RecordingApi>,
     execution: Option<&super::model::RewriteAction>,
 ) -> Result<RewriteStatusReport> {
-    let pending =
-        super::coordination::status_details_with_execution(target_root, &state, execution)?
-            .pending();
-    let envelope = api_envelope(target_root, &state, api, execution)?;
+    let (details, plan) =
+        super::coordination::status_projection_with_execution(target_root, &state, execution)?;
+    let pending = details.pending();
+    let envelope = api_envelope(target_root, &state, api, execution, plan)?;
     let skipped =
         api.is_some_and(|api| super::regression_scope::is_skipped(&state, &api.to_string()));
     let scoped = inventory::scoped(&state, api).unwrap_or(state);
@@ -199,8 +199,12 @@ fn api_envelope(
     state: &super::model::RewriteState,
     api: Option<&RecordingApi>,
     execution: Option<&super::model::RewriteAction>,
+    plan: Option<super::model::RewriteAction>,
 ) -> Result<super::model::RewriteActionEnvelope> {
-    let mut envelope = api_envelope_unannotated(target_root, state, api, execution)?;
+    let mut envelope = match plan {
+        Some(plan) => action::envelope(target_root, state, plan),
+        None => api_envelope_unannotated(target_root, state, api, execution)?,
+    };
     super::execution::annotate_status(target_root, &mut envelope.action)?;
     Ok(envelope)
 }

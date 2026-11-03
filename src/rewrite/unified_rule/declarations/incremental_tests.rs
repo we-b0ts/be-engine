@@ -197,9 +197,11 @@ fn additive_conflicts_are_atomic_and_mysql_empty_presence_still_enables_native_i
 #[test]
 fn async_api_additions_keep_existing_completion_contracts() {
     let declaration = |api: &str, key: &str| {
-        policy(json!({"format":"traffic-policy/v3","async_api":{
-            api:{"when":{"/background":true},"end":[{"redis":{"operation":"DEL","key":key}}]}
-        }}))
+        policy(
+            json!({"format":"traffic-policy/v3","recording":{"async_api":{
+                api:{"when":{"/background":true},"end":[{"redis":{"operation":"DEL","key":key}}]}
+            }}}),
+        )
     };
     let mut current = declaration("POST /one", "one");
     assert!(merge(&mut current, &declaration("POST /two", "two")).unwrap());

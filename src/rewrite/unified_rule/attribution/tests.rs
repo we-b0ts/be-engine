@@ -6,6 +6,13 @@ use crate::rewrite::{apply_rewrite_rule, dependency_attribution_context};
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 async fn fixture() -> (tempfile::TempDir, RewriteState, PathBuf) {
+    fixture_with_global("outside_admission", "runtime").await
+}
+
+async fn fixture_with_global(
+    reason: &str,
+    phase: &str,
+) -> (tempfile::TempDir, RewriteState, PathBuf) {
     let target = crate::rewrite::worker::tests::configured_target();
     let recorder = Recorder::new(target.path().join(".traffic-e2e/local/recordings"))
         .await
@@ -32,8 +39,8 @@ async fn fixture() -> (tempfile::TempDir, RewriteState, PathBuf) {
                 duration_ms: 1,
                 error: None,
             }),
-            "outside_admission",
-            "runtime",
+            reason,
+            phase,
             "",
         )
         .await
@@ -337,4 +344,198 @@ async fn async_only_owner_plan_rechecks_sealed_source_bytes_at_apply() {
         )
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn nested_async_rule_plan_publishes_policy_consumed_by_recording() {
+    let (target, state, file) = fixture().await;
+    let source = state.case_source.as_ref().unwrap();
+    let frozen = ["dependencies.jsonl", "dependency-manifest.json"]
+        .into_iter()
+        .map(|name| (name, fs::read(source.join(name)).unwrap()))
+        .collect::<Vec<_>>();
+    fs::write(
+        &file,
+        format!("format: traffic-policy/v3\nsource_revision: {REVISION}\nrecording:\n  async_api:\n    'GET /api':\n      - when_response: {{'/status': queued}}\n        end:\n          - http: {{method: GET, endpoint: 'worker.test:80', path: /queued}}\n      - when: {{}}\n        end:\n          - http: {{method: GET, endpoint: 'worker.test:80', path: /refresh}}\n"),
+    )
+    .unwrap();
+    let context = || RewriteContext {
+        target_root: target.path().into(),
+    };
+    let plan = plan_rewrite_unified_rule(
+        context(),
+        RewriteUnifiedRulePlanOptions {
+            file,
+            evidence_id: token(target.path()),
+        },
+    )
+    .unwrap();
+    let applied = apply_rewrite_rule(context(), &plan.plan_id).unwrap();
+    assert_eq!(applied.traffic_e2e_report["applied"], true);
+    assert_eq!(applied.traffic_e2e_report["verified"], false);
+    let path = target.path().join(".traffic-e2e/policy.yaml");
+    let published = fs::read_to_string(&path).unwrap();
+    let raw: serde_yaml::Value = serde_yaml::from_str(&published).unwrap();
+    assert!(raw.get("async_api").is_none());
+    assert!(raw["recording"].get("async_api").is_some());
+    assert!(raw["recording"].get("case_paths").is_none());
+    let compiled = crate::policy::parse_and_compile_policy(&published).unwrap();
+    assert!(
+        compiled.native.is_empty(),
+        "async-only publication grants no HTTP acquisition"
+    );
+    let recording = crate::config::SourceTrafficPolicyConfig::load(&path).unwrap();
+    assert_eq!(recording.async_api, compiled.async_api);
+    let mut app = crate::AppConfig::default();
+    recording.apply_to(&mut app).unwrap();
+    assert_eq!(app.async_api, compiled.async_api);
+    assert!(app.http_gateway.case_path_patterns.is_empty());
+    let scope = crate::recorder::async_api::AsyncScope::for_primary(
+        &app.async_api,
+        &hyper::Method::GET,
+        &"/api".parse().unwrap(),
+        b"{}",
+    )
+    .unwrap();
+    assert!(scope.scenario_index().is_none());
+    assert!(scope.select_response(Some(&json!({}))).0);
+    assert_eq!(scope.scenario_index(), Some(1));
+    let event: serde_json::Value = serde_json::from_slice(&frozen[0].1).unwrap();
+    assert_eq!(
+        scope.observe_recorded(&event).unwrap().unwrap().end_reason,
+        crate::recorder::async_api::AsyncEndReason::Resource
+    );
+    assert!(scope.all_ends_matched());
+    for (name, bytes) in frozen {
+        assert_eq!(fs::read(source.join(name)).unwrap(), bytes, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn pending_owner_plan_status_verifies_each_large_artifact_once_per_request() {
+    use crate::rewrite::unified_rule::manifest::{
+        Artifact, artifact_capture_stats, reset_artifact_capture_stats,
+    };
+    use crate::rewrite::{RewriteAction, status_rewrite};
+    use std::collections::BTreeMap;
+    use std::io::Write as _;
+
+    // Startup ownership keeps the independent attribution gate from returning
+    // before the pending-plan scheduler checks. The original Source stays sealed.
+    let (target, initial, proposal) = fixture_with_global("bootstrap_window", "bootstrap").await;
+    fs::write(&proposal, format!("format: traffic-policy/v3\nsource_revision: {REVISION}\nasync_api:\n  'GET /api':\n    end:\n      - http: {{method: GET, endpoint: 'worker.test:80', path: /refresh}}\n")).unwrap();
+    let context = || RewriteContext {
+        target_root: target.path().into(),
+    };
+    let plan = plan_rewrite_unified_rule(
+        context(),
+        RewriteUnifiedRulePlanOptions {
+            file: proposal,
+            evidence_id: token(target.path()),
+        },
+    )
+    .unwrap();
+
+    // A large additional frozen regular artifact exercises the same freshness
+    // hashing as large Source evidence without generating or copying real traffic.
+    let witness = target
+        .path()
+        .join(".traffic-e2e/local/source-proof-witness.bin");
+    let mut output = fs::File::create(&witness).unwrap();
+    let block = vec![b'x'; 1024 * 1024];
+    for _ in 0..32 {
+        output.write_all(&block).unwrap();
+    }
+    drop(output);
+    let store = RewriteStore::new(target.path()).unwrap();
+    let mut state = store.load().unwrap().unwrap();
+    let record = state.rule_plan.as_mut().unwrap().unified.as_mut().unwrap();
+    record.artifacts.push(Artifact::capture(&witness).unwrap());
+    let expected = record
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.path != record.policy)
+        .map(|artifact| (artifact.path.clone(), artifact.length))
+        .collect::<BTreeMap<_, _>>();
+    assert!(expected[&witness] >= 32 * 1024 * 1024);
+    store.save(&state).unwrap();
+
+    let assert_plan = |action: &RewriteAction, operation: &str| {
+        let RewriteAction::PlanApplyRequired { command, .. } = action else {
+            panic!("expected pending plan, got {action:?}");
+        };
+        assert!(command.argv.contains(&plan.plan_id));
+        assert!(command.argv.iter().any(|part| part == operation));
+    };
+    reset_artifact_capture_stats();
+    for _ in 0..3 {
+        assert_plan(
+            &crate::rewrite::rule_plans::required_action(target.path(), &state).unwrap(),
+            "apply",
+        );
+    }
+    let before = artifact_capture_stats();
+    for (path, length) in &expected {
+        assert_eq!(before.get(path), Some(&(3, 3 * length)), "{path:?}");
+    }
+
+    let state_path = crate::internal_runtime::root(target.path()).join("rewrite/state.json");
+    let policy_path = target.path().join(".traffic-e2e/policy.yaml");
+    let source = initial.case_source.as_ref().unwrap();
+    let frozen = [
+        &state_path,
+        &policy_path,
+        &source.join("dependencies.jsonl"),
+    ]
+    .into_iter()
+    .map(|path| (path.to_owned(), fs::read(path).unwrap()))
+    .collect::<BTreeMap<_, _>>();
+    reset_artifact_capture_stats();
+    let mut first = None;
+    for request in 1..=2 {
+        let status = status_rewrite(context()).unwrap();
+        assert_plan(&status.action, "apply");
+        assert_eq!(status.pending, 1);
+        assert!(!status.terminal_allowed);
+        let value = serde_json::to_value(&status).unwrap();
+        if let Some(first) = &first {
+            assert_eq!(&value, first);
+        } else {
+            first = Some(value);
+        }
+        let captures = artifact_capture_stats();
+        assert_eq!(captures.len(), expected.len());
+        for (path, length) in &expected {
+            assert_eq!(
+                captures.get(path),
+                Some(&(request, request as u64 * length)),
+                "request {request}: {path:?}"
+            );
+        }
+        for (path, bytes) in &frozen {
+            assert_eq!(&fs::read(path).unwrap(), bytes, "{path:?}");
+        }
+    }
+    let after = artifact_capture_stats();
+    println!(
+        "{}",
+        json!({"artifact_kind":"additional_frozen_regular_file","artifact_bytes":expected[&witness],
+        "three_uncached_checks":before[&witness],"two_public_status_requests":after[&witness]})
+    );
+
+    // A later request cannot borrow the prior successful content check. The
+    // unchanged length ensures this tests content integrity, not truncation.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&witness)
+        .unwrap()
+        .write_all(b"y")
+        .unwrap();
+    let stale = status_rewrite(context()).unwrap();
+    assert_plan(&stale.action, "recover");
+    for (path, bytes) in &frozen {
+        assert_eq!(&fs::read(path).unwrap(), bytes, "{path:?}");
+    }
+    assert!(apply_rewrite_rule(context(), &plan.plan_id).is_err());
+    assert_eq!(fs::read(&policy_path).unwrap(), frozen[&policy_path]);
 }

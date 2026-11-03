@@ -86,8 +86,8 @@ its exact effective policy fingerprint and complete active rule IDs. For process
 ownership, one actual Source task covers its complete cross-protocol selector
 group in the process epoch. For a foreign async API, bind its actual origin input
 and `async_api` lifecycle: its API and request/response scenario identify the
-trigger, and `end` identifies actual completion. Cover the applicable success,
-failure and cancellation paths through final business cleanup; do not enumerate
+trigger, and `end` identifies the analyzed path's entry into recording ending.
+Cover the applicable success, failure and cancellation tails; do not enumerate
 intermediate SQL, Redis or other business requests. Independent positive Source
 proof states file/symbol locations, call chain and exclusive scope. Missing
 capture must identify the actual absent scope.
@@ -101,7 +101,7 @@ submission; they are not additional JSON fields:
 - Whether the effective task/lifecycle policy is missing, incomplete or already
   sufficient. Name the applicable rule IDs and scenarios. For missing or
   incomplete policy, return the smallest supported proposal that covers the
-  Source-proven task or complete async trigger/end lifecycle for later recordings.
+  Source-proven task or analyzed async trigger/end lifecycle for later recordings.
 - Why this recording still needs attribution. Distinguish a missing completion
   path from a recording made before the applicable rule took effect, or a
   concrete execution gap under an already sufficient rule. Cite available rule
@@ -111,6 +111,42 @@ submission; they are not additional JSON fields:
   sufficient, return that finding and the ownership proof directly. Do not
   require a no-op plan or make an engine repair a prerequisite for supported
   manual attribution of the captured occurrences.
+
+For an async origin, rule generation is a required step **after ownership analysis**.
+Use the complete effective Case inventory: original Case-owned dependencies plus
+the occurrences assigned by this analysis, excluding proven foreign work. Inspect
+the last business exchanges by completion time, not the last page, connection
+summary or subset of previously ownerless traffic. Reuse the established Source
+call chain; do not require a new ownership analysis before proposing the rule.
+
+Return the actual method/API and request/response scenario, the original tail
+occurrence references, and a minimal end proposal or an explicit existing-coverage
+finding. Author lifecycle rules under `recording.async_api`, before independent
+optional `recording.case_paths`; do not also emit the legacy root spelling.
+For each end, supply its request template, necessary response/message
+conditions and matching occurrence count from Case admission. Generalize task IDs
+and inspect earlier matching calls so a recurring read is not mistaken for its
+final occurrence. For Redis, omitted `when_response` or `{kind: any}` accepts a
+successful complete reply; `{kind: nil}` requires native Redis null. Keep PUBLISH
+request JSON predicates in `when_message`; they do not inspect the integer reply.
+
+The end list contains alternatives: any match can enter `ending`. Once all ends
+have matched, close new admission immediately and drain admitted requests, without
+a silence interval; a single end follows this same rule. While some ends remain
+unmatched, each fresh match permits a fixed one-second probe. Any subsequent
+relevant request start cancels closure eligibility until a fresh end matches;
+another one-second silence cannot close the Case. A completed probe closes only with no
+relevant request in flight. Unambiguously process-owned requests do not cancel
+the probe. After the complete primary response, waiting for the first or next
+end has no absolute deadline. If no fresh end arrives, five continuous minutes
+of relevant business I/O silence with no relevant request in flight close the
+Case normally, retaining unobserved completion for rule analysis and keeping
+Source running. Real business activity restarts that interval; writer queues and
+definite process traffic do not. Explicit shutdown or actual capture failure can interrupt
+observation; the primary HTTP transport timeout remains separate. Do not author window
+settings, an all-of group, a new Source completion signal, or intermediate request
+allowlists. A last observed exchange supplies a candidate template, not independent
+ownership proof or proof that all future executions have the same last request.
 
 Reuse established Source call-chain and lifecycle analysis across recording
 batches when it remains applicable. Bind every submission to the new context,

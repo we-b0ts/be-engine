@@ -20,7 +20,10 @@ not an old-format fallback hidden behind the new schema.
 
 `traffic-policy/v3` declares one carrier-independent `json.fields` map. Fields
 use `kind: time` or `kind: identity` with `formats`, or `kind: unordered`.
-Source case capture uses `recording.case_paths` with the root `source_revision`.
+Source capture groups asynchronous boundaries under `recording.async_api`, before
+optional `recording.case_paths`. The latter uses root `source_revision`; the two
+fields are independent. Legacy root `async_api` remains readable, but dual
+declarations are rejected and canonical output uses the nested spelling.
 Time comparisons preserve relative differences. JSON payloads are recognized
 automatically in supported carriers, including MySQL columns; no per-column,
 API, SSE event or cache-key JSON declaration is required. Root `mysql` enables
@@ -153,7 +156,7 @@ not a fixed engine limit or proof that other supported domains are unnecessary.
 | S04 | Breeze snapshot directory/resource selection and existing specialized response plugins. | Native capture/startup owners; descriptor, resource, proxy and plugin lifecycles are not generic codec behavior. |
 | S05 | HTTP naming/configuration refresh and DingTalk process connections. | Source-proven process ownership, bounded by endpoint/method/path. |
 | S06 | Redis HSCAN process loops and bounded key families. | Recorder ownership plus protocol cursor/session rules; a scan does not create infinite generic response inventory. |
-| S07 | API work that continues after its HTTP response. | `async_api` selects the first matching Source request/response scenario and retains the ordinary Case until a concrete final SQL/Redis access, complete successful HTTP exchange, a case-owned dependency failure or the common deadline; all captured dependencies remain strict finite obligations. |
+| S07 | API work that continues after its HTTP response. | `async_api` selects the first matching Source request/response scenario. Once all ends match, immediately close admission and drain; a single end follows this same rule. Partial matches permit a fixed one-second probe. A subsequent relevant request start requires a fresh end to regain the probe, or complete all matches; otherwise five minutes of relevant business I/O silence close the Case with completion unobserved. Probe/idle closure requires no relevant request in flight. Redis replies may require native nil. After a complete primary response there is no absolute async deadline; an uncovered ending never stops Source or becomes a timeout failure. Explicit shutdown and actual capture failure can interrupt observation. All captured dependencies remain strict finite obligations. |
 | S08 | MySQL process scans, shard/table families and recovery lookback. | Native SQL selection with physical-table equality, bounded table series and complete Source request/response evidence. |
 | D01 | MySQL generated timestamps in SQL values and nested JSON values. | Shared typed time contract plus SQL slot adapter; preserve nonselected parameters and statement identity. |
 | D02 | MySQL response-time fields and relative lease/expiry values. | Explicit dependency input materialization, separate from SQL request comparison and final response assertion. |
@@ -585,7 +588,8 @@ intent, stale-input rejection, recovery and required fresh Replay remain active.
 The same wrapper optionally accepts `replace_sections: [json, mysql, redis, http,
 async_api]`. List only the sections intentionally being changed or cleared and
 provide each complete desired section under `policy`; unlisted sections keep
-the ordinary additive behavior. For example, clearing JSON requires an explicit
+the ordinary additive behavior. The logical `async_api` section is authored at
+`policy.recording.async_api`; the section identity remains unchanged. For example, clearing JSON requires an explicit
 `replace_sections: [json]` and `policy.json: {fields: {}}`. A section-only change
 may omit `replace_rules`. The plan exposes additions and removals before apply;
 neither mode bypasses Source proof, complete preflight or genuine verification.
