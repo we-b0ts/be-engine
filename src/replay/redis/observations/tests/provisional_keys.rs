@@ -76,3 +76,60 @@ fn a_future_key_hypothesis_does_not_hide_the_established_expiry_owner() {
     perform(&mut s, "EXPIRE", &[b"content:text-1577836801000", b"60"]);
     assert!(!s.case_is_dirty("case"));
 }
+
+#[test]
+fn get_states_use_the_accepted_key_without_probing_other_key_hypotheses() {
+    for transient in [false, true] {
+        let future_response: &[u8] = if transient {
+            b"$-1\r\n"
+        } else {
+            b"$6\r\nfuture\r\n"
+        };
+        let mut future = event(1, "GET", &[b"content:text-1577836801000"], future_response);
+        future["connection_id"] = json!(Uuid::from_u128(1));
+        let events = [
+            future,
+            event(
+                1,
+                "RPUSH",
+                &[b"blocks", br#"{"key":"content:text-1577836802000"}"#],
+                b":1\r\n",
+            ),
+            event(
+                2,
+                "GET",
+                &[b"content:text-1577836802000"],
+                b"$7\r\ncurrent\r\n",
+            ),
+        ];
+        let (_root, mut s) = state_with_policy(
+            &events,
+            json!({
+                "format":"traffic-policy/v3", "json":{"fields":{
+                    "/key":{"kind":"identity","formats":[{"prefix":"content:text-","format":"decimal"}]}
+                }}, "redis":{"keys":{"content:*":{"state":{"get":if transient {json!({"transient":["nil"]})} else {json!("observe")}}}}}
+            }),
+        );
+        s.request_contracts.configure_pre_match(true);
+        let key = format!("content:text-{}", chrono::Utc::now().timestamp_millis());
+        let metadata = format!(r#"{{"key":"{key}"}}"#);
+        perform(&mut s, "RPUSH", &[b"blocks", metadata.as_bytes()]);
+        let attempts_before = s.request_contracts.hypothesis_attempts().len();
+        for _ in 0..8 {
+            assert_eq!(
+                perform(&mut s, "GET", &[key.as_bytes()]),
+                b"$7\r\ncurrent\r\n"
+            );
+        }
+        assert!(!s.exchanges[0].status.is_consumed());
+        assert_eq!(
+            s.request_contracts.hypothesis_attempts().len(),
+            attempts_before
+        );
+        assert_eq!(
+            perform(&mut s, "GET", &[b"content:text-1577836801000"]),
+            future_response
+        );
+        assert!(!s.case_is_dirty("case"));
+    }
+}
