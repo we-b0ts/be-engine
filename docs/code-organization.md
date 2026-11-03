@@ -48,6 +48,12 @@ is unclear.
   combining global and authored fields, preserving duplicate, overlap and
   declaration-order behavior before that comparison.
 
+- `rewrite/dependency_review/case_defaults` restores mechanical ownership from
+  sealed input and protocol evidence. Its `mysql` child proves finite session
+  rollback tails from complete same-Case wire transactions, without changing
+  matching, original captures, or consumption. Ambiguous native sequences remain
+  unattributed; application async ownership still requires its independent proof.
+
 - `replay/preparation` binds an immutable Source scope and applicable contracts
   into a Case execution plan after native registration. `replay/native_index`
   owns ordered postings and immutable lane membership; HTTP, Redis and MySQL
@@ -76,7 +82,10 @@ is unclear.
   their existing owners.
 
 - `value_contract/time` owns standard temporal recognition, representation,
-  relative-clock comparison and the common tolerance. `policy/time_defaults`
+  relative-clock comparison and elapsed timestamp budgets with a two-second
+  clock allowance. `value_contract/json` supplies the independent API starts
+  and current comparison clocks; the kernel accepts no delivery-speed flag or
+  guessed business generation anchor. `policy/time_defaults`
   owns the project-wide civil offset. Callers supply dependency request or
   response-event clocks through `AnchorClocks`; explicit request and delivery
   provenance remain separate. Protocol adapters retain native value framing.
@@ -89,6 +98,12 @@ is unclear.
   observations. Native registration and Source transaction/read-span proof use
   that same boundary; business SQL, AUTOCOMMIT, errors and status-changing or
   unknown session effects retain their existing finite contracts.
+  `transaction_equivalence/source/locking_read` identifies complete ordinary
+  row-lock SELECTs as transaction-local effects. Their strict same-socket
+  transaction and actual end remain mandatory; after all Source transactions
+  have real coverage, they no longer block default-autocommit equivalence.
+  Session variables, named locks, output writes and unknown/nested effects
+  retain the original conservative setup requirement.
 
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
@@ -268,6 +283,10 @@ is unclear.
   for real Target consumption within the absolute case budget. Protocol modules
   retain their own exchange identities and termination validation; native
   `finite_inventory` adapters expose delivery state without consuming exchanges.
+  Native MySQL setup/cleanup and transaction-equivalence proofs also apply to
+  async finite references. The adapter retains those omissions separately from
+  consumption; ordinary business statements, locking reads and unfinished real
+  deliveries remain mandatory. HTTP completion resources retain strict references.
   Kafka inventories retain each produce/delivery effect's semantic sequence in
   addition to its physical request sequence. Async metadata version 2 separates
   capture completeness from business completion; incomplete Source business
@@ -361,6 +380,11 @@ is unclear.
   `rewrite/evidence/witness` owns bounded, assignment-bound access to authenticated
   dependency witness values and recorded input header names. It reuses native
   carrier extraction without applying rules or changing match outcomes.
+  `rewrite/evidence/report` wraps selected diagnostic facts with the same current
+  assignment and delivery context as an overview, without constructing and
+  discarding the whole API ownership graph. Protected witness and Redis argument
+  queries retain their own assignment, attempt, native identity and authentication
+  checks before creating that envelope.
   Its MySQL selector reads one authenticated materialized SQL cell; the pure
   `replay/mysql/contracts/value_view` adapter reuses bounded native parameter
   decoding and physical field resolution. It does not pair statements or
@@ -466,7 +490,8 @@ is unclear.
   publishes it only on successful delivery; MySQL/Redis reuse their read hooks.
   The private response control snapshot carries no payloads. The SSE adapter
   checks delivery-before-frame causality against the independent stream starts;
-  it cannot choose an arbitrary dependency clock or change local time tolerance.
+  it cannot choose an arbitrary dependency clock or borrow a future frame's
+  elapsed timestamp budget.
 - `policy_evidence` owns authenticated private payload witnesses, complete
   coverage accounting, sealing and publication of their relative artifacts.
   Public reports retain role/identity/digest metadata without payload bodies.
@@ -891,12 +916,44 @@ is unclear.
   conditional API receipts and explicit owner verification debt. Its `analysis`
   child selects concrete ownerless/disputed Source work and gates formal Replay
   until supported owner rules resolve it. Known-owned batch changes need no
-  analyst; `investigations/resolution` publishes the existing API implementer's
+  analyst. Read-only attribution context without ownership returns reuses this
+  sealed admission inventory and projects empty task/claim relationships;
+  original Source graphs and rule coverage remain mandatory for actual ownership
+  application or contexts with disputed claims. It does not scan unrelated
+  process payloads merely to display an empty relationship. The
+  `investigations/resolution` child publishes the existing API implementer's
   current-attempt diagnosis of its owned missing traffic.
+  `dependency_review/source/lookup` streams sealed scope locators and reads only
+  the requested Source identity's authenticated central rows. Its `scope` child
+  verifies locator hashes and recording boundaries while retaining only matching
+  UUID locations. Incomplete locator partitions retain the full metadata fallback.
+  Lookup shares physical-effect folding with the full Source proof loader;
+  diagnostic lookup never certifies attribution.
+  Its `occurrences` sibling streams original sealed records into only capture
+  completeness and exact native/HTTP identity metadata for paged API diagnostics.
+  It shares physical-effect folding, input-route authentication and unused-reference
+  resolution with the full Source loader, without constructing discovery graphs
+  or retaining SQL and payload selectors. Actual attribution proof still uses
+  the full Source snapshot.
+  `e2e_run/diagnostic_report` resolves published reports by exact session, either
+  an archived actual batch or the current finalized focused API attempt. It
+  retains Source, attempt, inventory and publication guards; malformed archives
+  never fall back to another report. `dependency_review/target_query` owns
+  bounded authenticated independent Target request reads from those reports,
+  without granting ownership, matching or formal rule proof.
+  `replay/attribution/views` publishes physical scope membership from frozen
+  ownership decisions. Unchanged scopes retain their immutable original paths
+  and native index caches; moved members rebuild both affected scopes without
+  changing original capture bytes or the attribution snapshot identity.
   `decisions` stores immutable, shared proof templates with complete finite UUID
   membership and ordered history; `decisions/serde` reads legacy occurrence
   maps/arrays and publishes compact groups. Status validates proof groups without
   expanding per-occurrence DTOs; the Replay overlay owns that explicit projection.
+  `case_defaults` restores ordinary Case admission for historical unowned
+  notification inputs from authenticated capture clocks and observed Case identity.
+  It preserves process-selector priority and original bytes, independently of
+  authored proofs and consumption. Analysis, context and frozen Replay scope use
+  this same default; current proofs can explicitly supersede it.
   `rewrite/unified_rule/attribution` admits Source-only ownership/lifecycle plans
   before Replay, without inventing a Target attempt. Its execution identity and
   preflight stay distinct from actual API and batch witnesses; value/sharing
@@ -1247,6 +1304,13 @@ is unclear.
   state; `artifacts` retains ownership of manifest and recorded-case validation.
   `config/regression` owns the separate ignored YAML schema, route-level matching
   and defaults, using the shared scope grammar without depending on rewrite state.
+  Its optional stream timing mode and interval cap flow through `e2e_run/config`
+  and `e2e_run/runtime` into Replay lifecycle state. Protocol delivery owns gap
+  compression; configuration resolution does not rewrite recorded evidence.
+  `rewrite/fingerprint` binds the mode and effective fast cap to execution
+  identity, and `e2e_run/case_selection` keeps passed-case history within that timing.
+  `e2e_run/execute/timing_guard` checks resolved and selected timing before
+  freezing execution identity and launching Replay after asynchronous preparation.
   `transition.rs` classifies Replay results and leaves parked-slice completion
   scheduling to the root coordinator. `progress_publication.rs` owns
   the final delivery publication gate for the selected regression scope.
@@ -1262,25 +1326,16 @@ is unclear.
   boundary for `status` and `next`; it detects pending configuration before
   dispatch or verification without committing files or treating routine progress
   updates as configuration changes.
-- Within `rewrite`, `quality.rs` owns delivery-time isolation and explicit worker,
-  integration and final pre-revalidation receipt scope and policy identities.
-  Worker and ordinary integration stages run source/isolation checks without
-  mandatory repository commands. The existing final stage binds the agent's
-  successful `quality_check` attestation to the frozen candidate; the integrator
-  executes the project-configured tool across the target and managed directories.
-  Review never executes fmt, tests, Clippy or other repository commands. The
-  configured tool and stage bind receipt validation and policy identity.
-  Worker receipts cannot satisfy integration admission; ordinary integration
-  receipts cannot satisfy the final gate. Historical command DTOs remain readable
-  but do not grant current admission. `target_quality.rs` is a
-  compatibility boundary for validation of an
-  already admitted receipt; it never executes repository checks. The
-  `target_replay_isolation` module, owned by `quality`, owns the mandatory,
-  deterministic scan that prevents production Rust source from consuming
-  Replay-only hostnames, fake addresses, private runtime state, or recording
-  artifacts. Keep this product-policy gate separate from the generic
-  code-organization checker. Repository instructions may add development checks
-  but cannot replace or disable this engine standard.
+- Within `rewrite`, `quality.rs` owns final source/isolation policy and the
+  final agent-owned quality-check attestation. Ordinary delivery captures exact
+  identity without scanning source or executing repository commands. Clippy and
+  other lint run only in the consolidated final assignment. The final receipt
+  binds the configured tool, committed candidate, build inputs and workflow scope.
+  Historical worker/integration quality receipts remain readable but cannot
+  authorize final revalidation. `target_quality.rs` is a legacy admission boundary
+  that never launches repository checks. `target_replay_isolation`, owned by
+  `quality`, prevents production code from consuming private replay addresses,
+  runtime state and recordings; it runs during final pre-revalidation review.
 - `rewrite/source_diff.rs` owns the Git source-diff boundary shared by Replay
   isolation and source review, including committed/worktree/untracked files and
   rename handling. Its `layout` child maps a target project nested below the Git
@@ -1293,8 +1348,11 @@ is unclear.
   reads and PR-base resolution only within a status/inventory query, keyed by
   directory and exact arguments. Other Git commands, including output-file
   writes, invalidate those reads; later queries inspect Git again.
-  `rewrite/review` owns the complete worker/integrator review
-  pipeline, spawn evidence, handoff admission, and quality rework routing. Its `scan`
+  `rewrite/review` owns final source review, spawn evidence, receipt admission
+  and quality rework routing. Its `delivery` child captures exact worker and
+  published integration identities without source scans or repository commands.
+  Ordinary review check is a successful no-op for code quality; dispatch,
+  committed-code and publication checks remain delivery responsibilities. Its `scan`
   child owns Rust syntax findings and complete-file line limits.
   Its spawn scan recognizes compiler-enforced file/item test configuration and
   Tokio test functions; extracted test files declare their own inner cfg rather

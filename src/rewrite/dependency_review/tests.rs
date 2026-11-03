@@ -103,6 +103,168 @@ async fn fixture(count: usize) -> (tempfile::TempDir, RewriteState) {
     (target, state)
 }
 
+#[tokio::test]
+async fn ownerless_context_matches_full_source_before_and_after_admission_inventory_is_cached() {
+    let (target, mut state) = fixture(2).await;
+    let full = context_for(target.path(), &state, &source::load(&state).unwrap()).unwrap();
+    assert_eq!(full.unattributed_exchange_ids.len(), 3);
+    for cached in [false, true] {
+        if cached {
+            analysis::refresh_inventory(target.path(), &mut state).unwrap();
+        }
+        let (identity, ids) = analysis::review_inventory(target.path(), &state).unwrap();
+        let bounded =
+            context_from_inventory(target.path(), &state, &identity, ids.into_owned()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&bounded).unwrap(),
+            serde_json::to_value(&full).unwrap()
+        );
+    }
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let context = super::super::RewriteContext {
+        target_root: target.path().into(),
+    };
+    assert_eq!(
+        dependency_attribution_context(context.clone())
+            .unwrap()
+            .unattributed_exchange_ids
+            .len(),
+        3
+    );
+    // Even a warmed admission projection cannot hide a changed sealed artifact.
+    let central = state
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("dependencies.jsonl");
+    let mut bytes = fs::read(&central).unwrap();
+    bytes.push(b'\n');
+    fs::write(central, bytes).unwrap();
+    assert!(dependency_attribution_context(context).is_err());
+}
+
+#[tokio::test]
+async fn unused_occurrence_projection_matches_full_source_and_retains_seal_checks() {
+    let (_target, state) = fixture(2).await;
+    let full = source::load(&state).unwrap();
+    let projected = source::occurrences::load(&state).unwrap();
+    assert_eq!(projected.identity, full.identity);
+    assert_eq!(projected.apis, full.apis);
+    assert_eq!(projected.case_defaults, full.case_defaults);
+    assert_eq!(projected.exchanges.len(), full.exchanges.len());
+    for (id, expected) in &full.exchanges {
+        let actual = &projected.exchanges[id];
+        assert_eq!(
+            serde_json::to_value(&actual.capture).unwrap(),
+            serde_json::to_value(&expected.capture).unwrap()
+        );
+        assert_eq!(actual.complete, expected.complete);
+        assert_eq!(
+            actual.selector["event_type"],
+            expected.selector["event_type"]
+        );
+        assert!(actual.selector.get("uri").is_none());
+        assert!(actual.selector.get("args").is_none());
+    }
+    let http = full
+        .http
+        .keys()
+        .map(|id| json!({"case_id":"selected","source_http_id":id}))
+        .collect::<Vec<_>>();
+    let redis = full
+        .native
+        .keys()
+        .filter(|(protocol, _, _)| protocol == "redis")
+        .map(|(_, connection, sequence)| {
+            json!({"case_id":"selected","connection_id":connection,"sequence":sequence,"command":"GET"})
+        })
+        .collect::<Vec<_>>();
+    let report = json!({"unused_case_http_exchanges":http,"redis":{"unused_case":redis},
+        "unused_case_exchanges":[{"case_id":"other","source_exchange_id":Uuid::new_v4()}]});
+    let selected = BTreeSet::from(["selected".into()]);
+    let expected = source::unused(&full, &report, &selected).unwrap();
+    assert_eq!(expected.len(), 3);
+    assert_eq!(projected.unused(&report, &selected).unwrap(), expected);
+    let unknown = json!({"unused_case_exchanges":[{
+        "case_id":"selected","source_exchange_id":Uuid::new_v4()}]});
+    assert!(projected.unused(&unknown, &selected).is_err());
+    let central = state
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("dependencies.jsonl");
+    let mut bytes = fs::read(&central).unwrap();
+    bytes.push(b'\n');
+    fs::write(central, bytes).unwrap();
+    assert!(source::occurrences::load(&state).is_err());
+}
+
+#[tokio::test]
+async fn single_source_information_preserves_sealed_physical_identity_and_shape() {
+    let (target, state) = fixture(2).await;
+    let source = source::load(&state).unwrap();
+    for (id, expected) in &source.exchanges {
+        let actual = dependency_attribution_source_information(
+            super::super::RewriteContext {
+                target_root: target.path().into(),
+            },
+            &id.to_string(),
+        )
+        .unwrap();
+        assert_eq!(actual["source_inventory_id"], source.identity);
+        assert_eq!(
+            actual["capture"],
+            serde_json::to_value(&expected.capture).unwrap()
+        );
+        assert_eq!(actual["capture_complete"], expected.complete);
+        assert_eq!(
+            actual["request_shape"]["event_type"],
+            expected.selector["event_type"]
+        );
+        assert!(actual.get("selector").is_none());
+        assert!(actual["request_shape"].get("args").is_none());
+        assert!(actual.get("response").is_none());
+    }
+    assert!(
+        dependency_attribution_source_information(
+            super::super::RewriteContext {
+                target_root: target.path().into()
+            },
+            &Uuid::new_v4().to_string(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("outside this immutable recording")
+    );
+
+    // A warmed index cannot authenticate bytes modified after the recording seal.
+    let path = state
+        .case_source
+        .as_ref()
+        .unwrap()
+        .join("dependencies.jsonl");
+    let mut bytes = fs::read(&path).unwrap();
+    let position = bytes
+        .windows(b"refresh".len())
+        .position(|w| w == b"refresh")
+        .unwrap();
+    bytes[position] = b'R';
+    fs::write(path, bytes).unwrap();
+    assert!(
+        dependency_attribution_source_information(
+            super::super::RewriteContext {
+                target_root: target.path().into()
+            },
+            &source.exchanges.keys().next().unwrap().to_string(),
+        )
+        .is_err(),
+        "a warmed lookup must reject modified sealed Source bytes"
+    );
+}
+
 fn proposal(
     source: &source::SourceSnapshot,
     policy: &crate::policy::CompiledPolicy,
@@ -215,13 +377,28 @@ async fn task_proof_binds_complete_cross_protocol_scope_and_keeps_original_inven
         .unwrap(),
         bytes
     );
-    let stored = RewriteStore::new(target.path())
+    let mut stored = RewriteStore::new(target.path())
         .unwrap()
         .load()
         .unwrap()
         .unwrap();
     assert!(batch_pending(&stored)); // A real process execution still owns this debt.
     assert_eq!(stored.dependency_review.obligations.len(), 1);
+    let decisions = serde_json::to_value(&stored.dependency_review.decisions).unwrap();
+    stored.dependency_review.case_defaults_identity = None;
+    super::analysis::refresh_inventory(target.path(), &mut stored).unwrap();
+    assert_eq!(
+        serde_json::to_value(&stored.dependency_review.decisions).unwrap(),
+        decisions,
+        "admission cache rebuilding preserves current authored ownership proofs"
+    );
+    assert!(
+        stored
+            .dependency_review
+            .unresolved_source_exchange_ids
+            .is_empty()
+    );
+    assert!(required_action(target.path(), &stored).is_none());
     assert!(
         apply_dependency_attribution(options())
             .unwrap_err()

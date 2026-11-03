@@ -23,7 +23,7 @@ enum ReviewCommand {
         #[arg(long, required = true, value_parser = super::parse_api_scope)]
         api: Vec<String>,
     },
-    /// Check source/isolation and record agent-owned final quality before full revalidation.
+    /// Check final source/quality; outside pre-revalidation, succeed without code checks.
     Check {
         #[arg(long, env = "BACKEND_REWRITE_REVIEW_WORKTREE")]
         worktree: PathBuf,

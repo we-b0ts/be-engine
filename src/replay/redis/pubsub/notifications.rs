@@ -8,6 +8,17 @@ use tokio::time::{Duration, Instant, sleep_until};
 
 type IndexedJob = (usize, Paged<NotificationEntry>, Arc<RecordSource>);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Progress {
+    Skipped,
+    Queued,
+    Ended,
+}
+
+pub(super) fn fast_gap_ms(previous: u64, current: u64, cap_ms: u64) -> u64 {
+    current.saturating_sub(previous).min(cap_ms)
+}
+
 pub(in crate::replay::redis) struct NotificationJob {
     pub(super) indices: Arc<Vec<usize>>,
     pub(super) indexed: Option<IndexedJob>,
@@ -54,7 +65,7 @@ pub(in crate::replay::redis) fn schedule_notifications(
                 for entry in entries {
                     let id = PushId::Indexed { lane, index };
                     index += 1;
-                    if !deliver(
+                    if deliver(
                         &weak,
                         &mut job,
                         id,
@@ -63,8 +74,10 @@ pub(in crate::replay::redis) fn schedule_notifications(
                         entry.adapter_namespace,
                         Some(source.reference(entry.location)),
                         started,
+                        false,
                     )
                     .await
+                        == Progress::Ended
                     {
                         return;
                     }
@@ -72,13 +85,28 @@ pub(in crate::replay::redis) fn schedule_notifications(
             }
         } else {
             let indices = job.indices.clone();
+            let mut previous_offset = 0;
             for &index in indices.iter() {
                 let Some(state) = weak.upgrade() else {
                     return;
                 };
-                let delay = state.lock().await.redis.pubsub.pushes[index]
-                    .record
-                    .duration_ms;
+                let (offset, fast, cap_ms) = {
+                    let replay = state.lock().await;
+                    let push = &replay.redis.pubsub.pushes[index];
+                    (
+                        push.record.duration_ms,
+                        replay.stream_timing == Some(crate::replay::ReplayStreamTiming::Fast)
+                            && push.source == ReplaySource::Case
+                            && push.record.rpc_request.is_none(),
+                        replay.stream_interval_cap_ms,
+                    )
+                };
+                let (delay, anchor) = if fast {
+                    (fast_gap_ms(previous_offset, offset, cap_ms), Instant::now())
+                } else {
+                    (offset, started)
+                };
+                previous_offset = offset;
                 let digest = {
                     let replay = state.lock().await;
                     replay.redis.pubsub.pushes[index]
@@ -95,17 +123,15 @@ pub(in crate::replay::redis) fn schedule_notifications(
                         .and_then(|raw| parse_pubsub_push(&raw).ok().flatten())
                         .and_then(|push| rpc::notification_namespace(&push.channel, &push.payload))
                 };
-                if !deliver(
-                    &weak,
-                    &mut job,
-                    PushId::Inline(index),
-                    delay,
-                    digest,
-                    namespace,
-                    None,
-                    started,
+                let id = PushId::Inline(index);
+                let progress = deliver(
+                    &weak, &mut job, id, delay, digest, namespace, None, anchor, fast,
                 )
-                .await
+                .await;
+                if progress == Progress::Ended
+                    || fast
+                        && progress == Progress::Queued
+                        && !wait_delivered(&state, &mut job, id).await
                 {
                     return;
                 }
@@ -124,7 +150,8 @@ async fn deliver(
     adapter_namespace: Option<String>,
     reference: Option<RecordRef>,
     started: Instant,
-) -> bool {
+    fast: bool,
+) -> Progress {
     if let Some(state) = weak.upgrade()
         && state.lock().await.redis.pubsub.timer_is_correlated(
             id,
@@ -132,43 +159,57 @@ async fn deliver(
             adapter_namespace.as_deref(),
         )
     {
-        return true;
+        return Progress::Skipped;
     }
     tokio::select! {
         _ = sleep_until(started + Duration::from_millis(delay)) => {}
-        _ = job.cancelled.changed() => { return false; }
-        _ = job.sender.closed() => { return false; }
+        _ = job.cancelled.changed() => { return Progress::Ended; }
+        _ = job.sender.closed() => { return Progress::Ended; }
     }
     let Some(state) = weak.upgrade() else {
-        return false;
+        return Progress::Ended;
     };
-    let (reference, inline) = {
+    let (reference, inline, case_id, request_epoch) = {
         let mut replay = state.lock().await;
         if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
-            return false;
+            return Progress::Ended;
         }
         if replay
             .redis
             .pubsub
             .timer_is_correlated(id, adapter_echo, adapter_namespace.as_deref())
         {
-            return true;
+            return Progress::Skipped;
         }
         match id {
             PushId::Inline(index) => {
-                let push = &mut replay.redis.pubsub.pushes[index];
+                let push = &replay.redis.pubsub.pushes[index];
                 if !push.status.is_available() {
-                    return true;
+                    return Progress::Skipped;
                 }
-                push.status = ReplayExchangeStatus::Responding;
-                (push.evidence.clone(), push.raw.clone())
+                let case = push.case_id.clone();
+                let reference = push.evidence.clone();
+                let raw = push.raw.clone();
+                let epoch = if let Some(case) = &case {
+                    if replay.active_case_id.as_ref() != Some(case) || replay.target_session_stopped
+                    {
+                        return Progress::Skipped;
+                    }
+                    let epoch = replay.redis.request_contracts.request_times(case).target;
+                    replay.redis.pubsub.reserve_case_push(id, case, job.client);
+                    epoch
+                } else {
+                    replay.redis.pubsub.reserve_push(id);
+                    None
+                };
+                (reference, raw, case, epoch)
             }
             PushId::Indexed { lane, index } => {
                 if !replay.redis.pubsub.indexed.available(lane, index) {
-                    return true;
+                    return Progress::Skipped;
                 }
                 replay.redis.pubsub.indexed.responding(lane, index);
-                (reference, Vec::new())
+                (reference, Vec::new(), None, None)
             }
         }
     };
@@ -186,30 +227,100 @@ async fn deliver(
                 id,
                 format!("notification evidence unavailable: {error:?}"),
             );
-            return false;
+            return Progress::Ended;
         }
     };
+    let delivery = Delivery {
+        case_id,
+        push: id,
+        bytes,
+        matched: None,
+        request_epoch,
+    };
+    // Queue pressure is transport progress, not a dependency mismatch. Never
+    // hold ReplayState while awaiting space, and keep cancellation runnable.
+    let permit = if fast {
+        let sender = job.sender.clone();
+        let permit = tokio::select! {
+            result = sender.reserve_owned() => result.ok(),
+            _ = job.cancelled.changed() => None,
+        };
+        let Some(permit) = permit else {
+            let mut replay = state.lock().await;
+            fail(
+                &mut replay,
+                id,
+                "notification delivery ended before queueing".into(),
+            );
+            return Progress::Ended;
+        };
+        Some(permit)
+    } else {
+        None
+    };
     let mut replay = state.lock().await;
-    if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
-        return false;
-    }
-    if job
-        .sender
-        .try_send(Delivery {
-            case_id: None,
-            push: id,
-            bytes,
-            matched: None,
-            request_epoch: None,
-        })
-        .is_err()
+    if replay.finalized_at.is_some()
+        || !replay.redis.pubsub.is_subscribed(job.client, id)
+        || !delivery.case_is_current(&replay)
     {
-        fail(&mut replay, id, "notification delivery queue full".into());
+        fail(
+            &mut replay,
+            id,
+            "notification Case or subscription ended before queueing".into(),
+        );
+        return Progress::Ended;
     }
-    true
+    if let Some(permit) = permit {
+        permit.send(delivery);
+    } else if job.sender.try_send(delivery).is_err() {
+        fail(&mut replay, id, "notification delivery queue full".into());
+        return Progress::Ended;
+    }
+    Progress::Queued
+}
+
+async fn wait_delivered(
+    state: &Arc<Mutex<ReplayState>>,
+    job: &mut NotificationJob,
+    id: PushId,
+) -> bool {
+    loop {
+        let wait = {
+            let replay = state.lock().await;
+            let status = match id {
+                PushId::Inline(index) => replay.redis.pubsub.pushes[index].status,
+                PushId::Indexed { .. } => return false,
+            };
+            if status == ReplayExchangeStatus::Consumed {
+                return true;
+            }
+            if status != ReplayExchangeStatus::Responding
+                || replay.finalized_at.is_some()
+                || !replay.redis.pubsub.is_subscribed(job.client, id)
+            {
+                return false;
+            }
+            // Register under the ownership mutex before releasing it. A very
+            // fast actual write cannot complete between this check and wait.
+            replay.redis.lifecycle.subscribe()
+        };
+        tokio::select! {
+            _ = wait.changed() => {}
+            _ = job.cancelled.changed() => return false,
+            _ = job.sender.closed() => return false,
+        }
+    }
 }
 
 fn fail(replay: &mut ReplayState, id: PushId, reason: String) {
+    let case = match id {
+        PushId::Inline(index) => replay.redis.pubsub.pushes[index].case_id.clone(),
+        PushId::Indexed { .. } => None,
+    };
+    if case.is_some() {
+        replay.redis.fail_pubsub_input(id, case.as_deref(), &reason);
+        return;
+    }
     replay.redis.pubsub.fail(id);
     let record = match id {
         PushId::Inline(index) => &replay.redis.pubsub.pushes[index].record,

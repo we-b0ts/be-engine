@@ -43,7 +43,8 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
     Ok(action::advance_envelope(
         &root,
         &scoped,
-        "integration source/isolation receipt is current; advance coordinator verification".into(),
+        "committed delivery is ready; advance coordinator verification without source review"
+            .into(),
     ))
 }
 
@@ -68,6 +69,7 @@ pub(super) fn status_action(root: &Path, state: &RewriteState) -> Result<Option<
     Ok(Some(action::replay_advance(
         root,
         &state.api,
-        "integration source/isolation receipt is current; advance coordinator verification".into(),
+        "committed delivery is ready; advance coordinator verification without source review"
+            .into(),
     )))
 }

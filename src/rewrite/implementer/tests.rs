@@ -99,29 +99,23 @@ fn confirm_group(root: &Path, group: &str) -> ImplementerDispatch {
 }
 
 fn delivery(
-    root: &Path,
+    _root: &Path,
     dispatch: &ImplementerDispatch,
     api: &str,
     handoff: &str,
 ) -> ImplementerDelivery {
     let task = dispatch.apis.iter().find(|task| task.api == api).unwrap();
-    let checked = review::check(crate::rewrite::RewriteReviewOptions {
-        target_root: root.into(),
-        worktree: Some(dispatch.worktree.clone()),
-        scope: Some(crate::rewrite::RewriteWorkScope::Api { api: api.into() }),
-        evidence: None,
-        integration: false,
-        quality_check: None,
-        handoff_id: None,
-        hardcode_ai_verified: vec![],
-    })
-    .unwrap();
+    let commit = crate::rewrite::source_diff::git_text(&dispatch.worktree, &["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_owned();
     ImplementerDelivery {
+        delivery_commit: Some(commit),
         api: api.into(),
         dispatch_id: task.dispatch_id.clone(),
         lease_generation: task.lease_generation,
         handoff_id: handoff.into(),
-        review_report: checked.report_path,
+        review_report: Path::new("").into(),
     }
 }
 
@@ -249,6 +243,68 @@ fn cross_group_partial_handoff_freezes_delivery_and_keeps_other_tasks() {
         Some("/other")
     );
     assert!(recovered.worker_bindings["/api"].review_report.is_some());
+}
+
+#[test]
+fn pooled_integration_accepts_the_published_frozen_commit_without_a_review_report() {
+    let (target, _) = setup();
+    let root = target.path();
+    let alpha = confirm_group(root, "alpha");
+    confirm_group(root, "beta");
+    fs::write(
+        alpha.worktree.join("lib.rs"),
+        "pub fn value() -> u8 { 2 }\n",
+    )
+    .unwrap();
+    git(&alpha.worktree, &["add", "lib.rs"]);
+    git(&alpha.worktree, &["commit", "-qm", "first API delivery"]);
+    let item = delivery(root, &alpha, "/api", "commit-only-handoff");
+    let commit = item.delivery_commit.clone().unwrap();
+    handoff(ImplementerHandoffOptions {
+        target_root: root.into(),
+        slot_id: 0,
+        agent_handle: "reused-handle".into(),
+        deliveries: vec![item],
+    })
+    .unwrap();
+    // The reusable checkout can advance while its original delivery is merged.
+    fs::write(
+        alpha.worktree.join("lib.rs"),
+        "pub fn value() -> u8 { 3 }\n",
+    )
+    .unwrap();
+    git(&alpha.worktree, &["add", "lib.rs"]);
+    git(&alpha.worktree, &["commit", "-qm", "next API work"]);
+    git(root, &["merge", "--ff-only", &commit]);
+    let options = worker::runtime::RewriteWorkerReportOptions {
+        target_root: root.into(),
+        agent_handle: "reused-handle".into(),
+        activity: Activity::Integrated,
+        handoff_id: Some("commit-only-handoff".into()),
+        delivery_commit: Some(commit.clone()),
+        review_report: None,
+    };
+    let mut wrong = options.clone();
+    wrong.agent_handle = "another-worker".into();
+    assert!(worker::runtime::report(wrong).is_err());
+    worker::runtime::report(options.clone()).unwrap();
+    worker::runtime::report(options).unwrap();
+    let state = RewriteStore::new(root).unwrap().load().unwrap().unwrap();
+    assert_eq!(
+        state.worker_bindings["/api"]
+            .last_integrated_commit
+            .as_deref(),
+        Some(commit.as_str())
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("lib.rs")).unwrap(),
+        "pub fn value() -> u8 { 2 }\n"
+    );
+    assert!(
+        state.implementers.unwrap().slots[&0]
+            .tasks
+            .contains_key("/other")
+    );
 }
 
 #[test]
@@ -586,7 +642,7 @@ fn a_retained_lease_cannot_report_work_against_a_new_recording() {
 }
 
 #[test]
-fn handoff_rejects_reviewed_code_missing_from_its_commit() {
+fn handoff_rejects_code_missing_from_its_delivery_commit() {
     let (target, _) = setup();
     let batch = confirm_group(target.path(), "alpha");
     fs::write(
@@ -602,7 +658,7 @@ fn handoff_rejects_reviewed_code_missing_from_its_commit() {
         deliveries: vec![reviewed],
     })
     .unwrap_err();
-    assert!(error.to_string().contains("commit all reviewed"));
+    assert!(error.to_string().contains("commit target and managed code"));
     let state = RewriteStore::new(target.path())
         .unwrap()
         .load()

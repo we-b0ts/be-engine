@@ -113,7 +113,7 @@ claim that all other slot tasks ended. Use `inventory` for `current_api`,
 `developing_api_count`, `pending_api_count`, assigned `groups`, tasks and handles.
 Reject stale API/dispatch/lease callbacks even when the slot name is unchanged.
 
-Each completed API needs its own current passing local review. An implementer
+Each completed API needs its exact committed delivery, without review check. An implementer
 may return one or several deliveries, including APIs from different assigned
 groups. The coordinator submits the completed subset as one JSON array:
 
@@ -124,7 +124,7 @@ groups. The coordinator submits the completed subset as one JSON array:
     "dispatch_id": "<original API dispatch>",
     "lease_generation": 1,
     "handoff_id": "<stable identity unique to this API delivery>",
-    "review_report": "/absolute/original-api-review.json"
+    "delivery_commit": "<full committed delivery SHA>"
   }
 ]
 ```

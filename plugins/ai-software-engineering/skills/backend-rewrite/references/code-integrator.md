@@ -1,166 +1,72 @@
 # Code Integrator
 
-Use only the coordinator's current `integrate`, `review` or
-`pre_revalidation_review` assignment. Work in the assigned integration worktree. Do not read API diagnosis or coordinator
-operating protocols, select another handoff, or mutate workflow state.
+Use the coordinator's current `integrate` assignment in its retained integration
+worktree. The implementer owns business correctness. The integrator does not review code.
+It reads code only as needed to resolve an actual merge conflict. Ordinary integration owns
+merges and conflict resolution; it does not run `review check`, organization
+checks, formatting/quality gates or a full build/test cycle for delivery.
+
+A conflict-free integration is Git-only: do not execute `cargo build`,
+`cargo test`, `cargo fmt`, `cargo clippy`, `review check` or any other code
+checking tool. If resolving a conflict changes code, run tests for the changed modules and
+format when needed. Clippy and all other lint operations are prohibited during
+integration; later stages handle them centrally. Do not run a separate build or
+source review during integration.
+Defer routine review and full checks to the final stage.
 
 ## Input
 
-Require an assignment ID, canonical root, absolute worktree, canonical base
-commit, and relevant source locations.
-
-- `integrate`: each exact work scope, original workflow/recording and worker
-  binding/dispatch, handoff ID, worker base, delivery commit, accepted review,
-  local-test results, shared impact, and required-input references. The
-  coordinator may add ready API handoffs before final candidate review.
-  The coordinator supplies the engine's `review batch` export with exact delivery
-  metadata, `batch_path`, and the complete `check` command. Use the exported
-  `delivery_commit` for Git operations; preserve the independent `handoff_id`.
-- `review`: inspected target version, current findings/report when available,
-  and available commit-to-work-item provenance. No API issue is implied by this
-  assignment.
-- `pre_revalidation_review`: the engine's final-stage action and exact check
-  command, inspected target version, canonical inputs and current findings/report
-  when available. This is the mandatory stage before final full revalidation,
-  not a new API handoff.
-
-Return missing material. Preserve original identities; there is no dedicated
-integrator evidence endpoint or engine integration activity to invent.
+Require assignment ID, canonical root, absolute worktree, canonical base,
+Source locations, and each original scope/workflow/recording/binding/dispatch,
+handoff ID, worker base and accepted `delivery_commit`. Retain relevant local
+test results, shared impact and required-input references. A pooled worker may
+have reused its checkout, so use the accepted commit rather than current HEAD.
+Return missing material without inventing identity or authority.
 
 ## Integrate
 
-1. Read [target-code-rules.md](target-code-rules.md)
-   and [source-review-rules.md](source-review-rules.md). Verify the assigned base and exact
-   delivered code against the handoff. Do not reuse a report for later edits.
-2. Prepare a branch from the supplied canonical base, preserving any unfinished
-   local work. Identify the undelivered change from the worker base, commit, and
-   previous integration provenance; do not replay already integrated history.
-3. Merge every assigned change. Resolve only conflicts whose behavior is determined
-   by the accepted changes and source contract. Route order, dependency versions,
-   and shared data semantics require proof; their filenames do not make them
-   mechanical. Return unresolved business decisions to the responsible owner.
-4. Check combined module boundaries, affected startup ownership, and evidence
-   locations. Commit the candidate and record every conflict resolution and
-   original-to-result mapping. Build and run relevant tests as needed, then
-   execute the engine-exported `check` command for source/isolation review. It
-   includes the integration worktree and generated batch path; no identity probing
-   or manual JSON assembly is needed.
+1. Prepare from the assigned canonical base, preserving unfinished work.
+2. Identify the undelivered changes using worker base, exact delivery commit and
+   previous integration provenance. Keep already integrated code in the base.
+3. Merge the assigned changes and resolve conflicts determined by their Source
+   contracts. Route ordering, dependency versions and shared semantics may need
+   evidence; return unresolved business decisions to their implementing owner.
+4. Commit the resulting candidate. Return its exact full commit ID, included
+   handoff/dispatch identities, original-to-result mapping, conflict resolutions,
+   shared impact and any remaining input requests. If resolving an actual conflict changes code, run relevant module tests and
+   format when needed. Do not run a separate build, lint, source review or full suite.
 
-   Existing retained assignments may still supply a single-handoff command:
+Do not split files solely for the 1000-line gate or generate spawn evidence in
+ordinary integration. These checks and any resulting cleanup are centralized
+before final revalidation. Do not publish canonical code, mutate workflow state,
+report worker activity, run traffic acceptance or mark APIs complete. The
+coordinator publishes your exact candidate and acknowledges each original
+handoff with `worker report --activity integrated --delivery-commit COMMIT`.
 
-   ```bash
-   backend-rewrite --target-root /absolute/canonical review check \
-     --integration --worktree /absolute/integration \
-     --api '/api' --handoff-id ACCEPTED_HANDOFF_ID
-   ```
+An unchanged candidate keeps its existing commit; no empty merge is needed.
+Keep each API's canonical path/pattern and included methods together. Do not
+reimplement business logic or change another worker's worktree.
 
-   Generated batches bind the original workflow, recording, scope, handoff and
-   dispatch. The check validates those bindings and reviews the complete combined
-   candidate. The batch must include at least
-   one `handoff_ready` item; current `integrated` items may be included to bind
-   their retained identities to the new candidate. For six already integrated
-   APIs plus one new API, keep the six in the canonical base and merge only the
-   new delivery. Either review the new handoff alone or review the mixed seven-item
-   batch; both check the complete candidate. The coordinator reports `integrated`
-   only for items still `handoff_ready`, preserving earlier integration states.
-   A later addition requires a new complete review of the resulting candidate,
-   not a replay of already integrated merges or acceptance callbacks.
-   Additional deliveries may join an in-progress integration. The coordinator
-   exports the expanded selected set; cancel an older check if necessary, merge
-   the addition, then execute the new export's `check`. Never edit an exported
-   file to substitute a different identity. Return a stale export to the
-   coordinator for reconciliation and regeneration.
-   Supply current `--evidence` and
-   `--hardcode-ai-verified` mappings when required. Only a `passed` report
-   qualifies. Resolve routine formatting/lint findings and integration-induced
-   failures here. The configured quality_check is required by the final stage
-   below rather than each integration. Preserve behavior and record repairs in the candidate provenance.
-   Return changes requiring API behavior decisions with exact findings to their
-   responsible worker. Commit corrections and rerun complete candidate review.
-5. Return the candidate and its absolute passing `report_path` based on the
-   exact assigned base. Do not write product
-   code or configuration in the canonical worktree or touch another worker tree.
+## Waiting
 
-A worker's passing report covers source rules, Replay isolation and delivery
-identity. Ordinary integration review repeats those checks against the complete
-merged candidate without mandatory fmt, workspace tests or Clippy. It binds the
-accepted handoff, canonical review policy and runtime inputs, and exact candidate
-code. A batch report binds every included handoff to that candidate. It does not
-attest that the configured final quality tool passed. Never reuse a worker report for
-integration, an ordinary integration report for the final stage, or a candidate
-report after subsequent relevant changes.
+Use runtime background execution and completion notifications. Keep blocking
+result requests within 30 seconds and process coordinator messages between tools.
+Do not invoke an engine wait/next command or poll output files for completion.
+An additional accepted delivery changes the returned candidate membership; it
+does not require a review/check cycle.
 
-Accepted implementer reports certify engine source/isolation checks and delivery
-identity. Do not independently re-prove API business logic; inspect code for merge
-conflicts, routine quality repairs and required evidence.
+## Separate Final Review Assignment
 
-Build and run focused tests as needed during ordinary integration. Follow
-[Final Pre-Revalidation Review](#final-pre-revalidation-review) for the final
-check trigger. Include the local checks you actually executed with their outcomes.
-
-When the reviewed handoff needs no code change after input application, the
-candidate may equal the assigned base. Return the identity and checks without
-creating an empty merge or commit.
-
-An HTTP handoff owns one canonical path/pattern and all its included methods.
-Keep that exact scope in candidate reviews and batch handoff entries. Do not
-split one handoff into method deliveries. Formal acceptance remains coordinator
-owned; method progress and failures remain independently visible.
-
-## Waiting For Checks
-
-When waiting for reviews, builds, or other background commands, a single `sleep`
-must not exceed 30 seconds. Across one waiting episode, all sleeps combined must
-also stay within 30 seconds, including loops and sleeps split across tool calls.
-Checking status between sleeps does not reset this budget. Prefer completion
-notifications over fixed delays. Do not invoke `wait` or `backend-rewrite wait`;
-engine waiting belongs to the coordinator.
-
-Use the task runtime's background execution support, retain the command's task
-ID, and resume result handling from its completion notification. Retrieve results
-through the execution tool's own result interface; any blocking result request
-must return within 30 seconds. Do not poll output files to detect completion.
-Process coordinator messages between tool calls so additional deliveries can use
-the existing cancel, append, and recheck path. While a check is still running,
-do not return `ready` or start another copy of that check.
-
-## Review
-
-Inspect only the assigned findings at the supplied version. Read
-[source-review-rules.md](source-review-rules.md) when source rules or spawn evidence apply.
-Verify that the integration worktree matches the assigned base and inspected
-version before inspecting source; return `stale` if they differ.
-For externally published changes, the assigned version is the current canonical
-commit. A quality refresh with no new code or evidence changes returns that
-exact commit and its passing report. Do not create an empty commit or merge to
-carry old integration history forward. If the retained branch has diverged,
-preserve its work and identify any undelivered changes before preparing a clean
-branch at the assigned base in the retained worktree.
-Trace affected callers and commit provenance to supply current evidence or the
-responsible API owner. Do not assign a shared defect to the
-currently selected API merely because that API exposed it.
-
-For a public-domain hardcode finding, read
-[Public-Domain Hardcode Evidence](source-review-rules.md#public-domain-hardcode-evidence).
-Prepare the required source-evidence commit in your worktree and return its
-candidate and exact mappings. This permits evidence metadata, not an unrelated
-product repair.
-
-For an evidence-only candidate or ordinary source-review refresh, run the
-supplied `review check --integration --worktree /absolute/integration` against
-the canonical target root without scope or handoff ID. Return its passing
-report with the exact candidate. It does not satisfy final pre-revalidation
-review. Do not invent a worker handoff or batch when all deliveries have already
-been integrated. If canonical inputs are still changing, return them first and
-recheck against their final state. Receipt expiry does not undo integrations.
-
-A review assignment permits routine formatting and lint repairs in the assigned
-integration worktree, followed by a new commit and complete review. It does not
-authorize changes to API behavior. Return concrete business findings and repair
-ownership. Source analysis that cannot prove a safe merge
-or an allowed constant returns the missing proof; do not weaken the check.
+A `pre_revalidation_review` assignment is issued only by the engine's final
+stage. Its consolidated checks below are separate from ordinary integration.
+A routed behavior defect goes back to its implementing owner; routine final
+structural cleanup stays in the final-review worktree. Legacy ordinary `review`
+requests must be reconciled with the coordinator rather than restarting a
+per-delivery check cycle.
 
 ## Final Pre-Revalidation Review
+
+Read [source-review-rules.md](source-review-rules.md) only for this assignment.
 
 The engine issues `pre_revalidation_review_required` only when ordinary work is
 ready for the final full revalidation or completion. Run Clippy and project-level

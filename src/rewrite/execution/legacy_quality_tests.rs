@@ -143,7 +143,7 @@ fn old_failed_quality_retry_routes_missing_receipt_to_integrator_without_checks(
     let result = retry_without_relaunch(target.path());
     assert!(matches!(
         result.action,
-        RewriteAction::SourceReviewRequired { .. }
+        RewriteAction::AdvanceRequired { .. }
     ));
     assert!(!result.terminal_allowed);
     let status = crate::rewrite::status_rewrite(RewriteContext {
@@ -152,7 +152,7 @@ fn old_failed_quality_retry_routes_missing_receipt_to_integrator_without_checks(
     .unwrap();
     assert!(matches!(
         status.action,
-        RewriteAction::SourceReviewRequired { .. }
+        RewriteAction::AdvanceRequired { .. }
     ));
     assert!(status.pending > 0, "receipt repair must remain schedulable");
     assert!(!counter.exists());

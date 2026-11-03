@@ -200,10 +200,9 @@ fn protected_global_read_copy_requires_real_delivery_matching_request_and_both_c
         let target=args(&["session:one",&json!({"at":1100,"updated":if mode=="fresh_time_bug" {2010}else{2020},"stable":if mode=="changed_remainder" {2}else{1}}).to_string()]);
         let write = json!({"event_type":"redis_exchange","command":"SET","target_host":"cache.test","target_port":6379,"database":0});
         let clocks = AnchorClocks {
-            case: ClockPair {
-                source: Some(at(1000)),
-                target: Some(at(2000)),
-            },
+            // Provenance remains necessary when the later write lacks API
+            // origins and therefore has only the two-second clock allowance.
+            case: ClockPair::default(),
             dependency: ClockPair {
                 source: Some(at(1010)),
                 target: Some(at(2020)),

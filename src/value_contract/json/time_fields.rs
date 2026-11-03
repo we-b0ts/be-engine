@@ -103,7 +103,7 @@ impl Comparator<'_> {
         let pair = if copied {
             parse_time_pair(source, target, &config)
         } else {
-            compare_time(source, target, &config, self.clocks.get(*anchor))
+            compare_time(source, target, &config, self.clocks, *anchor)
         }
         .map_err(|error| difference(pointer, &error.to_string()))?;
         *decisions

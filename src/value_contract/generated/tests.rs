@@ -496,7 +496,7 @@ fn decoded_cipher_occurrences_keep_independent_times_and_atomic_shared_identitie
         {"name":"second","cipher":cipher(1_700_000_060i64,other_source_id,2)},
     ]});
     let target = json!({"id":target_id,"expire_at":1_700_001_062,"items":[
-        {"name":"second","cipher":cipher(1_700_001_063i64,other_target_id,4)},
+        {"name":"second","cipher":cipher(1_700_001_060i64,other_target_id,4)},
         {"name":"first","cipher":cipher(1_700_001_061i64,target_id,3)},
     ]});
     let contract = encrypted(BTreeMap::new());

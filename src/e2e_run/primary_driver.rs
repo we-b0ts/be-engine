@@ -247,7 +247,8 @@ mod tests {
         let config = ResolvedProjectConfig {
             replay_case_no_progress_timeout: Duration::from_secs(5),
             replay_pre_match: true,
-            replay_http_stream_timing: Default::default(),
+            replay_stream_timing: None,
+            replay_stream_interval_cap_ms: crate::replay::DEFAULT_REPLAY_STREAM_INTERVAL_CAP_MS,
             replay_socketio_timing: Default::default(),
             target_dockerfile: PathBuf::from("Dockerfile.target"),
             target_build_contexts: Vec::new(),

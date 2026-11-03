@@ -424,140 +424,76 @@ the pushed manifest digest, and pin target Dockerfiles to `tag@sha256`.
 
 ## CLI Boundaries
 
-`backend-rewrite review check --worktree /absolute/worker --api '/api'`
-performs the mandatory worker handoff review. Register the worktree during
-`worker confirm --worktree /absolute/worker`; the engine records the dispatch
-base. After the final
-edit and commit, supply the returned report through `worker report ...
---activity handoff_ready --review-report /absolute/report.json`.
+Ordinary implementer delivery and integration do not require source review.
+Implementers own Source-correct logic, build/debug as needed, run focused tests
+for changed modules, format when needed and return committed delivery identities.
+They do not execute Clippy or other lint tools. Those tools belong to later
+consolidated quality work.
 
-When the configured target is a subdirectory of a larger Git repository, keep
-`--target-root` pointed at that project subdirectory. `--worktree` may point at
-either the outer Git worktree root or the corresponding project subdirectory;
-the engine normalizes it to the project subdirectory. By default source diffs,
-review paths, fingerprints, and Replay-isolation checks remain scoped to that
-project. Add target-relative sibling directories to
-`project.delivery.managed_paths` when the target and a rapidly changing local
-dependency must be delivered together. Every managed directory must exist,
-belong to the same Git repository, and be disjoint from the target and the
-other managed directories. Managed sibling files are reported relative to the
-target, for example `../backend-rs/src/lib.rs`. Once managed paths are present,
-a candidate with tracked changes outside the target and those paths is rejected.
+Pooled `implementer handoff --deliveries FILE` accepts entries
+`{api, dispatch_id, lease_generation, handoff_id, delivery_commit}`. The engine
+validates the registered worktree, committed target/managed code, exact dispatch
+and commit ancestry, then freezes a private identity receipt and durable Git ref.
+No source scan, line limit, spawn evidence or repository command runs at handoff.
+Legacy dedicated worker handoff uses `worker report --activity handoff_ready
+--handoff-id ID --delivery-commit COMMIT`. Existing review receipts remain
+readable for outstanding deliveries.
 
-Worker, integration and final pre-revalidation review share Source and
-Replay-isolation checks. Worker and ordinary integration review do not execute
-repository quality commands. The existing final pre-revalidation stage records
-the integrator's successful quality check on the final candidate; it does not
-execute repository commands either.
-All review stages enforce complete changed production Rust files <=1000 lines.
-Added Tokio spawn paths require structured startup ownership evidence via `--evidence`; request-owned
-and unknown ownership cannot pass. The scanner uses syntax, ordinary imports and
-source spans; it does not expand macros, infer types or prove call graphs.
-Inline `#[cfg(test)]` modules/functions, `#[tokio::test]` functions, and files
-with inner `#![cfg(test)]` are excluded from spawn ownership findings. For an
-extracted test module, put `#![cfg(test)]` in the child file as well as guarding
-its parent declaration. The scanner does not infer cross-file module ownership
-or exempt files based on their names; ordinary runtime siblings remain checked.
-It also performs the mandatory Replay-isolation and source-sensitive public
-domain checks, including `demo.test` occurrences in test fixtures. API workers
-build/debug and run relevant tests as needed; they do not need to run Clippy.
-The integrator builds and tests as needed during daily integration. At
-`pre_revalidation_review_required`, it executes `details.quality_check` across
-`details.quality_paths` on the final committed candidate. After success it runs
-the returned `review check --pre-revalidation --quality-check TOOL --worktree
-/absolute/integration` to report the successful tool and perform Source/isolation
-checks. `project.delivery.quality_check` defaults to `cargo-clippy`; other
-languages can configure their own tool identifier. For `cargo-clippy` the
-integrator runs `cargo clippy --workspace --all-targets -- -D warnings` in each
-applicable project. The engine never executes fmt, tests, Clippy or another
-repository tool. Formatting and unit tests follow project instructions. Routine formatting/lint
-repairs stay with the integrator. Stage-bound receipts prevent a worker report
-from replacing integration review or an ordinary integration report from
-replacing final pre-revalidation proof.
-Worker review checks the frozen
-dispatch ancestry and uses the same full PR diff baseline as integration review.
-See the [API implementer review protocol](../plugins/ai-software-engineering/skills/backend-rewrite/references/api-implementer-review.md).
+Integration only merges the assigned accepted commits and resolves actual
+conflicts. It does not review code. A conflict-free merge executes no cargo
+build/test/fmt/clippy, lint or review check. If conflict resolution changes code,
+run tests for the affected modules and format only when needed; Clippy and other
+lint remain prohibited. No full build/test cycle is required for integration.
+The integrator returns the exact candidate commit and original handoff mapping.
+The coordinator publishes that commit and acknowledges each ready handoff with
+`worker report --activity integrated --handoff-id ID --delivery-commit COMMIT`.
+The returned command accepts `BACKEND_REWRITE_DELIVERY_COMMIT`. Admission checks
+identity and exact committed publication without source or repository checks.
+`inventory` exposes frozen `delivery_commit` and `worker_worktree`; do not consume
+a reused implementer checkout's current HEAD. A batch can share one published
+candidate while retaining each handoff's separate identity. Already integrated
+handoffs stay integrated, including after interrupted reporting.
 
-Code integrators check their committed merged candidate using `review check
---integration --worktree /absolute/integration --api '/api' --handoff-id ID`
-After publishing that exact candidate, the coordinator
-reports `worker report ... --activity integrated --review-report
-/absolute/integration-report.json`. This requires an integration report for the
-original accepted handoff, not its earlier worker report. Global evidence-only
-or ordinary source-review refresh uses `review check --integration --worktree
-/absolute/integration` without scope or handoff ID. Final review uses the
-distinct `review check --pre-revalidation --quality-check TOOL --worktree /absolute/integration`
-without worker or batch selectors. After exact publication the coordinator
-admits either global report using `review accept --report /absolute/report.json`;
-only the final-stage report can satisfy the final full-revalidation gate.
-For selected current API handoffs, the coordinator runs
-`review batch --worktree /absolute/integration --api '/a' --api '/b'` (or its
-returned `commands.export_batch` with the retained worktree environment input).
-The engine creates a private batch file and returns its complete `check` command,
-accepted handoff/dispatch IDs, worker worktrees, delivery commits, and review paths.
-Handoff IDs remain exact opaque strings; a short handoff ID is not expanded into
-the separately supplied delivery commit. Export does not run quality checks or
-reserve or consume a handoff. Only explicitly selected routes are included.
-The generated file binds workflow, recording and dispatch; stale bindings fail
-before quality checks and must be regenerated from current inventory.
+`review check` outside `--pre-revalidation` returns `passed`, explains that no
+check is needed, and captures only identity. It performs no source scans or
+repository checks. Neither implementer nor ordinary integrator needs to invoke
+it. Missing/stale ordinary review receipts do not block focused Replay. Worker
+evidence exposes `context.delivery.assignment` and optional `required_repairs`,
+without a review check command.
 
-`--batch-handoffs /absolute/handoffs.json` also retains support for a nonempty
-legacy JSON array of exact `{scope, handoff_id}` entries with at least one
-`handoff_ready` item. Already `integrated` items may be included as retained
-deliveries: build on their published code, merge only new deliveries, and review
-the complete candidate once. After publication, report `integrated` only for
-listed items still `handoff_ready`, using the same batch report. Existing states
-and integration timestamps remain intact. If all items are already integrated,
-refresh the global receipt without scope, handoff ID or batch selectors and use
-`review accept`; a stale receipt does not undo previous integrations.
-`BACKEND_REWRITE_REVIEW_WORKTREE` and `BACKEND_REWRITE_REVIEW_REPORT` supply those
-paths for returned action commands. Check execution requires an explicit
-delivery worktree; the coordinator validates receipts without rerunning checks.
+When the target is nested in a Git repository, keep `--target-root` at that
+project. Worktree paths may identify the outer Git worktree or project directory.
+`delivery.managed_paths` adds disjoint same-repository siblings; their paths are
+reported relative to target, such as `../backend-rs/src/lib.rs`. Changes outside
+this managed scope are rejected during identity admission.
 
-`review show` reads the current integrated report and `review rework --finding
-ID --owner 'api:/api'` routes a finding to its
-responsible worker, including a completed retained work item.
-For a failing unpublished integration candidate, add `--report
-/absolute/failed-candidate-report.json` to `review rework`. Routing validates
-the candidate's code, commit, workflow and canonical base without publishing or
-accepting it. Source findings use their `findings[].id`; configured command and
-isolation/domain failures use the accepted handoff's `rework_required` path with
-exact logs or source locations, not fabricated source finding IDs.
-An executed review returns JSON with `passed`, `changes_required` or
-`evidence_required`; inspect `status`, not merely the command exit status.
-Checks and evidence reports are not traffic evidence and never change recordings.
-Quality results are bound to candidate code, canonical check configuration,
-runtime inputs, rules and the diff base. Publication admission matches actual
-code content without substituting a worker's private runtime fingerprint for the
-canonical identity. Code or input changes invalidate the report. Worker and ordinary integration
-reports do not waive the final agent-owned quality check.
-Admission requires the exact reviewed commit. After admission, an ordinary
-progress-only commit may retain that receipt: the reviewed commit must remain
-an ancestor, with code, canonical inputs, rules and the diff base unchanged,
-and no new `Hardcode-Source-Evidence` commit trailers.
-The engine checks this automatically; do not manufacture another handoff or
-rerun checks merely to publish progress metadata.
+Only `pre_revalidation_review_required` requests consolidated review. A separate
+final-review assignment executes the configured `delivery.quality_check` and
+required project tests on the final committed candidate, then reports success:
 
-Changes confined to the file named by `project.policy` preserve an accepted
-ordinary code review receipt when its other freshness conditions still hold.
-The final pre-revalidation receipt additionally binds the effective verification
-policy, inventory and immutable recording, so relevant changes still require
-fresh final proof. The policy file is excluded from ordinary review code identity and the purpose baseline comparison, but remain part of the traffic
-verification fingerprint: policy edits invalidate prior E2E evidence
-and require fresh verification. The persistent-configuration commit gate still
-requires these edits to be committed before continuing verification. Receipts
-created before this verification-policy exclusion may need one replacement
-review because their stored code fingerprints include that file.
+```bash
+backend-rewrite --target-root /absolute/canonical review check \
+  --pre-revalidation --quality-check TOOL --worktree /absolute/integration
+```
 
-After external changes are published on the canonical migration branch, prepare
-the retained integration worktree at that current commit for a global quality
-refresh. Preserve divergent or unfinished work; do not create an empty merge to
-refresh an obsolete integration branch. If review needs no new code or evidence
-commit, its candidate is the current canonical commit and can be admitted
-without another merge. Otherwise publish the exact reviewed candidate before
-admission, even when its files equal the canonical files. Admission errors show
-the published HEAD, reviewed HEAD and reviewed canonical base so the coordinator
-can finish publication or reconcile a changed base instead of repeating checks.
+This stage scans the whole PR, enforces changed production Rust files <=1000
+complete physical lines, validates startup ownership for added Tokio spawns,
+and checks Source/Replay isolation and source-sensitive domains. Read the
+[Source review contract](../plugins/ai-software-engineering/skills/backend-rewrite/references/source-review-rules.md)
+for syntax scope, test-only exclusions and exact evidence. The engine never
+executes fmt, tests, Clippy or another repository command; the final assignee
+owns tool execution. The configured quality tool defaults to `cargo-clippy`.
+
+If final review splits or otherwise changes code, commit corrections and refresh
+affected checks. Publish the exact passing final candidate and invoke
+`review accept --report ...` to admit it for a complete final revalidation.
+Ordinary identity receipts and earlier API successes cannot prove this changed
+candidate. Final proof binds code, build inputs, policy, inventory and recording;
+relevant changes require fresh proof, while progress-only publication may reuse
+an already admitted matching receipt. A request to stop at ordinary API
+`completed` leaves this stage pending. `review rework` can route final findings
+to their responsible implementer; their repair and ordinary integration still
+submit committed identities without a review-check cycle.
 
 Use `traffic-e2e config ... init` for one-time target configuration and
 `traffic-e2e prepare|run-api|run|status|recover|abort` for the standard
@@ -1908,14 +1844,15 @@ but fewer than all selected cases receives the same single-method retry permit.
 The issue and parked workers are preserved; ordinary completed failures, unknown
 engine identities for these retained issues, and quality work do not gain this
 permit. A fresh attempt must still satisfy every response and dependency gate.
-Next still requires current configuration and delivery review and acquires the
+Next still requires current configuration and delivery identity and acquires the
 ordinary traffic lease. It durably consumes each method's revision permit before
 starting Replay, preserving the prior issue and attempt history. A running retry
 does not dispatch its old issue again. Failure, process restart, and recovery never
 refund the permit; a new result determines the next action. Other issue kinds and
 unaccepted sibling methods retain their existing handoff and repair gates.
-Worker and ordinary integration review execute source/isolation and identity
-gates before delivery. The coordinator admits version-bound integration reports;
+Worker and ordinary integration admit exact committed identities without source
+or repository checks. Non-pre-revalidation review check succeeds without code
+checks. The coordinator reports exact published delivery commits;
 the legacy `target-quality run` entrypoint only validates an existing receipt.
 One admitted integrated API handoff schedules that API's Replay. After ordinary
 work drains, `pre_revalidation_review_required` blocks the final full sweep until
@@ -1948,6 +1885,10 @@ max_implementers: 16
 auto_next: false
 # Skip previously passed cases during repair Replay; final revalidation stays full.
 retry_failed_only: false
+# Optional: cap successful stream input intervals; omitted preserves Source timing.
+# replay_timing: fast
+# Per-interval cap in fast mode, in milliseconds (0 removes artificial waits).
+replay_interval_cap_ms: 5
 # Omitted or empty only selects every API in the recorded inventory.
 only:
   - "/api/users/*"
@@ -1971,6 +1912,25 @@ can supply those outcomes when its complete Source/API inventory matches.
 There is no scan, restoration or separate ledger for older attempts. Missing
 latest evidence starts a full baseline. The setting defaults to false and can be changed
 between attempts without changing target fingerprints.
+
+Set `replay_timing: fast` to shorten artificial input waits for ordinary Case
+Redis Pub/Sub messages and complete successful HTTP dependency streams. Each
+recorded interval becomes `min(recorded interval, replay_interval_cap_ms)`;
+the cap defaults to 5 ms and accepts 0. Pub/Sub includes subscription-to-first-push
+and adjacent push intervals. HTTP includes request-to-headers, headers-to-first-chunk,
+adjacent chunks and final-chunk-to-EOF. Compressed offsets accumulate those
+individual gaps, preserving shorter gaps, payload order, framing and trailers.
+Target processing and dependency calls initiated by Target retain their real
+execution time. Process-owned Pub/Sub and abnormal or interrupted HTTP streams
+retain their existing lifecycle timing.
+
+`replay_timing: recorded` preserves Source stream timing; omitting it has the same
+behavior. The low-level equivalents are
+`traffic-e2e replay --stream-timing fast --stream-interval-cap-ms 5`.
+These settings reuse existing recordings. Mode and active fast-mode cap are
+bound to executed Replay identity, and changing either requires fresh passing
+evidence and resets previously passed repair-case skips. They remain excluded
+from target and code fingerprints.
 
 Skipped passes are scheduling history, never fresh response or dependency
 evidence. `diagnosis.case_selection` reports available, selected and skipped
@@ -2106,9 +2066,10 @@ without an ordinary source-review receipt, including when an old or broken
 replace the final pre-revalidation gate. Committing engine progress files or changing
 only source traffic or verification policy does not create a source-review
 obligation. Other committed, staged, working-tree or untracked source/configuration
-changes require a current accepted integration review before
-verification and final delivery. Pending handoff/finding admission retains its
-ordinary review contract; the exemption does not admit an unpublished candidate.
+changes require normal committed-delivery identity admission where applicable,
+without a source review before focused verification. Final delivery still requires
+the complete final review and subsequent full revalidation. Pending handoffs
+retain their exact commit/dispatch contract; no exemption admits unpublished code.
 Source review and engine-issued final pre-revalidation checks belong to the
 delegated integrator, not the coordinator's startup path.
 
@@ -2239,22 +2200,12 @@ managed resources and allocates a replacement run. A pending rule plan produces
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. Worker `review check` enforces Source/Replay-isolation rules and
-delivery identity without running repository commands. Workers run relevant
-tests as needed; they do not need Clippy. Ordinary integration `review check`
-checks Source/Replay-isolation rules and identity against the combined candidate
-without mandatory Cargo commands. The coordinator admits the integration report
-for the exact published candidate; `advance_required` can then start focused
-Replay. Missing or stale ordinary proof returns `source_review_required`.
-Before the final full revalidation, the distinct
-`pre_revalidation_review_required` stage requires the integrator to execute
-the configured `quality_check` on the final committed candidate, report success
-through `review check --pre-revalidation --quality-check TOOL`, publish the exact
-candidate and admit its final-stage receipt. The engine command never executes
-repository tools; stages and order are unchanged. Code or relevant input changes require fresh final proof. Initial diagnostic Replay can run
-before the workflow has a delivery report. Repository-specific development
-requirements belong in `AGENTS.md` or `CLAUDE.md`; project configuration cannot
-replace or disable the engine Source/Replay-isolation checks.
+by apply. Worker delivery and ordinary integration validate exact committed identities
+without source review. Ordinary Replay does not require a source-review receipt.
+Before the final full revalidation, `pre_revalidation_review_required` requests
+the consolidated source, line-limit, spawn, isolation and configured quality
+checks on the final candidate. Review corrections are committed before the full
+revalidation of that version. The engine never executes repository quality tools.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. Backend rewrite consumes external evidence and never starts
@@ -2671,6 +2622,20 @@ Case dependency completions renew the idle clock. Unrelated process activity
 does not. Recorded idle gaps do not impose a minimum wait. The direct Replay
 CLI exposes the same setting as `--case-no-progress-timeout-ms`.
 
+Finite async references retain MySQL's native setup/cleanup and complete
+transaction-equivalence proofs. A proven unstarted session-control omission
+does not remain in the pending tail inventory, and remains separately reported
+as an omission rather than fabricated consumption. Missing business reads,
+locking transactions and unproved write/commit boundaries stay mandatory.
+An optional command that Target has started must finish its actual delivery.
+Complete ordinary row-lock SELECTs retain a strict real Target transaction.
+Once that lock lifetime and every other Source transaction are covered, the
+driver's default autocommit setting may use the same equivalence proof. Session
+variables, named locks, output writes and unknown effects retain the original
+setup requirement; an autocommit locking read cannot replace a real transaction.
+The captured HTTP completion resource remains strict, including when another
+HTTP read is allowed as shared initialization.
+
 On expiry, only the current Case records `case_no_progress` and ends incomplete.
 Its message leads with the number of recorded dependencies left unconsumed and
 asks Target implementers to check the corresponding calls. The idle wait and
@@ -2686,7 +2651,8 @@ This setting does not change Recorder/Source runtime timing or the separate
 `dependency_loading.case_timeout_seconds` preparation budget.
 
 `review check` owns the Source/Replay-isolation standard and never executes
-repository quality commands in any stage. Configure the final tool identifier
+repository quality commands. Outside pre-revalidation it returns success
+without source scans and explains that no check is needed. Configure the final tool identifier
 in `project.delivery.quality_check` (default `cargo-clippy`). At the existing
 `pre_revalidation_review_required` stage, the integrator executes that tool on
 the final committed target and managed projects. Only after success does it
@@ -2882,7 +2848,7 @@ traffic verification fingerprints; changed source, startup inputs and other
 configuration still require the usual review. Candidate publication still
 requires the exact reviewed commit.
 
-Before worker and integration delivery, `review check` runs the same built-in
+Only final `review check --pre-revalidation` runs the built-in
 target `replay-isolation` quality gate. It
 examines only Rust lines added relative to `delivery.pr_base`, including
 staged, unstaged, untracked, test, comment, and documentation lines. It does not

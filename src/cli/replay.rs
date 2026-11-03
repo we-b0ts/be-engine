@@ -20,9 +20,12 @@ pub(super) struct ReplayArgs {
     /// Continue through supported tentative value rules while retaining dirty evidence.
     #[arg(long)]
     pre_match: bool,
-    /// Deliver complete successful streams without their recorded idle gaps.
+    /// Replay recorded stream timing or cap successful HTTP and ordinary Case Pub/Sub intervals.
     #[arg(long, value_enum)]
-    http_stream_timing: Option<traffic_e2e::ReplayHttpStreamTiming>,
+    stream_timing: Option<traffic_e2e::ReplayStreamTiming>,
+    /// Maximum HTTP stream or ordinary Case Pub/Sub input gap in fast mode, in milliseconds (default: 5).
+    #[arg(long)]
+    stream_interval_cap_ms: Option<u64>,
     /// Published case or case-collection directory.
     #[arg(value_name = "CASE_OR_COLLECTION_DIR")]
     case: Option<PathBuf>,
@@ -91,7 +94,8 @@ struct ReplayFile {
 #[serde(default, deny_unknown_fields)]
 struct ReplayFileValues {
     pre_match: Option<bool>,
-    http_stream_timing: Option<traffic_e2e::ReplayHttpStreamTiming>,
+    stream_timing: Option<traffic_e2e::ReplayStreamTiming>,
+    stream_interval_cap_ms: Option<u64>,
     case_no_progress_timeout_ms: Option<u64>,
     case: Option<PathBuf>,
     dns_listen: Option<SocketAddr>,
@@ -112,7 +116,8 @@ struct ReplayFileValues {
 
 struct ResolvedReplay {
     pre_match: bool,
-    http_stream_timing: traffic_e2e::ReplayHttpStreamTiming,
+    stream_timing: Option<traffic_e2e::ReplayStreamTiming>,
+    stream_interval_cap_ms: u64,
     case_no_progress_timeout_ms: u64,
     request_timeout_ms: u64,
     dependency_loading: traffic_e2e::ReplayDependencyLoading,
@@ -158,7 +163,8 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
     };
     let lifecycle = ReplayLifecycleConfig {
         pre_match: resolved.pre_match,
-        http_stream_timing: resolved.http_stream_timing,
+        stream_timing: resolved.stream_timing,
+        stream_interval_cap_ms: resolved.stream_interval_cap_ms,
         case_no_progress_timeout: std::time::Duration::from_millis(
             resolved.case_no_progress_timeout_ms,
         ),
@@ -373,10 +379,11 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
     );
     Ok(ResolvedReplay {
         pre_match: args.pre_match || file.replay.pre_match.unwrap_or(false),
-        http_stream_timing: args
-            .http_stream_timing
-            .or(file.replay.http_stream_timing)
-            .unwrap_or(traffic_e2e::ReplayHttpStreamTiming::Recorded),
+        stream_timing: args.stream_timing.or(file.replay.stream_timing),
+        stream_interval_cap_ms: args
+            .stream_interval_cap_ms
+            .or(file.replay.stream_interval_cap_ms)
+            .unwrap_or(traffic_e2e::DEFAULT_REPLAY_STREAM_INTERVAL_CAP_MS),
         case_no_progress_timeout_ms,
         request_timeout_ms: recorder_defaults.as_ref().map_or_else(
             || AppConfig::default().http_gateway.request_timeout_ms,
@@ -538,6 +545,37 @@ mod tests {
             case_dir.canonicalize().unwrap()
         );
         assert!(!resolved.intercept);
+    }
+
+    #[test]
+    fn general_stream_timing_is_optional_and_cli_overrides_replay_file() {
+        use traffic_e2e::ReplayStreamTiming::{Fast, Recorded};
+        let directory = tempfile::tempdir().unwrap();
+        let case = Some(directory.path().to_path_buf());
+        let resolved = resolve(replay_args(case.clone(), None)).unwrap();
+        assert_eq!(resolved.stream_timing, None);
+        let config = directory.path().join("replay.yaml");
+        std::fs::write(
+            &config,
+            "replay:\n  stream_timing: fast\n  stream_interval_cap_ms: 10\n",
+        )
+        .unwrap();
+        let from_file = resolve(replay_args(case.clone(), Some(config.clone()))).unwrap();
+        assert_eq!(from_file.stream_timing, Some(Fast));
+        assert_eq!(from_file.stream_interval_cap_ms, 10);
+        let mut args = replay_args(case, Some(config));
+        args.stream_timing = Some(Recorded);
+        args.stream_interval_cap_ms = Some(0);
+        let from_cli = resolve(args).unwrap();
+        assert_eq!(from_cli.stream_timing, Some(Recorded));
+        assert_eq!(from_cli.stream_interval_cap_ms, 0);
+        assert!(TestCli::try_parse_from(["test", "--stream-timing", "fast", "cases"]).is_ok());
+        assert!(
+            TestCli::try_parse_from(["test", "--http-stream-timing", "fast", "cases"]).is_err()
+        );
+        assert!(
+            serde_yaml::from_str::<ReplayFile>("replay:\n  http_stream_timing: fast\n").is_err()
+        );
     }
 
     #[test]
@@ -734,7 +772,8 @@ mod tests {
     fn replay_args(case: Option<PathBuf>, config: Option<PathBuf>) -> ReplayArgs {
         ReplayArgs {
             pre_match: false,
-            http_stream_timing: None,
+            stream_timing: None,
+            stream_interval_cap_ms: None,
             case_no_progress_timeout_ms: None,
             case,
             config,

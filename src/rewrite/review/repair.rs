@@ -71,11 +71,12 @@ pub fn rework_with_report(
     }
     let evidence_instruction = if let Some(path) = report_path {
         format!(
-            "Read context.review.rework.findings and the original integration candidate report {} for source evidence; this candidate was not published.",
+            "Read context.delivery.required_repairs.findings and the original candidate evidence {} for source locations; this candidate was not published.",
             path.display()
         )
     } else {
-        "Read backend-rewrite review show for the current finding and evidence contract.".into()
+        "Read context.delivery.required_repairs for the assigned finding and source evidence."
+            .into()
     };
     let issue = RewriteIssue {
         id: format!("quality-{finding_id}"),

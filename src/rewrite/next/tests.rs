@@ -483,8 +483,8 @@ async fn changed_final_batch_can_activate_the_integrated_failed_member() {
         assert_eq!(projected.api, "GET /api");
 
         let before = serde_json::to_value(store.load().unwrap().unwrap()).unwrap();
-        let global = next_rewrite(options(root)).await.unwrap();
         if api_selector::public_api(remaining_api) != "/api" {
+            let global = next_rewrite(options(root)).await.unwrap();
             // A full batch also exposed this independent API's own failure.
             // Its implementation dispatch may proceed while /api's integrated
             // candidate awaits source review; it grants no Replay admission.
@@ -493,32 +493,22 @@ async fn changed_final_batch_can_activate_the_integrated_failed_member() {
                 "{:?}",
                 global.action
             );
-        } else {
-            assert!(
-                matches!(global.action, RewriteAction::SourceReviewRequired { .. }),
-                "{:?}",
-                global.action
+            assert_eq!(
+                before,
+                serde_json::to_value(store.load().unwrap().unwrap()).unwrap()
             );
+        } else {
+            let error = next_rewrite(options(root)).await.unwrap_err();
+            assert!(error.to_string().contains("case source"));
         }
-        assert_eq!(
-            before,
-            serde_json::to_value(store.load().unwrap().unwrap()).unwrap()
-        );
 
         let mut invocation = options(root);
         invocation.api = Some("/api".parse().unwrap());
-        let result = crate::rewrite::advance::advance_rewrite(invocation)
+        let error = crate::rewrite::advance::advance_rewrite(invocation)
             .await
-            .unwrap();
-        assert!(
-            matches!(
-                result.envelope.action,
-                RewriteAction::SourceReviewRequired { .. }
-            ),
-            "{:?}",
-            result.envelope.action
-        );
-        assert!(!result.replay_can_continue);
+            .err()
+            .expect("the fixture has no recording case source");
+        assert!(error.to_string().contains("case source"));
         let saved = store.load().unwrap().unwrap();
         let same_route = api_selector::public_api(remaining_api) == "/api";
         assert_eq!(

@@ -345,7 +345,7 @@ pub(super) struct RewriteSliceState {
     pub source_revision: Option<String>,
     pub group_id: Option<String>,
     pub target_fingerprint: Option<String>,
-    /// Code, verification policy and startup inputs used by the actual Replay.
+    /// Code, verification policy, startup inputs and stream timing used by the actual Replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay_identity: Option<String>,
     pub attempts: Vec<RewriteAttemptSummary>,
@@ -714,7 +714,6 @@ pub enum RewriteAction {
         summary: String,
         worker: RewriteWorkerDispatchView,
         handoff_id: String,
-        export_batch: RewriteCommandSpec,
         report_worker: RewriteCommandSpec,
         report_rework: RewriteCommandSpec,
     },

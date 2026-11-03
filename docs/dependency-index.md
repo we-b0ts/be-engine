@@ -45,6 +45,12 @@ manifest. Readers check source identity on every read/cache hit and verify the
 SHA-256 of each indexed byte range. Indexes are locators, never matching or
 sharing authorization.
 
+Attribution freezes reference views only for memberships that change. Unchanged
+Startup, Process and Case scopes keep their original immutable paths and file
+stamps, so assigning a late unowned Case dependency does not invalidate unrelated
+native indexes. A moved member rebuilds both its previous and effective scopes;
+the complete attribution snapshot still binds every Replay.
+
 The index includes exact HTTP endpoint/method/path hashes, exact Redis command
 argument hashes, original line numbers and byte ranges, endpoint/connection
 metadata, and complete Redis lane counts. Duplicate exchanges retain distinct
@@ -99,6 +105,9 @@ traffic-e2e diagnose dependency-index --case-source /path/to/completed/run
 
 The command reports `built`/`reused`, file count, source bytes and index location.
 It never starts a target or changes recording evidence.
+Preparation byte counts describe the selected Case or Global scope. Several
+scopes can refer to one central ledger; its full file stamp still authenticates
+their original locations and is not counted again for each scope.
 
 ## Shared Global evidence
 
@@ -122,6 +131,12 @@ reuse them without visiting all Global rows. A different Source or policy gets a
 different identity. Changed rules and older recordings retain on-demand rebuilds.
 Prewarm failure is explicit and preserves recording completion semantics and
 original bytes; it does not authorize Replay to bypass its native validation.
+The report-preparation marker does not certify that every native scoped-view
+index is portable. Native Process indexes built in the Recorder's local cache
+can still require an initial rebuild after copying a recording to another root
+or host. Report inventories and native scope indexes have separate identities;
+neither can substitute for a different membership view. The listener readiness
+budget must cover any native preparation that remains before it starts serving.
 An unreferenced prewarm may be rebuilt from intact Source; missing or changed
 evidence already referenced by a published report remains an error.
 See [Replay performance](replay-performance.md) for the implementation boundaries

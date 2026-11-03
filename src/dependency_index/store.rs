@@ -176,10 +176,8 @@ fn prepare_cancellable(
     let (root, files) = recording_files(source)?;
     let global = root.join("global-dependencies.jsonl");
     let global_bytes = if super::scoped::exists(&global) {
-        super::global::load_global_index_cancellable(&global, validate, cancelled)?
-            .0
-            .stamp
-            .size
+        super::global::load_global_index_cancellable(&global, validate, cancelled)?;
+        super::scoped::selected_bytes(&global)?
     } else {
         0
     };
@@ -197,27 +195,26 @@ fn prepare_cancellable(
         return Ok((index, report));
     }
     let started = Instant::now();
-    let total_bytes = files
+    let file_bytes = files
         .iter()
         .map(|p| super::scoped::selected_bytes(p))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .sum::<u64>();
+        .collect::<Result<Vec<_>>>()?;
+    let total_bytes = file_bytes.iter().sum::<u64>();
     let mut index = RunIndex {
         version: VERSION,
         run_id,
         files: Vec::new(),
         source_bytes: total_bytes,
     };
-    let mut read_bytes = 0;
+    let mut prepared_bytes = 0;
     tracing::info!(
         total_files = files.len(),
         total_bytes,
         "preparing dependency index"
     );
-    for (position, path) in files.iter().enumerate() {
+    for ((position, path), selected_bytes) in files.iter().enumerate().zip(file_bytes) {
         let file_index = load_file_cancellable(path, cancelled)?;
-        read_bytes += file_index.stamp.size;
+        prepared_bytes += selected_bytes;
         index.files.push(IndexedFile {
             path: path.strip_prefix(&root)?.into(),
             case_id: case_id(path)?,
@@ -227,7 +224,7 @@ fn prepare_cancellable(
             tracing::info!(
                 prepared_files = position + 1,
                 total_files = files.len(),
-                prepared_bytes = read_bytes,
+                prepared_bytes,
                 total_bytes,
                 elapsed_seconds = started.elapsed().as_secs(),
                 "preparing dependency index"

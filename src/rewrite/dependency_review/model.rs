@@ -18,6 +18,8 @@ pub(in crate::rewrite) struct ReviewLedger {
     pub revision: u64,
     pub recording_run_id: Option<String>,
     pub source_inventory_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_defaults_identity: Option<String>,
     pub unresolved_source_exchange_ids: BTreeSet<Uuid>,
     pub claims: BTreeMap<String, ForeignUnusedClaim>,
     pub investigations: BTreeMap<String, super::investigations::TargetInvestigation>,

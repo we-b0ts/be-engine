@@ -1,6 +1,5 @@
 //! Archive one real full session once; method snapshots reference its immutable evidence.
 use super::{
-    E2eRunContext,
     model::{ActiveRunState, CaseStatus, RunLayout, RunStatus},
     store,
     support::api_directory,
@@ -106,56 +105,4 @@ pub(super) fn publish(layout: &RunLayout, inventory: &CaseGroupInventory) -> Res
         store::publish_reference_snapshot(&stage, &latest, &projected)?;
     }
     Ok(())
-}
-
-pub(crate) struct DiagnosticBatchReport {
-    pub path: std::path::PathBuf,
-    pub key_context: std::path::PathBuf,
-    pub session_id: String,
-    pub sequence: u64,
-}
-
-pub(crate) fn batch_diagnostic_report(
-    context: E2eRunContext,
-    session: Option<&str>,
-) -> Result<DiagnosticBatchReport> {
-    let (_, layout) = super::config::resolve_layout(
-        &context.target_root,
-        &context.case_source,
-        context.run_key.as_deref(),
-    )?;
-    let directory = if let Some(session) = session {
-        ensure!(
-            !session.is_empty()
-                && session.len() <= 128
-                && session
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte)),
-            "invalid actual session selector"
-        );
-        layout.run_root.join("actual-batches").join(session)
-    } else {
-        layout.latest_dir
-    };
-    let state: ActiveRunState = store::read_yaml(&directory.join("state.yaml"))?;
-    let actual = state
-        .session_id
-        .context("actual batch has no Target session")?;
-    ensure!(
-        session.is_none_or(|expected| expected == actual),
-        "archive belongs to a different actual session"
-    );
-    ensure!(
-        state.replay_report == directory.join("reports/replay-report.json"),
-        "actual batch report escaped its published snapshot"
-    );
-    crate::dependency_index::FileStamp::read_native(&state.replay_report)?;
-    let key_context = crate::dependency_index::recording::root(&state.case_source)
-        .context("actual batch has no central Source key context")?;
-    Ok(DiagnosticBatchReport {
-        path: state.replay_report,
-        key_context,
-        session_id: actual,
-        sequence: state.sequence,
-    })
 }

@@ -82,33 +82,29 @@ fn ready_handoff_integration_resumes_after_first_pass_discovery() {
         status.action
     );
     let action = serde_json::to_value(&status.action).unwrap();
-    assert_eq!(
-        action["commands"]["export_batch"]["argv"],
-        serde_json::json!([
-            "backend-rewrite",
-            "--target-root",
-            target.path(),
-            "review",
-            "batch",
-            "--api",
-            "/api"
-        ])
-    );
-    assert_eq!(
-        action["commands"]["export_batch"]["required_env_names"],
-        serde_json::json!(["BACKEND_REWRITE_REVIEW_WORKTREE"])
+    assert!(action["commands"].get("export_batch").is_none());
+    assert!(
+        action["commands"]["report_worker"]["required_env_names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "BACKEND_REWRITE_DELIVERY_COMMIT")
     );
     let mut expected = action["commands"]["report_worker"].clone();
     let argv = expected["argv"].as_array_mut().unwrap();
     assert_eq!(argv.last().unwrap(), "integrated");
     *argv.last_mut().unwrap() = serde_json::json!("rework_required");
+    expected["required_env_names"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|name| name != "BACKEND_REWRITE_DELIVERY_COMMIT");
     assert_eq!(action["commands"]["report_rework"], expected);
     assert_eq!(action["details"]["handoff_id"], "ready-handoff");
     assert!(
         action["summary"]
             .as_str()
             .unwrap()
-            .contains("without rewriting the accepted delivery or requiring a failed Replay")
+            .contains("confirmed integration defect")
     );
 }
 
@@ -175,6 +171,7 @@ fn all_implementation_items_dispatch_even_with_zero_unverified_and_more_than_32_
         .unwrap();
         assert_eq!(response.pending, remaining);
         let response = runtime::report(runtime::RewriteWorkerReportOptions {
+            delivery_commit: None,
             review_report: None,
             target_root: target.path().into(),
             agent_handle: format!("actual-runtime-worker-{remaining}"),
@@ -236,7 +233,7 @@ fn accepted_parked_repair_is_scheduled_without_a_new_worker_handoff() {
 }
 
 #[tokio::test]
-async fn unscoped_next_selects_only_the_parked_integrated_api_and_preserves_quality_gates() {
+async fn unscoped_next_prepares_the_parked_integrated_api_without_review() {
     let target = configured_target();
     let store = RewriteStore::new(target.path()).unwrap();
     let mut state = many_issues(2);
@@ -254,15 +251,9 @@ async fn unscoped_next_selects_only_the_parked_integrated_api_and_preserves_qual
         source_route: None,
     })
     .await
-    .unwrap();
-    assert_eq!(envelope.pending, 1);
-    let RewriteAction::SourceReviewRequired { check, accept, .. } = envelope.action else {
-        panic!("integrated API requires a delivery quality receipt")
-    };
-    assert!(check.argv.contains(&"--integration".to_string()));
-    assert!(accept.argv.contains(&"accept".to_string()));
+    .unwrap_err();
+    assert!(envelope.to_string().contains("case source"));
     let latest = store.load().unwrap().unwrap();
-    assert_eq!(latest.api, "GET /api");
     assert_eq!(latest.phase, RewritePhase::ImplementationRequired);
     assert_eq!(
         runtime::coverage(

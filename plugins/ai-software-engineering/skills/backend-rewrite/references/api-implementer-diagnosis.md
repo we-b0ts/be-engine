@@ -58,18 +58,11 @@ retain its recorded method. Do not select only the first directory case or merge
 expected responses between methods. Treat possible causes as hypotheses.
 Use a legacy `METHOD API` entrypoint only when that is the exact returned assignment.
 
-The same context includes `review` with the registered worktree/base and the
-local check command. For a `target_quality` issue, read the assigned findings
-in `context.review.rework.findings` and the supplied review report, then follow
-[api-implementer-review.md](api-implementer-review.md); no traffic mismatch is implied. An
-unpublished candidate's findings need not appear in canonical `review show`.
-For a quality rework alongside an existing behavioral issue, read the assigned
-findings in `context.review.rework.findings` and address them as well. These
-retain the routing evidence if a later integration makes `review show` stale.
-Every changed-code handoff requires a `passed` review after the final edit and
-commit. Follow [api-implementer-review.md](api-implementer-review.md) for the
-complete delivery and evidence contract.
-Do not run integration-candidate checks or report your own handoff.
+The same context includes `delivery.assignment` with the registered worktree
+and frozen base. Address any supplied `context.delivery.required_repairs.findings`
+alongside the current issue, retaining their locations and provenance. Follow
+[api-implementer-delivery.md](api-implementer-delivery.md) for the committed
+delivery contract. Do not report your own handoff.
 
 Retain the initial overview's workflow/recording, scope, issue, binding and
 dispatch identities for this turn and include them in the return handoff. If a
@@ -82,7 +75,7 @@ evidence; use newly returned IDs when evidence changes within the same assignmen
 Prove one cause from source and target code, then follow
 [Return The Proven Cause](#return-the-proven-cause). A post-input resume still
 requiring implementation delivery follows
-[api-implementer-review.md](api-implementer-review.md), even when no code repair
+[api-implementer-delivery.md](api-implementer-delivery.md), even when no code repair
 remains; retain the existing commit rather than creating an artificial patch.
 
 For `work_scope.kind=api`, exact further evidence-query argv are under the
@@ -305,7 +298,7 @@ Return one supported result with the original evidence/dispatch identity,
 source proof, shared impact, necessary coordinator inputs, and unresolved risks:
 
 - Target API, cache, or startup defect: make one
-  coherent repair, run focused tests, and complete [api-implementer-review.md](api-implementer-review.md).
+  coherent repair, run focused tests, and complete [api-implementer-delivery.md](api-implementer-delivery.md).
 - Supported nondeterminism/order: return source proof and exact typed
   rule inputs. Do not apply the rule.
 - Source-proven omitted dependency: return evidence ID, `hostname[:port]`,

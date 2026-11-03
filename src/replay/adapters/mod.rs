@@ -40,7 +40,12 @@ pub(in crate::replay) enum DependencyAdapter {
 pub(in crate::replay) trait NativeDependencyAdapter {
     fn protocol(self) -> ProtocolKind;
     fn delivery_state(self, state: &ReplayState) -> Option<ReplayExchangeStatus>;
-    fn permits_unstarted_omission(self, state: &ReplayState, shared_initialization: bool) -> bool;
+    fn permits_unstarted_omission(
+        self,
+        state: &ReplayState,
+        shared_initialization: bool,
+        strict_reference: bool,
+    ) -> bool;
 }
 
 impl NativeDependencyAdapter for DependencyAdapter {
@@ -67,11 +72,20 @@ impl NativeDependencyAdapter for DependencyAdapter {
         }
     }
 
-    fn permits_unstarted_omission(self, state: &ReplayState, shared_initialization: bool) -> bool {
+    fn permits_unstarted_omission(
+        self,
+        state: &ReplayState,
+        shared_initialization: bool,
+        strict_reference: bool,
+    ) -> bool {
         match self {
+            // MySQL proves native setup/cleanup and transaction equivalence
+            // independently of the finite async inventory. It never permits an
+            // unobserved business statement or an already started delivery.
             Self::Mysql(index) => state.mysql.permits_unstarted_omission(index),
             Self::Http(index) => {
-                shared_initialization
+                !strict_reference
+                    && shared_initialization
                     && state.http_exchange_status(index) == Some(ReplayExchangeStatus::Available)
             }
             _ => false,
@@ -114,10 +128,11 @@ impl ExchangeHandle {
         self,
         state: &ReplayState,
         shared_initialization: bool,
+        strict_reference: bool,
     ) -> bool {
         match self {
             Self::Native(adapter) => {
-                adapter.permits_unstarted_omission(state, shared_initialization)
+                adapter.permits_unstarted_omission(state, shared_initialization, strict_reference)
             }
             Self::Connect(_) => false,
         }

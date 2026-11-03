@@ -1,6 +1,7 @@
 //! Receipt requirements persist across later recording and verification phases.
 use super::*;
-use crate::rewrite::{RewriteContext, RewriteNextOptions, artifacts};
+use crate::rewrite::model::RewritePhase;
+use crate::rewrite::{RewriteContext, artifacts};
 
 fn target(phase: RewritePhase) -> (tempfile::TempDir, RewriteState) {
     let root = crate::rewrite::worker::tests::configured_target();
@@ -17,16 +18,8 @@ fn target(phase: RewritePhase) -> (tempfile::TempDir, RewriteState) {
     (root, state)
 }
 
-fn next_options(root: &Path) -> RewriteNextOptions {
-    RewriteNextOptions {
-        target_root: root.into(),
-        api: None,
-        source_route: None,
-    }
-}
-
-#[tokio::test]
-async fn finalized_new_recording_installs_inventory_but_cannot_replay_without_receipt() {
+#[test]
+fn finalized_new_recording_does_not_require_an_ordinary_review_receipt() {
     let (root, state) = target(RewritePhase::RecordingRequired);
     write_json(&artifacts::recording_manifest(root.path(), &state.recording_run_id),
         &serde_json::json!({"status": "completed", "recording_apis": [state.api], "published_cases": 1}))
@@ -56,31 +49,6 @@ async fn finalized_new_recording_installs_inventory_but_cannot_replay_without_re
         RewriteAction::AdvanceRequired { .. }
     ));
 
-    let result = crate::rewrite::next_rewrite(next_options(root.path()))
-        .await
-        .unwrap();
-
-    assert!(
-        matches!(result.action, RewriteAction::SourceReviewRequired { .. }),
-        "unexpected verification action: {:?}",
-        result.action
-    );
-    let saved = RewriteStore::new(root.path())
-        .unwrap()
-        .load()
-        .unwrap()
-        .unwrap();
-    assert_eq!(saved.phase, RewritePhase::ApiPending);
-    assert_eq!(saved.api_inventory.len(), 1);
-    assert!(saved.delivery_review_required);
-    assert!(saved.case_source.is_none());
-    assert!(saved.attempts.is_empty());
-    assert!(matches!(
-        crate::rewrite::status_rewrite(RewriteContext {
-            target_root: root.path().into()
-        })
-        .unwrap()
-        .action,
-        RewriteAction::SourceReviewRequired { .. }
-    ));
+    assert!(gate(root.path(), &state, "master").unwrap().is_none());
+    assert!(required_action(root.path(), &state).unwrap().is_none());
 }

@@ -9,6 +9,7 @@ pub(crate) use representation::validate as validate_representation;
 pub(crate) const NANOS_PER_SECOND: i128 = 1_000_000_000;
 pub(crate) const DEFAULT_TOLERANCE: std::time::Duration = std::time::Duration::from_secs(5);
 pub(crate) const TOLERANCE_NANOS: u128 = DEFAULT_TOLERANCE.as_nanos();
+const TIMESTAMP_CLOCK_ERROR_NANOS: u128 = 2_000_000_000;
 const RELATIONSHIP_TOLERANCE_NANOS: u128 = 1000;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -89,7 +90,7 @@ pub(crate) fn date_nanos(time: DateTime<Utc>) -> i128 {
 }
 
 /// Integer Unix timestamps discard fractions smaller than their declared unit.
-/// Project each independent clock to that same unit before applying the fixed
+/// Project each independent clock to that same unit before applying the
 /// tolerance. Fractional values and textual formats retain full clock precision.
 pub(crate) fn timestamp_clocks(
     source: &Value,
@@ -126,13 +127,38 @@ pub(crate) fn compare_timestamp_nanos(
     mode: TimeMode,
     clocks: ClockPair,
 ) -> Result<(), TimeError> {
+    compare_timestamp_nanos_with_tolerance(source, target, mode, clocks, TOLERANCE_NANOS)
+}
+
+/// Only independent observations at or after both request starts can widen a
+/// timestamp comparison. Missing or reversed clocks retain the clock allowance.
+/// Callers supply the current event, never a later completion or wall clock.
+pub(crate) fn timestamp_tolerance_nanos(starts: ClockPair, observations: ClockPair) -> u128 {
+    let elapsed = starts.require().ok().zip(observations.require().ok());
+    let elapsed = elapsed.and_then(|((source_start, target_start), (source, target))| {
+        let source = date_nanos(source) - date_nanos(source_start);
+        let target = date_nanos(target) - date_nanos(target_start);
+        (source >= 0 && target >= 0).then_some(source.max(target) as u128)
+    });
+    elapsed.unwrap_or_default() + TIMESTAMP_CLOCK_ERROR_NANOS
+}
+
+pub(crate) fn compare_timestamp_nanos_with_tolerance(
+    source: i128,
+    target: i128,
+    mode: TimeMode,
+    clocks: ClockPair,
+    tolerance_nanos: u128,
+) -> Result<(), TimeError> {
     let (source_anchor, target_anchor) = clocks.require()?;
     match mode {
         TimeMode::RequestWindow => {
             validate_request_window(source, source_anchor)?;
             validate_request_window(target, target_anchor)
         }
-        TimeMode::PreserveRelative => compare_duration_nanos(source, target, clocks),
+        TimeMode::PreserveRelative => {
+            compare_relative_nanos(source, target, clocks, tolerance_nanos)
+        }
     }
 }
 
@@ -141,10 +167,19 @@ pub(crate) fn compare_duration_nanos(
     target: i128,
     clocks: ClockPair,
 ) -> Result<(), TimeError> {
+    compare_relative_nanos(source, target, clocks, TOLERANCE_NANOS)
+}
+
+fn compare_relative_nanos(
+    source: i128,
+    target: i128,
+    clocks: ClockPair,
+    tolerance_nanos: u128,
+) -> Result<(), TimeError> {
     let (source_anchor, target_anchor) = clocks.require()?;
     let value_delta = target.checked_sub(source).ok_or(TimeError::InvalidValue)?;
     let anchor_delta = date_nanos(target_anchor) - date_nanos(source_anchor);
-    if value_delta.abs_diff(anchor_delta) > TOLERANCE_NANOS {
+    if value_delta.abs_diff(anchor_delta) > tolerance_nanos {
         return Err(TimeError::DeltaMismatch);
     }
     Ok(())

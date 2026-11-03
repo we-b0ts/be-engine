@@ -19,9 +19,15 @@ pub struct RewriteWorkerReportOptions {
     pub activity: RewriteWorkerActivity,
     pub handoff_id: Option<String>,
     pub review_report: Option<PathBuf>,
+    /// Exact worker or published integration commit; no source review required.
+    pub delivery_commit: Option<String>,
 }
 
 pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelope> {
+    ensure!(
+        options.delivery_commit.is_none() || options.review_report.is_none(),
+        "supply delivery_commit or an existing receipt, not both"
+    );
     crate::rewrite::purpose::require_work_branch(&options.target_root)?;
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     super::validate_identity("subagent handle", &options.agent_handle, 4096)?;
@@ -63,12 +69,16 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
         if duplicate {
             None
         } else {
-            Some(super::super::review::accept_handoff(
-                &target_root,
-                &state,
-                &scope,
-                options.review_report.as_deref(),
-            )?)
+            Some(if let Some(commit) = options.delivery_commit.as_deref() {
+                super::super::review::delivery::worker(&target_root, &state, &scope, commit)?
+            } else {
+                super::super::review::accept_handoff(
+                    &target_root,
+                    &state,
+                    &scope,
+                    options.review_report.as_deref(),
+                )?
+            })
         }
     } else {
         None
@@ -76,14 +86,29 @@ pub fn report(options: RewriteWorkerReportOptions) -> Result<RewriteActionEnvelo
     let mut changed = apply_report(&mut state, &scope, &options, target_fingerprint)?;
     let integration_received = changed && options.activity == RewriteWorkerActivity::Integrated;
     if integration_received {
-        let path = options.review_report.as_deref().context("integrated delivery requires --review-report from code-integrator review check --integration")?;
-        let code_commit = super::super::review::accept_integration(
-            &target_root,
-            &mut state,
-            path,
-            Some(&scope),
-            options.handoff_id.as_deref(),
-        )?;
+        let code_commit = if let Some(commit) = options.delivery_commit.as_deref() {
+            super::super::review::delivery::integrate(
+                &target_root,
+                &mut state,
+                &scope,
+                options
+                    .handoff_id
+                    .as_deref()
+                    .context("integration requires a handoff id")?,
+                commit,
+            )?
+        } else {
+            let path = options.review_report.as_deref().context(
+                "integrated delivery requires --delivery-commit with the exact published commit",
+            )?;
+            super::super::review::accept_integration(
+                &target_root,
+                &mut state,
+                path,
+                Some(&scope),
+                options.handoff_id.as_deref(),
+            )?
+        };
         if let Some(commit) = code_commit {
             let binding = state.worker_bindings.get_mut(&scope.binding_key()).unwrap();
             if binding.last_integrated_commit.as_ref() != Some(&commit) {
@@ -419,7 +444,9 @@ fn report_command_with_activity(
     if let Some(activity) = activity {
         argv.extend(["--activity".to_string(), activity.to_string()]);
         env.push(HANDOFF_ENV.to_string());
-        env.push("BACKEND_REWRITE_WORKER_REVIEW_REPORT".to_string());
+        if activity != "rework_required" {
+            env.push("BACKEND_REWRITE_DELIVERY_COMMIT".to_string());
+        }
     } else {
         env.push(ACTIVITY_ENV.to_string());
     }

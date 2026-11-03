@@ -4,9 +4,11 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::json;
 
+use super::super::fingerprint;
 use super::super::model::{RewriteIssue, RewriteState};
 use super::super::work_scope::RewriteWorkScope;
-use super::super::{fingerprint, worker};
+#[cfg(test)]
+use super::super::worker;
 use super::RewriteEvidenceReport;
 
 const QUERY_OVERVIEW: &str = "overview";
@@ -180,14 +182,7 @@ pub(super) fn report(
     );
     Ok(RewriteEvidenceReport {
         schema_version: 4,
-        context: Some(Box::new(super::super::evidence_model::RewriteEvidenceContext {
-            target_root: target_root.to_path_buf(),
-            workflow_id: state.workflow_id.clone(),
-            revision: state.revision,
-            recording_run_id: state.recording_run_id.clone(),
-            review: crate::rewrite::review::context(target_root, state, &scope),
-            worker: worker::dispatch_view(state, scope.clone(), None),
-        })),
+        context: Some(super::report::context(target_root, state, &scope)),
         evidence_id,
         issue_id: issue.id.clone(),
         query: QUERY_OVERVIEW.to_string(),
@@ -204,7 +199,7 @@ pub(super) fn report(
         } else if let Some(failures) = execution_failures {
             super::execution::guidance(failures.as_array().expect("nonempty execution failures"))
         } else if issue.kind == crate::rewrite::RewriteIssueKind::TargetQuality {
-            "Read context.review.integrated_findings, fix the assigned quality finding, then run context.review.check for this dispatch before handoff.".to_string()
+            "Read context.delivery.required_repairs, fix the assigned finding, then commit and return the exact delivery_commit with its original dispatch and lease identities.".to_string()
         } else { match scope {
             RewriteWorkScope::Api { .. } =>
                 "Inspect this issue and execute the relevant returned queries before tracing source and target behavior.",

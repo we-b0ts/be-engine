@@ -191,6 +191,141 @@ Immutable original facts and decision history remain available. Rule removal,
 changed fingerprints or Source revision invalidate active proofs and reopen the
 affected assignment and acceptance.
 
+### Submission shape and field values
+
+The following example shows a Case-owned async decision. All placeholders,
+sample UUIDs, API, rule ID and scenario index must be replaced with independently
+verified facts from the current assignment. Copy `expected_revision` from
+`context.revision`; the other envelope identities come from the same fresh
+context. Reusing this JSON shape does not reuse ownership proof.
+
+```json
+{
+  "schema": "dependency-attribution/v3",
+  "assignment_id": "<context.assignment_id>",
+  "expected_revision": 0,
+  "recording_run_id": "<context.recording_run_id>",
+  "source_revision": "<context.source_revision>",
+  "source_inventory_id": "<context.source_inventory_id>",
+  "decisions": [
+    {
+      "claim_ids": [],
+      "source_exchange_ids": ["11111111-1111-4111-8111-111111111111"],
+      "source_task": "<actual Source task or call-chain name>",
+      "owner": {
+        "kind": "case",
+        "origin_case_id": "22222222-2222-4222-8222-222222222222",
+        "task_instance": "<actual Source task identity>"
+      },
+      "proof": {
+        "source_revision": "<context.source_revision>",
+        "source_locations": ["src/jobs.rs:finish_job"],
+        "call_chain": "<Source entrypoint, dispatch and dependency-producing calls>",
+        "exclusive_scope": "<current occurrence-to-origin identity and exclusive scope proof>"
+      },
+      "impact": "runtime",
+      "obligation_scope": {
+        "kind": "api",
+        "api": "/jobs",
+        "method": "POST",
+        "scenario": 0
+      },
+      "missing_evidence": null,
+      "rule_binding": {
+        "policy_fingerprint": "<context.effective_policy_fingerprint>",
+        "rule_ids": ["capture.async_api:POST /jobs"]
+      }
+    }
+  ],
+  "investigation_resolutions": [],
+  "claim_rejections": [],
+  "unresolved_claim_ids": []
+}
+```
+
+`owner.kind` is `case`, not `async_api`; the lifecycle is bound by `rule_binding`.
+`obligation_scope.kind` is `api`, with the canonical route and separate method.
+Its `scenario` is the zero-based index of the actual matching configured async
+scenario, not an index into `rule_groups`. `method` and `scenario` also accept
+`null` where the proven obligation covers that broader API scope. They must
+describe the actual origin, not the API reporting unused traffic.
+
+For an independent process task, the corresponding owner and obligation are:
+
+```json
+{
+  "owner": {
+    "kind": "process",
+    "process_epoch": "33333333-3333-4333-8333-333333333333",
+    "source_task": "<actual declared Source task>"
+  },
+  "obligation_scope": {
+    "kind": "process",
+    "source_task": "<same actual declared Source task>",
+    "process_epoch": "33333333-3333-4333-8333-333333333333"
+  }
+}
+```
+
+This is a fragment of a decision, not a complete submission. Bind its complete
+active process rule group and prove its actual task/epoch. Optional
+`owner.task_instance` for Cases and `owner.invocation` for processes may be
+omitted when they are not part of the proof.
+
+| `impact` | Meaning |
+| --- | --- |
+| `classification` | Ownership classification only; existing actual execution must remain valid. |
+| `runtime` | Admission or delivered scope changes; the original owner needs genuine Replay. |
+| `missing_capture` | Required Source capture is absent; identify the absent scope in `missing_evidence`. |
+
+For ownerless traffic, `claim_ids` can be empty. Ownership returns use the exact
+current claim IDs. All supplied occurrence IDs must belong to the current sealed
+inventory; counts, time proximity and old decisions are not substitutes for
+proof. The engine validates impact and scope rather than treating these fields
+as acceptance instructions.
+
+Proof requires 1–64 `source_locations`. Each location, `call_chain`, and
+`exclusive_scope` must be nonempty, trimmed, contain no control characters, and
+fit within **1024 UTF-8 bytes per string**, not 1024 characters. Check with
+`len(text.encode("utf-8"))` before submitting; keep detailed supporting notes
+separate while retaining the decisive Source references and identity proof in
+the submitted strings. Unknown JSON fields are rejected.
+
+### Correcting an existing Case owner
+
+An occurrence can already have a captured Case owner and still require a proven
+ownership correction. For example, a previous input's async completion may
+continue after the recorder admits the next input. The observed/admitted window
+records provenance; it does not independently prove which input produced that
+completion. Task identifiers alone are insufficient: trace the actual Source
+entrypoint, task identity, calls and exclusive occurrence scope.
+
+For a concrete Source attribution assignment or actual scope-gap investigation,
+the independent analyst can include those exact original UUIDs in a fresh-context
+decision. `apply` is not limited to the unattributed set. Use the proven origin
+Case as `owner`, its supported lifecycle rule, `impact: runtime`, and the actual
+origin API as `obligation_scope`. A foreign-unused claim returns genuinely unused
+traffic; it is not a prerequisite for an independently proved owner correction.
+
+Apply publishes an ownership overlay. It retains the immutable original capture,
+moves the selected memberships from the old Case view to the new Case view, and
+checks affected execution obligations. Do not edit the recording or scope files,
+add Target calls to consume the wrong owner's traffic, or broaden matching windows.
+If an actual Target investigation uses `cross_scope`, publish ownership proof
+before resolving that investigation, then use the new current proof revision in
+the resolution. Follow the returned action into genuine same-Source Replay;
+neither a successful apply nor a resolved investigation is an API pass.
+
+Ordinary MySQL session cleanup does not require an application `async_api` rule.
+The engine can restore native Case membership when a complete, consecutive wire
+transaction has one original admitted Case and its members fall within that
+input's primary capture window. Its successful zero-effect `ROLLBACK` and at most
+one immediately adjacent idle rollback inherit that Case, with the observed Case,
+resource, process epoch and status continuity checked. Gaps, unknown or mixed
+members, incomplete responses and ambiguous wire identities retain attribution
+debt. This restores protocol closure without changing original facts, request
+matching, or delivery requirements.
+
 ## Acceptance and origin obligations
 
 The engine can issue `ai-verified` for an API's existing actual attempt only when

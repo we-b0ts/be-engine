@@ -26,10 +26,6 @@ http_gateway:
     assert!(project.recorder.tcp_gateway.mitm_https);
     assert!(!project.recorder.udp_gateway.enabled);
     assert_eq!(
-        project.project.replay.http_stream_timing,
-        crate::replay::ReplayHttpStreamTiming::Recorded
-    );
-    assert_eq!(
         serde_yaml::to_string(&project).unwrap().as_bytes(),
         rendered
     );

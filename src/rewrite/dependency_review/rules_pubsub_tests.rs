@@ -106,6 +106,28 @@ fn proposal(source: &SourceSnapshot, policy: &CompiledPolicy) -> ProposedAttribu
 }
 
 #[tokio::test]
+async fn context_without_ownership_returns_does_not_read_unrelated_notification_payloads() {
+    let (target, state) = source("socketio").await;
+    let original = source::load(&state).unwrap();
+    let policy = load(target.path()).unwrap();
+    fs::remove_file(
+        state
+            .case_source
+            .as_ref()
+            .unwrap()
+            .join("dependencies.jsonl"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        claim_groups(&policy, &original, &[]).unwrap(),
+        BTreeMap::from([("redis_reader".into(), Vec::<String>::new())])
+    );
+    // A real ownership proof must still authenticate its original input.
+    assert!(process_matches(&original, &policy.native, None).is_err());
+}
+
+#[tokio::test]
 async fn original_pubsub_inputs_bind_the_complete_receive_task_without_claiming_subscription_commands()
  {
     let (target, state) = source("socketio").await;

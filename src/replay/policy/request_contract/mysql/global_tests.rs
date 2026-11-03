@@ -126,6 +126,8 @@ fn inferred_mysql_delivery_shares_identity_and_publishes_copies_only_after_wire(
         json!({"command":"COM_QUERY","sql":source_sql,"database":"app","response":{"status":"ok"}}),
     )
     .unwrap();
+    // Exercise copy provenance when the write has no API elapsed-time context.
+    owner.set_request_times("case", Default::default());
     let clocks = owner.contract_clocks(
         Some("case"),
         Some("2020-01-01T00:01:00Z".parse().unwrap()),

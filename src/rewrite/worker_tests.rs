@@ -502,6 +502,7 @@ fn status_recovers_confirmation_and_advance_across_repeated_worker_dispatches() 
             agent_name: None,
         })?;
         runtime::report(runtime::RewriteWorkerReportOptions {
+            delivery_commit: None,
             review_report: None,
             target_root: target.path().to_path_buf(),
             agent_handle: "persistent-worker".into(),

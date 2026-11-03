@@ -277,7 +277,7 @@ async fn memcached_and_motan_registry_handles_wait_for_real_native_delivery() {
     assert!(
         handles
             .iter()
-            .all(|(_, handle)| !handle.permits_unstarted_omission(&state, true))
+            .all(|(_, handle)| !handle.permits_unstarted_omission(&state, true, false))
     );
     drop(state);
     memcached_task.abort();

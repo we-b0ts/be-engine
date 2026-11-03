@@ -1,6 +1,29 @@
 use super::super::*;
 
 #[test]
+fn delivery_commit_replaces_review_report_for_ordinary_worker_admission() {
+    for activity in ["handoff_ready", "integrated"] {
+        let argv = [
+            "test",
+            "worker",
+            "report",
+            "--agent-handle",
+            "worker",
+            "--activity",
+            activity,
+            "--handoff-id",
+            "original",
+            "--delivery-commit",
+            "full-sha",
+        ];
+        assert!(Cli::try_parse_from(argv).is_ok());
+        let mut conflicting = argv.to_vec();
+        conflicting.extend(["--review-report", "/old/report.json"]);
+        assert!(Cli::try_parse_from(conflicting).is_err());
+    }
+}
+
+#[test]
 fn exposes_worker_and_integrated_review_commands() {
     for args in [
         vec![

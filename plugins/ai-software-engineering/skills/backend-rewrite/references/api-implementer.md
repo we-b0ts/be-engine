@@ -7,7 +7,7 @@ Develop one API at a time in the fixed assigned worktree. Each HTTP API names a
 canonical path/pattern and includes every recorded method in `facts.method_apis`. Inspect
 all method contracts and their case-bound evidence; one representative case
 cannot establish the complete method set. Implement their source behavior in one
-worktree and retain a separate reviewed delivery per API. Keep each case's HTTP method and do not
+worktree and retain a separate committed delivery per API. Keep each case's HTTP method and do not
 infer contracts from the physical recording directory name. Do not read coordinator or integrator
 operating protocols.
 
@@ -25,9 +25,9 @@ changing code, startup, or configuration, read
 Edit and test only the assigned worktree. Preserve unintegrated changes when
 synchronizing with the supplied canonical base; resolve your own source conflicts.
 Build and debug as needed, and run focused tests relevant to the changes.
-As an API implementer, you MUST NOT run `cargo clippy`, including through a
-script or another command that invokes it. A project guide listing Clippy as
-a development check does not assign that final check to the implementer.
+Do not execute Clippy or other lint tools, including through scripts. Later
+workflow stages handle lint centrally. Run tests for changed modules and apply
+formatting when needed to complete the implementation.
 Return your local test results with the delivery.
 
 When the coordinator forwards an expert report, check its evidence and inspected
@@ -36,17 +36,17 @@ repair; retain implementation, local-check, and handoff responsibility.
 
 ## Return
 
-For code changes or a post-input resume that still requires reviewed delivery,
-follow [api-implementer-review.md](api-implementer-review.md) for each completed
+For code changes or a post-input resume that still requires delivery,
+follow [api-implementer-delivery.md](api-implementer-delivery.md) for each completed
 API. Return its original issue/dispatch/lease identity, cause and evidence,
-commit, local checks, passing review, shared impact, required inputs, and risks.
+delivery_commit, focused local checks, shared impact, required inputs, and risks.
 One handoff can contain one or several completed APIs, including different
 assigned groups; it need not finish a group or the whole queue. Distinct API
 deliveries need distinct stable handoff IDs, even when they share a commit.
 
 Return the completed subset and remaining tasks. A handoff does not mean that
 the slot is idle. Continue or resume only assigned pending work, preserving
-unhanded changes. Once the engine accepts a subset, its commits/reports are
+unhanded changes. Once the engine accepts a subset, its commits are
 frozen independently of your checkout. Do not reset or switch the checkout while
 the current task or an unhanded delivery still uses it.
 

@@ -34,12 +34,12 @@ fn integer_epoch_fields_compare_second_resolution_without_rounding_duration_cont
         },
         ..Default::default()
     };
-    assert!(compare(&json!({"at":1000}), &json!({"at":2010}), &fields, clocks).passed());
-    assert!(!compare(&json!({"at":1000}), &json!({"at":2011}), &fields, clocks).passed());
+    assert!(compare(&json!({"at":1000}), &json!({"at":2007}), &fields, clocks).passed());
+    assert!(!compare(&json!({"at":1000}), &json!({"at":2008}), &fields, clocks).passed());
     assert!(
         !compare(
             &json!({"at":1000.0}),
-            &json!({"at":2010.0}),
+            &json!({"at":2007.0}),
             &fields,
             clocks
         )
@@ -55,6 +55,74 @@ fn integer_epoch_fields_compare_second_resolution_without_rounding_duration_cont
         contract: &duration,
     }];
     assert!(!compare(&json!({"at":1000}), &json!({"at":2010}), &fields, clocks).passed());
+}
+
+#[test]
+fn response_timestamp_elapsed_budget_keeps_clock_error_and_strict_value_shapes() {
+    let contract: FieldContract = serde_json::from_value(json!({
+        "kind":"time", "format":"unix_milliseconds", "relation":"preserve_offset"
+    }))
+    .unwrap();
+    let fields = [Field {
+        rule_id: "clock",
+        pointer: "/at",
+        contract: &contract,
+    }];
+    let starts = ClockPair {
+        source: chrono::DateTime::from_timestamp(1000, 0),
+        target: chrono::DateTime::from_timestamp(2000, 0),
+    };
+    let clocks = AnchorClocks::for_response(
+        starts,
+        ClockPair {
+            source: chrono::DateTime::from_timestamp(1005, 0),
+            target: chrono::DateTime::from_timestamp(2000, 0),
+        },
+    );
+    for offset in [0, 86_400_000, -86_400_000] {
+        let source = json!({"at":1000000 + offset, "stable":true});
+        let target = json!({"at":2000300 + offset, "stable":true});
+        let result = compare(&source, &target, &fields, clocks);
+        assert!(result.passed(), "{:?}", result.differences);
+        assert!(
+            !compare(
+                &source,
+                &json!({"at":2002100 + offset,"stable":true}),
+                &fields,
+                clocks
+            )
+            .passed()
+        );
+    }
+    let short = AnchorClocks::for_response(
+        starts,
+        ClockPair {
+            source: chrono::DateTime::from_timestamp(1000, 80_000_000),
+            target: chrono::DateTime::from_timestamp(2000, 30_000_000),
+        },
+    );
+    let source = json!({"at":1000000,"stable":true});
+    assert!(
+        compare(
+            &source,
+            &json!({"at":2002030,"stable":true}),
+            &fields,
+            short
+        )
+        .passed()
+    );
+    for target in [
+        json!({"at":2002031,"stable":true}),
+        json!({"at":2000300,"stable":false}),
+        json!({"at":2000300.0,"stable":true}),
+        json!({"at":"2000300","stable":true}),
+        json!({"at":2000,"stable":true}),
+    ] {
+        assert!(
+            !compare(&source, &target, &fields, short).passed(),
+            "{target}"
+        );
+    }
 }
 
 #[test]
@@ -108,10 +176,10 @@ fn naive_relative_times_cancel_shared_offsets_without_timezone_configuration() {
         let source = json!({"updated":format!("1970-01-01{separator}08:00:10.123456"),"stable":1});
         for (time, passes) in [
             ("08:01:50.123456", true),
-            ("08:01:55.123456", true),
-            ("08:01:45.123456", true),
-            ("08:01:55.123457", false),
-            ("08:01:45.123455", false),
+            ("08:01:52.123456", true),
+            ("08:01:48.123456", true),
+            ("08:01:52.123457", false),
+            ("08:01:48.123455", false),
             ("00:01:50.123456", false),
         ] {
             let target = json!({"updated":format!("1970-01-01{separator}{time}"),"stable":1});

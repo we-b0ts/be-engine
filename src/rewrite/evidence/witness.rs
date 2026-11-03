@@ -197,18 +197,8 @@ pub fn query_rewrite_witness_for_scope(
             "semantics":"Each statement is materialized independently. Numbers retain exact normalized SQL text; strings preserve decoded native bytes. A field origin or decoded JSON view grants no matching permission and does not prove the two selected cells correspond."
         });
     }
-    let id = overview::query_id(&state, &scope, issue);
-    let mut report = overview::report(&root, &state, scope, issue, &id)?;
-    report.query = "dependency_witness".into();
-    report.evidence_id = format!(
-        "evidence-{}",
-        fingerprint::id(&[&issue.id, &serde_json::to_string(&facts)?])
-            .trim_start_matches("fnv1a64:")
-    );
-    report.facts = facts;
-    report.queries.clear();
-    report.rule_hints.clear();
-    report.applicable_rule_planners.clear();
+    let mut report =
+        super::report::selected(&root, &state, &scope, issue, "dependency_witness", facts)?;
     report.does_not_prove = vec!["A retained candidate proves observed bytes, not a successful dependency match or authorization for a rule.".into()];
     report.next_step = "Trace the selected observed difference through Source and Target code. Recorded request header names come from authenticated input; public encrypted-header placeholders do not establish absence. Use narrower pointers for unavailable large values.".into();
     Ok(report)

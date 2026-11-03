@@ -9,6 +9,90 @@ fn clocks() -> ClockPair {
 }
 
 #[test]
+fn elapsed_timestamp_budget_adds_clock_error_and_keeps_fractional_boundaries() {
+    let starts = clocks();
+    let source = starts.source.unwrap();
+    let target = starts.target.unwrap();
+    for (source_ms, target_ms, budget_ms) in [(80, 30, 2080), (5000, 80, 7000), (1, 300000, 302000)]
+    {
+        let observations = ClockPair {
+            source: Some(source + chrono::Duration::milliseconds(source_ms)),
+            target: Some(target + chrono::Duration::milliseconds(target_ms)),
+        };
+        let budget = timestamp_tolerance_nanos(starts, observations);
+        assert_eq!(budget, budget_ms * 1_000_000);
+        let a = date_nanos(observations.source.unwrap()) + 86_400 * NANOS_PER_SECOND;
+        let b = date_nanos(observations.target.unwrap()) + 86_400 * NANOS_PER_SECOND;
+        for error in [-(budget as i128), budget as i128, budget as i128 + 1] {
+            assert_eq!(
+                compare_timestamp_nanos_with_tolerance(
+                    a,
+                    b + error,
+                    TimeMode::PreserveRelative,
+                    observations,
+                    budget
+                )
+                .is_ok(),
+                error.unsigned_abs() <= budget,
+            );
+        }
+        assert_eq!(
+            compare_duration_nanos(a, b + 6 * NANOS_PER_SECOND, observations),
+            Err(TimeError::DeltaMismatch),
+            "elapsed timestamp allowances must not relax duration contracts",
+        );
+    }
+}
+
+#[test]
+fn incomplete_or_reversed_elapsed_clocks_cannot_widen_timestamp_budget() {
+    let starts = clocks();
+    let later = ClockPair {
+        source: starts.source.map(|t| t + chrono::Duration::seconds(300)),
+        target: starts.target.map(|t| t + chrono::Duration::seconds(5)),
+    };
+    for (starts, observation) in [
+        (ClockPair::default(), later),
+        (
+            starts,
+            ClockPair {
+                source: None,
+                ..later
+            },
+        ),
+        (
+            ClockPair {
+                target: None,
+                ..starts
+            },
+            later,
+        ),
+        (
+            starts,
+            ClockPair {
+                target: starts.target.map(|t| t - chrono::Duration::nanoseconds(1)),
+                ..later
+            },
+        ),
+    ] {
+        assert_eq!(
+            timestamp_tolerance_nanos(starts, observation),
+            2_000_000_000
+        );
+    }
+    assert_eq!(
+        compare_timestamp_nanos_with_tolerance(
+            0,
+            0,
+            TimeMode::PreserveRelative,
+            ClockPair::default(),
+            302_000_000_000
+        ),
+        Err(TimeError::ReferenceMissing),
+    );
+}
+
+#[test]
 fn integer_epoch_anchors_use_declared_precision_and_keep_the_five_second_limit() {
     let clocks = ClockPair {
         source: DateTime::from_timestamp(1000, 510_000_000),

@@ -16,6 +16,10 @@ pub(crate) struct RegressionScope {
     pub(crate) auto_next: bool,
     #[serde(default)]
     pub(crate) retry_failed_only: bool,
+    #[serde(default)]
+    pub(crate) replay_timing: Option<crate::replay::ReplayStreamTiming>,
+    #[serde(default = "default_replay_interval_cap_ms")]
+    pub(crate) replay_interval_cap_ms: u64,
     pub(crate) recording_run_id: Option<String>,
     only: Option<Vec<String>>,
     skip: Option<Vec<String>>,
@@ -25,12 +29,18 @@ const fn default_max_implementers() -> usize {
     16
 }
 
+const fn default_replay_interval_cap_ms() -> u64 {
+    crate::replay::DEFAULT_REPLAY_STREAM_INTERVAL_CAP_MS
+}
+
 impl Default for RegressionScope {
     fn default() -> Self {
         Self {
             max_implementers: default_max_implementers(),
             auto_next: false,
             retry_failed_only: false,
+            replay_timing: None,
+            replay_interval_cap_ms: default_replay_interval_cap_ms(),
             recording_run_id: None,
             only: None,
             skip: None,
@@ -96,7 +106,7 @@ impl RegressionScope {
 
 pub(crate) const GITIGNORE_RULE: &str = "/.traffic-e2e/regression.yaml";
 pub(crate) const GIT_PATHSPEC: &str = ":(exclude).traffic-e2e/regression.yaml";
-pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Exact paths preserve trailing/repeated slashes; wildcard patterns stay canonical.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\n# Skip previously passed cases during repair Replay; final revalidation always runs all cases.\nretry_failed_only: false\n# Fixed implementation slots; a running workflow retains its original capacity.\nmax_implementers: 16\nonly: []\nskip: []\n";
+pub(crate) const TEMPLATE: &str = "# Local regression settings; not committed or included in target fingerprints.\n# Set recording_run_id to reuse a completed standard recording; missing runs block progress.\n# Without a pin, rewrite selects an existing completed run and keeps it fixed.\n# recording_run_id: \"20260911093000\"\n# HTTP API routes must match backend-rewrite inventory exactly, without methods.\n# Each route includes all its recorded methods.\n# Exact paths preserve trailing/repeated slashes; wildcard patterns stay canonical.\n# Omitted or empty only selects all APIs; skip takes precedence.\n# only:\n#   - \"/api/users/*\"\n# Continue only successful Replay when the existing scheduler selects Replay again.\nauto_next: false\n# Skip previously passed cases during repair Replay; final revalidation always runs all cases.\nretry_failed_only: false\n# Optional stream timing override: fast caps each ordinary Case Pub/Sub and successful HTTP stream gap.\n# Omitting replay_timing preserves Source timing; recorded preserves Source stream intervals.\n# replay_timing: fast\n# Fast-mode interval cap in milliseconds, including the first push/header; 0 removes artificial waits.\nreplay_interval_cap_ms: 5\n# Fixed implementation slots; a running workflow retains its original capacity.\nmax_implementers: 16\nonly: []\nskip: []\n";
 
 /// Low-level project initialization also installs the local policy without
 /// replacing user choices. Full repository initialization creates it atomically
@@ -132,6 +142,66 @@ pub(crate) fn initialize(target_root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_timing_is_optional_and_accepts_only_supported_modes() {
+        use crate::replay::ReplayStreamTiming::{Fast, Recorded};
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            RegressionScope::load(root.path()).unwrap().replay_timing,
+            None
+        );
+        initialize(root.path()).unwrap();
+        for (yaml, timing) in [
+            ("only: []\n", None),
+            ("replay_timing: fast\n", Some(Fast)),
+            ("replay_timing: recorded\n", Some(Recorded)),
+        ] {
+            std::fs::write(root.path().join(PATH), yaml).unwrap();
+            assert_eq!(
+                RegressionScope::load(root.path()).unwrap().replay_timing,
+                timing
+            );
+        }
+        std::fs::write(root.path().join(PATH), "replay_timing: immediate\n").unwrap();
+        assert!(RegressionScope::load(root.path()).is_err());
+    }
+
+    #[test]
+    fn replay_interval_cap_defaults_to_five_and_accepts_zero() {
+        let root = tempfile::tempdir().unwrap();
+        initialize(root.path()).unwrap();
+        assert_eq!(
+            RegressionScope::load(root.path())
+                .unwrap()
+                .replay_interval_cap_ms,
+            5
+        );
+        for cap in [0, 1, 50, u64::MAX] {
+            std::fs::write(
+                root.path().join(PATH),
+                format!("replay_interval_cap_ms: {cap}\n"),
+            )
+            .unwrap();
+            assert_eq!(
+                RegressionScope::load(root.path())
+                    .unwrap()
+                    .replay_interval_cap_ms,
+                cap
+            );
+        }
+        for value in ["-1", "1.5", "null", "true", "fast"] {
+            std::fs::write(
+                root.path().join(PATH),
+                format!("replay_interval_cap_ms: {value}\n"),
+            )
+            .unwrap();
+            assert!(
+                RegressionScope::load(root.path()).is_err(),
+                "accepted {value}"
+            );
+        }
+    }
 
     #[test]
     fn failed_case_retry_is_opt_in_and_requires_a_boolean() {

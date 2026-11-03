@@ -102,6 +102,16 @@ async fn subscriptions_keep_bootstrap_case_idle_and_reconnect_evidence_without_d
             .collect();
         assert_eq!(subscriptions.len(), 4);
         assert_eq!(pushes.len(), 4);
+        assert_eq!(pushes[0]["capture"]["attribution"]["kind"], "startup");
+        assert_eq!(
+            pushes[1]["capture"]["attribution"]["origin_case_id"],
+            case.id.to_string()
+        );
+        assert!(
+            pushes[2..]
+                .iter()
+                .all(|push| push["capture"]["attribution"]["kind"] == "unattributed")
+        );
         assert_eq!(
             subscriptions[0]["capture"]["attribution"]["kind"],
             "startup"
@@ -164,6 +174,55 @@ async fn subscriptions_keep_bootstrap_case_idle_and_reconnect_evidence_without_d
             "the scope refers to the single immutable exchange"
         );
     }
+}
+
+#[tokio::test]
+async fn declared_process_pubsub_does_not_borrow_a_running_case() {
+    let temp = tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    config
+        .process_dependency_tasks
+        .insert("subscriber".into(), "receive_loop".into());
+    config.process_owned_dependencies.push(
+        serde_yaml::from_str(
+            r#"
+protocol: redis_pubsub
+name: subscriber
+selector:
+  resource: {protocol: redis, endpoint: 'redis.test:6379', database: 0}
+  channel: events
+  kind: message
+source_evidence: subscriber.py:receive
+"#,
+        )
+        .unwrap(),
+    );
+    let state = AppState::new(config).await.unwrap();
+    let case = test_case("active-api");
+    let guard = state.try_reserve_active_case(case.clone()).unwrap();
+    state.activate_case_dependencies(&guard).unwrap();
+    let (mut client, mut upstream, task) = open_connection(&state).await;
+    subscribe_and_push(&mut client, &mut upstream, "SUBSCRIBE").await;
+    close_connection(client, upstream, task).await;
+    let events = recorded_events(&state).await;
+    let push = events
+        .iter()
+        .find(|event| event["event_type"] == "redis_pub_sub_push")
+        .unwrap();
+    assert_eq!(push["capture"]["attribution"]["kind"], "process");
+    assert_eq!(
+        push["capture"]["attribution"]["source_task"],
+        "receive_loop"
+    );
+    assert_eq!(push["capture"]["observed_case"], case.id.to_string());
+    let subscription = events
+        .iter()
+        .find(|event| event["command"] == "SUBSCRIBE")
+        .unwrap();
+    assert_eq!(subscription["capture"]["attribution"]["kind"], "case");
 }
 
 #[tokio::test]

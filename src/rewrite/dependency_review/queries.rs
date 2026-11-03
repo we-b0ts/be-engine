@@ -67,7 +67,11 @@ pub(super) fn candidate_page(
     offset: usize,
 ) -> Value {
     let (investigation, target) = request;
-    let mut page = source.discovery.discover(observation, owners, offset, 20);
+    let mut effective = source.case_defaults.clone();
+    effective.extend(owners.iter().map(|(id, owner)| (*id, owner.clone())));
+    let mut page = source
+        .discovery
+        .discover(observation, &effective, offset, 20);
     page["schema"] = json!(SCHEMA);
     page["investigation_id"] = json!(investigation);
     page["target_observation_id"] = json!(target);

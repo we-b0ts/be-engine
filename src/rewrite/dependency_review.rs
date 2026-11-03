@@ -2,6 +2,7 @@
 mod analysis;
 mod batch;
 mod batch_verification;
+mod case_defaults;
 mod decisions;
 mod investigations;
 mod model;
@@ -30,7 +31,9 @@ use super::{
     store::RewriteStore,
     verification_obligations::{ScopeObligation, VerificationScope},
 };
-use crate::dependency::attribution::{AttributionDecision, DependencyOwner};
+#[cfg(test)]
+use crate::dependency::attribution::AttributionDecision;
+use crate::dependency::attribution::DependencyOwner;
 pub(super) use analysis::required_action;
 pub use batch::{dependency_attribution_batch_information, retry_dependency_batch};
 pub(super) use batch::{required_action as batch_action, run as run_batch};
@@ -109,7 +112,7 @@ pub(super) fn refresh_receipts(root: &Path, state: &mut RewriteState) -> Result<
         }
     }
     investigations::refresh(state);
-    analysis::refresh_inventory(state)?;
+    analysis::refresh_inventory(root, state)?;
     if !state.dependency_review.receipts.is_empty() {
         verification::invalidate_receipts(root, state)?;
     }
@@ -123,10 +126,21 @@ pub fn dependency_attribution_context(
     let state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
-    let source = source::load(&state)?;
     let policy = rules::load(&root)?;
-    let mut context = context_for(&root, &state, &source)?;
-    context.task_groups = rules::claim_groups(&policy, &source, &context.claims)?;
+    let mut context = if state.dependency_review.claims.values().any(|claim| {
+        claim.recording_run_id == state.recording_run_id
+            && matches!(claim.status, ClaimStatus::Pending | ClaimStatus::Unresolved)
+    }) {
+        let source = source::load(&state)?;
+        let mut context = context_for(&root, &state, &source)?;
+        context.task_groups = rules::claim_groups(&policy, &source, &context.claims)?;
+        context
+    } else {
+        let (identity, ids) = analysis::review_inventory(&root, &state)?;
+        let mut context = context_from_inventory(&root, &state, &identity, ids.into_owned())?;
+        context.task_groups = rules::empty_claim_groups(&policy)?;
+        context
+    };
     context.effective_policy_fingerprint = policy.fingerprints.full.clone();
     context.rule_groups = rules::groups(&policy)?;
     let apis = context
@@ -162,20 +176,6 @@ fn context_for(
     state: &RewriteState,
     source: &source::SourceSnapshot,
 ) -> Result<AttributionReviewContext> {
-    let source_revision = state
-        .source_revision
-        .clone()
-        .context("Source revision absent")?;
-    let claims = state
-        .dependency_review
-        .claims
-        .values()
-        .filter(|claim| {
-            claim.recording_run_id == state.recording_run_id
-                && matches!(claim.status, ClaimStatus::Pending | ClaimStatus::Unresolved)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
     let active_rules = rules::fingerprints(&rules::load(root)?)?;
     let decisions = state
         .dependency_review
@@ -193,8 +193,32 @@ fn context_for(
                     DependencyOwner::Unattributed { .. }
                 )
                 && !decisions.contains_key(id)
+                && !source.case_defaults.contains_key(id)
         })
         .map(|(id, _)| *id)
+        .collect();
+    context_from_inventory(root, state, &source.identity, unattributed_exchange_ids)
+}
+
+fn context_from_inventory(
+    root: &Path,
+    state: &RewriteState,
+    identity: &str,
+    unattributed_exchange_ids: BTreeSet<uuid::Uuid>,
+) -> Result<AttributionReviewContext> {
+    let source_revision = state
+        .source_revision
+        .clone()
+        .context("Source revision absent")?;
+    let claims = state
+        .dependency_review
+        .claims
+        .values()
+        .filter(|claim| {
+            claim.recording_run_id == state.recording_run_id
+                && matches!(claim.status, ClaimStatus::Pending | ClaimStatus::Unresolved)
+        })
+        .cloned()
         .collect();
     let assignment_id = assignment_id(state)?;
     Ok(AttributionReviewContext {
@@ -203,7 +227,7 @@ fn context_for(
         workflow_id: state.workflow_id.clone(),
         recording_run_id: state.recording_run_id.clone(),
         source_revision,
-        source_inventory_id: source.identity.clone(),
+        source_inventory_id: identity.into(),
         revision: state.dependency_review.revision,
         assignment_id,
         claims,
@@ -453,6 +477,7 @@ pub fn apply_dependency_attribution(options: AttributionCommandOptions) -> Resul
                     DependencyOwner::Unattributed { .. }
                 )
                 && !state.dependency_review.decisions.contains_key(id)
+                && !original.case_defaults.contains_key(id)
         })
         .map(|(id, _)| *id)
         .collect();
@@ -601,7 +626,7 @@ pub(crate) fn freeze_dependency_attribution(
     target: Option<&Path>,
     source: &Path,
     recording_run: &str,
-) -> Result<(Vec<AttributionDecision>, String)> {
+) -> Result<(BTreeMap<uuid::Uuid, DependencyOwner>, String)> {
     snapshot::frozen(target, source, recording_run)
 }
 
@@ -694,17 +719,15 @@ pub fn dependency_attribution_source_information(
 ) -> Result<Value> {
     let (root, store) = open(&context.target_root)?;
     let state = store.load()?.context("rewrite workflow absent")?;
-    let inventory = source::load(&state)?;
     let id = id.parse::<uuid::Uuid>()?;
-    let event = inventory
-        .exchanges
-        .get(&id)
-        .context("Source exchange is outside this immutable recording")?;
+    let information = source::information(&state, id)?;
+    let event = &information.exchange;
     let metadata = &event.selector;
     Ok(
-        json!({"schema":SCHEMA,"recording_run_id":state.recording_run_id,"source_inventory_id":inventory.identity,
+        json!({"schema":SCHEMA,"recording_run_id":state.recording_run_id,"source_inventory_id":information.identity,
         "source_exchange_id":id,"capture":event.capture,"capture_complete":event.complete,
         "effective_attribution":state.dependency_review.decisions.get(&id).map(|decision|decision.decision(id)),
+        "default_case_attribution":information.case_default,
         "request_shape":{"event_type":metadata["event_type"],"operation":metadata["command"].as_str().or_else(||metadata["method"].as_str()),
             "endpoint":{"host":metadata["target_host"],"port":metadata["target_port"]},
             "args_count":metadata["args"].as_array().map(Vec::len),"params_count":metadata["params"].as_array().map(Vec::len),

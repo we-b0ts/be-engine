@@ -146,18 +146,8 @@ pub fn query_rewrite_redis_argument_for_scope(
         "association":"exact_native_request_fingerprint; identical requests may have multiple observations",
         "source_counterpart":"not_assumed"});
     facts["append_stream_progress"] = super::redis_stream_progress::facts(&replay, case_id);
-    let id = overview::query_id(&state, &scope, issue);
-    let mut report = overview::report(&root, &state, scope, issue, &id)?;
-    report.query = "redis_target_argument".into();
-    report.evidence_id = format!(
-        "evidence-{}",
-        super::fingerprint::id(&[&issue.id, &serde_json::to_string(&facts)?])
-            .trim_start_matches("fnv1a64:")
-    );
-    report.facts = facts;
-    report.queries.clear();
-    report.rule_hints.clear();
-    report.applicable_rule_planners.clear();
+    let mut report =
+        super::report::selected(&root, &state, &scope, issue, "redis_target_argument", facts)?;
     report.does_not_prove=vec!["Observed Target bytes do not prove a Source counterpart, a successful match, task origin or permission for a rule.".into()];
     report.next_step="Trace the selected argument through Target and Source code. Select one argument and a narrower JSON pointer when a value exceeds 4096 bytes; no plaintext payload is written to artifacts.".into();
     Ok(report)

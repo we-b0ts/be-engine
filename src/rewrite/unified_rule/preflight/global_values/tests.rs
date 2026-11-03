@@ -69,7 +69,7 @@ fn automatic_redis_text_preflight_keeps_builtin_coverage_separate_and_checks_req
             .contains(crate::value_contract::time::automatic::RULE_ID)
     );
     assert!(!coverage.evaluated.contains(GLOBAL_JSON_ID));
-    for target in ["2026-10-16T00:02:30Z", "2026-10-16T00:01:30Z"] {
+    for target in ["2026-10-16T00:02:30Z", "2026-10-16T00:04:03Z"] {
         let checked = compare(
             &event,
             Surface::DependencyRequest,

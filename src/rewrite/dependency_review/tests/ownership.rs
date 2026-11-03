@@ -8,7 +8,7 @@ async fn known_owned_new_batch_does_not_dispatch_repository_analyst() {
     state.dependency_review.recording_run_id = None;
     state.dependency_review.source_inventory_id = None;
     assert!(required_action(target.path(), &state).is_none());
-    super::super::analysis::refresh_inventory(&mut state).unwrap();
+    super::super::analysis::refresh_inventory(target.path(), &mut state).unwrap();
     assert_eq!(
         state.dependency_review.recording_run_id.as_deref(),
         Some(state.recording_run_id.as_str())

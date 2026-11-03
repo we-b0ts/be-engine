@@ -180,7 +180,7 @@ fn first_replay_preserves_required_integration_review() {
 
     assert!(matches!(
         status(target.path()).action,
-        RewriteAction::SourceReviewRequired { .. }
+        RewriteAction::AdvanceRequired { .. }
     ));
 }
 

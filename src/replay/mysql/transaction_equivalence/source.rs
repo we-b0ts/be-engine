@@ -3,6 +3,7 @@ use super::*;
 use crate::replay::dependencies::DependencyRecord;
 
 mod error_rollback;
+mod locking_read;
 
 pub(in crate::replay) struct Plan {
     pub setups: Vec<usize>,
@@ -398,6 +399,27 @@ fn statement(record: &RecordedMysqlExchange) -> Option<(bool, bool)> {
         && optional_session::read::classify(sql) == optional_session::read::Effect::StateChange;
     // Unknown SQL and locking reads retain a complete same-socket transaction.
     Some((write, !ordinary_write))
+}
+
+/// A complete native transaction proves row-lock lifetime independently of the
+/// driver's default autocommit mode. Unknown/session-persistent effects retain
+/// the original Source setup even when their statement spans were delivered.
+pub(super) fn requires_source_setup(record: &RecordedMysqlExchange) -> bool {
+    if optional_session::successful_begin(record)
+        || optional_session::successful_end(record, &["commit", "rollback"])
+        || optional_session::successful_prepare(record)
+        || optional_session::successful_ping(record)
+    {
+        return false;
+    }
+    match statement(record) {
+        Some((_, false)) => false,
+        Some((false, true)) if optional_session::complete_read(record) => record
+            .sql
+            .as_deref()
+            .is_none_or(|sql| !locking_read::transaction_local(sql)),
+        _ => true,
+    }
 }
 
 /// Only ordinary UPDATE outcomes authorize the narrow no-effect rollback exception.

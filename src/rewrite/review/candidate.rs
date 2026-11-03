@@ -251,6 +251,19 @@ pub(super) fn checks_passed(
         report.status == ReviewStatus::Passed,
         "review did not pass; fix the delivery and rerun review check"
     );
+    // Delivery receipts bind a frozen commit and dispatch, not source quality.
+    // They cannot satisfy the independently bound final-review gate.
+    if report.pre_revalidation.is_none() && report.required_gates == ["delivery-identity"] {
+        ensure!(
+            report.quality.is_none()
+                && report.findings.is_empty()
+                && report.files.is_empty()
+                && report.evidence.spawns.is_empty()
+                && report.evidence_files.is_empty(),
+            "identity-only delivery cannot contain source-review results"
+        );
+        return Ok(());
+    }
     let quality = report
         .quality
         .as_ref()

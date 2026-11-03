@@ -42,7 +42,7 @@ allowlist. Protocol detection still observes incidental native dependencies so
 unexpected traffic is retained for analysis. Keep business include/exclude
 rules, readiness, streaming and timeout settings when they affect the project.
 For example, `http_gateway.record_streaming: true` selects streaming capture;
-`project.replay.http_stream_timing` separately selects replay timing and defaults
+`replay_timing` in `.traffic-e2e/regression.yaml` separately selects replay timing and defaults
 to `recorded`.
 
 Transport settings remain optional overrides when a project needs a different

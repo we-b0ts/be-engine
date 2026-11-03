@@ -63,7 +63,7 @@ enum ImplementerCommand {
         slot: usize,
         #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
         agent_handle: String,
-        /// Path to a JSON file containing an array of {api, dispatch_id, lease_generation, handoff_id, review_report}.
+        /// JSON array of {api, dispatch_id, lease_generation, handoff_id, delivery_commit}.
         #[arg(long, value_name = "JSON_FILE")]
         deliveries: PathBuf,
     },

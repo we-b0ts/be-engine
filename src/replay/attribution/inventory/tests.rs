@@ -166,7 +166,7 @@ async fn source_metadata_rebuild_recovers_missing_unsupported_markers_and_case_o
     // The central facts remain authoritative even for a current-schema manual
     // manifest which omitted a compact unsupported marker.
     manifest.semantic_inventory.unsupported_by_scope.clear();
-    let inventory = effective(root, &manifest, &[]).unwrap();
+    let inventory = effective(root, &manifest, &BTreeMap::new()).unwrap();
     assert_eq!(
         inventory.unsupported_by_scope["process"]["dependency_connect_failure"],
         1
@@ -177,7 +177,7 @@ async fn source_metadata_rebuild_recovers_missing_unsupported_markers_and_case_o
         .unwrap()
         .parse()
         .unwrap();
-    let decision = AttributionDecision {
+    let decision = crate::dependency::attribution::AttributionDecision {
         exchange_id: exchange,
         owner: DependencyOwner::Case {
             origin_case_id: manifest.inputs[0].case_id,
@@ -193,7 +193,12 @@ async fn source_metadata_rebuild_recovers_missing_unsupported_markers_and_case_o
             exclusive_scope: "one primary invocation".into(),
         },
     };
-    let attributed = effective(root, &manifest, &[decision]).unwrap();
+    let attributed = effective(
+        root,
+        &manifest,
+        &BTreeMap::from([(decision.exchange_id, decision.owner)]),
+    )
+    .unwrap();
     assert_eq!(attributed.by_owner_kind["case"], 1);
     assert!(attributed.unsupported_by_scope.is_empty());
 }
@@ -209,7 +214,7 @@ async fn an_omitted_or_repeated_scope_location_cannot_hide_a_mandatory_fact() {
     for locations in [vec![], vec![original[0].clone(), original[0].clone()]] {
         scope.locations = locations;
         std::fs::write(&path, serde_json::to_vec(&scope).unwrap()).unwrap();
-        assert!(effective(root, &manifest, &[]).is_err());
+        assert!(effective(root, &manifest, &BTreeMap::new()).is_err());
     }
 }
 
@@ -222,7 +227,7 @@ async fn mandatory_closure_does_not_materialize_a_second_complete_payload_select
         crate::dependency_index::store::cache_directory(&root.join("dependencies.jsonl"))
             .join("file.json");
     assert!(!full_index.exists());
-    let inventory = effective(root, &manifest, &[]).unwrap();
+    let inventory = effective(root, &manifest, &BTreeMap::new()).unwrap();
     assert_eq!(
         inventory.total_mandatory,
         manifest.semantic_inventory.total_mandatory
@@ -280,7 +285,7 @@ async fn associated_shutdown_has_authenticated_scope_without_entering_primary_in
     let root = app.recorder().run_dir.as_ref();
     let (_, manifest) = recording::manifest(root).unwrap();
     assert!(manifest.capture_complete);
-    let inventory = effective(root, &manifest, &[]).unwrap();
+    let inventory = effective(root, &manifest, &BTreeMap::new()).unwrap();
     assert_eq!(inventory.total_mandatory, 1);
     assert_eq!(inventory.by_owner_kind["shutdown"], 1);
     assert_eq!(inventory.unattributed_dependencies, 0);

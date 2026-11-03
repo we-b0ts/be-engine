@@ -79,12 +79,9 @@ listener, lifecycle, startup, or configuration contract. Load only affected SDKs
   layered clients MUST NOT multiply retries invisibly.
 - Every spawned or background task MUST have an owner, bounded admission, error
   reporting, cancellation behavior, and shutdown behavior.
-- Changed `tokio::spawn` calls require evidence of initialization ownership.
-  Trace the startup entry, call chain and all callers; registering a request
-  callback in `main` does not make its execution initialization-owned.
-  Request-triggered spawning is prohibited even when its handle is immediately
-  awaited. Unknown ownership cannot pass review. Submit startup evidence through
-  the [source review contract](source-review-rules.md), not a prose assertion alone.
+- Request-triggered spawning is prohibited, including immediately awaited
+  spawned tasks. Keep request work in its caller's structured async lifetime;
+  application-owned background tasks retain explicit startup and shutdown owners.
 - Long-lived dependency clients and pools MUST have explicit ownership,
   capacity, reuse, health behavior, and shutdown. Do not construct them per
   request.
@@ -133,11 +130,7 @@ and keep each choice compatible with the source submission contract.
   `helpers`, `manager`, or equivalent ownership for unrelated behavior.
 - Production modules MUST NOT depend on test, fixture, recording, or Replay
   modules.
-- Rust product source files under `src/`, `crates/**/src/`, or `apps/**/src/`
-  MUST remain at or below 1000 complete physical lines, including comments,
-  blank lines and the last line without a trailing newline. This is the whole
-  changed file's size, not the diff size. If a touched file already exceeds the
-  limit, extract the touched responsibility before adding behavior.
+
 
 For each used Breeze or platform SDK, follow its SDK reference for dependency
 source, exact release/version, package name, and features. Preserve the project's
@@ -151,7 +144,7 @@ product uses.
 
 ## Validation
 
-Validate changed behavior with focused local checks. Preserve the exact checked
+Validate changed behavior with focused local tests. Preserve the exact delivered
 code and evidence identity in your result. Follow your role's delivery protocol
 for its required reports; local success does not establish formal acceptance.
 

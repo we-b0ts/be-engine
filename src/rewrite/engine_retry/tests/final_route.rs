@@ -236,7 +236,7 @@ fn fallback_requires_a_real_failed_attempt_on_a_known_different_engine() {
 }
 
 #[tokio::test]
-async fn fallback_status_remains_read_only_and_next_keeps_review_before_reservation() {
+async fn fallback_status_is_read_only_and_retry_needs_case_inputs_without_review() {
     let target = worker::tests::configured_target();
     let state = response_state();
     let store = RewriteStore::new(target.path()).unwrap();
@@ -249,7 +249,7 @@ async fn fallback_status_remains_read_only_and_next_keeps_review_before_reservat
         .unwrap();
         assert!(matches!(
             status.action,
-            RewriteAction::SourceReviewRequired { .. }
+            RewriteAction::AdvanceRequired { .. }
         ));
         assert!(!status.terminal_allowed);
         assert_eq!(serde_json::to_value(store.load().unwrap()).unwrap(), before);
@@ -260,11 +260,8 @@ async fn fallback_status_remains_read_only_and_next_keeps_review_before_reservat
         source_route: None,
     })
     .await
-    .unwrap();
-    assert!(matches!(
-        next.action,
-        RewriteAction::SourceReviewRequired { .. }
-    ));
+    .unwrap_err();
+    assert!(next.to_string().contains("case source"), "{next:#}");
     let restored = store.load().unwrap().unwrap();
     assert!(pending(&restored, &restored.active_slice));
     assert!(restored.engine_retry_fingerprints.is_empty());

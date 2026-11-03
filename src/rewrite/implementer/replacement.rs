@@ -88,6 +88,7 @@ pub fn replace_runtime(options: ImplementerReplaceRuntimeOptions) -> Result<Rewr
             &mut state,
             &scope,
             &worker::runtime::RewriteWorkerReportOptions {
+                delivery_commit: None,
                 target_root: root.clone(),
                 agent_handle: options.agent_handle.clone(),
                 activity: worker::model::RewriteWorkerActivity::Queued,

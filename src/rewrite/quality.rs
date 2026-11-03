@@ -65,6 +65,7 @@ fn default_working_directory() -> PathBuf {
 }
 
 impl QualityReport {
+    #[cfg(test)]
     pub(in crate::rewrite) fn passed(&self) -> bool {
         self.passed_for(QualityScope::Integration)
     }
@@ -127,6 +128,7 @@ impl QualityReport {
     }
 }
 
+#[cfg(test)]
 pub(in crate::rewrite) fn run(
     root: &Path,
     base: &str,
@@ -141,6 +143,7 @@ pub(in crate::rewrite) fn run(
     )
 }
 
+#[cfg(test)]
 pub(in crate::rewrite) fn run_worker(
     root: &Path,
     base: &str,

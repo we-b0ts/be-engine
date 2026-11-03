@@ -7,6 +7,7 @@ use tokio::net::TcpListener;
 mod adapter_echo;
 mod broadcast;
 mod cancellation;
+mod case_inputs;
 mod compact_evidence;
 mod echo_preparation;
 mod input_timing;
@@ -20,6 +21,7 @@ mod rpc_ingress;
 mod scale;
 mod subscriber_generations;
 mod subscription_evidence;
+mod unused_identity;
 
 const SOURCE: &str = "30b6569f34c2486dafd3bf29b09a071f";
 const TARGET: &str = "59629c1606fa4011b698ef82621b84b5";

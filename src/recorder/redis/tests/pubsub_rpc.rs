@@ -192,30 +192,48 @@ async fn exercise_rpc(close_origin: bool) {
         serde_json::from_slice::<Value>(&parsed.payload).unwrap()["args"][0]["exit_code"],
         7
     );
-    let global = crate::recorder::test_io::read_to_string(
+    // An uncorrelated input follows ordinary active admission. A positively
+    // correlated late reply above can never borrow the next Case instead.
+    let current = if close_origin {
         state
             .recorder()
-            .run_dir
-            .join("indexes/unattributed-scope.json"),
-    )
-    .await
-    .unwrap();
-    assert!(global.lines().any(|l| {
-        let v: Value = serde_json::from_str(l).unwrap();
-        v["event_type"] == "redis_pub_sub_push" && v.get("rpc_request").is_none()
-    }));
-    let current = state
-        .recorder()
-        .case_staging_dir(&second)
-        .join("dependencies.jsonl");
-    if let Ok(raw) = crate::recorder::test_io::read_to_string(current).await {
-        assert!(!raw.contains("redis_pub_sub_push"));
+            .flush_case_dependency_files(&state.recorder().case_staging_dir(&second))
+            .await
+            .unwrap();
+        crate::recorder::test_io::read_to_string(
+            state
+                .recorder()
+                .case_staging_dir(&second)
+                .join("dependencies.jsonl"),
+        )
+        .await
+        .unwrap()
+    } else {
+        raw
+    };
+    let pushes = current
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["event_type"] == "redis_pub_sub_push")
+        .collect::<Vec<_>>();
+    assert!(
+        pushes
+            .iter()
+            .any(|event| event.get("rpc_request").is_none())
+    );
+    if close_origin {
+        assert!(
+            pushes
+                .iter()
+                .all(|event| event.get("rpc_request").is_none())
+        );
     }
 }
 
 #[tokio::test]
 async fn generic_binary_pubsub_capture_is_semantic_evidence_with_no_rpc_adapter() {
     let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    assert!(state.inner.active_cases.close_bootstrap());
     let (mut client, proxy) = tcp_pair().await;
     let (mut redis, upstream) = tcp_pair().await;
     let task = spawn_handler(proxy, upstream, state.clone(), redis.peer_addr().unwrap());

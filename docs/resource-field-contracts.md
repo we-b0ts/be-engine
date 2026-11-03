@@ -17,7 +17,10 @@ pair, and the successful delivery must precede the output frame in both
 executions. A later dependency cannot authorize an earlier frame. This reuses
 the dependency's time validation instead of rebasing a stored value again
 against another event. Locally generated response times retain their
-independent capture clock and the fixed five-second tolerance. Stream offsets
+independent capture clock. Timestamp differences allow the larger of Source
+and Target elapsed time from API request start to that observation, plus two
+seconds for clock error. This includes timestamps created earlier in a request
+and reused in its final response. Stream offsets
 use the capture start; legacy recordings recover that start from the recorded
 completion timestamp and duration without changing their original files.
 
@@ -115,8 +118,8 @@ offset cancels in the comparison. Consistent Source/Target timezone behavior
 is still required. Native SQL dates use the protocol adapter's date arithmetic.
 
 Integer Unix timestamps compare independent anchors at the declared seconds,
-milliseconds or microseconds precision. The five-second tolerance is unchanged:
-an offset of five representable seconds passes and six seconds fails. Floating
+milliseconds or microseconds precision. The elapsed-time budget is computed
+before that projection, retaining fractional request durations. Floating
 timestamps and textual formats retain their existing precision; duration
 contracts do not acquire timestamp rounding.
 
@@ -367,8 +370,14 @@ payload comparisons or relax finite consumption.
 ## Time comparison and dependency delivery
 
 Global time declarations use relative differences; no authored relation is
-needed. Target time minus its independent request clock must preserve Source
-time minus its independent request clock within the fixed engine tolerance.
+needed. Target time minus its independent observation clock must preserve
+Source time minus its independent observation clock within
+`max(source_elapsed, target_elapsed) + 2 seconds`. Each elapsed interval starts
+at that side's API request and ends at the current comparison observation. The
+value itself need not lie in that interval: business offsets remain valid.
+Missing or reversed request observations do not widen the two-second allowance;
+missing comparison anchors still fail. Earlier stream frames cannot borrow a
+later frame's budget. This rule applies with either recorded or fast delivery.
 Each physical field occurrence has independent clock observations. Sharing a
 global declaration does not imply that unrelated business fields were sampled
 from one clock read.

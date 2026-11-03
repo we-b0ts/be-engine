@@ -116,7 +116,6 @@ pub(crate) fn render_project_config(
             },
             replay: ReplayProjectConfig {
                 pre_match: true,
-                http_stream_timing: Default::default(),
                 socketio_timing: Default::default(),
                 case_no_progress_timeout_ms:
                     crate::replay::DEFAULT_REPLAY_CASE_NO_PROGRESS_TIMEOUT_MS,
@@ -243,9 +242,11 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             Ok::<String, anyhow::Error>(format!("127.0.0.1:{port}"))
         })
         .transpose()?;
+    let regression = crate::config::regression::RegressionScope::load(&target_root)?;
     let project = ResolvedProjectConfig {
         replay_pre_match: config.project.replay.pre_match,
-        replay_http_stream_timing: config.project.replay.http_stream_timing,
+        replay_stream_timing: regression.replay_timing,
+        replay_stream_interval_cap_ms: regression.replay_interval_cap_ms,
         replay_socketio_timing: config.project.replay.socketio_timing,
         replay_case_no_progress_timeout: Duration::from_millis(
             config.project.replay.case_no_progress_timeout_ms,
@@ -421,6 +422,7 @@ mod tests {
     use super::*;
     mod capture_tests;
     mod socketio_timing_tests;
+    mod stream_timing_tests;
     use crate::e2e_run::model::MAX_TARGET_STARTUP_TIMEOUT_SECONDS;
 
     #[test]
@@ -440,18 +442,14 @@ mod tests {
     }
 
     #[test]
-    fn older_project_replay_settings_preserve_recorded_timing_until_fast_is_requested() {
+    fn project_replay_rejects_the_removed_http_only_timing_setting() {
         let absent: ReplayProjectConfig = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(absent.pre_match);
-        assert_eq!(
-            absent.http_stream_timing,
-            crate::replay::ReplayHttpStreamTiming::Recorded
-        );
-        let explicit: ReplayProjectConfig =
-            serde_json::from_value(serde_json::json!({"http_stream_timing":"fast"})).unwrap();
-        assert_eq!(
-            explicit.http_stream_timing,
-            crate::replay::ReplayHttpStreamTiming::Fast
+        assert!(
+            serde_json::from_value::<ReplayProjectConfig>(
+                serde_json::json!({"http_stream_timing":"fast"})
+            )
+            .is_err()
         );
     }
 

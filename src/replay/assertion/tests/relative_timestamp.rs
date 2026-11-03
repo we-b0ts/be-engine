@@ -44,12 +44,12 @@ fn relative_timestamp_accepts_expiry_offsets_formats_and_preserves_timezone_repr
 }
 
 #[test]
-fn relative_timestamp_preserves_ttl_and_uses_inclusive_five_second_tolerance() {
+fn relative_timestamp_preserves_ttl_and_uses_two_seconds_without_elapsed_time() {
     for (target, valid) in [
-        ("2023-11-14T23:14:15Z", true),
-        ("2023-11-14T23:14:25Z", true),
-        ("2023-11-14T23:14:14.999999Z", false),
-        ("2023-11-14T23:14:25.000001Z", false),
+        ("2023-11-14T23:14:18Z", true),
+        ("2023-11-14T23:14:22Z", true),
+        ("2023-11-14T23:14:17.999999Z", false),
+        ("2023-11-14T23:14:22.000001Z", false),
         ("2023-11-14T22:14:20Z", false), // Dropped TTL.
         ("2023-11-14T23:44:20Z", false), // Wrong TTL.
         ("2023-11-14T23:13:20Z", true),  // Exact values bypass time strategy.

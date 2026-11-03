@@ -117,7 +117,7 @@ fn jwt_companion_keeps_request_relation_while_other_business_times_use_response_
     let passed = assert_recorded_response(copy(&options)).unwrap();
     assert!(passed.passed, "{:?}", passed.differences);
     change_body(&options, false, |body| {
-        body["createdAt"] = json!(at(TARGET + 30))
+        body["createdAt"] = json!(at(TARGET - 3))
     });
     let rejected = assert_recorded_response(options).unwrap();
     assert!(!rejected.passed);

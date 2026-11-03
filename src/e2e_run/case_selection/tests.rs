@@ -130,6 +130,63 @@ fn retries_accumulate_passes_but_keep_failed_incomplete_and_unexecuted_inputs() 
 }
 
 #[test]
+fn replay_timing_changes_start_fresh_pass_history() {
+    let root = tempfile::tempdir().unwrap();
+    let (layout, inventory, iteration) = fixture(root.path());
+    let mut first = attempt(&layout, &mut inventory.clone(), &iteration);
+    pass(&mut first, "-0");
+    save(&layout, &first);
+    assert_eq!(
+        attempt(&layout, &mut inventory.clone(), &iteration)
+            .cases
+            .len(),
+        8
+    );
+    for timing in ["fast", "recorded"] {
+        std::fs::write(
+            root.path().join(crate::config::regression::PATH),
+            format!("retry_failed_only: true\nreplay_timing: {timing}\n"),
+        )
+        .unwrap();
+        let mut fresh = attempt(&layout, &mut inventory.clone(), &iteration);
+        assert_eq!(fresh.cases.len(), 10, "changed timing {timing}");
+        pass(&mut fresh, "-0");
+        save(&layout, &fresh);
+        assert_eq!(
+            attempt(&layout, &mut inventory.clone(), &iteration)
+                .cases
+                .len(),
+            8
+        );
+    }
+}
+
+#[test]
+fn fast_interval_cap_changes_start_fresh_pass_history() {
+    let root = tempfile::tempdir().unwrap();
+    let (layout, inventory, iteration) = fixture(root.path());
+    for cap in [5, 0, 10] {
+        std::fs::write(
+            root.path().join(crate::config::regression::PATH),
+            format!(
+                "retry_failed_only: true\nreplay_timing: fast\nreplay_interval_cap_ms: {cap}\n"
+            ),
+        )
+        .unwrap();
+        let mut fresh = attempt(&layout, &mut inventory.clone(), &iteration);
+        assert_eq!(fresh.cases.len(), 10, "changed cap {cap}");
+        pass(&mut fresh, "-0");
+        save(&layout, &fresh);
+        assert_eq!(
+            attempt(&layout, &mut inventory.clone(), &iteration)
+                .cases
+                .len(),
+            8
+        );
+    }
+}
+
+#[test]
 fn final_round_disabled_setting_new_workflow_and_changed_inventory_run_every_case() {
     let root = tempfile::tempdir().unwrap();
     let (layout, inventory, mut iteration) = fixture(root.path());

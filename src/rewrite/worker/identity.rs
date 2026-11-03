@@ -75,29 +75,44 @@ pub(super) fn report_scope(
             !runtime_observation && options.activity != RewriteWorkerActivity::HandoffReady,
             "pooled workflows require implementer report/handoff with explicit API, dispatch and lease generation"
         );
-        let path = options
-            .review_report
-            .as_deref()
-            .context("pool integration requires the exact original review report")?;
-        let report: RewriteReviewReport = serde_json::from_slice(&std::fs::read(path)?)?;
-        if let Some(scope) = report.scope {
-            scope
+        if let Some(path) = options.review_report.as_deref() {
+            let report: RewriteReviewReport = serde_json::from_slice(&std::fs::read(path)?)?;
+            if let Some(scope) = report.scope {
+                scope
+            } else {
+                let integration = report
+                    .integration
+                    .context("integration report has no API handoff identities")?;
+                let mut entries = integration
+                    .handoffs
+                    .iter()
+                    .filter(|entry| Some(&entry.handoff_id) == options.handoff_id.as_ref());
+                let entry = entries
+                    .next()
+                    .context("handoff id is absent from the integration report")?;
+                ensure!(
+                    entries.next().is_none(),
+                    "handoff id identifies multiple API deliveries"
+                );
+                entry.scope.clone()
+            }
         } else {
-            let integration = report
-                .integration
-                .context("integration report has no API handoff identities")?;
-            let mut entries = integration
-                .handoffs
-                .iter()
-                .filter(|entry| Some(&entry.handoff_id) == options.handoff_id.as_ref());
-            let entry = entries
+            let handoff = options
+                .handoff_id
+                .as_deref()
+                .context("integration requires a handoff id")?;
+            let mut scopes = runtime::scopes(state).into_iter().filter(|scope| {
+                runtime::observation(state, scope)
+                    .is_some_and(|o| o.handoff_id.as_deref() == Some(handoff))
+            });
+            let scope = scopes
                 .next()
-                .context("handoff id is absent from the integration report")?;
+                .context("handoff has no current implementation dispatch")?;
             ensure!(
-                entries.next().is_none(),
-                "handoff id identifies multiple API deliveries"
+                scopes.next().is_none(),
+                "handoff identifies multiple API deliveries"
             );
-            entry.scope.clone()
+            scope
         }
     } else {
         resolve_handle(state, &options.agent_handle, runtime_observation)?
@@ -119,13 +134,10 @@ pub(super) fn report_scope(
             | RewriteWorkerActivity::Idle
     ) {
         ensure!(
-            options.review_report.is_none(),
+            options.review_report.is_none() && options.delivery_commit.is_none(),
             "runtime observations do not accept a review report; report a fresh task-runtime query"
         );
-    } else {
-        let path = options.review_report.as_deref().context(
-            "handoff_ready, integrated and rework_required require --review-report with the original dispatch; resume an incomplete delivery as idle",
-        )?;
+    } else if let Some(path) = options.review_report.as_deref() {
         let bytes = std::fs::read(path)
             .with_context(|| format!("cannot read review document {}", path.display()))?;
         let report: RewriteReviewReport = serde_json::from_slice(&bytes)

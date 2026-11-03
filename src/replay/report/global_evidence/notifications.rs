@@ -227,6 +227,7 @@ impl NotificationEvidence {
                         "notification source line is invalid"
                     );
                     items.push(serde_json::to_value(CommandUnusedReport {
+                        source_exchange_id: None,
                         index: entry.location.line - 1,
                         case_id: None,
                         source: ReplaySource::Startup,

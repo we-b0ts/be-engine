@@ -303,7 +303,7 @@ prefixes still gate business inputs. Missing Source clocks, unmanaged execution
 without dependency feedback, `preserve_input_timing: true`, or `recorded` mode
 retain the original timeline without additional delivery-prefix gates.
 Neither mode changes immutable recordings, their policy, lane
-matching or dependency assertions, and `http_stream_timing` remains independent.
+matching or dependency assertions, and `regression.yaml` stream timing remains independent.
 
 ## Closing a case and background work
 

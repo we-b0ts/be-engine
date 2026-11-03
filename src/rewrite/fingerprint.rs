@@ -43,6 +43,14 @@ pub(super) fn replay_identity(target_root: &Path) -> Result<String> {
     let mut hash = Fnv1a::default();
     hash.update(b"rewrite-replay-identity-v1");
     hash.update(review_fingerprint(target_root)?.as_bytes());
+    let regression = crate::config::regression::RegressionScope::load(target_root)?;
+    if let Some(timing) = regression.replay_timing {
+        hash.update(b"regression-replay-timing-v1");
+        hash.update(&serde_json::to_vec(&timing)?);
+        if timing == crate::replay::ReplayStreamTiming::Fast {
+            hash.update(&regression.replay_interval_cap_ms.to_le_bytes());
+        }
+    }
     let policy = policy_file(target_root)?;
     match fs::read(&policy) {
         Ok(bytes) => {
@@ -359,6 +367,43 @@ mod tests {
     fn ids_are_stable_and_framed() {
         assert_eq!(id(&["ab", "c"]), id(&["ab", "c"]));
         assert_ne!(id(&["ab", "c"]), id(&["a", "bc"]));
+    }
+
+    #[test]
+    fn replay_timing_binds_execution_without_changing_target_or_code_identity() {
+        let target = crate::rewrite::worker::tests::configured_target();
+        let root = target.path();
+        let baseline = replay_identity(root).unwrap();
+        let target_identity = repository_fingerprint(root).unwrap();
+        let code_identity = code_fingerprint(root).unwrap();
+        let regression = root.join(crate::config::regression::PATH);
+        fs::write(
+            &regression,
+            "retry_failed_only: true\nreplay_interval_cap_ms: 100\n",
+        )
+        .unwrap();
+        assert_eq!(replay_identity(root).unwrap(), baseline);
+        fs::write(&regression, "replay_timing: fast\n").unwrap();
+        let fast = replay_identity(root).unwrap();
+        assert_ne!(fast, baseline);
+        fs::write(
+            &regression,
+            "replay_timing: fast\nreplay_interval_cap_ms: 0\n",
+        )
+        .unwrap();
+        assert_ne!(replay_identity(root).unwrap(), fast);
+        fs::write(&regression, "replay_timing: recorded\n").unwrap();
+        let recorded = replay_identity(root).unwrap();
+        assert_ne!(recorded, fast);
+        assert_ne!(recorded, baseline);
+        fs::write(
+            &regression,
+            "replay_timing: recorded\nreplay_interval_cap_ms: 0\n",
+        )
+        .unwrap();
+        assert_eq!(replay_identity(root).unwrap(), recorded);
+        assert_eq!(repository_fingerprint(root).unwrap(), target_identity);
+        assert_eq!(code_fingerprint(root).unwrap(), code_identity);
     }
 
     #[test]

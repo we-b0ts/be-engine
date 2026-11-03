@@ -65,6 +65,7 @@ impl MotanReplayState {
                 position: Position { section: 0, index },
                 visible: true,
                 value: serde_json::to_value(CommandUnusedReport {
+                    source_exchange_id: None,
                     index,
                     case_id: exchange.case_id.clone(),
                     source: exchange.source,
@@ -93,6 +94,7 @@ pub(super) fn unused_iter(
             exchange.source.matches_scope(source) && !exchange.status.is_consumed()
         })
         .map(move |(index, exchange)| CommandUnusedReport {
+            source_exchange_id: None,
             index,
             case_id: exchange.case_id.clone(),
             source: exchange.source,

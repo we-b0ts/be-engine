@@ -35,16 +35,7 @@ pub(crate) fn selector(value: &Value) -> Value {
     if let Some(fields) = selected.as_object_mut() {
         fields.insert(
             "_capture_complete".into(),
-            Value::Bool(
-                value["replay_safe"] != false
-                    && value["response"]["status"] != "incomplete"
-                    && value["capture_incomplete"] != true
-                    && value["capture_failure"] != true
-                    && value["request_body"]["truncated"] != true
-                    && value["response_body"]["truncated"] != true
-                    && value["response"]["truncated"] != true
-                    && value["response"]["rows_truncated"] != true,
-            ),
+            Value::Bool(capture_complete(value)),
         );
         if let Some(Value::String(raw)) = fields.get_mut("uri")
             && let Ok(uri) = raw.parse::<hyper::Uri>()
@@ -64,6 +55,17 @@ pub(crate) fn selector(value: &Value) -> Value {
         }
     }
     selected
+}
+
+pub(crate) fn capture_complete(value: &Value) -> bool {
+    value["replay_safe"] != false
+        && value["response"]["status"] != "incomplete"
+        && value["capture_incomplete"] != true
+        && value["capture_failure"] != true
+        && value["request_body"]["truncated"] != true
+        && value["response_body"]["truncated"] != true
+        && value["response"]["truncated"] != true
+        && value["response"]["rows_truncated"] != true
 }
 
 pub(crate) fn is_evidence(value: &Value) -> bool {

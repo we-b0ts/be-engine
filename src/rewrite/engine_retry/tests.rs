@@ -319,7 +319,7 @@ fn consumed_legacy_retry_survives_restart_even_without_a_new_result() {
 }
 
 #[test]
-fn status_is_read_only_and_keeps_delivery_review_without_worker_handoff() {
+fn status_is_read_only_and_releases_engine_retry_without_delivery_review() {
     let target = worker::tests::configured_target();
     let state = runtime_state(None);
     let store = RewriteStore::new(target.path()).unwrap();
@@ -331,7 +331,7 @@ fn status_is_read_only_and_keeps_delivery_review_without_worker_handoff() {
         })
         .unwrap();
         assert!(
-            matches!(status.action, RewriteAction::SourceReviewRequired { .. }),
+            matches!(status.action, RewriteAction::AdvanceRequired { .. }),
             "{:?}",
             status.action
         );
@@ -352,11 +352,12 @@ fn status_is_read_only_and_keeps_delivery_review_without_worker_handoff() {
     let details = rewrite::coordination::status_details(target.path(), &state).unwrap();
     assert!(!details.ready.contains_key("resume_worker"));
     assert!(!details.ready.contains_key("dispatch_worker"));
-    assert_eq!(details.ready.get("target_quality"), Some(&1));
+    assert!(!details.ready.contains_key("target_quality"));
+    assert_eq!(details.ready.get("verify_api"), Some(&1));
 }
 
 #[tokio::test]
-async fn next_keeps_review_gate_and_does_not_consume_a_retry_before_admission() {
+async fn next_reaches_recording_preparation_without_review_and_keeps_unstarted_retry() {
     let target = worker::tests::configured_target();
     let state = runtime_state(Some("engine-revision-v1:old"));
     let store = RewriteStore::new(target.path()).unwrap();
@@ -367,11 +368,8 @@ async fn next_keeps_review_gate_and_does_not_consume_a_retry_before_admission() 
         source_route: None,
     })
     .await
-    .unwrap();
-    assert!(matches!(
-        next.action,
-        RewriteAction::SourceReviewRequired { .. }
-    ));
+    .unwrap_err();
+    assert!(next.to_string().contains("case source"), "{next:#}");
     assert!(traditional_pending(
         &store.load().unwrap().unwrap().active_slice
     ));

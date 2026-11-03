@@ -138,7 +138,8 @@ never relabel an old completion with the current API's dispatch or lease.
 Pooled running/queued/idle observations use `implementer report` with explicit
 API/dispatch/lease identity. A completed subset uses `implementer handoff --slot
 N --agent-handle HANDLE --deliveries FILE`, whose JSON entries bind each API,
-dispatch, lease generation, unique handoff ID and original passing review report.
+dispatch, lease generation, unique handoff ID and exact delivery_commit.
+No worker review check or report is required.
 This submission may cross assigned groups. See
 [fixed implementers](coordinator-implementers.md#runtime-activity-and-partial-handoff).
 
@@ -152,7 +153,8 @@ This submission may cross assigned groups. See
 | `rework_required` | That handoff needs implementer changes; the integrator retains routine formatting/lint repair. |
 
 Integration and rework retain `worker report` with the original handle, unique
-handoff ID and original review report. Those exact delivery identities identify
+handoff ID, with --delivery-commit for the exact published integration candidate.
+Rework needs the original handoff, without a review report. Those identities identify
 one API even when the handle owns many. Do not use handle-only `worker report`
 for pooled runtime observations or use it instead of batch handoff.
 
@@ -162,10 +164,10 @@ idle dispatch can invalidate old planner preconditions. If the API no longer
 needs implementation but its slot still retains a lease, report idle using that
 lease to release it. Never relabel old results with a newly issued dispatch.
 
-Every usable code delivery requires a current passing per-API `review check`
-report. Retain workflow/recording, API/group, issue, binding, dispatch and lease;
+Usable delivery requires committed managed code and exact identities, without
+review check. Retain workflow/recording, API/group, issue, binding, dispatch and lease;
 proven cause, Source evidence, changed files/shared impact, exact commit, focused
-test results, original absolute report path, required inputs and remaining risks.
+test results, delivery_commit, required inputs and remaining risks.
 The engine freezes accepted commits and reports before reusing the checkout.
 Implementers need no mandatory Clippy run; the integrator executes the configured
 quality_check and reports success at the existing final pre-revalidation stage. See [review](coordinator-review.md).

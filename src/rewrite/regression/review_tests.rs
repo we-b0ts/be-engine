@@ -143,8 +143,8 @@ fn assert_batch_pending(envelope: &rewrite::RewriteActionEnvelope) {
     );
 }
 
-#[tokio::test]
-async fn new_code_changes_require_review_before_verification_even_without_history() {
+#[test]
+fn new_code_changes_do_not_require_review_before_verification() {
     for kind in ["working", "staged", "committed", "untracked", "deleted"] {
         let target = fixture();
         begin(options(target.path())).unwrap();
@@ -166,24 +166,20 @@ async fn new_code_changes_require_review_before_verification_even_without_histor
         assert!(
             matches!(
                 status.action,
-                rewrite::RewriteAction::SourceReviewRequired { .. }
+                rewrite::RewriteAction::AdvanceRequired { .. }
             ),
             "{kind}"
         );
         assert!(!status.terminal_allowed);
-        let next = rewrite::next_rewrite(rewrite::RewriteNextOptions {
-            target_root: target.path().into(),
-            api: None,
-            source_route: None,
-        })
-        .await
-        .unwrap();
+        let state = RewriteStore::new(target.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
         assert!(
-            matches!(
-                next.action,
-                rewrite::RewriteAction::SourceReviewRequired { .. }
-            ),
-            "{kind}"
+            review::gate(target.path(), &state, "master")
+                .unwrap()
+                .is_none()
         );
         assert!(matches!(
             traffic_operation::state(target.path()).unwrap(),
@@ -284,7 +280,7 @@ fn assert_first_traffic_policy_update(source_effect: bool) {
         assert!(
             review::gate(target.path(), &state, "master")
                 .unwrap()
-                .is_some()
+                .is_none()
         );
     }
 }

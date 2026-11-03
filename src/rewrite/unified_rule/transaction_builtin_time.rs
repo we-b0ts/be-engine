@@ -16,10 +16,10 @@ fn fixture(target_at: &str) -> Fixture {
 
 #[test]
 fn automatic_response_time_preflight_uses_completion_without_an_authored_time_field() {
-    for target in ["2026-10-16T00:02:30Z", "2026-10-16T00:01:30Z"] {
+    for target in ["2026-10-16T00:02:30Z", "2026-10-16T00:04:03Z"] {
         let fixture = fixture(target);
         let planned = fixture.plan();
-        if target == "2026-10-16T00:01:30Z" {
+        if target == "2026-10-16T00:04:03Z" {
             assert!(
                 format!("{:#}", planned.unwrap_err())
                     .contains("time difference does not preserve the anchor difference")

@@ -128,7 +128,11 @@ pub struct ImplementerDelivery {
     pub dispatch_id: String,
     pub lease_generation: u64,
     pub handoff_id: String,
+    #[serde(default)]
     pub review_report: PathBuf,
+    /// Commit frozen by engine admission; source review is a final-stage concern.
+    #[serde(default)]
+    pub delivery_commit: Option<String>,
 }
 
 #[derive(Debug, Clone)]

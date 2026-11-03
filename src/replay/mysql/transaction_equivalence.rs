@@ -207,12 +207,6 @@ impl Registry {
                 source_reason: plan.reason,
             };
             for group in plan.transactions {
-                if group.strict {
-                    requirement
-                        .source_reason
-                        .get_or_insert("source_statement_effects_unsupported");
-                    requirement.reason = requirement.source_reason.unwrap();
-                }
                 let Some(all) = group
                     .members
                     .iter()
@@ -223,6 +217,16 @@ impl Registry {
                     requirement.blocked = true;
                     break;
                 };
+                if group.strict
+                    && all
+                        .iter()
+                        .any(|&index| source::requires_source_setup(&exchanges[index].record))
+                {
+                    requirement
+                        .source_reason
+                        .get_or_insert("source_statement_effects_unsupported");
+                    requirement.reason = requirement.source_reason.unwrap();
+                }
                 let first_write = if group.strict || group.explicit && group.write_count != 0 {
                     0
                 } else {

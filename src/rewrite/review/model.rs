@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::rewrite::{RewriteCommandSpec, RewriteWorkScope};
+use crate::rewrite::RewriteWorkScope;
 
 pub const RULE_VERSION: &str = "target-source-review-v5";
 
@@ -163,10 +163,8 @@ pub struct IntegrationHandoffReview {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ReviewContext {
+pub struct DeliveryContext {
     pub assignment: Option<ReviewAssignment>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rework: Option<ReviewRework>,
-    pub check: RewriteCommandSpec,
-    pub integrated_findings: RewriteCommandSpec,
+    pub required_repairs: Option<ReviewRework>,
 }

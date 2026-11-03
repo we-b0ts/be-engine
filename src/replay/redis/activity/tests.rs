@@ -69,7 +69,15 @@ pub(in crate::replay::redis) fn events() -> Vec<Value> {
 }
 
 fn fixture(enabled: bool) -> (tempfile::TempDir, RedisReplayState) {
-    state_with_policy(&events(), document(enabled))
+    let (root, state) = state_with_policy(&events(), document(enabled));
+    state.request_contracts.set_request_times(
+        "case",
+        crate::replay::assertion::RequestTimes {
+            source: Some("2020-01-01T00:00:00Z".parse().unwrap()),
+            target: Some(chrono::Utc::now()),
+        },
+    );
+    (root, state)
 }
 
 #[test]

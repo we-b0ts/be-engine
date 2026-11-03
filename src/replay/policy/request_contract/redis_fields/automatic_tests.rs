@@ -126,6 +126,8 @@ fn automatic_scalar_delivery_and_copies_keep_raw_resp_payloads() {
         )
         .unwrap()
         .unwrap();
+    // A standalone comparison has no API elapsed budget to justify this shift.
+    owner.set_request_times("case", Default::default());
     let mut write = RedisRequestContext::without_exchange("case", &target, 0, "SET");
     write.recorded_at = DateTime::from_timestamp(3000, 0);
     write.actual_at = DateTime::from_timestamp(7000, 0);

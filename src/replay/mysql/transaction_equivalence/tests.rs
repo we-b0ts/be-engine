@@ -168,7 +168,7 @@ fn rollback_is_a_distinct_supported_transaction_end() {
 fn strict_source_effects_require_coverage_without_granting_setup_omission() {
     let mut values = records();
     values.truncate(4);
-    values[1]["sql"] = json!("SELECT id FROM users WHERE id=1 FOR UPDATE");
+    values[1]["sql"] = json!("SELECT @session_value FROM users WHERE id=1");
     let mut r = registry(&values);
     assert!(r.requires_witness(3));
     assert!(segment(&mut r, &mut Witness::default(), &[1, 2, 3], "COMMIT").is_empty());
@@ -178,6 +178,31 @@ fn strict_source_effects_require_coverage_without_granting_setup_omission() {
     assert_eq!(
         proof["source_transactions"][0]["strict_source_effects"],
         true
+    );
+    assert!(!r.requires_witness(3));
+}
+
+#[test]
+fn a_real_complete_locking_transaction_can_prove_default_autocommit_equivalence() {
+    let mut values = records();
+    values.truncate(4);
+    values[1]["sql"] = json!("SELECT id FROM users WHERE id=1 FOR UPDATE");
+    let mut r = registry(&values);
+    assert!(r.requires_witness(3));
+    assert_eq!(
+        segment(&mut r, &mut Witness::default(), &[1, 2, 3], "COMMIT"),
+        vec![0]
+    );
+    let proof = r.diagnostic(0).unwrap();
+    assert_eq!(proof["covered_transaction_count"], 1);
+    assert_eq!(proof["reason"], "equivalent_write_transactions");
+    assert_eq!(
+        proof["source_transactions"][0]["strict_source_effects"],
+        true
+    );
+    assert_eq!(
+        proof["source_transactions"][0]["autocommit_eligible"],
+        false
     );
     assert!(!r.requires_witness(3));
 }

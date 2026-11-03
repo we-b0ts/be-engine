@@ -25,6 +25,7 @@ mod redis_argument;
 pub use redis_argument::query_rewrite_redis_argument_for_scope;
 mod http_requests;
 mod redis_stream_progress;
+mod report;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
 mod mysql_diagnosis;
 mod overview;
@@ -251,7 +252,7 @@ fn source_process_next_step(kind: RewriteIssueKind) -> &'static str {
             "Inspect source startup and readiness paths only for matching bootstrap dependencies."
         }
         RewriteIssueKind::TargetQuality => {
-            "Read review show and address the target source quality finding; no traffic diagnosis is required."
+            "Read context.delivery.required_repairs and address the assigned code finding; no traffic diagnosis is required."
         }
     }
 }
@@ -771,7 +772,7 @@ fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
             "Use this evidence when target startup or readiness may depend on source bootstrap traffic"
         }
         RewriteIssueKind::TargetQuality => {
-            "Read review show and address the target source quality finding; no traffic diagnosis is required."
+            "Read context.delivery.required_repairs and address the assigned code finding; no traffic diagnosis is required."
         }
     }
 }

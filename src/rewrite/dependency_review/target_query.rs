@@ -8,6 +8,8 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{fs, path::Path};
+#[cfg(test)]
+mod tests;
 
 fn context(root: &Path, state: &RewriteState) -> Result<crate::E2eRunContext> {
     Ok(crate::E2eRunContext {
@@ -34,6 +36,7 @@ pub(super) fn inventory(root: &Path, state: &RewriteState, offset: usize) -> Res
         "actual batch report identity differs"
     );
     let manifest: WitnessManifest = serde_json::from_value(report["policy_witnesses"].clone())?;
+    manifest.load_graph(&reference.path)?;
     let graph = manifest
         .graph()
         .context("actual batch has no independent Target observation graph")?;
@@ -80,24 +83,50 @@ pub fn dependency_attribution_target(
     );
     let (root, store) = super::open(&context_options.target_root)?;
     let state = store.load()?.context("rewrite workflow absent")?;
+    let focused = state
+        .group_id
+        .as_deref()
+        .zip(state.active_issue.as_ref().map(|issue| issue.attempt));
     let reference =
-        crate::e2e_run::batch_diagnostic_report(context(&root, &state)?, Some(session))?;
-    let bytes = fs::read(&reference.path)?;
+        crate::e2e_run::session_diagnostic_report(context(&root, &state)?, session, focused)?;
+    request(
+        &reference.path,
+        &reference.key_context,
+        reference.sequence,
+        session,
+        observation,
+        pointer,
+    )
+}
+
+fn request(
+    path: &Path,
+    key_context: &Path,
+    sequence: u64,
+    session: &str,
+    observation: &str,
+    pointer: &str,
+) -> Result<Value> {
+    let bytes = fs::read(path)?;
     let report: Value = serde_json::from_slice(&bytes)?;
     ensure!(
         report["version"] == 7 && report["session_id"].as_str() == Some(session),
         "actual Target report belongs to another session"
     );
     let manifest: WitnessManifest = serde_json::from_value(report["policy_witnesses"].clone())?;
+    manifest.load_graph(path)?;
     let graph = manifest
         .graph()
         .context("actual Target observation graph absent")?;
     ensure!(
-        graph
-            .replay
-            .as_ref()
-            .is_some_and(|binding| binding.session_id == session),
-        "actual Target graph belongs to another session"
+        graph.replay.as_ref().is_some_and(|binding| {
+            binding.session_id == session
+                && report["replay_policy"]["fingerprint"]
+                    .as_str()
+                    .or_else(|| report["target_observation_policy_fingerprint"].as_str())
+                    == Some(binding.policy_fingerprint.as_str())
+        }),
+        "actual Target graph belongs to another session or policy"
     );
     let mut selected = graph
         .targets
@@ -113,12 +142,29 @@ pub fn dependency_attribution_target(
             && target.metadata.surface == Surface::DependencyRequest,
         "selected bytes are not an independent actual dependency request"
     );
-    let artifact = crate::policy_evidence::artifact_path(&reference.path, &manifest)?;
+    if target.metadata.run_owner.is_none() {
+        let case = report["cases"]
+            .as_array()
+            .and_then(|cases| {
+                cases
+                    .iter()
+                    .find(|case| case["case_id"] == target.metadata.case_id)
+            })
+            .context("Target observation is outside the selected report Cases")?;
+        let clock = case["target_request_started_at"]
+            .as_str()
+            .map(str::parse::<chrono::DateTime<chrono::Utc>>)
+            .transpose()?;
+        ensure!(
+            clock == target.metadata.clocks.case.target,
+            "Target observation Case clock differs from the report"
+        );
+    }
+    let artifact = crate::policy_evidence::artifact_path(path, &manifest)?;
     crate::dependency_index::FileStamp::read_native(&artifact)?;
     // Per-entry authentication permits diagnosis of retained observations when total
     // coverage is incomplete. Such a query never becomes a formal rule proof.
-    let raw =
-        crate::policy_evidence::read_target(&artifact, &manifest, index, &reference.key_context)?;
+    let raw = crate::policy_evidence::read_target(&artifact, &manifest, index, key_context)?;
     let protocol = target
         .metadata
         .resource
@@ -136,7 +182,7 @@ pub fn dependency_attribution_target(
         "missing"
     };
     Ok(
-        json!({"schema":SCHEMA,"actual_session_id":session,"actual_round":reference.sequence,"report_sha256":crate::policy_evidence::digest(&bytes),
+        json!({"schema":SCHEMA,"actual_session_id":session,"actual_round":sequence,"report_sha256":crate::policy_evidence::digest(&bytes),
         "target_observation_id":observation,"metadata":target.metadata,"pointer":pointer,
         "coverage_complete":manifest.complete && manifest.sealed,"coverage_error":report["target_observation_coverage_error"],
         "selected_value":if bounded{value}else{None},"selection_status":selection_status,
