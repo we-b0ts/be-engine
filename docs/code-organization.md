@@ -154,7 +154,9 @@ is unclear.
   adapters retain framing, session/request correlation and timed response-prefix
   materialization. `replay/exchange` owns shared termination timing and validation.
   Redis's ordered recording writer mirrors peer closes only before authenticated
-  recorder cleanup; pending exchanges still retain their incomplete-capture facts.
+  recorder cleanup. Closing an already disconnected client socket is idempotent
+  and does not create peer-termination evidence; pending exchanges still retain
+  their incomplete-capture facts.
   Protocol delivery owns claims, consumption and dirty reporting. See
   [dependency termination](dependency-termination.md).
   `replay/mysql/wire_diagnostics` owns opt-in connection-local protocol envelopes
