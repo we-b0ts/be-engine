@@ -635,12 +635,17 @@ pub(super) fn response_selection(
         .columns
         .get(index)
         .context("MySQL result column is absent")?;
-    let analysis = sql
-        .and_then(crate::mysql::sql::bounds::statement)
-        .and_then(|tokens| crate::mysql::sql::field_bindings::analyze(&tokens, database));
-    let origin = fields::response_origin(response, index, analysis.as_deref());
     if let Some(mysql) = &policy.mysql
-        && let Some(origin) = &origin
+        && let Some(origin) = fields::response_origin(response, index, None).or_else(|| {
+            // Native metadata already proves most result origins. Only legacy
+            // columns lacking it need SQL analysis; global/native value contracts
+            // do not use a physical origin at all. Avoid cloning and shaping the
+            // same statement for every result cell on those ordinary paths.
+            let analysis = sql
+                .and_then(crate::mysql::sql::bounds::statement)
+                .and_then(|tokens| crate::mysql::sql::field_bindings::analyze(&tokens, database));
+            fields::response_origin(response, index, analysis.as_deref())
+        })
         && let Some(field) = mysql.field(&origin.table, &origin.column)?
     {
         let source = scalar_value(source)?;
