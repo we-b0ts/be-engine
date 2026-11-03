@@ -442,6 +442,9 @@ struct VerificationRequestArgs {
     /// Bounded coordinator rationale identifying the shared or global change.
     #[arg(long)]
     reason: String,
+    /// Replay the selected APIs normally; retire an idle final sweep without accepting it.
+    #[arg(long)]
+    focused: bool,
 }
 
 #[derive(Debug, Args)]
@@ -648,6 +651,7 @@ async fn run(cli: Cli) -> Result<()> {
                     target_root,
                     apis: args.apis,
                     reason: args.reason,
+                    focused: args.focused,
                 })?,
                 pretty,
             ),

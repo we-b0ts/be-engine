@@ -99,3 +99,15 @@ Real deliveries use `state_observations` audits; actual failures and in-flight
 calls retain their normal failure and drain obligations. Omission audits are
 bounded to 1000 entries with an explicit omitted count. Existing key, call,
 observation, epoch and value-size limits remain enforced.
+
+## Replaying a completed API after policy changes
+
+Use `backend-rewrite verification request --focused --api /api/v1/responses
+--reason 'Redis state policy changed'` to invalidate the prior API success and
+request ordinary fresh Replay of its existing complete cases. Follow the returned
+`next` command. This also recovers an idle API queued in a final sweep that cannot
+start because the sealed run contains an incomplete input. The request retires
+that final admission without accepting it; it cannot discard active repairs,
+pending plans or an in-flight operation. Other APIs and verification obligations
+remain outstanding. The final full sweep still requires complete sealed Source
+evidence and its own accepted review.

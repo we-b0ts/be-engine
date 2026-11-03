@@ -154,10 +154,15 @@ fn source_block(root: &Path, state: &RewriteState) -> Option<RewriteAction> {
         return Some(input("the current sealed Source run omits required workflow methods; historical focused API snapshots cannot form one full session".into(),
             missing.into_iter().map(|api|format!("restore {api} in the current workflow inventory with complete Source inputs; recapture does not erase selected methods, only explicit only/skip can narrow scope")).collect()));
     }
-    validate_source_coverage(state, &methods).err().map(|error| input(
-        format!("a current sealed Source run is required for final reconciliation: {error:#}"),
-        vec!["provide one current sealed Source run containing complete inputs for every required workflow method API".into()],
-    ))
+    validate_source_coverage(state, &methods).err().map(|error| {
+        let mut required=vec!["provide one current sealed Source run containing complete inputs for every required workflow method API".into()];
+        if crate::rewrite::revalidation::focused_replay_available(state) {
+            let apis=methods.iter().map(|api| crate::rewrite::api_selector::public_api(api)).collect::<BTreeSet<_>>()
+                .into_iter().map(|api|format!("--api {api}")).collect::<Vec<_>>().join(" ");
+            required.push(format!("To replay prior successful APIs against their existing complete cases without final acceptance, run backend-rewrite verification request --focused {apis} --reason 'verification policy changed; rerun API contracts', then follow next. The final full sweep still requires complete sealed Source evidence."));
+        }
+        input(format!("a current sealed Source run is required for final reconciliation: {error:#}"),required)
+    })
 }
 
 pub(in crate::rewrite) fn required_action(

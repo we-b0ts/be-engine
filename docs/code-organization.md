@@ -1319,6 +1319,10 @@ is unclear.
   workers. Recognizing static routes or repeating existing patterns advances the
   catalog while preserving capture policy bytes, identities and proofs.
   `work_scope.rs` owns the API worker scope identity.
+  `revalidation/focused` owns explicit ordinary replay of prior API successes,
+  including retirement of idle final-sweep admission. It preserves all Source
+  evidence and outstanding final obligations; final completeness stays with
+  `dependency_review/batch`.
   `revalidation.rs` owns the coordinator's explicit verification request
   boundary and projection for deferred API status. Requests and scoped Next obey
   the same round gate and cannot turn stale successes into first-pass work.

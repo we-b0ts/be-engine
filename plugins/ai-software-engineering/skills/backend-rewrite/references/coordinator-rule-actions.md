@@ -383,3 +383,10 @@ bounded `target` queries. Do not publish private queried values in summaries or
 equate authenticated observations with Source ownership or consumption. Only the
 engine's current complete-session receipt closes final batch verification. See
 [dependency attribution](../../../../../docs/dependency-attribution.md).
+
+For a policy update after ordinary API completion, `verification request --focused
+--api <route> --reason <policy-change>` requests fresh API Replay without entering
+final acceptance. It can also retire idle final admission blocked on recording
+completeness. Follow its returned action; preserve the complete final Source gate,
+active repair issues and all outstanding obligations. See
+[Redis state contracts](../../../../../docs/redis-state-contracts.md).
