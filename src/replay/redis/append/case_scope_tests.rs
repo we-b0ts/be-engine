@@ -81,7 +81,7 @@ fn fixture() -> (tempfile::TempDir, RedisReplayState, Vec<CaseSource>) {
     std::fs::write(
         &policy,
         json!({"format":"traffic-policy/v3","redis":{"keys":{
-            "content:*":{"append_stream":true}
+            "content:*":{"state":{"append":"concatenate"}}
         }}})
         .to_string(),
     )

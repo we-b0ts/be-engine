@@ -70,7 +70,7 @@ fn activity_refresh_declaration_is_closed_and_does_not_allow_non_timestamp_field
         json!([""]),
     ] {
         let mut policy = document(true);
-        policy["redis"]["keys"]["activity:*"]["activity_refresh"]["fields"] = fields;
+        policy["redis"]["keys"]["activity:*"]["state"]["set"]["fields"] = fields;
         assert!(
             crate::policy::parse_policy(&policy.to_string())
                 .and_then(|p| crate::policy::compile_policy(&p))
@@ -78,7 +78,7 @@ fn activity_refresh_declaration_is_closed_and_does_not_allow_non_timestamp_field
         );
     }
     let mut policy = document(true);
-    policy["redis"]["keys"]["activity:*"]["activity_refresh"]["fields"] = json!(["/user_id"]);
+    policy["redis"]["keys"]["activity:*"]["state"]["set"]["fields"] = json!(["/user_id"]);
     let (_root, mut state) = state_with_policy(&events(), policy);
     assert!(state.prepare_activity_case("case").is_err());
     assert!(state.activity_refresh.profiles.is_empty());

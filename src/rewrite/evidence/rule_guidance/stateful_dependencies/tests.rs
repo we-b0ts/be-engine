@@ -11,17 +11,17 @@ fn capabilities(facts: &Value) -> Vec<String> {
 #[test]
 fn redis_mechanisms_follow_observed_operations_without_assuming_source_proof() {
     for (command, expected) in [
-        ("APPEND", vec!["redis_append_stream"]),
-        ("EXPIRE", vec!["redis_expiry_refresh"]),
+        ("APPEND", vec!["redis_append_stream", "redis_loop_state"]),
+        ("EXPIRE", vec!["redis_expiry_refresh", "redis_loop_state"]),
         ("LRANGE", vec!["redis_read_back"]),
         (
             "GET",
             vec![
                 "redis_activity_refresh",
                 "redis_finite_process_get",
+                "redis_loop_state",
                 "redis_read_back",
                 "redis_read_commutation",
-                "redis_read_observation",
                 "redis_state_observations",
             ],
         ),
@@ -42,10 +42,16 @@ fn redis_mechanisms_follow_observed_operations_without_assuming_source_proof() {
 fn typed_failures_and_lane_blockers_supply_scoped_capability_discovery() {
     let facts = json!({"clusters":[{"protocol":"redis","representative":{"difference":{
         "actual":{"presence":"present","signature":{"command":"MGET","diagnostic":{"kind":"redis_append_stream_boundary_mismatch"}}}}}}]});
-    assert_eq!(capabilities(&facts), vec!["redis_append_stream"]);
+    assert_eq!(
+        capabilities(&facts),
+        vec!["redis_append_stream", "redis_loop_state"]
+    );
     let facts = json!({"clusters":[{"protocol":"redis","representative":{"difference":{
         "actual":{"presence":"present","signature":{"diagnostic":{"kind":"redis_state_observation_mismatch"}}}}}}]});
-    assert_eq!(capabilities(&facts), vec!["redis_state_observations"]);
+    assert_eq!(
+        capabilities(&facts),
+        vec!["redis_loop_state", "redis_state_observations"]
+    );
     let facts = json!({"clusters":[{"protocol":"redis","operations":{"SET":1},"representative":{"difference":{
         "actual":{"presence":"present","signature":{"diagnostic":{"kind":"lane_blocked","blocked_by":{"command":"GET"}}}}}}}]});
     assert!(capabilities(&facts).contains(&"redis_read_commutation".into()));
@@ -78,7 +84,7 @@ fn read_back_guidance_explains_key_local_state_and_finite_historical_reads() {
     assert!(
         state
             .hint
-            .contains("Historical reads before the first owned SET stay finite")
+            .contains("historical unknown values before the first owned SET stay finite")
     );
     assert!(state.hint.contains("positive write-to-read witness"));
 }
@@ -106,9 +112,9 @@ fn unified_source_bindings_expose_supported_delivery_without_inventing_target_ev
             "redis_activity_refresh",
             "redis_append_stream",
             "redis_finite_process_get",
+            "redis_loop_state",
             "redis_read_back",
             "redis_read_commutation",
-            "redis_read_observation",
             "redis_state_observations"
         ]
     );

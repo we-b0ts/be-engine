@@ -46,10 +46,8 @@ pub(super) fn validate_proposal(input: &str) -> Result<()> {
     {
         for (pattern, entry) in keys {
             if ![
-                "append_stream",
+                "state",
                 "read_commutation",
-                "read_observation",
-                "expiry_refresh",
                 "read_back",
                 "commands",
                 "key_format",

@@ -67,7 +67,7 @@ impl ReplayPolicyRuntime {
                 r.rule.effect,
                 crate::policy::NativeEffect::RedisAppendStream
                     | crate::policy::NativeEffect::RedisReadCommutation(_)
-                    | crate::policy::NativeEffect::RedisReadObservation
+                    | crate::policy::NativeEffect::RedisReadObservation(_)
                     | crate::policy::NativeEffect::RedisExpiryRefresh(_)
                     | crate::policy::NativeEffect::RedisActivityRefresh(_)
             )

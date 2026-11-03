@@ -225,7 +225,7 @@ fn redis_rule(rule: &PolicyRule) -> bool {
             crate::policy::NativeEffect::RedisSequence(_)
                 | crate::policy::NativeEffect::RedisAppendStream
                 | crate::policy::NativeEffect::RedisReadCommutation(_)
-                | crate::policy::NativeEffect::RedisReadObservation
+                | crate::policy::NativeEffect::RedisReadObservation(_)
                 | crate::policy::NativeEffect::RedisExpiryRefresh(_)
                 | crate::policy::NativeEffect::RedisActivityRefresh(_)
         )

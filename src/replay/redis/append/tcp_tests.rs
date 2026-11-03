@@ -32,11 +32,11 @@ async fn state_observations_support_merged_batches_over_real_tcp() {
 
 #[tokio::test]
 async fn key_only_append_and_expiry_rechunk_over_real_tcp() {
-    replay_tcp_scope(false, false, Some(&[b"a", b"b", b"cd"]), true).await;
+    replay_tcp_scope(false, false, Some(&[b"a", b"b", b"cd"]), true, None).await;
 }
 
 async fn replay_tcp(reject_first: bool, commute_reads: bool, observation_chunks: Option<&[&[u8]]>) {
-    replay_tcp_scope(reject_first, commute_reads, observation_chunks, false).await;
+    replay_tcp_scope(reject_first, commute_reads, observation_chunks, false, None).await;
 }
 
 async fn replay_tcp_scope(
@@ -44,6 +44,7 @@ async fn replay_tcp_scope(
     commute_reads: bool,
     observation_chunks: Option<&[&[u8]]>,
     key_only: bool,
+    nil_calls: Option<usize>,
 ) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -78,6 +79,16 @@ async fn replay_tcp_scope(
             event["sequence"] = json!(index + 1);
         }
     }
+    if nil_calls.is_some() {
+        events.insert(2, event(3, "GET", &[b"poll:7"], b"$-1\r\n"));
+        events.push(event(9, "GET", &[b"poll:7"], b"$-1\r\n"));
+        for (index, event) in events.iter_mut().enumerate() {
+            event["sequence"] = json!(index + 1);
+            let timestamp = format!("2020-01-01T00:00:{:02}Z", index + 1);
+            event["timestamp"] = json!(timestamp);
+            event["request_started_at"] = json!(timestamp);
+        }
+    }
     let original = events.iter().map(|e| format!("{e}\n")).collect::<String>();
     std::fs::write(case.join("dependencies.jsonl"), &original).unwrap();
     let mut identity = json!({"id":"block","match":{"api":"POST /tasks","resource":{"protocol":"redis","endpoint":"redis.test:6379","database":0},"operation":"SET","key":{"kind":"affix","prefix":"current:"}},
@@ -107,11 +118,11 @@ async fn replay_tcp_scope(
             }
         }
     }
-    std::fs::write(
-        root.join(".traffic-e2e/policy.yaml"),
-        json!({"format":"traffic-policy/v3","rules":rules}).to_string(),
-    )
-    .unwrap();
+    let mut policy = json!({"format":"traffic-policy/v3","rules":rules});
+    if nil_calls.is_some() {
+        policy["redis"] = json!({"keys":{"poll:*":{"state":{"get":{"transient":["nil"]}}}}});
+    }
+    std::fs::write(root.join(".traffic-e2e/policy.yaml"), policy.to_string()).unwrap();
     crate::replay::write_test_recording_network_manifest(root);
     let addr = "127.0.0.1:0".parse().unwrap();
     let runtime = Arc::new(
@@ -204,6 +215,9 @@ async fn replay_tcp_scope(
         ));
         requests.push((vec![b"EXPIRE", b"content:new", b"3600"], b":1\r\n".to_vec()));
     }
+    for _ in 0..nil_calls.unwrap_or(0) {
+        requests.push((vec![b"GET", b"poll:7"], b"$-1\r\n".to_vec()));
+    }
     requests.push((vec![b"GET", b"content:new"], b"$4\r\nabcd\r\n".to_vec()));
     for (parts, expected) in requests {
         let request = crate::redis::encode_array(&parts);
@@ -249,6 +263,12 @@ async fn replay_tcp_scope(
     assert_eq!(report.unmatched.len(), usize::from(reject_first));
     if reject_first {
         assert_eq!(report.unmatched[0].target_event_index, Some(0));
+    }
+    if let Some(calls) = nil_calls {
+        assert_eq!(
+            report.allowed_state_omissions.len(),
+            if calls == 0 { 2 } else { 0 }
+        );
     }
     assert!(report.unused_case.is_empty());
     assert!(report.unsupported.is_empty());
@@ -296,4 +316,14 @@ async fn replay_tcp_scope(
         crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap(),
         original
     );
+}
+
+#[tokio::test]
+async fn fast_loop_zero_nil_reads_and_merged_bytes_over_real_tcp() {
+    replay_tcp_scope(false, false, Some(&[b"abcd"]), true, Some(0)).await;
+}
+
+#[tokio::test]
+async fn fast_loop_many_nil_reads_and_split_bytes_over_real_tcp() {
+    replay_tcp_scope(false, false, Some(&[b"a", b"b", b"cd"]), true, Some(7)).await;
 }

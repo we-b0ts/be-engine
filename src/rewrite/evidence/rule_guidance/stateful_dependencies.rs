@@ -43,6 +43,15 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
         .filter(|_| query == QUERY_DIRTY_CLUSTERS)
     {
         if cluster["protocol"] == "redis" {
+            if ["GET", "SET", "APPEND", "EXPIRE"]
+                .iter()
+                .any(|op| operation(cluster, op))
+                || diagnostic(cluster, "redis_state_observation_mismatch")
+                || diagnostic(cluster, "redis_append_stream_mismatch")
+                || diagnostic(cluster, "redis_append_stream_boundary_mismatch")
+            {
+                capabilities.insert("redis_loop_state");
+            }
             if operation(cluster, "APPEND")
                 || diagnostic(cluster, "redis_append_stream_mismatch")
                 || diagnostic(cluster, "redis_append_stream_boundary_mismatch")
@@ -53,7 +62,6 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
                 capabilities.extend([
                     "redis_finite_process_get",
                     "redis_read_commutation",
-                    "redis_read_observation",
                     "redis_read_back",
                     "redis_state_observations",
                     "redis_activity_refresh",
@@ -84,6 +92,12 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
                 continue;
             }
             if let Some("redis") = binding["match"]["resource"]["protocol"].as_str() {
+                if matches!(
+                    binding["match"]["operation"].as_str(),
+                    Some("GET" | "SET" | "APPEND" | "EXPIRE")
+                ) {
+                    capabilities.insert("redis_loop_state");
+                }
                 match binding["match"]["operation"].as_str() {
                     Some("APPEND") => {
                         capabilities.insert("redis_append_stream");
@@ -92,7 +106,6 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
                         capabilities.extend([
                             "redis_finite_process_get",
                             "redis_read_commutation",
-                            "redis_read_observation",
                             "redis_read_back",
                             "redis_state_observations",
                             "redis_activity_refresh",
@@ -126,28 +139,28 @@ pub(super) fn hints(root: &Path, query: &str, facts: &Value) -> Vec<RewriteRuleH
 fn instruction(capability: &str) -> &'static str {
     match capability {
         "redis_activity_refresh" => {
-            "Declare redis.keys.<bounded-pattern>.activity_refresh: {fields: [/last_activity_at]} only for Source-proven metadata heartbeat refreshes; timestamp formats remain in json.fields. Prove the complete isolated SET/GET/DEL lifetime, byte-exact current-value Source reads, stable unselected object fields and one unchanged positive EX TTL. Target GET returns its current matched SET value, and each refresh SET requires an actual delivered GET and changes only declared current timestamps. Creation/deletion, stream bytes and content/list reads stay finite. No absent-key polling, arbitrary writes, APPEND permission or skipped reads is granted. See docs/redis-activity-refresh.md."
+            "Declare redis.keys.<bounded-pattern>.state.set: {reduce: last, fields: [/last_activity_at]} only for Source-proven metadata heartbeat refreshes; timestamp formats remain in json.fields. Prove the complete isolated SET/GET/DEL lifetime, byte-exact current-value Source reads, stable unselected object fields and one unchanged positive EX TTL. Target GET returns its current matched SET value, and each refresh SET requires an actual delivered GET and changes only declared current timestamps. Creation/deletion, stream bytes and content/list reads stay finite. No absent-key polling, arbitrary writes, APPEND permission or skipped reads is granted. See docs/redis-activity-refresh.md."
         }
         "redis_finite_process_get" => {
             "For independently proven process work, declare process_dependencies.tasks.<actual-task>.requests with redis operation: GET, bounded ports and exact keys, omitting initial_load_timeout_ms. Every original response stays single-use, changing values stay distinct, and exhaustion fails. A task name is a grouping label, not captured issuer provenance: prove every selected Source occurrence independently of request paths, including sibling APIs using the same key. Existing snapshot seeds/hits cannot supply finite evidence. This classification grants no default response, wildcard, stateful-session relaxation or reuse; adding a positive initial_load_timeout_ms instead retains initialization snapshot acquisition and its fresh-recording obligation. See docs/process-owned-redis.md."
         }
         "redis_append_stream" => {
-            "Declare redis.keys.<bounded-pattern>.append_stream: true for Source-proven ordered APPEND buffering. Prove complete writers, initial length, causal order and read/reset fences. Resource/database selectors are not authored; preparation and runtime partition actual endpoint, database and authentication identities. Every byte remains exact; other calls and finite TTL counts need their own proof. redis_append_stream_mismatch and redis_append_stream_boundary_mismatch identify a rejected byte prefix or early fence: inspect the cursor and required offset. See docs/redis-append-stream.md."
+            "Declare redis.keys.<bounded-pattern>.state.append: concatenate for Source-proven ordered APPEND buffering. Prove complete writers, initial length, causal order and read/reset fences. Resource/database selectors are not authored; preparation and runtime partition actual endpoint, database and authentication identities. Every byte remains exact; other calls and finite TTL counts need their own proof. redis_append_stream_mismatch and redis_append_stream_boundary_mismatch identify a rejected byte prefix or early fence: inspect the cursor and required offset. See docs/redis-append-stream.md."
         }
         "redis_read_commutation" => {
             "Declare redis.keys.<bounded-pattern>.read_commutation: true for finite nil GETs commuting with unrelated commands. Prove complete nil reads, only no-op DEL cleanup, independent Source scheduling and no shared, mutated or stateful ownership. Every recorded read remains required and extra reads fail. GET presence or lane_blocked alone does not prove nil values or independence. Actual resource/database/authentication partitions remain strict. See docs/redis-read-commutation.md."
         }
-        "redis_read_observation" => {
-            "Declare redis.keys.<bounded-pattern>.read_observation: true only for Source-proven absent-state polling between owned single-key DEL/UNLINK boundaries. Prove the independent poll loop, complete nil responses, closing deletion and absence of writers, expiry observers, foreign ownership or transactions. Repeats/coalescing require a delivered initial deletion and a Source witness in the current epoch; historical reads stay finite and the closing deletion ends permission. Both mutations remain required. This does not authorize non-nil or always-false cancellation handling. See docs/redis-absent-read-observations.md."
-        }
         "redis_expiry_refresh" => {
-            "Declare redis.keys.<bounded-pattern>.expiry_refresh: true for count-equivalent EXPIRE calls inside one proven key lifetime. Prove successful ordinary Case creation, one exact positive TTL, no expiry observers or external ownership, and complete causal Source traces shorter than the TTL. One delivered refresh must cover each observed lifetime; creation/deletion and ordinary writes remain finite. EXPIRE presence alone does not prove these prerequisites. See docs/redis-state-observations.md."
+            "Declare redis.keys.<bounded-pattern>.state.expire: refresh for count-equivalent EXPIRE calls inside one proven key lifetime. Prove successful ordinary Case creation, one exact positive TTL, no expiry observers or external ownership, and complete causal Source traces shorter than the TTL. One delivered refresh must cover each observed lifetime; creation/deletion and ordinary writes remain finite. EXPIRE presence alone does not prove these prerequisites. See docs/redis-state-observations.md."
         }
         "redis_read_back" => {
-            "Global JSON and scalar identity formats already reuse established same-Case Target values and anchor unknown inputs. For Source-proven variable GET observations of the latest raw SET identity, declare kind: identity, formats and read_back: true on the same redis.keys pattern. Prove complete same-key SET/DEL lifetimes and a positive write-to-read witness; historical reads before an owned write remain finite. Actual endpoint/database/authentication and causality remain checked. Additional list or compound native write/read relationships retain their typed contracts and finite counts. See docs/redis-read-back.md."
+            "Global JSON and scalar identity formats already reuse established same-Case Target values and anchor unknown inputs. For Source-proven GET delivery of the latest raw SET identity, declare kind: identity, formats and read_back: true on the same redis.keys pattern. Prove complete same-key SET/DEL lifetimes and a positive write-to-read witness; observation counts are declared separately with state.get. Actual endpoint/database/authentication and causality remain checked. Additional list or compound native write/read relationships retain their typed contracts and finite counts. See docs/redis-read-back.md."
         }
         "redis_state_observations" => {
-            "redis.keys.<bounded-pattern>.read_back: true enables Source-proven current-identity GET state observations with the key scalar identity format. Supply independent Source proof on the proposed key declaration, not an authored state_epochs or binding graph. A positive write-to-read witness and complete causal SET/DEL history are required. Historical reads before the first owned SET stay finite; no future, deleted, other-resource or other-user identity can be borrowed. Investigate redis_state_observation_mismatch at its reported state mutation. See docs/redis-state-observations.md."
+            "Declare redis.keys.<bounded-pattern>.state.get: observe for repeated observations of a proven stable state; state.get: {transient: [nil]} additionally permits zero nil reads. Supply independent Source proof of the loop, complete GET/SET/DEL history, stable non-nil observations and causal mutations. Every real SET/DEL and at least one non-nil observation remain required. Identity read_back is a separate value adapter with a positive write-to-read witness; historical unknown values before the first owned SET stay finite. See docs/redis-state-contracts.md."
+        }
+        "redis_loop_state" => {
+            "Investigate a Source loop, polling/retry body or debounce flush: scheduling can change 0..N intermediate iterations. Discover the earliest admission failure and its lane blocker, then inspect complete same-key Source reads, writes, TTL and cleanup across endpoints/users/Cases. Prove which observations are transient and which body effects are reducible; equal responses or call counts cannot prove a loop. Compose redis.keys.<bounded-pattern>.state: {get: {transient: [nil]}, append: concatenate, expire: refresh} only for effects independently proven on that selected key; companion keys get their own state declarations. Stable reads use get: observe; real SET transitions stay finite, while metadata heartbeat SETs can use set: {reduce: last, fields: [/last_activity_at]}. A business/order write is never optional merely because it occurs in a loop. read_back separately maps current identity values. Plan validates complete Source traces, apply requires a fresh fast Replay, and allowed_state_omissions audits skipped nil observations separately from physical consumption. See docs/redis-state-contracts.md."
         }
         _ => unreachable!("only bounded supported capabilities are selected"),
     }

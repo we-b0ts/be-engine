@@ -48,7 +48,10 @@ pub fn is_key_only_read_back(rule: &NativeRule) -> bool {
                 write_operation: "SET".into(),
                 argument_index: 1,
                 json_pointers: vec![],
-                state_epochs: true,
+                // Observation counts are an independent permission. Both
+                // finite value rendering and explicit native epochs retain
+                // this same bounded raw SET-to-GET value contract.
+                state_epochs: effect.read_back[0].contract.state_epochs,
             })
 }
 
@@ -97,13 +100,18 @@ mod tests {
     #[test]
     fn key_only_readback_has_no_hidden_api_resource_or_capture_permission() {
         assert!(is_key_only_read_back(&rule()));
+        let mut finite = rule();
+        if let NativeEffect::Identity(effect) = &mut finite.effect {
+            effect.read_back[0].contract.state_epochs = false;
+        }
+        assert!(is_key_only_read_back(&finite));
         for change in [
             "api",
             "path",
             "operation",
             "index",
             "json",
-            "epochs",
+            "read_operation",
             "unbounded",
         ] {
             let mut rule = rule();
@@ -133,7 +141,7 @@ mod tests {
                                 .contract
                                 .json_pointers
                                 .push("/id".into()),
-                            _ => effect.read_back[0].contract.state_epochs = false,
+                            _ => effect.read_back[0].contract.operation = "LRANGE".into(),
                         }
                     }
                 }

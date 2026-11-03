@@ -43,11 +43,8 @@ fn inline(value: &Value) -> Result<Option<String>> {
                 )
             || map.get("kind").and_then(Value::as_str) == Some("time_window")
             || [
-                "append_stream",
+                "state",
                 "read_commutation",
-                "read_observation",
-                "expiry_refresh",
-                "activity_refresh",
                 "read_back",
                 "key_format",
                 "commands",

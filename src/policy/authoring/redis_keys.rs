@@ -6,16 +6,14 @@ use serde::{Deserialize, Deserializer};
 use serde_yaml::{Mapping, Value};
 use sha2::{Digest, Sha256};
 
-use crate::policy::native::{
-    NativeKeySelector, RedisActivityRefreshEffect, RedisExpiryRefreshEffect,
-    RedisReadCommutationEffect,
-};
+use crate::policy::native::{NativeKeySelector, RedisReadCommutationEffect};
 use crate::policy::{
     GlobalField, NativeEffect, NativeMatch, NativeRule, PolicyRule, Proof, Resource,
 };
 
 mod commands;
 mod key_format;
+mod state;
 mod stateful;
 
 const ID_PREFIX: &str = "redis.key.";
@@ -29,11 +27,8 @@ pub(super) struct Entry {
 
 #[derive(Debug, Clone)]
 enum Behavior {
-    Append,
+    State(state::Operation),
     ReadCommutation,
-    ReadObservation,
-    ExpiryRefresh,
-    ActivityRefresh(RedisActivityRefreshEffect),
     ReadBack,
     Commands {
         key_format: Option<key_format::KeyFormat>,
@@ -44,21 +39,16 @@ enum Behavior {
 impl Behavior {
     fn name(&self) -> &'static str {
         match self {
-            Self::Append => "append_stream",
+            Self::State(operation) => operation.name(),
             Self::ReadCommutation => "read_commutation",
-            Self::ReadObservation => "read_observation",
-            Self::ExpiryRefresh => "expiry_refresh",
-            Self::ActivityRefresh(_) => "activity_refresh",
             Self::ReadBack => "read_back",
             Self::Commands { .. } => "commands",
         }
     }
     fn operation(&self) -> Option<&str> {
         match self {
-            Self::Append => Some("APPEND"),
-            Self::ReadCommutation | Self::ReadObservation => Some("GET"),
-            Self::ExpiryRefresh => Some("EXPIRE"),
-            Self::ActivityRefresh(_) => None,
+            Self::State(operation) => operation.operation(),
+            Self::ReadCommutation => Some("GET"),
             Self::ReadBack => Some("SET"),
             Self::Commands { .. } => None,
         }
@@ -70,13 +60,10 @@ impl Behavior {
         proof: Option<&Proof>,
     ) -> Result<NativeEffect> {
         Ok(match self {
-            Self::Append => NativeEffect::RedisAppendStream,
+            Self::State(operation) => operation.effect(),
             Self::ReadCommutation => {
                 NativeEffect::RedisReadCommutation(RedisReadCommutationEffect {})
             }
-            Self::ReadObservation => NativeEffect::RedisReadObservation,
-            Self::ExpiryRefresh => NativeEffect::RedisExpiryRefresh(RedisExpiryRefreshEffect {}),
-            Self::ActivityRefresh(effect) => NativeEffect::RedisActivityRefresh(effect.clone()),
             Self::ReadBack => stateful::lower_read_back(resource, proof),
             Self::Commands {
                 key_format,
@@ -111,13 +98,15 @@ impl<'de> Deserialize<'de> for Entry {
                 .map(serde_yaml::from_value)
                 .transpose()?;
             let mut behaviors = Vec::new();
-            for behavior in [
-                Behavior::Append,
-                Behavior::ReadCommutation,
-                Behavior::ReadObservation,
-                Behavior::ExpiryRefresh,
-                Behavior::ReadBack,
-            ] {
+            let state = fields
+                .remove("state")
+                .map(serde_yaml::from_value::<state::Contract>)
+                .transpose()?;
+            let declared_state = state.is_some();
+            if let Some(state) = state {
+                behaviors.extend(state.operations()?);
+            }
+            for behavior in [Behavior::ReadCommutation, Behavior::ReadBack] {
                 if let Some(value) = fields.remove(behavior.name()) {
                     ensure!(
                         value == Value::Bool(true),
@@ -131,9 +120,6 @@ impl<'de> Deserialize<'de> for Entry {
                 .remove("key_format")
                 .map(serde_yaml::from_value::<key_format::KeyFormat>)
                 .transpose()?;
-            if let Some(value) = fields.remove("activity_refresh") {
-                behaviors.push(Behavior::ActivityRefresh(serde_yaml::from_value(value)?));
-            }
             let commands = fields
                 .remove("commands")
                 .map(serde_yaml::from_value::<commands::Commands>)
@@ -163,7 +149,7 @@ impl<'de> Deserialize<'de> for Entry {
                 "Redis read_back requires the key's identity scalar format"
             );
             ensure!(
-                scalar.is_some() || !behaviors.is_empty(),
+                scalar.is_some() || !behaviors.is_empty() || declared_state,
                 "Redis key declaration is empty"
             );
             ensure!(
@@ -276,31 +262,34 @@ pub(super) fn compact(rule: &PolicyRule, root: &mut Mapping) -> Result<bool> {
         Some(NativeKeySelector::Affix { prefix, suffix }) => format!("{prefix}*{suffix}"),
         _ => return Ok(false),
     };
-    let behavior = match &native.effect {
-        NativeEffect::RedisAppendStream => Behavior::Append,
-        NativeEffect::RedisReadCommutation(_) => Behavior::ReadCommutation,
-        NativeEffect::RedisReadObservation => Behavior::ReadObservation,
-        NativeEffect::RedisExpiryRefresh(_) => Behavior::ExpiryRefresh,
-        NativeEffect::RedisActivityRefresh(effect) => Behavior::ActivityRefresh(effect.clone()),
-        effect if stateful::is_read_back(effect, None) => Behavior::ReadBack,
-        NativeEffect::RedisSequence(effect) if effect.read_back.is_empty() => {
-            let key_format = if let Some(key) = &effect.key {
-                let Some(format) = key_format::reverse(&pattern, &key.contract)? else {
+    let behavior = if native.id.starts_with("redis.key.state.") {
+        let Some(operation) = state::Operation::reverse(&native.effect) else {
+            return Ok(false);
+        };
+        Behavior::State(operation)
+    } else {
+        match &native.effect {
+            NativeEffect::RedisReadCommutation(_) => Behavior::ReadCommutation,
+            effect if stateful::is_read_back(effect, None) => Behavior::ReadBack,
+            NativeEffect::RedisSequence(effect) if effect.read_back.is_empty() => {
+                let key_format = if let Some(key) = &effect.key {
+                    let Some(format) = key_format::reverse(&pattern, &key.contract)? else {
+                        return Ok(false);
+                    };
+                    Some(format)
+                } else {
+                    None
+                };
+                let Some(declarations) = commands::Commands::reverse(&effect.commands)? else {
                     return Ok(false);
                 };
-                Some(format)
-            } else {
-                None
-            };
-            let Some(declarations) = commands::Commands::reverse(&effect.commands)? else {
-                return Ok(false);
-            };
-            Behavior::Commands {
-                key_format,
-                declarations,
+                Behavior::Commands {
+                    key_format,
+                    declarations,
+                }
             }
+            _ => return Ok(false),
         }
-        _ => return Ok(false),
     };
     let mut semantic = native.clone();
     semantic.proof = None;
@@ -323,8 +312,11 @@ pub(super) fn compact(rule: &PolicyRule, root: &mut Mapping) -> Result<bool> {
         .or_insert_with(|| Value::Mapping(Mapping::new()))
         .as_mapping_mut()
         .context("Redis key declaration requires a mapping")?;
+    if let Behavior::State(operation) = &behavior {
+        operation.compact(entry)?;
+        return Ok(true);
+    }
     let value = match &behavior {
-        Behavior::ActivityRefresh(effect) => serde_yaml::to_value(effect)?,
         Behavior::Commands {
             key_format,
             declarations,

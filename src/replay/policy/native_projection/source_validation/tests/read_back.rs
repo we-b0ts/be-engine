@@ -172,7 +172,7 @@ fn compact_read_back_source_preflight_isolates_ordinary_cases_but_rejects_shared
     let policy = crate::policy::compile_policy(
         &crate::policy::parse_policy(
             &json!({"format":"traffic-policy/v3","redis":{"keys":{"current:*":{
-                "kind":"identity","formats":["string"],"read_back":true,"proof":proof()
+                "kind":"identity","formats":["string"],"read_back":true,"state":{"get":"observe"},"proof":proof()
             }}}})
             .to_string(),
         )

@@ -128,7 +128,7 @@ fn native_state_capture_and_attribution_never_masquerade_as_value_rules() {
             ExecutionOwner::RedisState,
         ),
         (
-            NativeEffect::RedisReadObservation,
+            NativeEffect::RedisReadObservation(Default::default()),
             RuleKind::RedisReadObservation,
             ExecutionOwner::RedisState,
         ),

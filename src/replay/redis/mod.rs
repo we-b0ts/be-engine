@@ -160,6 +160,7 @@ struct RecordedCapture {
 struct ReplayExchange {
     claim: Option<ClaimTicket>,
     observation_rule: Option<String>,
+    optional_observation_rule: Option<String>,
     read_commutation_rule: Option<String>,
     subscription_alias: bool,
     response_evidence: Option<crate::dependency_index::RecordRef>,
@@ -462,6 +463,7 @@ impl RedisReplayState {
         self.exchanges.push(ReplayExchange {
             claim: None,
             observation_rule: None,
+            optional_observation_rule: None,
             read_commutation_rule: None,
             subscription_alias: false,
             response_evidence: None,
@@ -488,6 +490,10 @@ impl RedisReplayState {
             append_streams_omitted: self.append_streams.omitted(),
             state_observations: self.observations.reports(),
             state_observations_omitted: self.observations.omitted(),
+            allowed_state_omissions: self.allowed_state_omissions(),
+            allowed_state_omissions_omitted: self
+                .allowed_state_omission_count()
+                .saturating_sub(1000),
             activity_refreshes: self.activity_refresh.reports(),
             activity_refreshes_omitted: self.activity_refresh.omitted(),
             pubsub: self.pubsub.report(),
@@ -531,7 +537,7 @@ impl RedisReplayState {
                     if exchange.reusable_snapshot {
                         !exchange.matched_once
                     } else {
-                        !exchange.status.is_consumed()
+                        exchange.requires_delivery()
                     }
                 })
             })
@@ -918,7 +924,7 @@ fn unused_iter(
                 && if exchange.reusable_snapshot {
                     !exchange.matched_once
                 } else {
-                    !exchange.status.is_consumed()
+                    exchange.requires_delivery()
                 }
         })
         .map(move |(index, exchange)| CommandUnusedReport {

@@ -266,7 +266,7 @@ database, authentication and protocol identities still have to match.
 redis:
   keys:
     'task:current:*': {kind: identity, formats: [uuid], read_back: true}
-    'task:content:*': {append_stream: true, expiry_refresh: true}
+    'task:content:*': {state: {append: concatenate, expire: refresh}}
     'task:cancel:*': {read_commutation: true}
     'task:counter:*': {commands: [INCRBY, EXPIRE]}
     'task:events:*':

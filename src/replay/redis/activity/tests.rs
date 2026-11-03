@@ -18,7 +18,7 @@ pub(in crate::replay::redis) fn document(enabled: bool) -> Value {
         "/started_at":{"kind":"time","formats":["rfc3339"]}
     }}, "rules":[append_rule()]});
     if enabled {
-        value["redis"] = json!({"keys":{"activity:*":{"activity_refresh":{"fields":["/last_activity_at"]},
+        value["redis"] = json!({"keys":{"activity:*":{"state":{"set":{"reduce":"last","fields":["/last_activity_at"]}},
             "proof":{"source":"session.py:touch","fact":"Every owned activity lifetime reads its latest SET, changes only last_activity_at and writes the same positive TTL; event flushes change refresh counts"}}}});
     }
     value

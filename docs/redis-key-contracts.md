@@ -6,7 +6,7 @@ resource aliases or database selectors:
 ```yaml
 redis:
   keys:
-    'chat:streaming:*': {append_stream: true, expiry_refresh: true}
+    'chat:streaming:*': {state: {append: concatenate, expire: refresh}}
     'chat:cancel:*': {read_commutation: true}
     'chat:streaming:text_block:*':
       kind: identity
@@ -26,8 +26,8 @@ localcache:
     - redis: {operation: HGET, key: token_v2, field: '3061639762'}
 ```
 
-Source-proven nil polling inside owned deletion boundaries can instead use
-`read_observation: true`; see [absent read observations](redis-absent-read-observations.md).
+Source-proven variable loop reads can use
+`state.get: {transient: [nil]}`; see [state contracts](redis-state-contracts.md).
 This permission requires complete Source proof and a fresh Replay.
 
 `kind`/`formats` describe scalar values; complete JSON values are recognized
@@ -39,8 +39,7 @@ infers equal Source instants internally without authored clock groups. EVALSHA
 requires its exact `script: {sha1: ...}`; EVAL requires `script: {sha256: ...}`.
 Scripts, numkeys, KEYS and unselected ARGV remain strict.
 
-`read_back: true` supports current raw SET identity/GET states, including proven
-variable GET counts. APPEND preserves the complete byte stream across chunks;
+`read_back: true` supports current raw SET identity/GET states, with `state.get` declaring variable counts. APPEND preserves the complete byte stream across chunks;
 read commutation retains finite read counts; expiry refresh preserves key
 lifetimes and fixed TTL. Actual endpoint, database, authentication, protocol,
 causal ordering and finite inventory are still checked independently. A format
