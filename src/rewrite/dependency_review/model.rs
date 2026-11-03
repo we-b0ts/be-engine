@@ -170,8 +170,6 @@ pub struct AttributionReviewContext {
     pub evidence_commands: Vec<crate::rewrite::RewriteCommandSpec>,
     pub effective_policy_fingerprint: String,
     pub rule_groups: Vec<serde_json::Value>,
-    pub async_capture_policy: serde_json::Value,
-    pub policy_ownership: serde_json::Value,
     pub rule_planning: serde_json::Value,
     pub unattributed_exchange_ids: BTreeSet<Uuid>,
     pub obligations: Vec<ScopeObligation>,

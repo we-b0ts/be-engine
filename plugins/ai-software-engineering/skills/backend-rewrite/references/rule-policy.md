@@ -31,22 +31,6 @@ the complete selected immutable Source inventory and independent Target evidence
 Source self-validation, derived dependency delivery and actual Target output are
 different evidence roles. A draft never supplies its own Source proof.
 
-For recurring asynchronous ownership issues, inspect `async_capture_policy` and
-`policy_ownership` in the current attribution context before assigning a cause.
-Missing older rule receipts mean unknown provenance; an apply timestamp alone
-does not prove which rule governed capture. Reuse established Source call-chain
-analysis and publish supported `async_api` ownership contracts through the same
-plan/apply transaction. New batch identities still require actual deterministic
-validation; a previous UUID list is not a reusable policy. Follow
-[reusable async ownership](../../../../../docs/async-api-ownership.md) for the
-finite origin/request contract and capture-versus-completion boundary.
-
-Independent Source-backed exact-UUID attribution remains a legal fallback when
-complete rules fail to classify traffic, including an engine execution defect.
-Continue its ordinary apply and genuine Replay path while reporting the specific
-policy/engine gap. Do not turn automatic classification repair into an extra
-workflow gate or use fallback to waive incomplete capture or actual consumption.
-
 `draft_policy` is a proof-required additive direction, marked `section_update: add`.
 Submit only the new fields or formats. Existing fields remain in place; adding
 format B to an existing format A produces `[A, B]`, preserving order and removing

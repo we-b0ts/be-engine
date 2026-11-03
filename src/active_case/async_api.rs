@@ -273,7 +273,6 @@ impl ActiveCaseRegistry {
             case.case.clone(),
             serde_json::json!({
                 "version":2,"api":observation.scope.api,"scenario_index":observation.scope.scenario_index(),"end_reason":signal.end_reason,
-                "policy_provenance":observation.scope.selected_provenance(),
                 "resource_index":signal.resource_index,"event_type":signal.event_type,
                 "elapsed_ms":observation.started.elapsed().as_millis(),
                 "request_timeout_ms":observation.deadline.saturating_duration_since(observation.started).as_millis(),

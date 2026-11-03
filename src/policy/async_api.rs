@@ -5,14 +5,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-mod ownership;
-mod provenance;
-pub use ownership::*;
-pub(crate) use provenance::{
-    AsyncRuleProvenance, AsyncTerminalProvenance, async_rules_fingerprint,
-    async_runtime_declarations,
-};
-
 pub const ASYNC_API_ID: &str = "capture.async_api";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,8 +23,6 @@ pub struct AsyncApiRule {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub unless_response: BTreeMap<String, Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ownership: Option<AsyncOwnership>,
     pub end: Vec<AsyncEnd>,
 }
 
@@ -46,11 +36,11 @@ impl<'de> Deserialize<'de> for AsyncApiRules {
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Declaration {
-            Single(Box<AsyncApiRule>),
+            Single(AsyncApiRule),
             Multiple(Vec<AsyncApiRule>),
         }
         Ok(Self(match Declaration::deserialize(deserializer)? {
-            Declaration::Single(rule) => vec![*rule],
+            Declaration::Single(rule) => vec![rule],
             Declaration::Multiple(rules) => rules,
         }))
     }
@@ -173,10 +163,6 @@ pub fn compile_async_api(
             "async API requires 1..32 scenarios"
         );
         for rule in &mut scenarios.0 {
-            if let Some(ownership) = &mut rule.ownership {
-                ownership::validate(ownership)?;
-                ownership.proof = None;
-            }
             ensure!(
                 rule.when.len() + rule.when_response.len() + rule.unless_response.len() <= 32,
                 "async API condition exceeds 32 fields"

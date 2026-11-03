@@ -133,29 +133,6 @@ pub(super) fn verify(
         }
     }
     let count = observed.values().sum::<usize>();
-    if policy
-        .async_api
-        .values()
-        .any(|rules| rules.iter().any(|rule| rule.ownership.is_some()))
-    {
-        // Freeze the whole original inventory: a tail may have been captured
-        // in another Case, even when no original occurrence was ownerless.
-        bundle.freeze(&recording.join("dependencies.jsonl"))?;
-        let assessment = crate::rewrite::dependency_review::assess_async_ownership(
-            &recording,
-            &policy.async_api,
-        )?;
-        if assessment["status"] == "execution_unavailable"
-            || assessment["problem_count"]
-                .as_u64()
-                .is_some_and(|count| count > 0)
-        {
-            result
-                .pending_effect_evidence
-                .insert("async-policy-ownership".into());
-        }
-        result.async_ownership = Some(assessment);
-    }
     result.source_validations += count;
     result
         .rules

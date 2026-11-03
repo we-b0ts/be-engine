@@ -16,7 +16,6 @@ struct Current {
     inventory: String,
     rules: BTreeMap<String, String>,
     case_defaults: BTreeMap<uuid::Uuid, DependencyOwner>,
-    policy_identity: Option<String>,
 }
 impl Current {
     fn eligible(&self, decision: &DecisionTemplate) -> bool {
@@ -30,15 +29,6 @@ impl Current {
             &self.inventory,
             |decision| self.eligible(decision),
         )?;
-        let identity = if let Some(policy) = &self.policy_identity {
-            crate::policy_evidence::digest(&serde_json::to_vec(&(
-                "declared-source-ownership-snapshot/v1",
-                identity,
-                policy,
-            ))?)
-        } else {
-            identity
-        };
         if self.case_defaults.is_empty() {
             return Ok(identity);
         }
@@ -76,7 +66,7 @@ fn current(target: Option<&Path>, explicit_source: Option<&Path>, run: &str) -> 
         .or(fallback.as_deref())
         .context("ownership snapshot has no current Source recording")?;
     let inventory = source::inventory_at(source_path, run)?.0;
-    let defaults = super::scope_defaults::load(source_path, target)?;
+    let case_defaults = super::case_defaults::load(source_path, target)?;
     let source_revision = state
         .as_ref()
         .and_then(|state| state.source_revision.clone());
@@ -104,8 +94,7 @@ fn current(target: Option<&Path>, explicit_source: Option<&Path>, run: &str) -> 
         source_revision,
         inventory,
         rules,
-        case_defaults: defaults.owners,
-        policy_identity: defaults.policy_identity,
+        case_defaults,
     })
 }
 

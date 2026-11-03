@@ -119,10 +119,6 @@ fn compile_expanded(
         .map(HttpPolicy::compile)
         .transpose()?;
     let async_api = compile_async_api(&document.async_api.clone().unwrap_or_default())?;
-    let semantic_async_api = document
-        .async_api
-        .as_ref()
-        .map(super::async_runtime_declarations);
     let mut ids = BTreeSet::new();
     let mut rules = Vec::with_capacity(expanded_rules.len());
     let mut native = vec![];
@@ -190,7 +186,7 @@ fn compile_expanded(
                     &document.mysql,
                     &document.redis,
                     &document.http,
-                    &semantic_async_api,
+                    &document.async_api,
                     &document.signatures,
                 ),
             )?,

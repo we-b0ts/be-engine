@@ -94,9 +94,7 @@ fn finish(
     let target = root
         .ancestors()
         .find(|path| path.join(".traffic-e2e").is_dir());
-    let case_default = super::super::scope_defaults::load(root, target)?
-        .owners
-        .remove(&id);
+    let case_default = super::super::case_defaults::load(root, target)?.remove(&id);
     Ok(SourceInformation {
         identity: digest(bytes),
         exchange,

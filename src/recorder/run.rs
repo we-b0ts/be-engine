@@ -320,7 +320,6 @@ impl Recorder {
         };
         self.write_network_manifest().await?;
         self.writer.seal(self.capture.coverage()).await?;
-        self.refresh_ownership_summaries().await?;
         self.prepare_global_report().await;
         self.write_run_report(status).await?;
         self.flush_traffic().await?;

@@ -1,8 +1,6 @@
 //! Best-effort derived indexes, isolated from recording completion semantics.
 use super::*;
 
-mod ownership_summaries;
-
 #[derive(Clone)]
 pub(super) struct GlobalPreparation {
     pub rules: Vec<crate::BackgroundDependencyRuleConfig>,

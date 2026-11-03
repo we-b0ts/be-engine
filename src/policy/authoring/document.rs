@@ -4,8 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::{Mapping, Value};
 
 use super::{
-    api, async_api, dependency_lifetimes, http, proof, recording, redis_keys, resources,
-    signatures, walk,
+    api, dependency_lifetimes, http, proof, recording, redis_keys, resources, signatures, walk,
 };
 use crate::policy::{PolicyRule, TrafficPolicy};
 
@@ -118,8 +117,6 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
                 rules.push(serde_yaml::from_value(rule)?);
             }
             sort_rules(&mut rules);
-            let async_api =
-                async_api::expand(document.async_api, document.source_revision.as_deref())?;
             Ok(Self {
                 format: document.format,
                 source_revision: document.source_revision,
@@ -128,7 +125,7 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
                 mysql: document.mysql,
                 redis,
                 http,
-                async_api,
+                async_api: document.async_api,
                 signatures: document.signatures,
                 resources: document.resources,
                 rules,
@@ -263,10 +260,7 @@ pub(crate) fn expanded(document: &TrafficPolicy) -> Result<TrafficPolicy> {
         mysql: document.mysql.clone(),
         redis: document.redis.clone(),
         http: document.http.clone(),
-        async_api: async_api::expand(
-            document.async_api.clone(),
-            document.source_revision.as_deref(),
-        )?,
+        async_api: document.async_api.clone(),
         signatures: document.signatures.clone(),
         resources: document.resources.clone(),
         rules,
@@ -310,10 +304,7 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
         root.insert("http".into(), serde_yaml::to_value(http)?);
     }
     if let Some(async_api) = &document.async_api {
-        root.insert(
-            "async_api".into(),
-            serde_yaml::to_value(crate::policy::async_runtime_declarations(async_api))?,
-        );
+        root.insert("async_api".into(), serde_yaml::to_value(async_api)?);
     }
     if !document.signatures.is_empty() {
         root.insert(

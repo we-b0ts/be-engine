@@ -13,7 +13,6 @@ fn scope(end: Vec<AsyncEnd>) -> ResourceScope {
             when: BTreeMap::from([("/background".into(), json!(true))]),
             when_response: Default::default(),
             unless_response: Default::default(),
-            ownership: None,
             end,
         },
         progress: Default::default(),

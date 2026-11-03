@@ -16,7 +16,6 @@ mod tests;
 #[derive(Debug)]
 struct Runtime {
     candidates: Vec<(usize, ResourceScope)>,
-    rule_fingerprint: String,
     selection: Mutex<Selection>,
 }
 
@@ -66,7 +65,6 @@ impl AsyncScope {
                 api: api.clone(),
                 runtime: Arc::new(Runtime {
                     candidates,
-                    rule_fingerprint: crate::policy::async_rules_fingerprint(rules),
                     selection: Mutex::new(Selection {
                         decided,
                         selected: decided.then_some(0),
@@ -107,21 +105,6 @@ impl AsyncScope {
             .lock()
             .expect("async scenario selection poisoned");
         state.selected.map(|index| self.runtime.candidates[index].0)
-    }
-
-    pub(crate) fn selected_provenance(&self) -> Option<crate::policy::AsyncRuleProvenance> {
-        let state = self
-            .runtime
-            .selection
-            .lock()
-            .expect("async scenario selection poisoned");
-        let (scenario_index, scope) = &self.runtime.candidates[state.selected?];
-        Some(crate::policy::AsyncRuleProvenance::for_rule(
-            &self.api,
-            self.runtime.rule_fingerprint.clone(),
-            *scenario_index,
-            &scope.rule,
-        ))
     }
 
     pub(crate) fn observe(&self, event: &RecorderEvent) -> Option<AsyncSignal> {

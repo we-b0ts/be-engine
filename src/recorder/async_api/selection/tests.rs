@@ -113,19 +113,3 @@ fn earlier_response_condition_takes_priority_over_unconditional_fallback() {
         assert_eq!(signal.is_some(), expected == 1);
     }
 }
-
-#[test]
-fn provenance_retains_the_original_group_and_the_actually_selected_scenario() {
-    let scenarios = json!([
-        {"when":{"/background":true},"when_response":{"/status":"queued"},"end":[{"redis":{"operation":"DEL","key":"queued:*"}}]},
-        {"when_response":{"/status":"in_progress"},"end":[{"redis":{"operation":"DEL","key":"running:*","occurrence":2}}]}
-    ]);
-    let rules = serde_json::from_value(scenarios.clone()).unwrap();
-    let scope = scope(scenarios, b"{}");
-    assert!(scope.selected_provenance().is_none());
-    scope.select_response(Some(&json!({"status":"in_progress"})));
-    assert_eq!(
-        scope.selected_provenance(),
-        crate::policy::AsyncRuleProvenance::selected("POST /jobs", &rules, 1)
-    );
-}
