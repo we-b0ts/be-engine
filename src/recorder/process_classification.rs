@@ -3,6 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::active_case::DependencyTargets;
 
+/// Only a single declared task can be excluded from request-start activity.
+pub(crate) fn definite_process(rules: &[String], tasks: &BTreeMap<String, String>) -> bool {
+    let Some(first) = rules.first().and_then(|rule| tasks.get(rule)) else {
+        return false;
+    };
+    rules.iter().all(|rule| tasks.get(rule) == Some(first))
+}
+
 pub(crate) fn classify(
     targets: DependencyTargets,
     rules: impl IntoIterator<Item = String>,
@@ -37,6 +45,20 @@ pub(crate) fn classify(
 mod tests {
     use super::*;
     use crate::active_case::ActiveCaseRegistry;
+
+    #[test]
+    fn request_activity_is_excluded_only_for_one_complete_declared_task_identity() {
+        let tasks = BTreeMap::from([
+            ("a".into(), "refresh".into()),
+            ("b".into(), "refresh".into()),
+            ("c".into(), "cleanup".into()),
+        ]);
+        assert!(!definite_process(&[], &tasks));
+        assert!(!definite_process(&["unknown".into()], &tasks));
+        assert!(!definite_process(&["a".into(), "unknown".into()], &tasks));
+        assert!(!definite_process(&["a".into(), "c".into()], &tasks));
+        assert!(definite_process(&["a".into(), "b".into()], &tasks));
+    }
 
     #[test]
     fn overlapping_selectors_from_different_tasks_are_not_resolved_by_rule_order() {

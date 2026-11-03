@@ -183,7 +183,8 @@ fn load(case_dir: &Path, execution_allowance: Duration) -> Result<Option<Metadat
         .transpose()?
         .unwrap_or(0);
     Ok(Some(Metadata {
-        business_complete: true,
+        recorded_idle_completion: false,
+        normal_completion: true,
         request_timeout_ms: budget.as_millis().try_into()?,
         interaction_post_input_ms: Some(post_input_ms),
         references: references.into_iter().collect(),

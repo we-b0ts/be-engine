@@ -82,7 +82,15 @@ async fn primary_failure_skips_success_work_but_preserves_the_target_stop_receip
 
 #[tokio::test]
 async fn async_observation_retains_case_until_real_target_consumes_its_finite_tail() {
-    for reason in ["resource", "dependency_failure", "timeout"] {
+    for reason in [
+        "resource",
+        "probe",
+        "idle",
+        "dependency_failure",
+        "timeout",
+        "stopped",
+    ] {
+        let requires_stop = matches!(reason, "dependency_failure" | "timeout" | "stopped");
         let expected: &[u8] = if reason == "dependency_failure" {
             b"-ERR unavailable\r\n"
         } else {
@@ -102,9 +110,11 @@ async fn async_observation_retains_case_until_real_target_consumes_its_finite_ta
             fixture.root.join("case-a/async-api-observation.json"),
             json!({
                 "version":2,"capture_complete":true,"business_complete":reason=="resource","business_completion":if reason=="resource" {"observed"}else{"unobserved"},"inventory_complete":true,
-                "end_reason":reason,"request_timeout_ms":1000,
-                "source_stop_required":reason!="resource",
-                "source_stop_after_ms":(reason!="resource").then_some(0),"cleanup_refs":[],
+                "end_reason":if reason=="probe" {"resource"} else {reason},"request_timeout_ms":1000,
+                "source_stop_required":requires_stop,
+                "source_stop_after_ms":requires_stop.then_some(0),"cleanup_refs":[],
+                "ending":(reason=="probe").then(|| json!({"reason":"probe_completed","probe_ms":1000,"started_after_ms":1,"elapsed_ms":1001})),
+                "idle_completion":(reason=="idle").then(|| json!({"quiet_ms":300_000})),
                 "completed_refs":legacy["selected_completed_refs"]
             })
             .to_string(),
@@ -114,7 +124,6 @@ async fn async_observation_retains_case_until_real_target_consumes_its_finite_ta
         let state = fixture.runtime.state.clone();
         let began = begin_case(&command("begin"), state.clone()).await;
         assert_eq!(began["ok"], true, "{reason}: {began}");
-        let requires_stop = reason != "resource";
         assert_eq!(
             begin_case(&command("begin"), state.clone()).await["target_stop_required"],
             requires_stop
@@ -188,6 +197,11 @@ async fn async_observation_retains_case_until_real_target_consumes_its_finite_ta
             assert!(
                 report.is_dirty(),
                 "a captured Source timeout/failure cannot certify declared business completion"
+            );
+        } else {
+            assert!(
+                !state.lock().await.target_session_stopped,
+                "normal {reason} capture must finish after real finite consumption without stopping Target"
             );
         }
         if requires_stop {

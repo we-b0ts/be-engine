@@ -10,12 +10,15 @@ use std::time::Duration;
 mod async_inventory;
 mod interaction_inventory;
 mod references;
+#[cfg(test)]
+mod scope_tests;
 pub(super) use references::reference;
 
 const MAX_METADATA_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(super) struct Metadata {
-    pub business_complete: bool,
+    recorded_idle_completion: bool,
+    pub normal_completion: bool,
     pub request_timeout_ms: u64,
     pub interaction_post_input_ms: Option<u64>,
     pub references: Vec<RecordedReference>,
@@ -62,6 +65,23 @@ struct AsyncObservation {
     source_stop_after_ms: Option<u64>,
     #[serde(default)]
     cleanup_refs: Vec<RecordedReference>,
+    #[serde(default)]
+    ending: Option<EndingObservation>,
+    #[serde(default)]
+    idle_completion: Option<IdleObservation>,
+}
+
+#[derive(Deserialize)]
+struct IdleObservation {
+    quiet_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct EndingObservation {
+    reason: String,
+    probe_ms: u64,
+    started_after_ms: u64,
+    elapsed_ms: u64,
 }
 
 pub(super) async fn load(
@@ -92,7 +112,8 @@ pub(super) async fn load(
                 "dependency-tail exchange inventory is incomplete"
             );
             Some(Metadata {
-                business_complete: true,
+                recorded_idle_completion: false,
+                normal_completion: true,
                 request_timeout_ms: observation.request_timeout_ms,
                 interaction_post_input_ms: None,
                 references: observation.completed_refs,
@@ -177,8 +198,13 @@ pub(super) async fn load_effective(
     if !derived {
         return Ok(metadata);
     }
-    if let Some(mut effective) =
-        async_inventory::from_scope(case_dir, dependencies, async_rules, request_timeout).await?
+    let recorded_idle = metadata
+        .as_ref()
+        .is_some_and(|tail| tail.recorded_idle_completion);
+    if !recorded_idle
+        && let Some(mut effective) =
+            async_inventory::from_scope(case_dir, dependencies, async_rules, request_timeout)
+                .await?
     {
         if let Some(captured) = metadata {
             effective.source_stop_required |= captured.source_stop_required;
@@ -199,15 +225,30 @@ pub(super) async fn load_effective(
                         continue;
                     }
                     if let Some(item) = reference(&serde_json::from_slice(raw)?)? {
-                        references.insert(item);
+                        let inserted = references.insert(item);
+                        ensure!(
+                            !recorded_idle || inserted,
+                            "async Source inventory repeats an exchange"
+                        );
+                        ensure!(
+                            references.len() <= MAX_SELECTED_REFS,
+                            "effective tail inventory exceeds its bound"
+                        );
                     }
                 }
                 Ok(references)
             })
             .await
             .context("effective tail inventory task failed")??;
-        tail.strict_references
-            .retain(|item| references.contains(item));
+        if recorded_idle {
+            // An observed idle fallback permits normal finite replay without
+            // a matched end. The derived scope still requires every newly
+            // assigned semantic exchange to be consumed.
+            tail.strict_references = references.clone();
+        } else {
+            tail.strict_references
+                .retain(|item| references.contains(item));
+        }
         tail.cleanup_refs.retain(|item| references.contains(item));
         tail.references = references.into_iter().collect();
         validate(tail)?;
@@ -229,12 +270,37 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
     ensure!(
         matches!(
             observation.end_reason.as_str(),
-            "resource" | "dependency_failure" | "timeout"
+            "resource" | "idle" | "dependency_failure" | "timeout" | "stopped"
         ),
         "async API observation has an unknown completion reason"
     );
+    if let Some(ending) = &observation.ending {
+        ensure!(
+            observation.end_reason == "resource"
+                && ending.probe_ms == 1_000
+                && ending
+                    .started_after_ms
+                    .checked_add(ending.elapsed_ms)
+                    .is_some()
+                && ending.reason == "probe_completed"
+                && ending.elapsed_ms >= ending.probe_ms,
+            "async ending requires a candidate and a completed request-start probe"
+        );
+    }
     ensure!(
-        observation.business_complete == (observation.end_reason == "resource")
+        match (
+            &observation.idle_completion,
+            observation.end_reason.as_str()
+        ) {
+            (Some(idle), "idle") => idle.quiet_ms == 300_000 && observation.ending.is_none(),
+            (None, reason) => reason != "idle",
+            _ => false,
+        },
+        "async idle completion requires the five-minute business inactivity observation"
+    );
+    ensure!(
+        observation.business_complete
+            == (observation.end_reason == "resource" && observation.ending.is_none())
             && observation.business_completion
                 == if observation.business_complete {
                     "observed"
@@ -243,7 +309,7 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
                 },
         "async API business completion facts are inconsistent"
     );
-    let failure_end = observation.end_reason != "resource";
+    let failure_end = !matches!(observation.end_reason.as_str(), "resource" | "idle");
     let source_stop_required = observation.source_stop_required.unwrap_or(failure_end);
     ensure!(
         observation.completed_refs.len() <= MAX_SELECTED_REFS,
@@ -270,15 +336,16 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
     ensure!(
         observation
             .source_stop_after_ms
-            .is_none_or(|offset| source_stop_required && offset <= 86_400_000),
-        "async Source-stop clock has no bounded lifecycle owner"
+            .is_none_or(|_| source_stop_required),
+        "async Source-stop clock has no lifecycle owner"
     );
     ensure!(
         !failure_end || source_stop_required,
         "async failure/deadline completion cannot reuse the stopped Source process"
     );
     let metadata = Metadata {
-        business_complete: observation.business_complete,
+        recorded_idle_completion: observation.end_reason == "idle",
+        normal_completion: matches!(observation.end_reason.as_str(), "resource" | "idle"),
         request_timeout_ms: observation.request_timeout_ms,
         interaction_post_input_ms: None,
         strict_references: references,
@@ -287,7 +354,10 @@ fn async_metadata(raw: &[u8]) -> Result<Metadata> {
         source_stop_required,
         source_stop_after_ms: observation.source_stop_after_ms,
         cleanup_refs: cleanup,
-        failure_completion: observation.end_reason == "dependency_failure",
+        failure_completion: matches!(
+            observation.end_reason.as_str(),
+            "dependency_failure" | "stopped"
+        ),
         timeout_completion: observation.end_reason == "timeout",
     };
     validate(&metadata)?;
@@ -320,7 +390,8 @@ fn legacy(raw: &[u8]) -> Result<Metadata> {
         "legacy dependency observation exchange inventory is incomplete"
     );
     let metadata = Metadata {
-        business_complete: true,
+        recorded_idle_completion: false,
+        normal_completion: true,
         request_timeout_ms: observation.request_timeout_ms,
         interaction_post_input_ms: None,
         strict_references: observation
@@ -432,6 +503,71 @@ mod cleanup_tests {
         json!({"version":2,"request_timeout_ms":100,"end_reason":"timeout",
             "capture_complete":true,"business_complete":false,"business_completion":"unobserved","inventory_complete":true,"source_stop_required":true,
             "source_stop_after_ms":100,"completed_refs":[reference],"cleanup_refs":[reference]})
+    }
+
+    #[test]
+    fn completed_candidate_probe_is_normal_capture_without_claiming_business_completion() {
+        let mut value = observation();
+        value["end_reason"] = json!("resource");
+        value["request_timeout_ms"] = json!(5000);
+        value["source_stop_required"] = json!(false);
+        value["source_stop_after_ms"] = Value::Null;
+        value["cleanup_refs"] = json!([]);
+        value["ending"] = json!({"reason":"probe_completed","probe_ms":1000,
+            "started_after_ms":10,"elapsed_ms":1001});
+        let metadata = async_metadata(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(metadata.normal_completion);
+        assert!(!metadata.failure_completion);
+        assert!(!metadata.timeout_completion);
+        assert!(!metadata.source_stop_required);
+        for field in ["reason", "probe_ms", "elapsed_ms"] {
+            let mut invalid = value.clone();
+            invalid["ending"][field] = match field {
+                "reason" => json!("limit"),
+                _ => json!(0),
+            };
+            assert!(async_metadata(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
+        value["ending"]["started_after_ms"] = json!(172_800_000_u64);
+        value["ending"]["elapsed_ms"] = json!(172_800_001_u64);
+        assert!(async_metadata(&serde_json::to_vec(&value).unwrap()).is_ok());
+        let mut overflow = value.clone();
+        overflow["ending"]["started_after_ms"] = json!(u64::MAX);
+        assert!(async_metadata(&serde_json::to_vec(&overflow).unwrap()).is_err());
+        value["business_complete"] = json!(true);
+        value["business_completion"] = json!("observed");
+        assert!(async_metadata(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn explicit_stop_has_a_distinct_unfinished_capture_reason_without_a_day_limit() {
+        let mut value = observation();
+        value["end_reason"] = json!("stopped");
+        value["source_stop_after_ms"] = json!(172_800_000_u64);
+        let metadata = async_metadata(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(!metadata.normal_completion);
+        assert!(metadata.failure_completion);
+        assert!(!metadata.timeout_completion);
+        assert!(metadata.source_stop_required);
+    }
+
+    #[test]
+    fn business_idle_capture_replays_normally_without_a_fabricated_terminal() {
+        let mut value = observation();
+        value["end_reason"] = json!("idle");
+        value["source_stop_required"] = json!(false);
+        value["source_stop_after_ms"] = Value::Null;
+        value["cleanup_refs"] = json!([]);
+        value["idle_completion"] = json!({"quiet_ms":300_000});
+        let metadata = async_metadata(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(metadata.normal_completion);
+        assert!(!metadata.failure_completion);
+        assert!(!metadata.timeout_completion);
+        assert!(!metadata.source_stop_required);
+        for marker in [Value::Null, json!({"quiet_ms":1000})] {
+            value["idle_completion"] = marker;
+            assert!(async_metadata(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
     }
     #[test]
     fn only_complete_owned_resources_can_be_classified_as_lifecycle_cleanup() {

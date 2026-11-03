@@ -148,9 +148,82 @@ foreign async API, bind the actual origin Case and applicable end-only `async_ap
 scenario. Intermediate business requests need not be enumerated. The original
 request/response scenario must match the lifecycle rule.
 
+Each analysis must assess the existing policy as well as the current occurrence
+owner. Return the following findings with the ordinary attribution submission;
+these are analysis and handoff content, not new submission fields:
+
+- The Source owner and call chain, with exclusive proof connecting the current
+  occurrence UUIDs to their actual origin input or process task.
+- Whether the effective policy is missing, incomplete or sufficient, naming the
+  applicable rule IDs and scenarios. If a change is needed, supply the smallest
+  supported proposal. An async proposal describes its API/request/response
+  trigger and analyzed `end` paths, including business cleanup on the applicable
+  success, failure and cancellation branches. It does not list the
+  API's intermediate SQL, Redis or other dependency requests.
+- Why the current sealed recording needs correction: a missing lifecycle path,
+  capture before the applicable rule took effect, or a concrete execution gap
+  despite sufficient policy. Cite the available rule and recording evidence;
+  current policy alone does not prove which rule was active during capture.
+- The necessary policy publication, exact-UUID attribution proof and remaining
+  real Replay or capture obligations for the coordinator.
+
+Rule generation follows the completed ownership analysis. For an async origin,
+combine its original Case scope with newly assigned occurrences and exclude
+proven foreign work. From the complete effective tail, return the actual scenario,
+end request templates, necessary response/message predicates and matching counts
+from Case admission. Do not use the last page or only the formerly ownerless
+subset as the Case boundary. Generalize physical task IDs and check earlier
+matches; reuse existing coverage instead of accumulating duplicate candidates.
+Author the proposal under `recording.async_api`, before independent optional
+`recording.case_paths`. The logical rule identity remains `capture.async_api`.
+The last observed exchange is evidence for a candidate, not independent ownership
+proof. Redis nil means `when_response: {kind: nil}` on a complete native reply;
+PUBLISH request JSON stays under `when_message`.
+
+Any alternative end can enter ending. Once all ends have matched, close new
+admission immediately and drain admitted requests; a single end follows this same
+rule. Partial matches permit a fixed one-second probe after each fresh match. Any
+subsequent relevant request start requires another fresh end before closure
+becomes eligible; another one-second silence alone cannot close the Case. A completed probe
+also requires no relevant requests in flight. Only unambiguously process-owned
+requests are ignored. After the complete primary response, waiting for the first
+or next end has no absolute deadline. Without a fresh end, five continuous minutes
+of relevant business I/O silence and no relevant request in flight close the Case
+normally with completion unobserved, keeping Source running for rule analysis.
+Real business activity restarts that interval; writer queues and definite process
+traffic do not. The primary HTTP transport timeout remains separate; explicit
+shutdown or actual capture failure can interrupt observation.
+The probe duration is not authored policy. Rule
+proposals need no new Source completion signal, all-of groups or intermediate
+request whitelist. The coordinator must receive either this proposal, an explicit
+existing-coverage finding, or the concrete unsupported evidence alongside the
+ordinary attribution submission.
+
+These rules describe future recording scope; the attribution submission corrects
+the finite existing recording separately. A sufficient effective policy need
+not be changed just because an older recording still has ownerless traffic.
+State which rule covers the Source path and continue supported manual
+attribution with exact original UUIDs and positive proof. Do the same for a
+demonstrated execution gap while reporting that gap separately: an engine repair
+is not an additional prerequisite for ordinary proof/apply. Do not submit a
+no-op rule plan. Absent required capture remains capture debt; an ownership
+overlay cannot recreate traffic that was never recorded.
+
+Established Source call-chain and lifecycle analysis can be reused across
+batches while it remains applicable. Obtain current context and bind each new
+proof to its actual inventory, UUIDs, origin Cases and rule fingerprints. A new
+batch alone does not require repeating the repository analysis; a new Source
+path or contradictory evidence requires reviewing the affected conclusion.
+
 `dependency-attribution rules` returns complete active task/lifecycle rule groups
-and their fingerprints. The coordinator publishes any new Source-proven rule
-through unified rule plan/apply first, then obtains fresh attribution context.
+and their fingerprints. The coordinator publishes any necessary Source-proven
+rule change through unified rule plan/apply first, then obtains fresh attribution
+context, rebinds the already established exact-UUID ownership proof and follows the returned action
+into genuine Replay. If the effective policy is already sufficient, skip rule
+publication and obtain fresh attribution context directly. Applying policy or
+ownership alone does not establish a pass.
+Fresh context updates transaction identities; it does not require repeating the
+completed Source ownership analysis.
 Before the first Replay, use the context's exact `rule_planning` evidence token
 and plan command for Source-only owner rules; no fabricated Target attempt is
 needed. Source-only ownership planning cannot authorize value differences or

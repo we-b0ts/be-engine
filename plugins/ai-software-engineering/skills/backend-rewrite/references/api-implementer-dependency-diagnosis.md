@@ -35,6 +35,31 @@ resolving the investigation; it does not dispatch a repository analyst for it.
 An async rule or investigation resolution alone cannot authorize another
 Case's recorded dependencies. Missing origin or occurrence proof remains explicit.
 
+After completing an own-API attribution analysis, also return the scenario's
+end-rule assessment under `recording.async_api`, before independent optional
+`recording.case_paths`; do not also emit the legacy root spelling.
+Inspect its complete effective Case traffic, including newly
+assigned occurrences, and propose missing end templates, necessary reply/message
+conditions and counts from Case admission. Reuse already sufficient conditions.
+Redis `when_response: {kind: nil}` selects native null; omitted/`any` accepts a
+successful complete reply, while `when_message` selects PUBLISH request JSON.
+Any end match can enter ending. Once all ends have matched, close admission
+immediately and drain admitted requests, without a silence interval; a single end
+follows this same rule. Partial matches permit a fixed one-second probe. A subsequent
+relevant request start requires another fresh end before closure becomes eligible;
+another one-second silence does not close the Case. Closure also requires no relevant
+request in flight. Only unambiguously process-owned requests are ignored. There
+is no absolute deadline while waiting for the first or next end after the
+complete primary response. Without a fresh end, five continuous minutes of
+relevant business I/O silence and no relevant request in flight close the Case
+normally with completion unobserved, keeping Source running for rule analysis.
+Real business activity restarts that interval; writer queues and definite process
+traffic do not. The primary HTTP transport timeout remains separate; explicit
+shutdown or actual capture failure can interrupt observation. Do not author timing settings,
+all-of groups or an intermediate dependency list. Give this proposal to the
+coordinator alongside the established proof; do not rerun ownership analysis
+merely because plan/apply requires a fresh context.
+
 Treat a recording omission as a bounded hypothesis when a response or Replay difference traces through source code to one exact response-driving
 backend endpoint, but the representative recording contains no corresponding
 dependency target or exchange. The absence alone is not proof of Breeze bypass,

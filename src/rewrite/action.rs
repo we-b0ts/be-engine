@@ -47,18 +47,34 @@ pub(super) fn for_status(
 /// Native workflow gate, before choosing among worker actions. Counts consume this
 /// same gate regardless of which API's action the caller wants to inspect.
 pub(super) fn status_base(target_root: &Path, state: &RewriteState) -> Result<RewriteAction> {
+    Ok(status_base_projection(target_root, state)?.0)
+}
+
+/// Return the exact plan checked at the idle gate, separately from legacy or
+/// capture-plan actions that may share the same public action variant.
+pub(super) fn status_base_projection(
+    target_root: &Path,
+    state: &RewriteState,
+) -> Result<(RewriteAction, Option<RewriteAction>)> {
     if let Some(action) = super::dependency_review::required_action(target_root, state) {
-        return Ok(action);
+        return Ok((action, None));
     }
     if let Some(plan) = super::rule_plans::idle_action(target_root, state)? {
-        return Ok(plan);
+        return Ok((plan.clone(), Some(plan)));
     }
     if state.revalidation_round.is_some() {
         let mut projected = state.clone();
         if super::review::pre_revalidation::reconcile(target_root, &mut projected)? {
-            return status_base(target_root, &projected);
+            return status_base_projection(target_root, &projected);
         }
     }
+    Ok((status_base_without_idle_plan(target_root, state)?, None))
+}
+
+fn status_base_without_idle_plan(
+    target_root: &Path,
+    state: &RewriteState,
+) -> Result<RewriteAction> {
     if state.case_pattern_identification.is_some()
         || super::transition::replay_completion_pending(state)
     {

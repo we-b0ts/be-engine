@@ -166,6 +166,56 @@ fn source_scope_update_preserves_other_effects_complete_rules_and_original_proof
 }
 
 #[test]
+fn async_only_recording_does_not_turn_a_legacy_capture_rule_into_the_authored_path_owner() {
+    let mut document = base();
+    document.async_api = Some(
+        serde_json::from_value(serde_json::json!({
+            "POST /jobs":{"end":[{"redis":{"operation":"DEL","key":"done:*","occurrence":2}}]}
+        }))
+        .unwrap(),
+    );
+    let original = crate::policy::render_policy(&document).unwrap();
+    let raw: serde_yaml::Value = serde_yaml::from_str(&original).unwrap();
+    assert!(raw["recording"].get("async_api").is_some());
+    assert!(raw["recording"].get("case_paths").is_none());
+    let baseline = crate::policy::parse_policy(&original).unwrap();
+    let before = crate::policy::compile_policy(&baseline).unwrap();
+    let mut proposed = project_source_policy(&before.native).unwrap();
+    proposed.async_api = before.async_api.clone();
+    proposed.http.case_path_patterns.push("/new/*".into());
+    let rendered = render_updated(&original, &proposed, &proof("new-observation")).unwrap();
+    let after = crate::policy::parse_policy(&rendered).unwrap();
+    assert_eq!(after.async_api, baseline.async_api);
+    for existing in &baseline.rules {
+        assert_eq!(
+            after.rules.iter().find(|rule| rule.id() == existing.id()),
+            Some(existing),
+            "async lifecycle authoring cannot replace an existing HTTP acquisition owner"
+        );
+    }
+    let new = after
+        .rules
+        .iter()
+        .find(|rule| rule.id() == "source-capture-http")
+        .unwrap();
+    let NativeEffect::CaptureHttp(effect) = &new.as_native().unwrap().effect else {
+        panic!("new acquisition owner");
+    };
+    assert_eq!(effect.case_paths, ["/new/*"]);
+    let compiled = crate::policy::compile_policy(&after).unwrap();
+    assert_eq!(compiled.fingerprints.runtime, before.fingerprints.runtime);
+    assert_eq!(
+        compiled.fingerprints.classification,
+        before.fingerprints.classification
+    );
+    assert_eq!(compiled.async_api, before.async_api);
+    assert_eq!(
+        render_updated(&rendered, &proposed, &proof("unused")).unwrap(),
+        rendered
+    );
+}
+
+#[test]
 fn changed_owner_merges_file_references_under_one_document_revision() {
     let mut document = base();
     document.source_revision = Some(revision());

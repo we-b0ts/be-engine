@@ -19,7 +19,7 @@ fn dependency_tail_deadline_stops_source_and_drains_a_dependency_that_never_repl
 
 #[test]
 #[ignore = "requires python3 and root or passwordless sudo for the fixed Source UID; no interception"]
-fn async_case_deadline_stops_source_drains_original_io_and_completes_recording_normally() {
+fn async_wait_outlives_primary_budget_and_explicit_shutdown_drains_original_io() {
     runtime().block_on(exercise(true, true));
 }
 
@@ -124,9 +124,17 @@ async fn exercise(tail_timeout: bool, async_api: bool) {
         );
     }
     drop(sockets);
+    let (stop, stopped) = tokio::sync::oneshot::channel();
     let service = async {
         let mut forwards = super::super::kubernetes::PortForwards::default();
-        let shutdown = std::future::pending::<anyhow::Result<()>>();
+        let shutdown = async {
+            if async_api {
+                stopped.await.unwrap();
+                Ok(())
+            } else {
+                std::future::pending::<anyhow::Result<()>>().await
+            }
+        };
         tokio::pin!(shutdown);
         super::super::run_prepared(options, config, None, &mut forwards, shutdown.as_mut()).await
     };
@@ -148,13 +156,38 @@ async fn exercise(tail_timeout: bool, async_api: bool) {
         }
         assert!(response.starts_with(b"HTTP/1.1 200"), "{response:?}");
         assert!(String::from_utf8_lossy(&response).contains("data: ready\n\n"));
+        if async_api {
+            // The primary HTTP budget has expired, but its complete response
+            // leaves the asynchronous worker and admitted dependency alive.
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            assert!(cleanup.alive(), "waiting for an end must not stop Source");
+            let mut observations = Vec::new();
+            find_files(
+                &temp
+                    .path()
+                    .join("data/.traffic-e2e/local/artifacts/recordings"),
+                "async-api-observation.json",
+                &mut observations,
+            );
+            assert!(
+                observations.is_empty(),
+                "neither an end nor the five-minute idle fallback has been reached"
+            );
+            stop.send(()).unwrap();
+        }
     };
-    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(20), async {
+    // Explicit normal shutdown retains its existing sixty-second graceful
+    // drain before interrupting this Case, whose end never arrives.
+    let budget = Duration::from_secs(if async_api { 90 } else { 20 });
+    let (outcome, ()) = tokio::time::timeout(budget, async {
         tokio::join!(service, client)
     })
     .await
     .expect("quarantine must stop the Source and finalize instead of keeping a fallback-only service alive");
-    assert_eq!(outcome.is_ok(), async_api, "{outcome:?}");
+    assert!(
+        outcome.is_err(),
+        "an unfinished Case cannot pass: {outcome:?}"
+    );
     if let Some(dependency_task) = dependency_task {
         tokio::time::timeout(Duration::from_secs(2), dependency_task)
             .await
@@ -181,20 +214,34 @@ async fn exercise(tail_timeout: bool, async_api: bool) {
     assert_eq!(runs.len(), 1);
     let report = read_json(&runs[0].join("recording-run.json"));
     assert_ne!(report["status"], "running");
-    assert_eq!(report["completion_reason"], "source_isolation_required");
+    assert_eq!(
+        report["completion_reason"],
+        if async_api {
+            "shutdown_signal"
+        } else {
+            "source_isolation_required"
+        }
+    );
     if async_api {
-        assert_eq!(report["status"], "completed");
-        assert_eq!(report["published_cases"], 1);
-        assert_eq!(report["failed_cases"], 0);
+        assert_eq!(report["published_cases"], 0);
+        assert_eq!(report["failed_cases"], 1);
+        let shutdown = read_json(&runs[0].join("recording-shutdown.json"));
+        assert_eq!(shutdown["outcome"], "case_drain_timeout");
+        assert_eq!(shutdown["case_drain_timeout_ms"], 60_000);
         let mut observations = Vec::new();
         find_files(&runs[0], "async-api-observation.json", &mut observations);
         assert_eq!(observations.len(), 1);
         let observation = read_json(&observations[0]);
-        assert_eq!(observation["end_reason"], "timeout");
-        assert_eq!(observation["complete"], true);
+        assert_eq!(observation["end_reason"], "stopped");
+        assert_eq!(observation["capture_complete"], true);
+        assert_eq!(observation["business_complete"], false);
+        assert_eq!(observation["inventory_complete"], true);
         let case = observations[0].parent().unwrap();
-        assert!(case.join("expected-response.json").exists());
-        assert!(!case.join("recording-error.json").exists());
+        assert!(case.join("expected-response.json.invalid").exists());
+        assert_eq!(
+            read_json(&case.join("recording-error.json"))["reason"],
+            "shutdown_case_drain_timeout"
+        );
         let dependencies =
             crate::recorder::test_io::read_to_string_sync(case.join("dependencies.jsonl")).unwrap();
         let terminated = dependencies

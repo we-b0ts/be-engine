@@ -209,7 +209,8 @@ fn recording_rejects_missing_revision_unknown_fields_invalid_paths_and_conflicti
         assert!(policy::parse_policy(&input).is_err(), "accepted {input}");
     }
     let declaration = Declaration {
-        case_paths: vec!["/api/*".into(); 4097],
+        async_api: None,
+        case_paths: Some(vec!["/api/*".into(); 4097]),
         name: default_name(),
         proof: None,
     };

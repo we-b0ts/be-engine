@@ -244,7 +244,7 @@ fn context_from_inventory(
             .filter(|o| o.pending())
             .cloned()
             .collect(),
-        next_step: "Resolve every ownerless Source occurrence through supported process-task or async-origin API rules and independent positive proof before formal Replay. Reject mistaken ownership returns with Source proof. Missing traffic remains with its reporting API implementer; no ownership result proves consumption.",
+        next_step: "Complete independent Source ownership analysis first, then assess whether effective process/async lifecycle rules are missing, incomplete or sufficient. For each async origin, inspect its complete effective Case inventory (original ownership plus newly assigned occurrences) and return the scenario's end proposal under recording.async_api or identify existing coverage. Derive request templates, reply/message conditions and total matching occurrence counts from the analyzed tail; do not enumerate intermediate dependencies. For a necessary rule change, the coordinator uses rule_planning to plan/apply, obtains fresh context, then rebinds and applies the already established exact-occurrence proof. No unchanged plan or repeated ownership analysis is required. Reject mistaken returns with Source proof; missing traffic stays with its reporting API, and ownership never proves consumption.",
     })
 }
 

@@ -2,7 +2,7 @@ use super::*;
 use crate::active_case::ActiveCaseGuard;
 use crate::recorder::{RedisExchangeEvent, capture_body};
 
-fn active(timeout: Duration) -> (ActiveCaseRegistry, ActiveCaseGuard, Uuid) {
+pub(super) fn active(timeout: Duration) -> (ActiveCaseRegistry, ActiveCaseGuard, Uuid) {
     let registry = ActiveCaseRegistry::default();
     let case = CaseContext {
         id: Uuid::new_v4(),
@@ -25,7 +25,7 @@ fn active(timeout: Duration) -> (ActiveCaseRegistry, ActiveCaseGuard, Uuid) {
     (registry, guard, case.id)
 }
 
-fn event(failure: bool) -> RecorderEvent {
+pub(super) fn event(failure: bool) -> RecorderEvent {
     RecorderEvent::RedisExchange(RedisExchangeEvent {
         id: Uuid::new_v4(),
         connection_id: Uuid::new_v4(),
@@ -62,7 +62,7 @@ fn event(failure: bool) -> RecorderEvent {
     })
 }
 
-fn drain(
+pub(super) fn drain(
     registry: &ActiveCaseRegistry,
     id: Uuid,
     cleanup: Duration,
@@ -251,10 +251,11 @@ async fn recoverable_dependency_failure_waits_for_retry_and_terminal_resource() 
 }
 
 #[tokio::test]
-async fn common_request_deadline_is_complete_and_preserves_original_inflight_io() {
+async fn explicit_source_stop_preserves_original_inflight_io() {
     let (registry, _guard, id) = active(Duration::ZERO);
     let pending = registry.current_targets_for_http_request(true);
     let draining = drain(&registry, id, Duration::from_millis(5));
+    registry.begin_quiescing();
     tokio::time::timeout(Duration::from_secs(1), registry.wait_for_quiescing())
         .await
         .unwrap();
@@ -265,7 +266,7 @@ async fn common_request_deadline_is_complete_and_preserves_original_inflight_io(
     assert_eq!(draining.await.unwrap(), DependencyDrainResult::Drained);
     assert_eq!(
         registry.async_api_report(id).unwrap().1["end_reason"],
-        "timeout"
+        "stopped"
     );
 }
 
@@ -308,7 +309,11 @@ async fn source_stop_inventory_marks_only_original_unfinished_io_not_complete_bu
     // The same shape without Source-stop ownership is ordinary invalid evidence.
     registry.observe_stream_tail_event(&incomplete, &pending, true);
     let draining = drain(&registry, id, Duration::from_millis(5));
+    registry.begin_quiescing();
     registry.wait_for_quiescing().await;
+    while !registry.async_source_stop_requested(id) {
+        tokio::task::yield_now().await;
+    }
     let mut cleanup = incomplete.clone();
     if let RecorderEvent::RedisExchange(event) = &mut cleanup {
         event.sequence = 2;

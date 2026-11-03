@@ -200,7 +200,7 @@ pub(in crate::replay) async fn prepare(
     }
     if metadata
         .as_ref()
-        .is_some_and(|metadata| !metadata.business_complete)
+        .is_some_and(|metadata| !metadata.normal_completion)
     {
         state
             .dependency_tails

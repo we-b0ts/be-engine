@@ -9,9 +9,10 @@ relevant action below.
 ## Coordinator Boundary
 
 The engine selects the legal action; the coordinator executes or delegates it.
-Repository analysts own read-only source route and module-group analysis. API implementers own
-API diagnosis and implementation. The retained code integrator owns candidate
-preparation and review. An engine-requested API expert investigates
+Repository analysts own read-only source route, module-group and independent
+dependency attribution analysis, including Source-proven task/lifecycle rule
+proposals. API implementers own API diagnosis and implementation. The retained
+code integrator owns candidate preparation and review. An engine-requested API expert investigates
 read-only and reports through the coordinator to the existing API implementer. The
 task runtime supplies live handles and events but does not replace engine state.
 
@@ -105,13 +106,14 @@ listed protocol before handling that action.
 | `recording_in_progress`, `recording_refresh_pending` | Observe external publication and wait for the selected evidence | External recording owner | [recording actions](coordinator-recording.md) |
 | `case_pattern_identification_required` | Retain the batch, delegate analysis, then apply the exact result | Repository analyst in read-only `route_analysis` mode | [case patterns](coordinator-case-patterns.md) |
 | `repository_analysis_required` | Complete incremental grouping before Replay | Repository analyst | [repository analysis](coordinator-repository-analysis.md) |
+| `dependency_attribution_required` | Obtain the exact context, reconcile rule assessment and proposals, then apply independent ownership proof | Repository analyst in read-only `dependency_attribution` mode | [independent dependency attribution](coordinator-rule-actions.md#independent-dependency-attribution) |
 | `implementer_dispatch_required` | Create/resume the fixed slot and confirm its exact same-group API batch | API implementer | [fixed implementers](coordinator-implementers.md) |
 | `implementation_required`, `worker_status_required` | Dispatch/resume/query the bound implementer and report actual runtime observations | API implementer | [agent protocol](coordinator-agent-protocol.md) |
 | `expert_required` | Reserve, dispatch, reconcile, forward, and close exactly as returned | API expert, reporting to the existing API implementer | [API expert assistance](coordinator-agent-protocol.md#api-expert-assistance) |
 | `integration_required` | Retain identity, publish the exact merged candidate, then report integration without review check | Code integrator | [integration](coordinator-integration.md) |
 | `source_review_required`, `target_quality_required` | Reconcile legacy requests; ordinary source review is deferred to final pre-revalidation | Code integrator; API implementer only for a routed work-item defect | [review actions](coordinator-review.md) |
 | `pre_revalidation_review_required` | Delegate the configured quality requirement and final reporting command, publish the exact candidate, and accept its final-stage receipt | Code integrator | [final review](coordinator-review.md#final-review-before-full-revalidation) |
-| `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer worker | [rule actions](coordinator-rule-actions.md) |
+| `plan_apply_required` | Apply the unchanged engine plan with source-proven inputs | Inputs originate from the assigned API implementer or repository analyst | [rule actions](coordinator-rule-actions.md) |
 | `input_required` | Resolve only the named input and resume the retained invocation | Delegate semantic/source questions to the owning API implementer or code integrator | [input handling](#input_required) and, for startup inputs, [startup inputs](coordinator-startup-inputs.md) |
 | `system_repair_required`, `recovery_required`, `blocked` | Execute only the returned acceptance/recovery action or stop with retained context | External system owner may install the named repair | [recovery and system repair](coordinator-recovery.md) |
 | `wait_required`, `worker_events_required` | Perform the mandatory runtime query pass, reconcile events, then wait or refresh status | Task runtime provides live observations | [mandatory runtime queries](coordinator-agent-protocol.md#mandatory-runtime-queries) |
@@ -317,6 +319,16 @@ one complete incremental submission through the returned batch/version-bound
 command. Finish analysis before Replay; no overlap or implementer binding is
 needed. Existing grouped APIs reuse the project catalog.
 
+### `dependency_attribution_required`
+
+Read [independent dependency attribution](coordinator-rule-actions.md#independent-dependency-attribution).
+Dispatch the exact current context and relevant effective task/lifecycle
+declarations to the read-only repository analyst. Reconcile both its ownership
+proof and its assessment of whether the existing rule covers the Source lifecycle.
+Publish supported rule changes through the existing plan/apply transaction,
+obtain fresh context, then apply the proof. Reuse adequate rules and preserve the
+ordinary manual-proof fallback described by that protocol.
+
 ### `implementer_dispatch_required`
 
 Read [fixed implementers](coordinator-implementers.md). Accept the engine’s
@@ -329,8 +341,8 @@ per-API dispatch and lease identities.
 ### `plan_apply_required`
 
 Execute the exact unchanged `commands.apply` once; never rerun planning or
-reconstruct selector inputs. For response-rule, recorder-capture, or
-process-owned-dependency plans, first read
+reconstruct selector inputs. For response-rule, recorder-capture,
+process-owned-dependency or async lifecycle plans, first read
 [coordinator-rule-actions.md](coordinator-rule-actions.md). A response
 rule plan remains bound to its existing evidence and plan ID.
 

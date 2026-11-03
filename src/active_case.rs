@@ -51,6 +51,15 @@ struct ActiveCaseRegistration {
     async_api: Option<Arc<async_api::AsyncObservation>>,
 }
 
+impl ActiveCaseRegistration {
+    fn business_activity(&self) -> Arc<DependencyActivity> {
+        self.stream_tail
+            .as_ref()
+            .map(|tail| tail.activity())
+            .unwrap_or_else(|| self.dependencies.clone())
+    }
+}
+
 pub(crate) struct ActiveCaseGuard {
     registry: ActiveCaseRegistry,
     case_id: Uuid,
@@ -244,6 +253,13 @@ impl ActiveCaseRegistry {
         state.quiescing = true;
         state.case_matching_ready = false;
         state.bootstrap_open = false;
+        // Publish the actual stop boundary before waking protocol cancellation
+        // observers, which need this provenance for their retained requests.
+        for case in &state.active {
+            if let Some(observation) = &case.async_api {
+                observation.mark_source_stop();
+            }
+        }
         self.quiescing.send_replace(true);
         changed
     }

@@ -67,9 +67,10 @@ After this wait, the supervisor stops Source and then closes retained dependency
 connections as engine cleanup before finalizing the recording.
 
 The run manifest distinguishes external SIGTERM/SIGINT (`shutdown_signal`) from
-an internal safety stop (`source_isolation_required`). Source isolation can
-complete a valid recording after an asynchronous dependency failure or deadline;
-it does not imply that the operator stopped the container.
+an internal safety stop (`source_isolation_required`). Source isolation handles
+actual dependency capture failures and transport cleanup; waiting for an
+uncovered async end does not request isolation. It does not imply that the
+operator stopped the container.
 
 If an uncommitted case is still incomplete after 60 seconds, it fails with
 `shutdown_case_drain_timeout`. An earlier independent case failure is preserved.
@@ -129,6 +130,9 @@ timeouts retain their case while Source gets the configured
 cannot finish within that budget, admission closure wakes the supervisor to stop
 Source and finalize the failed recording. Source exit is confirmed before the
 supervisor closes any remaining dependency connections as engine-owned cleanup.
+This HTTP transport budget does not limit asynchronous end observation after a
+complete primary response. Such observation uses the end/probe and business-idle
+boundaries below, or is explicitly interrupted.
 
 HTTP include and exclude rules support `paths` for exact, case-sensitive URI
 path matching. Query strings are ignored when matching requests and must not
@@ -156,34 +160,117 @@ applied once at startup. Comparison rules in the same file do not enable Replay
 or change Source business behavior. HTTP include/exclude rules still apply.
 
 An API that returns before its work finishes can retain the ordinary Case with
-`async_api` in the same policy:
+`recording.async_api` in the same policy:
 
 ```yaml
-async_api:
-  POST /api/v1/responses:
-    - when_response: {/status: queued}
-      end:
-        - http:
-            method: POST
-            endpoint: executor.example.com:80
-            path: /submit
-    - when: {/background: true}
-      when_response: {/status: in_progress}
-      end:
-        - mysql:
-            sql: "UPDATE jobs SET status = 'completed' WHERE id = ?"
-        - redis: {operation: DEL, key: 'job:finished:*'}
+recording:
+  async_api:
+    POST /api/v1/responses:
+      - when_response: {/status: queued}
+        end:
+          - http:
+              method: POST
+              endpoint: executor.example.com:80
+              path: /submit
+      - when: {/background: true}
+        when_response: {/status: in_progress}
+        end:
+          - mysql:
+              sql: "UPDATE jobs SET status = 'completed' WHERE id = ?"
+          - redis: {operation: DEL, key: 'job:finished:*'}
 ```
 
-These are illustrative terminal resources; choose the actual final dependency
-from Source behavior. An initialization access that uses the same key or SQL
-cannot also identify completion. MySQL matches the full SQL structure and fixed
+`recording.async_api` and `recording.case_paths` are independent optional fields.
+Canonical output places `async_api` before `case_paths`. The old root `async_api`
+remains readable, but declaring both locations is rejected, even for empty maps.
+Both spellings compile to the same rule identity and fingerprints; moving the
+declaration alone does not change capture behavior or invalidate evidence.
+
+These are illustrative ending conditions. After ownership analysis, choose the
+last business request templates from the complete effective Case, including
+newly attributed tail traffic, and check their Source path and earlier matches.
+An initialization access that uses the same key or SQL cannot alone identify
+the final occurrence. MySQL matches the full SQL structure and fixed
 literals, ignoring whitespace and keyword case. Each `?` matches one scalar;
 prepared parameters are decoded before matching. Redis matches the operation
 and physical key, with at most one `*`. An optional `occurrence: 2` waits for the
 second successful access to the same physical key, database and endpoint when
 Source uses the same operation during initialization and final cleanup. Distinct
 keys and mirrored evidence cannot be combined to reach that count.
+Redis `when_response: {kind: nil}` additionally requires a native Redis null
+reply; omitted or `{kind: any}` accepts any complete successful reply. A string
+containing `null`, an empty string and missing capture are not native nil.
+Occurrence counts include only exchanges satisfying all request/reply conditions
+and start at Case admission, not at the beginning of an observed tail. For example:
+
+```yaml
+end:
+  - redis: {operation: DEL, occurrence: 2, key: 'chat:cancel:*'}
+  - redis:
+      operation: GET
+      key: 'channel:task_callback:telegram:*'
+      when_response: {kind: nil}
+```
+
+If Source already publishes a terminal JSON message, match its channel and
+message fields instead of treating a pub/sub channel as a Redis key:
+
+```yaml
+end:
+  - redis:
+      operation: PUBLISH
+      channel: socketio
+      when_message: {/method: emit, /event: 'chat:start', /namespace: /chat}
+```
+
+Choose the event belonging to the selected Source ending path. PUBLISH ends
+require an exact channel, all literal JSON-pointer conditions, complete request
+and response captures, and a successful native integer reply; zero subscribers
+is still a successful publication. Other messages on that channel do not end
+the Case. `when_message` inspects the publication's request JSON, whereas
+`when_response` inspects the native reply; PUBLISH accepts only `any` because
+a successful publication always returns an integer.
+
+The `end` list contains alternatives: a partial match can enter `ending` without
+requiring all ends. Once every end in the selected scenario has matched, Recorder
+closes new dependency admission immediately and drains admitted requests, with no
+silence interval. A scenario with one end follows this same rule. Match state
+respects each end's occurrence requirement and any transaction commit boundary.
+
+While some ends remain unmatched, each fresh end match keeps admission open for
+a fixed one-second probe. If another relevant request
+starts, the Case must wait for a fresh end match before another probe can permit
+closure. Subsequent silence alone never restores that permission. For example,
+after the second DEL, a new SQL request cancels the probe; two seconds of silence
+after that SQL do not close the Case. A later matching GET can start a new probe.
+The same recorded exchange cannot repeatedly grant probes.
+
+A successful probe closes admission only when no relevant requests remain in
+flight. Writer queues and unambiguously process-owned requests do not cancel the
+probe; unknown ownership cannot be assumed to be process traffic. Closing admission
+and checking request starts are atomic. Already admitted I/O and evidence still
+drain without losing their original ownership. Later traffic remains available
+to independent attribution analysis.
+
+Both observation durations are fixed engine behavior, not policy fields. After
+the complete primary response, waiting for the first or next end has no absolute
+deadline. If no fresh end arrives, five continuous minutes without relevant
+business I/O and with no relevant request in flight close the Case normally.
+Each real business activity restarts this idle interval. Writer queues and
+unambiguously process-owned traffic do not. The interval cannot start before the
+primary response completes. This fallback records that business completion was
+not observed, retaining the traffic for rule analysis without stopping Source or
+marking a timeout failure. The primary HTTP transport timeout remains separate;
+explicit shutdown or actual capture failure can interrupt observation.
+
+A fresh end restores the one-second probe, or closes immediately if it satisfies
+the last unmatched end. Merely knowing that additional end alternatives exist
+does not extend the probe. Only an actual subsequent request
+start switches back to waiting for a fresh end or the five-minute idle fallback.
+A completed probe is a capture boundary, not proof that a detached worker
+can never issue another request. Do not select an early polling request whose
+normal idle gap outlasts the probe; use a later condition for that Source path.
+
 Optional database and endpoint selectors
 restrict the physical resource; omitted database selectors match any Source
 database. Source and Target still use the same physical connection identity.
@@ -208,10 +295,11 @@ work: a later executor callback is a separate inbound HTTP request. Choose
 conditions that identify the actual submission branch; `queued` alone is not a
 universal executor mode indicator.
 
-Dependencies remain in
-the ordinary Case after the primary response is sent. Any declared terminal
-resource, any ordinary dependency failure, or the existing common request
-deadline completes observation. There is no policy timeout or failure toggle.
+Dependencies remain in the ordinary Case after the primary response is sent.
+A successful declared end starts ending as described above. Waiting for either
+the first end or another end has no absolute deadline after the complete primary
+response. Complete business errors remain real retry/cleanup observations; incomplete dependency
+capture retains its failure handling. There is no policy timeout or failure toggle.
 Known process-owned traffic does not end or become part of the Case. A terminal
 access observed before the primary response finishes is retained without
 truncating that response. When response conditions select a scenario, its early
@@ -223,16 +311,29 @@ Optional `CLIENT SETINFO LIB-NAME` / `LIB-VER` exchanges use the same precise SD
 metadata exemption as semantic dependency recording. An unsupported metadata
 reply cannot finish asynchronous business observation or request Source
 isolation. Required setup failures (`AUTH`, `SELECT`, `HELLO`), incomplete or
-unsafe exchanges, and business-command errors retain their failure behavior.
+unsafe exchanges retain their capture failure behavior. Complete business-command
+errors do not satisfy a successful end condition.
 
-`async-api-observation.json` records `end_reason` as `resource`,
-`dependency_failure`, or `timeout`, together with the zero-based selected
-`scenario_index`. The latter two end reasons stop Source through normal
-recording supervision so its detached worker cannot leak into another Case.
+`async-api-observation.json` records `end_reason` as `resource`, `idle`,
+`dependency_failure`, or `stopped`, together with the zero-based selected
+`scenario_index`. `stopped` records an explicit shutdown or independently observed
+Source exit; it does not turn an uncovered end into a failure or a timer into a
+successful completion. Historical `timeout` observations remain readable.
+Actual capture failure and external stopping retain their supervision behavior.
 Admitted I/O retains its original ownership until the real termination and queued
-evidence have drained. The ordinary Case and recording finish normally; this is
-not a recording invalidation. Capture corruption or incomplete primary HTTP
-traffic still follows the existing failure behavior.
+evidence have drained. Resource/probe and business-idle boundaries save an
+ordinary Case normally. Explicit shutdown retains its existing drain limits and
+incomplete-Case diagnostics; capture corruption or incomplete primary HTTP
+traffic retains its existing failure behavior.
+Partial-match ending metadata records a completed probe separately from business
+completion, preserving the observed candidate and finite dependency inventory.
+An `idle` boundary instead records `idle_completion: {quiet_ms: 300000}` and
+`business_completion: unobserved`, with no fabricated end match or completed
+probe. It is a normal recording boundary that keeps Source running.
+If another request cancels the probe and no fresh end arrives, observation waits
+for the five-minute business-idle fallback. A missing rule must not produce an
+automatic timeout or stop Source.
+A timer alone does not prove business completion.
 
 The observation stores the precise Source-stop offset and exact `cleanup_refs`
 for admitted requests still unfinished at that boundary. Original outcomes,
@@ -243,6 +344,9 @@ business response, fabricate a proxy 502, or waive unstarted ordinary resources.
 Captured HTTP prefixes may reuse global formats for complete JSON/SSE values;
 partial or unknown bytes stay exact, and no unobserved response EOF is added.
 Capture limits and prefixes that were not flushed remain capture failures.
+Replay still validates the finite recorded inventory with its configured
+execution budgets; unbounded Source end observation does not remove Replay's
+failure detection or execution limits.
 
 An upstream TCP connection failure retains a semantic
 `dependency_connect_failure` observation with its physical endpoint, known

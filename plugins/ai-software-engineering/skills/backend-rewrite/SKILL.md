@@ -24,7 +24,7 @@ workflow agent role and is never workflow authority.
 | --- | --- | --- | --- |
 | Rewrite engine | `backend-rewrite` and `traffic-e2e` | Workflow state, legal action selection, evidence identity, traffic serialization, verification, and terminal eligibility | Invent task-runtime state or perform source diagnosis |
 | Rewrite coordinator | Main/root `coordinator` task | Execute engine actions, dispatch and reconcile agents, apply coordinator-owned inputs, publish exact integration candidates, invoke acceptance, and deliver | Diagnose business source, edit target code, or mark work complete from an agent report |
-| Repository analyst | `repository-analyst` assignment | Analyze source routes, modules and cross-API/task dependency attribution read-only; return independent Source ownership proofs | Edit code or configuration, bind an implementer, run Replay, or mutate workflow state |
+| Repository analyst | `repository-analyst` assignment | Analyze source routes, modules and cross-API/task dependency attribution read-only; return independent Source ownership proofs and supported task/lifecycle rule proposals | Edit code or configuration, bind an implementer, run Replay, or mutate workflow state |
 | API implementer | Fixed `api-implementer-N` slot | Implement Source-correct APIs one at a time and return committed subsets without review check | Mutate workflow state, publish to the canonical target, or accept its own work |
 | Code integrator | `code-integrator` assignment | Merge accepted deliveries, resolve conflicts and return an exact candidate; consolidated review uses a separate final-stage assignment | Act as an API implementer, mutate engine state, or report implementation-worker activity |
 | API expert | Engine-requested `api-expert` assignment | Investigate one reserved API read-only and return evidence-backed findings for its existing API implementer | Edit code, own the API, mutate workflow state, or satisfy implementation/acceptance gates |
@@ -126,8 +126,24 @@ rerun initialization.
 - Recordings and `.traffic-e2e/local/artifacts/` are immutable evidence. Preserve
   engine-generated `progress.yaml`. Do not synthesize evidence, rewrite source
   behavior to manufacture a pass, or replace engine aggregation with scripts.
-- Rule diagnosis and source proof belong to the API implementer; planning,
-  application, and fresh verification follow the coordinator's rule protocol.
+- Rule diagnosis and source proof belong to the API implementer for its API,
+  or to the repository analyst for assigned independent dependency attribution.
+  After ownership analysis, async lifecycle proposals describe the scenario and
+  end templates, reply/message conditions and occurrence counts from its complete
+  effective Case tail under `recording.async_api`, before independent optional
+  `recording.case_paths`, without enumerating intermediate business requests. Any
+  end can enter ending; once all ends match, close admission immediately and drain
+  admitted requests with no silence interval. A single end follows the same rule.
+  Partial matches permit a fixed one-second probe.
+  A subsequent relevant request start requires a fresh end before closure can
+  become eligible again; another one-second silence cannot close the Case. There is no
+  absolute deadline after the complete primary response. Without a fresh end,
+  five minutes of relevant business I/O silence and no relevant request in flight
+  close the Case normally with completion unobserved, keeping Source running for
+  rule analysis. Explicit shutdown or actual capture
+  failure can interrupt observation; primary HTTP transport timeout is separate.
+  Planning, application, and fresh verification
+  follow the coordinator's rule protocol.
   Follow the [shared rule evidence contract](references/rule-policy.md): current
   API hints, evidence queries and legal actions drive rule work.
 - Target behavior must use normal product code and configuration, never recorded

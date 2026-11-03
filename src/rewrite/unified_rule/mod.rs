@@ -51,6 +51,7 @@ fn parse_proposal(input: &str) -> Result<TrafficPolicy> {
         || value.get("mysql").is_some()
         || value.get("redis").is_some()
         || value.get("http").is_some()
+        || value.get("recording").is_some()
         || value.get("async_api").is_some()
     {
         serde_yaml::from_value::<TrafficPolicy>(value)

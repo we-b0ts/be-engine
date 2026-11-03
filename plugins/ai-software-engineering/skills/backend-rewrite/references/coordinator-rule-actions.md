@@ -1,8 +1,9 @@
 # Coordinator Rule Actions
 
-Only the confirmed workflow coordinator plans/applies rules. Require the worker's
-Source conclusions and exact proposed selectors; return semantic questions to the
-Source owner. Follow the [shared rule evidence contract](rule-policy.md): relevant
+Only the confirmed workflow coordinator plans/applies rules. Require the assigned
+API implementer's or repository analyst's Source conclusions and exact proposed
+selectors; return semantic questions to the Source owner. Follow the
+[shared rule evidence contract](rule-policy.md): relevant
 API `rule_hints`, queries, planners and current actions drive the work. Rules live
 in the single file named by `project.policy`; default
 `.traffic-e2e/policy.yaml`. Declare one global JSON field-format map under
@@ -293,14 +294,63 @@ an exact recording omission and interception/response-IP-URL rewrite inputs.
 returned `show --api` view and coordinator `resolve` command to publish that
 implementer's conclusion. Unmatched or startup dirty alone is not analyst work.
 
-Use `dependency-attribution rules` to inspect complete effective task/lifecycle
-groups. Publish Source-proven process/async rules through unified rule plan/apply
-first. Before any actual Replay exists, use the context's exact `rule_planning`
-Source-only evidence token and command; do not fabricate API attempts or apply
-value waivers through attribution planning. Obtain fresh attribution context,
-then apply the independent analyst
-submission with the exact policy fingerprint, rule IDs, Source inventory and
-expected revision. Names or exclusion evidence alone cannot authorize a pass.
+Use `dependency-attribution rules` for effective task/lifecycle group identities
+and the async `scenarios` with their current triggers and ends. Inspect other
+relevant declarations in `project.policy` and include them in the analyst
+assignment. After tracing the Source branches,
+retries and cleanup, require an explicit rule assessment alongside the ownership
+proof. Keep the assessment and any rule proposal in the analyst's accompanying
+result; the `dependency-attribution/v3` submission keeps its existing schema:
+
+- An existing rule covers the actual trigger and analyzed ending path: reuse it. No
+  byte-identical plan/apply is needed merely because another batch needs proof.
+- A rule is missing or its trigger/end is incomplete, and Source proves a
+  supported correction: obtain the smallest rule proposal and its Source
+  justification. For an async API, require the completed ownership analysis to
+  produce end templates, necessary reply/message conditions and occurrence counts
+  from the complete effective Case tail. Count from Case admission and retain
+  the original occurrence references in the accompanying evidence. Declare only
+  trigger conditions and alternative end resources, not intermediate requests.
+- Source does not establish a supported ending condition, or an adequate rule has an
+  execution gap: retain the concrete limitation and use ordinary independent
+  per-occurrence attribution where supported. Keep effective rule bindings,
+  Source proof and genuine Replay/capture obligations. Policy or engine repair
+  does not introduce an additional gate on that existing fallback.
+
+Do not accept an async attribution handoff that omits its rule assessment. A new
+tail requires either the minimal proposal or a concrete explanation of existing
+coverage/unsupported evidence. Author rules under `recording.async_api`, before
+independent optional `recording.case_paths`; the logical `async_api` replacement
+section and `capture.async_api` identity are unchanged. Do not also emit the legacy
+root spelling. This follows ownership analysis; it does not make
+the proposed end the proof of ownership. Once all ends have matched, close new
+admission immediately and drain admitted requests, without a silence interval;
+a single end follows this same rule. Partial matches permit a fixed one-second probe.
+A subsequent relevant request start cancels closure eligibility until another
+fresh end matches; silence alone cannot restore it. Probe closure requires no relevant
+request in flight. Only unambiguously process-owned requests are ignored. There
+is no absolute deadline while waiting for the first or next end after the
+complete primary response. Without a fresh end, five continuous minutes of
+relevant business I/O silence and no relevant request in flight close the Case
+normally with completion unobserved, keeping Source running for rule analysis.
+Real business activity restarts that interval; writer queues and definite process
+traffic do not. The primary HTTP transport timeout remains separate; explicit
+shutdown or actual capture failure can interrupt observation.
+No window configuration or all-of grouping belongs in the proposal. Native Redis
+nil uses `when_response: {kind: nil}`; omit the condition for any successful reply.
+PUBLISH message fields remain under `when_message`.
+
+For a supported correction, publish the Source-proven process/async rule through
+unified rule plan/apply before applying the attribution proof. Merely binding an
+existing rule does not close a diagnosed missing or incomplete rule proposal.
+Use the context's exact `rule_planning` Source-only evidence token and command;
+no actual Replay is required to obtain that planning evidence. Review and apply
+the returned plan, obtain fresh attribution context, and bind the analyst's
+submission to its exact policy fingerprint, rule IDs, Source inventory and
+expected revision. Rebind the already established analysis; fresh transaction
+identities do not require repeating it. Do not reuse the pre-apply context, fabricate API attempts or
+apply value waivers through attribution planning. Names or exclusion evidence
+alone cannot authorize a pass.
 
 `dependency-attribution show --api <canonical-route>` is the factual Target view
 for all method contracts, hypotheses, original Source IDs, actual unmatched

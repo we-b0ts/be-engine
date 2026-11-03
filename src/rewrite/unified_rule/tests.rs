@@ -49,6 +49,32 @@ fn single_list_and_document_use_the_same_schema_and_compiler() {
 }
 
 #[test]
+fn nested_async_proposals_keep_logical_policy_identity_and_publish_canonically() {
+    let ends = json!({"POST /jobs":{"end":[{"redis":{"operation":"DEL","key":"done:*"}}]}});
+    let legacy =
+        parse_proposal(&json!({"format":"traffic-policy/v3","async_api":ends}).to_string())
+            .unwrap();
+    let nested = parse_proposal(
+        &json!({"format":"traffic-policy/v3","recording":{"async_api":ends}}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(nested, legacy);
+    let published = crate::policy::render_policy(&nested).unwrap();
+    let value: serde_yaml::Value = serde_yaml::from_str(&published).unwrap();
+    assert!(value.get("async_api").is_none());
+    assert!(value["recording"].get("async_api").is_some());
+    assert_eq!(parse_proposal(&published).unwrap(), nested);
+    assert!(
+        parse_proposal(
+            &json!({"format":"traffic-policy/v3","async_api":{},
+        "recording":{"async_api":ends}})
+            .to_string()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn exact_updated_policy_is_only_recoverable_with_durable_apply_intent() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("policy.yaml");

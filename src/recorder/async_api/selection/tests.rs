@@ -113,3 +113,74 @@ fn earlier_response_condition_takes_priority_over_unconditional_fallback() {
         assert_eq!(signal.is_some(), expected == 1);
     }
 }
+
+#[test]
+fn completed_candidates_are_fresh_matches_not_latched_signals_or_duplicate_exchanges() {
+    let selected = scope(
+        json!({"end":[
+            {"redis":{"operation":"DEL","key":"done:*","occurrence":2}},
+            {"redis":{"operation":"GET","key":"tail:*"}}
+        ]}),
+        b"{}",
+    );
+    let initial = redis("DEL", b"done:42");
+    let terminal = redis("DEL", b"done:42");
+    assert!(selected.observe_at(&initial, 1).is_none());
+    assert!(selected.observe_at(&terminal, 2).is_some());
+    assert_eq!(selected.selected_signal_generation(), Some(2));
+    assert!(selected.observe_at(&redis("GET", b"noise:42"), 3).is_none());
+    assert!(selected.observe_at(&terminal, 3).is_none());
+    assert!(selected.observe_at(&initial, 3).is_none());
+    assert_eq!(selected.selected_signal_generation(), Some(2));
+    assert!(selected.observe_at(&redis("DEL", b"done:42"), 4).is_some());
+    let tail = redis("GET", b"tail:42");
+    assert!(selected.observe_at(&tail, 5).is_some());
+    assert!(selected.observe_at(&tail, 6).is_none());
+    assert_eq!(selected.selected_signal_generation(), Some(5));
+}
+
+#[test]
+fn response_selection_keeps_the_latest_early_candidate_and_its_request_generation() {
+    let selected = scope(
+        json!([
+            {"when_response":{"/status":"queued"},"end":[{"redis":{"operation":"DEL","key":"done:*"}}]},
+            {"when_response":{"/status":"in_progress"},"end":[{"redis":{"operation":"GET","key":"tail:*"}}]}
+        ]),
+        b"{}",
+    );
+    assert!(selected.observe_at(&redis("DEL", b"done:42"), 1).is_none());
+    assert!(selected.observe_at(&redis("DEL", b"done:42"), 2).is_none());
+    assert!(selected.observe_at(&redis("GET", b"tail:42"), 3).is_none());
+    assert!(selected.observe_at(&redis("GET", b"noise:42"), 4).is_none());
+    assert!(
+        selected
+            .select_response(Some(&json!({"status":"queued"})))
+            .1
+            .is_some()
+    );
+    assert_eq!(selected.selected_signal_generation(), Some(2));
+    assert!(selected.observe_at(&redis("GET", b"noise:42"), 5).is_none());
+}
+
+#[test]
+fn early_all_end_progress_is_independent_for_each_response_candidate() {
+    for (response, all) in [("queued", true), ("in_progress", false)] {
+        let selected = scope(
+            json!([
+                {"when_response":{"/status":"queued"},"end":[
+                    {"redis":{"operation":"DEL","key":"done:*"}},
+                    {"redis":{"operation":"GET","key":"tail:*"}}]},
+                {"when_response":{"/status":"in_progress"},"end":[
+                    {"redis":{"operation":"DEL","key":"done:*","occurrence":2}},
+                    {"redis":{"operation":"GET","key":"tail:*"}}]}
+            ]),
+            b"{}",
+        );
+        assert!(!selected.all_ends_matched());
+        selected.observe_at(&redis("DEL", b"done:42"), 1);
+        selected.observe_at(&redis("GET", b"tail:42"), 2);
+        assert!(!selected.all_ends_matched());
+        selected.select_response(Some(&json!({"status":response})));
+        assert_eq!(selected.all_ends_matched(), all);
+    }
+}

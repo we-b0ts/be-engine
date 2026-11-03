@@ -36,7 +36,7 @@ struct Document {
     signatures: std::collections::BTreeMap<String, crate::policy::SignatureDefinition>,
     #[serde(default)]
     api: Option<api::ApiDefinitions>,
-    #[serde(default, deserialize_with = "optional_async_api")]
+    #[serde(default, deserialize_with = "recording::optional_async_api")]
     async_api: Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRules>>,
     #[serde(default, deserialize_with = "crate::policy::strict_map::unique_map")]
     resources: std::collections::BTreeMap<String, crate::policy::ResourceDeclaration>,
@@ -51,12 +51,6 @@ struct RedisDocument {
     keys: Option<std::collections::BTreeMap<String, redis_keys::Entry>>,
     #[serde(default, deserialize_with = "redis_rules")]
     rules: Option<Vec<Value>>,
-}
-
-fn optional_async_api<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<std::collections::BTreeMap<String, crate::policy::AsyncApiRules>>, D::Error> {
-    crate::policy::strict_map::unique_map(deserializer).map(Some)
 }
 
 fn redis_keys<'de, D: Deserializer<'de>>(
@@ -84,6 +78,15 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
             }
             resources::validate(&document.resources)?;
             crate::policy::signatures::validate(&document.signatures)?;
+            let recording_async = document
+                .recording
+                .as_ref()
+                .and_then(|recording| recording.async_api.as_ref());
+            ensure!(
+                document.async_api.is_none() || recording_async.is_none(),
+                "async_api cannot be declared both at the top level and under recording"
+            );
+            let async_api = document.async_api.or_else(|| recording_async.cloned());
             let (redis, nested_rules) = redis_document(document.redis)?;
             let (http, http_rules) = http::expand(document.http, &document.resources)?;
             let mut declared_rules = document.rules;
@@ -125,7 +128,7 @@ impl<'de> Deserialize<'de> for TrafficPolicy {
                 mysql: document.mysql,
                 redis,
                 http,
-                async_api: document.async_api,
+                async_api,
                 signatures: document.signatures,
                 resources: document.resources,
                 rules,
@@ -303,9 +306,6 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
     if let Some(http) = &document.http {
         root.insert("http".into(), serde_yaml::to_value(http)?);
     }
-    if let Some(async_api) = &document.async_api {
-        root.insert("async_api".into(), serde_yaml::to_value(async_api)?);
-    }
     if !document.signatures.is_empty() {
         root.insert(
             "signatures".into(),
@@ -328,6 +328,11 @@ pub(super) fn compact_value(document: &TrafficPolicy) -> Result<Value> {
     let mut rules = vec![];
     let mut redis_rules = vec![];
     let mut recording_root = Mapping::new();
+    if let Some(async_api) = &document.async_api {
+        let mut recording = Mapping::new();
+        recording.insert("async_api".into(), serde_yaml::to_value(async_api)?);
+        recording_root.insert("recording".into(), recording.into());
+    }
     let recording_id = recording::selected(&document.rules, document.source_revision.as_deref())?;
     let resource_names = resources::names(&document.resources)?;
     let compact_captures = compact_capture_suffix(&document);

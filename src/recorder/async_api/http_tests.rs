@@ -3,21 +3,18 @@ use crate::policy::AsyncHttpEnd;
 use crate::recorder::{HttpExchangeEvent, capture_body};
 
 fn scope() -> ResourceScope {
-    ResourceScope {
-        rule: AsyncApiRule {
-            end: vec![AsyncEnd::Http(AsyncHttpEnd {
-                method: "POST".into(),
-                endpoint: Endpoint {
-                    host: "executor.test".into(),
-                    port: 80,
-                },
-                path: "/submit".into(),
-                status_codes: vec![202],
-            })],
-            ..Default::default()
-        },
-        progress: Default::default(),
-    }
+    ResourceScope::new(AsyncApiRule {
+        end: vec![AsyncEnd::Http(AsyncHttpEnd {
+            method: "POST".into(),
+            endpoint: Endpoint {
+                host: "executor.test".into(),
+                port: 80,
+            },
+            path: "/submit".into(),
+            status_codes: vec![202],
+        })],
+        ..Default::default()
+    })
 }
 
 fn event() -> HttpExchangeEvent {

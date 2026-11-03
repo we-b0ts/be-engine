@@ -354,7 +354,15 @@ async fn async_source_stop_retains_only_flushed_prefix_without_certifying_respon
         let case_id = case.id;
         let draining =
             tokio::spawn(async move { drain_state.drain_active_case_dependencies(case_id).await });
+        state.begin_case_quiescing();
         state.inner.active_cases.wait_for_quiescing().await;
+        while !state
+            .inner
+            .active_cases
+            .async_source_stop_requested(case_id)
+        {
+            tokio::task::yield_now().await;
+        }
         termination.connection_observation().observe_engine_stop();
         drop(capture);
         let invalidation = draining.await.unwrap();

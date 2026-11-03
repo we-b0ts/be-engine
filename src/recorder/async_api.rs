@@ -1,4 +1,5 @@
 //! Source-selected asynchronous API completion, independent of traffic ownership.
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -7,25 +8,31 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::DependencyExchangeOutcome;
-use crate::mysql::sql::{self, Token};
+use crate::mysql::sql::Token;
 use crate::policy::{AsyncApiRule, AsyncEnd, Endpoint};
-use crate::recorder::{BodyCapture, MysqlValue, RecorderEvent};
+use crate::recorder::{BodyCapture, RecorderEvent};
+mod publish;
 mod recorded;
+mod redis_event;
+mod response;
 mod selection;
+mod templates;
 mod transaction;
 pub(crate) use selection::AsyncScope;
 
 #[derive(Debug, Clone)]
 struct ResourceScope {
     rule: AsyncApiRule,
-    progress: Arc<Mutex<RedisProgress>>,
+    progress: Arc<Mutex<ResourceProgress>>,
+    templates: templates::Templates,
 }
 
 #[derive(Debug, Default)]
-struct RedisProgress {
+struct ResourceProgress {
     resources: BTreeMap<RedisResource, BTreeSet<uuid::Uuid>>,
     observations: usize,
     mysql: transaction::Transactions,
+    completed: u32,
 }
 
 const MAX_OCCURRENCE_OBSERVATIONS: usize = 100_000;
@@ -45,6 +52,8 @@ pub(crate) enum AsyncEndReason {
     Resource,
     DependencyFailure,
     Timeout,
+    Stopped,
+    Idle,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,7 +66,30 @@ pub(crate) struct AsyncSignal {
 }
 
 impl ResourceScope {
+    fn new(rule: AsyncApiRule) -> Self {
+        let templates = templates::Templates::new(&rule);
+        Self {
+            rule,
+            templates,
+            progress: Default::default(),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn observe(&self, event: &RecorderEvent) -> Option<AsyncSignal> {
+        self.observe_cached(
+            event,
+            redis_event::Event::from_event(event).as_ref(),
+            &OnceCell::new(),
+        )
+    }
+
+    fn observe_cached(
+        &self,
+        event: &RecorderEvent,
+        redis: Option<&redis_event::Event<'_>>,
+        actual_sql: &OnceCell<Option<Vec<Token>>>,
+    ) -> Option<AsyncSignal> {
         // Reuse the exact metadata exemption applied to the semantic inventory.
         // Optional CLIENT SETINFO errors cannot end the business observation.
         if matches!(event, RecorderEvent::RedisExchange(exchange)
@@ -72,44 +104,86 @@ impl ResourceScope {
                 event_type: Some(event.kind()),
             });
         }
-        let signal = self
+        let indexes = self
             .rule
             .end
             .iter()
             .enumerate()
-            .find_map(|(index, end)| {
-                (terminal(end, event) && self.occurrence_reached(index, end, event))
-                    .then_some(index)
+            .filter_map(|(index, end)| {
+                (terminal(index, end, event, redis, actual_sql, &self.templates)
+                    && self.occurrence_reached(index, end, event, redis))
+                .then_some(index)
             })
-            .map(|index| AsyncSignal {
-                end_reason: AsyncEndReason::Resource,
-                resource_index: Some(index),
-                event_type: Some(event.kind()),
-            });
-        if let RecorderEvent::MysqlExchange(event) = event {
-            self.progress
-                .lock()
-                .expect("async progress poisoned")
+            .fold(0, |mask, index| mask | (1_u32 << index));
+        let indexes = if let RecorderEvent::MysqlExchange(event) = event {
+            let mut progress = self.progress.lock().expect("async progress poisoned");
+            let tokens = progress
                 .mysql
-                .observe(
-                    transaction::Facts {
-                        connection_id: event.connection_id,
-                        sequence: event.query_sequence,
-                        before: event.server_status_before,
-                        after: event.response.server_status,
-                        sql: event.sql.as_deref(),
-                        successful: event.outcome == DependencyExchangeOutcome::Response
-                            && event.response.error_code.is_none()
-                            && event.parse_warnings.is_empty(),
-                    },
-                    signal,
-                )
+                .needs_tokens(event.connection_id, indexes)
+                .then(|| {
+                    actual_sql
+                        .get_or_init(|| {
+                            templates::actual_sql(
+                                event.sql.as_deref()?,
+                                event.params.as_deref().unwrap_or_default(),
+                            )
+                        })
+                        .as_deref()
+                })
+                .flatten();
+            progress.mysql.observe(
+                transaction::Facts {
+                    connection_id: event.connection_id,
+                    sequence: event.query_sequence,
+                    before: event.server_status_before,
+                    after: event.response.server_status,
+                    tokens,
+                    successful: event.outcome == DependencyExchangeOutcome::Response
+                        && event.response.error_code.is_none()
+                        && event.parse_warnings.is_empty(),
+                },
+                indexes,
+            )
         } else {
-            signal
-        }
+            indexes
+        };
+        self.complete(indexes, event.kind())
     }
 
-    fn occurrence_reached(&self, index: usize, end: &AsyncEnd, event: &RecorderEvent) -> bool {
+    fn complete(&self, indexes: u32, event_type: &'static str) -> Option<AsyncSignal> {
+        if indexes == 0 {
+            return None;
+        }
+        let index = indexes.trailing_zeros() as usize;
+        self.progress
+            .lock()
+            .expect("async progress poisoned")
+            .completed |= indexes;
+        Some(AsyncSignal {
+            end_reason: AsyncEndReason::Resource,
+            resource_index: Some(index),
+            event_type: Some(event_type),
+        })
+    }
+
+    fn all_ends_matched(&self) -> bool {
+        !self.rule.end.is_empty()
+            && self
+                .progress
+                .lock()
+                .expect("async progress poisoned")
+                .completed
+                .count_ones() as usize
+                == self.rule.end.len()
+    }
+
+    fn occurrence_reached(
+        &self,
+        index: usize,
+        end: &AsyncEnd,
+        event: &RecorderEvent,
+        redis: Option<&redis_event::Event<'_>>,
+    ) -> bool {
         let (AsyncEnd::Redis(end), RecorderEvent::RedisExchange(event)) = (end, event) else {
             return true;
         };
@@ -121,7 +195,7 @@ impl ResourceScope {
             end,
             event.id,
             (&event.target_host, event.target_port, event.database),
-            redis_keys(event),
+            redis.and_then(redis_event::Event::keys).unwrap_or_default(),
         )
     }
 
@@ -131,7 +205,7 @@ impl ResourceScope {
         end: &crate::policy::AsyncRedisEnd,
         id: uuid::Uuid,
         (host, port, database): (&str, u16, i64),
-        keys: Vec<Vec<u8>>,
+        keys: &[Vec<u8>],
     ) -> bool {
         if end.occurrence == 1 {
             return true;
@@ -140,25 +214,24 @@ impl ResourceScope {
             .progress
             .lock()
             .expect("async resource progress poisoned");
-        // Keep a bounded observation inventory. An untracked resource remains
-        // unfinished and uses the same common deadline, never a guessed end.
-        keys.into_iter()
-            .filter(|key| key_matches(&end.key, key))
+        // Keep a bounded observation inventory. An untracked resource cannot
+        // prove completion; only a real end or the recording boundary closes it.
+        keys.iter()
+            .filter(|key| self.templates.key_matches(index, key))
             .any(|key| {
                 let resource = RedisResource {
                     selector: index,
                     host: host.to_ascii_lowercase(),
                     port,
                     database,
-                    key_digest: Sha256::digest(&key).into(),
+                    key_digest: Sha256::digest(key).into(),
                 };
-                if let Some(observed) = progress.resources.get(&resource) {
-                    if observed.len() >= end.occurrence {
-                        return true;
-                    }
-                    if observed.contains(&id) {
-                        return false;
-                    }
+                if progress
+                    .resources
+                    .get(&resource)
+                    .is_some_and(|observed| observed.contains(&id))
+                {
+                    return false;
                 }
                 // Bound the total set entries, including a multi-key command
                 // touching many resources. Digests avoid retaining large keys.
@@ -180,7 +253,14 @@ fn endpoint_matches(endpoint: &Option<Endpoint>, host: Option<&str>, port: Optio
     })
 }
 
-fn terminal(end: &AsyncEnd, event: &RecorderEvent) -> bool {
+fn terminal(
+    index: usize,
+    end: &AsyncEnd,
+    event: &RecorderEvent,
+    redis: Option<&redis_event::Event<'_>>,
+    actual_sql: &OnceCell<Option<Vec<Token>>>,
+    templates: &templates::Templates,
+) -> bool {
     match (end, event) {
         (AsyncEnd::Mysql(end), RecorderEvent::MysqlExchange(event)) => {
             event.outcome == DependencyExchangeOutcome::Response
@@ -196,29 +276,21 @@ fn terminal(end: &AsyncEnd, event: &RecorderEvent) -> bool {
                     event.target_host.as_deref(),
                     event.target_port,
                 )
-                && event.sql.as_deref().is_some_and(|actual| {
-                    sql_matches(
-                        &end.sql,
-                        actual,
-                        event.params.as_deref().unwrap_or_default(),
-                    )
-                })
+                && actual_sql
+                    .get_or_init(|| {
+                        templates::actual_sql(
+                            event.sql.as_deref()?,
+                            event.params.as_deref().unwrap_or_default(),
+                        )
+                    })
+                    .as_deref()
+                    .is_some_and(|actual| templates.sql_matches(index, actual))
         }
-        (AsyncEnd::Redis(end), RecorderEvent::RedisExchange(event)) => {
-            event.outcome == DependencyExchangeOutcome::Response
-                && !matches!(event.response_kind.as_str(), "error" | "blob_error")
-                && end
-                    .database
-                    .is_none_or(|database| event.database == database)
-                && endpoint_matches(
-                    &end.endpoint,
-                    Some(&event.target_host),
-                    Some(event.target_port),
-                )
-                && event.command.eq_ignore_ascii_case(&end.operation)
-                && redis_keys(event)
-                    .iter()
-                    .any(|key| key_matches(&end.key, key))
+        (AsyncEnd::Redis(end), RecorderEvent::RedisExchange(_)) => {
+            redis.is_some_and(|cached| cached.matches_key(end, index, templates))
+        }
+        (AsyncEnd::RedisPublish(end), RecorderEvent::RedisExchange(_)) => {
+            redis.is_some_and(|cached| publish::matches(end, cached))
         }
         (AsyncEnd::Http(end), RecorderEvent::HttpExchange(event)) => {
             event.outcome == DependencyExchangeOutcome::Response
@@ -275,28 +347,6 @@ fn http_terminal(
         && (end.status_codes.is_empty() || end.status_codes.contains(&status))
 }
 
-fn redis_keys(event: &crate::recorder::RedisExchangeEvent) -> Vec<Vec<u8>> {
-    let Some(arguments) = event.args.iter().map(decode).collect::<Option<Vec<_>>>() else {
-        return Vec::new();
-    };
-    crate::redis::key_slots::key_indices(&event.command.to_ascii_uppercase(), &arguments)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|index| arguments[index].clone())
-        .collect()
-}
-
-fn key_matches(pattern: &str, key: &[u8]) -> bool {
-    match pattern.split_once('*') {
-        Some((prefix, suffix)) => {
-            key.len() >= prefix.len() + suffix.len()
-                && key.starts_with(prefix.as_bytes())
-                && key.ends_with(suffix.as_bytes())
-        }
-        None => pattern.as_bytes() == key,
-    }
-}
-
 fn decode(capture: &BodyCapture) -> Option<Vec<u8>> {
     if capture.truncated {
         return None;
@@ -304,57 +354,6 @@ fn decode(capture: &BodyCapture) -> Option<Vec<u8>> {
     match capture.encoding {
         "utf8" => Some(capture.data.as_bytes().to_vec()),
         "base64" => STANDARD.decode(capture.data.as_bytes()).ok(),
-        _ => None,
-    }
-}
-
-fn sql_matches(pattern: &str, actual: &str, parameters: &[MysqlValue]) -> bool {
-    let (Some(pattern), Some(mut actual)) = (
-        sql::bounds::statement(pattern),
-        sql::bounds::statement(actual),
-    ) else {
-        return false;
-    };
-    let mut parameters = parameters.iter();
-    for token in &mut actual {
-        if *token == Token::Placeholder {
-            let Some(value) = parameters.next().and_then(bound_value) else {
-                return false;
-            };
-            *token = value;
-        }
-    }
-    parameters.next().is_none()
-        && pattern.len() == actual.len()
-        && pattern.iter().zip(&actual).all(|(expected, actual)| {
-            expected == actual || *expected == Token::Placeholder && actual.is_value()
-        })
-}
-
-fn bound_value(value: &MysqlValue) -> Option<Token> {
-    match value.kind.as_str() {
-        "null" => Some(Token::Null),
-        "integer" | "float" | "decimal" => {
-            let value = value.value.as_ref()?;
-            let text = value
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| value.to_string());
-            sql::number(&text).map(Token::Number)
-        }
-        "boolean" | "bool" => value
-            .value
-            .as_ref()?
-            .as_bool()
-            .map(|value| Token::Number(u8::from(value).to_string())),
-        "string" | "bytes" | "binary" | "date" | "datetime" | "time" | "json" => {
-            let bytes = if let Some(raw) = &value.raw {
-                decode(raw)?
-            } else {
-                value.value.as_ref()?.as_str()?.as_bytes().to_vec()
-            };
-            Some(Token::Bytes(bytes))
-        }
         _ => None,
     }
 }

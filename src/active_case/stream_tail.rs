@@ -128,6 +128,10 @@ impl StreamTailRequest {
 }
 
 impl StreamTail {
+    pub(super) fn activity(&self) -> Arc<DependencyActivity> {
+        self.activity.clone()
+    }
+
     pub(super) fn completed_inventory(&self) -> (bool, serde_json::Value) {
         let inventory = self
             .completed
@@ -153,7 +157,7 @@ impl StreamTail {
     }
 
     pub(super) fn reserve(&self) -> StreamTailRequest {
-        StreamTailRequest(Arc::new(Mutex::new(Some(self.activity.reserve()))))
+        StreamTailRequest(Arc::new(Mutex::new(Some(self.activity.reserve_request()))))
     }
 }
 
@@ -164,7 +168,9 @@ impl DependencyTargets {
         if !self.cases.is_empty() {
             self.cases.clear();
             self._reservations.clear();
-            self.stream_tail.clear();
+            // Request-start classification suppresses proven process activity
+            // before reservation. A request classified only now was unknown
+            // while in flight and must retain that observation until completion.
         }
         self
     }
