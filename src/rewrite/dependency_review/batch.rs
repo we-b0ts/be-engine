@@ -219,6 +219,7 @@ pub(in crate::rewrite) fn required_action(
 }
 
 pub(in crate::rewrite) async fn run(root: &Path) -> Result<RewriteActionEnvelope> {
+    crate::rewrite::purpose::require_work_branch(root)?;
     let (root, store) = super::open(root)?;
     let _lock = store.lock()?;
     let mut state = store.load()?.context("rewrite workflow absent")?;

@@ -23,8 +23,13 @@ pub(super) async fn execute_with_feedback(
     transcript: &InputTranscript,
     header_timeout: Duration,
     body_limit: usize,
-    mut dependency_failure: Option<tokio::sync::watch::Receiver<bool>>,
+    feedback: super::Feedback,
 ) -> Result<ReplayResponse> {
+    let super::Feedback {
+        mut dependency_failure,
+        input_timing,
+        ..
+    } = feedback;
     transcript.validate()?;
     let subscription = transcript.http_stream_mode == HttpStreamMode::Subscription;
     ensure!(
@@ -32,11 +37,22 @@ pub(super) async fn execute_with_feedback(
         "HTTP subscription input requires a GET request"
     );
     let close_timing = client_close_timing(transcript)?;
+    let scheduled_close = input_timing
+        .as_ref()
+        .filter(|_| matches!(close_timing, Some(ClientCloseTiming::Absolute(_))));
+    let close_input = async {
+        match scheduled_close {
+            Some(timing) => timing.wait(1, Vec::new()).await.map(|_| ()),
+            None => std::future::pending::<Result<()>>().await,
+        }
+    };
+    tokio::pin!(close_input);
     let started = Instant::now();
     let started_at = chrono::Utc::now();
     let mut client_close = close_timing
         .and_then(|timing| match timing {
-            ClientCloseTiming::Absolute(offset) => Some(offset),
+            ClientCloseTiming::Absolute(offset) if scheduled_close.is_none() => Some(offset),
+            ClientCloseTiming::Absolute(_) => None,
             ClientCloseTiming::AfterCompletion(_) => None,
         })
         .map(|offset| {
@@ -57,6 +73,7 @@ pub(super) async fn execute_with_feedback(
     let (response, transport) = tokio::select! {
         biased;
         _=crate::dependency::execution::rejected(&mut dependency_failure)=>return Err(crate::dependency::execution::UnmatchedDependency {observed_status:None}.into()),
+        result=&mut close_input=>{result?;anyhow::bail!("recorded HTTP client closed before Target response headers");},
         response=tokio::time::timeout_at(head_deadline,transport::request(request))=>response.context("recorded stream response headers timed out")?.context("recorded stream request failed")?,
     };
     ensure!(
@@ -106,6 +123,10 @@ pub(super) async fn execute_with_feedback(
             client_close.map_or(lifecycle_deadline, |close| close.min(lifecycle_deadline));
         let frame = tokio::select! {
             biased;
+            result = &mut close_input => {
+                result?;
+                break (EndReason::ClientClose, true);
+            },
             _ = async { match dependency_failure.as_mut() {
                 Some(failure) => {let _=failure.changed().await;},
                 None => std::future::pending::<()>().await,
@@ -173,6 +194,7 @@ pub(super) async fn execute_with_feedback(
     if let Some(partial) = &partial_message {
         lifecycle.record_message(partial.decode()?.len())?;
     }
+    let close_started_at = chrono::Utc::now();
     if matches!(
         reason,
         EndReason::ClientClose | EndReason::DependencyFailure
@@ -182,6 +204,11 @@ pub(super) async fn execute_with_feedback(
         transport.cancel()?;
     }
     drop(body);
+    if reason == EndReason::ClientClose
+        && let Some(timing) = scheduled_close
+    {
+        timing.closed(close_started_at).await?;
+    }
     let mut end = lifecycle.end_observation(reason, elapsed_ms(started), transport_clean);
     end.partial_message = partial_message;
     if reason == EndReason::ClientClose {
@@ -219,7 +246,7 @@ async fn execute(
         transcript,
         header_timeout,
         body_limit,
-        None,
+        None.into(),
     )
     .await
 }

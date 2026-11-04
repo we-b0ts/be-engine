@@ -317,6 +317,7 @@ async fn queued_delivery_cannot_cross_a_case_or_request_epoch() {
         matched: None,
         case_id: Some(CASE.into()),
         request_epoch: Some(epoch),
+        value: None,
     };
     assert!(delivery.case_is_current(&state));
     state.redis.pubsub.native_clock.begin_case(CASE);

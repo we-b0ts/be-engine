@@ -189,6 +189,14 @@ impl RecordedHttpClient {
                     crate::replay::input_timing_observer(session, case, self.socketio_timing)
                         .await?,
                 )
+            } else if matches!(
+                transcript.protocol,
+                crate::interaction::model::Protocol::Sse
+                    | crate::interaction::model::Protocol::Ndjson
+            ) && !transcript.actions.is_empty()
+                && let Some((session, case)) = &self.input_registration
+            {
+                crate::replay::http_input_timing_observer(session, case).await?
             } else {
                 None
             };

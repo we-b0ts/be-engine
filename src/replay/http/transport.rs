@@ -20,17 +20,18 @@ pub(in crate::replay) async fn handle_http_replay_connection(
     ca: Arc<MitmCa>,
 ) -> Result<()> {
     let control = ConnectionControl::new(&stream)?;
+    let termination = ClientTermination::with_connection_control(control.clone());
     match target.protocol {
-        ReplayProtocol::Http => serve_http_io(stream, target, state, control).await,
+        ReplayProtocol::Http => serve_http_io(stream, target, state, control, termination).await,
         ReplayProtocol::Https => {
             let server_config = ca.server_config_for_host(&target.host)?;
             let tls = TlsAcceptor::from(server_config)
-                .accept(stream)
+                .accept(ObservedClientIo::transport(stream, termination.clone()))
                 .await
                 .with_context(|| {
                     format!("HTTPS replay TLS handshake failed for {}", target.host)
                 })?;
-            serve_http_io(tls, target, state, control).await
+            serve_http_io(tls, target, state, control, termination).await
         }
         ReplayProtocol::Auto
         | ReplayProtocol::Mysql
@@ -46,11 +47,11 @@ async fn serve_http_io<T>(
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
     control: ConnectionControl,
+    termination: ClientTermination,
 ) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let termination = ClientTermination::with_connection_control(control.clone());
     if target.protocol == ReplayProtocol::Http {
         termination.watch_raw_input_after_server_end();
     }
@@ -365,6 +366,7 @@ async fn handle_http_request(
     };
     let mut record = record;
     let ordinary_delivery = stream_delivery::full_delivery::Transport {
+        observation: Some(transport.observation.clone()),
         progress: transport.delivery.clone(),
         finished: transport.io_finished.clone(),
     };

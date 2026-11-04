@@ -5,6 +5,9 @@ use std::path::Path;
 use tokio::sync::mpsc;
 mod adapter;
 mod delivery;
+mod subject_delivery;
+mod value_delivery;
+pub(super) use delivery::deliver_input;
 pub(super) mod echo;
 pub(super) struct RpcComparison {
     pub source: Vec<Vec<u8>>,
@@ -84,6 +87,7 @@ pub(super) struct Delivery {
     pub(super) matched: Option<MatchedRedisExchange>,
     pub(super) case_id: Option<String>,
     pub(super) request_epoch: Option<chrono::DateTime<chrono::Utc>>,
+    pub(super) value: Option<value_delivery::Prepared>,
 }
 
 impl Delivery {
@@ -150,6 +154,7 @@ pub(in crate::replay) struct PubSubState {
     callbacks: usize,
     delivered_callbacks: usize,
     cases: std::collections::HashMap<String, Vec<usize>>,
+    value_producers: Option<value_delivery::causality::Producers>,
 }
 
 impl PubSubState {

@@ -1,3 +1,4 @@
+pub(in crate::replay) mod cancelled;
 pub(in crate::replay) mod candidates;
 pub(in crate::replay) mod contracts;
 pub(crate) mod diagnosis;
@@ -43,6 +44,7 @@ pub(crate) mod cross_case;
 mod evidence;
 mod identity;
 pub(in crate::replay) mod ingress;
+pub(in crate::replay) mod input_timing;
 mod lifecycle;
 mod recording;
 pub(super) use evidence::register_global_exchange;
@@ -163,6 +165,7 @@ mod upstream_failure;
 
 #[derive(Debug, Default)]
 pub(super) struct HttpReplayEvents {
+    pub(super) cancelled: BTreeMap<usize, cancelled::Audit>,
     pub(super) global_report: crate::replay::report::global_evidence::regular_usage::Usage,
     pub(super) dirty_case_ids: BTreeSet<String>,
     pub(super) matched_count: usize,
@@ -465,7 +468,9 @@ impl ReplayState {
                     let allowed = self.allowed_unused_http.as_ref().is_some_and(|config| {
                         config.hosts.contains(&exchange.identity.target.host)
                     });
-                    !exchange.status.is_consumed() && !allowed
+                    !exchange.status.is_consumed()
+                        && !allowed
+                        && !self.permits_cancelled_http_omission(index)
                 })
             })
     }
@@ -558,7 +563,7 @@ impl ReplayState {
         self.http_exchanges
             .iter()
             .enumerate()
-            .filter(move |(_, exchange)| {
+            .filter(move |(index, exchange)| {
                 let in_scope = if source.is_run_owned() {
                     exchange.available_in_run_pool()
                 } else {
@@ -572,9 +577,10 @@ impl ReplayState {
                     return false;
                 }
                 let is_allowed = source == ReplaySource::Case
-                    && self.allowed_unused_http.as_ref().is_some_and(|config| {
-                        config.hosts.contains(&exchange.identity.target.host)
-                    });
+                    && (self.http_events.cancelled.contains_key(index)
+                        || self.allowed_unused_http.as_ref().is_some_and(|config| {
+                            config.hosts.contains(&exchange.identity.target.host)
+                        }));
                 is_allowed == allowed
             })
             .map(move |(index, exchange)| RecordedHttpExchangeSummary {

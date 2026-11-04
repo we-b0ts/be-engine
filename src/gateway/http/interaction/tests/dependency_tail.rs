@@ -260,6 +260,28 @@ async fn stream_tail(primary_eof: bool) {
     fixture.finish_dependency().await;
     let directory = published(&fixture.state).await;
     assert_eq!(directory, fixture.state.recorder().case_dir(&case));
+    if primary_eof {
+        let request: Value = serde_json::from_slice(
+            &tokio::fs::read(directory.join("request.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let admission: Value = serde_json::from_slice(
+            &tokio::fs::read(directory.join("admission.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let request_start: chrono::DateTime<chrono::Utc> =
+            serde_json::from_value(request["timestamp"].clone()).unwrap();
+        let admitted: chrono::DateTime<chrono::Utc> =
+            serde_json::from_value(admission["timestamp"].clone()).unwrap();
+        assert!(
+            request_start <= admitted,
+            "adopting late SSE headers must preserve the original primary request clock"
+        );
+    }
     let event = recorded_dependency(&directory).await;
     let report: Value = serde_json::from_slice(
         &tokio::fs::read(directory.join("dependency-tail-observation.json"))

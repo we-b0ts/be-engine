@@ -45,6 +45,13 @@ command sequence, then checks endpoint, database, username, subscription kind,
 subject, and confirmation. Missing or inconsistent subscription anchors fail
 loading instead of routing a message to an arbitrary connection.
 
+An ordinary pooled command before the first subscription does not reserve the
+later subscriber's physical Target socket. Target may use its normal pool for
+that prefix and a dedicated Pub/Sub connection for SUBSCRIBE. Every recorded
+predecessor must still complete, and the subscription suffix retains exclusive
+connection ownership. Explicit session setup, transactions, unknown session
+effects and subscription tails without a proven start retain strict binding.
+
 Recorder retains successful complete RESP2 subscription confirmations throughout
 the process lifetime, including idle-time reconnects after HTTP readiness. A
 bootstrap subscription remains ordinary Global evidence. An idle runtime
@@ -72,6 +79,16 @@ those recordings need fresh capture after upgrading the Recorder.
 Pub/Sub payloads may contain application secrets or user data, like ordinary
 Redis values. They are retained exactly in the private recording artifacts; the
 engine does not infer redaction or put message payloads in diagnostic reports.
+
+Ordinary Case-owned JSON notification payloads use the same global
+`json.fields` declarations as other value carriers. Declare each actual
+logical field position, for example `/payload/clientUserMessageId` for an
+incoming envelope and `/data/0/payload/clientUserMessageId` for an outgoing
+adapter request. A known complete identity delivers its accepted Target value;
+an unknown selected input remains anchored to its Source value. Unselected
+fields, channel/subscription framing and finite delivery remain strict.
+Socket.IO protocol identity translation and self-echoes retain their native
+adapter. Global notifications never borrow the active Case's identity state.
 
 ## Source-proven notification ownership
 

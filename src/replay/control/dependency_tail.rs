@@ -163,6 +163,11 @@ fn permits_unstarted_omission(state: &ReplayState, selected: &SelectedExchange) 
     )
 }
 
+fn permits_tail_omission(state: &ReplayState, selected: &SelectedExchange) -> bool {
+    selected.exchange.permits_cancelled_omission(state)
+        || permits_unstarted_omission(state, selected)
+}
+
 /// Prepare immutable references before activation, without starting a Target
 /// budget for a begin that may still lose concurrent case admission.
 pub(in crate::replay) async fn prepare(
@@ -537,7 +542,7 @@ async fn drain_selected(
                     || before_target_stop
                         && selected.lifecycle_cleanup
                         && status == ReplayExchangeStatus::AwaitingClientTermination)
-                    && !permits_unstarted_omission(&state, selected)
+                    && !permits_tail_omission(&state, selected)
                     && !(failure_cleanup
                         && matches!(
                             status,

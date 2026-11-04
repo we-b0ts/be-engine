@@ -26,6 +26,7 @@ mod candidate_pairs;
 pub(super) mod dependency;
 mod global_values;
 mod identities;
+mod input_retiming;
 mod payload;
 mod resource;
 mod response;
@@ -42,6 +43,8 @@ pub struct Preflight {
     pub missing_target_witnesses: usize,
     #[serde(default)]
     pub unvalidated_target_witnesses: BTreeSet<response::UnvalidatedTargetWitness>,
+    #[serde(default)]
+    pub unvalidated_retimed_witnesses: BTreeSet<input_retiming::UnvalidatedWitness>,
     #[serde(default)]
     pub unavailable_source_values: usize,
     pub rules: BTreeMap<String, usize>,
@@ -63,6 +66,7 @@ impl Preflight {
             "planned_needs_recording"
         } else if self.missing_target_witnesses > 0
             || !self.unvalidated_target_witnesses.is_empty()
+            || !self.unvalidated_retimed_witnesses.is_empty()
             || !self.stateful_target_obligations.is_empty()
         {
             "planned_needs_replay"
@@ -124,12 +128,12 @@ pub(super) fn verify(
         validation_ids.insert(crate::value_contract::time::automatic::RULE_ID.into());
     }
     let (scope, mut foreign) = resource::prepare(root, state, bundle, policy, &validation_ids)?;
-    global_values::verify(root, bundle, policy, &validation_ids, &mut result)?;
+    global_values::verify(root, bundle, previous, policy, &validation_ids, &mut result)?;
     global_values::global_trace(state, bundle, policy, &validation_ids, &mut result)?;
     payload::verify(root, bundle, policy, selected, &mut result)?;
     let resource_ids = resource::selected(policy, &validation_ids);
     for other in &mut foreign {
-        global_values::verify(root, other, policy, &resource_ids, &mut result)?;
+        global_values::verify(root, other, previous, policy, &resource_ids, &mut result)?;
         payload::verify(root, other, policy, &resource_ids, &mut result)?;
         bundle.cases.append(&mut other.cases);
         bundle.artifacts.append(&mut other.artifacts);

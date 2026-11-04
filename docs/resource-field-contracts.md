@@ -117,6 +117,20 @@ Relative naive timestamps do not require an offset because the shared civil
 offset cancels in the comparison. Consistent Source/Target timezone behavior
 is still required. Native SQL dates use the protocol adapter's date arithmetic.
 
+A finalized partial Replay may plan additive JSON time declarations without
+changing existing fields or protocol permissions. The planner still freezes
+and validates the complete Source scope. For an exact field path, authenticated
+completed dependency reads can prove that the proposed declaration would
+change an input already delivered by the old policy. Later observations on the
+same resource, after both its Source completion and Target delivery, then remain
+explicit `unvalidated_retimed_witnesses`; they do not count as independent Target
+validation. These cuts apply across Cases in the same protected Replay session,
+with both clocks still enforcing order; a separate session collects its own
+evidence. A later primary response can carry the same fresh-execution
+obligation. Render-only payloads, missing clocks, future reads and other
+resources cannot establish it. Application always requires fresh genuine Replay;
+unselected counters and native requests remain strict during that execution.
+
 Integer Unix timestamps compare independent anchors at the declared seconds,
 milliseconds or microseconds precision. The elapsed-time budget is computed
 before that projection, retaining fractional request durations. Floating

@@ -1,5 +1,5 @@
 //! Physical connection pooling is independent of a recorded stateful session.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
@@ -25,24 +25,61 @@ impl Default for TargetConnection {
 }
 
 #[derive(Debug, Default)]
+struct LaneState {
+    whole_lane: bool,
+    first_subscribe: Option<u64>,
+    first_unsubscribe: Option<u64>,
+}
+
+impl LaneState {
+    fn register(&mut self, record: &RecordedExchange) {
+        let first = match record.command.to_ascii_uppercase().as_str() {
+            "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" if !record.session_setup => {
+                &mut self.first_subscribe
+            }
+            "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" if !record.session_setup => {
+                &mut self.first_unsubscribe
+            }
+            _ => {
+                self.whole_lane = true;
+                return;
+            }
+        };
+        *first = Some(first.map_or(record.sequence, |sequence| sequence.min(record.sequence)));
+    }
+
+    fn contains(&self, sequence: u64) -> bool {
+        // A pool may lend an ordinary connection to a later subscriber. Only
+        // its subscription suffix owns the socket. Unknown state, explicit
+        // setup and an unsubscribe without a preceding subscribe stay strict.
+        self.whole_lane
+            || self.first_subscribe.is_none_or(|start| {
+                self.first_unsubscribe.is_some_and(|end| end < start) || sequence >= start
+            })
+    }
+}
+
+#[derive(Debug, Default)]
 pub(super) struct ConnectionScopes {
     // Ordinary Case commands bind only their Case's lane. Global commands and
     // explicit session_setup retain a connection-wide boundary, even when a
     // setup record carries a Case origin.
-    stateful_global: BTreeSet<Uuid>,
-    stateful_cases: BTreeMap<String, BTreeSet<Uuid>>,
+    stateful_global: BTreeMap<Uuid, LaneState>,
+    stateful_cases: BTreeMap<String, BTreeMap<Uuid, LaneState>>,
     owners: BTreeMap<(Option<String>, Uuid), Uuid>,
 }
 
 impl ConnectionScopes {
     pub(super) fn is_stateful(&self, exchange: &ReplayExchange) -> bool {
         self.stateful_global
-            .contains(&exchange.record.connection_id)
+            .get(&exchange.record.connection_id)
+            .is_some_and(|lane| lane.contains(exchange.record.sequence))
             || (exchange.source == ReplaySource::Case
                 && exchange.case_id.as_deref().is_some_and(|case| {
                     self.stateful_cases
                         .get(case)
-                        .is_some_and(|lanes| lanes.contains(&exchange.record.connection_id))
+                        .and_then(|lanes| lanes.get(&exchange.record.connection_id))
+                        .is_some_and(|lane| lane.contains(exchange.record.sequence))
                 }))
     }
 
@@ -54,17 +91,18 @@ impl ConnectionScopes {
         case_id: Option<&str>,
     ) {
         if record.session_setup || !pool_compatible(&record.command, args) {
-            if !record.session_setup
+            let lanes = if !record.session_setup
                 && source == ReplaySource::Case
                 && let Some(case) = case_id
             {
-                self.stateful_cases
-                    .entry(case.into())
-                    .or_default()
-                    .insert(record.connection_id);
+                self.stateful_cases.entry(case.into()).or_default()
             } else {
-                self.stateful_global.insert(record.connection_id);
-            }
+                &mut self.stateful_global
+            };
+            lanes
+                .entry(record.connection_id)
+                .or_default()
+                .register(record);
         }
     }
 

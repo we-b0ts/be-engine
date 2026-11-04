@@ -170,7 +170,7 @@ async fn deliver(
         return Progress::Ended;
     };
     let (reference, inline, case_id, request_epoch) = {
-        let mut replay = state.lock().await;
+        let replay = state.lock().await;
         if replay.finalized_at.is_some() || !replay.redis.pubsub.is_subscribed(job.client, id) {
             return Progress::Ended;
         }
@@ -195,11 +195,8 @@ async fn deliver(
                     {
                         return Progress::Skipped;
                     }
-                    let epoch = replay.redis.request_contracts.request_times(case).target;
-                    replay.redis.pubsub.reserve_case_push(id, case, job.client);
-                    epoch
+                    replay.redis.request_contracts.request_times(case).target
                 } else {
-                    replay.redis.pubsub.reserve_push(id);
                     None
                 };
                 (reference, raw, case, epoch)
@@ -208,7 +205,6 @@ async fn deliver(
                 if !replay.redis.pubsub.indexed.available(lane, index) {
                     return Progress::Skipped;
                 }
-                replay.redis.pubsub.indexed.responding(lane, index);
                 (reference, Vec::new(), None, None)
             }
         }
@@ -230,13 +226,31 @@ async fn deliver(
             return Progress::Ended;
         }
     };
-    let delivery = Delivery {
+    let mut delivery = Delivery {
         case_id,
         push: id,
         bytes,
         matched: None,
         request_epoch,
+        value: None,
     };
+    {
+        let mut replay = state.lock().await;
+        match super::value_delivery::prepare(&mut replay, &delivery) {
+            Ok(value) => delivery.value = value,
+            Err(_) => {
+                fail(
+                    &mut replay,
+                    id,
+                    "notification value preparation failed".into(),
+                );
+                return Progress::Ended;
+            }
+        }
+    }
+    if !wait_predecessors(&state, job, &delivery).await {
+        return Progress::Ended;
+    }
     // Queue pressure is transport progress, not a dependency mismatch. Never
     // hold ReplayState while awaiting space, and keep cancellation runnable.
     let permit = if fast {
@@ -270,6 +284,14 @@ async fn deliver(
         );
         return Progress::Ended;
     }
+    if !replay.redis.pubsub.push_available(id) {
+        return Progress::Skipped;
+    }
+    if let Some(case) = &delivery.case_id {
+        replay.redis.pubsub.reserve_case_push(id, case, job.client);
+    } else {
+        replay.redis.pubsub.reserve_push(id);
+    }
     if let Some(permit) = permit {
         permit.send(delivery);
     } else if job.sender.try_send(delivery).is_err() {
@@ -277,6 +299,44 @@ async fn deliver(
         return Progress::Ended;
     }
     Progress::Queued
+}
+
+async fn wait_predecessors(
+    state: &Arc<Mutex<ReplayState>>,
+    job: &mut NotificationJob,
+    delivery: &Delivery,
+) -> bool {
+    loop {
+        let wait = {
+            let mut replay = state.lock().await;
+            if replay.finalized_at.is_some()
+                || !delivery.case_is_current(&replay)
+                || !replay.redis.pubsub.is_subscribed(job.client, delivery.push)
+                || !replay.redis.pubsub.push_available(delivery.push)
+            {
+                return false;
+            }
+            match super::value_delivery::ready(&replay, delivery) {
+                Ok(true) => return true,
+                Ok(false) => replay.redis.lifecycle.subscribe(),
+                Err(_) => {
+                    fail(
+                        &mut replay,
+                        delivery.push,
+                        "notification identity predecessor failed".into(),
+                    );
+                    return false;
+                }
+            }
+        };
+        // Pending causal inputs are not started I/O. The subscriber remains
+        // free to receive commands/EOF, and cancellation owns the unclaimed tail.
+        tokio::select! {
+            _ = wait.changed() => {},
+            _ = job.cancelled.changed() => return false,
+            _ = job.sender.closed() => return false,
+        }
+    }
 }
 
 async fn wait_delivered(

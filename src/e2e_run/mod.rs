@@ -205,7 +205,6 @@ pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareRes
         &options.context.case_source,
         options.context.run_key.as_deref(),
     )?;
-    branch::require_work_branch(&layout.target_root, &config.pr_base)?;
     config::require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
     ensure!(
         !layout.active_dir.exists(),

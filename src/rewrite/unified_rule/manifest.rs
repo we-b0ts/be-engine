@@ -16,7 +16,7 @@ use super::super::{fingerprint, model::RewriteState};
 mod batch;
 #[cfg(test)]
 mod capture_stats;
-mod eligibility;
+pub(super) mod eligibility;
 mod primary;
 #[cfg(test)]
 pub(in crate::rewrite) use capture_stats::{

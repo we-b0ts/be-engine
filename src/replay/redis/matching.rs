@@ -1,5 +1,6 @@
 //! Redis command selection with semantic value matching and source-lane order diagnostics.
 use super::*;
+use anyhow::ensure;
 mod builtin_failure;
 mod hypothesis;
 mod request;
@@ -12,6 +13,23 @@ use crate::replay::report::command::CommandMatchDiagnostic;
 
 impl RedisReplayState {
     pub(super) fn arguments_match(&self, exchange: &ReplayExchange, args: &[Vec<u8>]) -> bool {
+        self.arguments_match_inner(exchange, args, true)
+    }
+
+    pub(super) fn observation_arguments_match(
+        &self,
+        exchange: &ReplayExchange,
+        args: &[Vec<u8>],
+    ) -> bool {
+        self.arguments_match_inner(exchange, args, false)
+    }
+
+    fn arguments_match_inner(
+        &self,
+        exchange: &ReplayExchange,
+        args: &[Vec<u8>],
+        allow_hypotheses: bool,
+    ) -> bool {
         if self.activity_refresh.owns(exchange) {
             return false;
         }
@@ -87,11 +105,20 @@ impl RedisReplayState {
             .as_ref()
             .map_or(exchange.args.as_slice(), |n| n.source.as_slice());
         let actual = normalized.as_ref().map_or(args, |n| n.actual.as_slice());
-        if let Some(result) =
-            self.request_preview(exchange, source, actual, original_source, original_actual)
-        {
+        if let Some(result) = self.request_preview_with_hypotheses(
+            exchange,
+            source,
+            actual,
+            original_source,
+            original_actual,
+            allow_hypotheses,
+        ) {
             return result
                 .and_then(|mut decision| {
+                    ensure!(
+                        allow_hypotheses || !decision.is_provisional(),
+                        "a key hypothesis cannot select a native state-observation owner"
+                    );
                     if let (Some(case), Some(normalized)) =
                         (exchange.case_id.as_deref(), normalized.as_ref())
                     {
@@ -726,6 +753,11 @@ impl RedisReplayState {
             exchange.claim = Some(ticket.observer());
             Claim::Finite(ticket)
         };
+        if exchange.record.command.eq_ignore_ascii_case("PUBLISH") {
+            // A notification may depend on this accepted request's identity,
+            // before either its response or a related RPC callback completes.
+            self.lifecycle.notify_waiters();
+        }
         Ok(MatchedRedisExchange {
             claim,
             refresh,

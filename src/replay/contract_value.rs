@@ -30,6 +30,14 @@ impl Delivery {
     ) -> Result<Self> {
         let codec = crate::value_codec::CodecPlan::compile(&crate::policy::Codec::Json)?;
         let decoded = codec.decode(source)?;
+        Self::prepare_decoded_global(decoded, global, clocks)
+    }
+
+    pub(in crate::replay) fn prepare_decoded_global(
+        decoded: DecodedValue,
+        global: &crate::policy::CompiledJsonPolicy,
+        clocks: AnchorClocks,
+    ) -> Result<Self> {
         let source_clock =
             |pair: crate::value_contract::time::ClockPair| crate::value_contract::time::ClockPair {
                 source: pair.source,

@@ -66,9 +66,11 @@ impl Live {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct Query {
-    epoch: DateTime<Utc>,
-    sequence: u64,
-    completed: Vec<u64>,
+    pub(super) epoch: DateTime<Utc>,
+    pub(super) sequence: u64,
+    pub(super) completed: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) closed_at: Option<DateTime<Utc>>,
 }
 
 pub(super) async fn accept(

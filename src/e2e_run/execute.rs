@@ -36,7 +36,7 @@ pub(super) struct CaseExecutionRuntime {
 }
 
 pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
-    let (config, layout) = resolve_for_execution(&context)?;
+    let (config, layout) = resolve_for_execution(&context, false)?;
     ensure!(
         store::focused_active_directories(&layout)?.is_empty(),
         "a focused API attempt is active; finish or recover it before starting a full round"
@@ -135,7 +135,7 @@ pub(crate) async fn run_e2e_apis(
             == api_keys.len(),
         "focused Replay API selectors must be unique"
     );
-    let (config, base_layout) = resolve_for_execution(&context)?;
+    let (config, base_layout) = resolve_for_execution(&context, iteration.is_some())?;
     ensure!(
         !base_layout.active_dir.exists(),
         "a full E2E round is active; use status, abort, or recover before running one API"
@@ -429,13 +429,18 @@ pub(crate) async fn recover_focused_e2e_api(context: E2eRunContext, api_key: &st
     Ok(true)
 }
 
-fn resolve_for_execution(context: &E2eRunContext) -> Result<(ResolvedProjectConfig, RunLayout)> {
+pub(super) fn resolve_for_execution(
+    context: &E2eRunContext,
+    managed: bool,
+) -> Result<(ResolvedProjectConfig, RunLayout)> {
     let (config, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    branch::require_work_branch(&layout.target_root, &config.pr_base)?;
+    if managed {
+        branch::require_work_branch(&layout.target_root, &config.pr_base)?;
+    }
     config::require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
     ensure!(
         config.target_dockerfile.is_file(),

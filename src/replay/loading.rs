@@ -447,6 +447,7 @@ impl ReplayRuntime {
             startup_phase: Default::default(),
             dependency_attribution_snapshot: attribution.snapshot,
             input_timing: None,
+            http_input_timing: None,
             stream_timing: lifecycle.stream_timing,
             stream_interval_cap_ms: lifecycle.stream_interval_cap_ms,
             http_ingress: Default::default(),

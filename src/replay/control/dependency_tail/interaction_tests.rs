@@ -85,7 +85,7 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
             let mut state = state.lock().await;
             state.case_dependency_post_response_window = Duration::ZERO;
             state.dependency_tails = CaseTails::default()
-                .with_async_rules(BTreeMap::new(), Duration::from_millis(80))
+                .with_async_rules(BTreeMap::new(), Duration::from_secs(5))
                 .with_no_progress_timeout(Duration::from_millis(50));
         }
         assert_eq!(
@@ -95,6 +95,7 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
         let (mut redis, redis_task) = client(state.clone()).await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (cleanup_ready, cleanup_allowed) = tokio::sync::oneshot::channel();
         let target = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -118,7 +119,9 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
             ));
             websocket.flush().await.unwrap(); // peer sees close before the hook finishes
             drop(websocket);
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            // Wait until the test observes the pending tail. A wall-clock
+            // delay can finish before that observation under suite load.
+            cleanup_allowed.await.unwrap();
             redis.write_all(GET).await.unwrap();
             let mut actual = vec![0; response.len()];
             redis.read_exact(&mut actual).await.unwrap();
@@ -160,6 +163,7 @@ async fn wire_close_retains_late_cleanup_read_before_admitting_the_next_case() {
         next.case_id = Some("case-b".into());
         assert_eq!(begin_case(&next, state.clone()).await["ok"], false);
         assert_eq!(state.lock().await.active_case_id.as_deref(), Some("case-a"));
+        cleanup_ready.send(()).unwrap();
         let ended = tokio::time::timeout(Duration::from_secs(2), ending)
             .await
             .unwrap()

@@ -82,6 +82,7 @@ pub(super) fn prepare(
         completed: BTreeMap::new(),
         in_flight: BTreeMap::new(),
         failed: false,
+        cancelled_cache: None,
     };
     let mut base = None;
     let mut epoch_start = 0_usize;

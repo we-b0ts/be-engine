@@ -9,10 +9,18 @@ pub(super) fn read_only(
     timeline: &[(usize, &ReplayExchange)],
 ) -> Result<Profile> {
     let mut lanes = BTreeMap::new();
-    let mut reads: Vec<&ReplayExchange> = Vec::new();
+    // Keep the entire unchanged-state frontier, including no-op deletions.
+    // A long read or cleanup must not disappear behind a shorter later read
+    // when checking a real transition to a different value.
+    let mut accesses: Vec<&ReplayExchange> = Vec::new();
     let mut value: Option<Vec<u8>> = None;
     let mut mutation: Option<&ReplayExchange> = None;
     let mut observed = false;
+    let multiple_lanes = timeline.first().is_some_and(|(_, first)| {
+        timeline
+            .iter()
+            .any(|(_, e)| e.record.connection_id != first.record.connection_id)
+    });
     for &(index, exchange) in timeline {
         if let Some(previous) =
             lanes.insert(exchange.record.connection_id, exchange.record.sequence)
@@ -20,6 +28,16 @@ pub(super) fn read_only(
             ensure!(
                 previous < exchange.record.sequence,
                 "state read Source clocks reverse a connection lane"
+            );
+        }
+        if multiple_lanes {
+            ensure!(
+                exchange
+                    .record
+                    .earliest_start()
+                    .zip(exchange.record.timestamp)
+                    .is_some_and(|(start, end)| start <= end),
+                "concurrent state observations require complete Source clocks"
             );
         }
         let response = exchange.response_bytes()?;
@@ -50,7 +68,7 @@ pub(super) fn read_only(
                         profile.transient_nil && previous == b"$-1\r\n" && response != b"$-1\r\n",
                         "read-only state changed without a supported SET; only a declared transient nil may precede a stable terminal value"
                     );
-                    for before in &reads {
+                    for before in &accesses {
                         source::require_causal_order(before, exchange)?;
                     }
                     ensure!(
@@ -78,17 +96,14 @@ pub(super) fn read_only(
                             .map(|(index, _)| index)
                             .collect(),
                     });
-                    reads.clear();
+                    accesses.clear();
                 }
                 value = Some(response);
-                reads.push(exchange);
+                accesses.push(exchange);
                 observed = true;
                 profile.epochs.last_mut().unwrap().observations.push(index);
             }
             "DEL" | "UNLINK" => {
-                for before in &reads {
-                    source::require_causal_order(before, exchange)?;
-                }
                 let removed = source::integer(&response)?;
                 let unique = exchange.args.iter().collect::<BTreeSet<_>>().len();
                 let known_absent = value.as_deref() == Some(b"$-1\r\n");
@@ -103,10 +118,22 @@ pub(super) fn read_only(
                         "state cleanup did not remove the observed existing key"
                     );
                 }
+                if !known_absent {
+                    for before in &accesses {
+                        source::require_causal_order(before, exchange)?;
+                    }
+                }
                 source::new_epoch(&mut profile, index)?;
                 value = Some(b"$-1\r\n".to_vec());
-                reads.clear();
-                mutation = Some(exchange);
+                if known_absent {
+                    // Nil GETs and cleanup that cannot remove this key commute.
+                    // The actual DEL remains a finite mutation/epoch gate, but
+                    // it does not require ordering within the unchanged state.
+                    accesses.push(exchange);
+                } else {
+                    accesses.clear();
+                    mutation = Some(exchange);
+                }
             }
             _ => anyhow::bail!(
                 "state observation has an unsupported writer or expiry observer; preserve finite matching or declare its typed state effect"

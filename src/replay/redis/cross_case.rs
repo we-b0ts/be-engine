@@ -4,6 +4,8 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, path::Path};
+#[cfg(test)]
+mod tests;
 
 pub(super) use super::request_identity::target_fingerprint;
 
@@ -82,8 +84,9 @@ pub(in crate::replay) fn verify_candidate(
             let bytes = reader.read(&file, &index.stamp, &entry.location)?;
             let raw = std::str::from_utf8(&bytes)?.trim_end_matches(['\r', '\n']);
             let line = entry.location.line - 1;
-            let record: RecordedExchange =
-                serde_json::from_str(raw).context("invalid Redis exchange evidence")?;
+            let Some(record) = decode_exchange(raw.as_bytes())? else {
+                continue;
+            };
             let args = record
                 .args
                 .iter()
@@ -252,8 +255,9 @@ pub(in crate::replay) fn load(
             .filter(|entry| any_scope || keys.contains(&entry.key))
         {
             let raw = reader.read(&file, &index.stamp, &entry.location)?;
-            let record: RecordedExchange =
-                serde_json::from_slice(&raw).context("invalid Redis exchange evidence")?;
+            let Some(record) = decode_exchange(&raw)? else {
+                continue;
+            };
             let args = record
                 .args
                 .iter()
@@ -357,4 +361,23 @@ fn lane_counts(index: &crate::dependency_index::FileIndex) -> Result<BTreeMap<Uu
         .iter()
         .map(|(id, count)| Ok((id.parse()?, *count)))
         .collect()
+}
+
+fn decode_exchange(raw: &[u8]) -> Result<Option<RecordedExchange>> {
+    #[derive(Deserialize)]
+    struct EventTag<'a> {
+        #[serde(borrow)]
+        event_type: &'a str,
+    }
+    // The Redis index includes both exchanges and asynchronous inputs. Read
+    // only the discriminator; don't allocate a push's captured payload or
+    // invent a request sequence for an input owned by the Pub/Sub executor.
+    let tag: EventTag<'_> = serde_json::from_slice(raw).context("invalid Redis evidence tag")?;
+    match tag.event_type {
+        "redis_pub_sub_push" => Ok(None),
+        "redis_exchange" => serde_json::from_slice(raw)
+            .map(Some)
+            .context("invalid Redis exchange evidence"),
+        _ => anyhow::bail!("Redis cross-case index contains an unexpected event type"),
+    }
 }

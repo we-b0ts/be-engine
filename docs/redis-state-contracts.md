@@ -66,6 +66,12 @@ A completely nil Source trace also supports zero Target reads, without inserting
 a fictional SET or DEL. Actual deletion boundaries remain finite, including
 multi-key cleanup whose returned count agrees with the selected key's state.
 A state without an original GET witness never borrows an earlier lifetime's read.
+Within a proven nil state, pooled GETs and deletions that cannot remove the
+selected key may overlap. Multi-key deletion counts must still agree with that
+key being absent, and every actual deletion retains its finite delivery gate.
+Concurrent accesses require complete Source clocks. All reads and no-op cleanup
+remain causal predecessors of a later non-nil observation; a real state-changing
+deletion also retains its causal boundary on both sides.
 
 ## Buffered flushes
 

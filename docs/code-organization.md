@@ -30,6 +30,13 @@ is unclear.
 
 ## Current Boundaries
 
+- `replay/redis/append/cancelled` owns automatic cancelled-cache eligibility,
+  bounded authenticated primary-content ceilings and separate omission audits.
+  Native APPEND retains key identity, exact prefix matching and actual wire
+  lengths/consumption. `replay/http/cancelled` owns real dependency FIN/RST after
+  trusted primary close metadata; input timing supplies only clocks and flushed
+  prefix facts. Neither owner converts cancellation into recorded EOF.
+
 - `protocol_contract` owns closed protocol, role and native-version identities.
   `primary_protocol` adapts immutable HTTP/Motan inputs to genuine native
   execution and independent observations; `e2e_run/primary_driver` owns caller
@@ -105,6 +112,12 @@ is unclear.
   Session variables, named locks, output writes and unknown/nested effects
   retain the original conservative setup requirement.
 
+- `replay/redis/connection_scope` owns physical-session eligibility. A proven
+  subscription suffix starts at its first SUBSCRIBE; preceding ordinary pool
+  operations retain finite lane order without acquiring that socket's owner.
+  Explicit setup, transactions, unknown session effects and subscriptions with
+  an unproven start retain the full-lane boundary.
+
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
   `preparation` proves immutable identity, clocks and subscription slots;
@@ -133,6 +146,23 @@ is unclear.
   long recordings retain paged payload references and bounded delivery queues.
   RESP delivery retains wire consumption and Case cancellation checks; the
   adapter and request contracts retain strict callback result comparison.
+  `pubsub/value_delivery` applies declared global JSON formats to ordinary
+  Case-owned notification payloads using the same accepted identity store as
+  native requests. Its `causality` child indexes declared identities in earlier
+  same-Case Source PUBLISH requests once per loaded Case. Notifications wait for
+  an unknown identity's actual request admission before reserving delivery;
+  genuine unknown external inputs retain their exact historical anchor. The
+  subscription worker retains one decoded value while waiting and cancellation
+  leaves unadmitted inputs outside the started-I/O barrier.
+  `pubsub/subject_delivery` projects an accepted subscription's exact Source
+  connection/sequence onto its actual Target subject for notification frames,
+  alongside the existing confirmation translation. Static subjects retain a
+  borrowed frame; changed subjects preserve payload bytes and require their
+  original native subscription kind. Pattern changes require a separate
+  concrete-channel proof and cannot reuse channel identity translation.
+  `pubsub/delivery` owns epoch/subscription fences, the actual
+  wire write and finite receipt. Protocol envelopes and Global inputs retain
+  their native owners; unselected fields and original captures stay unchanged.
   `replay/redis/pubsub/namespace_sessions` owns SID-directed emit correspondence:
   it selects only unique namespace identities from original Source protocol
   observations, then binds them to CONNECT receipts from the actual Target
@@ -180,6 +210,11 @@ is unclear.
   response/native references and publish successful wire-delivery facts separately
   from matching and RPC completion. Supported native clocks reuse the same mapping;
   unsupported protocol delivery or recording timing retains original offsets.
+  `control/http_input_timing` separately prepares one immutable HTTP stream/input
+  clock and admits its two-phase primary-close handshake. Native HTTP timing
+  adapters expose Source chunk clocks and real flushed prefixes; future chunks
+  await the input driver's actual transport cancellation, without changing
+  response completion or finite dependency consumption.
   Independently proven individual Redis delivery prefixes still gate Auto business inputs
   without requiring compression coverage; ACKs, heartbeat and cancellation keep
   their own native scheduling. Prefixes exclude future Source completions and
@@ -1139,7 +1174,10 @@ is unclear.
   recorded stateful lanes and owns their exclusive target connection
   claims; runtime Redis I/O and session setup remain in `replay/redis/mod.rs`.
   `replay/redis/cross_case` owns finite sharing of source-proven Redis reads
-  across cases in one completed recording; policy feedback owns promotion of
+  across cases in one completed recording. Its indexed load and proof paths
+  dispatch the original event type before decoding exchanges; notification
+  frames retain their Pub/Sub owner and have no invented request sequence.
+  Policy feedback owns promotion of
   the corresponding time-shift rule.
   `replay/redis/request_identity` owns the native request fingerprint shared by
   Replay admission and authenticated unmatched-request diagnostics.
@@ -1583,11 +1621,17 @@ explicit repository-wide audit.
 
 - `rewrite/unified_rule/manifest/eligibility` permits a finalized partial attempt
   to revoke existing bounded key-local Redis read-back permissions or revise
-  formats on existing JSON identity fields. Identity revisions preserve the
-  exact field set, kind and literal prefixes; every other compiled owner and
+  formats on existing JSON identity fields, or add missing JSON time fields.
+  Time additions preserve every existing field, clock and other owner.
+  Identity revisions preserve the exact field set, kind and literal prefixes;
+  every other compiled owner and
   signature remains identical. Other additions and modifications retain the
   complete-attempt requirement. Full Source freezing, independent Target
   preflight, policy CAS and fresh genuine Replay remain with the normal planner.
+  `preflight/input_retiming` retains unvalidated old execution after proven
+  changes to completed time inputs. It consumes the native read-provenance
+  adapter's authenticated receipts and both causal cutoffs; it grants no runtime
+  comparison permission or positive validation for those observations.
 
 - `rewrite/case_dependencies` owns bounded, read-only per-target dependency
   projections. Its `mysql` child owns query, parameter, connection, and response
@@ -1894,7 +1938,8 @@ explicit repository-wide audit.
 - `rewrite/unified_rule/{manifest,preflight,discovery}` owns complete protected
   evidence, Source/Target role distinctions, reviewable plan/apply and recovery.
   `manifest/eligibility` owns narrow finalized-partial format changes: Redis
-  scalar identities and existing JSON identity representations retain every
+  scalar identities, existing JSON identity representations and additive JSON
+  time declarations retain every
   other compiled permission and pass the same complete preflight and stale
   checks. Eligibility never certifies an incomplete Replay.
   Its `change` child admits explicit replacement sets, preserving unselected

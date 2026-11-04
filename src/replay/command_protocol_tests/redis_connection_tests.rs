@@ -431,13 +431,8 @@ async fn simultaneous_pool_requests_cannot_claim_the_same_exchange() {
 }
 
 #[tokio::test]
-async fn subscription_and_blocking_source_lanes_keep_connection_binding() {
+async fn blocking_and_unknown_source_lanes_keep_connection_binding() {
     for (command, args, response) in [
-        (
-            "PSUBSCRIBE",
-            vec!["events.*"],
-            b"*3\r\n$10\r\npsubscribe\r\n$8\r\nevents.*\r\n:1\r\n".as_slice(),
-        ),
         ("BLPOP", vec!["queue", "1"], b"*-1\r\n".as_slice()),
         ("WAIT", vec!["1", "10"], b":1\r\n".as_slice()),
         ("SCRIPT", vec!["DEBUG", "YES"], b"+OK\r\n".as_slice()),

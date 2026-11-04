@@ -4,6 +4,7 @@ use crate::policy::{Database, NativeEffect, Protocol};
 use crate::replay::report::command::CommandMatchDiagnostic;
 use serde::Serialize;
 
+pub(in crate::replay) mod cancelled;
 mod diagnostic;
 pub(in crate::replay) use diagnostic::{AppendBoundaryMismatch, AppendMismatch};
 mod source;
@@ -57,6 +58,7 @@ struct Profile {
     completed: BTreeMap<usize, usize>,
     in_flight: BTreeMap<usize, usize>,
     failed: bool,
+    cancelled_cache: Option<cancelled::Cache>,
 }
 
 #[derive(Debug)]
@@ -339,10 +341,14 @@ impl RedisReplayState {
             .filter(|p| p.start < to && from < p.end)
             .collect::<Vec<_>>();
         ensure!(
-            !pieces.is_empty() && pieces.len() <= MAX_FRAGMENTS,
+            (!pieces.is_empty() || profile.cancelled_cache.is_some())
+                && pieces.len() <= MAX_FRAGMENTS,
             "append stream fragment limit exceeded"
         );
-        let epoch = pieces[0];
+        let epoch = pieces
+            .first()
+            .copied()
+            .unwrap_or_else(|| profile.pieces.last().unwrap());
         ensure!(
             pieces
                 .iter()
@@ -388,7 +394,12 @@ impl RedisReplayState {
             .base
             .checked_add(to - epoch.epoch_start)
             .context("append stream length overflow")?;
-        let index = pieces[0].index;
+        let index = epoch.index;
+        ensure!(
+            self.connection_scopes
+                .matches(&self.exchanges[index], Some(case), connection),
+            "append stream connection scope differs"
+        );
         let fragments = pieces
             .iter()
             .map(|piece| {
@@ -534,7 +545,7 @@ impl RedisReplayState {
                 }
             }
         }
-        if profile.delivered == profile.bytes.len() {
+        if profile.delivered == profile.bytes.len() && profile.cancelled_cache.is_none() {
             profile.bytes = Vec::new();
         }
         indices

@@ -6,6 +6,7 @@ use crate::http::termination::DeliveryProgress;
 mod tests;
 
 pub(in crate::replay::http) struct Transport {
+    pub observation: Option<crate::http::termination::ClientTermination>,
     pub progress: DeliveryProgress,
     pub finished: tokio::sync::watch::Receiver<bool>,
 }

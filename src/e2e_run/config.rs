@@ -856,6 +856,31 @@ mod tests {
     }
 
     #[test]
+    fn standalone_http_timeline_replay_accepts_base_but_managed_replay_requires_work_branch() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(target.path())
+                .args(["switch", "-q", "integration"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let cases = target.path().join("cases");
+        fs::create_dir_all(&cases).unwrap();
+        let context = crate::E2eRunContext {
+            target_root: target.path().into(),
+            case_source: cases,
+            run_key: Some("engine-validation".into()),
+        };
+        super::super::execute::resolve_for_execution(&context, false).unwrap();
+        let error = super::super::execute::resolve_for_execution(&context, true).unwrap_err();
+        assert!(error.to_string().contains("only the pull-request target"));
+    }
+
+    #[test]
     fn initialize_requires_existing_pr_base() {
         let target = target();
         let mut options = options(target.path());

@@ -78,6 +78,8 @@ pub(in crate::replay) struct ReplayReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) mysql_isolation_equivalence: Vec<Value>,
     pub(in crate::replay) matched_http_exchange_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) cancelled_http_streams: Vec<http::cancelled::Audit>,
     pub(in crate::replay) matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
     pub(in crate::replay) unmatched_http_requests: Vec<http::HttpRequestReport>,
     pub(in crate::replay) unsupported_http_exchanges: Vec<http::HttpRequestReport>,

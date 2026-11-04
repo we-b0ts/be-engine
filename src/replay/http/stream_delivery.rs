@@ -20,15 +20,16 @@ pub(super) fn ordinary(response: Response<Full<Bytes>>) -> Response<DeliveryBody
 
 pub(super) async fn response(
     mut record: RecordedHttpExchange,
-    started: tokio::time::Instant,
+    mut started: tokio::time::Instant,
     state: Arc<Mutex<ReplayState>>,
     client_prefix: Option<Arc<PrefixDelivery>>,
     server_close: Option<termination::ServerClose>,
     ordinary_delivery: full_delivery::Transport,
 ) -> Result<Response<DeliveryBody>> {
-    let completion = DeliveryCompletion {
+    let mut completion = DeliveryCompletion {
         state: state.clone(),
         detail: record.stream_delivery.take(),
+        cancellation: None,
     };
     let Some(stream) = &record.response_stream else {
         return Ok(full_delivery::response(
@@ -53,6 +54,20 @@ pub(super) async fn response(
         .and_then(|s| StatusCode::from_u16(s).ok())
         .context("stream response status missing")?;
     let mut stream = stream.clone();
+    let mut input_timing = super::input_timing::bind(
+        &state,
+        completion.detail.as_ref(),
+        ordinary_delivery.progress.clone(),
+    )
+    .await?;
+    if let (Some(bound), Some(observation)) = (&input_timing, ordinary_delivery.observation) {
+        completion.cancellation = Some(super::cancelled::Observation::new(
+            bound.timeline.clone(),
+            observation,
+            stream.chunks.len(),
+            bound.schedule.prefix_chunks,
+        ));
+    }
     let (timing, interval_cap_ms) = {
         let replay = state.lock().await;
         (
@@ -60,7 +75,21 @@ pub(super) async fn response(
             replay.stream_interval_cap_ms,
         )
     };
-    if timing == crate::replay::ReplayStreamTiming::Fast
+    if let Some(bound) = &mut input_timing {
+        anyhow::ensure!(
+            stream.chunks.len() == bound.schedule.chunks_ms.len(),
+            "HTTP input stream framing changed"
+        );
+        started = bound.started;
+        stream.headers_ms = bound.schedule.headers_ms;
+        for (chunk, at) in stream.chunks.iter_mut().zip(&bound.schedule.chunks_ms) {
+            chunk.at_ms = *at;
+        }
+        stream.end_ms = bound.schedule.end_ms;
+        if bound.schedule.headers_after_close {
+            bound.wait_release().await?;
+        }
+    } else if timing == crate::replay::ReplayStreamTiming::Fast
         && stream.complete
         && status.is_success()
         && record.lifecycle_stop.is_none()
@@ -70,12 +99,19 @@ pub(super) async fn response(
         cap_stream_intervals(&mut stream, interval_cap_ms);
     }
     tokio::time::sleep_until(started + std::time::Duration::from_millis(stream.headers_ms)).await;
+    if let Some(bound) = &input_timing
+        && bound.schedule.prefix_chunks == 0
+        && bound.schedule.prefix_required
+    {
+        bound.prefix.queued();
+    }
     let payload_len = payload.len();
     let mut body = TimedBody::new(payload, stream, started);
     body.completion = Some(completion);
     body.client_prefix = client_prefix;
     body.server_close = server_close;
     body.length_delimited = record.materialized_proxy_failure;
+    body.input_timing = input_timing;
     if body.length_delimited {
         anyhow::ensure!(
             body.stream.trailers.is_none()
@@ -129,6 +165,7 @@ struct TimedBody {
     timer: Pin<Box<tokio::time::Sleep>>,
     finished: bool,
     length_delimited: bool,
+    input_timing: Option<crate::replay::control::http_input_timing::BoundStream>,
     completion: Option<DeliveryCompletion>,
     client_prefix: Option<Arc<PrefixDelivery>>,
     server_close: Option<termination::ServerClose>,
@@ -150,6 +187,7 @@ impl TimedBody {
             )),
             finished: false,
             length_delimited: false,
+            input_timing: None,
             completion: None,
             client_prefix: None,
             server_close: None,
@@ -166,6 +204,19 @@ impl Body for TimedBody {
         cx: &mut TaskContext<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
         let this = self.get_mut();
+        if let Some(bound) = &mut this.input_timing {
+            let after_close = this.next >= bound.schedule.prefix_chunks
+                && (this.next < this.stream.chunks.len() || bound.schedule.end_after_close);
+            if after_close {
+                match bound.poll_release(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(error)) => {
+                        return Poll::Ready(Some(Err(std::io::Error::other(error))));
+                    }
+                    Poll::Ready(Ok(())) => {}
+                }
+            }
+        }
         if this.next == this.stream.chunks.len()
             && let Some(prefix) = &this.client_prefix
         {
@@ -194,6 +245,19 @@ impl Body for TimedBody {
         if let Some(chunk) = this.stream.chunks.get(this.next) {
             let bytes = this.payload.slice(chunk.start..chunk.end);
             this.next += 1;
+            if let Some(cancellation) = this
+                .completion
+                .as_mut()
+                .and_then(|c| c.cancellation.as_mut())
+            {
+                cancellation.queued_chunks = this.next;
+            }
+            if let Some(bound) = &this.input_timing
+                && this.next == bound.schedule.prefix_chunks
+                && bound.schedule.prefix_required
+            {
+                bound.prefix.queued();
+            }
             if this.next == this.stream.chunks.len()
                 && let Some(delivered) = &this.client_prefix
             {
@@ -239,6 +303,7 @@ impl Body for TimedBody {
 struct DeliveryCompletion {
     state: Arc<Mutex<ReplayState>>,
     detail: Option<MatchedHttpExchangeReport>,
+    cancellation: Option<super::cancelled::Observation>,
 }
 
 impl DeliveryCompletion {
@@ -260,6 +325,13 @@ impl DeliveryCompletion {
 
 impl Drop for DeliveryCompletion {
     fn drop(&mut self) {
+        if let (Some(cancellation), Some(detail)) = (self.cancellation.take(), self.detail.as_ref())
+        {
+            let detail = detail.clone();
+            self.detail = None;
+            super::cancelled::finish(self.state.clone(), detail, cancellation);
+            return;
+        }
         self.finish(Err(anyhow!(
             "Target HTTP dependency body was dropped before complete delivery"
         )));

@@ -12,9 +12,23 @@ type Observation = (String, String, String);
 pub(super) struct Candidates {
     validated: BTreeSet<Observation>,
     rejected: BTreeMap<Observation, anyhow::Error>,
+    deferred: BTreeSet<Observation>,
 }
 
 impl Candidates {
+    pub(super) fn defer(&mut self, witness: &WitnessRef) -> Result<()> {
+        self.deferred.insert((
+            witness.metadata.source.case_id.clone(),
+            serde_json::to_string(&witness.metadata.resource)?,
+            witness
+                .target_observation_id
+                .as_ref()
+                .or(witness.target_sha256.as_ref())
+                .context("deferred Target has no protected observation identity")?
+                .clone(),
+        ));
+        Ok(())
+    }
     pub(super) fn observe(&mut self, witness: &WitnessRef, result: Result<usize>) -> Result<usize> {
         let observation = (
             witness.metadata.source.case_id.clone(),
@@ -56,7 +70,7 @@ impl Candidates {
     }
 
     pub(super) fn finish(self) -> Result<()> {
-        match self.rejected.into_values().next() {
+        match self.rejected.into_iter().find(|(id, _)| !self.deferred.contains(id)).map(|(_, error)| error) {
             Some(error) => Err(error).context(
                 "a related Target dependency observation has no valid pair in the complete Source scope",
             ),

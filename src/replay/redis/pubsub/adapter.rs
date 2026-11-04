@@ -450,6 +450,7 @@ impl PubSubState {
                 bytes,
                 matched: Some(matched.clone()),
                 request_epoch: None,
+                value: None,
             },
         ))
     }

@@ -91,6 +91,7 @@ impl ReplayState {
                 .transaction_equivalent_autocommit(),
             mysql_isolation_equivalence: self.mysql.isolation.audit(),
             matched_http_exchange_count: self.http_events.matched_count,
+            cancelled_http_streams: self.http_events.cancelled.values().cloned().collect(),
             matched_http_exchanges: self.http_events.matched.clone(),
             unmatched_http_requests: self.http_events.unmatched.clone(),
             unsupported_http_exchanges: self.http_events.unsupported.clone(),

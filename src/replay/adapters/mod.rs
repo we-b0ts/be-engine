@@ -40,6 +40,7 @@ pub(in crate::replay) enum DependencyAdapter {
 pub(in crate::replay) trait NativeDependencyAdapter {
     fn protocol(self) -> ProtocolKind;
     fn delivery_state(self, state: &ReplayState) -> Option<ReplayExchangeStatus>;
+    fn permits_cancelled_omission(self, state: &ReplayState) -> bool;
     fn permits_unstarted_omission(
         self,
         state: &ReplayState,
@@ -49,6 +50,13 @@ pub(in crate::replay) trait NativeDependencyAdapter {
 }
 
 impl NativeDependencyAdapter for DependencyAdapter {
+    fn permits_cancelled_omission(self, state: &ReplayState) -> bool {
+        match self {
+            Self::Redis(index) => state.redis.permits_cancelled_append_omission(index),
+            Self::Http(index) => state.permits_cancelled_http_omission(index),
+            _ => false,
+        }
+    }
     fn protocol(self) -> ProtocolKind {
         match self {
             Self::Redis(_) | Self::RedisRpcPush(_) => ProtocolKind::Redis,
@@ -101,6 +109,12 @@ pub(in crate::replay) enum ExchangeHandle {
 }
 
 impl ExchangeHandle {
+    pub(in crate::replay) fn permits_cancelled_omission(self, state: &ReplayState) -> bool {
+        match self {
+            Self::Native(adapter) => adapter.permits_cancelled_omission(state),
+            Self::Connect(_) => false,
+        }
+    }
     pub(in crate::replay) fn shared_initialization(
         self,
         state: &ReplayState,

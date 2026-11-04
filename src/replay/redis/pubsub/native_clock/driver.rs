@@ -108,6 +108,7 @@ async fn run(weak: Weak<Mutex<ReplayState>>) {
             matched: None,
             case_id: Some(job.case),
             request_epoch: Some(job.epoch),
+            value: None,
         });
     }
 }
