@@ -9,12 +9,18 @@ async fn control(runtime: &Arc<crate::replay::ReplayRuntime>, value: Value) -> V
         .0
 }
 
-async fn exercise_shared_close(cap: u64, abandon: bool, cancel: Option<bool>) {
+trait TestStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> TestStream for T {}
+
+async fn exercise_shared_close(cap: u64, abandon: bool, cancel: Option<bool>, tls: bool) {
     let temp = tempfile::tempdir().unwrap();
     let case = temp.path().join("shared-close");
     tokio::fs::create_dir_all(&case).await.unwrap();
     let epoch = "2026-11-03T13:28:26Z";
     let mut dep = dependency();
+    if tls {
+        dep["scheme"] = json!("https");
+    }
     dep["id"] = json!("stream-1");
     dep["request_started_at"] = json!(epoch);
     dep["response_body"]["data"] = json!("onetwolate");
@@ -72,7 +78,28 @@ async fn exercise_shared_close(cap: u64, abandon: bool, cancel: Option<bool>) {
         false,
         "close cannot precede an unstarted Source input prefix"
     );
-    let mut client = TcpStream::connect(address).await.unwrap();
+    let stream = TcpStream::connect(address).await.unwrap();
+    let end = crate::dependency::termination::ConnectionControl::new(&stream).unwrap();
+    let mut client: Box<dyn TestStream> = if tls {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(runtime.ca.ca_cert_der()).unwrap();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        ));
+        Box::new(
+            connector
+                .connect(
+                    rustls::pki_types::ServerName::try_from("stream.test").unwrap(),
+                    stream,
+                )
+                .await
+                .unwrap(),
+        )
+    } else {
+        Box::new(stream)
+    };
     client.write_all(b"POST /stream HTTP/1.1\r\nHost: stream.test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
@@ -93,7 +120,6 @@ async fn exercise_shared_close(cap: u64, abandon: bool, cancel: Option<bool>) {
     }
     assert_eq!(ready["ready"], true, "{ready}");
     if let Some(early) = cancel {
-        let end = crate::dependency::termination::ConnectionControl::new(&client).unwrap();
         if early {
             end.reset().unwrap();
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -161,8 +187,8 @@ async fn exercise_shared_close(cap: u64, abandon: bool, cancel: Option<bool>) {
 #[tokio::test]
 async fn fast_http_timeline_preserves_wire_prefix_close_and_future_data_order() {
     tokio::time::timeout(Duration::from_secs(4), async {
-        exercise_shared_close(5, false, None).await;
-        exercise_shared_close(0, false, None).await;
+        exercise_shared_close(5, false, None, false).await;
+        exercise_shared_close(0, false, None, false).await;
     })
     .await
     .unwrap();
@@ -170,27 +196,30 @@ async fn fast_http_timeline_preserves_wire_prefix_close_and_future_data_order() 
 
 #[tokio::test]
 async fn abandoned_http_timeline_cannot_release_future_source_bytes() {
-    tokio::time::timeout(Duration::from_secs(4), exercise_shared_close(5, true, None))
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn real_dependency_cancel_after_primary_close_is_audited_without_fabricating_eof() {
     tokio::time::timeout(
         Duration::from_secs(4),
-        exercise_shared_close(50, false, Some(false)),
+        exercise_shared_close(5, true, None, false),
     )
     .await
     .unwrap();
 }
 
 #[tokio::test]
+async fn real_dependency_cancel_after_primary_close_is_audited_without_fabricating_eof() {
+    tokio::time::timeout(Duration::from_secs(4), async {
+        exercise_shared_close(50, false, Some(false), false).await;
+        exercise_shared_close(50, false, Some(false), true).await;
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn dependency_cancel_before_the_actual_primary_close_remains_dirty() {
-    tokio::time::timeout(
-        Duration::from_secs(4),
-        exercise_shared_close(50, false, Some(true)),
-    )
+    tokio::time::timeout(Duration::from_secs(4), async {
+        exercise_shared_close(50, false, Some(true), false).await;
+        exercise_shared_close(50, false, Some(true), true).await;
+    })
     .await
     .unwrap();
 }

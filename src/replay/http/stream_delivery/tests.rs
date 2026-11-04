@@ -17,7 +17,7 @@ fn dependency() -> Value {
     })
 }
 
-async fn line(client: &mut TcpStream) -> Vec<u8> {
+async fn line<T: tokio::io::AsyncRead + Unpin + ?Sized>(client: &mut T) -> Vec<u8> {
     let mut line = Vec::new();
     while !line.ends_with(b"\r\n") {
         line.push(client.read_u8().await.unwrap());
@@ -25,7 +25,7 @@ async fn line(client: &mut TcpStream) -> Vec<u8> {
     line
 }
 
-async fn chunk(client: &mut TcpStream) -> Vec<u8> {
+async fn chunk<T: tokio::io::AsyncRead + Unpin + ?Sized>(client: &mut T) -> Vec<u8> {
     let length =
         usize::from_str_radix(std::str::from_utf8(&line(client).await).unwrap().trim(), 16)
             .unwrap();

@@ -47,11 +47,20 @@ impl Observation {
                 if self.transport.engine_stopped() {
                     return None;
                 }
-                if let Some(end) = self.transport.cancelled() {
-                    return self
-                        .timeline
-                        .permits_cancellation(index, end.at)
-                        .then_some(end.termination);
+                // This path already owns an unfinished BodyDrop. A genuine
+                // post-close FIN is admissible too, retaining its write-half
+                // scope in the audit rather than promoting it to a reset.
+                if let Some(end) = self
+                    .transport
+                    .cancelled()
+                    .or_else(|| self.transport.observed())
+                {
+                    if self.timeline.permits_cancellation(index, end.at) {
+                        return Some(end.termination);
+                    }
+                    if end.termination.scope == crate::dependency::TerminationScope::Connection {
+                        return None;
+                    }
                 }
                 if events.changed().await.is_err() {
                     return None;
@@ -91,6 +100,10 @@ pub(super) fn finish(
             state.http_events.cancelled.insert(detail.index, audit);
             state.complete_http_exchange(detail);
         } else {
+            tracing::warn!(case_id = ?detail.case_id, source_http_index = detail.index,
+                queued_chunks = observation.queued_chunks,
+                cancellation = %observation.timeline.cancellation_diagnosis(&observation.transport),
+                "HTTP stream cancellation was not independently proven");
             state.finish_http_response(
                 detail,
                 Err(anyhow!(

@@ -27,6 +27,14 @@ pub(in crate::replay) struct Timeline {
 }
 
 impl Timeline {
+    pub(in crate::replay) fn cancellation_diagnosis(
+        &self,
+        transport: &crate::http::termination::ClientTermination,
+    ) -> Value {
+        serde_json::json!({"stage":*self.stage.borrow(), "prefix_ready":self.ready(),
+            "actual_primary_close_ms":self.primary_close.lock().expect("HTTP close clock poisoned").map(|at| at.saturating_duration_since(self.started.into_std()).as_millis()),
+            "transport":transport.diagnosis(self.started.into_std())})
+    }
     pub(in crate::replay) fn permits_cancellation(
         &self,
         index: usize,

@@ -33,6 +33,9 @@ prefix. BodyDrop alone, early dependency cancellation and engine cleanup remain
 failures. The report retains `cancelled_http_streams`, the real termination and
 queued chunk counts, with `recorded_eof_delivered: false`. The exchange remains
 separate from complete Source consumption.
+HTTPS observes TCP errors before TLS can translate them. An observed FIN keeps
+its write-half scope; it qualifies only alongside an unfinished BodyDrop after
+the actual primary close, and never becomes a fabricated connection reset.
 
 The same actual primary cancellation automatically permits tail-length
 differences in temporary Redis streaming caches. An existing APPEND-stream
