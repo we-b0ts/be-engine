@@ -1168,7 +1168,10 @@ is unclear.
   recorded stateful lanes and owns their exclusive target connection
   claims; runtime Redis I/O and session setup remain in `replay/redis/mod.rs`.
   `replay/redis/cross_case` owns finite sharing of source-proven Redis reads
-  across cases in one completed recording; policy feedback owns promotion of
+  across cases in one completed recording. Its indexed load and proof paths
+  dispatch the original event type before decoding exchanges; notification
+  frames retain their Pub/Sub owner and have no invented request sequence.
+  Policy feedback owns promotion of
   the corresponding time-shift rule.
   `replay/redis/request_identity` owns the native request fingerprint shared by
   Replay admission and authenticated unmatched-request diagnostics.
