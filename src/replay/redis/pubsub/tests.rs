@@ -9,6 +9,7 @@ mod broadcast;
 mod cancellation;
 mod case_inputs;
 mod compact_evidence;
+mod connection_scope;
 mod echo_preparation;
 mod input_timing;
 mod namespace_sessions;

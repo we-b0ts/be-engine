@@ -45,6 +45,13 @@ command sequence, then checks endpoint, database, username, subscription kind,
 subject, and confirmation. Missing or inconsistent subscription anchors fail
 loading instead of routing a message to an arbitrary connection.
 
+An ordinary pooled command before the first subscription does not reserve the
+later subscriber's physical Target socket. Target may use its normal pool for
+that prefix and a dedicated Pub/Sub connection for SUBSCRIBE. Every recorded
+predecessor must still complete, and the subscription suffix retains exclusive
+connection ownership. Explicit session setup, transactions, unknown session
+effects and subscription tails without a proven start retain strict binding.
+
 Recorder retains successful complete RESP2 subscription confirmations throughout
 the process lifetime, including idle-time reconnects after HTTP readiness. A
 bootstrap subscription remains ordinary Global evidence. An idle runtime

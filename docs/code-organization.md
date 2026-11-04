@@ -112,6 +112,12 @@ is unclear.
   Session variables, named locks, output writes and unknown/nested effects
   retain the original conservative setup requirement.
 
+- `replay/redis/connection_scope` owns physical-session eligibility. A proven
+  subscription suffix starts at its first SUBSCRIBE; preceding ordinary pool
+  operations retain finite lane order without acquiring that socket's owner.
+  Explicit setup, transactions, unknown session effects and subscriptions with
+  an unproven start retain the full-lane boundary.
+
 - `replay/redis/pubsub/ingress` owns the finite inverse RPC relationship between
   a Global Socket.IO request notification and its original Case callback.
   `preparation` proves immutable identity, clocks and subscription slots;
