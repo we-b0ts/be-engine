@@ -6,7 +6,7 @@ pub(in crate::replay::redis) async fn deliver_input(
     writer: &mut (impl tokio::io::AsyncWrite + Unpin),
     state: &Arc<Mutex<ReplayState>>,
     client: Uuid,
-    delivery: Delivery,
+    mut delivery: Delivery,
 ) -> Result<()> {
     let _callback_guard = delivery
         .matched
@@ -27,7 +27,7 @@ pub(in crate::replay::redis) async fn deliver_input(
         );
         return Ok(());
     }
-    let bytes = match super::value_delivery::render(&replay, &delivery) {
+    let bytes = match super::value_delivery::render(&replay, &mut delivery) {
         Ok(bytes) => bytes,
         Err(error) => {
             reject(

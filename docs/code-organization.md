@@ -148,7 +148,13 @@ is unclear.
   adapter and request contracts retain strict callback result comparison.
   `pubsub/value_delivery` applies declared global JSON formats to ordinary
   Case-owned notification payloads using the same accepted identity store as
-  native requests. `pubsub/delivery` owns epoch/subscription fences, the actual
+  native requests. Its `causality` child indexes declared identities in earlier
+  same-Case Source PUBLISH requests once per loaded Case. Notifications wait for
+  an unknown identity's actual request admission before reserving delivery;
+  genuine unknown external inputs retain their exact historical anchor. The
+  subscription worker retains one decoded value while waiting and cancellation
+  leaves unadmitted inputs outside the started-I/O barrier.
+  `pubsub/delivery` owns epoch/subscription fences, the actual
   wire write and finite receipt. Protocol envelopes and Global inputs retain
   their native owners; unselected fields and original captures stay unchanged.
   `replay/redis/pubsub/namespace_sessions` owns SID-directed emit correspondence:

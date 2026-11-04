@@ -753,6 +753,11 @@ impl RedisReplayState {
             exchange.claim = Some(ticket.observer());
             Claim::Finite(ticket)
         };
+        if exchange.record.command.eq_ignore_ascii_case("PUBLISH") {
+            // A notification may depend on this accepted request's identity,
+            // before either its response or a related RPC callback completes.
+            self.lifecycle.notify_waiters();
+        }
         Ok(MatchedRedisExchange {
             claim,
             refresh,

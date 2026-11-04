@@ -129,3 +129,171 @@ async fn an_unknown_selected_notification_identity_stays_an_exact_input_anchor()
     );
     task.abort();
 }
+
+async fn causal_runtime(root: &Path, lazy: bool, producer_before: bool) -> Arc<ReplayRuntime> {
+    policy(root, true);
+    let subscriber = Uuid::new_v4();
+    let source = br#"{"request_id":"historical-token"}"#;
+    let original = crate::redis::encode_array(&[b"message", b"jobs", INPUT]);
+    let mut publish = exchange(Uuid::new_v4(), 1, "PUBLISH", &[b"jobs", source], b":1\r\n");
+    publish["timestamp"] = if producer_before {
+        json!("2026-11-04T04:39:14.410Z")
+    } else {
+        json!("2026-11-04T04:39:14.510Z")
+    };
+    let mut notification = push(subscriber, None, &original, 0);
+    notification["timestamp"] = json!("2026-11-04T04:39:14.451Z");
+    runtime(
+        root,
+        &[
+            exchange(subscriber, 1, "SUBSCRIBE", &[b"jobs"], ACK),
+            publish,
+            notification,
+        ],
+        &[],
+        lazy,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn an_early_notification_waits_for_its_source_identity_producer() {
+    for lazy in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = causal_runtime(temp.path(), lazy, true).await;
+        let target = br#"{"request_id":"new-longer-target-token"}"#;
+        let (mut input, input_task) = connect(&runtime).await;
+        assert_eq!(send(&mut input, &[b"SUBSCRIBE", b"jobs"]).await, ACK);
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                read_redis_frame(&mut input)
+            )
+            .await
+            .is_err(),
+            "the notification must not anchor a Source identity before its producer arrives"
+        );
+        {
+            let replay = runtime.state.lock().await;
+            assert!(!replay.redis.pubsub.has_case_delivery());
+            assert!(!replay.redis.request_contracts.has_identities("case"));
+        }
+        let (mut publisher, publisher_task) = connect(&runtime).await;
+        assert_eq!(
+            send(&mut publisher, &[b"PUBLISH", b"jobs", target]).await,
+            b":1\r\n"
+        );
+        let expected = br#"{ "payload" : { "client_id" : "new-longer-target-token", "fixed" : "historical-token" }, "literal":17 }"#;
+        assert_eq!(
+            read(&mut input).await,
+            crate::redis::encode_array(&[b"message", b"jobs", expected])
+        );
+        let replay = runtime.state.lock().await;
+        assert!(replay.redis.snapshot().unmatched.is_empty());
+        assert!(replay.redis.snapshot().unused_case.is_empty());
+        assert_eq!(replay.redis.pubsub.report().unwrap().delivered_pushes, 1);
+        publisher_task.abort();
+        input_task.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_later_source_request_does_not_gate_an_unknown_external_input() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = causal_runtime(temp.path(), true, false).await;
+    let (mut input, task) = connect(&runtime).await;
+    assert_eq!(send(&mut input, &[b"SUBSCRIBE", b"jobs"]).await, ACK);
+    assert_eq!(
+        read(&mut input).await,
+        crate::redis::encode_array(&[b"message", b"jobs", INPUT])
+    );
+    let replay = runtime.state.lock().await;
+    assert!(
+        replay
+            .redis
+            .request_contracts
+            .knows_identity_value(
+                "case",
+                &json!("historical-token"),
+                &json!("historical-token")
+            )
+            .unwrap()
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn causal_notification_wakes_on_admission_before_the_publish_response() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = causal_runtime(temp.path(), true, true).await;
+    let (mut input, task) = connect(&runtime).await;
+    assert_eq!(send(&mut input, &[b"SUBSCRIBE", b"jobs"]).await, ACK);
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            read_redis_frame(&mut input)
+        )
+        .await
+        .is_err()
+    );
+    let matched = {
+        let mut replay = runtime.state.lock().await;
+        replay
+            .redis
+            .match_redis(
+                Some("case"),
+                &TargetKey {
+                    host: "redis.test".into(),
+                    port: 6379,
+                },
+                TargetConnection::default(),
+                2,
+                0,
+                None,
+                "PUBLISH",
+                &[b"jobs".to_vec(), br#"{"request_id":"new-token"}"#.to_vec()],
+            )
+            .unwrap()
+    };
+    let expected = br#"{ "payload" : { "client_id" : "new-token", "fixed" : "historical-token" }, "literal":17 }"#;
+    assert_eq!(
+        read(&mut input).await,
+        crate::redis::encode_array(&[b"message", b"jobs", expected])
+    );
+    let replay = runtime.state.lock().await;
+    assert_eq!(
+        replay.redis.exchange_status(matched.index),
+        Some(ReplayExchangeStatus::Responding)
+    );
+    assert_eq!(replay.redis.pubsub.report().unwrap().delivered_pushes, 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn closing_a_causal_wait_leaves_the_input_unclaimed() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = causal_runtime(temp.path(), true, true).await;
+    let (mut input, task) = connect(&runtime).await;
+    assert_eq!(send(&mut input, &[b"SUBSCRIBE", b"jobs"]).await, ACK);
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            read_redis_frame(&mut input)
+        )
+        .await
+        .is_err()
+    );
+    drop(input);
+    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let replay = runtime.state.lock().await;
+    assert!(!replay.redis.pubsub.has_case_delivery());
+    assert!(!replay.redis.request_contracts.has_identities("case"));
+    assert!(replay.redis.pubsub.case_is_dirty("case"));
+    let report = replay.redis.pubsub.report().unwrap();
+    assert_eq!((report.delivered_pushes, report.failed_pushes), (0, 0));
+}
