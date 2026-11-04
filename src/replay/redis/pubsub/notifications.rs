@@ -195,8 +195,7 @@ async fn deliver(
                     {
                         return Progress::Skipped;
                     }
-                    let epoch = replay.redis.request_contracts.request_times(case).target;
-                    epoch
+                    replay.redis.request_contracts.request_times(case).target
                 } else {
                     None
                 };
