@@ -27,7 +27,8 @@ pub(in crate::replay::redis) async fn deliver_input(
         );
         return Ok(());
     }
-    let bytes = match super::value_delivery::render(&replay, &mut delivery) {
+    let push = delivery.push;
+    let value_bytes = match super::value_delivery::render(&replay, &mut delivery) {
         Ok(bytes) => bytes,
         Err(error) => {
             reject(
@@ -38,6 +39,18 @@ pub(in crate::replay::redis) async fn deliver_input(
             return Err(error.context("Pub/Sub input value contract failed"));
         }
     };
+    let bytes =
+        match super::subject_delivery::render(&replay.redis.pubsub, client, push, &value_bytes) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                reject(
+                    &mut replay,
+                    &delivery,
+                    "Pub/Sub input subject translation failed",
+                );
+                return Err(error.context("Pub/Sub input subject translation failed"));
+            }
+        };
     let timing_scope = super::super::input_timing::scope(&replay);
     drop(replay);
     let sent = tokio::time::timeout(std::time::Duration::from_secs(5), writer.write_all(&bytes))

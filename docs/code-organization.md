@@ -154,6 +154,12 @@ is unclear.
   genuine unknown external inputs retain their exact historical anchor. The
   subscription worker retains one decoded value while waiting and cancellation
   leaves unadmitted inputs outside the started-I/O barrier.
+  `pubsub/subject_delivery` projects an accepted subscription's exact Source
+  connection/sequence onto its actual Target subject for notification frames,
+  alongside the existing confirmation translation. Static subjects retain a
+  borrowed frame; changed subjects preserve payload bytes and require their
+  original native subscription kind. Pattern changes require a separate
+  concrete-channel proof and cannot reuse channel identity translation.
   `pubsub/delivery` owns epoch/subscription fences, the actual
   wire write and finite receipt. Protocol envelopes and Global inputs retain
   their native owners; unselected fields and original captures stay unchanged.

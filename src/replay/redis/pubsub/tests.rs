@@ -20,6 +20,7 @@ mod rpc_coverage;
 mod rpc_identity_formats;
 mod rpc_ingress;
 mod scale;
+mod subject_delivery;
 mod subscriber_generations;
 mod subscription_evidence;
 mod unused_identity;
