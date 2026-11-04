@@ -69,6 +69,8 @@ pub(in crate::replay) struct Query {
     pub(super) epoch: DateTime<Utc>,
     pub(super) sequence: u64,
     pub(super) completed: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) closed_at: Option<DateTime<Utc>>,
 }
 
 pub(super) async fn accept(

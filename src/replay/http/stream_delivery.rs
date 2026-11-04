@@ -26,9 +26,10 @@ pub(super) async fn response(
     server_close: Option<termination::ServerClose>,
     ordinary_delivery: full_delivery::Transport,
 ) -> Result<Response<DeliveryBody>> {
-    let completion = DeliveryCompletion {
+    let mut completion = DeliveryCompletion {
         state: state.clone(),
         detail: record.stream_delivery.take(),
+        cancellation: None,
     };
     let Some(stream) = &record.response_stream else {
         return Ok(full_delivery::response(
@@ -59,6 +60,14 @@ pub(super) async fn response(
         ordinary_delivery.progress.clone(),
     )
     .await?;
+    if let (Some(bound), Some(observation)) = (&input_timing, ordinary_delivery.observation) {
+        completion.cancellation = Some(super::cancelled::Observation::new(
+            bound.timeline.clone(),
+            observation,
+            stream.chunks.len(),
+            bound.schedule.prefix_chunks,
+        ));
+    }
     let (timing, interval_cap_ms) = {
         let replay = state.lock().await;
         (
@@ -236,6 +245,13 @@ impl Body for TimedBody {
         if let Some(chunk) = this.stream.chunks.get(this.next) {
             let bytes = this.payload.slice(chunk.start..chunk.end);
             this.next += 1;
+            if let Some(cancellation) = this
+                .completion
+                .as_mut()
+                .and_then(|c| c.cancellation.as_mut())
+            {
+                cancellation.queued_chunks = this.next;
+            }
             if let Some(bound) = &this.input_timing
                 && this.next == bound.schedule.prefix_chunks
                 && bound.schedule.prefix_required
@@ -287,6 +303,7 @@ impl Body for TimedBody {
 struct DeliveryCompletion {
     state: Arc<Mutex<ReplayState>>,
     detail: Option<MatchedHttpExchangeReport>,
+    cancellation: Option<super::cancelled::Observation>,
 }
 
 impl DeliveryCompletion {
@@ -308,6 +325,13 @@ impl DeliveryCompletion {
 
 impl Drop for DeliveryCompletion {
     fn drop(&mut self) {
+        if let (Some(cancellation), Some(detail)) = (self.cancellation.take(), self.detail.as_ref())
+        {
+            let detail = detail.clone();
+            self.detail = None;
+            super::cancelled::finish(self.state.clone(), detail, cancellation);
+            return;
+        }
         self.finish(Err(anyhow!(
             "Target HTTP dependency body was dropped before complete delivery"
         )));

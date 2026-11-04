@@ -365,6 +365,7 @@ async fn handle_http_request(
     };
     let mut record = record;
     let ordinary_delivery = stream_delivery::full_delivery::Transport {
+        observation: Some(transport.observation.clone()),
         progress: transport.delivery.clone(),
         finished: transport.io_finished.clone(),
     };

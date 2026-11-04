@@ -62,7 +62,11 @@ async fn body(
         state,
         None,
         None,
-        Transport { progress, finished },
+        Transport {
+            progress,
+            finished,
+            observation: None,
+        },
     )
     .await
     .unwrap()

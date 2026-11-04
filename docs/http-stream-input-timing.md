@@ -26,11 +26,32 @@ when adopting the response into stream ownership. A mismatched admission Case,
 missing dependency request clock, invalid stream timing or unsupported partial
 stream cannot authorize this shared fast path.
 
-The scheduling change does not truncate a recorded complete dependency response,
-turn Target BodyDrop into successful EOF, waive APPEND bytes, or manufacture
-termination evidence. An old capture may still need independent native
-termination/consumption evidence when its proxy completed an upstream response
-that Source business code did not consume. Actual Replay retains that failure.
+For an unfinished response with a real primary client cancellation, an HTTP
+dependency may independently close before its recorded proxy EOF. Acceptance
+requires actual FIN/RST after the primary close and a flushed pre-close input
+prefix. BodyDrop alone, early dependency cancellation and engine cleanup remain
+failures. The report retains `cancelled_http_streams`, the real termination and
+queued chunk counts, with `recorded_eof_delivered: false`. The exchange remains
+separate from complete Source consumption.
+
+The same actual primary cancellation automatically permits tail-length
+differences in temporary Redis streaming caches. An existing APPEND-stream
+contract, an initially empty value, successful key-local expiry and absence of
+read/reset fences must prove eligibility. Exact Source APPEND bytes must be a
+prefix of a unique stream of string fields in the authenticated pre-close
+primary response. Target APPENDs must follow that same continuous byte prefix;
+they can stop earlier or extend up to the primary response's finite content
+ceiling. APPEND returns the actual Target cumulative length. A complete response
+assertion is still required for the case to pass. There is no Target option.
+
+`redis.allowed_cancelled_cache_tails` reports Source and Target lengths, missing
+or additional bytes, and partially or fully omitted Source exchanges. Omitted
+records retain their real native delivery status. These differences are accepted
+because business flush timers run independently of accelerated stream timing;
+this tradeoff can conceal a missing final cache flush in a cancelled request.
+Normal completed requests, nonexpiring values, observed/reset state and other
+dependency protocols retain their strict contracts. Candidate derivation is
+bounded and performed once, outside input execution and the stream delivery loop.
 
 Standalone `traffic-e2e prepare`, `run-api` and `run` validate the current
 checkout, including the configured delivery base branch. Their execution does

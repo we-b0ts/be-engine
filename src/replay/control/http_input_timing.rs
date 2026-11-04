@@ -21,11 +21,39 @@ pub(in crate::replay) struct Timeline {
     started: MonoInstant,
     plan: source::Plan,
     prefixes: SyncMutex<BTreeMap<usize, Arc<PrefixDelivery>>>,
+    primary_close: SyncMutex<Option<std::time::Instant>>,
     // 0: waiting, 1: actual primary cancellation sent, 2: abandoned Case.
     stage: watch::Sender<u8>,
 }
 
 impl Timeline {
+    pub(in crate::replay) fn permits_cancellation(
+        &self,
+        index: usize,
+        at: std::time::Instant,
+    ) -> bool {
+        *self.stage.borrow() == 1
+            && self.ready()
+            && self
+                .plan
+                .streams
+                .get(&index)
+                .is_some_and(|s| s.end_after_close && s.prefix_required)
+            && self
+                .primary_close
+                .lock()
+                .expect("HTTP close clock poisoned")
+                .is_some_and(|close| at >= close)
+    }
+
+    pub(in crate::replay) async fn wait_closed(&self) {
+        let mut stage = self.stage.subscribe();
+        while *stage.borrow_and_update() == 0 {
+            if stage.changed().await.is_err() {
+                break;
+            }
+        }
+    }
     pub(in crate::replay) fn abort(&self) {
         self.stage.send_replace(2);
     }
@@ -72,6 +100,7 @@ impl Timeline {
             }
         });
         Ok(Some(BoundStream {
+            timeline: self.clone(),
             started: self.started,
             schedule: stream.clone(),
             prefix,
@@ -82,6 +111,7 @@ impl Timeline {
 }
 
 pub(in crate::replay) struct BoundStream {
+    pub timeline: Arc<Timeline>,
     pub started: MonoInstant,
     pub schedule: source::StreamSchedule,
     pub prefix: Arc<PrefixDelivery>,
@@ -155,6 +185,18 @@ pub(super) async fn accept(
             let Some(plan) = plan else {
                 return Ok(serde_json::json!({"ok":true,"enabled":false}));
             };
+            let recording = shared
+                .lock()
+                .await
+                .cases
+                .get(case)
+                .context("HTTP timing Case absent")?
+                .clone();
+            let source_close_ms = plan.source_close_ms;
+            let caches = tokio::task::spawn_blocking(move || {
+                crate::replay::redis::append::cancelled::load(&recording, source_close_ms)
+            })
+            .await??;
             let mut state = shared.lock().await;
             ensure_live(&state, case)?;
             ensure!(
@@ -162,6 +204,7 @@ pub(super) async fn accept(
                 "HTTP timing Case admission changed"
             );
             let epoch = Utc::now();
+            state.redis.prepare_cancelled_caches(case, caches)?;
             tracing::info!(
                 case_id = case,
                 source_close_ms = plan.source_close_ms,
@@ -176,6 +219,7 @@ pub(super) async fn accept(
                 started: MonoInstant::now(),
                 plan,
                 prefixes: SyncMutex::default(),
+                primary_close: SyncMutex::new(None),
                 stage: watch::channel(0).0,
             }));
             return Ok(serde_json::json!({"ok":true,"enabled":true,"epoch":epoch}));
@@ -184,7 +228,7 @@ pub(super) async fn accept(
             .input_timing
             .as_ref()
             .context("HTTP timing metadata absent")?;
-        let state = shared.lock().await;
+        let mut state = shared.lock().await;
         ensure_live(&state, case)?;
         let live = state
             .http_input_timing
@@ -205,7 +249,32 @@ pub(super) async fn accept(
                 ready,
                 "primary close preceded its delivered Source input prefix"
             );
+            let closed_at = query
+                .closed_at
+                .context("actual HTTP primary close clock missing")?;
+            let lag = (Utc::now() - closed_at)
+                .to_std()
+                .context("HTTP close clock is in the future")?;
+            let at = std::time::Instant::now()
+                .checked_sub(lag)
+                .context("invalid HTTP close clock")?;
+            ensure!(
+                closed_at >= live.epoch
+                    && at >= (live.started + Duration::from_millis(live.plan.close_ms)).into_std(),
+                "HTTP close clock preceded its scheduled input"
+            );
+            let mut primary = live
+                .primary_close
+                .lock()
+                .expect("HTTP close clock poisoned");
+            ensure!(
+                primary.is_none(),
+                "HTTP primary close was acknowledged twice"
+            );
+            *primary = Some(at);
+            drop(primary);
             live.stage.send_replace(1);
+            state.redis.confirm_cancelled_caches(case);
         }
         Ok(serde_json::json!({"ok":true,"ready":ready,"wait_ms":5,"advance":{"removed_ms":0}}))
     }

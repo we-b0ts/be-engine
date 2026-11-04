@@ -194,6 +194,7 @@ pub(super) async fn execute_with_feedback(
     if let Some(partial) = &partial_message {
         lifecycle.record_message(partial.decode()?.len())?;
     }
+    let close_started_at = chrono::Utc::now();
     if matches!(
         reason,
         EndReason::ClientClose | EndReason::DependencyFailure
@@ -206,7 +207,7 @@ pub(super) async fn execute_with_feedback(
     if reason == EndReason::ClientClose
         && let Some(timing) = scheduled_close
     {
-        timing.closed().await?;
+        timing.closed(close_started_at).await?;
     }
     let mut end = lifecycle.end_observation(reason, elapsed_ms(started), transport_clean);
     end.partial_message = partial_message;

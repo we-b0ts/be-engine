@@ -9,7 +9,7 @@ async fn control(runtime: &Arc<crate::replay::ReplayRuntime>, value: Value) -> V
         .0
 }
 
-async fn exercise_shared_close(cap: u64, abandon: bool) {
+async fn exercise_shared_close(cap: u64, abandon: bool, cancel: Option<bool>) {
     let temp = tempfile::tempdir().unwrap();
     let case = temp.path().join("shared-close");
     tokio::fs::create_dir_all(&case).await.unwrap();
@@ -60,7 +60,13 @@ async fn exercise_shared_close(cap: u64, abandon: bool) {
     .await;
     assert_eq!(begin["enabled"], true, "{begin}");
     let query = json!({"epoch":begin["epoch"],"sequence":1,"completed":[]});
-    let close = |command: &str| json!({"command":command,"case_id":id,"input_timing":query});
+    let close = |command: &str| {
+        let mut query = query.clone();
+        if command == "http_input_timing_closed" {
+            query["closed_at"] = json!(chrono::Utc::now());
+        }
+        json!({"command":command,"case_id":id,"input_timing":query})
+    };
     assert_eq!(
         control(&runtime, close("http_input_timing_closed")).await["ok"],
         false,
@@ -80,8 +86,50 @@ async fn exercise_shared_close(cap: u64, abandon: bool) {
             .is_err(),
         "future Source bytes must wait for the actual primary close acknowledgement"
     );
-    let ready = control(&runtime, close("http_input_timing_wait")).await;
+    let mut ready = control(&runtime, close("http_input_timing_wait")).await;
+    while ready["ready"] != true {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        ready = control(&runtime, close("http_input_timing_wait")).await;
+    }
     assert_eq!(ready["ready"], true, "{ready}");
+    if let Some(early) = cancel {
+        let end = crate::dependency::termination::ConnectionControl::new(&client).unwrap();
+        if early {
+            end.reset().unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            control(&runtime, close("http_input_timing_closed")).await["ok"],
+            true
+        );
+        if !early {
+            end.reset().unwrap();
+        }
+        drop(client);
+        for _ in 0..200 {
+            let state = runtime.state.lock().await;
+            if state.http_exchanges[0].status != crate::replay::ReplayExchangeStatus::Responding {
+                break;
+            }
+            drop(state);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let state = runtime.state.lock().await;
+        assert_eq!(state.http_case_is_dirty(&id), early);
+        assert_eq!(state.http_events.cancelled.len(), usize::from(!early));
+        assert!(
+            !state.http_exchanges[0].status.is_consumed(),
+            "cancellation is not complete recorded EOF"
+        );
+        let report = state.snapshot_report();
+        assert_eq!(report.cancelled_http_streams.len(), usize::from(!early));
+        assert_eq!(
+            report.allowed_unused_case_http_exchanges.len(),
+            usize::from(!early)
+        );
+        task.abort();
+        return;
+    }
     if abandon {
         runtime.state.lock().await.advance_admission_epoch();
         assert_eq!(
@@ -113,8 +161,8 @@ async fn exercise_shared_close(cap: u64, abandon: bool) {
 #[tokio::test]
 async fn fast_http_timeline_preserves_wire_prefix_close_and_future_data_order() {
     tokio::time::timeout(Duration::from_secs(4), async {
-        exercise_shared_close(5, false).await;
-        exercise_shared_close(0, false).await;
+        exercise_shared_close(5, false, None).await;
+        exercise_shared_close(0, false, None).await;
     })
     .await
     .unwrap();
@@ -122,7 +170,27 @@ async fn fast_http_timeline_preserves_wire_prefix_close_and_future_data_order() 
 
 #[tokio::test]
 async fn abandoned_http_timeline_cannot_release_future_source_bytes() {
-    tokio::time::timeout(Duration::from_secs(4), exercise_shared_close(5, true))
+    tokio::time::timeout(Duration::from_secs(4), exercise_shared_close(5, true, None))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn real_dependency_cancel_after_primary_close_is_audited_without_fabricating_eof() {
+    tokio::time::timeout(
+        Duration::from_secs(4),
+        exercise_shared_close(50, false, Some(false)),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn dependency_cancel_before_the_actual_primary_close_remains_dirty() {
+    tokio::time::timeout(
+        Duration::from_secs(4),
+        exercise_shared_close(50, false, Some(true)),
+    )
+    .await
+    .unwrap();
 }

@@ -299,6 +299,7 @@ impl RedisReplayState {
 
     pub(in crate::replay) fn has_case_in_flight(&self) -> bool {
         self.observations.has_in_flight()
+            || self.append_streams.has_in_flight()
             || self.pubsub.has_case_delivery()
             || self.activity_refresh.has_in_flight()
             || self.exchanges.iter().enumerate().any(|(index, e)| {
@@ -314,6 +315,7 @@ impl RedisReplayState {
 
     pub(in crate::replay) fn has_in_flight(&self) -> bool {
         self.observations.has_in_flight()
+            || self.append_streams.has_in_flight()
             || self.pubsub.has_case_delivery()
             || self.activity_refresh.has_in_flight()
             || self.exchanges.iter().enumerate().any(|(index, e)| {
@@ -488,6 +490,7 @@ impl RedisReplayState {
             target_event_index_scope: Some("case_request_admission"),
             append_streams: self.append_streams.reports(),
             append_streams_omitted: self.append_streams.omitted(),
+            allowed_cancelled_cache_tails: self.cancelled_cache_audits(),
             state_observations: self.observations.reports(),
             state_observations_omitted: self.observations.omitted(),
             allowed_state_omissions: self.allowed_state_omissions(),
@@ -509,9 +512,11 @@ impl RedisReplayState {
                 .iter()
                 .cloned()
                 .chain(self.initial_expiry_violations())
+                .chain(self.append_streams.unconfirmed_extensions())
                 .collect(),
             unused_case: unused(&self.exchanges, ReplaySource::Case)
                 .into_iter()
+                .filter(|e| !self.append_streams.allows_cancelled_omission(e.index))
                 .chain(self.pubsub.unused(ReplaySource::Case))
                 .collect(),
             unused_global_count: Some(self.global_unused_count()),
@@ -529,7 +534,11 @@ impl RedisReplayState {
         self.pubsub.case_is_dirty(case_id)
             || self.unsettled_initial_expiry(case_id)
             || self.events.dirty_case_ids.contains(case_id)
+            || self.append_streams.unconfirmed_extension(case_id)
             || self.case_exchange_index.any(case_id, |index| {
+                if self.append_streams.allows_cancelled_omission(index) {
+                    return false;
+                }
                 self.exchanges.get(index).is_some_and(|exchange| {
                     if exchange.source != ReplaySource::Case {
                         return false;

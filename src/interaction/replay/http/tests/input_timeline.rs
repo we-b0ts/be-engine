@@ -20,7 +20,7 @@ impl InputTiming for CloseInput {
             Ok(Advance::default())
         })
     }
-    fn closed(&self) -> BoxFuture<'_, Result<()>> {
+    fn closed(&self, _started_at: chrono::DateTime<chrono::Utc>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             // This only completes when the genuine peer observes cancellation.
             // Calling feedback before resetting the primary socket deadlocks.

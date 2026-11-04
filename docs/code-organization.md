@@ -30,6 +30,13 @@ is unclear.
 
 ## Current Boundaries
 
+- `replay/redis/append/cancelled` owns automatic cancelled-cache eligibility,
+  bounded authenticated primary-content ceilings and separate omission audits.
+  Native APPEND retains key identity, exact prefix matching and actual wire
+  lengths/consumption. `replay/http/cancelled` owns real dependency FIN/RST after
+  trusted primary close metadata; input timing supplies only clocks and flushed
+  prefix facts. Neither owner converts cancellation into recorded EOF.
+
 - `protocol_contract` owns closed protocol, role and native-version identities.
   `primary_protocol` adapts immutable HTTP/Motan inputs to genuine native
   execution and independent observations; `e2e_run/primary_driver` owns caller

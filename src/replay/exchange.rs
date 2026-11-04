@@ -22,6 +22,8 @@ pub(super) enum ReplayExchangeStatus {
     Responding,
     AwaitingClientTermination,
     Consumed,
+    /// A separately audited primary cancellation; recorded EOF was not delivered.
+    Cancelled,
     Failed,
 }
 

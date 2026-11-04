@@ -80,6 +80,7 @@ fn late_target_request_does_not_change_the_source_cutoff_or_clock_mapping() {
     assert_eq!(plan.close_ms, 20);
     // Actual late admission waits for its wire prefix, not a shifted cutoff.
     let timeline = Timeline {
+        primary_close: SyncMutex::new(None),
         case: "case".into(),
         epoch: epoch(),
         admission_epoch: 0,

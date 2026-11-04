@@ -46,13 +46,13 @@ impl InputTiming for Observer {
         })
     }
 
-    fn closed(&self) -> BoxFuture<'_, Result<()>> {
+    fn closed(&self, started_at: DateTime<Utc>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             super::super::native_event::send(
                 &self.socket,
                 serde_json::json!({
                     "command":"http_input_timing_closed","case_id":self.case,
-                    "input_timing":{"epoch":self.epoch,"sequence":1,"completed":[]}
+                    "input_timing":{"epoch":self.epoch,"sequence":1,"completed":[],"closed_at":started_at}
                 }),
             )
             .await?;

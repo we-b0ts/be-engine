@@ -38,7 +38,7 @@ impl InputTiming for Observer {
             loop {
                 let response = super::super::native_event::send(&self.socket,
                     serde_json::json!({"command":"input_timing","case_id":self.case,
-                        "input_timing":Query {epoch:self.epoch,sequence,completed:completed.clone()}})).await?;
+                        "input_timing":Query {epoch:self.epoch,sequence,completed:completed.clone(),closed_at:None}})).await?;
                 if response["ready"] == true {
                     return Ok(serde_json::from_value(response["advance"].clone())?);
                 }
