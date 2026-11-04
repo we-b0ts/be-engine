@@ -7,6 +7,7 @@ use super::{artifacts, fingerprint};
 use crate::{E2eRunContext, E2eRunPrepareOptions, RecordingApi, prepare_e2e_run};
 
 pub(super) fn prepare_recording(target_root: &Path, state: &mut RewriteState) -> Result<()> {
+    super::purpose::require_work_branch(target_root)?;
     crate::e2e_run::resolve_project(target_root)?;
     let case_source = artifacts::recording_run(target_root, &state.recording_run_id);
     let api = state.api.parse::<RecordingApi>()?;
