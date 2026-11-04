@@ -5,6 +5,8 @@ use std::path::Path;
 use tokio::sync::mpsc;
 mod adapter;
 mod delivery;
+mod value_delivery;
+pub(super) use delivery::deliver_input;
 pub(super) mod echo;
 pub(super) struct RpcComparison {
     pub source: Vec<Vec<u8>>,

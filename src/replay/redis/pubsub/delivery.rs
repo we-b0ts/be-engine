@@ -1,6 +1,92 @@
 //! Case-bound Global input stays in the started-I/O barrier through wire delivery.
 use super::*;
 
+/// Value preparation, the actual write and its finite receipt share one owner.
+pub(in crate::replay::redis) async fn deliver_input(
+    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+    state: &Arc<Mutex<ReplayState>>,
+    client: Uuid,
+    delivery: Delivery,
+) -> Result<()> {
+    let _callback_guard = delivery
+        .matched
+        .as_ref()
+        .and_then(|matched| match &matched.claim {
+            Claim::Finite(ticket) => Some(ticket.guard()),
+            Claim::Native(_) => None,
+        });
+    let mut replay = state.lock().await;
+    if !delivery.case_is_current(&replay)
+        || replay.finalized_at.is_some()
+        || !replay.redis.pubsub.is_subscribed(client, delivery.push)
+    {
+        reject(
+            &mut replay,
+            &delivery,
+            "Pub/Sub input Case or subscription already ended",
+        );
+        return Ok(());
+    }
+    let bytes = match super::value_delivery::render(&replay, &delivery) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            reject(
+                &mut replay,
+                &delivery,
+                "Pub/Sub input value contract failed",
+            );
+            return Err(error.context("Pub/Sub input value contract failed"));
+        }
+    };
+    let timing_scope = super::super::input_timing::scope(&replay);
+    drop(replay);
+    let sent = tokio::time::timeout(std::time::Duration::from_secs(5), writer.write_all(&bytes))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Pub/Sub push delivery timed out",
+            )
+        })
+        .and_then(|result| result);
+    let mut replay = state.lock().await;
+    match sent {
+        Ok(()) if !delivery.case_is_current(&replay) => {
+            reject(
+                &mut replay,
+                &delivery,
+                "Pub/Sub input Case changed during delivery",
+            );
+        }
+        Ok(()) => {
+            replay.redis.pubsub.complete(delivery.push);
+            super::super::input_timing::delivered(
+                &mut replay,
+                timing_scope.as_ref(),
+                crate::replay::control::input_timing::DeliveryReference::NativePush(delivery.push),
+            );
+            replay.redis.lifecycle.notify_waiters();
+            if let Some(matched) = &delivery.matched {
+                replay.redis.complete_exchange(matched);
+            }
+        }
+        Err(error) => {
+            reject(&mut replay, &delivery, "Pub/Sub input TCP delivery failed");
+            return Err(error.into());
+        }
+    }
+    Ok(())
+}
+
+fn reject(replay: &mut ReplayState, delivery: &Delivery, reason: &str) {
+    replay
+        .redis
+        .fail_pubsub_input(delivery.push, delivery.case_id.as_deref(), reason);
+    if let Some(matched) = &delivery.matched {
+        replay.redis.fail_exchange(matched, reason.into());
+    }
+}
+
 impl PubSubState {
     fn slot_target(&self, slot: PushId) -> TargetKey {
         let record = match slot {

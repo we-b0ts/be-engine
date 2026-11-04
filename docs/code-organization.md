@@ -146,6 +146,11 @@ is unclear.
   long recordings retain paged payload references and bounded delivery queues.
   RESP delivery retains wire consumption and Case cancellation checks; the
   adapter and request contracts retain strict callback result comparison.
+  `pubsub/value_delivery` applies declared global JSON formats to ordinary
+  Case-owned notification payloads using the same accepted identity store as
+  native requests. `pubsub/delivery` owns epoch/subscription fences, the actual
+  wire write and finite receipt. Protocol envelopes and Global inputs retain
+  their native owners; unselected fields and original captures stay unchanged.
   `replay/redis/pubsub/namespace_sessions` owns SID-directed emit correspondence:
   it selects only unique namespace identities from original Source protocol
   observations, then binds them to CONNECT receipts from the actual Target
