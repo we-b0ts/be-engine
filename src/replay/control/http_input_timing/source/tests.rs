@@ -146,3 +146,13 @@ fn invalid_dependency_clocks_cannot_authorize_timeline_compression() {
     s.stream.chunks[1].at_ms = 80_000;
     assert!(build(epoch(), 100_000, vec![s], 5).is_err());
 }
+
+#[test]
+fn fractional_request_clock_cannot_pull_a_post_close_chunk_before_the_cutoff() {
+    let mut source = stream();
+    source.started_at += chrono::TimeDelta::microseconds(400);
+    source.stream.chunks[0].at_ms = 99_999;
+    source.stream.chunks[1].at_ms = 100_000;
+    let plan = build(epoch(), 100_000, vec![source], 5).unwrap();
+    assert_eq!(plan.streams[&7].prefix_chunks, 1);
+}

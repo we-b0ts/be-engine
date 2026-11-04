@@ -91,8 +91,13 @@ fn build(epoch: DateTime<Utc>, close: u64, streams: Vec<SourceStream>, cap: u64)
     let mut points = BTreeSet::from([0, close]);
     let mut prepared = Vec::with_capacity(streams.len());
     for source in streams {
-        let start = u64::try_from((source.started_at - epoch).num_milliseconds())
+        let elapsed = (source.started_at - epoch)
+            .to_std()
             .context("HTTP stream began before its primary input origin")?;
+        // Rounding down could move a fractional-millisecond post-close frame
+        // before the integral input cutoff. Preserve that strict ordering.
+        let start = u64::try_from(elapsed.as_nanos().div_ceil(1_000_000))
+            .context("HTTP stream request offset exceeds the timing range")?;
         let offset = |at: u64| start.checked_add(at).context("HTTP Source clock overflow");
         let headers = offset(source.stream.headers_ms)?;
         let chunks = source
