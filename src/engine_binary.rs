@@ -6,14 +6,35 @@ const REWRITE_BINARY_NAME: &str = "backend-rewrite";
 const ENGINE_BINARY_NAME: &str = "traffic-e2e";
 
 pub(crate) fn executable() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(executable) = recorded_test_engine()? {
+        return Ok(executable);
+    }
     let current = std::env::current_exe().context("failed to resolve current executable")?;
     resolve_executable(&current, std::process::id())
 }
 
 /// An installed filesystem path for container mounts, rather than a reexec handle.
 pub(crate) fn installed_executable() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(executable) = recorded_test_engine()? {
+        return Ok(executable);
+    }
     let current = std::env::current_exe().context("failed to resolve current executable")?;
     companion_or_self(installed_executable_path(&current))
+}
+
+#[cfg(test)]
+fn recorded_test_engine() -> Result<Option<PathBuf>> {
+    let Some(path) = std::env::var_os("TRAFFIC_E2E_TEST_ENGINE_BINARY") else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(path);
+    ensure!(
+        path.is_absolute() && path.is_file(),
+        "recorded test engine must be an existing absolute executable path"
+    );
+    Ok(Some(path))
 }
 
 fn resolve_executable(current: &Path, process_id: u32) -> Result<PathBuf> {

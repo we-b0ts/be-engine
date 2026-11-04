@@ -12,6 +12,8 @@ use tokio::{
     net::{TcpListener, UnixListener},
 };
 
+mod recorded_http_close;
+
 #[tokio::test]
 async fn status_failure_notifies_cleanup_and_remains_primary_while_body_only_failure_keeps_normal_end()
  {

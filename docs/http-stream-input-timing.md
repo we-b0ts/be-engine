@@ -36,3 +36,16 @@ Standalone `traffic-e2e prepare`, `run-api` and `run` validate the current
 checkout, including the configured delivery base branch. Their execution does
 not edit Target implementation or enter a rewrite workflow. Managed
 backend-rewrite preparation and Replay retain their feature-branch checks.
+
+An opt-in ignored engine regression can replay a real recording against an
+existing immutable production image when the current Target checkout has moved
+on. `recorded_http_close_on_pinned_target` requires `TRAFFIC_E2E_TEST_TARGET_ROOT`,
+`TRAFFIC_E2E_TEST_CASE_SOURCE`, `TRAFFIC_E2E_TEST_RUN_KEY`,
+`TRAFFIC_E2E_TEST_API`, `TRAFFIC_E2E_TEST_RESULT_PATH`,
+`TRAFFIC_E2E_TEST_ENGINE_BINARY` and `TRAFFIC_E2E_TEST_TARGET_IMAGE`.
+Prepare that standalone run key normally first. The image must be a locally
+available `sha256:` id, not a mutable tag. Run only this ignored test with one
+test thread. These test-only adapters still execute the normal isolated Target,
+real dependency Replay and assertions. The result applies to that image, not to
+the current Target source candidate; keep its standalone run key separate from
+managed rewrite evidence.

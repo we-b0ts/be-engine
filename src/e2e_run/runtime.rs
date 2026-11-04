@@ -182,6 +182,27 @@ pub(super) async fn build_target_image(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
 ) -> Result<crate::TargetImage> {
+    #[cfg(test)]
+    if let Some(id) = std::env::var_os("TRAFFIC_E2E_TEST_TARGET_IMAGE") {
+        let id = id
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("test image id is not UTF-8"))?;
+        ensure!(id.strip_prefix("sha256:").is_some_and(|hash|
+            hash.len() == 64 && hash.bytes().all(|v| v.is_ascii_hexdigit())),
+            "recorded tests require an immutable Target image id");
+        let inspected = Command::new("docker")
+            .args(["image", "inspect", "--format", "{{.Id}}", &id])
+            .output()
+            .await?;
+        ensure!(
+            inspected.status.success() && String::from_utf8_lossy(&inspected.stdout).trim() == id,
+            "recorded Target image is unavailable or changed"
+        );
+        return Ok(crate::TargetImage {
+            tag: id.clone(),
+            id,
+        });
+    }
     let target = crate::target_container::TargetContainerConfig::from_project(
         layout.target_root.clone(),
         config,
