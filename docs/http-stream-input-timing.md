@@ -52,6 +52,8 @@ or additional bytes, and partially or fully omitted Source exchanges. Omitted
 records retain their real native delivery status. These differences are accepted
 because business flush timers run independently of accelerated stream timing;
 this tradeoff can conceal a missing final cache flush in a cancelled request.
+Dependency-tail waiting and no-progress diagnostics use the same native
+cancellation allowances; input-delivery proofs still require real consumption.
 Normal completed requests, nonexpiring values, observed/reset state and other
 dependency protocols retain their strict contracts. Candidate derivation is
 bounded and performed once, outside input execution and the stream delivery loop.

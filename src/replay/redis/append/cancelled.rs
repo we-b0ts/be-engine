@@ -26,6 +26,9 @@ pub(in crate::replay) struct Audit {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn permits_cancelled_append_omission(&self, index: usize) -> bool {
+        self.append_streams.allows_cancelled_omission(index)
+    }
     pub(in crate::replay) fn prepare_cancelled_caches(
         &mut self,
         case: &str,

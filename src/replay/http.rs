@@ -470,7 +470,7 @@ impl ReplayState {
                     });
                     !exchange.status.is_consumed()
                         && !allowed
-                        && exchange.status != super::ReplayExchangeStatus::Cancelled
+                        && !self.permits_cancelled_http_omission(index)
                 })
             })
     }

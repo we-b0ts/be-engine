@@ -67,7 +67,7 @@ pub(super) fn waiting(
     let pending: Vec<_> = tail.selected.iter().filter_map(|selected| {
         let status = exchange_status(state, selected.exchange)?;
         (!status.is_consumed()
-            && !permits_unstarted_omission(state, selected)
+            && !permits_tail_omission(state, selected)
 )
             .then(|| serde_json::json!({"reference":selected.reference,"state":format!("{status:?}")}))
     }).take(8).collect();

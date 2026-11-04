@@ -23,6 +23,15 @@ pub(in crate::replay) struct Audit {
     observed_termination: crate::dependency::DependencyTermination,
 }
 
+impl ReplayState {
+    pub(in crate::replay) fn permits_cancelled_http_omission(&self, index: usize) -> bool {
+        self.http_exchanges
+            .get(index)
+            .is_some_and(|e| e.status == super::super::ReplayExchangeStatus::Cancelled)
+            && self.http_events.cancelled.contains_key(&index)
+    }
+}
+
 impl Observation {
     pub(super) fn new(
         timeline: Arc<Timeline>,
