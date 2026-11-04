@@ -124,7 +124,9 @@ completed dependency reads can prove that the proposed declaration would
 change an input already delivered by the old policy. Later observations on the
 same resource, after both its Source completion and Target delivery, then remain
 explicit `unvalidated_retimed_witnesses`; they do not count as independent Target
-validation. A later primary response can carry the same fresh-execution
+validation. These cuts apply across Cases in the same protected Replay session,
+with both clocks still enforcing order; a separate session collects its own
+evidence. A later primary response can carry the same fresh-execution
 obligation. Render-only payloads, missing clocks, future reads and other
 resources cannot establish it. Application always requires fresh genuine Replay;
 unselected counters and native requests remain strict during that execution.

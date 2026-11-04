@@ -6,13 +6,61 @@ use crate::policy_evidence::{
 };
 
 const CASE: &str = "00000000-0000-4000-8000-000000000001";
+const EARLIER_INPUT_CASE: &str = "00000000-0000-4000-8000-000000000002";
 
 fn setup(mode: &str) -> Fixture {
-    let fixture = Fixture::with_request_time(Some("2026-10-16T15:59:00Z"));
+    let cross_case = mode.starts_with("cross-case");
+    let before_read = mode == "cross-case-before-read";
+    let source_write = if before_read {
+        "2026-10-16T15:58:59Z"
+    } else {
+        "2026-10-16T15:59:03Z"
+    };
+    let target_write = if before_read {
+        "2026-10-16T16:00:59Z"
+    } else {
+        "2026-10-16T16:01:03Z"
+    };
+    let source_case = if before_read {
+        "2026-10-16T15:58:58Z"
+    } else {
+        source_write
+    };
+    let target_case = if before_read {
+        "2026-10-16T16:00:58Z"
+    } else {
+        target_write
+    };
+    let fixture = Fixture::with_cases(
+        Some(if cross_case {
+            source_case
+        } else {
+            "2026-10-16T15:59:00Z"
+        }),
+        |_, root| {
+            if !cross_case {
+                return vec![];
+            }
+            let directory = root.join(format!("apis/api/{EARLIER_INPUT_CASE}"));
+            fs::create_dir_all(&directory).unwrap();
+            write(
+                &directory.join("request.json"),
+                json!({"timestamp":"2026-10-16T15:59:00Z","method":"GET","uri":"/api","body":body(json!({}))}),
+            );
+            fs::write(directory.join("dependencies.jsonl"), "").unwrap();
+            vec![directory]
+        },
+    );
     fixture.replace_responses(
         json!({"status":200,"timestamp":"2026-10-16T15:59:10Z","body":body(json!({}))}),
-        json!({"version":1,"status":200,"request_sent_at":"2026-10-16T16:01:00Z","response_completed_at":"2026-10-16T16:01:10Z","body":body(json!({}))}),
+        json!({"version":1,"status":200,"request_sent_at":if cross_case {target_case} else {"2026-10-16T16:01:00Z"},"response_completed_at":"2026-10-16T16:01:10Z","body":body(json!({}))}),
     );
+    if cross_case {
+        fixture.replace_case_responses(EARLIER_INPUT_CASE,
+            json!({"status":200,"timestamp":"2026-10-16T15:59:10Z","body":body(json!({}))}),
+            json!({"version":1,"status":200,"request_sent_at":"2026-10-16T16:01:00Z","response_completed_at":"2026-10-16T16:01:10Z","body":body(json!({}))}),
+        );
+    }
     write(
         &fixture.proposal,
         json!({"format":"traffic-policy/v3","json":{"fields":{
@@ -32,19 +80,33 @@ fn setup(mode: &str) -> Fixture {
         "response":{"status":"resultset","columns":[{"name":"payload","column":"payload","table":"pets","family":"string","sql_type":"VARCHAR"}],"rows":[[{"kind":"string","value":payload}]]}});
     let write_event = json!({"event_type":"mysql_exchange","connection_id":uuid::Uuid::nil(),"query_sequence":2,
         "target_host":"db.test","target_port":3306,"database":"app","command":"COM_QUERY",
-        "request_started_at":"2026-10-16T15:59:03Z","timestamp":"2026-10-16T15:59:04Z","duration_ms":1000,
+        "request_started_at":source_write,"timestamp":"2026-10-16T15:59:04Z","duration_ms":1000,
         "sql":format!("UPDATE pets SET payload='{payload}' WHERE id=7"),"response":{"status":"ok"},"outcome":"response"});
-    let directory = fixture
-        .state()
-        .case_source
-        .as_ref()
-        .unwrap()
-        .join(format!("apis/api/{CASE}"));
+    let directory = fixture.state().case_source.as_ref().unwrap().join(format!(
+        "apis/api/{}",
+        if cross_case { EARLIER_INPUT_CASE } else { CASE }
+    ));
+    let write_directory = if cross_case {
+        directory.parent().unwrap().join(CASE)
+    } else {
+        directory.clone()
+    };
     fs::write(
         directory.join("dependencies.jsonl"),
-        format!("{read}\n{write_event}\n"),
+        if cross_case {
+            format!("{read}\n")
+        } else {
+            format!("{read}\n{write_event}\n")
+        },
     )
     .unwrap();
+    if cross_case {
+        fs::write(
+            write_directory.join("dependencies.jsonl"),
+            format!("{write_event}\n"),
+        )
+        .unwrap();
+    }
     let key = fixture
         .root()
         .join(".traffic-e2e/local")
@@ -61,7 +123,14 @@ fn setup(mode: &str) -> Fixture {
     report["session_id"] = json!(session);
     report["complete"] = false.into();
     report["finalized"] = (mode != "unfinalized").into();
-    report["cases"][0]["target_request_started_at"] = json!("2026-10-16T16:01:00Z");
+    report["cases"][0]["target_request_started_at"] = json!(if cross_case {
+        target_case
+    } else {
+        "2026-10-16T16:01:00Z"
+    });
+    if cross_case {
+        report["cases"][1]["target_request_started_at"] = json!("2026-10-16T16:01:00Z");
+    }
     let store = WitnessStore::new_bound(
         fixture.paths.replay.parent().unwrap(),
         &session,
@@ -95,14 +164,16 @@ fn setup(mode: &str) -> Fixture {
             &write_event,
             Surface::DependencyRequest,
             TargetRole::IndependentTargetObservation,
-            "2026-10-16T16:01:03Z",
+            target_write,
             "2026-10-16T16:01:04Z",
         ),
     ] {
         if mode == "missing-read" && event["query_sequence"] == 1 {
             continue;
         }
-        let source = preflight::dependency::source_witness(surface, event, &directory).unwrap();
+        let later = cross_case && event["query_sequence"] == 2;
+        let directory = if later { &write_directory } else { &directory };
+        let source = preflight::dependency::source_witness(surface, event, directory).unwrap();
         let mut target: serde_json::Value = serde_json::from_slice(&source).unwrap();
         if surface == Surface::DependencyResponse {
             target["request"]["request_started_at"] = json!(start);
@@ -118,11 +189,11 @@ fn setup(mode: &str) -> Fixture {
             surface,
             source_role: if surface == Surface::DependencyResponse {SourceRole::DependencyResponse} else {SourceRole::DependencyRequest},
             target_role: role,
-            source: SourceIdentity {case_id:CASE.into(),exchange_id:None,connection_id:Some(uuid::Uuid::nil().to_string()),sequence:event["query_sequence"].as_u64()},
+            source: SourceIdentity {case_id:if cross_case && !later {EARLIER_INPUT_CASE} else {CASE}.into(),exchange_id:None,connection_id:Some(uuid::Uuid::nil().to_string()),sequence:event["query_sequence"].as_u64()},
             resource:Some(serde_json::from_value::<Resource>(json!({"protocol":"mysql","endpoint":"db.test:3306","database":event["database"]})).unwrap()),
             operation:"COM_QUERY".into(),slot:Slot::Value,
             clocks:WitnessClocks {
-                case:ClockPair {source:Some("2026-10-16T15:59:00Z".parse().unwrap()),target:Some("2026-10-16T16:01:00Z".parse().unwrap())},
+                case:ClockPair {source:Some(if later {source_case} else {"2026-10-16T15:59:00Z"}.parse().unwrap()),target:Some(if later {target_case} else {"2026-10-16T16:01:00Z"}.parse().unwrap())},
                 dependency:ClockPair {source:Some(event["request_started_at"].as_str().unwrap().parse().unwrap()),target:Some(start.parse().unwrap())},
                 delivery:ClockPair {source:Some(event["timestamp"].as_str().unwrap().parse().unwrap()),target:Some(end.parse().unwrap())},
             },
@@ -130,7 +201,7 @@ fn setup(mode: &str) -> Fixture {
         store
             .record_observation(
                 metadata,
-                &directory,
+                directory,
                 &source,
                 Some(&serde_json::to_vec(&target).unwrap()),
                 Some(&format!("{}-{surface:?}", event["query_sequence"])),
@@ -158,12 +229,19 @@ fn changed_delivered_calendar_input_preserves_counter_failures_as_fresh_executio
         "unfinalized",
         "stale-source",
         "stale-target",
+        "cross-case",
+        "cross-case-before-read",
     ] {
         let fixture = setup(mode);
         let planned = fixture.plan();
         if matches!(
             mode,
-            "render-only" | "missing-read" | "future-delivery" | "other-resource" | "unfinalized"
+            "render-only"
+                | "missing-read"
+                | "future-delivery"
+                | "other-resource"
+                | "unfinalized"
+                | "cross-case-before-read"
         ) {
             assert!(planned.is_err(), "{mode}");
             assert!(fixture.state().rule_plan.is_none());

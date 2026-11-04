@@ -64,53 +64,61 @@ pub(super) fn verify(
         .map(WitnessManifest::source_index)
         .transpose()?;
     let mut candidates = candidate_pairs::Candidates::default();
+    // Case boundaries do not erase an input from the same protected Replay
+    // session: application caches and in-flight work can carry it forward.
+    // Collect first, independent of the case map's lexical iteration order.
+    let mut inputs = super::input_retiming::Inputs::new(previous, policy);
+    if inputs.enabled() {
+        for (case, directory) in bundle.cases.clone() {
+            let request = bundle.request(&directory.join("request.json"))?;
+            let trace = bundle.dependency_path(&directory)?;
+            bundle.freeze(&trace)?;
+            let mut delivered = TimeCopyStore::default();
+            delivered.begin_case(&case);
+            visit(&trace, |event| {
+                if matches!(
+                    dependency::protocol(event),
+                    Some(Protocol::Mysql | Protocol::Redis)
+                ) && has_surface(event, Surface::DependencyResponse)
+                    && let (Some(index), Some(private), Some(identity)) = (
+                        index.as_ref(),
+                        private.as_deref(),
+                        time_copies::identity(&case, event),
+                    )
+                {
+                    let raw =
+                        dependency::source_witness(Surface::DependencyResponse, event, &directory)?;
+                    time_copies::observe_global_with_retiming(
+                        &mut delivered,
+                        &case,
+                        event,
+                        &raw,
+                        policy,
+                        time_copies::ReadEvidence {
+                            private,
+                            directory: &directory,
+                            report: &bundle.replay,
+                            case_started: timestamp(&request["timestamp"]),
+                            responses: index
+                                .for_source(Surface::DependencyResponse, &identity)
+                                .collect(),
+                            requests: index
+                                .for_source(Surface::DependencyRequest, &identity)
+                                .collect(),
+                        },
+                        Some(&mut inputs),
+                    )?;
+                }
+                Ok(())
+            })?;
+        }
+    }
     for (case, directory) in bundle.cases.clone() {
         let request = bundle.request(&directory.join("request.json"))?;
         let trace = bundle.dependency_path(&directory)?;
         bundle.freeze(&trace)?;
         let mut metadata = crate::replay::MysqlInferenceMetadata::default();
-        let mut inputs = super::input_retiming::Inputs::new(previous, policy);
-        let mut delivered = TimeCopyStore::default();
-        delivered.begin_case(&case);
-        visit(&trace, |event| {
-            metadata.observe_event(event)?;
-            if inputs.enabled()
-                && matches!(
-                    dependency::protocol(event),
-                    Some(Protocol::Mysql | Protocol::Redis)
-                )
-                && has_surface(event, Surface::DependencyResponse)
-                && let (Some(index), Some(private), Some(identity)) = (
-                    index.as_ref(),
-                    private.as_deref(),
-                    time_copies::identity(&case, event),
-                )
-            {
-                let raw =
-                    dependency::source_witness(Surface::DependencyResponse, event, &directory)?;
-                time_copies::observe_global_with_retiming(
-                    &mut delivered,
-                    &case,
-                    event,
-                    &raw,
-                    policy,
-                    time_copies::ReadEvidence {
-                        private,
-                        directory: &directory,
-                        report: &bundle.replay,
-                        case_started: timestamp(&request["timestamp"]),
-                        responses: index
-                            .for_source(Surface::DependencyResponse, &identity)
-                            .collect(),
-                        requests: index
-                            .for_source(Surface::DependencyRequest, &identity)
-                            .collect(),
-                    },
-                    Some(&mut inputs),
-                )?;
-            }
-            Ok(())
-        })?;
+        visit(&trace, |event| metadata.observe_event(event))?;
         if selected.contains(crate::policy::GLOBAL_HTTP_ID)
             && let Some(http) = &policy.http
         {
