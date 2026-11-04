@@ -43,6 +43,7 @@ pub(crate) mod cross_case;
 mod evidence;
 mod identity;
 pub(in crate::replay) mod ingress;
+pub(in crate::replay) mod input_timing;
 mod lifecycle;
 mod recording;
 pub(super) use evidence::register_global_exchange;

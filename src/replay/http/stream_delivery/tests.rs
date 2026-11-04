@@ -4,6 +4,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod cancellation;
+mod input_timeline;
 
 fn dependency() -> Value {
     serde_json::json!({

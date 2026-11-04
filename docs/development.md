@@ -52,6 +52,8 @@ evidence-backed plan/apply and fresh verification with existing recordings.
 IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
 [Generated HTTP request body fields](http-request-body-fields.md) validate bounded
 random identifiers and signed JWTs against independent dependency request clocks.
+[Shared HTTP stream/input timing](http-stream-input-timing.md) preserves client-close
+ordering while accelerating dependency streams.
 [SSE response diagnostics](interaction-diagnostics.md) expose authenticated
 per-frame response values through bounded, read-only evidence queries.
 [JWT response rules](jwt-response-rules.md) validate signatures, stable claims

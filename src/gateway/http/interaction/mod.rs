@@ -373,6 +373,7 @@ pub(super) async fn adopt_response(
     request_body: Bytes,
     upstream: String,
     started: Instant,
+    request_started_at: chrono::DateTime<Utc>,
     status: StatusCode,
     response_headers: hyper::HeaderMap,
     body: Incoming,
@@ -417,7 +418,7 @@ pub(super) async fn adopt_response(
         state.invalidate_active_case(session.case.id, crate::recorder::CaseInvalidation::new("streaming_disabled", "response declared a stream after admission; enable http_gateway.record_streaming and record again"));
     }
     let meta = finish::RequestMeta {
-        timestamp: Utc::now(),
+        timestamp: request_started_at,
         method: method.to_string(),
         uri: original_uri.to_string(),
         api_pattern,

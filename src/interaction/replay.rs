@@ -55,7 +55,7 @@ pub(crate) async fn execute(
                 transcript,
                 header_timeout,
                 body_limit,
-                feedback.dependency_failure,
+                feedback,
             )
             .await
         }

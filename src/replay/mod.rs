@@ -275,8 +275,8 @@ pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
 pub(crate) use control::{
-    FinalizationScope, check_response_identities, input_timing_observer, native_event_observer,
-    register_derived_input,
+    FinalizationScope, check_response_identities, http_input_timing_observer,
+    input_timing_observer, native_event_observer, register_derived_input,
 };
 
 pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -455,6 +455,7 @@ struct ReplayState {
     startup_phase: startup::StartupPhase,
     dependency_attribution_snapshot: Option<String>,
     input_timing: Option<control::input_timing::Live>,
+    http_input_timing: Option<Arc<control::http_input_timing::Timeline>>,
     stream_timing: Option<ReplayStreamTiming>,
     stream_interval_cap_ms: u64,
     http_ingress: http::ingress::HttpIngress,

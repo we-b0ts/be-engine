@@ -472,6 +472,7 @@ async fn handle_gateway_request(
                     request_body,
                     upstream_base,
                     started,
+                    request_started_at,
                     status,
                     response_headers,
                     stream,

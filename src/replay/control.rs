@@ -9,10 +9,12 @@ pub(super) mod dependency_tail;
 mod derived_input;
 mod finalization;
 pub(crate) use finalization::FinalizationScope;
+pub(in crate::replay) mod http_input_timing;
 mod identity;
 pub(in crate::replay) mod input_timing;
 mod native_event;
 pub(crate) use derived_input::register as register_derived_input;
+pub(crate) use http_input_timing::connect as http_input_timing_observer;
 pub(crate) use input_timing::connect as input_timing_observer;
 pub(crate) use native_event::connect as native_event_observer;
 mod interaction;
@@ -295,6 +297,9 @@ pub(super) async fn handle_control_request(
             native_event::accept(&request, &state).await
         }
         "input_timing_begin" | "input_timing" => input_timing::accept(&request, &state).await,
+        "http_input_timing_begin" | "http_input_timing_wait" | "http_input_timing_closed" => {
+            http_input_timing::accept(&request, &state).await
+        }
         "prepare_end" => target_stop::prepare(&request, &state).await,
         "end" => end_case(&request, state.clone()).await,
         "end_stopped" => end_case(&request, state.clone()).await,
@@ -555,6 +560,9 @@ pub(super) async fn begin_case(
     state.advance_admission_epoch();
     state.set_active_case(Some(case_id.to_string()));
     state.input_timing = None;
+    if let Some(timeline) = state.http_input_timing.take() {
+        timeline.abort();
+    }
     state.redis.pubsub.native_clock.begin_case(case_id);
     state.redis.pubsub.namespace_sessions.begin_case();
     if let Some(policy) = &mut state.replay_policy {

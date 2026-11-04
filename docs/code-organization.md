@@ -180,6 +180,11 @@ is unclear.
   response/native references and publish successful wire-delivery facts separately
   from matching and RPC completion. Supported native clocks reuse the same mapping;
   unsupported protocol delivery or recording timing retains original offsets.
+  `control/http_input_timing` separately prepares one immutable HTTP stream/input
+  clock and admits its two-phase primary-close handshake. Native HTTP timing
+  adapters expose Source chunk clocks and real flushed prefixes; future chunks
+  await the input driver's actual transport cancellation, without changing
+  response completion or finite dependency consumption.
   Independently proven individual Redis delivery prefixes still gate Auto business inputs
   without requiring compression coverage; ACKs, heartbeat and cancellation keep
   their own native scheduling. Prefixes exclude future Source completions and
