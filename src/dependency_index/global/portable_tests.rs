@@ -85,6 +85,87 @@ fn reject_rescan(_: &Value) -> Result<()> {
     anyhow::bail!("a copied sealed index must not rescan semantic records")
 }
 
+#[tokio::test]
+async fn recording_process_index_survives_copy_and_missing_pages_fall_back_locally() {
+    use crate::recorder::{DependencyConnectFailureEvent, Recorder, RecorderEvent};
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = crate::AppConfig::default();
+    config
+        .process_dependency_tasks
+        .insert("periodic-selector".into(), "periodic_task".into());
+    let recorder = Recorder::new(temp.path().join("recorder"))
+        .await
+        .unwrap()
+        .with_global_preparation(&config)
+        .await
+        .unwrap();
+    recorder
+        .append_global_dependency(
+            &RecorderEvent::DependencyConnectFailure(DependencyConnectFailureEvent {
+                id: uuid::Uuid::new_v4(),
+                timestamp: chrono::Utc::now(),
+                client_addr: None,
+                protocol: "redis".into(),
+                target_host: "cache.test".into(),
+                target_port: 6379,
+                duration_ms: 0,
+                failure_kind: "connection_refused".into(),
+                client_outcome: "reset".into(),
+            }),
+            "background_rule",
+            "runtime",
+            "periodic-selector",
+        )
+        .await
+        .unwrap();
+    recorder.finish_run().await.unwrap();
+
+    let replay = temp.path().join("replay/.traffic-e2e");
+    let copied = replay.join("local/artifacts/recordings/copied");
+    copy_tree(&recorder.run_dir, &copied);
+    let scope = copied.join("indexes/process-scope.json");
+    let packaged = copied.join("indexes/process-dependencies");
+    let (index, root) = load_global_index(&scope, reject_rescan).unwrap();
+    assert_eq!(root, packaged);
+    let entries = global_records(&index, &root).unwrap().read_page(0).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].record["event_type"],
+        "dependency_connect_failure"
+    );
+
+    // A changed scope must not use the copy's portable index even if its
+    // physical ledger and manifest are untouched.
+    let changed = replay.join("local/artifacts/recordings/changed");
+    copy_tree(&recorder.run_dir, &changed);
+    let changed_scope = changed.join("indexes/process-scope.json");
+    File::options()
+        .append(true)
+        .open(&changed_scope)
+        .unwrap()
+        .write_all(b"\n")
+        .unwrap();
+    assert!(load_global_index(&changed_scope, reject_rescan).is_err());
+
+    // A copy without the packaged pages must build in Replay's local cache.
+    fs::remove_dir_all(packaged.join(".global-replay-pages")).unwrap();
+    let (rebuilt, root) = load_global_index(&scope, crate::replay::validate_index_record).unwrap();
+    assert!(root.starts_with(replay.join("local/dependency-index")));
+    assert_eq!(rebuilt.sha256, index.sha256);
+    let (_, warm) = load_global_index(&scope, reject_rescan).unwrap();
+    assert_eq!(warm, root);
+    assert!(!packaged.join(".global-replay-pages").exists());
+
+    // A valid index from another scope of this same recording cannot stand in
+    // for Process even though both share the physical ledger and manifest.
+    copy_tree(
+        &recorder.run_dir.join("indexes/startup-dependencies"),
+        &packaged,
+    );
+    assert!(recording::load(&scope, &FileStamp::read(&scope).unwrap()).is_none());
+}
+
 #[test]
 fn same_inode_same_size_edit_cannot_reuse_a_sealed_hash_after_mtime_is_restored() {
     let fixture = fixture();

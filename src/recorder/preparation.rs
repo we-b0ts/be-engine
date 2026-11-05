@@ -7,6 +7,22 @@ pub(super) struct GlobalPreparation {
     pub fingerprint: Option<String>,
 }
 impl Recorder {
+    pub(super) async fn seal_global_dependency_indexes(&self) {
+        let run = self.run_dir.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::dependency_index::global::seal_recording_scopes(
+                &run,
+                crate::replay::validate_index_record,
+            )
+        })
+        .await
+        .context("recording dependency index task failed")
+        .and_then(|result| result);
+        if let Err(error) = result {
+            tracing::warn!(error=%error, "recording dependency indexes could not be published; Replay will rebuild missing indexes");
+        }
+    }
+
     pub(super) async fn prepare_mysql_ownership(&self) {
         let run = self.run_dir.clone();
         let rules = self

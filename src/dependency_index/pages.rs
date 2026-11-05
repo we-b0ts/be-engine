@@ -111,6 +111,23 @@ pub(crate) struct PageManifest {
 }
 
 impl PageManifest {
+    pub(super) fn validate_files(&self, root: &Path) -> Result<()> {
+        let resolved = self.clone().resolve(root)?;
+        let mut directory = root.to_owned();
+        for component in self.directory.components() {
+            directory.push(component);
+            ensure!(
+                std::fs::symlink_metadata(&directory)?.is_dir(),
+                "linked dependency page directory"
+            );
+        }
+        let inventory = Paged::<serde_json::Value>::restore(resolved)?;
+        for page in 0..inventory.pages() {
+            super::FileStamp::read_native(&inventory.directory.path.join(format!("{page}.json")))?;
+        }
+        Ok(())
+    }
+
     /// Retain existing immutable pages without decoding or projecting their records.
     /// The destination must belong to the caller's unpublished staging directory.
     pub(crate) fn retain_into(&self, directory: &Path) -> Result<Self> {

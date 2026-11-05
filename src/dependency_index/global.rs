@@ -1,6 +1,7 @@
 //! Portable Global record metadata and notification locations, without response payloads.
 #[cfg(test)]
 mod portable_tests;
+mod recording;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -13,6 +14,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::{FileStamp, PageManifest, PageWriter, Paged, RecordLocation, RecordStream, store};
+pub(crate) use recording::seal_recording_scopes;
 
 pub(crate) const GLOBAL_FRAGMENT: &str = ".global-replay-index.json";
 const VERSION: u32 = 6;
@@ -357,6 +359,10 @@ pub(crate) fn load_global_index_cancellable(
     let parent = path
         .parent()
         .context("Global dependency file has no parent")?;
+    if let Some(sealed) = recording::load(path, &stamp) {
+        store::check_cancelled(cancelled)?;
+        return Ok(sealed);
+    }
     if super::scoped::view_path(path).is_none()
         && let Some(index) = load_sealed_index(path, parent, &stamp, cancelled)?
     {
@@ -372,8 +378,20 @@ pub(crate) fn load_global_index_cancellable(
     {
         return Ok((index, root));
     }
+    let index = build_index(path, &root, &stamp, validate, cancelled)?;
+    store::write_json(&fragment, &index)?;
+    Ok((index, root))
+}
+
+fn build_index(
+    path: &Path,
+    root: &Path,
+    stamp: &FileStamp,
+    validate: fn(&Value) -> Result<()>,
+    cancelled: &AtomicBool,
+) -> Result<GlobalIndex> {
     let mut input = RecordStream::open(path)?;
-    let mut builder = GlobalBuilder::new(&root, stamp.clone())?;
+    let mut builder = GlobalBuilder::new(root, stamp.clone())?;
     if super::scoped::view_path(path).is_some() {
         builder.set_scoped();
     }
@@ -407,11 +425,9 @@ pub(crate) fn load_global_index_cancellable(
             next_progress = builder.offset + 64 * 1024 * 1024;
         }
     }
-    super::scoped::validate_stamp(path, &stamp)?;
+    super::scoped::validate_stamp(path, stamp)?;
     store::check_cancelled(cancelled)?;
-    let index = builder.finish()?;
-    store::write_json(&fragment, &index)?;
-    Ok((index, root))
+    builder.finish()
 }
 
 pub(crate) fn global_records(index: &GlobalIndex, root: &Path) -> Result<Paged<GlobalEntry>> {
