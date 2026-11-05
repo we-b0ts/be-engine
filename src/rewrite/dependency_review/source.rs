@@ -396,25 +396,12 @@ fn collect_unused<T: Ord>(
     selected: &BTreeSet<String>,
     mut resolve: impl FnMut(&str, &Value) -> Result<T>,
 ) -> Result<BTreeSet<T>> {
-    let mut ids = BTreeSet::new();
-    for (protocol, section, field) in [
-        ("mysql", report, "unused_case_exchanges"),
-        ("http", report, "unused_case_http_exchanges"),
-        ("redis", &report["redis"], "unused_case"),
-        ("memcached", &report["memcached"], "unused_case"),
-        ("motan", &report["motan"], "unused_case"),
-        ("kafka", &report["kafka"], "unused_case"),
-        ("network", &report["connect_failures"], "unused_case"),
-    ] {
-        if let Some(events) = section[field].as_array() {
-            for event in events.iter().filter(|event| {
-                event["case_id"]
-                    .as_str()
-                    .is_some_and(|case| selected.contains(case))
-            }) {
-                ids.insert(resolve(protocol, event)?);
-            }
-        }
-    }
-    Ok(ids)
+    crate::replay::report::unused_source::case_unused_rows(report)
+        .filter(|(_, event)| {
+            event["case_id"]
+                .as_str()
+                .is_some_and(|case| selected.contains(case))
+        })
+        .map(|(protocol, event)| resolve(protocol, event))
+        .collect()
 }

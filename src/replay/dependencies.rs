@@ -69,14 +69,18 @@ pub(super) async fn load_dependency_file(
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
     process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
-) -> Result<super::execution_plan::SourceScopeIdentity> {
+) -> Result<(
+    super::execution_plan::SourceScopeIdentity,
+    Vec<report::unused_source::CaptureFact>,
+)> {
     let original = path.to_owned();
-    let (records, scope) = tokio::task::spawn_blocking(move || -> Result<_> {
+    let (records, scope, facts) = tokio::task::spawn_blocking(move || -> Result<_> {
         use sha2::Digest;
         let mut hash = sha2::Sha256::new();
         let mut source_bytes = 0_u64;
         let mut input = crate::dependency_index::RecordStream::open(&original)?;
         let mut records = Vec::new();
+        let mut facts = Vec::new();
         while let Some((location, raw)) = input.next()? {
             hash.update(raw);
             source_bytes += raw.len() as u64;
@@ -85,6 +89,9 @@ pub(super) async fn load_dependency_file(
             }
             let value: Value = serde_json::from_slice(raw)?;
             validate_outcome(&value)?;
+            if let Some(fact) = report::unused_source::CaptureFact::from_record(&value) {
+                facts.push(fact);
+            }
             records.push((location.line, serde_json::from_value(value)?));
         }
         Ok((
@@ -93,6 +100,7 @@ pub(super) async fn load_dependency_file(
                 sha256: format!("{:x}", hash.finalize()),
                 source_bytes,
             },
+            facts,
         ))
     })
     .await
@@ -121,7 +129,7 @@ pub(super) async fn load_dependency_file(
         process_owned_dependencies,
         &cleanup,
     )?;
-    Ok(scope)
+    Ok((scope, facts))
 }
 
 pub(super) fn parse_dependency_records(

@@ -540,6 +540,9 @@ fn traffic_summary(
             Some(crate::e2e_run::E2eActiveProgress::Finalizing) => {
                 format!("finalizing replay for {api}")
             }
+            Some(crate::e2e_run::E2eActiveProgress::GeneratingEvidence) => {
+                format!("generating Replay evidence for {api}")
+            }
             None => format!("replaying {api}"),
         },
     }

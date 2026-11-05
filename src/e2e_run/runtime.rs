@@ -563,25 +563,25 @@ pub(super) async fn finalize_replay(
     scope: crate::replay::FinalizationScope,
 ) -> Result<()> {
     let command = scope.command();
-    if intentionally_incomplete {
-        let response = control(state, command, None, false, false)
+    tracing::info!("finalizing Replay and generating evidence");
+    let response = if intentionally_incomplete {
+        control(state, command, None, false, false)
             .await
-            .context("failed to finalize intentionally incomplete replay")?;
-        state.replay_finalized = response
-            .get("finalized")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        return Ok(());
-    }
-    let response = match control(state, command, None, true, true).await {
-        Ok(response) => response,
-        Err(strict_error) => {
-            state.push_error(format!("strict replay finalize failed: {strict_error:#}"));
-            control(state, command, None, false, false)
-                .await
-                .context("failed to finalize replay after recording dirty evidence")?
+            .context("failed to finalize intentionally incomplete replay")?
+    } else {
+        match control(state, command, None, true, true).await {
+            Ok(response) => response,
+            Err(strict_error) => {
+                state.push_error(format!("strict replay finalize failed: {strict_error:#}"));
+                control(state, command, None, false, false)
+                    .await
+                    .context("failed to finalize replay after recording dirty evidence")?
+            }
         }
     };
+    if let Some(evidence_generation_ms) = response["evidence_generation_ms"].as_u64() {
+        tracing::info!(evidence_generation_ms, "Replay evidence published");
+    }
     state.replay_finalized = response
         .get("finalized")
         .and_then(serde_json::Value::as_bool)

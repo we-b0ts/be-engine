@@ -18,6 +18,10 @@ fn body(data: &str) -> Value {
 
 impl Fixture {
     async fn new(count: usize) -> Self {
+        Self::load(count, None).await
+    }
+
+    async fn load(count: usize, unused_with_lazy_loading: Option<bool>) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let recorder = crate::Recorder::new(temp.path().join("recordings"))
             .await
@@ -53,6 +57,22 @@ impl Fixture {
             ] {
                 recorder.write_case_json(&case, name, &value).await.unwrap();
             }
+            if unused_with_lazy_loading.is_some() {
+                let redis = Uuid::new_v4();
+                for value in [
+                    json!({"event_type":"mysql_exchange","connection_id":Uuid::new_v4(),
+                        "query_sequence":1,"target_host":"mysql.test","target_port":3306,
+                        "sql":"UPDATE notes SET seen = 1 WHERE id = 2"}),
+                    json!({"event_type":"redis_exchange","connection_id":redis,"sequence":1,
+                        "target_host":"redis.test","target_port":6379,"command":"GET","args":[body("unused")],
+                        "response_kind":"bulk_string","response":body("$1\r\nx\r\n"),"replay_safe":true}),
+                ] {
+                    recorder
+                        .append_case_dependency(&case, &fixtures::native_event(&value), "fixture")
+                        .await
+                        .unwrap();
+                }
+            }
             recorder.publish_case(&case).await.unwrap();
             cases.push(case.id.to_string());
         }
@@ -81,6 +101,11 @@ impl Fixture {
                 addr,
                 ReplayLifecycleConfig {
                     case_dependency_post_response_window: Duration::ZERO,
+                    case_no_progress_timeout: Duration::from_millis(10),
+                    dependency_loading: ReplayDependencyLoading {
+                        lazy_cases: unused_with_lazy_loading.unwrap_or_default(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             )
@@ -124,6 +149,45 @@ impl Fixture {
             self.begin(case).await;
             self.end(case, true).await;
         }
+    }
+}
+
+#[tokio::test]
+async fn dirty_finalization_publishes_mysql_and_redis_source_occurrences_in_both_loading_modes() {
+    for lazy in [false, true] {
+        let fixture = Fixture::load(1, Some(lazy)).await;
+        let case = &fixture.cases[0];
+        fixture.begin(case).await;
+        fixture.end(case, false).await;
+        let (response, stop) = fixture.command("finalize_cases", None, false).await;
+        assert!(stop, "{response}");
+        assert_eq!(response["dirty"], true);
+        assert!(response["evidence_generation_ms"].as_u64().is_some());
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(&fixture.report).unwrap()).unwrap();
+        let selected = BTreeSet::from([case.clone()]);
+        let identity = report["unused_source_inventory_id"].as_str().unwrap();
+        let published =
+            report::unused_source::published_for_cases(&report, identity, &selected).unwrap();
+        assert_eq!(published.len(), 2);
+        for (protocol, row) in report::unused_source::case_unused_rows(&report) {
+            assert!(matches!(protocol, "mysql" | "redis"));
+            let original = &row["source_occurrence"];
+            assert_eq!(original["captured_owner"]["origin_case_id"], case.as_str());
+            assert_eq!(original["capture_complete"], true);
+        }
+        assert!(
+            report::unused_source::published_for_cases(&report, "another recording", &selected)
+                .is_none()
+        );
+        let mut missing = report.clone();
+        missing["redis"]["unused_case"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_occurrence");
+        assert!(
+            report::unused_source::published_for_cases(&missing, identity, &selected).is_none()
+        );
     }
 }
 
