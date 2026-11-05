@@ -53,9 +53,19 @@ remain diagnostic identities and cannot authorize policy planning.
 
 ## Occurrence metadata reuse
 
-The first full occurrence query authenticates the sealed recording and streams
-its original dependencies into compact capture, completeness, native-reference
-and HTTP-reference metadata for the selected API's complete unused-reference set.
+The runner shows a generating-evidence phase while Replay finalizes. Finalized
+reports carry the original occurrence UUID, capture owner and completeness for
+unused Case MySQL and Redis traffic when available, including Redis Pub/Sub
+notifications. The report binds the projection to the sealed Source manifest
+and the actual Replay session. The finalizer projects these fields from loaded
+Case data, and logs the projection time as `evidence_generation_ms`.
+
+The API detail reader authenticates the sealed Source and uses the published
+projection when it covers the selected unused rows. Older reports, missing
+metadata and selections with unsupported unused protocols use the on-demand
+cache. Its first lookup streams original dependencies into compact capture,
+completeness, native-reference and HTTP-reference metadata for the selected
+API's complete unused-reference set.
 The cache identity includes the method, authenticated input membership and every
 selected physical/native reference; another unused inventory cannot reuse a
 narrower selection. Native ambiguity and notification identity checks remain
@@ -71,10 +81,11 @@ schema mismatch, changed manifest or another recording rebuilds or rejects as
 appropriate. Policy-dependent Case defaults are recomputed separately; they are
 never frozen into recording-only metadata.
 
-Warm lookups avoid traversing business payloads. First-use full queries can
-still cost proportionally to the recording size. No cache proves ownership,
-certifies a rule or substitutes for complete Source/independent Target proof,
-native finite consumption or genuine Replay.
+After Source authentication, published evidence and warm lookups skip the
+original occurrence traversal. A cold fallback query can cost proportionally to
+the recording size. No cache proves ownership, certifies a rule or substitutes
+for complete Source/independent Target proof, native finite consumption or
+genuine Replay.
 
 ## Measured query costs
 

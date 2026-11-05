@@ -584,9 +584,10 @@ async fn run_active_with_replay(
     }
     state.status = RunStatus::Finalizing;
     store::write_active(layout, state)?;
-    let _ = active_progress::write(layout, state, ActiveProgressPhase::Finalizing);
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::GeneratingEvidence);
 
     finalize_replay(state, intentionally_incomplete, finalization).await?;
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::Finalizing);
     wait_for_replay(replay).await?;
     state.replay_pid = None;
     build_final_evidence(config, layout, inventory, state)?;

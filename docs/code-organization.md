@@ -978,6 +978,10 @@ is unclear.
   while retaining complete Source proof and a fresh-Replay obligation.
   `e2e_run/replay_publication` stages the original Replay report and dependency
   sidecar into that same snapshot and retargets aggregate report references.
+  `replay/report/unused_source` projects original MySQL and Redis capture facts
+  for the actual unused Case rows from in-memory preparation metadata at
+  finalization. It binds the projection to the admitted recording manifest and
+  carries it inside the session report.
   `replay/report/aggregate/runner` validates runner-selected report locations,
   session identity and complete shared-session coverage while preserving the
   public recording report discovery boundary. `e2e_run/final_evidence` selects
@@ -1008,6 +1012,8 @@ is unclear.
   Its `selection` child binds metadata to an API's complete unused reference set,
   including every native ambiguity candidate, without retaining unrelated payloads
   or whole-run occurrence maps in ordinary API diagnostics.
+  The diagnostic reader prefers finalized report projections when their Source
+  identity and selected coverage match, and uses the same cache for fallback.
   Corrupt or foreign metadata rebuilds from original bytes. This cache grants
   no Source proof or verification authority.
   It shares physical-effect folding, input-route authentication and unused-reference

@@ -157,6 +157,43 @@ async fn unused_occurrence_projection_preserves_input_routes_and_notification_id
 }
 
 #[tokio::test]
+async fn published_occurrence_diagnosis_uses_no_original_scan_and_missing_fields_backfill() {
+    use super::super::source::occurrences::{ORIGINAL_TRAVERSALS, for_diagnosis};
+
+    let (_target, state, case, _) = historical(true).await;
+    let full = super::super::source::load(&state).unwrap();
+    let (id, event) = full
+        .exchanges
+        .iter()
+        .find(|(_, event)| event.selector["event_type"] == "redis_pub_sub_push")
+        .unwrap();
+    let mut report = json!({"finalized":true,"unused_source_inventory_id":full.identity,
+    "redis":{"unused_case":[{
+        "case_id":case,"command":"PUBSUB_PUSH","source_exchange_id":id,
+        "source_occurrence":{"source_exchange_id":id,"captured_owner":event.capture.attribution,
+            "capture_complete":event.complete}
+    }]}});
+    let before = ORIGINAL_TRAVERSALS.get();
+    let published = for_diagnosis(&state, "POST /responses", &report).unwrap();
+    assert_eq!(ORIGINAL_TRAVERSALS.get(), before);
+    report["redis"]["unused_case"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("source_occurrence");
+    let rebuilt = for_diagnosis(&state, "POST /responses", &report).unwrap();
+    assert_eq!(ORIGINAL_TRAVERSALS.get(), before + 1);
+    assert_eq!(published.unused, rebuilt.unused);
+    assert_eq!(published.case_defaults, rebuilt.case_defaults);
+    assert_eq!(
+        for_diagnosis(&state, "POST /responses", &report)
+            .unwrap()
+            .unused,
+        rebuilt.unused
+    );
+    assert_eq!(ORIGINAL_TRAVERSALS.get(), before + 1);
+}
+
+#[tokio::test]
 async fn historical_case_inputs_bypass_analysis_and_freeze_as_finite_case_evidence() {
     let (target, mut state, case, original) = historical(true).await;
     let defaults = load(state.case_source.as_ref().unwrap(), Some(target.path())).unwrap();

@@ -179,6 +179,7 @@ pub(crate) enum E2eActiveProgress {
     PreparingCase { completed: usize, total: usize },
     Building,
     Replaying { completed: usize, total: usize },
+    GeneratingEvidence,
     Finalizing,
 }
 

@@ -463,12 +463,22 @@ async fn finalize_replay(
     // persisted report to carry the finalized completeness verdict, so persist
     // it alongside `finalized` instead of returning it only in the response.
     value["complete"] = Value::Bool(complete);
+    tracing::info!("generating Replay evidence");
+    let started = Instant::now();
+    let published_occurrences = report::unused_source::attach(&state, &mut value);
+    let evidence_generation_ms = started.elapsed().as_millis() as u64;
+    tracing::info!(
+        evidence_generation_ms,
+        published_occurrences,
+        "generated Replay evidence"
+    );
     (
         serde_json::json!({
             "ok": true,
             "complete": complete,
             "dirty": dirty,
             "finalized": true,
+            "evidence_generation_ms": evidence_generation_ms,
         }),
         Some(value),
     )

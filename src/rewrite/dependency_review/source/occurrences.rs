@@ -1,5 +1,6 @@
 //! Read-only unused-occurrence metadata, without ownership or discovery graphs.
 use super::*;
+use crate::replay::report::unused_source::{self, SourceOccurrence};
 use serde_json::json;
 mod cache;
 mod selection;
@@ -25,6 +26,101 @@ impl Occurrences {
             resolve_unused_reference(&self.exchanges, &self.native, &self.http, protocol, event)
         })
     }
+}
+
+pub(in crate::rewrite::dependency_review) struct DiagnosticOccurrences {
+    pub identity: String,
+    pub selected: BTreeSet<String>,
+    pub unused: BTreeMap<Uuid, SourceOccurrence>,
+    pub case_defaults: BTreeMap<Uuid, crate::dependency::attribution::DependencyOwner>,
+}
+
+pub(in crate::rewrite::dependency_review) fn for_diagnosis(
+    state: &RewriteState,
+    api: &str,
+    report: &Value,
+) -> Result<DiagnosticOccurrences> {
+    if unused_source::has_published_occurrences(report)
+        && let Some(published) = read_published(state, api, report)?
+    {
+        return Ok(published);
+    }
+    let source = for_api(state, api, report)?;
+    let selected = source.apis.keys().map(Uuid::to_string).collect();
+    let unused = source
+        .unused(report, &selected)?
+        .into_iter()
+        .map(|id| {
+            let exchange = &source.exchanges[&id];
+            (
+                id,
+                SourceOccurrence {
+                    source_exchange_id: id,
+                    captured_owner: exchange.capture.attribution.clone(),
+                    capture_complete: exchange.complete,
+                },
+            )
+        })
+        .collect();
+    Ok(DiagnosticOccurrences {
+        identity: source.identity,
+        selected,
+        unused,
+        case_defaults: source.case_defaults,
+    })
+}
+
+fn read_published(
+    state: &RewriteState,
+    api: &str,
+    report: &Value,
+) -> Result<Option<DiagnosticOccurrences>> {
+    let (root, bytes, manifest) = sealed_manifest(state)?;
+    let manifest_path = root.join(MANIFEST_FILE);
+    let ledger = root.join("dependencies.jsonl");
+    let manifest_stamp = crate::dependency_index::FileStamp::read_native(&manifest_path)?;
+    ensure!(
+        fs::read(&manifest_path)? == bytes,
+        "Source manifest changed before occurrence lookup"
+    );
+    let stamp = crate::dependency_index::FileStamp::read_native(&ledger)?;
+    crate::dependency_index::recording::authenticate(&root)?;
+    let identity = digest(&bytes);
+    let files = manifest
+        .files
+        .iter()
+        .map(|file| (root.join(&file.path), file.clone()))
+        .collect();
+    let (apis, _) = input_routes(&root, &manifest, &files)?;
+    let selected = apis
+        .iter()
+        .filter(|(_, method)| method.as_str() == api)
+        .map(|(id, _)| id.to_string())
+        .collect();
+    let Some(unused) = unused_source::published_for_cases(report, &identity, &selected) else {
+        return Ok(None);
+    };
+    let case_defaults = load_case_defaults(&root)?;
+    ensure!(
+        crate::dependency_index::FileStamp::read_native(&manifest_path)? == manifest_stamp
+            && crate::dependency_index::FileStamp::read_native(&ledger)? == stamp,
+        "Source recording changed during occurrence lookup"
+    );
+    Ok(Some(DiagnosticOccurrences {
+        identity,
+        selected,
+        unused,
+        case_defaults,
+    }))
+}
+
+fn load_case_defaults(
+    root: &Path,
+) -> Result<BTreeMap<Uuid, crate::dependency::attribution::DependencyOwner>> {
+    let target = root
+        .ancestors()
+        .find(|path| path.join(".traffic-e2e").is_dir());
+    super::super::case_defaults::load(root, target)
 }
 
 #[cfg(test)]
@@ -77,10 +173,7 @@ fn load_selected(state: &RewriteState, requested: Option<(&str, &Value)>) -> Res
     };
     // These defaults depend on current process rules; they must not be frozen
     // into recording-only metadata or reused across policy changes.
-    let target = root
-        .ancestors()
-        .find(|path| path.join(".traffic-e2e").is_dir());
-    result.case_defaults = super::super::case_defaults::load(&root, target)?;
+    result.case_defaults = load_case_defaults(&root)?;
     ensure!(
         crate::dependency_index::FileStamp::read_native(&root.join(MANIFEST_FILE))?
             == manifest_stamp
