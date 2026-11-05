@@ -24,9 +24,12 @@ pub(super) mod execution;
 mod redis_argument;
 pub use redis_argument::query_rewrite_redis_argument_for_scope;
 mod http_requests;
+mod query_catalog;
 mod redis_stream_progress;
 mod report;
 pub use access::{query_rewrite_evidence, query_rewrite_evidence_for_scope};
+use query_catalog::query_kinds;
+mod diagnosis;
 mod mysql_diagnosis;
 mod overview;
 pub(super) mod policy_freshness;
@@ -52,6 +55,7 @@ const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
 const QUERY_TARGET_RUNTIME_DIAGNOSTICS: &str = "target_runtime_diagnostics";
 const QUERY_UNIFIED_RULE_CANDIDATES: &str = "unified_rule_candidates";
 const QUERY_HTTP_REQUESTS: &str = "http_request_differences";
+const QUERY_API_INFORMATION: &str = "api_information";
 
 pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
     let Some(issue) = &state.active_issue else {
@@ -265,6 +269,11 @@ fn facts(
     offset: usize,
 ) -> Result<(Value, Vec<String>, String)> {
     match kind {
+        QUERY_API_INFORMATION => Ok((
+            super::dependency_review::api_information(target_root, state, &state.api, 0)?,
+            vec!["Unused Source occurrences and unmatched Target observations do not establish ownership or authorize a rule.".into()],
+            "Inspect the relevant hypothesis or occurrence, follow its returned detail/pagination command, and prove its Source behavior before proposing a repair or rule.".into(),
+        )),
         QUERY_JWT_TIME_VALIDITY => Ok((super::jwt_rule::evidence_facts(target_root, state)?,
             vec!["Unverified JWT time claims and HTTP 401 do not alone prove authentication causality or rule applicability.".into()],
             "For time-drift candidates, inspect signing_key_discovery for target variable names, startup mount paths/access modes, existing bindings and discovery commands. Trace the source/target JWT path, configuration precedence and expiration leeway, then use the returned rule planner with the proven signing-key source. Plan/apply verifies original signatures.".into())),
@@ -622,116 +631,6 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
     }
 }
 
-fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str, &'static str)> {
-    let mut queries = Vec::new();
-    let typed_body_candidate = issue
-        .representative
-        .as_ref()
-        .is_some_and(|representative| representative.body_diagnosis.is_some());
-    if matches!(
-        issue.kind,
-        RewriteIssueKind::TargetRuntime | RewriteIssueKind::Replay
-    ) {
-        queries.push((
-            QUERY_TARGET_RUNTIME_DIAGNOSTICS,
-            "Inspect bounded target stdout, stderr, and container state from the failed attempt",
-        ));
-    }
-    let response_unavailable = issue.representative.as_ref().is_some_and(|representative| {
-        representative.difference_kind == ResponseDifferenceKind::ResponseUnavailable
-    });
-    let standard_header_difference = issue
-        .representative
-        .as_ref()
-        .is_some_and(|representative| representative.pointer.starts_with("$headers/"));
-    let dependency_evidence_first = matches!(
-        issue.kind,
-        RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-    );
-    if dependency_evidence_first {
-        queries.push((
-            QUERY_DIRTY_CLUSTERS,
-            "Cluster case-scoped dirty dependencies by protocol, endpoint, and reason",
-        ));
-        queries.push((
-            QUERY_SOURCE_PROCESS_TRAFFIC,
-            source_process_evidence_purpose(issue.kind),
-        ));
-    }
-    if matches!(
-        issue.kind,
-        RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-    ) && issue.representative.is_some()
-    {
-        queries.push((
-            QUERY_CASE_RESPONSE_DIFFERENCES,
-            "Inspect all response differences in the representative case before implementation",
-        ));
-    }
-    queries.push((
-        QUERY_REPRESENTATIVES,
-        "Show the bounded representative with explicit value presence",
-    ));
-    if !dependency_evidence_first && source_process_evidence_relevant(issue) {
-        queries.push((
-            QUERY_SOURCE_PROCESS_TRAFFIC,
-            source_process_evidence_purpose(issue.kind),
-        ));
-    }
-    if issue.representative.is_some() {
-        if !response_unavailable && !typed_body_candidate && !standard_header_difference {
-            queries.extend([
-                (
-                    QUERY_SOURCE_VARIATION,
-                    "Measure the representative source value across recorded cases",
-                ),
-                (
-                    QUERY_COLLECTION_EQUIVALENCE,
-                    "Check whether representative arrays are equal as multisets",
-                ),
-            ]);
-        }
-        queries.push((
-            QUERY_DEPENDENCY_CORRELATION,
-            "Correlate response outcomes with dependency cleanliness",
-        ));
-        if !response_unavailable && !typed_body_candidate && !standard_header_difference {
-            queries.push((
-                QUERY_POLICY_APPLICABILITY,
-                "Check structural rule applicability without authorizing a rule",
-            ));
-        }
-    }
-    if issue.kind == RewriteIssueKind::Response {
-        queries.push((QUERY_JWT_TIME_VALIDITY, "Check failed 401 requests for JWT expiration between recording and replay; plan verifies signatures"));
-        queries.push((
-            QUERY_DIRTY_CLUSTERS,
-            "Cluster case-scoped dirty dependencies by protocol, endpoint, and reason",
-        ));
-    }
-    if issue.recorder_capture_diagnosis.is_some() {
-        queries.push((QUERY_IP_CAPTURE, "Inspect reported IP origin and recorder response rewrite eligibility before system repair"));
-    }
-    if state.attempt_delta.is_some() {
-        queries.push((
-            QUERY_ATTEMPT_DELTA,
-            "Compare response convergence with the previous attempt",
-        ));
-    }
-    if matches!(
-        issue.kind,
-        RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-    ) {
-        queries.push((execution::KIND,"Page through every case interrupted by an unmatched dependency, including cases omitted from the overview"));
-        if issue.kind != RewriteIssueKind::Replay {
-            queries.push((QUERY_TARGET_RUNTIME_DIAGNOSTICS, "Inspect bounded target stdout, stderr, and container state alongside failed response or dependency evidence"));
-        }
-        queries.push((QUERY_HTTP_REQUESTS, "Inspect failed HTTP dependency requests, exact Source/Target body differences, and complete protected body pages"));
-        queries.push((QUERY_UNIFIED_RULE_CANDIDATES,"Inspect physical field bindings and bounded strategy drafts; inventory Source-owned time, duration, unordered and identity locations together"));
-    }
-    queries
-}
-
 pub(super) fn unified_rule_hint(
     root: &Path,
     state: &RewriteState,
@@ -747,34 +646,6 @@ pub(super) fn unified_rule_hint(
         hint:"Use the differences and Source locations to diagnose this issue. This query exposes supported content formats and carrier bindings, even when no draft exists. Rules require Source proof, complete plan validation and genuine Replay; equal/null observations do not authorize a rule.".into(),
         help:command.command,
     })
-}
-
-fn source_process_evidence_relevant(issue: &RewriteIssue) -> bool {
-    match issue.kind {
-        RewriteIssueKind::TargetQuality => false,
-        RewriteIssueKind::TargetRuntime => issue
-            .possible_causes
-            .iter()
-            .any(|cause| cause == "source_compatible_configuration"),
-        _ => true,
-    }
-}
-
-fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
-    match kind {
-        RewriteIssueKind::Dependency | RewriteIssueKind::Replay => {
-            "Inspect source bootstrap and configured process-owned traffic before classifying dirty dependencies as request-owned or process-owned"
-        }
-        RewriteIssueKind::Response => {
-            "Use this evidence when startup, background refresh, or local-cache state may explain the response mismatch"
-        }
-        RewriteIssueKind::TargetRuntime => {
-            "Use this evidence when target startup or readiness may depend on source bootstrap traffic"
-        }
-        RewriteIssueKind::TargetQuality => {
-            "Read context.delivery.required_repairs and address the assigned code finding; no traffic diagnosis is required."
-        }
-    }
 }
 
 fn query_id(state: &RewriteState, issue: &RewriteIssue, kind: &str) -> String {

@@ -996,8 +996,16 @@ is unclear.
   UUID locations. Incomplete locator partitions retain the full metadata fallback.
   Lookup shares physical-effect folding with the full Source proof loader;
   diagnostic lookup never certifies attribution.
-  Its `occurrences` sibling streams original sealed records into only capture
+  Its `occurrences` sibling streams original sealed records once into only capture
   completeness and exact native/HTTP identity metadata for paged API diagnostics.
+  Its `cache` child persists that disposable metadata with a recording identity,
+  central file stamp and checksummed envelope. Every lookup authenticates the
+  complete sealed membership first; policy-dependent Case defaults remain fresh.
+  Its `selection` child binds metadata to an API's complete unused reference set,
+  including every native ambiguity candidate, without retaining unrelated payloads
+  or whole-run occurrence maps in ordinary API diagnostics.
+  Corrupt or foreign metadata rebuilds from original bytes. This cache grants
+  no Source proof or verification authority.
   It shares physical-effect folding, input-route authentication and unused-reference
   resolution with the full Source loader, without constructing discovery graphs
   or retaining SQL and payload selectors. Actual attribution proof still uses
@@ -1393,7 +1401,13 @@ is unclear.
   scheduling to the root coordinator. `progress_publication.rs` owns
   the final delivery publication gate for the selected regression scope.
   `evidence/overview` owns issue overview identity and projection, including
-  current worker context outside evidence hashes.
+  current worker context outside evidence hashes. Full dependency attribution
+  is an on-demand issue query, never a prerequisite for an overview.
+  `evidence/diagnosis` projects bounded Case/operation mismatch groups, ordered
+  follow-up query IDs and conditional repair/strategy guidance from already
+  retained facts. It neither discovers rules nor establishes their applicability.
+  `evidence/query_catalog` owns issue-specific query availability and purposes;
+  method issues reference a single shared command catalog by identity.
   `evidence/access` owns read-only assignment/opaque-query resolution and
   worker-confirmation checks; `evidence` owns bounded API diagnostic queries.
   `bin/backend-rewrite/evidence` owns CLI selector parsing for that read-only

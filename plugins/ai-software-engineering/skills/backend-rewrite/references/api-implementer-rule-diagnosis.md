@@ -130,8 +130,10 @@ window. A value codec rule does not change exptime/CAS/noreply behavior.
 
 ## Foreign Dependencies And Batched Hypotheses
 
-Read `facts.api_information` or `dependency-attribution show --api <route>`
-on passing and failing attempts. It preserves every attempted time/identity
+For ownership or hypothesis diagnosis, execute the overview's
+`facts.api_information.query_id` using its matching `queries[].command`, or
+`dependency-attribution show --api <route>` on passing and failing attempts.
+The full detail preserves every attempted time/identity
 hypothesis, including rejected probes, and groups actionable Source questions
 without treating a successful speculative match as proof. Prove value rules
 for your API and return one combined proposal after the completed diagnostic
