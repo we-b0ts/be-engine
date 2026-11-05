@@ -170,6 +170,11 @@ argument root, just as other logical JSON carriers do. Protocol kind, namespace,
 normalized server event ACK identity, event name, argument order/count and binary
 attachment declarations remain exact. Known business packets do not fall back
 to opaque byte comparison; control packets retain their transport contracts.
+Fast replay aligns plain Socket.IO ACKs by namespace and original client event
+ID. ACKs can cross same-namespace text events when the request was already
+pending and the recorded input has no conflicting completion or transport
+boundary. Business events are compared in their original relative order.
+Packet counts, arguments and stream termination still use ordinary assertions.
 
 If actual execution cleanup fails after Replay readiness, the runner stops Target and asks
 Replay to publish an interrupted diagnostic snapshot before stopping its process.
@@ -1927,6 +1932,9 @@ individual gaps, preserving shorter gaps, payload order, framing and trailers.
 Target processing and dependency calls initiated by Target retain their real
 execution time. Process-owned Pub/Sub and abnormal or interrupted HTTP streams
 retain their existing lifecycle timing.
+
+The same fast setting and interval cap accelerate supported
+[Socket.IO input gaps and completed quiet tails](interaction-recording.md#completion-profiles).
 
 `replay_timing: recorded` preserves Source stream timing; omitting it has the same
 behavior. The low-level equivalents are

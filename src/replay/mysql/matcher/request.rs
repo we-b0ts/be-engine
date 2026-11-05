@@ -151,7 +151,11 @@ impl ReplayState {
                         }
                         let exchange = &self.mysql.exchanges[index];
                         if transaction.is_some_and(|context| {
-                            !self.mysql.isolation.permits(context.connection, index)
+                            !self.mysql.isolation.permits(
+                                context.connection,
+                                index,
+                                &self.mysql.exchanges,
+                            )
                         }) {
                             continue;
                         }

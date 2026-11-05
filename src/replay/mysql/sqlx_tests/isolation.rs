@@ -1,5 +1,7 @@
 //! Actual TLS/MySQL clients exercise scoped isolation without changing SQL data.
-use super::super::isolation::tests::{baseline, reasserted_records, records};
+use super::super::isolation::tests::{
+    baseline, connection_default_records, reasserted_records, record, records,
+};
 use super::*;
 use sqlx::Executor;
 
@@ -28,6 +30,83 @@ async fn body(client: &mut MySqlConnection) {
         .await
         .unwrap();
     transaction.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn read_committed_default_can_be_omitted_without_a_transaction_reset() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut source = connection_default_records();
+        let mut read = records().remove(2);
+        read["query_sequence"] = json!(7);
+        source.push(read);
+        source.push(record(8, "ROLLBACK", 1, 0));
+        let (temp, address, runtime, task) = fixture(&source, false).await;
+        let mut client = open(address, &temp).await;
+        client.execute("SET AUTOCOMMIT = 0").await.unwrap();
+        let id: i32 = sqlx::query_scalar("SELECT id FROM items WHERE id=?")
+            .bind(1_i32)
+            .fetch_one(&mut client)
+            .await
+            .unwrap();
+        assert_eq!(id, 1);
+        client.execute("ROLLBACK").await.unwrap();
+
+        let state = runtime.state.lock().await;
+        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        assert!(state.mysql.isolation.audit().is_empty());
+        let report = serde_json::to_value(state.snapshot_report()).unwrap();
+        let omitted = report["allowed_unused_mysql_connection_read_committed_exchanges"]
+            .as_array()
+            .unwrap();
+        assert_eq!(omitted.len(), 1);
+        assert_eq!(omitted[0]["query_sequence"], 5);
+        assert_eq!(
+            state.mysql.exchanges[omitted[0]["index"].as_u64().unwrap() as usize].status,
+            ReplayExchangeStatus::Available
+        );
+        task.abort();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn ordinary_read_does_not_consume_a_future_isolation_transaction_member() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut source = records();
+        let mut ordinary = source[2].clone();
+        ordinary["connection_id"] = json!(Uuid::from_u128(92));
+        ordinary["server_status_before"] = json!(2);
+        ordinary["response"]["server_status"] = json!(2);
+        ordinary["response"]["rows"] = json!([]);
+        source.push(ordinary);
+
+        let (temp, address, runtime, task) =
+            fixture_with_global(&source, &[baseline()], None).await;
+        let mut reader = open(address, &temp).await;
+        let id: Option<i32> = sqlx::query_scalar("SELECT id FROM items WHERE id=?")
+            .bind(1_i32)
+            .fetch_optional(&mut reader)
+            .await
+            .unwrap();
+        assert_eq!(id, None);
+
+        let mut writer = open(address, &temp).await;
+        writer
+            .execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .await
+            .unwrap();
+        body(&mut writer).await;
+
+        let state = runtime.state.lock().await;
+        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        assert_eq!(state.mysql.isolation.audit()[0]["phase"], "covered");
+        task.abort();
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

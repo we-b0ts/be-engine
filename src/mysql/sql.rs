@@ -31,6 +31,10 @@ impl Token {
 }
 
 pub(crate) fn tokens(sql: &str) -> Option<Vec<Token>> {
+    tokens_shared(sql).map(|tokens| tokens.as_ref().clone())
+}
+
+pub(crate) fn tokens_shared(sql: &str) -> Option<std::sync::Arc<Vec<Token>>> {
     lexical_cache::tokens(sql)
 }
 

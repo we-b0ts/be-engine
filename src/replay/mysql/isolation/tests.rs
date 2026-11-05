@@ -62,11 +62,87 @@ pub(in crate::replay::mysql) fn reasserted_records() -> Vec<Value> {
     rows
 }
 
+pub(in crate::replay::mysql) fn connection_default_records() -> Vec<Value> {
+    let mut rows = vec![
+        record(1, "SET NAMES utf8mb4", 2, 2),
+        record(2, "SET time_zone = '+08:00'", 2, 2),
+        record(3, "SET AUTOCOMMIT = 0", 2, 0),
+        record(4, "SET NAMES utf8mb4", 0, 0),
+        record(
+            5,
+            "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            0,
+            0,
+        ),
+        record(6, "COMMIT", 0, 0),
+    ];
+    let mut capture = crate::dependency::observation::fixture_capture("case");
+    capture.semantic_required = false;
+    for index in [0, 1, 3] {
+        rows[index]["capture"] = serde_json::to_value(&capture).unwrap();
+    }
+    rows[0]["server_status_before"] = Value::Null;
+    rows
+}
+
 fn decoded(values: Vec<Value>) -> Vec<DependencyRecord> {
     values
         .into_iter()
         .map(|v| serde_json::from_value(v).unwrap())
         .collect()
+}
+
+#[test]
+fn read_committed_default_requires_an_intact_driver_connection_prefix() {
+    for (index, key, replacement) in [
+        (0, "/capture", Value::Null),
+        (1, "/query_sequence", json!(3)),
+        (1, "/sql", json!("SELECT id FROM items")),
+        (2, "/sql", json!("SET GLOBAL AUTOCOMMIT = 0")),
+        (3, "/connection_id", json!(Uuid::from_u128(92))),
+        (4, "/server_status_before", json!(1)),
+        (4, "/response/status", json!("error")),
+        (
+            4,
+            "/sql",
+            json!("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"),
+        ),
+        (
+            4,
+            "/sql",
+            json!("SET TRANSACTION ISOLATION LEVEL READ COMMITTED"),
+        ),
+        (5, "/sql", json!("ROLLBACK")),
+        (5, "/server_status_before", json!(1)),
+    ] {
+        let mut records = connection_default_records();
+        *records[index].pointer_mut(key).unwrap() = replacement;
+        let options = super::super::optional_session::classify(
+            &decoded(records),
+            ReplaySource::Case,
+            &mut Default::default(),
+        );
+        assert_ne!(
+            options.get(&4),
+            Some(&OptionalSessionExchange::ConnectionReadCommitted),
+            "{index}: {key}"
+        );
+    }
+
+    let mut records = connection_default_records();
+    let mut later = records[4].clone();
+    later["query_sequence"] = json!(7);
+    records.push(later);
+    let options = super::super::optional_session::classify(
+        &decoded(records),
+        ReplaySource::Case,
+        &mut Default::default(),
+    );
+    assert_eq!(
+        options.get(&4),
+        Some(&OptionalSessionExchange::ConnectionReadCommitted)
+    );
+    assert!(!options.contains_key(&6));
 }
 
 #[test]

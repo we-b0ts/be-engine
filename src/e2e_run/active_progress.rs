@@ -95,6 +95,31 @@ pub(super) fn path(layout: &RunLayout) -> PathBuf {
     layout.active_dir.join(ACTIVE_PROGRESS_FILE)
 }
 
+/// A workflow attempt may publish its progress under the primary focused
+/// group without a selected group in the coordinator's state.
+pub(super) fn workflow(
+    run_root: &Path,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> Option<E2eActiveProgress> {
+    let focused = fs::read_dir(run_root.join("focused")).into_iter().flatten();
+    let directories = std::iter::once(run_root.to_path_buf())
+        .chain(focused.filter_map(|entry| entry.ok().map(|entry| entry.path())));
+    let mut current = directories.filter_map(|directory| {
+        let active = directory.join(".active");
+        let file = active.join(ACTIVE_PROGRESS_FILE);
+        let modified = file.metadata().ok()?.modified().ok()?;
+        // Ignore artifacts left by an earlier coordinator operation.
+        if chrono::DateTime::<chrono::Utc>::from(modified) < started_at
+            || !active.join("state.yaml").is_file()
+        {
+            return None;
+        }
+        read(&file).ok()
+    });
+    let progress = current.next()?;
+    current.next().is_none().then_some(progress)
+}
+
 fn write_atomic(path: &Path, payload: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -119,6 +144,35 @@ fn write_atomic(path: &Path, payload: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::case_group::{CanonicalCase, CanonicalCaseGroup, CaseGroupInventory};
+
+    #[test]
+    fn workflow_reports_a_unique_current_focused_build() {
+        let temp = tempfile::tempdir().unwrap();
+        let building =
+            b"{\"version\":1,\"phase\":\"building\",\"completed\":0,\"total\":15,\"failed\":0}";
+        let old = temp.path().join("focused/old/.active");
+        let active = temp.path().join("focused/current/.active");
+        for directory in [&old, &active] {
+            fs::create_dir_all(directory).unwrap();
+            fs::write(directory.join("state.yaml"), b"status: running").unwrap();
+        }
+        fs::write(old.join(ACTIVE_PROGRESS_FILE), building).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(old.join(ACTIVE_PROGRESS_FILE))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH)
+            .unwrap();
+        let started_at = chrono::Utc::now() - chrono::Duration::seconds(1);
+        assert_eq!(workflow(temp.path(), started_at), None);
+        fs::write(active.join(ACTIVE_PROGRESS_FILE), building).unwrap();
+        assert_eq!(
+            workflow(temp.path(), started_at),
+            Some(E2eActiveProgress::Building)
+        );
+        fs::write(old.join(ACTIVE_PROGRESS_FILE), building).unwrap();
+        assert_eq!(workflow(temp.path(), started_at), None);
+    }
 
     #[test]
     fn round_trips_replay_progress() {

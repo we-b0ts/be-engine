@@ -2,6 +2,7 @@
 //! This module never forwards, persists, schedules, or compares expected output.
 
 mod ack_error;
+pub(crate) mod native_receipts;
 
 pub(crate) use ack_error::{AckFailureKind, AckObservationError};
 

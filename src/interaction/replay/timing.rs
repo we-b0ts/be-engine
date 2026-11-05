@@ -19,9 +19,27 @@ pub(crate) enum SocketIoTiming {
 /// dependency replay owner supplies delivery facts and commits clock changes.
 pub(crate) trait InputTiming: Send + Sync {
     fn wait(&self, sequence: u64, completed: Vec<u64>) -> BoxFuture<'_, Result<Advance>>;
+    fn ordered_fast(&self) -> bool {
+        false
+    }
+    fn fast_tail(&self) -> Option<FastTail> {
+        None
+    }
+    fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {
+        Box::pin(async { Ok(Advance::default()) })
+    }
     fn closed(&self, _started_at: chrono::DateTime<chrono::Utc>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async { Ok(()) })
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FastTail {
+    pub close_sequence: Option<u64>,
+    pub output_count: usize,
+    pub idle_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_acks: Option<std::collections::BTreeSet<u64>>,
 }
 
 /// Business inputs retain the Source dependency-delivery prefix even when no
