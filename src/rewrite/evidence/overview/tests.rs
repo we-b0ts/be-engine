@@ -124,6 +124,32 @@ fn overview_follows_parked_api_and_rejects_replaced_evidence() {
     );
     assert_eq!(overview.issue_id, "issue-a");
     assert_eq!(overview.facts["work_scope"]["api"], "/api");
+    assert_eq!(overview.schema_version, 5);
+    assert_eq!(overview.facts["api_information"]["deferred"], true);
+    assert_eq!(overview.facts["execution_evidence"]["available"], false);
+    let information = overview.facts["api_information"]["query_id"]
+        .as_str()
+        .unwrap();
+    assert!(
+        overview
+            .queries
+            .iter()
+            .any(|query| query.query_id == information)
+    );
+    for method in overview.facts["method_issues"].as_array().unwrap() {
+        assert!(
+            method.get("queries").is_none(),
+            "command specs are emitted once"
+        );
+        for id in method["query_ids"].as_array().unwrap() {
+            assert!(
+                overview
+                    .queries
+                    .iter()
+                    .any(|query| Some(query.query_id.as_str()) == id.as_str())
+            );
+        }
+    }
 
     state
         .parked_slices

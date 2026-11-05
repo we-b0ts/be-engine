@@ -77,7 +77,8 @@ pub(super) fn report(
                 queries.extend(method_queries.clone());
             }
             method_issues
-                .push(json!({"api": api, "issue": method_issue, "queries": method_queries}));
+                .push(json!({"api": api, "issue": method_issue,
+                    "query_ids": method_queries.iter().map(|query| &query.query_id).collect::<Vec<_>>() }));
         }
     }
     let rule_discovery = queries
@@ -86,8 +87,13 @@ pub(super) fn report(
         .collect::<Vec<_>>();
     let mut facts = json!({ "work_scope": scope, "issue": issue, "method_apis": methods,
         "method_issues": method_issues,"rule_discovery":rule_discovery });
-    facts["api_information"] =
-        super::super::dependency_review::api_information(target_root, state, &state.api, 0)?;
+    // A diagnosis entrypoint must not reconstruct whole-run ownership merely to
+    // show one issue. Keep that authenticated projection behind its own query.
+    facts["api_information"] = json!({"deferred": true,
+        "query_id": queries.iter().find(|query| query.query_id
+            == super::query_id(state, issue, super::QUERY_API_INFORMATION)).map(|query| &query.query_id),
+        "retained_attempt": state.attempts.last().filter(|attempt| attempt.attempt == issue.attempt),
+        "freshness": "retained attempt; current acceptance is checked by the detail query" });
     if matches!(
         issue.kind,
         crate::rewrite::RewriteIssueKind::Response
@@ -129,19 +135,25 @@ pub(super) fn report(
     }
     // Retained issues may predate dependency-first attribution. Expose the
     // original execution cause without changing their persisted identity.
-    let execution_context = super::e2e_context(target_root, state)
-        .and_then(|context| {
+    let execution_context = if matches!(
+        issue.kind,
+        crate::rewrite::RewriteIssueKind::Response
+            | crate::rewrite::RewriteIssueKind::Dependency
+            | crate::rewrite::RewriteIssueKind::Replay
+    ) {
+        match super::e2e_context(target_root, state).and_then(|context| {
             crate::e2e_run::query_execution_context(context, super::group_id(state)?, issue.attempt)
-        })
-        .ok()
-        .filter(|_| {
-            matches!(
-                issue.kind,
-                crate::rewrite::RewriteIssueKind::Response
-                    | crate::rewrite::RewriteIssueKind::Dependency
-                    | crate::rewrite::RewriteIssueKind::Replay
-            )
-        });
+        }) {
+            Ok(execution) => Some(execution),
+            Err(error) => {
+                facts["execution_evidence"] = json!({"available": false,
+                    "reason": error.to_string().chars().take(1024).collect::<String>()});
+                None
+            }
+        }
+    } else {
+        None
+    };
     if let Some(execution) = &execution_context {
         super::execution::attach(target_root, state, issue, execution, &mut facts);
     }
@@ -175,13 +187,14 @@ pub(super) fn report(
         facts["runtime_diagnosis"] = json!(queries.iter().find(|query| query.query_id
             == super::query_id(state, issue, super::QUERY_TARGET_RUNTIME_DIAGNOSTICS)));
     }
+    facts["diagnosis"] = super::diagnosis::overview(state, issue, &facts, &queries);
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
             .trim_start_matches("fnv1a64:")
     );
     Ok(RewriteEvidenceReport {
-        schema_version: 4,
+        schema_version: 5,
         context: Some(super::report::context(target_root, state, &scope)),
         evidence_id,
         issue_id: issue.id.clone(),
@@ -202,7 +215,7 @@ pub(super) fn report(
             "Read context.delivery.required_repairs, fix the assigned finding, then commit and return the exact delivery_commit with its original dispatch and lease identities.".to_string()
         } else { match scope {
             RewriteWorkScope::Api { .. } =>
-                "Inspect this issue and execute the relevant returned queries before tracing source and target behavior.",
+                "Start with facts.diagnosis: inspect its mismatch locations and next_queries, resolving query_ids through queries[].command. Check each method_issues entry. Strategies are conditional; use detail evidence and Source proof before choosing a repair or rule.",
         }.to_string() },
     })
 }

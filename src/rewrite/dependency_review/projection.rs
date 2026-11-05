@@ -197,7 +197,7 @@ fn occurrence_information(
     report: &Value,
     offset: usize,
 ) -> Result<Value> {
-    let source = super::source::occurrences::load(state)?;
+    let source = super::source::occurrences::for_api(state, api, report)?;
     let selected = source
         .apis
         .iter()

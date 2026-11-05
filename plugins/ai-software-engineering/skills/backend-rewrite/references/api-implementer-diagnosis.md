@@ -52,11 +52,28 @@ and dispatch identity. Read the complete bounded issue in `facts.issue`,
 including its ID, attempt, observed target fingerprint, possible causes, and
 representative when available. HTTP route overviews also return `facts.method_apis`
 for the complete method contract set and `facts.method_issues` with per-method
-issues and queries. Check each included method, including siblings whose response
+issues and `query_ids`; resolve those IDs through the single top-level `queries`
+command list. Check each included method, including siblings whose response
 evidence already passed; use the method's returned query IDs for diagnosis and
 retain its recorded method. Do not select only the first directory case or merge
 expected responses between methods. Treat possible causes as hypotheses.
 Use a legacy `METHOD API` entrypoint only when that is the exact returned assignment.
+
+Overview schema 5 supplies `facts.diagnosis`: start with its `focus`, bounded
+`mismatches.groups` and ordered `next_queries`. Each mismatch retains a Case and
+Target event index plus an `evidence_pointer` into the overview's execution
+failures. Counts cover only the displayed failures, not the entire API; follow
+the returned execution pagination for omitted Cases. The response observation
+pointer leads to the existing representative with explicit expected/actual
+presence. `strategies` distinguishes Target repairs, investigations and policy
+candidates; its conditions and Source-proof requirements are not applicability
+or authorization. Detail queries retain their own evidence IDs and schema.
+
+`facts.api_information` is deferred. It contains the retained attempt and a
+`query_id` for full ownership, unused occurrences, hypotheses and verification
+obligations. Run that query when those facts distinguish the current hypothesis.
+The retained attempt does not certify current Target or policy freshness. The
+ordinary overview does not scan the complete recording dependency ledger.
 
 The same context includes `delivery.assignment` with the registered worktree
 and frozen base. Address any supplied `context.delivery.required_repairs.findings`

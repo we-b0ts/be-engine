@@ -23,6 +23,7 @@ type HttpReferences = BTreeMap<String, BTreeSet<Uuid>>;
 #[cfg(test)]
 mod tests;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct SourceExchange {
     pub capture: CaptureMetadata,
     pub complete: bool,
@@ -390,11 +391,11 @@ pub(super) fn unused(
     })
 }
 
-fn collect_unused(
+fn collect_unused<T: Ord>(
     report: &Value,
     selected: &BTreeSet<String>,
-    mut resolve: impl FnMut(&str, &Value) -> Result<Uuid>,
-) -> Result<BTreeSet<Uuid>> {
+    mut resolve: impl FnMut(&str, &Value) -> Result<T>,
+) -> Result<BTreeSet<T>> {
     let mut ids = BTreeSet::new();
     for (protocol, section, field) in [
         ("mysql", report, "unused_case_exchanges"),
