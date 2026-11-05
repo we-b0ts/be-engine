@@ -689,7 +689,8 @@ is unclear.
 - `mysql/isolation` owns closed isolation-setting/probe syntax without expanding
   the generic session-setup whitelist. `replay/mysql/isolation/source` proves
   original baseline probes and complete override/transaction/restoration scopes
-  during preparation. Its parent binds NEXT settings to actual Target sockets,
+  during preparation, including a complete scope reasserting its known baseline.
+  Its parent binds NEXT settings to actual Target sockets,
   observes successful deliveries through the existing transaction owner and
   grants only proven Source restoration omission. Its Source proof classifies
   complete read-only scopes; its live owner requires every original read and a

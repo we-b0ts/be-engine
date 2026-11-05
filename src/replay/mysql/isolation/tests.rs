@@ -57,6 +57,9 @@ fn decoded(values: Vec<Value>) -> Vec<DependencyRecord> {
 fn isolation_profiles_require_the_original_baseline_closed_scope_and_complete_wire_sequence() {
     for scenario in [
         "valid",
+        "same-baseline",
+        "same-baseline-missing-reset",
+        "same-baseline-empty-scope",
         "missing-baseline",
         "wrong-baseline",
         "missing-reset",
@@ -80,12 +83,18 @@ fn isolation_profiles_require_the_original_baseline_closed_scope_and_complete_wi
             if scenario == "wrong-baseline" {
                 base["response"]["rows"][0][0]["value"] = json!("READ-UNCOMMITTED");
             }
+            if scenario.starts_with("same-baseline") {
+                base["response"]["rows"][0][0]["value"] = json!("READ-COMMITTED");
+            }
             if scenario == "pooled-future-probe" {
                 base["timestamp"] = json!("2020-01-01T00:00:02Z");
             }
             registry.prepare(&decoded(vec![base]), ReplaySource::Startup, None);
         }
         let mut rows = records();
+        if scenario.starts_with("same-baseline") {
+            rows[6]["sql"] = json!("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED");
+        }
         if scenario.starts_with("pooled") {
             for row in &mut rows {
                 row["connection_id"] = json!(Uuid::from_u128(92));
@@ -99,8 +108,20 @@ fn isolation_profiles_require_the_original_baseline_closed_scope_and_complete_wi
             }
         }
         match scenario {
-            "missing-reset" => {
+            "missing-reset" | "same-baseline-missing-reset" => {
                 rows.pop();
+            }
+            "same-baseline-empty-scope" => {
+                rows = vec![
+                    rows[0].clone(),
+                    record(9, "COMMIT", 0, 0),
+                    record(
+                        10,
+                        "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+                        0,
+                        0,
+                    ),
+                ];
             }
             "gap" => rows[2]["query_sequence"] = json!(42),
             "active-setting" => rows[0]["server_status_before"] = json!(1),
@@ -120,7 +141,7 @@ fn isolation_profiles_require_the_original_baseline_closed_scope_and_complete_wi
         let plans = registry.prepare(&decoded(rows), ReplaySource::Case, Some("case"));
         assert_eq!(
             plans.len(),
-            usize::from(matches!(scenario, "valid" | "pooled")),
+            usize::from(matches!(scenario, "valid" | "pooled" | "same-baseline")),
             "{scenario}"
         );
         if let Some(plan) = plans.first() {

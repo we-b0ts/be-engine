@@ -196,9 +196,8 @@ impl Registry {
                 else {
                     continue;
                 };
-                if level == baseline.level {
-                    continue;
-                }
+                // Reasserting the known baseline has the same finite scope as
+                // an override: prove the original transaction and restoration.
                 if let Some(plan) = prove(case, connection, baseline, level, index, &rows[start..])
                 {
                     plans.push(plan);

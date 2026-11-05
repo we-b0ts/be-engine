@@ -107,7 +107,10 @@ SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 ~~~
 
 The probe must establish the restored baseline, and all recorded probes for
-that resource must agree. A pool may initialize its shared dialect on one
+that resource must agree. The setup and restoration may both name that baseline:
+reasserting the existing session level still requires the complete original
+transaction and genuine Target delivery before restoration can be omitted.
+A pool may initialize its shared dialect on one
 connection and configure another without probing again. For that case the
 independent probe must have completed strictly before the new scope starts;
 sequence numbers from different connections are never compared. Same-connection
