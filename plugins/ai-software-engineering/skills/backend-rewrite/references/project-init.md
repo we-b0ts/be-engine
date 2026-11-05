@@ -114,14 +114,10 @@ their existing sequence. Formatting, unit tests and additional development
 requirements belong in `AGENTS.md` or `CLAUDE.md`; they do not replace or disable
 the engine Source/Replay-isolation standard.
 
-The generated target uses `http-server` with its `macros` feature and exports
-the readiness GET route with `#[api(auth = none)]` and
-`#[http_server::get(...)]`. The readiness path must be literal: no captures,
-query, fragment, whitespace, or trailing slash except `/`. Keep the readiness
-endpoint when adding business APIs. Follow [http-server.md](sdk/http-server.md)
-to export methods in their owning modules and combine them through
-`http_server::Router::new(ReadinessApi).merge(business_api)`; retain
-`Server::serve_until` and the SIGTERM/SIGINT shutdown handling.
+The generated target exposes a readiness GET endpoint. The readiness path
+must be literal, with no captures, query, fragment, whitespace, or trailing
+slash except `/`. Keep the readiness endpoint and SIGTERM/SIGINT shutdown
+behavior when adding business APIs.
 
 The generated bootstrap target temporarily contains `src/startup_probe.rs`,
 and `src/main.rs` calls it during startup. Keep it through initialization

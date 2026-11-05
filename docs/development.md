@@ -2516,9 +2516,7 @@ also generates a runnable readiness-only Rust target using `http-server`
 route through `#[api(auth = none)]` and `#[http_server::get(...)]`, returns
 an empty `200` response, and starts with `Server::bind` / `serve_until` for
 graceful shutdown. The generated route must be a literal path without captures,
-query, fragment, whitespace, or a trailing slash (except `/`). Implement
-business APIs with the same macros in their owning modules and combine them
-with `http_server::Router::new(ReadinessApi).merge(business_api)`.
+query, fragment, whitespace, or a trailing slash (except `/`).
 The bootstrap also includes a temporary `src/startup_probe.rs` initialization
 module. Keep that module and its
 `src/main.rs` call through initialization preflight, then delete the module,

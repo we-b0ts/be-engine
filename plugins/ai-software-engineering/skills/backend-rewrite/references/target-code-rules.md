@@ -5,21 +5,6 @@ integration code. These rules apply to the code author and integrator.
 
 These rules apply only to an existing initialized target repository.
 
-## SDK Contracts
-
-Read the relevant reference before defining, changing, or reviewing a client,
-listener, lifecycle, startup, or configuration contract. Load only affected SDKs:
-
-- Inbound HTTP or an `http-server` listener: [http-server.md](sdk/http-server.md).
-- Outbound HTTP through `brz-http`: [http-client.md](sdk/http-client.md).
-- Motan service export: [motan-exporter.md](sdk/motan-exporter.md).
-- Motan dependency calls: [motan-referer.md](sdk/motan-referer.md).
-- Memcache `CacheService`: [memcache.md](sdk/memcache.md).
-- `brz-redis`: [redis.md](sdk/redis.md).
-- `brz-mysql`: [mysql.md](sdk/mysql.md).
-- Application logging through `brz-logs`: [logs.md](sdk/logs.md).
-- JSON models, field presence/null handling, passthrough, or coercion: [json.md](sdk/json.md).
-
 ## Scope And Compatibility
 
 - Repository instructions and established build, runtime, and module contracts
@@ -131,16 +116,6 @@ and keep each choice compatible with the source submission contract.
 - Production modules MUST NOT depend on test, fixture, recording, or Replay
   modules.
 
-
-For each used Breeze or platform SDK, follow its SDK reference for dependency
-source, exact release/version, package name, and features. Preserve the project's
-registry configuration and expose capabilities through their documented
-`brz-<capability>` dependency names. Use the canonical capability names `http`,
-`memcache`, `redis`, `mysql`, `vintage`, `motan`, `auth`, `mcq`, `kafka`, and
-`logs`. `brz-auth` owns authentication SDK implementations, including TAuth
-and TAuth2; Memcache-backed MCQ belongs in `brz-mcq`. Product code MUST use the
-`brz-*` dependency rather than a raw SDK or driver. Add only dependencies the
-product uses.
 
 ## Validation
 
