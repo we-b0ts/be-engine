@@ -16,12 +16,12 @@ struct Cache {
     order: VecDeque<String>,
     bytes: usize,
 }
-type CachedTokens = (Arc<Option<Vec<Token>>>, usize);
+type CachedTokens = (Option<Arc<Vec<Token>>>, usize);
 
-pub(super) fn tokens(sql: &str) -> Option<Vec<Token>> {
+pub(super) fn tokens(sql: &str) -> Option<Arc<Vec<Token>>> {
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     if sql.len() > MAX_SQL {
-        return super::scan(sql, |_| {});
+        return super::scan(sql, |_| {}).map(Arc::new);
     }
     let cache = CACHE.get_or_init(Mutex::default);
     let hit = cache
@@ -31,11 +31,11 @@ pub(super) fn tokens(sql: &str) -> Option<Vec<Token>> {
         .get(sql)
         .map(|v| v.0.clone());
     if let Some(hit) = hit {
-        return (*hit).clone();
+        return hit;
     }
-    let parsed = Arc::new(super::scan(sql, |_| {}));
+    let parsed = super::scan(sql, |_| {}).map(Arc::new);
     let charge = sql.len() * 2
-        + parsed.as_ref().as_ref().map_or(0, |ts| {
+        + parsed.as_ref().map_or(0, |ts| {
             ts.capacity() * std::mem::size_of::<Token>()
                 + ts.iter()
                     .map(|t| match t {
@@ -64,7 +64,7 @@ pub(super) fn tokens(sql: &str) -> Option<Vec<Token>> {
             cache.entries.insert(sql.into(), (parsed.clone(), charge));
         }
     }
-    (*parsed).clone()
+    parsed
 }
 
 #[cfg(test)]
@@ -78,7 +78,10 @@ mod tests {
             "SELECT `a` FROM t WHERE x = 2",
         ] {
             for _ in 0..3 {
-                assert_eq!(super::tokens(sql), super::super::scan(sql, |_| {}));
+                assert_eq!(
+                    super::tokens(sql).as_deref(),
+                    super::super::scan(sql, |_| {}).as_ref()
+                );
             }
         }
     }

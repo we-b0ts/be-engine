@@ -1,6 +1,6 @@
 //! Correlate text and prepared calls without interpolating or executing SQL.
 use super::*;
-use crate::mysql::sql::{Token, number, tokens};
+use crate::mysql::sql::{Token, number, tokens, tokens_shared};
 
 pub(super) mod cache;
 mod predicate;
@@ -37,20 +37,29 @@ pub(super) fn cross_protocol_matches(
     sql: &str,
     params: Option<&[RecordedMysqlValue]>,
 ) -> bool {
-    let Some(recorded_sql) = &recorded.sql else {
+    let Some(recorded_sql) = recorded.sql.as_deref() else {
         return false;
     };
-    let forms = match (recorded.command.as_str(), command) {
-        ("COM_QUERY", "COM_STMT_EXECUTE") => {
-            params.and_then(|params| Some((tokens(recorded_sql)?, materialize(sql, params)?)))
-        }
-        ("COM_STMT_EXECUTE", "COM_QUERY") => recorded
-            .params
-            .as_deref()
-            .and_then(|params| Some((materialize(recorded_sql, params)?, tokens(sql)?))),
-        _ => None,
+    let (text, template, values) = match (recorded.command.as_str(), command) {
+        ("COM_QUERY", "COM_STMT_EXECUTE") => (recorded_sql, sql, params),
+        ("COM_STMT_EXECUTE", "COM_QUERY") => (sql, recorded_sql, recorded.params.as_deref()),
+        _ => return false,
     };
-    forms.is_some_and(|(recorded, actual)| recorded == actual)
+    let (Some(values), Some(text), Some(template)) =
+        (values, tokens_shared(text), tokens_shared(template))
+    else {
+        return false;
+    };
+    let mut values = values.iter();
+    text.len() == template.len()
+        && text.iter().zip(template.iter()).all(|(text, template)| {
+            if *template == Token::Placeholder {
+                values.next().and_then(bound_value).as_ref() == Some(text)
+            } else {
+                text == template
+            }
+        })
+        && values.next().is_none()
 }
 
 /// Prepared statements can put equal scalar values in different placeholder
@@ -77,13 +86,14 @@ pub(super) fn prepared_values_match(
 /// Only actual parameter positions are wildcards. Constants, table names,
 /// predicates, projections and LIMIT clauses must still match.
 pub(super) fn metadata_matches(template: &str, recorded: &str) -> bool {
-    let (Some(template), Some(recorded)) = (tokens(template), tokens(recorded)) else {
+    let (Some(template), Some(recorded)) = (tokens_shared(template), tokens_shared(recorded))
+    else {
         return false;
     };
     template.len() == recorded.len()
         && template
             .iter()
-            .zip(&recorded)
+            .zip(recorded.iter())
             .all(|(t, r)| t == r || (*t == Token::Placeholder && r.is_value()))
 }
 
@@ -91,7 +101,7 @@ pub(super) fn prepared_metadata_matches(recorded: &RecordedMysqlExchange, sql: &
     let forms = recorded.sql.as_deref().and_then(|source| {
         Some((
             materialize(source, recorded.params.as_deref().unwrap_or_default())?,
-            tokens(sql)?,
+            tokens_shared(sql)?,
         ))
     });
     forms.is_some_and(|(source, actual)| {
