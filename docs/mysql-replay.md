@@ -110,6 +110,12 @@ The probe must establish the restored baseline, and all recorded probes for
 that resource must agree. The setup and restoration may both name that baseline:
 reasserting the existing session level still requires the complete original
 transaction and genuine Target delivery before restoration can be omitted.
+Repeated successful settings of that same level before the first business
+operation may share this proof. Their exact contiguous Source references remain
+unconsumed until the complete Target transaction ends successfully; then they
+become optional alongside the restoration. Changed levels, gaps, failures and
+active settings retain their independent obligations. The isolation audit lists
+the finite `source_reassertion_indices` and whether their omission was proven.
 A pool may initialize its shared dialect on one
 connection and configure another without probing again. For that case the
 independent probe must have completed strictly before the new scope starts;

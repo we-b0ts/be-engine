@@ -46,6 +46,22 @@ pub(in crate::replay::mysql) fn records() -> Vec<Value> {
     ]
 }
 
+pub(in crate::replay::mysql) fn reasserted_records() -> Vec<Value> {
+    let mut rows = vec![
+        record(
+            6,
+            "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            0,
+            0,
+        ),
+        record(7, "COMMIT", 0, 0),
+    ];
+    rows.extend(records());
+    rows.last_mut().unwrap()["sql"] =
+        json!("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED");
+    rows
+}
+
 fn decoded(values: Vec<Value>) -> Vec<DependencyRecord> {
     values
         .into_iter()
@@ -147,6 +163,38 @@ fn isolation_profiles_require_the_original_baseline_closed_scope_and_complete_wi
         if let Some(plan) = plans.first() {
             assert_eq!(plan.required, BTreeSet::from([2, 3, 4]));
             assert_eq!((plan.setup, plan.end, plan.reset), (0, 4, 6));
+        }
+    }
+}
+
+#[test]
+fn reassertions_require_a_contiguous_successful_same_level_prefix_and_one_original_transaction() {
+    for scenario in ["valid", "gap", "changed-level", "active", "failed"] {
+        let mut registry = Registry::default();
+        let mut probe = baseline();
+        probe["response"]["rows"][0][0]["value"] = json!("READ-COMMITTED");
+        registry.prepare(&decoded(vec![probe]), ReplaySource::Startup, None);
+        let mut rows = reasserted_records();
+        match scenario {
+            "gap" => rows[1]["query_sequence"] = json!(99),
+            "changed-level" => {
+                rows[0]["sql"] = json!("SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            }
+            "active" => rows[0]["server_status_before"] = json!(1),
+            "failed" => rows[0]["response"]["status"] = json!("error"),
+            _ => {}
+        }
+        let plans = registry.prepare(&decoded(rows), ReplaySource::Case, Some("case"));
+        assert_eq!(plans.len(), 1, "{scenario}");
+        let plan = &plans[0];
+        assert_eq!(plan.required, BTreeSet::from([4, 5, 6]), "{scenario}");
+        assert_eq!((plan.end, plan.reset), (6, 8), "{scenario}");
+        if scenario == "valid" {
+            assert_eq!(plan.setup, 0);
+            assert_eq!(plan.reassertions, BTreeSet::from([2]));
+        } else {
+            assert_eq!(plan.setup, 2, "{scenario}");
+            assert!(plan.reassertions.is_empty(), "{scenario}");
         }
     }
 }

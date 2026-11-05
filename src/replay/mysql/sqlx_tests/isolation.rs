@@ -1,5 +1,5 @@
 //! Actual TLS/MySQL clients exercise scoped isolation without changing SQL data.
-use super::super::isolation::tests::{baseline, records};
+use super::super::isolation::tests::{baseline, reasserted_records, records};
 use super::*;
 use sqlx::Executor;
 
@@ -33,11 +33,12 @@ async fn body(client: &mut MySqlConnection) {
 #[tokio::test]
 async fn next_isolation_uses_real_transaction_delivery_and_omits_only_the_source_session_reset() {
     tokio::time::timeout(Duration::from_secs(30), async {
-        for (policy, pooled_source, same_baseline) in [(None, false, false), (None, true, false),
-            (Some("format: traffic-policy/v3\nmysql: {}\njson:\n  fields:\n    /id: {kind: identity, formats: [decimal]}\n"), false, false),
-            (None, false, true), (None, true, true)] {
-            let mut source = records();
-            let second = records().into_iter().map(|mut row| {
+        for (policy, pooled_source, same_baseline, reasserted) in [(None, false, false, false), (None, true, false, false),
+            (Some("format: traffic-policy/v3\nmysql: {}\njson:\n  fields:\n    /id: {kind: identity, formats: [decimal]}\n"), false, false, false),
+            (None, false, true, false), (None, true, true, false),
+            (None, false, true, true), (None, true, true, true)] {
+            let mut source = if reasserted { reasserted_records() } else { records() };
+            let second = source.clone().into_iter().map(|mut row| {
                 row["query_sequence"] = json!(row["query_sequence"].as_u64().unwrap() + 10);
                 row
             }).collect::<Vec<_>>();
@@ -75,9 +76,11 @@ async fn next_isolation_uses_real_transaction_delivery_and_omits_only_the_source
             let audit = state.mysql.isolation.audit();
             assert_eq!(audit.len(), 2);
             assert!(audit.iter().all(|v| v["reset_omission_proven"] == true));
+            assert!(audit.iter().all(|v| v["source_reassertion_indices"].as_array().unwrap().len()
+                == usize::from(reasserted)));
             assert_eq!(state.mysql.exchanges.iter().filter(|e|
                 e.optional_session == Some(OptionalSessionExchange::TransactionIsolation)
-                && e.status == ReplayExchangeStatus::Available).count(), 2);
+                && e.status == ReplayExchangeStatus::Available).count(), if reasserted { 4 } else { 2 });
             task.abort();
         }
     }).await.unwrap();
@@ -93,6 +96,7 @@ async fn isolation_rejects_unproven_modes_active_settings_cross_socket_and_missi
             "cross-socket",
             "missing-begin",
             "missing-member",
+            "reasserted-missing-member",
             "ambiguous-default",
         ] {
             let globals = if scenario == "ambiguous-default" {
@@ -100,13 +104,21 @@ async fn isolation_rejects_unproven_modes_active_settings_cross_socket_and_missi
                 another["connection_id"] = json!(Uuid::from_u128(93));
                 another["response"]["rows"][0][0]["value"] = json!("READ-COMMITTED");
                 vec![baseline(), another]
+            } else if scenario == "reasserted-missing-member" {
+                let mut probe = baseline();
+                probe["response"]["rows"][0][0]["value"] = json!("READ-COMMITTED");
+                vec![probe]
             } else if scenario == "missing-baseline" {
                 vec![]
             } else {
                 vec![baseline()]
             };
-            let (temp, address, runtime, task) =
-                fixture_with_global(&records(), &globals, None).await;
+            let rows = if scenario == "reasserted-missing-member" {
+                reasserted_records()
+            } else {
+                records()
+            };
+            let (temp, address, runtime, task) = fixture_with_global(&rows, &globals, None).await;
             let mut client = open(address, &temp).await;
             match scenario {
                 "active" => {
@@ -178,7 +190,7 @@ async fn isolation_rejects_unproven_modes_active_settings_cross_socket_and_missi
                             .is_err()
                     );
                 }
-                "missing-member" => {
+                "missing-member" | "reasserted-missing-member" => {
                     client
                         .execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
                         .await
