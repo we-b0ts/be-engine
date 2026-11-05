@@ -173,10 +173,11 @@ is unclear.
   retire the live correspondence.
   `replay/assertion/interaction/client_ack` separately owns original client
   request provenance and exact native reply pairing for fast replay. It pairs
-  only contiguous plain ACK runs whose unique namespace/id request identities
-  have no direct or transitive completion ordering, with transport/namespace
-  boundaries retained. Payload contracts and all business event positions stay
-  strict; no expected output enters the input executor.
+  plain ACKs by unique namespace/id request identity and preserves observed
+  completion ordering. Its `mixed` child aligns bounded runs containing text
+  business events, preserving their relative order and requiring a pending
+  original request with no conflicting input or transport boundary. Payload
+  contracts stay strict and no expected output enters the input executor.
 
 - `dependency/termination` owns protocol-independent peer observations, monotonic
   termination time and explicit transport FIN/RST control. Recorder connection

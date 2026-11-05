@@ -150,16 +150,16 @@ fn compare_outputs_global_with_time_copies(
     let actual_events = comparable(actual)?;
     let sse = expected.protocol == Protocol::Sse && actual.protocol == Protocol::Sse;
     let socketio = expected.protocol == Protocol::SocketIo && actual.protocol == Protocol::SocketIo;
-    let alignment = ack_context
-        .filter(|_| socketio)
-        .map(|context| context.alignment(&expected_events, &actual_events))
-        .unwrap_or_else(|| (0..actual_events.len()).collect());
     let source_offsets = expected
         .events
         .iter()
         .filter(|event| !event.heartbeat)
         .map(|event| event.offset_ms)
         .collect::<Vec<_>>();
+    let alignment = ack_context
+        .filter(|_| socketio)
+        .map(|context| context.alignment(&expected_events, &actual_events, &source_offsets))
+        .unwrap_or_else(|| (0..actual_events.len()).collect());
     let target_offsets = actual
         .events
         .iter()
