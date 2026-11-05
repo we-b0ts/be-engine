@@ -376,6 +376,18 @@ Dependency responses retain their original case and finite delivery state;
 streamed responses remain in flight through body completion. Normal case closure
 does not terminate Target or require a new run for the remaining selected cases.
 
+An observed client EOF or reset at a complete framing boundary with pending
+business work uses a separate Case tail window in Recorder and managed Replay.
+The primary transport ends at its actual boundary. Case admission stays open
+until 15 continuous seconds without relevant dependency activity and without
+accepted I/O in flight, with a five-minute observation cap. Real activity
+restarts the quiet interval. The cap closes admission, then the usual bounded
+drain handles already accepted I/O. A quiet or capped observation alone does
+not fail the recorded Case, prove business completion, or waive any dependency
+comparison. A transport end after normal business completion uses the ordinary
+close path. An incomplete frame or failed transport confirmation retains its
+existing failure path.
+
 Longer detached work uses the existing source-proven process-owned policy.
 Ordinary process-owned selectors cover MySQL, Redis, HTTP, Memcached and Motan.
 API-origin selectors currently cover MySQL and Redis, with an identity captured

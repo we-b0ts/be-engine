@@ -113,6 +113,11 @@ submission; they are not additional JSON fields:
   manual attribution of the captured occurrences.
 
 For an async origin, rule generation is a required step **after ownership analysis**.
+When the analysis instead proves a disconnect path after an observed premature
+client transport end, use the engine's `engine.client_abort_tail:v1` binding
+and exact claimed unused UUIDs. `context.client_abort_origins` is a candidate
+list. Prove the call chain, original Case identity and occurrence ownership
+independently, even when several other Cases intervened.
 Use the complete effective Case inventory: original Case-owned dependencies plus
 the occurrences assigned by this analysis, excluding proven foreign work. Inspect
 the last business exchanges by completion time, not the last page, connection

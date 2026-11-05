@@ -465,6 +465,9 @@ is unclear.
   release, preventing a new delivery from entering between the check and release.
   Its `pending` child assembles bounded timeout evidence from protocol-owned
   delivery references and observation claims while holding that same lock.
+  Its `client_abort` child waits for bounded Case-local inactivity after a
+  premature transport end and uses the same atomic release barrier. Source's
+  `active_case/client_abort` observes the same lifecycle at capture time.
   A failed primary status ends normal async business waiting while
   retaining unused/dirty evidence; protocol owners expose delivery state, and
   runner response assertions retain the primary failure independently of cleanup.

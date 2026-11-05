@@ -1,5 +1,6 @@
 //! Provenance is accepted only under effective Source-owned task/lifecycle rules.
 use super::{
+    client_abort,
     model::ProposedAttribution,
     source::{self, SourceSnapshot},
 };
@@ -40,6 +41,12 @@ pub(super) fn fingerprints(policy: &CompiledPolicy) -> Result<BTreeMap<String, S
     for (api, rules) in &policy.async_api {
         values.insert(async_id(api), source::digest(&serde_json::to_vec(rules)?));
     }
+    ensure!(
+        values
+            .insert(client_abort::RULE_ID.into(), client_abort::fingerprint())
+            .is_none(),
+        "client-abort attribution identity is reserved for the engine"
+    );
     Ok(values)
 }
 
@@ -91,6 +98,9 @@ pub(super) fn groups(policy: &CompiledPolicy) -> Result<Vec<Value>> {
         "scenario_count":rules.len(),"scenarios":rules,
         "dependency_requests":"automatically captured until the declared end; no intermediate request list"}));
     }
+    groups.push(json!({"kind":"client_abort_tail","rule_id":client_abort::RULE_ID,
+        "fingerprint":client_abort::fingerprint(),
+        "association":"Prove exact unused Source occurrences from later Cases belong to an earlier observed client-aborted Case. Requires a fresh Replay of the effective origin scope."}));
     Ok(groups)
 }
 
@@ -110,6 +120,17 @@ pub(super) fn bind(
         "proven ownership must bind effective task/lifecycle rules"
     );
     let active = fingerprints(&policy)?;
+    if proposal
+        .rule_binding
+        .rule_ids
+        .contains(client_abort::RULE_ID)
+    {
+        client_abort::bind(state, source, proposal)?;
+        return Ok(BTreeMap::from([(
+            client_abort::RULE_ID.into(),
+            client_abort::fingerprint(),
+        )]));
+    }
     match &proposal.owner {
         DependencyOwner::Process {
             source_task,

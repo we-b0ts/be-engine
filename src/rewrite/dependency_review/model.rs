@@ -167,6 +167,8 @@ pub struct AttributionReviewContext {
     pub assignment_id: String,
     pub claims: Vec<ForeignUnusedClaim>,
     pub task_groups: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub client_abort_origins: Vec<serde_json::Value>,
     pub evidence_commands: Vec<crate::rewrite::RewriteCommandSpec>,
     pub effective_policy_fingerprint: String,
     pub rule_groups: Vec<serde_json::Value>,

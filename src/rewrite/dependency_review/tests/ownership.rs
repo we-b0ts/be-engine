@@ -3,6 +3,149 @@ use super::*;
 use crate::rewrite::model::RewriteAction;
 
 #[tokio::test]
+async fn a_client_abort_proof_can_reassign_unused_occurrences_from_multiple_later_cases() {
+    let target = crate::rewrite::worker::tests::configured_target();
+    fs::write(target.path().join(".traffic-e2e/policy.yaml"), POLICY).unwrap();
+    let recorder = Recorder::new(target.path().join(".traffic-e2e/local/recordings"))
+        .await
+        .unwrap();
+    let mut cases = Vec::new();
+    for second in [0, 2, 4] {
+        let case = crate::recorder::CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".into(),
+            uri_group: None,
+        };
+        let mut request =
+            json!({"method":"GET","uri":"/api","timestamp":format!("2026-10-31T00:00:0{second}Z")});
+        let mut response = json!({"status":101});
+        if second == 0 {
+            request["interaction"] = json!({"protocol":"socket_io","actions":[{"offset_ms":500,"action":{"kind":"transport_end","end":"eof"}}]});
+            response["interaction"] = json!({"protocol":"socket_io","end":{"reason":"client_transport_end","clean":true,"offset_ms":1000,"pending":[1]}});
+        }
+        recorder
+            .write_case_json(&case, "request.json", &request)
+            .await
+            .unwrap();
+        recorder
+            .write_case_json(&case, "expected-response.json", &response)
+            .await
+            .unwrap();
+        recorder
+            .append_case_dependency(&case, &http("/disconnect"), "active_window")
+            .await
+            .unwrap();
+        recorder.publish_case(&case).await.unwrap();
+        cases.push(case.id);
+    }
+    recorder.finish_run().await.unwrap();
+    let mut state = crate::rewrite::test_support::test_state();
+    state.case_source = Some(recorder.run_dir.as_ref().clone());
+    state.recording_run_id = recorder
+        .run_dir
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into();
+    state.source_revision =
+        Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+    let original = source::load(&state).unwrap();
+    let ids = original
+        .exchanges
+        .iter()
+        .filter_map(|(id, event)| {
+            matches!(&event.capture.attribution, DependencyOwner::Case { origin_case_id, .. }
+            if cases[1..].contains(origin_case_id))
+            .then_some(*id)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(ids.len(), 2);
+    let claim: ForeignUnusedClaim = serde_json::from_value(json!({
+        "id":"returned", "api":"/api", "method_api":"GET /api", "recording_run_id":state.recording_run_id,
+        "source_revision":state.source_revision, "source_inventory_id":original.identity,
+        "attempt":1,"execution_identity":"actual","report_sha256":"report",
+        "source_exchange_ids":ids,"reason":"disconnect hook from an earlier request",
+        "status":"pending","rejection":null
+    })).unwrap();
+    state
+        .dependency_review
+        .claims
+        .insert(claim.id.clone(), claim);
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let context = dependency_attribution_context(crate::rewrite::RewriteContext {
+        target_root: target.path().into(),
+    })
+    .unwrap();
+    assert_eq!(context.client_abort_origins.len(), 1);
+    assert_eq!(
+        context.client_abort_origins[0]["origin_case_id"],
+        json!(cases[0])
+    );
+    assert_eq!(
+        context.client_abort_origins[0]["later_claimed_cases"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let proposal: ProposedAttribution = serde_json::from_value(json!({
+        "claim_ids":["returned"],"source_exchange_ids":ids,"source_task":"disconnect hook",
+        "owner":{"kind":"case","origin_case_id":cases[0]},
+        "proof":{"source_revision":context.source_revision,"source_locations":["src/handler.rs:10"],
+            "call_chain":"client EOF invokes disconnect hook", "exclusive_scope":"exact same-connection disconnect calls"},
+        "impact":"classification","obligation_scope":{"kind":"api","api":"/api","method":"GET"},
+        "missing_evidence":null,"rule_binding":{"policy_fingerprint":context.effective_policy_fingerprint,
+            "rule_ids":[super::super::client_abort::RULE_ID]}
+    })).unwrap();
+    let mut normal = proposal.clone();
+    normal.owner = DependencyOwner::Case {
+        origin_case_id: cases[1],
+        task_instance: None,
+    };
+    assert!(rules::bind(target.path(), &state, &original, &mut normal).is_err());
+    let path = target.path().join("client-abort-proof.json");
+    fs::write(
+        &path,
+        serde_json::to_vec(&AttributionSubmission {
+            schema: SCHEMA.into(),
+            assignment_id: context.assignment_id,
+            expected_revision: context.revision,
+            recording_run_id: context.recording_run_id,
+            source_revision: context.source_revision,
+            source_inventory_id: context.source_inventory_id,
+            decisions: vec![proposal],
+            investigation_resolutions: vec![],
+            unresolved_claim_ids: BTreeSet::new(),
+            claim_rejections: vec![],
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let result = apply_dependency_attribution(AttributionCommandOptions {
+        target_root: target.path().into(),
+        file: path,
+    })
+    .unwrap();
+    assert_eq!(result["ownership_complete"], true);
+    assert_eq!(result["accepted_apis"], json!([]));
+    assert!(!result["pending_obligations"].as_array().unwrap().is_empty());
+    let (effective, _) = freeze_dependency_attribution(
+        Some(target.path()),
+        state.case_source.as_deref().unwrap(),
+        &state.recording_run_id,
+    )
+    .unwrap();
+    for id in ids {
+        assert!(
+            matches!(effective[&id], DependencyOwner::Case { origin_case_id, .. } if origin_case_id == cases[0])
+        );
+    }
+}
+
+#[tokio::test]
 async fn known_owned_new_batch_does_not_dispatch_repository_analyst() {
     let (target, mut state, _) = ready_batch_fixture().await;
     state.dependency_review.recording_run_id = None;

@@ -294,6 +294,13 @@ ownership disputes. All ownerless occurrences need effective process/async-API
 rules and positive attribution before formal Replay; empty review does not
 release the gate. A new batch with known owners needs no attribution analyst.
 
+For an unused ownership return after a premature client transport end,
+`context.client_abort_origins` identifies earlier Source candidates. The
+analyst may prove an origin separated by multiple Cases. A detached business
+task still needs its applicable async rule. A proved disconnect path uses the
+engine rule `engine.client_abort_tail:v1` and exact claimed UUIDs. Follow the
+returned Replay obligation for the changed origin scope.
+
 A report of missing traffic already claims ownership for its API. Keep that
 diagnosis with the existing implementer: require its own async lifecycle rule or
 an exact recording omission and interception/response-IP-URL rewrite inputs.

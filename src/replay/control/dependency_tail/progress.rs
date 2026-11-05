@@ -36,7 +36,7 @@ impl NoProgress {
     }
 }
 
-pub(super) fn counts(state: &ReplayState, case: &str) -> [usize; 6] {
+pub(in crate::replay::control) fn counts(state: &ReplayState, case: &str) -> [usize; 6] {
     let case = Some(case);
     [
         state

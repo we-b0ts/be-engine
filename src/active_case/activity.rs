@@ -168,11 +168,22 @@ impl DependencyActivity {
         quiet: std::time::Duration,
         deadline: Instant,
     ) -> bool {
+        self.wait_until_quiet_after(quiet, deadline, None).await
+    }
+
+    pub(super) async fn wait_until_quiet_after(
+        &self,
+        quiet: std::time::Duration,
+        deadline: Instant,
+        since: Option<Instant>,
+    ) -> bool {
         loop {
             let changed = self.changed.notified();
             let (in_flight, quiet_at) = {
                 let state = self.state.lock().expect("dependency activity poisoned");
-                (state.in_flight, state.last_activity + quiet)
+                let last =
+                    since.map_or(state.last_activity, |since| state.last_activity.max(since));
+                (state.in_flight, last + quiet)
             };
             let now = Instant::now();
             if in_flight == 0 && now >= quiet_at {

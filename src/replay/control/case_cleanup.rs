@@ -2,11 +2,14 @@
 use super::*;
 use std::collections::BTreeMap;
 use tokio::time::Instant as TokioInstant;
+mod client_abort;
 mod pending;
+pub(super) use client_abort::{lock_for_abort_release, mark_client_aborted};
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct CaseCleanup {
     failed: BTreeMap<String, TokioInstant>,
+    client_abort: Option<(String, TokioInstant)>,
 }
 
 impl CaseCleanup {
@@ -16,6 +19,16 @@ impl CaseCleanup {
 
     pub(super) fn end(&mut self, case: &str) {
         self.failed.remove(case);
+        if self.client_abort_at(case).is_some() {
+            self.client_abort = None;
+        }
+    }
+
+    pub(super) fn client_abort_at(&self, case: &str) -> Option<TokioInstant> {
+        self.client_abort
+            .as_ref()
+            .filter(|(id, _)| id == case)
+            .map(|(_, at)| *at)
     }
 }
 

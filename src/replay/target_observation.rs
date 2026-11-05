@@ -3,6 +3,8 @@ use super::*;
 use crate::policy_evidence::{
     ClockPair, ObservationRetention, TargetMetadata, TargetRole, WitnessClocks, WitnessStore,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::time::Instant as TokioInstant;
 
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct CoverageError {
@@ -18,7 +20,15 @@ pub(in crate::replay) struct TargetObservations {
     key_context: PathBuf,
     policy_fingerprint: String,
     failure: Arc<std::sync::Mutex<Option<CoverageError>>>,
+    abort_tail: Arc<AbortTail>,
 }
+
+#[derive(Debug, Default)]
+struct AbortTail {
+    watching: AtomicBool,
+    last: std::sync::Mutex<Option<(String, TokioInstant)>>,
+}
+
 impl TargetObservations {
     pub(in crate::replay) fn new(
         store: WitnessStore,
@@ -32,7 +42,33 @@ impl TargetObservations {
             key_context,
             policy_fingerprint,
             failure: Default::default(),
+            abort_tail: Default::default(),
         }
+    }
+    pub(super) fn watch_abort_tail(&self, case: &str, at: TokioInstant) {
+        *self
+            .abort_tail
+            .last
+            .lock()
+            .expect("abort activity poisoned") = Some((case.into(), at));
+        self.abort_tail.watching.store(true, Ordering::Release);
+    }
+    pub(super) fn abort_tail_activity(&self, case: &str) -> Option<TokioInstant> {
+        self.abort_tail
+            .last
+            .lock()
+            .expect("abort activity poisoned")
+            .as_ref()
+            .filter(|(id, _)| id == case)
+            .map(|(_, at)| *at)
+    }
+    pub(super) fn end_abort_tail(&self) {
+        self.abort_tail.watching.store(false, Ordering::Release);
+        *self
+            .abort_tail
+            .last
+            .lock()
+            .expect("abort activity poisoned") = None;
     }
     pub(in crate::replay) fn key_context(&self) -> &Path {
         &self.key_context
@@ -97,6 +133,18 @@ impl TargetObservations {
         observed: DateTime<Utc>,
         payload: &[u8],
     ) -> Result<ObservationRetention> {
+        if let Some(case) = case
+            && self.abort_tail.watching.load(Ordering::Acquire)
+            && let Some((owner, at)) = self
+                .abort_tail
+                .last
+                .lock()
+                .expect("abort activity poisoned")
+                .as_mut()
+            && owner == case
+        {
+            *at = TokioInstant::now();
+        }
         self.store.record_target(
             &id.to_string(),
             TargetMetadata {

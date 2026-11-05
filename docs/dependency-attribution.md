@@ -64,6 +64,21 @@ readable. The analyst must either reject the return with Source proof, preservin
 the original owner, or prove another owner under effective rules. A return never
 waives dirty or incomplete capture and does not itself change the owner.
 
+After a premature client transport end, later Cases can contain unused Source
+occurrences produced by that origin's disconnect path. Return the exact unused
+UUIDs from the affected Cases with the same claim command. Analyst context
+lists earlier observed client-abort candidates as timing clues, including
+origins separated by multiple subsequent Cases. The analyst proves the actual
+call chain and exact occurrence ownership. For ordinary detached business use
+the existing end-only async API rule. For the interrupted transport path bind
+`engine.client_abort_tail:v1` with the current policy fingerprint and the
+claimed UUIDs, using the earlier Case as owner. The engine requires a sealed,
+cleanly observed premature client EOF or reset, a later original Case and a
+shared Source process epoch. The overlay removes just those occurrences from
+the later scopes and requires real Replay of the changed origin scope.
+An unmatched Target request remains separate evidence. Temporal proximity alone
+cannot authorize reassignment, consumption or a new response.
+
 ### Missing traffic remains with its reporting API
 
 An unmatched request is an independent Target observation, even when it has no
