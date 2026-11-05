@@ -1933,6 +1933,9 @@ Target processing and dependency calls initiated by Target retain their real
 execution time. Process-owned Pub/Sub and abnormal or interrupted HTTP streams
 retain their existing lifecycle timing.
 
+The same fast setting and interval cap accelerate supported
+[Socket.IO input gaps and completed quiet tails](interaction-recording.md#completion-profiles).
+
 `replay_timing: recorded` preserves Source stream timing; omitting it has the same
 behavior. The low-level equivalents are
 `traffic-e2e replay --stream-timing fast --stream-interval-cap-ms 5`.

@@ -7,6 +7,7 @@ pub(super) struct Plan {
     pub input: InputTranscript,
     pub source_start: Option<DateTime<Utc>>,
     pub covered: bool,
+    pub fast: Option<fast::Source>,
 }
 
 #[derive(Deserialize)]
@@ -15,7 +16,7 @@ struct Request {
     interaction: InputTranscript,
 }
 
-pub(super) fn load(case: &ReplayCase) -> Result<Plan> {
+pub(super) fn load(case: &ReplayCase, fast_cap: Option<u64>) -> Result<Plan> {
     let raw = crate::request_headers::load_request_file(&case.dir.join("request.json"))?;
     let request: Request = serde_json::from_slice(&raw)?;
     request.interaction.validate()?;
@@ -27,6 +28,17 @@ pub(super) fn load(case: &ReplayCase) -> Result<Plan> {
     // adapters exist. Their claim/consumed state is not a delivery substitute.
     let mut records = crate::dependency_index::RecordStream::open(&case.dependencies_path)?;
     let mut covered = request.timestamp.is_some();
+    let mut fast = fast_cap
+        .zip(request.timestamp)
+        .filter(|_| {
+            !request.interaction.policy.preserve_input_timing
+                && request
+                    .interaction
+                    .socket_io_heartbeat
+                    .as_ref()
+                    .is_none_or(|heartbeat| !heartbeat.responses.is_empty())
+        })
+        .map(|(cap, start)| fast::Source::new(&case.dir, &request.interaction, cap, start));
     #[derive(Deserialize)]
     struct Kind {
         event_type: String,
@@ -43,10 +55,14 @@ pub(super) fn load(case: &ReplayCase) -> Result<Plan> {
             kind.event_type.as_str(),
             "redis_exchange" | "redis_pub_sub_push"
         );
+        if let Some(fast) = fast.as_mut() {
+            fast.record(raw)?;
+        }
     }
     Ok(Plan {
         input: request.interaction,
         source_start: request.timestamp,
         covered,
+        fast,
     })
 }

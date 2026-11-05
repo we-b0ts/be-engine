@@ -231,6 +231,21 @@ project:
     socketio_timing: auto # default; use recorded for the original input timeline
 ```
 
+Managed Replay with `replay_timing: fast` in `regression.yaml` also accelerates
+Socket.IO inputs in `auto`, using the same `replay_interval_cap_ms` (default 5 ms).
+Business inputs can advance after the original MySQL and Redis requests in
+their preceding interval have been admitted on the actual Target Case.
+Recorded completion and callback prerequisites still apply. If a preceding
+request remains missing, the input is sent at its original offset. Existing
+recordings with sufficient request timestamps and native identities can be
+reused. Explicit `recorded` and `preserve_input_timing` retain original timing.
+
+For a clean Source business-idle or completed client-close tail, Fast can
+shorten the remaining quiet once the actual output and dependency delivery
+requirements are met. Client cancellation with pending work, server-driven
+termination and incomplete tail evidence retain their normal closing rules.
+Dependencies triggered by the close retain their existing drain.
+
 JWT request rules also select exact fields in namespace CONNECT auth objects,
 using the same named signing profile as header or query credentials:
 
@@ -289,7 +304,7 @@ business work or authorize fast input compression. Terminal-event completion
 contracts, reused ACK IDs, unsupported inputs and ambiguous
 same-millisecond boundaries retain their original unused slots.
 The scheduler continues receiving WS frames and handling heartbeats while waiting.
-Independent transport cancellation keeps its mapped original deadline, even if
+In the ordinary Auto scheduler, independent transport cancellation keeps its mapped original deadline, even if
 an earlier input is blocked; skipped inputs remain incomplete. A completion-bound
 close retains its explicit `after` prerequisites and the full interval after actual
 completion. Namespace/transport close gaps themselves are not compressed.

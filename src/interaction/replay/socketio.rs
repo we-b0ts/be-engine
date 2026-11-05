@@ -71,6 +71,15 @@ pub(super) async fn execute_with_feedback(
     let mut timing_sequence = None;
     let mut timing_ready = None;
     let mut removed_ms = 0;
+    let ordered_fast = input_timing
+        .as_ref()
+        .is_some_and(|timing| timing.ordered_fast());
+    let fast_tail = input_timing.as_ref().and_then(|timing| timing.fast_tail());
+    let mut tail_wait: Option<futures_util::future::BoxFuture<'static, Result<Advance>>> = None;
+    let mut tail_ready_at: Option<Instant> = None;
+    let mut tail_compressed = false;
+    let mut output_count = 0;
+    let mut last_output = started;
     let mut heartbeats = heartbeat::Heartbeats::new(transcript);
     let mut namespaces = namespace::Admission::default();
     let has_transport_end = transcript
@@ -137,6 +146,31 @@ pub(super) async fn execute_with_feedback(
                     ))
                 })
             });
+        let at_fast_tail = fast_tail.is_some_and(|tail| {
+            output_count >= tail.output_count
+                && observed.pending().is_empty()
+                && match tail.close_sequence {
+                    Some(sequence) => admitted.is_some_and(|action| action.sequence == sequence),
+                    None => action.is_none(),
+                }
+        });
+        if at_fast_tail
+            && tail_wait.is_none()
+            && tail_ready_at.is_none()
+            && let Some(timing) = &input_timing
+        {
+            let timing = timing.clone();
+            tail_wait = Some(Box::pin(async move { timing.wait_fast_tail().await }));
+        }
+        let fast_idle_due = fast_tail
+            .filter(|tail| at_fast_tail && tail.close_sequence.is_none())
+            .zip(tail_ready_at)
+            .map(|(tail, ready)| {
+                ready.max(last_sent).max(last_output) + Duration::from_millis(tail.idle_ms)
+            });
+        if fast_idle_due.is_some_and(|due| Instant::now() >= due) {
+            break (EndReason::BusinessIdle, true);
+        }
         if let (Some(action), Some(timing)) = (admitted, &input_timing)
             && (action.compressible_gap || delivery_prefix(action))
             && !cancellation(action)
@@ -164,9 +198,17 @@ pub(super) async fn execute_with_feedback(
                     return (timing_ready == Some(action.sequence)).then(Instant::now);
                 }
                 // Without dependency coverage no gap is eligible for acceleration.
+                let removed = if tail_ready_at.is_none()
+                    && fast_tail.is_some_and(|tail| tail.close_sequence == Some(action.sequence))
+                {
+                    0
+                } else {
+                    removed_ms
+                };
                 let mut due =
-                    started + Duration::from_millis(action.offset_ms.saturating_sub(removed_ms));
+                    started + Duration::from_millis(action.offset_ms.saturating_sub(removed));
                 if cancellation(action)
+                    && !tail_compressed
                     && let Some(gap_start) = action.gap_start_ms
                     && let Some(barrier) =
                         action.after.iter().filter_map(|id| completed.get(id)).max()
@@ -197,9 +239,13 @@ pub(super) async fn execute_with_feedback(
                     || matches!(action.action, InputActionKind::TransportEnd { .. }))
         });
         let cancel_due = cancel.map(|action| {
-            started + Duration::from_millis(action.offset_ms.saturating_sub(removed_ms))
+            let removed = if ordered_fast { 0 } else { removed_ms };
+            started + Duration::from_millis(action.offset_ms.saturating_sub(removed))
         });
-        let wake = due.map_or(lifecycle_deadline, |due| due.min(lifecycle_deadline));
+        let wake = due
+            .into_iter()
+            .chain(fast_idle_due)
+            .fold(lifecycle_deadline, Instant::min);
         let heartbeat_due = heartbeats.next_due();
         tokio::select! {
             biased;
@@ -243,11 +289,21 @@ pub(super) async fn execute_with_feedback(
                 timing_ready = timing_sequence;
                 timing_wait = None;
             }
+            result = async { tail_wait.as_mut().expect("pending fast tail query").await }, if tail_wait.is_some() => {
+                let advance = result?;
+                tail_compressed = advance.removed_ms > removed_ms;
+                removed_ms = advance.removed_ms;
+                tail_ready_at = Some(Instant::now());
+                tail_wait = None;
+            }
             incoming = transport.recv() => {
                 match incoming.context("Target session reader stopped")? {
                     ReaderEvent::Message(message) => {
                         let before = observed.pending();
-                        observed.output(message.clone(), elapsed_ms(started))?;
+                        if !observed.output(message.clone(), elapsed_ms(started))?.heartbeat {
+                            output_count += 1;
+                            last_output = Instant::now();
+                        }
                         note_completed(before, &observed, &mut completed);
                         if transcript.protocol == Protocol::SocketIo {
                             for packet in server_decoder.push(&message)? {

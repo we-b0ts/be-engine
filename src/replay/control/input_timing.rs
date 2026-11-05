@@ -6,6 +6,7 @@ use crate::interaction::replay::timing::{
 use crate::replay::control::dependency_tail::RecordedReference;
 use tokio::time::Instant as MonoInstant;
 mod client;
+mod fast;
 mod source;
 pub(crate) use client::connect;
 
@@ -45,6 +46,7 @@ pub(in crate::replay) struct Live {
     mode: SocketIoTiming,
     evidence: Vec<Evidence>,
     advanced: BTreeSet<u64>,
+    fast: Option<fast::Plan>,
 }
 
 impl Live {
@@ -83,16 +85,21 @@ pub(super) async fn accept(
             .as_deref()
             .context("input timing requires case_id")?;
         if request.command == "input_timing_begin" {
-            let recording = {
+            let mode = request.socketio_timing.unwrap_or_default();
+            let (recording, fast_cap) = {
                 let state = shared.lock().await;
                 ensure_live(&state, case)?;
-                state
+                let recording = state
                     .cases
                     .get(case)
                     .context("input timing case missing")?
-                    .clone()
+                    .clone();
+                let fast_cap = (mode == SocketIoTiming::Auto
+                    && state.stream_timing == Some(ReplayStreamTiming::Fast))
+                .then_some(state.stream_interval_cap_ms);
+                (recording, fast_cap)
             };
-            let plan = tokio::task::spawn_blocking(move || source::load(&recording))
+            let mut plan = tokio::task::spawn_blocking(move || source::load(&recording, fast_cap))
                 .await
                 .context(SourcePlanUnavailable)?
                 .context(SourcePlanUnavailable)?;
@@ -109,9 +116,16 @@ pub(super) async fn accept(
                 .epoch(case)
                 .or_else(|| state.redis.request_contracts.request_times(case).target)
                 .unwrap_or_else(Utc::now);
-            let (mut evidence, covered) = match plan.source_start {
-                Some(start) => state.redis.timing_evidence(case, start)?,
-                None => (Vec::new(), false),
+            let fast = plan
+                .fast
+                .take()
+                .and_then(|source| source.resolve(&state, case, &plan.input).ok());
+            let fast_tail = fast.as_ref().and_then(fast::Plan::tail);
+            let ordered_fast = fast.is_some();
+            let (mut evidence, covered) = match (fast.is_some(), plan.source_start) {
+                (true, _) => (Vec::new(), false),
+                (false, Some(start)) => state.redis.timing_evidence(case, start)?,
+                (false, None) => (Vec::new(), false),
             };
             // Keep immutable metadata ordered independently of the wire-success
             // journal. Delivery hooks do not rescan this inventory per push.
@@ -120,7 +134,6 @@ pub(super) async fn accept(
                 covered: plan.covered && covered,
                 ..plan
             };
-            let mode = request.socketio_timing.unwrap_or_default();
             let candidates = plan
                 .input
                 .actions
@@ -132,6 +145,7 @@ pub(super) async fn accept(
                 ?mode,
                 candidates,
                 dependency_timing_covered = plan.covered,
+                ordered_fast,
                 "prepared Socket.IO input timeline"
             );
             state.input_timing = Some(Live {
@@ -144,8 +158,9 @@ pub(super) async fn accept(
                 mode,
                 evidence,
                 advanced: BTreeSet::new(),
+                fast,
             });
-            return Ok(serde_json::json!({"ok":true,"epoch":epoch}));
+            return Ok(serde_json::json!({"ok":true,"epoch":epoch,"ordered_fast":ordered_fast,"fast_tail":fast_tail}));
         }
         let query = request
             .input_timing
@@ -163,6 +178,9 @@ pub(super) async fn accept(
                 && live.admission_epoch == state.admission_epoch,
             "input timing request epoch changed"
         );
+        if live.fast.is_some() {
+            return fast::advance(&mut state, request.command == "input_timing_tail", query);
+        }
         let action = live
             .plan
             .input

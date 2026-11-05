@@ -178,6 +178,10 @@ is unclear.
   business events, preserving their relative order and requiring a pending
   original request with no conflicting input or transport boundary. Payload
   contracts stay strict and no expected output enters the input executor.
+  `replay/control/input_timing/fast` owns ordered Socket.IO cuts using original
+  Case request identities, actual native admission and the stream interval cap.
+  It projects clean tail timing and frame counts separately from payloads.
+  The Socket.IO executor observes real outputs before allowing a tail cut.
 
 - `dependency/termination` owns protocol-independent peer observations, monotonic
   termination time and explicit transport FIN/RST control. Recorder connection

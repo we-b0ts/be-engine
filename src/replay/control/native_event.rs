@@ -223,6 +223,7 @@ fn feedback_rejection(request: &Value, response: &Value) -> Value {
                     | "native_input_ack"
                     | "input_timing_begin"
                     | "input_timing"
+                    | "input_timing_tail"
             )
         })
         .unwrap_or("unknown_command");
