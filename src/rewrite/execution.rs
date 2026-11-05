@@ -510,7 +510,11 @@ fn running_summary(target_root: &Path, state: Option<&RewriteState>) -> String {
         state.and_then(|state| state.case_source.as_deref()),
         active.api.as_deref(),
     );
-    traffic_summary(&active, replay_progress(target_root, state), &methods)
+    traffic_summary(
+        &active,
+        replay_progress(target_root, state, &active),
+        &methods,
+    )
 }
 
 fn traffic_summary(
@@ -580,20 +584,22 @@ fn recorded_methods(case_source: Option<&Path>, api: Option<&str>) -> Vec<String
 fn replay_progress(
     target_root: &Path,
     state: Option<&RewriteState>,
+    active: &super::traffic_operation::TrafficOperationMarker,
 ) -> Option<crate::e2e_run::E2eActiveProgress> {
     let state = state?;
-    let case_source = state.case_source.as_ref()?.clone();
-    let api_key = state.group_id.as_deref()?;
-    crate::e2e_run::focused_active_progress(
-        &crate::E2eRunContext {
-            target_root: target_root.to_path_buf(),
-            case_source,
-            run_key: None,
-        },
-        api_key,
-    )
-    .ok()
-    .flatten()
+    let context = crate::E2eRunContext {
+        target_root: target_root.to_path_buf(),
+        case_source: state.case_source.as_ref()?.clone(),
+        run_key: None,
+    };
+    if active.api.is_none() {
+        return crate::e2e_run::workflow_active_progress(&context, active.started_at.parse().ok()?)
+            .ok()
+            .flatten();
+    }
+    crate::e2e_run::focused_active_progress(&context, state.group_id.as_deref()?)
+        .ok()
+        .flatten()
 }
 
 fn root(target_root: &Path) -> PathBuf {

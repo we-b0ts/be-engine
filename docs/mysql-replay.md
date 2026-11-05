@@ -94,6 +94,15 @@ replace recorded effects with an in-memory database.
 
 ## Transaction isolation scope
 
+Replay permits an unused `SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED`
+in a proven physical-connection initialization prefix. The contiguous Source
+wire sequence starts at the first driver setup statement and includes successful
+driver settings, an inactive `SET AUTOCOMMIT = 0` and an empty `COMMIT` immediately
+after the isolation setting. All commands must keep the same connection identity.
+Replay reports the unused setting under
+`allowed_unused_mysql_connection_read_committed_exchanges`. Transaction-specific
+settings, other isolation levels and business SQL retain their usual obligations.
+
 Replay can match a driver's next-transaction isolation setting to a proven
 Source session override. This requires an immutable successful
 `SELECT @@transaction_isolation` or `@@session.tx_isolation` initialization
@@ -129,7 +138,10 @@ per Case, 260 exchanges per scope and 4096 installed scopes and baseline connect
 
 Target can instead send `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` as
 `COM_QUERY`, then `BEGIN`, the original business operations and their end. The
-setting consumes the actual Source setup exchange. Admission binds the actual
+setting consumes the actual Source setup exchange. A proved isolation scope's
+transaction members become eligible only after that setup is delivered. This
+keeps identical requests from consuming members before their transaction opens.
+Admission binds the actual
 Target socket; every member must finish delivery on that socket in the same
 explicit transaction. Existing business SQL, value and write-transaction
 equivalence checks still apply. Another socket, wrong level, active-transaction

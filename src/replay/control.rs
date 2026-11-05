@@ -308,7 +308,9 @@ pub(super) async fn handle_control_request(
         "native_event_begin" | "native_event" | "native_connected" | "native_input_ack" => {
             native_event::accept(&request, &state).await
         }
-        "input_timing_begin" | "input_timing" => input_timing::accept(&request, &state).await,
+        "input_timing_begin" | "input_timing" | "input_timing_tail" => {
+            input_timing::accept(&request, &state).await
+        }
         "http_input_timing_begin" | "http_input_timing_wait" | "http_input_timing_closed" => {
             http_input_timing::accept(&request, &state).await
         }

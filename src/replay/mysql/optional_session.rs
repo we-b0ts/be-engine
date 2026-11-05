@@ -5,6 +5,7 @@ use crate::replay::dependencies::DependencyRecord;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod autocommit;
+mod connection_default;
 mod control;
 pub(in crate::replay::mysql) mod read;
 pub(in crate::replay::mysql) use control::successful_begin;
@@ -68,7 +69,7 @@ pub(in crate::replay) fn classify(
             ambiguous.insert(connection);
         }
     }
-    let mut optional = BTreeMap::new();
+    let mut optional = connection_default::classify(records);
     // Classification happens once per loaded file. Borrow SQL already owned
     // by the records and drop this parse-result cache with the classification.
     let mut read_sql = HashMap::<&str, read::Effect>::new();

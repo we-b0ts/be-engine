@@ -1,5 +1,6 @@
 //! Target input execution. This owner never opens expected-response evidence.
 mod feedback;
+pub(crate) mod heartbeat_tail;
 mod http;
 mod socketio;
 pub(crate) mod timing;

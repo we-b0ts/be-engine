@@ -124,6 +124,7 @@ impl InteractionLifecycle {
             reason,
             EndReason::BusinessIdle
                 | EndReason::ServerEof
+                | EndReason::FastHeartbeatTailSkipped
                 | EndReason::ClientClose
                 | EndReason::ClientTransportEnd
         );
@@ -136,7 +137,9 @@ impl InteractionLifecycle {
                 && (self.pending.is_empty()
                     || matches!(
                         reason,
-                        EndReason::ClientClose | EndReason::ClientTransportEnd
+                        EndReason::ClientClose
+                            | EndReason::ClientTransportEnd
+                            | EndReason::FastHeartbeatTailSkipped
                     )),
             partial_message: None,
             close: None,

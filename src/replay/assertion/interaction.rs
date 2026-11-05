@@ -51,7 +51,7 @@ pub(super) fn validate_input(
     Ok(())
 }
 use crate::interaction::model::{
-    MessageKind, OutputObservation, Protocol, TRANSCRIPT_VERSION, WireMessage,
+    EndReason, MessageKind, OutputObservation, Protocol, TRANSCRIPT_VERSION, WireMessage,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -64,7 +64,12 @@ pub(super) fn compare(
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     report: &mut ResponseAssertionCaseReport,
     ack_context: Option<&AckContext>,
+    source_heartbeat_tail: bool,
 ) -> Result<()> {
+    report.fast_heartbeat_tail_skipped = actual.is_some_and(|actual| {
+        actual.protocol == Protocol::SocketIo
+            && actual.end.reason == EndReason::FastHeartbeatTailSkipped
+    });
     let checked = compare_outputs_global_with_time_copies(
         expected,
         actual,
@@ -73,6 +78,7 @@ pub(super) fn compare(
         request_times,
         copies,
         ack_context,
+        source_heartbeat_tail,
     )?;
     report.identity_pairs.extend(checked.identity_pairs());
     report.applied_body_rule_ids.extend(checked.evaluated);
@@ -101,6 +107,7 @@ pub(crate) fn compare_outputs_global(
         request_times,
         &Default::default(),
         None,
+        false,
     )
 }
 
@@ -113,6 +120,7 @@ fn compare_outputs_global_with_time_copies(
     request_times: super::RequestTimes,
     copies: &crate::value_contract::time_copies::DeliveredTimeCopies,
     ack_context: Option<&AckContext>,
+    source_heartbeat_tail: bool,
 ) -> Result<Comparison> {
     let mut report = Comparison::default();
     let (expected, actual) = match (expected, actual) {
@@ -134,13 +142,17 @@ fn compare_outputs_global_with_time_copies(
     if !expected.end.clean || !actual.end.clean {
         mismatch(&mut report, "$interaction/end/clean");
     }
-    if expected.end.reason != actual.end.reason {
+    let heartbeat_tail_skipped = actual.protocol == Protocol::SocketIo
+        && actual.end.reason == EndReason::FastHeartbeatTailSkipped
+        && actual.end.close.is_none()
+        && source_heartbeat_tail;
+    if expected.end.reason != actual.end.reason && !heartbeat_tail_skipped {
         mismatch(&mut report, "$interaction/end/reason");
     }
     if expected.end.pending != actual.end.pending {
         mismatch(&mut report, "$interaction/end/pending");
     }
-    if expected.end.close != actual.end.close {
+    if expected.end.close != actual.end.close && !heartbeat_tail_skipped {
         mismatch(&mut report, "$interaction/end/close");
     }
     if partial_message(expected)? != partial_message(actual)? {
@@ -150,16 +162,16 @@ fn compare_outputs_global_with_time_copies(
     let actual_events = comparable(actual)?;
     let sse = expected.protocol == Protocol::Sse && actual.protocol == Protocol::Sse;
     let socketio = expected.protocol == Protocol::SocketIo && actual.protocol == Protocol::SocketIo;
-    let alignment = ack_context
-        .filter(|_| socketio)
-        .map(|context| context.alignment(&expected_events, &actual_events))
-        .unwrap_or_else(|| (0..actual_events.len()).collect());
     let source_offsets = expected
         .events
         .iter()
         .filter(|event| !event.heartbeat)
         .map(|event| event.offset_ms)
         .collect::<Vec<_>>();
+    let alignment = ack_context
+        .filter(|_| socketio)
+        .map(|context| context.alignment(&expected_events, &actual_events, &source_offsets))
+        .unwrap_or_else(|| (0..actual_events.len()).collect());
     let target_offsets = actual
         .events
         .iter()

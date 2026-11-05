@@ -398,6 +398,18 @@ pub(crate) fn focused_active_progress(
     }))
 }
 
+pub(crate) fn workflow_active_progress(
+    context: &E2eRunContext,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<E2eActiveProgress>> {
+    let (_, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    Ok(active_progress::workflow(&layout.run_root, started_at))
+}
+
 /// Foreign APIs without a complete attempt retain an explicit Replay obligation.
 /// Known unfinished attempts retain their state identity; malformed complete or
 /// active published evidence never becomes absence.

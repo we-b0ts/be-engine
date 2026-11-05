@@ -36,14 +36,14 @@ fn output(messages: &[&str]) -> OutputObservation {
             .enumerate()
             .map(|(i, message)| OutputEvent {
                 sequence: i as u64 + 1,
-                offset_ms: i as u64,
+                offset_ms: 41_000 + i as u64 * 1_000,
                 heartbeat: false,
                 message: WireMessage::text(*message),
             })
             .collect(),
         end: EndObservation {
             reason: EndReason::ClientClose,
-            offset_ms: 50_000,
+            offset_ms: 42_000 + messages.len() as u64 * 1_000,
             pending: vec![],
             clean: true,
             partial_message: None,
@@ -65,6 +65,7 @@ fn checked(input: Option<&InputTranscript>, source: &[&str], target: &[&str]) ->
         Default::default(),
         &Default::default(),
         context.as_ref(),
+        false,
     )
     .unwrap()
 }
@@ -87,6 +88,73 @@ fn independent_ack_arrival_order_keeps_exact_request_identity_and_distinct_bodie
             "accepted {target:?}"
         );
     }
+}
+
+#[test]
+fn pending_acks_can_cross_text_events_without_reordering_business_frames() {
+    const PUSH: &str = r#"42/n,17["notice",{"seq":1}]"#;
+    const LIVE_PUSH: &str = r#"42/n,99["notice",{"seq":1}]"#;
+    const NEXT: &str = r#"42/n,["notice",{"seq":2}]"#;
+    let input = input();
+    for (source, target) in [
+        (vec![PUSH, A], vec![A, LIVE_PUSH]),
+        (vec![A, LIVE_PUSH], vec![PUSH, A]),
+        (vec![PUSH, NEXT, A, B], vec![B, PUSH, A, NEXT]),
+    ] {
+        assert!(checked(Some(&input), &source, &target).passed());
+    }
+    let mut long_source = vec![NEXT; 130];
+    long_source.extend([PUSH, A]);
+    let mut long_target = vec![NEXT; 130];
+    long_target.extend([A, LIVE_PUSH]);
+    assert!(checked(Some(&input), &long_source, &long_target).passed());
+
+    for target in [
+        vec![A, NEXT, LIVE_PUSH],
+        vec![A, LIVE_PUSH, LIVE_PUSH],
+        vec![A, LIVE_PUSH],
+        vec![r#"43/n,936[{"tag":"changed"}]"#, LIVE_PUSH, NEXT],
+        vec![r#"43/n,811[{"tag":"A"}]"#, LIVE_PUSH, NEXT],
+        vec![A, r#"42/elsewhere,17["notice",{"seq":1}]"#, NEXT],
+    ] {
+        assert!(
+            !checked(Some(&input), &[PUSH, NEXT, A], &target).passed(),
+            "{target:?}"
+        );
+    }
+}
+
+#[test]
+fn ack_crossing_respects_request_arrival_and_recorded_input_edges() {
+    const PUSH: &str = r#"42/n,["notice",{}]"#;
+    let mut delayed = input();
+    delayed.actions[1].offset_ms = 42_000;
+    assert!(!checked(Some(&delayed), &[PUSH, B], &[B, PUSH]).passed());
+
+    let mut dependent = input();
+    let mut next = dependent.actions[0].clone();
+    next.sequence = 3;
+    next.offset_ms = 41_500;
+    next.after = vec![1];
+    next.action = InputActionKind::Message {
+        message: WireMessage::text(r#"42/n,["continue",{}]"#),
+    };
+    dependent.actions.push(next);
+    assert!(!checked(Some(&dependent), &[A, PUSH], &[PUSH, A]).passed());
+
+    let mut fenced = input();
+    let mut control = fenced.actions[1].clone();
+    control.sequence = 3;
+    control.offset_ms = 41_500;
+    control.action = InputActionKind::Message {
+        message: WireMessage::text("41/n,"),
+    };
+    fenced.actions.push(control);
+    assert!(!checked(Some(&fenced), &[PUSH, A], &[A, PUSH]).passed());
+
+    let mut ordered = input();
+    ordered.actions[1].after = vec![1];
+    assert!(!checked(Some(&ordered), &[A, PUSH, B], &[B, PUSH, A]).passed());
 }
 
 #[test]
@@ -161,10 +229,10 @@ fn input_transport_and_namespace_boundaries_keep_reply_order_strict() {
 }
 
 #[test]
-fn ack_pairing_never_crosses_output_events_namespace_controls_or_binary_frames() {
+fn ack_pairing_never_crosses_other_namespaces_controls_or_binary_frames() {
     let input = input();
     for barrier in [
-        r#"42/n,["notice",{}]"#,
+        r#"42/other,["notice",{}]"#,
         r#"40/n,{"sid":"live"}"#,
         "41/n,",
         r#"451-/n,["binary",{"_placeholder":true,"num":0}]"#,
@@ -204,6 +272,7 @@ fn paired_ack_arguments_still_evaluate_global_field_contracts() {
             Default::default(),
             &Default::default(),
             Some(&context),
+            false,
         )
         .unwrap()
     };

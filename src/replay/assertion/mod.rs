@@ -305,6 +305,15 @@ fn assert_recorded_response_with_policy_and_time_copies(
     let actual_interaction = actual.interaction.as_ref();
     interaction::validate_input(request.interaction.as_ref(), expected_interaction)?;
     let ack_context = interaction::AckContext::prepare(request.interaction.as_ref())?;
+    let source_heartbeat_tail = actual_interaction.is_some_and(|actual| {
+        actual.end.reason == crate::interaction::model::EndReason::FastHeartbeatTailSkipped
+    }) && request
+        .interaction
+        .as_ref()
+        .zip(expected_interaction)
+        .is_some_and(|(input, source)| {
+            crate::interaction::replay::heartbeat_tail::recognize(input, source).is_some()
+        });
     let oneway = expected.response_expected == Some(false);
     let expected_status = match expected.status.as_ref() {
         Some(status) => status.code(),
@@ -378,6 +387,7 @@ fn assert_recorded_response_with_policy_and_time_copies(
         time_copies,
         &mut report,
         ack_context.as_ref(),
+        source_heartbeat_tail,
     )?;
     if !report.identity_pairs.is_empty() {
         let proposal = crate::value_contract::identities::IdentityDecision::prepare(

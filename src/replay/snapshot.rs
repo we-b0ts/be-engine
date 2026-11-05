@@ -87,6 +87,8 @@ impl ReplayState {
             allowed_unused_mysql_rollback_exchanges: self.allowed_unused_rollbacks(),
             allowed_unused_mysql_commit_exchanges: self.allowed_unused_commits(),
             allowed_unused_mysql_autocommit_exchanges: self.allowed_unused_autocommit(),
+            allowed_unused_mysql_connection_read_committed_exchanges: self
+                .allowed_unused_connection_read_committed(),
             transaction_equivalent_mysql_autocommit_exchanges: self
                 .transaction_equivalent_autocommit(),
             mysql_isolation_equivalence: self.mysql.isolation.audit(),

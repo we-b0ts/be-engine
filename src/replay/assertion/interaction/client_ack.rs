@@ -6,14 +6,24 @@ use crate::interaction::{
 };
 use std::collections::{BTreeSet, HashMap};
 
+mod mixed;
+
 type Key = (String, u64);
 const MAX_ACTIONS: usize = 16_384;
 const MAX_EDGES: usize = 65_536;
 
-/// Only original request identities and completion edges survive preparation.
+/// Original request identities, completion edges and input fences.
 pub(in crate::replay::assertion) struct Context {
-    requests: BTreeMap<Key, Option<u64>>,
+    requests: BTreeMap<Key, Option<Request>>,
     graph: Vec<(u64, Vec<u64>, bool)>,
+    control_offsets: Vec<u64>,
+    first_completion_uses: HashMap<u64, u64>,
+}
+
+#[derive(Clone, Copy)]
+struct Request {
+    sequence: u64,
+    offset_ms: u64,
 }
 
 impl Context {
@@ -39,13 +49,22 @@ impl Context {
         }
         let mut requests = BTreeMap::new();
         let mut graph = Vec::with_capacity(input.actions.len());
+        let mut control_offsets = Vec::new();
+        let mut first_completion_uses = HashMap::new();
         for action in &input.actions {
+            for &prior in &action.after {
+                first_completion_uses
+                    .entry(prior)
+                    .or_insert(action.offset_ms);
+            }
             let InputActionKind::Message { message } = &action.action else {
                 graph.push((action.sequence, action.after.clone(), true));
+                control_offsets.push(action.offset_ms);
                 continue;
             };
             if message.kind != MessageKind::Text {
                 graph.push((action.sequence, action.after.clone(), true));
+                control_offsets.push(action.offset_ms);
                 continue;
             }
             let frame = decode_engine_io_text(&message.data, input.policy.max_message_bytes);
@@ -56,6 +75,9 @@ impl Context {
                     Ok(EngineIoPacket::Ping(_) | EngineIoPacket::Pong(_))
                 );
             graph.push((action.sequence, action.after.clone(), control));
+            if control {
+                control_offsets.push(action.offset_ms);
+            }
             let Ok(EngineIoPacket::Message(packet)) = frame else {
                 continue;
             };
@@ -67,16 +89,24 @@ impl Context {
                 requests
                     .entry((packet.namespace, id))
                     .and_modify(|sequence| *sequence = None)
-                    .or_insert(Some(action.sequence));
+                    .or_insert(Some(Request {
+                        sequence: action.sequence,
+                        offset_ms: action.offset_ms,
+                    }));
             }
         }
-        Ok(Some(Self { requests, graph }))
+        Ok(Some(Self {
+            requests,
+            graph,
+            control_offsets,
+            first_completion_uses,
+        }))
     }
 
-    fn independent(&self, keys: &[Key]) -> bool {
+    fn independent(&self, keys: &[&Key]) -> bool {
         let Some(sequences) = keys
             .iter()
-            .map(|key| self.requests.get(key).copied().flatten())
+            .map(|key| self.request(key).map(|request| request.sequence))
             .collect::<Option<BTreeSet<_>>>()
         else {
             return false;
@@ -106,36 +136,56 @@ impl Context {
         true
     }
 
-    pub(super) fn alignment(&self, source: &[WireMessage], target: &[WireMessage]) -> Vec<usize> {
+    fn request(&self, key: &Key) -> Option<Request> {
+        self.requests.get(key).copied().flatten()
+    }
+
+    pub(super) fn alignment(
+        &self,
+        source: &[WireMessage],
+        target: &[WireMessage],
+        source_offsets: &[u64],
+    ) -> Vec<usize> {
         let mut alignment = (0..target.len()).collect::<Vec<_>>();
+        if source == target {
+            return alignment;
+        }
+        let source = source.iter().map(Frame::parse).collect::<Vec<_>>();
+        let target = target.iter().map(Frame::parse).collect::<Vec<_>>();
+        let mixed_runs = self.align_mixed_runs(&source, &target, source_offsets, &mut alignment);
+        let mut mixed_runs = mixed_runs.into_iter().peekable();
         let mut start = 0;
         while start < source.len() {
-            if key(&source[start]).is_none() {
+            if mixed_runs.peek().is_some_and(|run| run.start == start) {
+                start = mixed_runs.next().expect("aligned run").end;
+                continue;
+            }
+            if source[start].ack().is_none() {
                 start += 1;
                 continue;
             }
             let mut end = start + 1;
-            while end < source.len() && key(&source[end]).is_some() {
+            while end < source.len() && source[end].ack().is_some() {
                 end += 1;
             }
             if end - start > 1 && end <= target.len() {
-                self.align_run(source, target, start..end, &mut alignment);
+                self.align_ack_run(&source, &target, start..end, &mut alignment);
             }
             start = end;
         }
         alignment
     }
 
-    fn align_run(
+    fn align_ack_run(
         &self,
-        source: &[WireMessage],
-        target: &[WireMessage],
+        source: &[Frame],
+        target: &[Frame],
         run: std::ops::Range<usize>,
         alignment: &mut [usize],
     ) {
         let keys = source[run.clone()]
             .iter()
-            .map(key)
+            .map(Frame::ack)
             .collect::<Option<Vec<_>>>()
             .expect("ACK run");
         if !self.independent(&keys) {
@@ -143,7 +193,7 @@ impl Context {
         }
         let mut actual = BTreeMap::new();
         for index in run.clone() {
-            let Some(key) = key(&target[index]) else {
+            let Some(key) = target[index].ack() else {
                 return;
             };
             if actual.insert(key, index).is_some() {
@@ -164,18 +214,39 @@ impl Context {
     }
 }
 
-fn key(message: &WireMessage) -> Option<Key> {
-    if message.kind != MessageKind::Text {
-        return None;
+enum Frame {
+    Ack(Key),
+    Business(String),
+    Fence,
+}
+
+impl Frame {
+    fn parse(message: &WireMessage) -> Self {
+        if message.kind != MessageKind::Text
+            || !message.data.starts_with("42") && !message.data.starts_with("43")
+        {
+            return Self::Fence;
+        }
+        let Ok(EngineIoPacket::Message(packet)) = decode_engine_io_text(&message.data, usize::MAX)
+        else {
+            return Self::Fence;
+        };
+        if packet.attachments != 0 || !packet.binary.is_empty() {
+            return Self::Fence;
+        }
+        match (packet.kind, packet.id) {
+            (SocketIoKind::Ack, Some(id)) => Self::Ack((packet.namespace, id)),
+            (SocketIoKind::Event, _) => Self::Business(packet.namespace),
+            _ => Self::Fence,
+        }
     }
-    let EngineIoPacket::Message(packet) = decode_engine_io_text(&message.data, usize::MAX).ok()?
-    else {
-        return None;
-    };
-    if packet.kind != SocketIoKind::Ack || packet.attachments != 0 || !packet.binary.is_empty() {
-        return None;
+
+    fn ack(&self) -> Option<&Key> {
+        match self {
+            Self::Ack(key) => Some(key),
+            _ => None,
+        }
     }
-    Some((packet.namespace, packet.id?))
 }
 
 #[cfg(test)]

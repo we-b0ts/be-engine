@@ -412,6 +412,9 @@ pub struct ResponseAssertionCaseReport {
     pub unused_applicable_body_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_diagnosis: Option<ResponseBodyAssertionReport>,
+    /// Replay verified the business exchange without observing Target's heartbeat close.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast_heartbeat_tail_skipped: bool,
     pub unordered_candidates: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unordered_joined_string_candidates: Vec<JsonJoinedStringCandidate>,
@@ -469,6 +472,7 @@ impl ResponseAssertionCaseReport {
             applied_body_rule_ids: Vec::new(),
             unused_applicable_body_rule_ids: Vec::new(),
             body_diagnosis: None,
+            fast_heartbeat_tail_skipped: false,
             unordered_candidates: Vec::new(),
             unordered_joined_string_candidates: Vec::new(),
             passed: false,
