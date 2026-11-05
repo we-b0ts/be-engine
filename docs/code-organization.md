@@ -690,6 +690,9 @@ is unclear.
   the generic session-setup whitelist. `replay/mysql/isolation/source` proves
   original baseline probes and complete override/transaction/restoration scopes
   during preparation, including a complete scope reasserting its known baseline.
+  Same-level settings before its first business operation retain exact Source
+  references under that one proof; successful real Target completion alone can
+  authorize their finite omission alongside restoration.
   Its parent binds NEXT settings to actual Target sockets,
   observes successful deliveries through the existing transaction owner and
   grants only proven Source restoration omission. Its Source proof classifies

@@ -63,11 +63,26 @@ impl Registry {
             else {
                 continue;
             };
+            let Some(reassertions) = plan
+                .reassertions
+                .iter()
+                .map(|i| map(*i))
+                .collect::<Option<BTreeSet<_>>>()
+            else {
+                continue;
+            };
             plan.setup = setup;
             plan.end = end;
             plan.reset = reset;
+            plan.reassertions = reassertions;
             plan.required = required;
-            for index in plan.required.iter().copied().chain([setup, reset]) {
+            for index in plan
+                .required
+                .iter()
+                .chain(&plan.reassertions)
+                .copied()
+                .chain([setup, reset])
+            {
                 self.owners.insert(index, setup);
             }
             self.profiles.insert(
@@ -148,7 +163,7 @@ impl Registry {
         case: Option<&str>,
         delivery: transaction_equivalence::Delivery<'_>,
         transactions: &transaction_equivalence::Registry,
-    ) -> Option<usize> {
+    ) -> Option<Vec<usize>> {
         let transaction_equivalence::Delivery {
             sql,
             index,
@@ -246,9 +261,17 @@ impl Registry {
             } else {
                 "incomplete_transaction"
             };
-            let reset = covered.then_some(profile.plan.reset);
+            let omissions = covered.then(|| {
+                profile
+                    .plan
+                    .reassertions
+                    .iter()
+                    .copied()
+                    .chain([profile.plan.reset])
+                    .collect()
+            });
             self.bindings.remove(&connection);
-            return reset;
+            return omissions;
         }
         binding.valid &= after & 0x200b == 3;
         if !binding.valid {
@@ -274,12 +297,14 @@ impl Registry {
                 "source_baseline_sequence":p.baseline_sequence,
                 "source_baseline_connection_id":p.baseline_connection,
                 "source_setup_index":p.setup, "source_end_index":p.end, "source_reset_index":p.reset,
+                "source_reassertion_indices":p.reassertions,
                 "isolation":p.level.name(), "baseline":p.baseline.name(),
                 "target_connection_id":profile.target, "phase":profile.phase,
                 "required_members":p.required.len(), "delivered_members":profile.observed,
                 "read_only":p.read_only,
                 "source_end_omission_proven":profile.end_omission_proven,
                 "reset_omission_proven":profile.phase == "covered",
+                "reassertion_omission_proven":profile.phase == "covered" && !p.reassertions.is_empty(),
                 "coverage_kind":"source_session_restoration_omission"
             })
         }).collect()
