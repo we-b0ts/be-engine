@@ -142,13 +142,20 @@ impl Registry {
             })
     }
 
-    pub(in crate::replay::mysql) fn permits(&self, connection: Uuid, index: usize) -> bool {
+    pub(in crate::replay::mysql) fn permits(
+        &self,
+        connection: Uuid,
+        index: usize,
+        exchanges: &[ReplayExchange],
+    ) -> bool {
         if let Some(profile) = self
             .owners
             .get(&index)
             .and_then(|owner| self.profiles.get(owner))
             && profile.phase != "covered"
-            && profile.target.is_some_and(|target| target != connection)
+            && (profile.target.is_some_and(|target| target != connection)
+                || profile.plan.required.contains(&index)
+                    && !exchanges[profile.plan.setup].status.is_consumed())
         {
             return false;
         }

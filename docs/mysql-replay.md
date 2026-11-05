@@ -129,7 +129,10 @@ per Case, 260 exchanges per scope and 4096 installed scopes and baseline connect
 
 Target can instead send `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` as
 `COM_QUERY`, then `BEGIN`, the original business operations and their end. The
-setting consumes the actual Source setup exchange. Admission binds the actual
+setting consumes the actual Source setup exchange. A proved isolation scope's
+transaction members become eligible only after that setup is delivered. This
+keeps identical requests from consuming members before their transaction opens.
+Admission binds the actual
 Target socket; every member must finish delivery on that socket in the same
 explicit transaction. Existing business SQL, value and write-transaction
 equivalence checks still apply. Another socket, wrong level, active-transaction

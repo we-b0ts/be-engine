@@ -31,6 +31,44 @@ async fn body(client: &mut MySqlConnection) {
 }
 
 #[tokio::test]
+async fn ordinary_read_does_not_consume_a_future_isolation_transaction_member() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut source = records();
+        let mut ordinary = source[2].clone();
+        ordinary["connection_id"] = json!(Uuid::from_u128(92));
+        ordinary["server_status_before"] = json!(2);
+        ordinary["response"]["server_status"] = json!(2);
+        ordinary["response"]["rows"] = json!([]);
+        source.push(ordinary);
+
+        let (temp, address, runtime, task) =
+            fixture_with_global(&source, &[baseline()], None).await;
+        let mut reader = open(address, &temp).await;
+        let id: Option<i32> = sqlx::query_scalar("SELECT id FROM items WHERE id=?")
+            .bind(1_i32)
+            .fetch_optional(&mut reader)
+            .await
+            .unwrap();
+        assert_eq!(id, None);
+
+        let mut writer = open(address, &temp).await;
+        writer
+            .execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .await
+            .unwrap();
+        body(&mut writer).await;
+
+        let state = runtime.state.lock().await;
+        assert!(state.mysql.events.unmatched_queries.is_empty());
+        assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+        assert_eq!(state.mysql.isolation.audit()[0]["phase"], "covered");
+        task.abort();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn next_isolation_uses_real_transaction_delivery_and_omits_only_the_source_session_reset() {
     tokio::time::timeout(Duration::from_secs(30), async {
         for (policy, pooled_source, same_baseline, reasserted) in [(None, false, false, false), (None, true, false, false),
