@@ -73,6 +73,9 @@ pub(in crate::replay) struct ReplayReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) allowed_unused_mysql_autocommit_exchanges: Vec<RecordedExchangeSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) allowed_unused_mysql_connection_read_committed_exchanges:
+        Vec<RecordedExchangeSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) transaction_equivalent_mysql_autocommit_exchanges:
         Vec<RecordedExchangeSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

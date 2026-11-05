@@ -509,6 +509,12 @@ impl ReplayState {
         self.allowed_unused_session_exchanges(OptionalSessionExchange::Autocommit)
     }
 
+    pub(in crate::replay) fn allowed_unused_connection_read_committed(
+        &self,
+    ) -> Vec<RecordedExchangeSummary> {
+        self.allowed_unused_session_exchanges(OptionalSessionExchange::ConnectionReadCommitted)
+    }
+
     pub(in crate::replay) fn transaction_equivalent_autocommit(
         &self,
     ) -> Vec<RecordedExchangeSummary> {
