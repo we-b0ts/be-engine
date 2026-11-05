@@ -258,7 +258,7 @@ Source 对账展示全部发生项、有效归属、应承担的消费义务与�
 
 Replay 前对新录制和新规则影响范围进行一次增量归属分析。已有事实和证明缓存按 Source 版本及实际任务复用。尚不能确定的项保留 unattributed；可开展诊断 Replay 获取额外事实，正式验收要求相应作用域不再有未解决归属。
 
-API 实现者提交具体 unused 引用及排除自身的 Source 证据，引擎登记 `foreign_unused_claim`，交分析者处理。提交 claim 即可让实现者继续其他工作，不等待他完成全仓搜索；claim 本身不会解除消费义务。
+API 实现者只回报具体的 unused Source 发生项 UUID、当前 evidence ID 和简要事实理由。协调者提交 `dependency-attribution claim`，引擎登记 `foreign_unused_claim`。随后由独立仓库分析者调查真实归属、触发链和适用规则。提交 claim 本身不会解除消费义务。
 
 仓库分析者统一返回：属于当前 API、独立进程任务、其他 API 的同步/异步工作、初始化共享候选，或尚未解决。按真实 Source task/entrypoint 合并相关 Case，完整检查 selectors、间接调用、分支、重试及清理路径；任务名、时间、连接或单个 ID 不单独证明调用者。
 

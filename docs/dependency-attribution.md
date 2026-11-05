@@ -40,11 +40,21 @@ obligations. Follow returned pagination commands. SQL/Redis arguments and raw
 payloads stay in protected evidence queries; summary output contains identities,
 coordinates, shapes and digests.
 
-## Implementer claims
+## Report a disputed Source owner
 
-An API implementer owns its API behavior, including any traffic it reports as
-missing. A concrete unused occurrence may be returned as an ownership dispute
-without proving exclusion or tracing another API or task. The coordinator submits:
+Only the independent repository analyst investigates disputed or unknown Source
+traffic ownership, including which Case, API or task triggered the traffic and
+which lifecycle rule applies. The current implementer can trigger this analysis
+by returning a concrete unused Source occurrence it believes is foreign:
+
+1. The implementer uses `dependency-attribution show --api /route` and returns
+   the exact unused Source UUIDs, their current method evidence ID and a bounded
+   factual reason. Proving exclusion and tracing the true owner belong to the
+   repository analyst.
+2. The coordinator uses the returned `dependency_occurrences.claim_command` with
+   the payload below. Once `status` returns `dependency_attribution_required`,
+   the coordinator runs the returned context command and dispatches the exact
+   read-only assignment to the repository analyst.
 
 ```json
 {
@@ -82,9 +92,9 @@ cannot authorize reassignment, consumption or a new response.
 ### Missing traffic remains with its reporting API
 
 An unmatched request is an independent Target observation, even when it has no
-Source candidate. Reporting missing traffic claims that traffic for the current
-API; it does not open repository-analyst work. The existing API implementer traces
-its actual async lifecycle, caches, client topology and complete capture evidence.
+Source candidate. When the implementer reports a missing dependency of its own
+API, it traces the API's actual async lifecycle, caches, client topology and
+complete capture evidence.
 If the API's asynchronous work was captured elsewhere, it supplies its own
 `async_api` rule. If capture omitted the required call, it supplies the exact
 Source endpoint and omission reason: for example a fixed IP requiring explicit
@@ -97,6 +107,11 @@ The coordinator may retain authenticated observations with
 current `evidence_id`, a nonempty factual `reason` and exact
 `target_observation_ids`. The result and `show --api` explicitly retain
 `owner: api_implementer` and return offline candidate-discovery commands.
+If the open question is foreign ownership and only unmatched Target observation
+IDs are available, report the observation and evidence IDs as an unresolved
+ownership question. The current engine has no analyst dispatch from those IDs
+alone. A claim requires actual unused Source UUIDs from the current finalized
+attempt.
 
 The implementer's conclusion is published by the coordinator with
 `dependency-attribution resolve --file diagnosis.json`. Supply `schema`, current

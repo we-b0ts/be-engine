@@ -18,6 +18,10 @@ If given a `route_analysis` task, return that routing mismatch to the coordinato
 so it can dispatch `repository-analyst`.
 
 For implementation or repair, read [api-implementer-diagnosis.md](api-implementer-diagnosis.md).
+For unused dependencies with disputed Source ownership, follow the
+[traffic ownership handoff](api-implementer-dependency-diagnosis.md#traffic-ownership).
+Send concrete IDs and a factual reason to the coordinator. The independent
+repository analyst investigates ownership.
 Retain each task's original API, group, dispatch and lease generation. Restore
 the next assigned API from its scoped evidence entrypoint before starting it. Before
 changing code, startup, or configuration, read

@@ -322,6 +322,9 @@ needed. Existing grouped APIs reuse the project catalog.
 ### `dependency_attribution_required`
 
 Read [independent dependency attribution](coordinator-rule-actions.md#independent-dependency-attribution).
+The coordinator submits a claim from the implementer's exact unused Source
+UUIDs, current evidence ID and factual reason. The independent repository
+analyst owns the investigation of the disputed Source traffic.
 Dispatch the exact current context and relevant effective task/lifecycle
 declarations to the read-only repository analyst. Reconcile both its ownership
 proof and its assessment of whether the existing rule covers the Source lifecycle.

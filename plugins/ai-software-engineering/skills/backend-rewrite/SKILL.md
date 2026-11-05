@@ -126,10 +126,14 @@ rerun initialization.
 - Recordings and `.traffic-e2e/local/artifacts/` are immutable evidence. Preserve
   engine-generated `progress.yaml`. Do not synthesize evidence, rewrite source
   behavior to manufacture a pass, or replace engine aggregation with scripts.
-- Rule diagnosis and source proof belong to the API implementer for its API,
-  or to the repository analyst for assigned independent dependency attribution.
-  After ownership analysis, async lifecycle proposals describe the scenario and
-  end templates, reply/message conditions and occurrence counts from its complete
+- The repository analyst alone investigates disputed or unknown Source traffic
+  ownership. The implementer can flag exact unused Source occurrences with a
+  current evidence ID and factual reason. The coordinator submits the claim and
+  dispatches the engine's read-only `dependency_attribution_required` assignment
+  to the repository analyst. The implementer diagnoses behavior and rules for
+  traffic already owned by its API. After ownership analysis, async lifecycle
+  proposals describe the scenario and end templates, reply/message conditions
+  and occurrence counts from its complete
   effective Case tail under `recording.async_api`, before independent optional
   `recording.case_paths`, without enumerating intermediate business requests. Any
   end can enter ending; once all ends match, close admission immediately and drain
