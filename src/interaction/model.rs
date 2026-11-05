@@ -327,6 +327,7 @@ pub struct CloseObservation {
 #[serde(rename_all = "snake_case")]
 pub enum EndReason {
     ServerEof,
+    FastHeartbeatTailSkipped,
     ClientClose,
     ClientTransportEnd,
     BusinessIdle,

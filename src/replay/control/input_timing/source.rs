@@ -30,14 +30,7 @@ pub(super) fn load(case: &ReplayCase, fast_cap: Option<u64>) -> Result<Plan> {
     let mut covered = request.timestamp.is_some();
     let mut fast = fast_cap
         .zip(request.timestamp)
-        .filter(|_| {
-            !request.interaction.policy.preserve_input_timing
-                && request
-                    .interaction
-                    .socket_io_heartbeat
-                    .as_ref()
-                    .is_none_or(|heartbeat| !heartbeat.responses.is_empty())
-        })
+        .filter(|_| !request.interaction.policy.preserve_input_timing)
         .map(|(cap, start)| fast::Source::new(&case.dir, &request.interaction, cap, start));
     #[derive(Deserialize)]
     struct Kind {

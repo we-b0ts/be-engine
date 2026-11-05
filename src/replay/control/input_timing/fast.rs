@@ -1,8 +1,10 @@
 //! Ordered fast inputs use exact Case request admission and actual tail delivery.
 use super::*;
 use crate::interaction::{
-    model::{EndReason, InputAction, InputTranscript, Protocol, TRANSCRIPT_VERSION},
-    replay::timing::FastTail,
+    model::{
+        EndReason, InputAction, InputTranscript, OutputObservation, Protocol, TRANSCRIPT_VERSION,
+    },
+    replay::{heartbeat_tail, timing::FastTail},
     socketio::{EngineIoPacket, SocketIoKind, decode_engine_io_text},
 };
 use crate::replay::adapters::{ExchangeHandle, resolve_case};
@@ -122,6 +124,15 @@ impl Source {
             .map(|request| request.reference)
             .collect::<Vec<_>>();
         let handles = resolve_case(state, case, &refs, |_, handle| handle)?;
+        if self.tail.as_ref().is_some_and(|tail| {
+            tail.policy.heartbeat_acks.is_some()
+                && self
+                    .requests
+                    .last()
+                    .is_some_and(|request| request.started >= tail.cutoff)
+        }) {
+            self.tail = None;
+        }
         if let Some(tail) = &mut self.tail {
             for request in self
                 .requests
@@ -139,6 +150,17 @@ impl Source {
                 tail.quiet_from = tail.quiet_from.max(completed);
             }
         }
+        ensure!(
+            input
+                .socket_io_heartbeat
+                .as_ref()
+                .is_none_or(|program| !program.responses.is_empty())
+                || self
+                    .tail
+                    .as_ref()
+                    .is_some_and(|tail| tail.policy.heartbeat_acks.is_some()),
+            "ordered timing for an unanswered heartbeat requires an eligible heartbeat tail"
+        );
         let mut previous = 0;
         let mut previous_input = BTreeMap::new();
         for action in &input.actions {
@@ -159,7 +181,7 @@ impl Source {
 
 impl Plan {
     pub(super) fn tail(&self) -> Option<FastTail> {
-        self.source.tail.as_ref().map(|tail| tail.policy)
+        self.source.tail.as_ref().map(|tail| tail.policy.clone())
     }
 
     fn ready(&self, state: &ReplayState, case: &str, from: u64, to: u64, tail: bool) -> bool {
@@ -192,7 +214,16 @@ pub(super) fn advance(state: &mut ReplayState, tail: bool, query: &Query) -> Res
     let elapsed = u64::try_from(live.started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let (sequence, from, to, eligible, ready, idle_tail) = if tail {
         let tail = plan.source.tail.as_ref().context("fast tail unavailable")?;
-        let ready = plan.ready(state, &live.case, 0, tail.cutoff, true);
+        let ready = if tail.policy.heartbeat_acks.is_some() {
+            // Native omission proof can settle an unstarted setup/cleanup
+            // exchange. An ordinary dependency must finish on the wire.
+            plan.handles.iter().all(|handle| {
+                handle.delivery_state(state) == Some(ReplayExchangeStatus::Consumed)
+                    || handle.permits_unstarted_omission(state, false, true)
+            })
+        } else {
+            plan.ready(state, &live.case, 0, tail.cutoff, true)
+        };
         (
             tail.policy.close_sequence.unwrap_or(0),
             tail.quiet_from,
@@ -273,6 +304,8 @@ fn offset(start: DateTime<Utc>, at: DateTime<Utc>) -> Option<u64> {
 
 impl Tail {
     fn load(path: &Path, input: &InputTranscript, cap: u64) -> Result<Option<Self>> {
+        use std::io::{BufReader, Seek};
+
         #[derive(Deserialize)]
         struct Response {
             interaction: Option<Completion>,
@@ -301,24 +334,35 @@ impl Tail {
         let Ok(file) = std::fs::File::open(path.join("expected-response.json")) else {
             return Ok(None);
         };
-        // Only timing, terminal kind and frame counts are projected. The
-        // driver still captures and asserts actual Target business payloads.
-        let response: Response = serde_json::from_reader(std::io::BufReader::new(file))?;
+        // Ordinary tails need only clocks and counts. Decode protocol frames
+        // only to classify a clean server EOF, without retaining their payloads.
+        let mut reader = BufReader::new(file);
+        let response: Response = serde_json::from_reader(&mut reader)?;
         let Some(completion) = response.interaction.filter(|completion| {
             completion.version == TRANSCRIPT_VERSION
                 && completion.protocol == Protocol::SocketIo
                 && completion.end.clean
-                && completion.end.pending.is_empty()
                 && completion.end.partial_message.is_none()
         }) else {
             return Ok(None);
         };
+        let heartbeat = if completion.end.reason == EndReason::ServerEof {
+            #[derive(Deserialize)]
+            struct WireResponse {
+                interaction: OutputObservation,
+            }
+            reader.rewind()?;
+            let response: WireResponse = serde_json::from_reader(reader)?;
+            heartbeat_tail::recognize(input, &response.interaction)
+        } else {
+            None
+        };
+        if heartbeat.is_none() && !completion.end.pending.is_empty() {
+            return Ok(None);
+        }
+        let last_input = input.actions.last().map_or(0, |action| action.offset_ms);
         let (cutoff, close_sequence, last_input) = match completion.end.reason {
-            EndReason::BusinessIdle => (
-                completion.end.offset_ms,
-                None,
-                input.actions.last().map_or(0, |action| action.offset_ms),
-            ),
+            EndReason::BusinessIdle => (completion.end.offset_ms, None, last_input),
             EndReason::ClientClose => {
                 let Some(close) = input
                     .actions
@@ -336,6 +380,9 @@ impl Tail {
                     .last()
                     .map_or(0, |action| action.offset_ms);
                 (close.offset_ms, Some(close.sequence), last)
+            }
+            EndReason::ServerEof if let Some(evidence) = &heartbeat => {
+                (evidence.last_ping_ms, None, last_input)
             }
             _ => return Ok(None),
         };
@@ -361,6 +408,7 @@ impl Tail {
                 close_sequence,
                 output_count: outputs.count(),
                 idle_ms: cap.min(cutoff.saturating_sub(quiet_from)),
+                heartbeat_acks: heartbeat.map(|evidence| evidence.acknowledged),
             },
             cutoff,
             quiet_from,

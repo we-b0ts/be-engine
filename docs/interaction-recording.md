@@ -242,9 +242,17 @@ reused. Explicit `recorded` and `preserve_input_timing` retain original timing.
 
 For a clean Source business-idle or completed client-close tail, Fast can
 shorten the remaining quiet once the actual output and dependency delivery
-requirements are met. Client cancellation with pending work, server-driven
-termination and incomplete tail evidence retain their normal closing rules.
-Dependencies triggered by the close retain their existing drain.
+requirements are met. Fast can also skip a direct WebSocket heartbeat tail
+when the last Source Engine.IO PING was unanswered, the clean server close
+followed after the declared `pingTimeout`, and no input or dependency activity
+remained in the tail. Replay waits for the real Target output frames, matching
+native ACK receipts and required dependency deliveries before releasing the connection
+without sending a close frame. The actual response reports
+`fast_heartbeat_tail_skipped` and still undergoes business comparison and
+dependency audit. Use recorded timing to verify Target's own heartbeat timeout
+and server close. Other server closures, client cancellation with pending work
+and incomplete tail evidence retain their normal closing rules. Dependencies
+triggered by the close retain their existing drain.
 
 JWT request rules also select exact fields in namespace CONNECT auth objects,
 using the same named signing profile as header or query credentials:

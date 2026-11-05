@@ -46,7 +46,7 @@ impl InputTiming for Observer {
     }
 
     fn fast_tail(&self) -> Option<FastTail> {
-        self.fast_tail
+        self.fast_tail.clone()
     }
 
     fn wait_fast_tail(&self) -> BoxFuture<'_, Result<Advance>> {

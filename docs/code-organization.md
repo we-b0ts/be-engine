@@ -135,7 +135,7 @@ is unclear.
   or changing Source ownership. Such slots have no subscription-age timer fallback;
   physical record order is retained across separate Source ownership views.
   Ordinary native notification clocks also admit bounded same-namespace client
-  events with ACK IDs. `interaction/replay/socketio/native_receipts` correlates
+  events with ACK IDs. `interaction/socketio/native_receipts` correlates
   actual sent inputs and received ACK metadata independently of business
   completion and fast timing; the native clock retains Source windows, original
   subscription ownership and the current request epoch. An input without an ACK
@@ -180,8 +180,12 @@ is unclear.
   contracts stay strict and no expected output enters the input executor.
   `replay/control/input_timing/fast` owns ordered Socket.IO cuts using original
   Case request identities, actual native admission and the stream interval cap.
-  It projects clean tail timing and frame counts separately from payloads.
-  The Socket.IO executor observes real outputs before allowing a tail cut.
+  It projects clean tail timing, frame counts and native ACK receipt identities
+  separately from payloads. `interaction/replay/heartbeat_tail` recognizes
+  Source heartbeat-timeout candidates from the Engine.IO handshake, wire tail
+  and paired ACKs. The Socket.IO executor uses real outputs and dependency
+  delivery before cutting an eligible tail. Response assertion keeps comparing
+  the full business exchange and records the skipped transport observation.
 
 - `dependency/termination` owns protocol-independent peer observations, monotonic
   termination time and explicit transport FIN/RST control. Recorder connection

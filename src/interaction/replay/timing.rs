@@ -33,11 +33,13 @@ pub(crate) trait InputTiming: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct FastTail {
     pub close_sequence: Option<u64>,
     pub output_count: usize,
     pub idle_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_acks: Option<std::collections::BTreeSet<u64>>,
 }
 
 /// Business inputs retain the Source dependency-delivery prefix even when no

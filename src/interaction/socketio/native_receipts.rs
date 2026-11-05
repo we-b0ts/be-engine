@@ -4,15 +4,16 @@ use crate::interaction::{
     socketio::{EngineIoPacket, SocketIoKind, SocketIoPacket, decode_engine_io_text},
 };
 use anyhow::Result;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
-pub(super) struct Receipts {
+pub(crate) struct Receipts {
     sent: BTreeMap<(String, u64), Option<u64>>,
+    pub(crate) acknowledged: BTreeSet<u64>,
 }
 
 impl Receipts {
-    pub(super) fn sent(
+    pub(crate) fn sent(
         &mut self,
         sequence: u64,
         message: &WireMessage,
@@ -40,10 +41,13 @@ impl Receipts {
         }
         Ok(())
     }
-    pub(super) fn acknowledge(&mut self, packet: &SocketIoPacket) -> Option<u64> {
-        self.sent
+    pub(crate) fn acknowledge(&mut self, packet: &SocketIoPacket) -> Option<u64> {
+        let sequence = self
+            .sent
             .remove(&(packet.namespace.clone(), packet.id?))
-            .flatten()
+            .flatten()?;
+        self.acknowledged.insert(sequence);
+        Some(sequence)
     }
 }
 

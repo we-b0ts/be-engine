@@ -146,6 +146,7 @@ pub(super) async fn accept(
                 candidates,
                 dependency_timing_covered = plan.covered,
                 ordered_fast,
+                heartbeat_tail_eligible = fast_tail.as_ref().is_some_and(|tail| tail.heartbeat_acks.is_some()),
                 "prepared Socket.IO input timeline"
             );
             state.input_timing = Some(Live {
