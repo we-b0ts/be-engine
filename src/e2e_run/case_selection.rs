@@ -23,6 +23,8 @@ pub(super) struct CaseSelection {
     final_round: bool,
     #[serde(default)]
     replay_timing: Option<crate::replay::ReplayStreamTiming>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dependency_attribution_snapshot: Option<String>,
     #[serde(default = "default_stream_interval_cap_ms")]
     replay_interval_cap_ms: u64,
     groups: BTreeMap<String, GroupSelection>,
@@ -83,10 +85,23 @@ pub(super) fn prepare(
     };
     let regression = crate::config::regression::RegressionScope::load(&layout.target_root)?;
     let retry = regression.retry_failed_only && !iteration.final_round;
+    let dependency_attribution_snapshot =
+        if crate::dependency_index::recording::root(&inventory.case_source).is_some() {
+            let (_, manifest) =
+                crate::dependency_index::recording::manifest(&inventory.case_source)?;
+            Some(crate::rewrite::dependency_attribution_identity_for_source(
+                &layout.target_root,
+                &inventory.case_source,
+                &manifest.run_id,
+            )?)
+        } else {
+            None
+        };
     let mut selection = CaseSelection {
         workflow_id: iteration.workflow_id.clone(),
         final_round: iteration.final_round,
         replay_timing: regression.replay_timing,
+        dependency_attribution_snapshot,
         replay_interval_cap_ms: regression.replay_interval_cap_ms,
         groups: BTreeMap::new(),
         skipped_passed_case_ids: BTreeSet::new(),
@@ -120,6 +135,11 @@ pub(super) fn prepare(
             .case_selection
             .as_ref()
             .is_some_and(|selection| selection.workflow_id != iteration.workflow_id)
+            || previous
+                .case_selection
+                .as_ref()
+                .and_then(|selection| selection.dependency_attribution_snapshot.as_ref())
+                != selection.dependency_attribution_snapshot.as_ref()
             || previous
                 .case_selection
                 .as_ref()

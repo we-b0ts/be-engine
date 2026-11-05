@@ -262,6 +262,18 @@ pub(super) async fn handle_control_request(
             let state = state.lock().await;
             case_execution::status(&state, request.case_id.as_deref())
         }
+        "case_client_aborted" => {
+            let mut state = state.lock().await;
+            let result = request
+                .case_id
+                .as_deref()
+                .context("case_client_aborted requires case_id")
+                .and_then(|case| case_cleanup::mark_client_aborted(&mut state, case));
+            match result {
+                Ok(()) => serde_json::json!({"ok":true}),
+                Err(error) => serde_json::json!({"ok":false,"error":format!("{error:#}")}),
+            }
+        }
         "case_failed" => {
             let mut state = state.lock().await;
             let result = request
@@ -463,12 +475,22 @@ async fn finalize_replay(
     // persisted report to carry the finalized completeness verdict, so persist
     // it alongside `finalized` instead of returning it only in the response.
     value["complete"] = Value::Bool(complete);
+    tracing::info!("generating Replay evidence");
+    let started = Instant::now();
+    let published_occurrences = report::unused_source::attach(&state, &mut value);
+    let evidence_generation_ms = started.elapsed().as_millis() as u64;
+    tracing::info!(
+        evidence_generation_ms,
+        published_occurrences,
+        "generated Replay evidence"
+    );
     (
         serde_json::json!({
             "ok": true,
             "complete": complete,
             "dirty": dirty,
             "finalized": true,
+            "evidence_generation_ms": evidence_generation_ms,
         }),
         Some(value),
     )
@@ -601,7 +623,7 @@ pub(super) async fn end_case(
         Ok(stopped) => stopped,
         Err(error) => return serde_json::json!({"ok":false,"error":format!("{error:#}")}),
     };
-    let (post_response_window, case_dir) = {
+    let (post_response_window, case_dir, client_aborted) = {
         let mut state = state.lock().await;
         if !state.cases.contains_key(case_id) {
             return serde_json::json!({
@@ -620,6 +642,10 @@ pub(super) async fn end_case(
         (
             state.case_dependency_post_response_window,
             state.cases[case_id].dir.clone(),
+            state
+                .case_cleanup
+                .client_abort_at(case_id)
+                .filter(|_| !stopped),
         )
     };
     let deadline = if stopped {
@@ -645,12 +671,15 @@ pub(super) async fn end_case(
         // delivery barrier, including protocols absent from tail selectors.
         case_cleanup::drain_started(&state, case_id, deadline).await
     };
-    let cleanup = match deadline {
-        Some(deadline) => tokio::time::timeout_at(deadline, cleanup)
+    let cleanup = match (client_aborted, deadline) {
+        // A premature client end gets its own observation bound. The normal
+        // request's deadline and unstarted business obligations are independent.
+        (Some(_), _) => Ok(()),
+        (None, Some(deadline)) => tokio::time::timeout_at(deadline, cleanup)
             .await
             .map_err(|_| anyhow!("dependency-tail absolute request budget expired during case cleanup; case ownership was retained"))
             .and_then(|result| result),
-        None => cleanup.await,
+        (None, None) => cleanup.await,
     };
     let cleanup_failure = if let Err(error) = cleanup {
         let error = case_cleanup::failure_description(&state, &error).await;
@@ -679,14 +708,18 @@ pub(super) async fn end_case(
         .or(deadline);
 
     let counter_sample = {
-        let mut state =
-            match case_cleanup::lock_for_release(&state, case_id, release_deadline).await {
-                Ok(state) => state,
-                Err(error) => {
-                    let error = case_cleanup::failure_description(&state, &error).await;
-                    return serde_json::json!({"ok":false,"dirty":true,"error":error});
-                }
-            };
+        let release = if let Some(aborted) = client_aborted {
+            case_cleanup::lock_for_abort_release(&state, case_id, aborted).await
+        } else {
+            case_cleanup::lock_for_release(&state, case_id, release_deadline).await
+        };
+        let mut state = match release {
+            Ok(state) => state,
+            Err(error) => {
+                let error = case_cleanup::failure_description(&state, &error).await;
+                return serde_json::json!({"ok":false,"dirty":true,"error":error});
+            }
+        };
         let sample = state
             .egress_counter_starts
             .remove(case_id)
@@ -694,6 +727,9 @@ pub(super) async fn end_case(
         state.set_active_case(None);
         state.target_stop_prepared.remove(case_id);
         dependency_tail::end(&mut state, case_id);
+        if state.case_cleanup.client_abort_at(case_id).is_some() {
+            state.target_observations.end_abort_tail();
+        }
         state.case_cleanup.end(case_id);
         if let Some(case) = state.cases.get_mut(case_id) {
             case.status = ReplayCaseStatus::Ended;

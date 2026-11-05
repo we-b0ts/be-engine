@@ -32,6 +32,13 @@ At run finalization it creates `.global-replay-index.json` and portable Global
 metadata/notification pages while computing the Global summary. These indexes
 travel with the completed recording, so first use on another host can validate
 and reuse them instead of scanning the original payload again.
+For central recordings, Recorder also publishes the native Startup, Process,
+and Unattributed dependency indexes and their pages in
+`indexes/{startup,process,unattributed}-dependencies/` after sealing the ledger.
+Replay prefers those indexes for the original recording scopes. When a copy
+changes filesystem identities, Replay authenticates the sealed recording
+before reusing its index. Missing indexes or pages and incompatible scope
+views fall back to Replay's local cache without modifying the recording.
 Recorder refreshes the sealed fragment identity after its own final ownership
 assignment, checking unchanged size, inode and modification time without reading
 the payload again. Ordinary Replay never relaxes change-time validation.
@@ -131,12 +138,10 @@ reuse them without visiting all Global rows. A different Source or policy gets a
 different identity. Changed rules and older recordings retain on-demand rebuilds.
 Prewarm failure is explicit and preserves recording completion semantics and
 original bytes; it does not authorize Replay to bypass its native validation.
-The report-preparation marker does not certify that every native scoped-view
-index is portable. Native Process indexes built in the Recorder's local cache
-can still require an initial rebuild after copying a recording to another root
-or host. Report inventories and native scope indexes have separate identities;
-neither can substitute for a different membership view. The listener readiness
-budget must cover any native preparation that remains before it starts serving.
+Report inventories and native scope indexes have separate identities. A
+report-preparation marker cannot substitute for a missing native scope index.
+Older recordings and scopes changed by Replay attribution can still require a
+native index build within the listener readiness budget.
 An unreferenced prewarm may be rebuilt from intact Source; missing or changed
 evidence already referenced by a published report remains an error.
 See [Replay performance](replay-performance.md) for the implementation boundaries

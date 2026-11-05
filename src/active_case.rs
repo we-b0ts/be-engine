@@ -8,6 +8,7 @@ use crate::recorder::{CaseContext, CaseInvalidation};
 
 mod activity;
 mod async_api;
+mod client_abort;
 mod correlation;
 mod publication;
 mod recovery;

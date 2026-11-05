@@ -3,6 +3,7 @@ mod analysis;
 mod batch;
 mod batch_verification;
 mod case_defaults;
+mod client_abort;
 mod decisions;
 mod investigations;
 mod model;
@@ -134,6 +135,7 @@ pub fn dependency_attribution_context(
         let source = source::load(&state)?;
         let mut context = context_for(&root, &state, &source)?;
         context.task_groups = rules::claim_groups(&policy, &source, &context.claims)?;
+        context.client_abort_origins = client_abort::candidates(&source, &context.claims);
         context
     } else {
         let (identity, ids) = analysis::review_inventory(&root, &state)?;
@@ -232,6 +234,7 @@ fn context_from_inventory(
         assignment_id,
         claims,
         task_groups: BTreeMap::new(),
+        client_abort_origins: vec![],
         evidence_commands: vec![],
         effective_policy_fingerprint: String::new(),
         rule_groups: vec![],

@@ -463,6 +463,8 @@ struct ReplayState {
     case_cleanup: control::case_cleanup::CaseCleanup,
     connect_failures: connect_failure::Inventory,
     deferred: Option<Arc<deferred::DeferredDependencies>>,
+    source_inventory_id: Option<String>,
+    eager_source_facts: BTreeMap<String, Vec<report::unused_source::CaptureFact>>,
     egress_counter_reader: Option<ReplayEgressCounterReader>,
     egress_counter_starts: BTreeMap<String, egress_counter::Sample>,
     egress_rejections: BTreeMap<String, ReplayEgressRejections>,

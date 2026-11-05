@@ -20,6 +20,7 @@ pub(super) enum ActiveProgressPhase {
     PreparingCase,
     Building,
     Replaying,
+    GeneratingEvidence,
     Finalizing,
 }
 
@@ -85,6 +86,7 @@ pub(super) fn read(path: &Path) -> Result<E2eActiveProgress> {
             completed: snapshot.completed,
             total: snapshot.total,
         },
+        ActiveProgressPhase::GeneratingEvidence => E2eActiveProgress::GeneratingEvidence,
         ActiveProgressPhase::Finalizing => E2eActiveProgress::Finalizing,
     })
 }

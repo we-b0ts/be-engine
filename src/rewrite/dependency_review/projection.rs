@@ -197,20 +197,13 @@ fn occurrence_information(
     report: &Value,
     offset: usize,
 ) -> Result<Value> {
-    let source = super::source::occurrences::load(state)?;
-    let selected = source
-        .apis
-        .iter()
-        .filter(|(_, method)| method.as_str() == api)
-        .map(|(id, _)| id.to_string())
-        .collect();
-    let unused = source.unused(report, &selected)?;
-    let targets = super::investigations::unmatched_observations(report, &selected);
-    let entries = unused.iter().skip(offset).take(PAGE).map(|id| {
-        let event = &source.exchanges[id];
-        json!({"source_exchange_id":id,"captured_owner":event.capture.attribution,
+    let source = super::source::occurrences::for_diagnosis(state, api, report)?;
+    let unused = &source.unused;
+    let targets = super::investigations::unmatched_observations(report, &source.selected);
+    let entries = unused.iter().skip(offset).take(PAGE).map(|(id,event)| {
+        json!({"source_exchange_id":id,"captured_owner":event.captured_owner,
             "default_case_attribution":source.case_defaults.get(id),
-            "effective_attribution":state.dependency_review.decisions.get(id).map(|decision|decision.decision(*id)),"capture_complete":event.complete,
+            "effective_attribution":state.dependency_review.decisions.get(id).map(|decision|decision.decision(*id)),"capture_complete":event.capture_complete,
             "source_query":crate::rewrite::action::command(root,vec!["dependency-attribution".into(),"source".into(),"--exchange-id".into(),id.to_string()],vec![])})
     }).collect::<Vec<_>>();
     Ok(

@@ -12,6 +12,7 @@ pub(in crate::replay) mod global_evidence;
 mod model;
 mod sql_summary;
 mod success;
+pub(crate) mod unused_source;
 mod writer;
 #[cfg(test)]
 mod writer_tests;

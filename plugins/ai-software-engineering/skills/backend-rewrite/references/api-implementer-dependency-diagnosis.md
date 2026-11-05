@@ -12,18 +12,23 @@ from a source-detached API task.
 
 ## Traffic ownership
 
+For a suspected foreign unused dependency, use
+`dependency-attribution show --api <canonical-route>` to identify the concrete
+unused Source occurrence. Return its exact Source UUID, current method evidence
+ID and a bounded factual reason to the coordinator. This is sufficient to
+request review. Proving exclusion, tracing the true trigger across Cases and
+assessing its lifecycle rule are the independent repository analyst's work.
+The coordinator submits the returned `claim_command` and dispatches the analyst.
+For a suspected foreign request with only an unmatched Target observation, report
+the exact observation and evidence IDs as unresolved ownership. The claim
+requires an unused Source UUID from the current finalized attempt.
+
 Your API owns the traffic you report as missing. Investigate its async lifecycle
 and supply its own supported `async_api` rule when the work was captured in
 another scope. Otherwise identify the exact recorder omission and repair inputs,
 including fixed-IP interception or response IP-URL rewriting. Empty candidates
 alone prove neither omission nor asynchronous ownership. Return the diagnosis to
 the coordinator; only the coordinator publishes rules or investigation results.
-
-For concrete recorded unused traffic you consider foreign, return the exact
-Source occurrence IDs, current evidence ID and a bounded factual reason. You do
-not need to prove exclusion or trace the true owner. The coordinator submits an
-ownership return and the engine requests the repository analyst. The analyst may
-reject your return or prove another API/task owner through supported rules.
 
 ## Missing Recorded Dependency Evidence
 
@@ -257,9 +262,8 @@ the current dirty-cluster evidence ID and one protocol-specific planner returned
 in `applicable_rule_planners`. Run its exact read-only help argv and return only
 the source-proven selector inputs to the workflow coordinator. Replay evidence, case
 source, and immutable Source revision come from engine state; do not invent them
-or replace the provided identity. When ownership is known, retain that owner and diagnose its behavior. For
-specific unused occurrences you return as foreign, provide IDs and reason rather
-than taking responsibility for discovering the true owner. A request-owned
+or replace the provided identity. Diagnose the behavior of the known owner. Route
+disputed ownership through [traffic ownership](#traffic-ownership). A request-owned
 result requires normal target implementation; it cannot justify a process-owned rule. Never
 rewrite Replay reports, trim traffic, or edit immutable capture files.
 

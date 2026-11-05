@@ -66,10 +66,12 @@ For `dependency_attribution`, preserve assignment ID/generation, recording run,
 Source revision, Source inventory ID and expected proof revision. The coordinator
 queries `dependency-attribution context` and dispatches this read-only assignment.
 You receive only concrete ownerless Source traffic or ownership returns. An
-implementer need not prove its exclusion or find the true owner. You either
-reject a mistaken return with Source proof, or independently prove the actual
-process task or async API owner under supported effective rules. Complete all
-ownerless attribution before formal Replay; an empty review cannot release it.
+ownership return can start with unused Source UUIDs, the current method evidence
+ID and a bounded factual reason. You own the independent investigation of the
+actual trigger, Case or task and applicable lifecycle rule. Reject a mistaken
+return with Source proof or prove the actual owner under effective rules.
+Complete all ownerless attribution before formal Replay. An empty review cannot
+release that gate.
 Missing traffic already has its reporting API's owner and remains with that
 implementer, even when no Source candidate exists.
 Read indirect calls, branches, retries and cleanup paths. A timestamp, connection,
@@ -113,6 +115,11 @@ submission; they are not additional JSON fields:
   manual attribution of the captured occurrences.
 
 For an async origin, rule generation is a required step **after ownership analysis**.
+When the analysis instead proves a disconnect path after an observed premature
+client transport end, use the engine's `engine.client_abort_tail:v1` binding
+and exact claimed unused UUIDs. `context.client_abort_origins` is a candidate
+list. Prove the call chain, original Case identity and occurrence ownership
+independently, even when several other Cases intervened.
 Use the complete effective Case inventory: original Case-owned dependencies plus
 the occurrences assigned by this analysis, excluding proven foreign work. Inspect
 the last business exchanges by completion time, not the last page, connection

@@ -286,20 +286,36 @@ recording observation.
 
 ## Independent Dependency Attribution
 
+The repository analyst alone investigates disputed or unknown Source ownership.
+When the implementer flags unused Source UUIDs with the current method evidence
+ID and a bounded factual reason, submit the `claim_command` returned by
+`dependency-attribution show --api <canonical-route>`. Those inputs are enough
+to request analysis. The analyst owns tracing the true trigger, proving or
+rejecting the return, and assessing the applicable lifecycle rule.
+
 For `dependency_attribution_required`, dispatch the returned assignment to the
-read-only repository analyst. Dedupe by assignment ID and generation; do not
-require the current API implementer to prove exclusion or identify another
-caller. This action is only for concrete ownerless Source occurrences or returned
+read-only repository analyst. Dedupe by assignment ID and generation.
+This action is only for concrete ownerless Source occurrences or returned
 ownership disputes. All ownerless occurrences need effective process/async-API
 rules and positive attribution before formal Replay; empty review does not
 release the gate. A new batch with known owners needs no attribution analyst.
+
+For an unused ownership return after a premature client transport end,
+`context.client_abort_origins` identifies earlier Source candidates. The
+analyst may prove an origin separated by multiple Cases. A detached business
+task still needs its applicable async rule. A proved disconnect path uses the
+engine rule `engine.client_abort_tail:v1` and exact claimed UUIDs. Follow the
+returned Replay obligation for the changed origin scope.
 
 A report of missing traffic already claims ownership for its API. Keep that
 diagnosis with the existing implementer: require its own async lifecycle rule or
 an exact recording omission and interception/response-IP-URL rewrite inputs.
 `investigate` retains authenticated Target requests as API-owned work; use the
 returned `show --api` view and coordinator `resolve` command to publish that
-implementer's conclusion. Unmatched or startup dirty alone is not analyst work.
+implementer's conclusion. When foreign ownership is suspected and only a Target
+observation is available, keep its observation and evidence IDs as unresolved.
+The engine currently requires concrete unused Source UUIDs to open an ownership
+claim. Keep the disputed ownership analysis with the repository analyst.
 
 Use `dependency-attribution rules` for effective task/lifecycle group identities
 and the async `scenarios` with their current triggers and ends. Inspect other

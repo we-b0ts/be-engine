@@ -151,6 +151,28 @@ async fn unused_occurrence_projection_matches_full_source_and_retains_seal_check
     let (_target, state) = fixture(2).await;
     let full = source::load(&state).unwrap();
     let projected = source::occurrences::load(&state).unwrap();
+    let traversals = source::occurrences::ORIGINAL_TRAVERSALS.get();
+    let cached = source::occurrences::load(&state).unwrap();
+    assert_eq!(
+        source::occurrences::ORIGINAL_TRAVERSALS.get(),
+        traversals,
+        "warm diagnostics must not traverse original payloads"
+    );
+    assert_eq!(cached.exchanges.len(), projected.exchanges.len());
+    assert_eq!(cached.apis, projected.apis);
+    let directory =
+        crate::dependency_index::store::cache_directory(state.case_source.as_ref().unwrap());
+    fs::write(
+        directory.join("diagnostic-occurrences-v1.json"),
+        b"broken cache",
+    )
+    .unwrap();
+    let rebuilt = source::occurrences::load(&state).unwrap();
+    assert_eq!(
+        source::occurrences::ORIGINAL_TRAVERSALS.get(),
+        traversals + 1
+    );
+    assert_eq!(rebuilt.exchanges.len(), projected.exchanges.len());
     assert_eq!(projected.identity, full.identity);
     assert_eq!(projected.apis, full.apis);
     assert_eq!(projected.case_defaults, full.case_defaults);
@@ -197,9 +219,74 @@ async fn unused_occurrence_projection_matches_full_source_and_retains_seal_check
         .unwrap()
         .join("dependencies.jsonl");
     let mut bytes = fs::read(&central).unwrap();
-    bytes.push(b'\n');
-    fs::write(central, bytes).unwrap();
+    let modified = fs::metadata(&central).unwrap().modified().unwrap();
+    let position = bytes
+        .windows(b"worker.test".len())
+        .position(|value| value == b"worker.test")
+        .unwrap();
+    bytes[position..position + b"worker.test".len()].copy_from_slice(b"tamper.test");
+    fs::write(&central, bytes).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&central)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
     assert!(source::occurrences::load(&state).is_err());
+}
+
+#[tokio::test]
+async fn occurrence_metadata_from_another_recording_is_rebuilt() {
+    let (_first_target, first) = fixture(1).await;
+    let (_second_target, second) = fixture(4).await;
+    let first_metadata = source::occurrences::load(&first).unwrap();
+    let directory = |state: &RewriteState| {
+        crate::dependency_index::store::cache_directory(state.case_source.as_ref().unwrap())
+    };
+    let second_directory = directory(&second);
+    crate::dependency_index::store::private_directory(&second_directory).unwrap();
+    fs::copy(
+        directory(&first).join("diagnostic-occurrences-v1.json"),
+        second_directory.join("diagnostic-occurrences-v1.json"),
+    )
+    .unwrap();
+    let before = source::occurrences::ORIGINAL_TRAVERSALS.get();
+    let second_metadata = source::occurrences::load(&second).unwrap();
+    assert_ne!(first_metadata.identity, second_metadata.identity);
+    assert_eq!(second_metadata.exchanges.len(), 5);
+    assert_eq!(source::occurrences::ORIGINAL_TRAVERSALS.get(), before + 1);
+}
+
+#[tokio::test]
+async fn issue_overview_and_empty_unused_detail_do_not_traverse_original_payloads() {
+    let (target, mut state) = fixture(2).await;
+    state.phase = super::super::RewritePhase::ImplementationRequired;
+    state.active_issue = Some(serde_json::from_value(json!({"id":"issue","kind":"dependency",
+        "owner":"target_code","summary":"unused dependencies","observed_target_fingerprint":"target",
+        "attempt":1})).unwrap());
+    super::super::worker::confirm_current_for_test(&mut state);
+    RewriteStore::new(target.path())
+        .unwrap()
+        .save(&state)
+        .unwrap();
+    let context = super::super::RewriteContext {
+        target_root: target.path().into(),
+    };
+    let before = source::occurrences::ORIGINAL_TRAVERSALS.get();
+    let report = super::super::query_rewrite_evidence_for_scope(
+        context.clone(),
+        &super::super::RewriteWorkScope::Api { api: "/api".into() },
+    )
+    .unwrap();
+    assert_eq!(source::occurrences::ORIGINAL_TRAVERSALS.get(), before);
+    let detail_id = report.facts["api_information"]["query_id"]
+        .as_str()
+        .unwrap();
+    let detail = super::super::query_rewrite_evidence(context, detail_id).unwrap();
+    assert_eq!(source::occurrences::ORIGINAL_TRAVERSALS.get(), before);
+    assert_eq!(detail.facts["schema"], "target-api-information/v3");
+    assert_eq!(detail.facts["dependency_occurrences"]["available"], true);
+    assert_eq!(detail.facts["dependency_occurrences"]["unused_total"], 0);
 }
 
 #[tokio::test]

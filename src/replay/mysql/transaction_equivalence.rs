@@ -721,16 +721,19 @@ impl ReplayState {
             }
         }
         let mysql = &mut self.mysql;
-        if let Some(index) = mysql.isolation.observe(
+        if let Some(indices) = mysql.isolation.observe(
             witness.connection(),
             case,
             delivery,
             &mysql.transaction_equivalence,
-        ) && mysql.exchanges[index].status.is_available()
-        {
-            mysql.exchanges[index].optional_session =
-                Some(OptionalSessionExchange::TransactionIsolation);
-            self.refresh_mysql_global_report(index);
+        ) {
+            for index in indices {
+                if self.mysql.exchanges[index].status.is_available() {
+                    self.mysql.exchanges[index].optional_session =
+                        Some(OptionalSessionExchange::TransactionIsolation);
+                    self.refresh_mysql_global_report(index);
+                }
+            }
         }
     }
 }

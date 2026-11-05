@@ -24,6 +24,7 @@ pub(in crate::replay) struct Plan {
     pub(super) setup: usize,
     pub(super) end: usize,
     pub(super) reset: usize,
+    pub(super) reassertions: BTreeSet<usize>,
     pub(super) required: BTreeSet<usize>,
     pub(super) read_only: bool,
 }
@@ -185,6 +186,7 @@ impl Registry {
             {
                 continue;
             }
+            let mut reassertions = BTreeSet::new();
             for (start, &(index, row)) in rows.iter().enumerate() {
                 if plans.len() >= 128 {
                     return plans;
@@ -196,11 +198,14 @@ impl Registry {
                 else {
                     continue;
                 };
-                if level == baseline.level {
+                if reassertions.contains(&index) {
                     continue;
                 }
+                // Reasserting the known baseline has the same finite scope as
+                // an override: prove the original transaction and restoration.
                 if let Some(plan) = prove(case, connection, baseline, level, index, &rows[start..])
                 {
+                    reassertions.extend(plan.reassertions.iter().copied());
                     plans.push(plan);
                 }
             }
@@ -244,6 +249,7 @@ fn prove(
     let start_sequence = sequence;
     let mut previous = first.response.server_status?;
     let mut required = BTreeSet::new();
+    let mut reassertions = BTreeSet::new();
     let mut read_only = true;
     let mut active = false;
     let mut end = None;
@@ -261,6 +267,16 @@ fn prove(
         previous = after;
         let sql = row.sql.as_deref()?;
         if let Some((Scope::Session, reset)) = crate::mysql::isolation::setting(sql) {
+            // Pool initialization and a scoped checkout can reassert the same
+            // level before any business operation. Keep these finite controls
+            // until the Target genuinely covers the complete transaction.
+            if reset == level && end.is_none() && required.is_empty() {
+                if !control(row) || !inactive(row) || active {
+                    return None;
+                }
+                reassertions.insert(index);
+                continue;
+            }
             if reset != baseline.level || !control(row) || !inactive(row) || active {
                 return None;
             }
@@ -276,6 +292,7 @@ fn prove(
                 setup,
                 end: end?,
                 reset: index,
+                reassertions,
                 required,
                 read_only,
             });

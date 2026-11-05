@@ -465,6 +465,9 @@ is unclear.
   release, preventing a new delivery from entering between the check and release.
   Its `pending` child assembles bounded timeout evidence from protocol-owned
   delivery references and observation claims while holding that same lock.
+  Its `client_abort` child waits for bounded Case-local inactivity after a
+  premature transport end and uses the same atomic release barrier. Source's
+  `active_case/client_abort` observes the same lifecycle at capture time.
   A failed primary status ends normal async business waiting while
   retaining unused/dirty evidence; protocol owners expose delivery state, and
   runner response assertions retain the primary failure independently of cleanup.
@@ -689,7 +692,11 @@ is unclear.
 - `mysql/isolation` owns closed isolation-setting/probe syntax without expanding
   the generic session-setup whitelist. `replay/mysql/isolation/source` proves
   original baseline probes and complete override/transaction/restoration scopes
-  during preparation. Its parent binds NEXT settings to actual Target sockets,
+  during preparation, including a complete scope reasserting its known baseline.
+  Same-level settings before its first business operation retain exact Source
+  references under that one proof; successful real Target completion alone can
+  authorize their finite omission alongside restoration.
+  Its parent binds NEXT settings to actual Target sockets,
   observes successful deliveries through the existing transaction owner and
   grants only proven Source restoration omission. Its Source proof classifies
   complete read-only scopes; its live owner requires every original read and a
@@ -864,8 +871,10 @@ is unclear.
   notification locations. Sealed fragments from trusted immutable completed
   recordings survive ordinary copies by matching source size and nanosecond
   mtime, then binding the current full file stamp in memory; their relative pages
-  remain under the sealed recording root. Local rebuild caches still require the
-  full stamp. `pages`, `stream` and `reference` own disk pages,
+  remain under the sealed recording root. Its `recording` child publishes native
+  scope indexes under the sealed recording's `indexes/` directory and binds
+  portable reuse to the authenticated manifest and original scope. Local rebuild
+  caches still require the full stamp. `pages`, `stream` and `reference` own disk pages,
   immutable traversal and shared original-byte reads. `replay/global` registers
   these inventories through protocol-owned evidence adapters. Redis Pub/Sub's
   `inventory` owns session consumption and its `notifications` child owns ordered
@@ -974,6 +983,10 @@ is unclear.
   while retaining complete Source proof and a fresh-Replay obligation.
   `e2e_run/replay_publication` stages the original Replay report and dependency
   sidecar into that same snapshot and retargets aggregate report references.
+  `replay/report/unused_source` projects original MySQL and Redis capture facts
+  for the actual unused Case rows from in-memory preparation metadata at
+  finalization. It binds the projection to the admitted recording manifest and
+  carries it inside the session report.
   `replay/report/aggregate/runner` validates runner-selected report locations,
   session identity and complete shared-session coverage while preserving the
   public recording report discovery boundary. `e2e_run/final_evidence` selects
@@ -996,8 +1009,18 @@ is unclear.
   UUID locations. Incomplete locator partitions retain the full metadata fallback.
   Lookup shares physical-effect folding with the full Source proof loader;
   diagnostic lookup never certifies attribution.
-  Its `occurrences` sibling streams original sealed records into only capture
+  Its `occurrences` sibling streams original sealed records once into only capture
   completeness and exact native/HTTP identity metadata for paged API diagnostics.
+  Its `cache` child persists that disposable metadata with a recording identity,
+  central file stamp and checksummed envelope. Every lookup authenticates the
+  complete sealed membership first; policy-dependent Case defaults remain fresh.
+  Its `selection` child binds metadata to an API's complete unused reference set,
+  including every native ambiguity candidate, without retaining unrelated payloads
+  or whole-run occurrence maps in ordinary API diagnostics.
+  The diagnostic reader prefers finalized report projections when their Source
+  identity and selected coverage match, and uses the same cache for fallback.
+  Corrupt or foreign metadata rebuilds from original bytes. This cache grants
+  no Source proof or verification authority.
   It shares physical-effect folding, input-route authentication and unused-reference
   resolution with the full Source loader, without constructing discovery graphs
   or retaining SQL and payload selectors. Actual attribution proof still uses
@@ -1393,7 +1416,13 @@ is unclear.
   scheduling to the root coordinator. `progress_publication.rs` owns
   the final delivery publication gate for the selected regression scope.
   `evidence/overview` owns issue overview identity and projection, including
-  current worker context outside evidence hashes.
+  current worker context outside evidence hashes. Full dependency attribution
+  is an on-demand issue query, never a prerequisite for an overview.
+  `evidence/diagnosis` projects bounded Case/operation mismatch groups, ordered
+  follow-up query IDs and conditional repair/strategy guidance from already
+  retained facts. It neither discovers rules nor establishes their applicability.
+  `evidence/query_catalog` owns issue-specific query availability and purposes;
+  method issues reference a single shared command catalog by identity.
   `evidence/access` owns read-only assignment/opaque-query resolution and
   worker-confirmation checks; `evidence` owns bounded API diagnostic queries.
   `bin/backend-rewrite/evidence` owns CLI selector parsing for that read-only

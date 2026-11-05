@@ -50,7 +50,7 @@ pub(in crate::replay) async fn append(
         .unwrap();
 }
 
-fn native_event(value: &Value) -> RecorderEvent {
+pub(in crate::replay) fn native_event(value: &Value) -> RecorderEvent {
     let now = Utc::now();
     let host = value["target_host"].as_str().unwrap();
     let port = value["target_port"].as_u64().unwrap() as u16;

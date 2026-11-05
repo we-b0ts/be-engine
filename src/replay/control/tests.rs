@@ -6,10 +6,10 @@ mod peer_disconnect;
 mod streaming;
 
 #[tokio::test(start_paused = true)]
-async fn replay_end_finishes_ordinary_case_without_a_post_response_sleep() {
+async fn replay_end_waits_only_for_aborted_cases_and_caps_rolling_quiet() {
     let temp = tempfile::tempdir().unwrap();
     let collection_dir = temp.path().join("api-user");
-    for case_id in ["case-a", "case-b"] {
+    for case_id in ["case-a", "case-b", "case-c"] {
         let case_dir = collection_dir.join(case_id);
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
@@ -69,6 +69,48 @@ async fn replay_end_finishes_ordinary_case_without_a_post_response_sleep() {
     assert_eq!(started.elapsed(), Duration::ZERO);
     assert_eq!(ended["ok"], true);
     assert_eq!(state.lock().await.active_case_id, None);
+
+    let request = |command: &str, case: &str| ReplayControlRequest {
+        command: command.into(),
+        case_id: Some(case.into()),
+        fail_on_dirty: true,
+        fail_on_incomplete: false,
+        identity_pairs: vec![],
+        derived_input: None,
+        native_event: None,
+        input_timing: None,
+        socketio_timing: None,
+    };
+    for (case, activity_at, remaining) in [
+        ("case-b", Duration::from_secs(14), Duration::from_secs(15)),
+        ("case-c", Duration::from_secs(299), Duration::from_secs(1)),
+    ] {
+        assert_eq!(
+            begin_case(&request("begin", case), state.clone()).await["ok"],
+            true
+        );
+        let (observed, _) = handle_control_request(
+            request("case_client_aborted", case),
+            state.clone(),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(observed["ok"], true);
+        tokio::time::advance(activity_at).await;
+        let latest = tokio::time::Instant::now();
+        {
+            let mut active = state.lock().await;
+            // Independent post-abort dependency observations renew idle, but
+            // a failed case still retains its original absolute bound.
+            active.target_observations.watch_abort_tail(case, latest);
+            case_cleanup::mark_failed(&mut active, case).unwrap();
+        }
+        let ended = end_case(&request("end", case), state.clone()).await;
+        assert_eq!(ended["ok"], true);
+        assert_eq!(latest.elapsed(), remaining);
+        assert_eq!(state.lock().await.active_case_id, None);
+    }
 }
 
 #[test]

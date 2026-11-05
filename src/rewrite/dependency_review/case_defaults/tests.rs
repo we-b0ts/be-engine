@@ -118,11 +118,79 @@ async fn unused_occurrence_projection_preserves_input_routes_and_notification_id
         .unwrap()
         .remove("source_exchange_id");
     assert!(projected.unused(&missing, &selected).is_err());
+    let mut subset = report.clone();
+    subset["redis"]["unused_case"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    let scoped =
+        super::super::source::occurrences::for_api(&state, "POST /responses", &subset).unwrap();
+    assert_eq!(scoped.exchanges.len(), 1);
+    assert_eq!(
+        scoped.unused(&subset, &selected).unwrap(),
+        super::super::source::unused(&full, &subset, &selected).unwrap()
+    );
+    let traversals = super::super::source::occurrences::ORIGINAL_TRAVERSALS.get();
+    let warm =
+        super::super::source::occurrences::for_api(&state, "POST /responses", &subset).unwrap();
+    assert_eq!(warm.case_defaults, full.case_defaults);
+    assert_eq!(
+        super::super::source::occurrences::ORIGINAL_TRAVERSALS.get(),
+        traversals
+    );
+    let complete =
+        super::super::source::occurrences::for_api(&state, "POST /responses", &report).unwrap();
+    assert_eq!(complete.exchanges.len(), 2);
+    assert_eq!(
+        super::super::source::occurrences::ORIGINAL_TRAVERSALS.get(),
+        traversals + 1,
+        "another unused inventory must not reuse a narrower cache"
+    );
     let path = full.inputs[&case].join("request.json");
     let mut bytes = fs::read(&path).unwrap();
     bytes.push(b' ');
     fs::write(path, bytes).unwrap();
     assert!(super::super::source::occurrences::load(&state).is_err());
+    assert!(
+        super::super::source::occurrences::for_api(&state, "POST /responses", &subset).is_err()
+    );
+}
+
+#[tokio::test]
+async fn published_occurrence_diagnosis_uses_no_original_scan_and_missing_fields_backfill() {
+    use super::super::source::occurrences::{ORIGINAL_TRAVERSALS, for_diagnosis};
+
+    let (_target, state, case, _) = historical(true).await;
+    let full = super::super::source::load(&state).unwrap();
+    let (id, event) = full
+        .exchanges
+        .iter()
+        .find(|(_, event)| event.selector["event_type"] == "redis_pub_sub_push")
+        .unwrap();
+    let mut report = json!({"finalized":true,"unused_source_inventory_id":full.identity,
+    "redis":{"unused_case":[{
+        "case_id":case,"command":"PUBSUB_PUSH","source_exchange_id":id,
+        "source_occurrence":{"source_exchange_id":id,"captured_owner":event.capture.attribution,
+            "capture_complete":event.complete}
+    }]}});
+    let before = ORIGINAL_TRAVERSALS.get();
+    let published = for_diagnosis(&state, "POST /responses", &report).unwrap();
+    assert_eq!(ORIGINAL_TRAVERSALS.get(), before);
+    report["redis"]["unused_case"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("source_occurrence");
+    let rebuilt = for_diagnosis(&state, "POST /responses", &report).unwrap();
+    assert_eq!(ORIGINAL_TRAVERSALS.get(), before + 1);
+    assert_eq!(published.unused, rebuilt.unused);
+    assert_eq!(published.case_defaults, rebuilt.case_defaults);
+    assert_eq!(
+        for_diagnosis(&state, "POST /responses", &report)
+            .unwrap()
+            .unused,
+        rebuilt.unused
+    );
+    assert_eq!(ORIGINAL_TRAVERSALS.get(), before + 1);
 }
 
 #[tokio::test]

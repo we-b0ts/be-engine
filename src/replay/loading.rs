@@ -31,14 +31,26 @@ impl ReplayRuntime {
         let lazy = lifecycle.dependency_loading.lazy_cases;
         clear_report_artifacts(config.report_path.as_deref()).await?;
         let root_dir = config.case_dir;
-        if crate::dependency_index::recording::root(&root_dir).is_some() {
-            let source = root_dir.clone();
-            tokio::task::spawn_blocking(move || {
-                crate::dependency_index::recording::authenticate(&source)
-            })
-            .await
-            .context("recording authentication task failed")??;
-        }
+        let source_inventory_id =
+            if let Some(source) = crate::dependency_index::recording::root(&root_dir) {
+                Some(
+                    tokio::task::spawn_blocking(move || -> Result<String> {
+                        let path = source.join(crate::dependency::observation::MANIFEST_FILE);
+                        let stamp = crate::dependency_index::FileStamp::read_native(&path)?;
+                        crate::dependency_index::recording::authenticate(&source)?;
+                        let bytes = std::fs::read(&path)?;
+                        ensure!(
+                            crate::dependency_index::FileStamp::read_native(&path)? == stamp,
+                            "Source manifest changed while preparing Replay"
+                        );
+                        Ok(crate::policy_evidence::digest(&bytes))
+                    })
+                    .await
+                    .context("recording authentication task failed")??,
+                )
+            } else {
+                None
+            };
         let process_owned_dependencies = &config.process_owned_dependencies;
         let replay_artifact_dir = config
             .report_path
@@ -177,6 +189,7 @@ impl ReplayRuntime {
             .collect();
         let mut deferred_files = BTreeMap::new();
         let mut prepared_scopes = BTreeMap::new();
+        let mut eager_source_facts = BTreeMap::new();
         for (index, case) in cases.values().enumerate() {
             let cleanup = lifecycle_cleanup::load_refs(&case.dir).await?;
             connect_failures
@@ -235,7 +248,7 @@ impl ReplayRuntime {
                     },
                 );
             } else {
-                let scope = load_dependency_file(
+                let (scope, facts) = load_dependency_file(
                     &case.dependencies_path,
                     ReplaySource::Case,
                     Some(&case.id),
@@ -252,6 +265,7 @@ impl ReplayRuntime {
                 )
                 .await?;
                 prepared_scopes.insert(case.id.clone(), scope);
+                eager_source_facts.insert(case.id.clone(), facts);
             }
             load_motan_debug_file(
                 &case.dir.join("dependencies-debug.jsonl"),
@@ -456,6 +470,8 @@ impl ReplayRuntime {
             target_stop_prepared: BTreeSet::new(),
             target_session_stopped: false,
             deferred,
+            source_inventory_id,
+            eager_source_facts,
             egress_counter_reader: None,
             egress_counter_starts: BTreeMap::new(),
             egress_rejections: BTreeMap::new(),

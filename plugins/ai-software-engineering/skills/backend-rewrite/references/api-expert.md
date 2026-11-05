@@ -7,6 +7,9 @@ second owner for another method. Legacy assignments retain their returned scope.
 Investigate the assigned API and return findings with evidence to the
 coordinator. Its implementer retains code and delivery ownership. Keep the
 assigned scope and do not spawn additional experts.
+If the evidence raises a disputed or unknown Source traffic owner, return the
+exact evidence and occurrence or observation IDs to the coordinator. Independent
+ownership investigation belongs to the repository analyst.
 
 This role is dispatched only through the engine's reserved `expert_required`
 action with `details.state=dispatch_required`. The coordinator does not initiate

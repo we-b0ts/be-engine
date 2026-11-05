@@ -54,6 +54,8 @@ IDs, signed Redis JSON writes, correlated write times and multipart boundaries.
 random identifiers and signed JWTs against independent dependency request clocks.
 [Shared HTTP stream/input timing](http-stream-input-timing.md) preserves client-close
 ordering while accelerating dependency streams.
+[Rewrite evidence](rewrite-evidence.md) describes the lightweight implementer
+overview, conditional strategies and authenticated on-demand dependency metadata.
 [SSE response diagnostics](interaction-diagnostics.md) expose authenticated
 per-frame response values through bounded, read-only evidence queries.
 [JWT response rules](jwt-response-rules.md) validate signatures, stable claims

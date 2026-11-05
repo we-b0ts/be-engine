@@ -231,6 +231,20 @@ pub(super) struct RedisReplayState {
 }
 
 impl RedisReplayState {
+    pub(in crate::replay) fn case_exchange_id(&self, case: &str, index: usize) -> Option<Uuid> {
+        let exchange = self.exchanges.get(index)?;
+        (exchange.source.matches_scope(ReplaySource::Case)
+            && exchange.case_id.as_deref() == Some(case))
+        .then(|| {
+            exchange
+                .record
+                .capture
+                .as_ref()
+                .map(|capture| capture.exchange_id)
+        })
+        .flatten()
+    }
+
     pub(in crate::replay) fn with_run_value_scopes(scopes: BTreeMap<Uuid, Arc<str>>) -> Self {
         Self {
             run_value_scopes: scopes,

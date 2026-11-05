@@ -235,7 +235,27 @@ async fn run(
     // Transport cleanup keeps its own short budget. Dependency observation has
     // the primary request's absolute deadline and the same bounded writer drain.
     super::diagnostics::phase(session.case.id, protocol, "dependency_drain_started");
-    let drain = if observation_deadline.is_some() {
+    let client_abort = finished_observation
+        .as_ref()
+        .ok()
+        .and_then(|(input, output)| {
+            output.end.interrupted_by_client().then(|| {
+                let end = input.actions.last().expect("observed client transport end");
+                session.started + Duration::from_millis(end.offset_ms)
+            })
+        });
+    let drain = if let Some(aborted) = client_abort {
+        session
+            .state
+            .inner
+            .active_cases
+            .observe_client_abort_tail(session.case.id, aborted)
+            .await;
+        session
+            .state
+            .drain_active_case_dependencies(session.case.id)
+            .await
+    } else if observation_deadline.is_some() {
         // This operation owns both its absolute observation limit and the
         // bounded drain measured from actual admission closure. An outer timer
         // must not cancel its close/report/publication handoff between phases.

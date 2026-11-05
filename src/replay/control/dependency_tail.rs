@@ -16,7 +16,7 @@ const MAX_SELECTED_REFS: usize = 100_000;
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 pub(in crate::replay) const TARGET_STOP_CLEANUP_GRACE: Duration = Duration::from_secs(30);
 mod metadata;
-mod progress;
+pub(super) mod progress;
 pub(in crate::replay) use metadata::load_cleanup_refs;
 
 #[derive(Debug)]

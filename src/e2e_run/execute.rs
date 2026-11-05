@@ -584,9 +584,10 @@ async fn run_active_with_replay(
     }
     state.status = RunStatus::Finalizing;
     store::write_active(layout, state)?;
-    let _ = active_progress::write(layout, state, ActiveProgressPhase::Finalizing);
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::GeneratingEvidence);
 
     finalize_replay(state, intentionally_incomplete, finalization).await?;
+    let _ = active_progress::write(layout, state, ActiveProgressPhase::Finalizing);
     wait_for_replay(replay).await?;
     state.replay_pid = None;
     build_final_evidence(config, layout, inventory, state)?;
@@ -676,6 +677,20 @@ pub(super) async fn execute_case(
             "failed to prepare replay request for case {case_id}: {error:#}"
         )),
     };
+    let interaction_end = assertion_command
+        .as_ref()
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+        .and_then(|response| response.pointer("/interaction/end").cloned())
+        .and_then(|end| {
+            serde_json::from_value::<crate::interaction::model::EndObservation>(end).ok()
+        });
+    if interaction_end
+        .as_ref()
+        .is_some_and(crate::interaction::model::EndObservation::interrupted_by_client)
+    {
+        control(state, "case_client_aborted", Some(case_id), false, false).await?;
+    }
     let execution_status =
         control(state, "case_execution_status", Some(case_id), false, false).await?;
     let response_times: crate::value_contract::time_copies::DeliveredTimeCopies = if runtime
@@ -757,15 +772,9 @@ pub(super) async fn execute_case(
         .map(super::primary_driver::response_unavailable_reason);
     // A different primary status (or no usable response) ends the normal
     // business path. Body-only differences retain the recorded async contract.
-    let dependency_failed = assertion_command
+    let dependency_failed = interaction_end
         .as_ref()
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
-        .is_some_and(|response| {
-            response
-                .pointer("/interaction/end/reason")
-                .is_some_and(|reason| reason == "dependency_failure")
-        });
+        .is_some_and(|end| end.reason == crate::interaction::model::EndReason::DependencyFailure);
     let primary_failed = assertion_command.is_err()
         || dependency_failed
         || state.cases[case_index].execution_failure.is_some()

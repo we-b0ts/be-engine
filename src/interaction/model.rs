@@ -306,6 +306,16 @@ pub struct EndObservation {
     pub close: Option<CloseObservation>,
 }
 
+impl EndObservation {
+    /// An observed client transport end while recorded business work is pending.
+    pub(crate) fn interrupted_by_client(&self) -> bool {
+        self.clean && self.reason == EndReason::ClientTransportEnd && !self.pending.is_empty()
+    }
+}
+
+pub(crate) const CLIENT_ABORT_QUIET: std::time::Duration = std::time::Duration::from_secs(15);
+pub(crate) const CLIENT_ABORT_LIMIT: std::time::Duration = std::time::Duration::from_secs(300);
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CloseObservation {
