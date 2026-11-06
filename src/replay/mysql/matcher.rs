@@ -370,6 +370,7 @@ impl ReplayState {
     ) -> StatementMetadata {
         let normalized_sql = normalize_sql(sql);
         let param_count = count_sql_placeholders(sql);
+        let select_table = candidates::sql_table(sql);
         let mut semantic_target = None;
         let mut direct_projection = None;
         for source in [ReplaySource::Case, ReplaySource::Startup] {
@@ -383,6 +384,10 @@ impl ReplayState {
                     if !exchange.source.matches_scope(source)
                         || !active_case_matches(case, exchange)
                         || !identity_matches_exchange(identity, &exchange.identity)
+                        || !self
+                            .mysql
+                            .candidates
+                            .permits_table(index, select_table.as_deref())
                     {
                         continue;
                     }

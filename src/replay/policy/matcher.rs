@@ -506,6 +506,22 @@ impl ReplayPolicyRuntime {
         })
     }
 
+    pub(in crate::replay) fn mysql_legacy_sql_selector_applies(
+        &self,
+        case_id: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+    ) -> bool {
+        let Some(case) = case_id.and_then(|id| self.cases.get(id)) else {
+            return false;
+        };
+        self.loaded.document.dependency_rules.iter().any(|rule| {
+            rule.protocol == DependencyProtocol::Mysql
+                && rule_matches_case(rule, case)
+                && self.mysql_selectors.matches_scope(rule, identity, command)
+        })
+    }
+
     pub(in crate::replay) fn preview_http(
         &self,
         context: &HttpPolicyContext<'_>,

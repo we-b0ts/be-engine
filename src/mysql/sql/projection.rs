@@ -285,7 +285,7 @@ fn clause(token: &Token) -> bool {
     ["where", "order", "limit"].iter().any(|s| token.is(s))
 }
 
-fn identifier(token: &Token) -> Option<&str> {
+pub(crate) fn identifier(token: &Token) -> Option<&str> {
     match token {
         Token::Word(value) | Token::Identifier(value) if !value.is_empty() => Some(value),
         _ => None,

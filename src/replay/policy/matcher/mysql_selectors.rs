@@ -70,6 +70,15 @@ impl MysqlSelectors {
         command: &str,
         sql: Option<&str>,
     ) -> bool {
+        self.matches_scope(rule, identity, command) && self.matches_sql(rule, sql)
+    }
+
+    pub(super) fn matches_scope(
+        &self,
+        rule: &ReplayDependencyRule,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+    ) -> bool {
         let Some(mysql) = &rule.mysql else {
             return false;
         };
@@ -88,6 +97,6 @@ impl MysqlSelectors {
         {
             return false;
         }
-        self.matches_sql(rule, sql)
+        true
     }
 }

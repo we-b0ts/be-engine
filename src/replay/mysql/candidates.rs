@@ -9,6 +9,7 @@ use std::sync::Arc;
 mod family;
 use family::Family;
 pub(super) use family::classify as sql_family;
+pub(super) use family::sql_table;
 
 #[derive(Debug)]
 pub(super) struct Candidates {
@@ -17,6 +18,7 @@ pub(super) struct Candidates {
     members: CaseMembership,
     lanes: LaneIndex,
     families: Vec<Option<Family>>,
+    select_tables: Vec<Option<String>>,
 }
 
 impl Default for Candidates {
@@ -27,6 +29,7 @@ impl Default for Candidates {
             members: CaseMembership::default(),
             lanes: LaneIndex::default(),
             families: Vec::new(),
+            select_tables: Vec::new(),
         }
     }
 }
@@ -56,8 +59,22 @@ impl Candidates {
             *self = Self::default();
         }
         for (index, exchange) in exchanges.iter().enumerate().skip(self.count) {
-            self.families
-                .push(sql_family(exchange.record.sql.as_deref()));
+            let tokens = exchange
+                .record
+                .sql
+                .as_deref()
+                .and_then(family::bounded_tokens);
+            self.families.push(
+                tokens
+                    .as_deref()
+                    .and_then(|tokens| family::classify_tokens(tokens)),
+            );
+            self.select_tables.push(
+                tokens
+                    .as_deref()
+                    .and_then(|tokens| family::select_table(tokens))
+                    .map(str::to_owned),
+            );
             self.members
                 .register(exchange.source, exchange.case_id.as_deref(), index);
             if let Some(connection) = exchange.record.connection_id {
@@ -107,6 +124,14 @@ impl Candidates {
             .get(candidate)
             .copied()
             .flatten()
+            .zip(actual)
+            .is_none_or(|(source, actual)| source == actual)
+    }
+
+    pub(super) fn permits_table(&self, candidate: usize, actual: Option<&str>) -> bool {
+        self.select_tables
+            .get(candidate)
+            .and_then(|table| table.as_deref())
             .zip(actual)
             .is_none_or(|(source, actual)| source == actual)
     }

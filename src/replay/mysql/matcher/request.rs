@@ -93,6 +93,10 @@ impl ReplayState {
         let observed_params = params;
         let baseline_normalized_sql = sql.map(normalize_sql);
         let sql_family = candidates::sql_family(sql);
+        let select_table = sql.and_then(candidates::sql_table);
+        let legacy_sql_selector = self.replay_policy.as_ref().is_some_and(|policy| {
+            policy.mysql_legacy_sql_selector_applies(case, identity, command)
+        });
         let transaction_end = transaction.and_then(|transaction| transaction.preferred_end);
         let plain_end = matches!(
             baseline_normalized_sql.as_deref(),
@@ -243,6 +247,17 @@ impl ReplayState {
                                 .metadata_warnings
                                 .push(format!("SQL request witness unavailable: {error:#}"));
                             return None;
+                        }
+                        // The witness above still records independently observed
+                        // requests. Native matching cannot cross physical tables.
+                        if !legacy_sql_selector
+                            && !allow_hypotheses
+                            && !self
+                                .mysql
+                                .candidates
+                                .permits_table(index, select_table.as_deref())
+                        {
+                            continue;
                         }
                         let dynamic = self
                             .replay_policy
