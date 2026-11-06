@@ -140,6 +140,26 @@ pub(super) struct Observation {
 }
 
 impl Registry {
+    pub(super) fn can_defer_setup(
+        &self,
+        setup: usize,
+        input_at: DateTime<Utc>,
+        exchanges: &[ReplayExchange],
+    ) -> bool {
+        self.setups.get(&setup).is_some_and(|&index| {
+            let requirement = &self.requirements[index];
+            !requirement.blocked
+                && requirement.source_reason.is_none()
+                && requirement.transactions.iter().all(|transaction| {
+                    transaction.witness.is_some()
+                        || exchanges[transaction.members[0]]
+                            .record
+                            .request_started_at
+                            .is_some_and(|started| started > input_at)
+                })
+        })
+    }
+
     pub(super) fn covered_by(&self, end: usize, connection: Uuid) -> bool {
         self.ends.get(&end).is_some_and(|&(r, t)| {
             let requirement = &self.requirements[r];

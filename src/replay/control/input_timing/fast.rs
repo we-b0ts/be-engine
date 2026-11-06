@@ -11,7 +11,7 @@ use crate::interaction::{
     },
     socketio::{EngineIoPacket, decode_engine_io_text},
 };
-use crate::replay::adapters::{ExchangeHandle, resolve_case};
+use crate::replay::adapters::{DependencyAdapter, ExchangeHandle, resolve_case};
 
 const MAX_REQUESTS: usize = 100_000;
 const POLL_MS: u64 = 5;
@@ -336,6 +336,11 @@ impl Plan {
         from: SourceOffset,
         to: SourceOffset,
     ) -> (bool, Option<DispatchDependency>) {
+        let input_at = i64::try_from(to.earliest_us()).ok().and_then(|us| {
+            self.source
+                .start
+                .checked_add_signed(chrono::Duration::microseconds(us))
+        });
         let mut compressible = true;
         for (request, handle) in self.requests_between(from, to) {
             if request.started_us >= to.earliest_us() {
@@ -346,6 +351,12 @@ impl Plan {
                     compressible = false;
                 }
             } else if !Self::request_ready(state, case, request, handle, false) {
+                if let ExchangeHandle::Native(DependencyAdapter::Mysql(index)) = *handle
+                    && input_at
+                        .is_some_and(|at| state.mysql.can_defer_autocommit_for_dispatch(index, at))
+                {
+                    continue;
+                }
                 if request.started_us <= from.latest_us() {
                     compressible = false;
                     continue;

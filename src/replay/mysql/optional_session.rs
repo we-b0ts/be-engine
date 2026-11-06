@@ -22,6 +22,32 @@ impl MysqlReplayState {
                 && exchange.optional_session.is_some()
         })
     }
+
+    /// A Source driver setup can depend on transaction coverage from later
+    /// Socket.IO inputs. Defer that proof at dispatch only. The setup remains
+    /// available and strict Target transaction checks still run at admission.
+    pub(in crate::replay) fn can_defer_autocommit_for_dispatch(
+        &self,
+        index: usize,
+        input_at: DateTime<Utc>,
+    ) -> bool {
+        self.exchanges.get(index).is_some_and(|exchange| {
+            exchange.source == ReplaySource::Case
+                && self
+                    .lifecycle
+                    .live_status(index, exchange.status)
+                    .is_available()
+                && exchange
+                    .record
+                    .sql
+                    .as_deref()
+                    .and_then(crate::mysql::autocommit::assignment)
+                    == Some(false)
+                && self
+                    .transaction_equivalence
+                    .can_defer_setup(index, input_at, &self.exchanges)
+        })
+    }
 }
 
 /// Only the ends of proven read-compatible Global spans are retained, including
