@@ -175,7 +175,7 @@ impl PubSubState {
                 offset: timestamp - callback.case_started,
                 ordinal: candidate.ordinal,
                 reserved: false,
-                delivered: false,
+                delivered_at: None,
                 failed: false,
             });
         }

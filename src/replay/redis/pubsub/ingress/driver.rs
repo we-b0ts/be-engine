@@ -1,7 +1,7 @@
 //! One replay-owned driver delivers proven ingress after its live session exists.
 use super::*;
 use std::sync::Weak;
-use tokio::time::{Duration, MissedTickBehavior};
+use tokio::time::{Duration, Instant, MissedTickBehavior};
 
 struct Job {
     index: usize,
@@ -139,7 +139,7 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
             .as_ref()
             .and_then(|timeline| timeline.reached(case, started, entry.offset))
             .unwrap_or_else(|| Utc::now() >= due);
-        if !reached {
+        if !reached && !fast_dispatch_reached(replay, entry, started, Instant::now()) {
             return Ok(None);
         }
         if !replay
@@ -179,6 +179,41 @@ fn ready(replay: &ReplayState) -> std::result::Result<Option<Job>, usize> {
         }));
     }
     Ok(None)
+}
+
+fn fast_dispatch_reached(
+    replay: &ReplayState,
+    entry: &Entry,
+    started: DateTime<Utc>,
+    now: Instant,
+) -> bool {
+    let Some(cap) = replay.input_timing.as_ref().and_then(|timeline| {
+        timeline.native_dispatch_cap(replay, &entry.case, started, entry.offset)
+    }) else {
+        return false;
+    };
+    // A proven RPC push can supply the output this ACK is waiting for.
+    // Its predecessor in the ingress stream must have finished writing
+    // before an accelerated gap starts.
+    let previous = replay
+        .redis
+        .pubsub
+        .ingress
+        .entries
+        .iter()
+        .filter(|previous| {
+            previous.case == entry.case
+                && (previous.offset, previous.ordinal) < (entry.offset, entry.ordinal)
+        })
+        .max_by_key(|previous| (previous.offset, previous.ordinal));
+    previous.is_none_or(|previous| {
+        previous.delivered_at.is_some_and(|delivered| {
+            let gap = (entry.offset - previous.offset)
+                .to_std()
+                .unwrap_or_default();
+            now >= delivered + gap.min(cap)
+        })
+    })
 }
 
 fn render(raw: &[u8], entry: &Entry, sid: &str) -> Result<Vec<u8>> {

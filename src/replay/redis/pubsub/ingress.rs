@@ -49,7 +49,7 @@ struct Entry {
     offset: chrono::TimeDelta,
     ordinal: usize,
     reserved: bool,
-    delivered: bool,
+    delivered_at: Option<tokio::time::Instant>,
     failed: bool,
     prerequisites: Vec<causal::Prerequisite>,
 }
@@ -95,7 +95,11 @@ impl Ingress {
             .callbacks
             .get(&(exchange.record.connection_id, exchange.record.sequence))?;
         let entry = &self.entries[index];
-        if !entry.delivered || entry.failed || args.len() != 2 || args[0] != entry.channel {
+        if entry.delivered_at.is_none()
+            || entry.failed
+            || args.len() != 2
+            || args[0] != entry.channel
+        {
             return None;
         }
         let (actual, actual_value) = rpc::callback(&args[1]).ok().flatten()?;
@@ -137,7 +141,7 @@ impl PubSubState {
         };
         self.ingress.entries.iter().any(|entry| {
             entry.reserved
-                && !entry.delivered
+                && entry.delivered_at.is_none()
                 && !entry.failed
                 && Some(entry.case.as_str()) == case
                 && entry.endpoint == *endpoint
@@ -152,7 +156,7 @@ impl PubSubState {
     pub(super) fn complete_ingress(&mut self, slot: PushId) {
         for entry in &mut self.ingress.entries {
             if entry.slot == slot {
-                entry.delivered = true;
+                entry.delivered_at = Some(tokio::time::Instant::now());
             }
         }
     }

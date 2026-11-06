@@ -162,20 +162,17 @@ pub(super) async fn execute_with_feedback(
             || action.is_none_or(|action| {
                 namespaces.permits(action, transcript.policy.max_message_bytes)
             });
-        let admitted = action
-            .filter(|_| namespace_ready)
-            .filter(|action| {
-                transcript.protocol != Protocol::SocketIo
-                    || action.after.iter().all(|id| completed.contains_key(id))
+        let prerequisites_ready = action.filter(|_| namespace_ready).filter(|action| {
+            transcript.protocol != Protocol::SocketIo
+                || action.after.iter().all(|id| completed.contains_key(id))
+        });
+        let admitted = prerequisites_ready.filter(|action| {
+            action.ack_ref.as_ref().is_none_or(|reference| {
+                server_acks
+                    .contains_key(&(reference.namespace.clone(), reference.server_event_ordinal))
             })
-            .filter(|action| {
-                action.ack_ref.as_ref().is_none_or(|reference| {
-                    server_acks.contains_key(&(
-                        reference.namespace.clone(),
-                        reference.server_event_ordinal,
-                    ))
-                })
-            });
+        });
+        let events_ready = missing_event.is_none() && admitted.is_some();
         if dispatch_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             let unadmitted = dispatch.as_ref().and_then(dispatch::Dispatch::unadmitted);
             dispatch_timeout = Some(DispatchTimeout {
@@ -196,7 +193,7 @@ pub(super) async fn execute_with_feedback(
             break (reason, false);
         }
         if let Some(dispatch) = &dispatch
-            && missing_event.is_none()
+            && events_ready
         {
             dispatch.events_arrived();
         }
@@ -231,7 +228,15 @@ pub(super) async fn execute_with_feedback(
             .filter(|_| at_fast_tail)
             .zip(tail_ready_at)
             .and_then(|(tail, ready)| tail.business_idle_due(ready, last_sent, last_output));
-        if let (Some(action), Some(timing)) = (admitted, &input_timing)
+        // The dispatch window can release the native push that produces an ACK's
+        // server event. Open it before that event arrives, while keeping the
+        // input gated on the live ACK identity.
+        let timing_action = if ordered {
+            prerequisites_ready
+        } else {
+            admitted
+        };
+        if let (Some(action), Some(timing)) = (timing_action, &input_timing)
             && (ordered || action.compressible_gap || delivery_prefix(action))
             && !cancellation(action)
             && timing_sequence != Some(action.sequence)
@@ -239,8 +244,7 @@ pub(super) async fn execute_with_feedback(
             let timing = timing.clone();
             timing_sequence = Some(action.sequence);
             timing_wait = Some(if ordered {
-                let (pending, wait) =
-                    dispatch::Dispatch::begin(timing, action, missing_event.is_none());
+                let (pending, wait) = dispatch::Dispatch::begin(timing, action, events_ready);
                 dispatch = Some(pending);
                 wait
             } else {
