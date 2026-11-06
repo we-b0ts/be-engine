@@ -3,6 +3,7 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -94,6 +95,8 @@ pub struct UnifiedRulePlanRecord {
     source_proofs: source_proof::SourceProofSnapshot,
     #[serde(default)]
     target_replay_drift_at_plan: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence_validation_started: Option<SystemTime>,
 }
 
 pub fn plan_rewrite_unified_rule(
@@ -133,6 +136,7 @@ fn plan(
     options: RewriteUnifiedRulePlanOptions,
     batch_scope: bool,
 ) -> Result<RewriteRuleReport> {
+    let evidence_validation_started = SystemTime::now();
     let attribution_scope = attribution::matches(&options.evidence_id);
     let issue_id = if batch_scope || attribution_scope {
         options.evidence_id.clone()
@@ -328,7 +332,7 @@ fn plan(
     } else {
         original.clone()
     };
-    let record = UnifiedRulePlanRecord {
+    let mut record = UnifiedRulePlanRecord {
         apply_started: false,
         policy: config.replay_policy,
         original,
@@ -341,6 +345,7 @@ fn plan(
         replace_sections: change.replace_sections,
         source_proofs,
         target_replay_drift_at_plan,
+        evidence_validation_started: None,
     };
     let id = format!(
         "plan-{}",
@@ -352,6 +357,7 @@ fn plan(
         ])
         .trim_start_matches("fnv1a64:")
     );
+    record.evidence_validation_started = Some(evidence_validation_started);
     let traffic_e2e_report = record.report(false);
     let outer: RewriteRulePlanRecord = serde_json::from_value(json!({
         "id":id, "issue_id":issue_id, "kind":"unified", "json_pointer":"",
@@ -403,18 +409,19 @@ impl UnifiedRulePlanRecord {
 
     fn ensure_current(&self, root: &Path, state: &RewriteState) -> Result<()> {
         self.ensure_policy_baseline(root)?;
-        ensure!(
-            self.identity.revalidate(root, state)? == self.identity,
-            "Target/Source/engine/attempt identity changed after planning"
-        );
         for artifact in &self.artifacts {
             if artifact.path != self.policy {
                 artifact.verify()?;
             }
         }
+        ensure!(
+            self.identity.revalidate(root, state)? == self.identity,
+            "Target/Source/engine/attempt identity changed after planning"
+        );
         let compiled = compile_policy(&parse_policy(&self.updated)?)?;
         self.source_proofs.verify(&compiled)?;
-        self.preflight.ensure_current(root, &compiled)?;
+        self.preflight
+            .ensure_current(root, &compiled, self.evidence_validation_started)?;
         Ok(())
     }
 
@@ -480,8 +487,9 @@ pub(super) fn apply(
         record.apply_started,
         "unified apply requires the durable coordinator intent"
     );
-    record.ensure_current(root, state)?;
+    // begin_apply authenticated this plan under the same coordinator locks.
     let previous_execution = super::fingerprint::replay_identity(root)?;
+    record.ensure_policy_baseline(root)?;
     crate::config::edit::write_atomic(&record.policy, record.updated.as_bytes())?;
     let mut report = record.report(true);
     if record.is_api_issue() {

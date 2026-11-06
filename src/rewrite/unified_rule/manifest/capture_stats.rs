@@ -1,4 +1,4 @@
-//! Test-only evidence reads; production verification always hashes fresh bytes.
+//! Test-only accounting of rule evidence payload reads.
 use std::{
     cell::RefCell,
     collections::BTreeMap,

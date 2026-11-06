@@ -98,12 +98,17 @@ impl Preflight {
         !self.capture_scopes.is_empty() || source::needs_recording(&self.obligations)
     }
 
-    pub(super) fn ensure_current(&self, root: &Path, policy: &CompiledPolicy) -> Result<()> {
+    pub(super) fn ensure_current(
+        &self,
+        root: &Path,
+        policy: &CompiledPolicy,
+        validation: Option<std::time::SystemTime>,
+    ) -> Result<()> {
         if let Some(record) = &self.source_scope {
-            record.ensure_current(root, policy)?;
+            record.ensure_current(root, policy, validation)?;
         }
         if let Some(record) = &self.resource_scope {
-            record.ensure_current(root)?;
+            record.ensure_current(root, validation)?;
         }
         Ok(())
     }

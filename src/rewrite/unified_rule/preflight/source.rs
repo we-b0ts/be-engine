@@ -125,7 +125,22 @@ impl SourceRecord {
         }
     }
 
-    pub(super) fn ensure_current(&self, root: &Path, policy: &CompiledPolicy) -> Result<()> {
+    pub(super) fn ensure_current(
+        &self,
+        root: &Path,
+        policy: &CompiledPolicy,
+        validation: Option<std::time::SystemTime>,
+    ) -> Result<()> {
+        if let Some(validation) = validation
+            && !self.inventory.snapshot.path.as_os_str().is_empty()
+        {
+            return crate::dependency_index::evidence::verify_frozen(
+                &self.inventory.recording_root,
+                &self.inventory.snapshot,
+                validation,
+            );
+        }
+        // Legacy Source plans did not record a complete proof catalog.
         let rules = policy
             .native
             .iter()

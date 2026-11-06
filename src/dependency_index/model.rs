@@ -16,6 +16,23 @@ pub(crate) struct FileStamp {
 }
 
 impl FileStamp {
+    /// Linux filesystems can reuse ctime within a clock tick. Only trust a
+    /// stamp as a content seal if it was already old when validation began.
+    pub(crate) fn stable_before(&self, validation: std::time::SystemTime) -> bool {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let Ok(seconds) = u64::try_from(self.changed.0) else {
+            return false;
+        };
+        let Ok(nanos) = u32::try_from(self.changed.1) else {
+            return false;
+        };
+        UNIX_EPOCH
+            .checked_add(Duration::new(seconds, nanos))
+            .and_then(|changed| validation.duration_since(changed).ok())
+            .is_some_and(|age| age >= Duration::from_secs(2))
+    }
+
     pub(crate) fn read(path: &std::path::Path) -> anyhow::Result<Self> {
         let source = super::scoped::resolve(path)?;
         Self::read_native(&source.path)

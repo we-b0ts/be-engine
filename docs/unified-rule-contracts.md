@@ -96,8 +96,11 @@ statuses. Failed comparisons against independent Target observations appear in
 `preflight.target_comparison_failures` with their Case, surface and any protected
 witness ID. Those observations carry no positive validation count. In both
 cases the plan can return `planned_needs_replay`. Apply checks the policy
-baseline and frozen evidence before publishing the change. Fresh genuine Replay
-then runs the response and dependency assertions.
+baseline and the identities of the frozen evidence before publishing the change.
+Finalized artifacts with stable filesystem stamps do not need a second content
+scan. Older plans and recently modified artifacts retain digest verification.
+Status projects the next action from the policy baseline and current issue.
+Fresh genuine Replay then runs the response and dependency assertions.
 
 Inbound request JWT translation, Source capture admission, Source response
 rewrite, process ownership, API-origin attribution, finite sharing and snapshot
