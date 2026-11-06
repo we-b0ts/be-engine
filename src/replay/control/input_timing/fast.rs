@@ -537,9 +537,12 @@ fn advance_dispatch(state: &mut ReplayState, query: &Query, events_ready: bool) 
         to.ms
     };
     let remaining = due.saturating_sub(elapsed);
+    let wait_ms = if gates_ready { remaining } else { POLL_MS };
     Ok(serde_json::json!({
         "ok":true,"ready":gates_ready && remaining == 0,
-        "wait_ms":if gates_ready { remaining } else { POLL_MS },
+        // An unresolved request in the previous legacy millisecond bucket
+        // can become admissible without appearing as a hard dependency.
+        "wait_ms":if compressible { wait_ms } else { wait_ms.min(POLL_MS) },
         "unadmitted_request": unadmitted,
         "advance": Advance {removed_ms:live.clock.removed_ms()}
     }))

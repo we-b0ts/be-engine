@@ -115,6 +115,57 @@ async fn ordered_fast_reports_missing_admission_past_the_source_deadline() {
 }
 
 #[tokio::test]
+async fn ordered_fast_rechecks_a_request_in_the_previous_input_bucket() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut request = input(400);
+    let actions = request["interaction"]["actions"].as_array_mut().unwrap();
+    actions[2]["after"] = json!([]);
+    actions[2]["compressible_gap"] = false.into();
+    actions[2]["gap_start_ms"] = Value::Null;
+    actions.truncate(3);
+    actions.push(serde_json::to_value(action(4, 30_000, r#"423["work"]"#)).unwrap());
+    std::fs::create_dir_all(temp.path().join("case")).unwrap();
+    std::fs::write(temp.path().join("case/request.json"), request.to_string()).unwrap();
+    let mut get = recorded_exchange(
+        Uuid::new_v4(),
+        1,
+        "GET",
+        &[b"previous"],
+        b"+OK\r\n",
+        "2020-01-01T00:00:00.400586Z",
+        "2020-01-01T00:00:00.402Z",
+    );
+    get["response_kind"] = "simple_string".into();
+    let runtime = runtime(temp.path(), &[get], &[], true).await.unwrap();
+    enable(&runtime).await;
+    let (session, control) = serve_control(temp.path(), &runtime).await;
+    let observer = crate::replay::input_timing_observer(&session, "case", SocketIoTiming::Auto)
+        .await
+        .unwrap();
+    assert!(observer.ordered_fast());
+    observer.wait(3, vec![]).await.unwrap();
+
+    let (_events, gate) = tokio::sync::watch::channel(true);
+    let (missing, witness) = tokio::sync::watch::channel(None);
+    let mut pending = observer.wait_dispatch(4, vec![], gate, missing);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut pending)
+            .await
+            .is_err()
+    );
+    assert!(witness.borrow().is_none());
+    let (mut redis, task) = connect(&runtime).await;
+    assert_eq!(send(&mut redis, &[b"GET", b"previous"]).await, b"+OK\r\n");
+    let advance = tokio::time::timeout(Duration::from_secs(1), pending)
+        .await
+        .expect("admission must wake the compressed dispatch before its Source offset")
+        .unwrap();
+    assert!(advance.removed_ms > 28_000);
+    task.abort();
+    control.abort();
+}
+
+#[tokio::test]
 async fn ordered_fast_compresses_legacy_millisecond_input_and_preserves_close_gaps() {
     replay_close_gaps(false).await;
 }
