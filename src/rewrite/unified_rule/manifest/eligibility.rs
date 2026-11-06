@@ -26,22 +26,13 @@ pub(super) fn removes_only_read_back(before: &CompiledPolicy, after: &CompiledPo
 /// Target preflight. They never certify the unfinished Replay.
 pub(super) fn allows_partial(before: &CompiledPolicy, after: &CompiledPolicy) -> bool {
     removes_only_read_back(before, after)
-        || allows_target_drift(before, after)
+        || adds_only_json_identities(before, after)
+        || changes_only_redis_identities(before, after)
         || json_identity_change(before, after, false)
         || adds_only_json_times(before, after)
 }
 
-pub(in crate::rewrite::unified_rule) fn allows_target_drift(
-    before: &CompiledPolicy,
-    after: &CompiledPolicy,
-) -> bool {
-    adds_only_json_identities(before, after) || changes_only_redis_identities(before, after)
-}
-
-pub(in crate::rewrite::unified_rule) fn adds_only_json_identities(
-    before: &CompiledPolicy,
-    after: &CompiledPolicy,
-) -> bool {
+fn adds_only_json_identities(before: &CompiledPolicy, after: &CompiledPolicy) -> bool {
     json_identity_change(before, after, true)
 }
 

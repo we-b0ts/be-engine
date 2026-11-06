@@ -343,7 +343,7 @@ fn sse_value_contracts_keep_identity_time_remainder_and_lifecycle_strict() {
 }
 
 #[test]
-fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evidence() {
+fn sse_value_contract_preflight_rejects_invalid_source_and_stale_evidence_and_defers_target() {
     for scenario in [
         "source-time",
         "source-field",
@@ -361,7 +361,7 @@ fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evid
         let mut target = stream(true);
         match scenario {
             "source-time" => change_data(&mut source, 0, |v| {
-                v["response"]["created_at"] = json!(START - 100)
+                v["response"]["created_at"] = json!({"invalid":"time"})
             }),
             "source-field" => change_data(&mut source, 0, |v| {
                 v["response"].as_object_mut().unwrap().remove("created_at");
@@ -405,6 +405,11 @@ fn sse_value_contract_preflight_rejects_invalid_source_and_target_and_stale_evid
                 fs::write(options(&fixture).actual_response, b"{}").unwrap();
             }
             assert!(apply_rewrite_rule(fixture.context(), &plan.plan_id).is_err());
+        } else if scenario.starts_with("target") {
+            let report = fixture.plan().unwrap().traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(report["preflight"]["independent_target_validations"], 0);
+            assert!(!report.to_string().contains(PRIVATE));
         } else {
             let error = format!("{:#}", fixture.plan().unwrap_err());
             assert!(

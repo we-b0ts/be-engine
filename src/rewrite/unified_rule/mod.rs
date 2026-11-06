@@ -118,7 +118,6 @@ pub fn plan_rewrite_unified_rule(
     // Planning publishes an independent event, never a replacement of the
     // coordinator's in-flight snapshot. Other APIs may keep replaying.
     let expected = inventory::scoped(&state, Some(&api.parse()?))?;
-    worker::ensure_api_confirmed(&state, &api, "planning a unified traffic rule")?;
     let report =
         inventory::with_slice_mut(&mut state, &api, |state| plan(&root, state, options, false))?;
     let record = inventory::scoped(&state, Some(&api.parse()?))?
@@ -296,16 +295,9 @@ fn plan(
         }
     }
     let current = crate::validate_replay_policy(&config.replay_policy)?;
-    let allows_target_drift = !batch_scope
-        && !attribution_scope
-        && manifest::eligibility::allows_target_drift(&before, &compiled);
-    let target_replay_drift_at_plan = !batch_scope
-        && !attribution_scope
+    let allows_target_drift = !batch_scope && !attribution_scope;
+    let target_replay_drift_at_plan = allows_target_drift
         && state.replay_identity.as_ref() != Some(&fingerprint::replay_identity(root)?);
-    ensure!(
-        !target_replay_drift_at_plan || allows_target_drift,
-        "Target code, startup inputs or policy changed since genuine Replay; run fresh Replay before planning"
-    );
     let identity = if attribution_scope {
         manifest::ExecutionIdentity::Attribution(attribution::Identity::current(state)?)
     } else if batch_scope {

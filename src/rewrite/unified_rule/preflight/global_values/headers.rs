@@ -74,8 +74,12 @@ pub(super) fn primary(
         &after,
         policy,
         AnchorClocks::for_response(pair.request_times, pair.times),
-    )?;
-    valid_count(&checked, &selected)?;
-    result.independent_target_validations += 1;
+    )
+    .and_then(|comparison| valid_count(&comparison, &selected));
+    if checked.is_ok() {
+        result.independent_target_validations += 1;
+    } else {
+        result.defer_target_comparison(case, Surface::ApiResponse, None);
+    }
     Ok(())
 }

@@ -16,11 +16,6 @@ struct CompareContext<'a> {
     native_obligations: &'a mut BTreeSet<String>,
 }
 
-struct PrimaryBaseline<'a> {
-    plan: &'a crate::policy::CompiledJsonPolicy,
-    identity_addition: bool,
-}
-
 fn active(policy: &CompiledPolicy, selected: &BTreeSet<String>) -> bool {
     json_active(policy, selected)
         || selected.contains("global.mysql") && policy.mysql.is_some()
@@ -45,16 +40,6 @@ pub(super) fn verify(
     if !active(policy, selected) {
         return Ok(());
     }
-    use super::super::manifest::eligibility::{adds_only_json_identities, adds_only_json_times};
-    let identity_addition = adds_only_json_identities(previous, policy);
-    let primary_baseline = previous
-        .global_json
-        .as_ref()
-        .filter(|_| identity_addition || adds_only_json_times(previous, policy))
-        .map(|plan| PrimaryBaseline {
-            plan,
-            identity_addition,
-        });
     let manifest = bundle
         .replay
         .get("policy_witnesses")
@@ -141,16 +126,7 @@ pub(super) fn verify(
         }
         if json_active(policy, selected) {
             primary(
-                root,
-                bundle,
-                &case,
-                &directory,
-                &request,
-                policy,
-                selected,
-                result,
-                &inputs,
-                primary_baseline.as_ref(),
+                root, bundle, &case, &directory, &request, policy, selected, result, &inputs,
             )
             .with_context(|| {
                 format!("global format primary validation: case={case}, surface=api.response")
@@ -273,7 +249,13 @@ pub(super) fn verify(
                         {
                             candidates.observe(witness, checked)?
                         } else {
-                            checked?
+                            match checked {
+                                Ok(count) => count,
+                                Err(_) => {
+                                    result.defer_target_comparison(&case, surface, Some(&witness.id));
+                                    0
+                                }
+                            }
                         };
                         if count > 0 {
                             found = true;
@@ -313,7 +295,8 @@ pub(super) fn verify(
             Ok(())
         }).with_context(|| format!("global format dependency validation: case={case}"))?;
     }
-    candidates.finish()
+    candidates.finish(result);
+    Ok(())
 }
 
 pub(super) fn global_trace(
@@ -435,42 +418,6 @@ fn valid_count(comparison: &Comparison, selected: &BTreeSet<String>) -> Result<u
     Ok(comparison.evaluated.intersection(selected).count())
 }
 
-fn contains_only_baseline_differences(
-    baseline: &Comparison,
-    proposed: &Comparison,
-    identity_addition: bool,
-) -> bool {
-    if baseline.passed() {
-        return false;
-    }
-    let mut counts = BTreeMap::new();
-    for difference in &baseline.differences {
-        *counts
-            .entry((&difference.pointer, &difference.reason))
-            .or_insert(0usize) += 1;
-    }
-    proposed.differences.iter().all(|difference| {
-        let present = counts
-            .get_mut(&(&difference.pointer, &difference.reason))
-            .is_some_and(|count| {
-                let present = *count > 0;
-                *count = count.saturating_sub(1);
-                present
-            });
-        // Adding a format can reveal a later unselected mismatch that the
-        // strict JSON walk never reached. Its values are still frozen and
-        // have no selected contract. For time additions, require exact
-        // baseline evidence for structural and selected-field failures.
-        present
-            || difference.reason == "unselected value or type changed"
-            || identity_addition
-                && matches!(
-                    difference.reason.as_str(),
-                    "field presence changed" | "unexpected field" | "array cardinality changed"
-                )
-    })
-}
-
 fn record_source(
     comparison: &Comparison,
     selected: &BTreeSet<String>,
@@ -498,7 +445,6 @@ fn primary(
     selected: &BTreeSet<String>,
     result: &mut Preflight,
     inputs: &super::input_retiming::Inputs,
-    baseline: Option<&PrimaryBaseline<'_>>,
 ) -> Result<()> {
     let plan = policy.global_json.as_ref().expect("selected global JSON");
     // Native owners compose into this comparison but their usage is recorded
@@ -584,16 +530,13 @@ fn primary(
         return Ok(());
     };
     let clocks = AnchorClocks::for_response(pair.request_times, pair.times);
-    let compare_target = |plan| -> Result<Comparison> {
-        let mut checked = compare_body(
-            &pair.source,
-            pair.target
-                .as_deref()
-                .context("global JSON Target body unavailable")?,
-            plan,
-            clocks,
-        )?;
-        checked.merge_and_validate(crate::replay::compare_interaction_global(
+    let target_body = pair
+        .target
+        .as_deref()
+        .context("global JSON Target body unavailable")?;
+    let checked = (|| -> Result<usize> {
+        let mut comparison = compare_body(&pair.source, target_body, plan, clocks)?;
+        comparison.merge_and_validate(crate::replay::compare_interaction_global(
             pair.source_interaction.as_ref(),
             pair.target_interaction.as_ref(),
             Some(plan),
@@ -601,41 +544,15 @@ fn primary(
             pair.request_times,
             pair.max_interaction_message_bytes,
         )?);
-        Ok(checked)
-    };
-    let checked = (|| -> Result<usize> {
-        let comparison = compare_target(plan)?;
-        if !comparison.passed()
-            && let Some(baseline) = baseline
-            && contains_only_baseline_differences(
-                &compare_target(baseline.plan)?,
-                &comparison,
-                baseline.identity_addition,
-            )
-        {
-            result
-                .preexisting_primary_differences
-                .insert(case.into(), comparison.differences.len());
-            result.missing_target_witnesses += 1;
-            return Ok(0);
-        }
         valid_count(&comparison, &selected)
-            .context("phase=independent_target_validation, document=body_or_interaction")
     })();
-    let checked = match checked {
-        Err(_)
-            if inputs.precedes_response(ClockPair {
-                source: pair.times.source,
-                target: pair.times.target,
-            }) =>
-        {
+    match checked {
+        Ok(checked) if relevant || checked > 0 => result.independent_target_validations += 1,
+        Ok(_) => {}
+        Err(_) if inputs.precedes_response(pair.times) => {
             super::input_retiming::Inputs::defer(case, Surface::ApiResponse, None, result);
-            return Ok(());
         }
-        other => other?,
-    };
-    if !result.preexisting_primary_differences.contains_key(case) && (relevant || checked > 0) {
-        result.independent_target_validations += 1;
+        Err(_) => result.defer_target_comparison(case, Surface::ApiResponse, None),
     }
     Ok(())
 }

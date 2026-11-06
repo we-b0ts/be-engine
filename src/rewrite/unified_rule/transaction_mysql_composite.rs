@@ -38,12 +38,13 @@ fn mysql_global_json_composes_identity_time_and_unordered_fields_without_capture
             serde_json::to_vec(&envelope).unwrap()
         });
         fixture.confirm();
-        let planned = fixture.plan();
+        let plan = fixture.plan().unwrap();
         if scenario != "valid" {
-            assert!(planned.is_err(), "{scenario}");
-            continue;
+            assert_eq!(
+                plan.traffic_e2e_report["status"], "planned_needs_replay",
+                "{scenario}"
+            );
         }
-        let plan = planned.unwrap();
         assert!(
             plan.traffic_e2e_report["expanded_rules"]
                 .as_array()
@@ -52,7 +53,7 @@ fn mysql_global_json_composes_identity_time_and_unordered_fields_without_capture
         );
         assert_eq!(
             plan.traffic_e2e_report["preflight"]["independent_target_validations"],
-            2
+            if scenario == "valid" { 2 } else { 1 }
         );
         apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
         assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);

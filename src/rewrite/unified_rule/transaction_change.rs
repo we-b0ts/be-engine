@@ -317,25 +317,20 @@ fn finalized_partial_identity_format_revision_keeps_source_target_and_remainder_
         write(&fixture.paths.aggregate, aggregate);
         fixture.confirm();
         let plan = fixture.plan();
-        if scenario != "valid" {
-            let error = plan.unwrap_err();
-            let message = format!("{error:#}");
-            if scenario == "stable-change" {
-                assert!(
-                    !message.contains("complete finalized Replay"),
-                    "format-only change should reach strict Target preflight: {message}"
-                );
-            } else {
-                assert!(
-                    message.contains("complete finalized Replay"),
-                    "{scenario}: {message}"
-                );
-            }
+        if !matches!(scenario, "valid" | "stable-change") {
+            let error = format!("{:#}", plan.unwrap_err());
+            assert!(
+                error.contains("complete finalized Replay"),
+                "{scenario}: {error}"
+            );
             assert!(fixture.state().rule_plan.is_none());
             continue;
         }
         let plan = plan.unwrap();
         assert_eq!(plan.traffic_e2e_report["verified"], false);
+        if scenario == "stable-change" {
+            assert_eq!(plan.traffic_e2e_report["status"], "planned_needs_replay");
+        }
         let applied = apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
         assert_eq!(applied.traffic_e2e_report["requires_fresh_replay"], true);
         assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);

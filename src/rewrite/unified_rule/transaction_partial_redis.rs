@@ -94,17 +94,8 @@ fn partial_redis_identity_plan_validates_all_source_and_actual_target_before_app
         fixture.confirm();
         let original = fs::read(fixture.policy()).unwrap();
         let plan = fixture.plan();
-        if matches!(scenario, "target-format" | "ttl" | "unfinalized") {
-            let message = format!(
-                "{:#}",
-                plan.expect_err(&format!("{scenario} must reject before publication"))
-            );
-            if scenario != "unfinalized" {
-                assert!(
-                    !message.contains("complete finalized Replay"),
-                    "{scenario} must reach strict preflight: {message}"
-                );
-            }
+        if scenario == "unfinalized" {
+            assert!(plan.is_err());
             assert!(fixture.state().rule_plan.is_none());
             assert_eq!(fs::read(fixture.policy()).unwrap(), original);
             continue;
@@ -117,12 +108,21 @@ fn partial_redis_identity_plan_validates_all_source_and_actual_target_before_app
                 .unwrap()
                 >= 2
         );
-        assert!(
-            plan.traffic_e2e_report["preflight"]["independent_target_validations"]
-                .as_u64()
-                .unwrap()
-                > 0
-        );
+        let preflight = &plan.traffic_e2e_report["preflight"];
+        if matches!(scenario, "target-format" | "ttl") {
+            assert_eq!(
+                preflight["target_comparison_failures"][0]["surface"],
+                "dependency.request"
+            );
+            assert_eq!(preflight["independent_target_validations"], 0);
+        } else {
+            assert!(
+                preflight["independent_target_validations"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+        }
         assert!(
             plan.traffic_e2e_report["preflight"]["missing_target_witnesses"]
                 .as_u64()

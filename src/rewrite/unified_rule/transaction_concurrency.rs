@@ -196,8 +196,8 @@ fn json_identity_plan_survives_code_and_timing_drift_but_keeps_policy_cas() {
         assert_eq!(plan.traffic_e2e_report["target_replay_drift_at_plan"], true);
         let preflight = &plan.traffic_e2e_report["preflight"];
         assert_eq!(
-            preflight["preexisting_primary_differences"]["00000000-0000-4000-8000-000000000001"],
-            1
+            preflight["target_comparison_failures"][0]["case_id"],
+            "00000000-0000-4000-8000-000000000001"
         );
         assert_eq!(preflight["independent_target_validations"], 0);
         fs::write(&code, "fn other_api() -> bool { true }\n").unwrap();

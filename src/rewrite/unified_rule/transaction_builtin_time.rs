@@ -18,19 +18,14 @@ fn fixture(target_at: &str) -> Fixture {
 fn automatic_response_time_preflight_uses_completion_without_an_authored_time_field() {
     for target in ["2026-10-16T00:02:30Z", "2026-10-16T00:04:03Z"] {
         let fixture = fixture(target);
-        let planned = fixture.plan();
-        if target == "2026-10-16T00:04:03Z" {
-            assert!(
-                format!("{:#}", planned.unwrap_err())
-                    .contains("time difference does not preserve the anchor difference")
-            );
-            continue;
-        }
-        let planned = planned.unwrap();
+        let planned = fixture.plan().unwrap();
         let report = &planned.traffic_e2e_report;
         assert!(report["json"]["fields"].get("/created").is_none());
         assert_eq!(report["source_proofs"]["rules"], json!([]));
-        assert_eq!(report["preflight"]["independent_target_validations"], 1);
+        assert_eq!(
+            report["preflight"]["independent_target_validations"],
+            u64::from(target == "2026-10-16T00:02:30Z")
+        );
         assert!(
             report["rule_ids"]
                 .as_array()

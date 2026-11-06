@@ -326,22 +326,17 @@ fn added_json_time_can_plan_with_an_existing_interaction_end_failure() {
             }}}),
         );
         fixture.confirm();
-        if invalid_time {
-            let error = format!("{:#}", fixture.plan().unwrap_err());
-            assert!(error.contains("/block/timestamp"), "{error}");
-        } else {
-            let plan = fixture.plan().unwrap();
-            let report = &plan.traffic_e2e_report;
-            assert!(
-                report["preflight"]["preexisting_primary_differences"][case]
-                    .as_u64()
-                    .is_some_and(|count| count > 0)
-            );
-            assert_eq!(report["preflight"]["independent_target_validations"], 0);
-            assert_eq!(report["verified"], false);
-            apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
-            assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
-        }
+        let plan = fixture.plan().unwrap();
+        let report = &plan.traffic_e2e_report;
+        assert_eq!(report["status"], "planned_needs_replay");
+        assert_eq!(
+            report["preflight"]["target_comparison_failures"][0]["case_id"],
+            case
+        );
+        assert_eq!(report["preflight"]["independent_target_validations"], 0);
+        assert_eq!(report["verified"], false);
+        apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+        assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
     }
 }
 

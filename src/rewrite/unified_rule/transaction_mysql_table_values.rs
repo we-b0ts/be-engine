@@ -104,7 +104,14 @@ fn global_sql_json_formats_keep_null_exact_and_prepared_statements_strict() {
                     assert_eq!(plan.traffic_e2e_report["verified"], false);
                 }
             } else {
-                assert!(planned.is_err(), "{table}/{scenario}");
+                let report = planned
+                    .unwrap_or_else(|error| panic!("{table}/{scenario}: {error:#}"))
+                    .traffic_e2e_report;
+                assert_eq!(
+                    report["status"], "planned_needs_replay",
+                    "{table}/{scenario}"
+                );
+                assert_eq!(report["preflight"]["independent_target_validations"], 1);
             }
             assert_eq!(fs::read(path).unwrap(), original);
         }

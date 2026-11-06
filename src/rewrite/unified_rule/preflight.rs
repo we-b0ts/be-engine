@@ -41,8 +41,8 @@ pub struct Preflight {
     pub independent_target_validations: usize,
     pub derived_delivery_validations: usize,
     pub missing_target_witnesses: usize,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub preexisting_primary_differences: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub target_comparison_failures: BTreeSet<TargetComparisonFailure>,
     #[serde(default)]
     pub unvalidated_target_witnesses: BTreeSet<response::UnvalidatedTargetWitness>,
     #[serde(default)]
@@ -62,11 +62,28 @@ pub struct Preflight {
     resource_scope: Option<resource::ResourceRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TargetComparisonFailure {
+    case_id: String,
+    surface: Surface,
+    witness_id: Option<String>,
+}
+
 impl Preflight {
+    fn defer_target_comparison(&mut self, case: &str, surface: Surface, witness: Option<&str>) {
+        self.target_comparison_failures
+            .insert(TargetComparisonFailure {
+                case_id: case.into(),
+                surface,
+                witness_id: witness.map(str::to_owned),
+            });
+    }
+
     pub(super) fn status(&self) -> &'static str {
         if self.needs_recording() {
             "planned_needs_recording"
         } else if self.missing_target_witnesses > 0
+            || !self.target_comparison_failures.is_empty()
             || !self.unvalidated_target_witnesses.is_empty()
             || !self.unvalidated_retimed_witnesses.is_empty()
             || !self.stateful_target_obligations.is_empty()

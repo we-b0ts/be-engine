@@ -302,7 +302,21 @@ pub(super) fn verify(
                     {
                         candidates.observe(witness, comparison)?
                     } else {
-                        comparison?
+                        match comparison {
+                            Ok(count) => count,
+                            Err(_)
+                                if witness.metadata.target_role
+                                    == TargetRole::IndependentTargetObservation =>
+                            {
+                                result.defer_target_comparison(
+                                    &case_id,
+                                    surface,
+                                    Some(&witness.id),
+                                );
+                                0
+                            }
+                            Err(error) => return Err(error),
+                        }
                     };
                     if evaluated == 0 {
                         continue;
@@ -347,6 +361,6 @@ pub(super) fn verify(
             }
         }
     }
-    candidates.finish()?;
+    candidates.finish(result);
     Ok(())
 }
