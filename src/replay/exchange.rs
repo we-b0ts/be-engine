@@ -99,6 +99,13 @@ impl ReplayExchangeTiming {
         }
     }
 
+    pub(super) async fn delay_response_from_request(self, started: Instant) {
+        let deadline = self.response_deadline(started);
+        if Instant::now() < deadline {
+            tokio::time::sleep_until(deadline).await;
+        }
+    }
+
     /// Observe Target while a recorded server action is pending. Extra inputs
     /// are returned to the protocol owner rather than silently discarded.
     pub(super) async fn await_server_deadline<R>(
@@ -308,6 +315,20 @@ mod tests {
         let started = Instant::now();
         timing.delay_response().await;
         assert!(started.elapsed() >= Duration::from_millis(20));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn request_relative_response_delay_counts_matching_time_once() {
+        let timing = ReplayExchangeTiming::from_recorded(20, DependencyExchangeOutcome::Response);
+        let started = Instant::now();
+        tokio::time::advance(Duration::from_millis(15)).await;
+        timing.delay_response_from_request(started).await;
+        assert!(started.elapsed() >= Duration::from_millis(20));
+        assert!(started.elapsed() < Duration::from_millis(35));
+
+        let now = Instant::now();
+        timing.delay_response_from_request(started).await;
+        assert_eq!(Instant::now(), now);
     }
 
     #[tokio::test]

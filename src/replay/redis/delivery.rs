@@ -130,7 +130,7 @@ pub(super) async fn deliver_redis_exchange(
         return Ok(true);
     }
 
-    matched.timing.delay_response().await;
+    matched.timing.delay_response_from_request(started).await;
     let unified_rendered_at = chrono::Utc::now();
     let unified_rendered = matched
         .unified_delivery
