@@ -16,6 +16,11 @@ struct CompareContext<'a> {
     native_obligations: &'a mut BTreeSet<String>,
 }
 
+struct PrimaryBaseline<'a> {
+    plan: &'a crate::policy::CompiledJsonPolicy,
+    identity_addition: bool,
+}
+
 fn active(policy: &CompiledPolicy, selected: &BTreeSet<String>) -> bool {
     json_active(policy, selected)
         || selected.contains("global.mysql") && policy.mysql.is_some()
@@ -40,10 +45,16 @@ pub(super) fn verify(
     if !active(policy, selected) {
         return Ok(());
     }
-    let previous_json =
-        super::super::manifest::eligibility::adds_only_json_identities(previous, policy)
-            .then_some(previous.global_json.as_ref())
-            .flatten();
+    use super::super::manifest::eligibility::{adds_only_json_identities, adds_only_json_times};
+    let identity_addition = adds_only_json_identities(previous, policy);
+    let primary_baseline = previous
+        .global_json
+        .as_ref()
+        .filter(|_| identity_addition || adds_only_json_times(previous, policy))
+        .map(|plan| PrimaryBaseline {
+            plan,
+            identity_addition,
+        });
     let manifest = bundle
         .replay
         .get("policy_witnesses")
@@ -139,7 +150,7 @@ pub(super) fn verify(
                 selected,
                 result,
                 &inputs,
-                previous_json,
+                primary_baseline.as_ref(),
             )
             .with_context(|| {
                 format!("global format primary validation: case={case}, surface=api.response")
@@ -424,7 +435,11 @@ fn valid_count(comparison: &Comparison, selected: &BTreeSet<String>) -> Result<u
     Ok(comparison.evaluated.intersection(selected).count())
 }
 
-fn contains_only_baseline_differences(baseline: &Comparison, proposed: &Comparison) -> bool {
+fn contains_only_baseline_differences(
+    baseline: &Comparison,
+    proposed: &Comparison,
+    identity_addition: bool,
+) -> bool {
     if baseline.passed() {
         return false;
     }
@@ -442,18 +457,17 @@ fn contains_only_baseline_differences(baseline: &Comparison, proposed: &Comparis
                 *count = count.saturating_sub(1);
                 present
             });
-        // The strict JSON walk stops at the first failure. Repairing an
-        // earlier identity can reveal a later structural or unselected
-        // mismatch that the old walk never reached. Identity formats cannot
-        // introduce these mismatches in the same frozen values.
+        // Adding a format can reveal a later unselected mismatch that the
+        // strict JSON walk never reached. Its values are still frozen and
+        // have no selected contract. For time additions, require exact
+        // baseline evidence for structural and selected-field failures.
         present
-            || matches!(
-                difference.reason.as_str(),
-                "unselected value or type changed"
-                    | "field presence changed"
-                    | "unexpected field"
-                    | "array cardinality changed"
-            )
+            || difference.reason == "unselected value or type changed"
+            || identity_addition
+                && matches!(
+                    difference.reason.as_str(),
+                    "field presence changed" | "unexpected field" | "array cardinality changed"
+                )
     })
 }
 
@@ -484,7 +498,7 @@ fn primary(
     selected: &BTreeSet<String>,
     result: &mut Preflight,
     inputs: &super::input_retiming::Inputs,
-    previous_json: Option<&crate::policy::CompiledJsonPolicy>,
+    baseline: Option<&PrimaryBaseline<'_>>,
 ) -> Result<()> {
     let plan = policy.global_json.as_ref().expect("selected global JSON");
     // Native owners compose into this comparison but their usage is recorded
@@ -592,8 +606,12 @@ fn primary(
     let checked = (|| -> Result<usize> {
         let comparison = compare_target(plan)?;
         if !comparison.passed()
-            && let Some(previous) = previous_json
-            && contains_only_baseline_differences(&compare_target(previous)?, &comparison)
+            && let Some(baseline) = baseline
+            && contains_only_baseline_differences(
+                &compare_target(baseline.plan)?,
+                &comparison,
+                baseline.identity_addition,
+            )
         {
             result
                 .preexisting_primary_differences

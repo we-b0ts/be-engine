@@ -279,6 +279,73 @@ fn interaction_rules_require_a_positive_ordinary_body_witness() {
 }
 
 #[test]
+fn added_json_time_can_plan_with_an_existing_interaction_end_failure() {
+    let case = "00000000-0000-4000-8000-000000000001";
+    for invalid_time in [false, true] {
+        let fixture = Fixture::with_cases(Some("2026-10-16T00:00:00Z"), |_, source| {
+            let path = source.join(format!("apis/api/{case}/request.json"));
+            let mut request: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            request["interaction"] = json!(InputTranscript::new(
+                Protocol::SocketIo,
+                InteractionPolicy::default()
+            ));
+            write(&path, request);
+            vec![]
+        });
+        let output = |target: bool| {
+            let time = if target && invalid_time {
+                0
+            } else if target {
+                1_792_108_860_010_i64
+            } else {
+                1_792_108_800_010_i64
+            };
+            let mut output = stream(target);
+            output["status"] = json!(101);
+            output["headers"] = json!({});
+            output["interaction"]["protocol"] = json!("socket_io");
+            output["interaction"]["events"][0]["message"]["data"] = json!(format!(
+                "42[\"block\",{{\"block\":{{\"timestamp\":{time}}}}}]"
+            ));
+            output["interaction"]["events"][1]["message"]["data"] = json!("42[\"done\"]");
+            if target {
+                output["interaction"]["events"]
+                    .as_array_mut()
+                    .unwrap()
+                    .pop();
+                output["interaction"]["end"]["reason"] = json!("dependency_failure");
+                output["interaction"]["end"]["clean"] = json!(false);
+            }
+            output
+        };
+        fixture.replace_responses(output(false), output(true));
+        write(
+            &fixture.proposal,
+            json!({"format":"traffic-policy/v3","json":{"fields":{
+                "/block/timestamp":{"kind":"time","formats":["unix_milliseconds"]}
+            }}}),
+        );
+        fixture.confirm();
+        if invalid_time {
+            let error = format!("{:#}", fixture.plan().unwrap_err());
+            assert!(error.contains("/block/timestamp"), "{error}");
+        } else {
+            let plan = fixture.plan().unwrap();
+            let report = &plan.traffic_e2e_report;
+            assert!(
+                report["preflight"]["preexisting_primary_differences"][case]
+                    .as_u64()
+                    .is_some_and(|count| count > 0)
+            );
+            assert_eq!(report["preflight"]["independent_target_validations"], 0);
+            assert_eq!(report["verified"], false);
+            apply_rewrite_rule(fixture.context(), &plan.plan_id).unwrap();
+            assert!(fixture.state().rule_replay_pending && !fixture.state().e2e_current);
+        }
+    }
+}
+
+#[test]
 fn interaction_rules_preserve_private_header_date_and_jwt_contracts() {
     let fixture = mixed("");
     let key = "synthetic-stream-header-signing-key";

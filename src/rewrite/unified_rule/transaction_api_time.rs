@@ -71,28 +71,12 @@ fn api_time_plan_apply_validates_source_and_independent_target_response_clocks()
 }
 
 #[test]
-fn api_time_preflight_rejects_wrong_offsets_windows_and_unselected_values() {
-    for (pointer, value, reason) in [
-        (
-            "/expires_at",
-            json!(SOURCE_START + 3600 + 70),
-            "time difference does not preserve the anchor difference",
-        ),
-        (
-            "/created_at",
-            json!(SOURCE_START + 70),
-            "time difference does not preserve the anchor difference",
-        ),
-        (
-            "/remaining",
-            json!(3670),
-            "unselected value or type changed",
-        ),
-        (
-            "/business",
-            json!("changed"),
-            "unselected value or type changed",
-        ),
+fn api_time_preflight_rejects_invalid_times_and_defers_existing_value_differences() {
+    for (pointer, value) in [
+        ("/expires_at", json!(SOURCE_START + 3600 + 70)),
+        ("/created_at", json!(SOURCE_START + 70)),
+        ("/remaining", json!(3670)),
+        ("/business", json!("changed")),
     ] {
         let fixture = fixture();
         let mut target = response(60);
@@ -101,9 +85,25 @@ fn api_time_preflight_rejects_wrong_offsets_windows_and_unselected_values() {
             &serde_json::to_vec(&response(0)).unwrap(),
             &serde_json::to_vec(&target).unwrap(),
         );
-        let error = format!("{:#}", fixture.plan().unwrap_err());
-        assert!(error.contains(pointer) && error.contains(reason), "{error}");
-        assert!(fixture.state().rule_plan.is_none());
+        let plan = fixture.plan();
+        if matches!(pointer, "/created_at" | "/expires_at") {
+            let error = format!("{:#}", plan.unwrap_err());
+            assert!(
+                error.contains(pointer)
+                    && error.contains("time difference does not preserve the anchor difference"),
+                "{error}"
+            );
+            assert!(fixture.state().rule_plan.is_none());
+        } else {
+            let report = plan.unwrap().traffic_e2e_report;
+            assert_eq!(report["status"], "planned_needs_replay");
+            assert_eq!(
+                report["preflight"]["preexisting_primary_differences"]["00000000-0000-4000-8000-000000000001"],
+                1,
+                "{pointer}"
+            );
+            assert_eq!(report["preflight"]["independent_target_validations"], 0);
+        }
     }
 }
 
