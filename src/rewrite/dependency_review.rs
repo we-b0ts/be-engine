@@ -12,6 +12,7 @@ mod projection;
 mod queries;
 mod rules;
 mod snapshot;
+mod socketio_tail;
 mod source;
 mod target_query;
 #[cfg(test)]

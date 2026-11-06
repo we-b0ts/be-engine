@@ -2,6 +2,7 @@
 use super::{
     client_abort,
     model::ProposedAttribution,
+    socketio_tail,
     source::{self, SourceSnapshot},
 };
 use crate::{
@@ -46,6 +47,12 @@ pub(super) fn fingerprints(policy: &CompiledPolicy) -> Result<BTreeMap<String, S
             .insert(client_abort::RULE_ID.into(), client_abort::fingerprint())
             .is_none(),
         "client-abort attribution identity is reserved for the engine"
+    );
+    ensure!(
+        values
+            .insert(socketio_tail::RULE_ID.into(), socketio_tail::fingerprint())
+            .is_none(),
+        "Socket.IO close-tail attribution identity is reserved for the engine"
     );
     Ok(values)
 }
@@ -101,6 +108,9 @@ pub(super) fn groups(policy: &CompiledPolicy) -> Result<Vec<Value>> {
     groups.push(json!({"kind":"client_abort_tail","rule_id":client_abort::RULE_ID,
         "fingerprint":client_abort::fingerprint(),
         "association":"Prove exact unused Source occurrences from later Cases belong to an earlier observed client-aborted Case. Requires a fresh Replay of the effective origin scope."}));
+    groups.push(json!({"kind":"socketio_close_tail","rule_id":socketio_tail::RULE_ID,
+        "fingerprint":socketio_tail::fingerprint(),
+        "association":"Prove exact Source occurrences belong to an observed Socket.IO close tail. Requires a fresh Replay of the effective origin scope."}));
     Ok(groups)
 }
 
@@ -120,6 +130,17 @@ pub(super) fn bind(
         "proven ownership must bind effective task/lifecycle rules"
     );
     let active = fingerprints(&policy)?;
+    if proposal
+        .rule_binding
+        .rule_ids
+        .contains(socketio_tail::RULE_ID)
+    {
+        socketio_tail::bind(state, source, proposal, &active)?;
+        return Ok(BTreeMap::from([(
+            socketio_tail::RULE_ID.into(),
+            socketio_tail::fingerprint(),
+        )]));
+    }
     if proposal
         .rule_binding
         .rule_ids
