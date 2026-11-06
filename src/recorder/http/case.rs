@@ -192,7 +192,9 @@ pub(crate) fn primary_interaction_failure(
         EndReason::ProtocolError => "interaction_protocol_error",
         EndReason::BudgetExceeded => "interaction_budget_exceeded",
         EndReason::CleanupTimeout => "interaction_cleanup_timeout",
-        EndReason::FastHeartbeatTailSkipped => "unexpected_replay_interaction_end",
+        EndReason::FastHeartbeatTailSkipped | EndReason::MissingPredecessor => {
+            "unexpected_replay_interaction_end"
+        }
         EndReason::BusinessIdle
         | EndReason::ServerEof
         | EndReason::ClientClose

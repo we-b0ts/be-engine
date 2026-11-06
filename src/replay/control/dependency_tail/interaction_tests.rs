@@ -38,6 +38,7 @@ async fn original_interaction(fixture: &Fixture, protocol: Protocol, elapsed: u6
             offset_ms: elapsed,
             pending: vec![],
             clean: true,
+            missing_predecessor: None,
             partial_message: None,
             close: None,
         },

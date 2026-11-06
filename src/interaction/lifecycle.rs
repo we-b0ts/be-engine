@@ -141,6 +141,7 @@ impl InteractionLifecycle {
                             | EndReason::ClientTransportEnd
                             | EndReason::FastHeartbeatTailSkipped
                     )),
+            missing_predecessor: None,
             partial_message: None,
             close: None,
         }

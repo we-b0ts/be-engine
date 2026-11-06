@@ -16,6 +16,7 @@ fn output(message: &str) -> OutputObservation {
             offset_ms: 1,
             pending: vec![],
             clean: true,
+            missing_predecessor: None,
             partial_message: None,
             close: None,
         },

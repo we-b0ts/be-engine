@@ -20,6 +20,8 @@ use crate::http::response_headers;
 use crate::http::sse::{SseObservation, SseObservationPolicy};
 use crate::recorder::HeaderMapSnapshot;
 
+mod socketio_order;
+
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
 #[derive(Debug, Deserialize)]
@@ -29,7 +31,7 @@ struct RecordedRequest {
     headers: BTreeMap<String, Vec<String>>,
     body: RecordedBody,
     #[serde(default)]
-    // Execution policy lives in request.json; expected-response.json is never read here.
+    // Execution policy lives in request.json.
     sse_observation: Option<SseObservationPolicy>,
     #[serde(default)]
     interaction: Option<crate::interaction::model::InputTranscript>,
@@ -126,25 +128,46 @@ impl RecordedHttpClient {
 
     #[cfg(test)]
     pub(crate) async fn send(&self, request_path: &Path) -> Result<RecordedHttpResponse> {
-        let request_label = request_path.display().to_string();
         let request_path = request_path.to_path_buf();
+        let path = request_path.clone();
         let bytes = tokio::task::spawn_blocking(move || {
             crate::request_headers::load_request_file(&request_path)
         })
         .await
         .context("recorded request loader task failed")??;
-        self.send_bytes(&bytes, &request_label).await
+        self.send_recorded_bytes(&bytes, &path).await
     }
 
+    pub(crate) async fn send_recorded_bytes(
+        &self,
+        bytes: &[u8],
+        request_path: &Path,
+    ) -> Result<RecordedHttpResponse> {
+        self.send_inner(
+            bytes,
+            &request_path.display().to_string(),
+            Some(request_path),
+        )
+        .await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn send_bytes(
         &self,
         bytes: &[u8],
         request_label: &str,
     ) -> Result<RecordedHttpResponse> {
-        let decrypted = crate::request_headers::decrypt_request_bytes(
-            bytes,
-            std::path::Path::new(request_label),
-        )?;
+        self.send_inner(bytes, request_label, None).await
+    }
+
+    async fn send_inner(
+        &self,
+        bytes: &[u8],
+        request_label: &str,
+        request_path: Option<&Path>,
+    ) -> Result<RecordedHttpResponse> {
+        let decrypted =
+            crate::request_headers::decrypt_request_bytes(bytes, Path::new(request_label))?;
         let bytes = decrypted.as_deref().unwrap_or(bytes);
         let mut value: serde_json::Value = serde_json::from_slice(bytes)
             .with_context(|| format!("invalid recorded request {request_label}"))?;
@@ -173,6 +196,28 @@ impl RecordedHttpClient {
         let request = build_request(&self.origin, &recorded)?;
         let request_headers = response_headers::snapshot_request_context(request.headers());
         if let Some(transcript) = &recorded.interaction {
+            let event_order = if transcript.protocol
+                == crate::interaction::model::Protocol::SocketIo
+                && self.input_registration.is_some()
+                && let Some(request_path) = request_path
+            {
+                let request_path = request_path.to_path_buf();
+                let policy = transcript.policy.clone();
+                let last_input = transcript
+                    .actions
+                    .last()
+                    .map_or(0, |action| action.offset_ms);
+                let compress = self.socketio_timing
+                    == crate::interaction::replay::timing::SocketIoTiming::Auto;
+                tokio::task::spawn_blocking(move || {
+                    socketio_order::load(&request_path, &policy, last_input, compress)
+                })
+                .await
+                .context("Socket.IO event order preparation task failed")?
+                .context("could not prepare Source Socket.IO event order")?
+            } else {
+                None
+            };
             let native_events = if transcript.protocol
                 == crate::interaction::model::Protocol::SocketIo
                 && let Some((session, case)) = &self.input_registration
@@ -211,6 +256,7 @@ impl RecordedHttpClient {
                     dependency_failure: self.execution_failure.clone(),
                     native_events,
                     input_timing,
+                    event_order,
                 },
             )
             .await?;

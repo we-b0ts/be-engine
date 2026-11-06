@@ -381,6 +381,7 @@ mod tests {
                 offset_ms: 100,
                 pending: Vec::new(),
                 clean: true,
+                missing_predecessor: None,
                 partial_message: None,
                 close: None,
             },

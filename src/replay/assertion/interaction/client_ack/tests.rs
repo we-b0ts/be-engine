@@ -47,6 +47,7 @@ fn output(messages: &[&str]) -> OutputObservation {
             offset_ms: 42_000 + messages.len() as u64 * 1_000,
             pending: vec![],
             clean: true,
+            missing_predecessor: None,
             partial_message: None,
             close: None,
         },

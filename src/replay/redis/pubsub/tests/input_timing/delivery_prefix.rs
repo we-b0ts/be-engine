@@ -1,8 +1,8 @@
-//! Slow dependency delivery cannot advance a following unacknowledged input.
+//! Socket.IO business events and resource delivery use independent evidence.
 use super::*;
 
 #[tokio::test]
-async fn business_input_waits_past_its_source_deadline_while_native_ping_remains_live() {
+async fn business_input_waits_for_recorded_events_even_without_redis_delivery() {
     let temp = tempfile::tempdir().unwrap();
     let mut input = InputTranscript::new(
         Protocol::SocketIo,
@@ -27,6 +27,18 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
     let path = temp.path().join("case/request.json");
     std::fs::write(&path, request.to_string()).unwrap();
     let original = std::fs::read(&path).unwrap();
+    std::fs::write(
+        temp.path().join("case/expected-response.json"),
+        json!({"interaction": {
+            "version": crate::interaction::model::TRANSCRIPT_VERSION,
+            "protocol":"socket_io",
+            "events":[
+                {"sequence":1,"offset_ms":24,"message":{"kind":"text","data":"431[true]"}},
+                {"sequence":2,"offset_ms":26,"message":{"kind":"text","data":"42/other,[\"ready\"]"}}
+            ],
+            "end":{"reason":"client_close","offset_ms":600,"clean":true}
+        }}).to_string(),
+    ).unwrap();
     let connection = Uuid::new_v4();
     let mut set = exchange(connection, 1, "SET", &[b"registered", b"yes"], b"+OK\r\n");
     set["response_kind"] = "simple_string".into();
@@ -64,8 +76,10 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
             .await
             .unwrap();
         assert_eq!(text(&mut socket).await, "421[\"register\"]");
-        // Simulate a slow handler before its native dependency request. The
-        // heartbeat has no after[] or ACK and its Source deadline has elapsed.
+        socket
+            .send(Message::Text("431[true]".into()))
+            .await
+            .unwrap();
         socket.send(Message::Text("2live".into())).await.unwrap();
         assert_eq!(text(&mut socket).await, "3live");
         assert!(
@@ -73,16 +87,17 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
                 .await
                 .is_err()
         );
+        socket
+            .send(Message::Text(r#"42/other,["ready"]"#.into()))
+            .await
+            .unwrap();
+        assert_eq!(text(&mut socket).await, "42[\"heartbeat\"]");
+        // A Source Redis response before the heartbeat is not an event barrier.
         let (mut redis, task) = connect(&target_runtime).await;
         assert_eq!(
             send(&mut redis, &[b"SET", b"registered", b"yes"]).await,
             b"+OK\r\n"
         );
-        socket
-            .send(Message::Text("431[true]".into()))
-            .await
-            .unwrap();
-        assert_eq!(text(&mut socket).await, "42[\"heartbeat\"]");
         // Source started this dependency before the heartbeat but finished it
         // afterward. Its overlapping handler must not block the next input.
         assert_eq!(
@@ -101,7 +116,7 @@ async fn business_input_waits_past_its_source_deadline_while_native_ping_remains
             1024 * 1024,
         )
         .with_input_registration(&session, "case")
-        .send_bytes(&serde_json::to_vec(&request).unwrap(), "delivery-prefix"),
+        .send_recorded_bytes(&serde_json::to_vec(&request).unwrap(), &path),
     )
     .await
     .unwrap()

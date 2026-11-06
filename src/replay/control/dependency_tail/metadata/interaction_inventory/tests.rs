@@ -17,6 +17,7 @@ async fn files(root: &Path, protocol: Protocol) -> Vec<RecordedReference> {
             offset_ms: 400,
             pending: vec![3],
             clean: true,
+            missing_predecessor: None,
             partial_message: None,
             close: None,
         },

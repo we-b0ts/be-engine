@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 mod cancellation_timing;
 mod close_completion;
+mod event_order;
 mod fast_execution;
 mod heartbeat_behavior;
 mod namespace_admission;

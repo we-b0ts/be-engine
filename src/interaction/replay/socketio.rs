@@ -10,6 +10,7 @@ use hyper::Request;
 use std::collections::BTreeMap;
 use tokio::time::{Duration, Instant, sleep_until};
 
+use super::event_order::{Schedule, attachment};
 use super::timing::{Advance, cancellation, delivery_prefix, transport_cancellation};
 use super::{Feedback, HttpClient, NativeEvent, ReplayResponse, elapsed_ms};
 use crate::interaction::{
@@ -35,6 +36,7 @@ pub(super) async fn execute_with_feedback(
         mut dependency_failure,
         native_events,
         input_timing,
+        mut event_order,
     } = feedback;
     transcript.validate()?;
     let started = Instant::now();
@@ -88,6 +90,14 @@ pub(super) async fn execute_with_feedback(
         .actions
         .last()
         .is_some_and(|action| matches!(action.action, InputActionKind::TransportEnd { .. }));
+    let event_inputs = event_order.as_ref().map(|_| {
+        transcript
+            .actions
+            .iter()
+            .map(delivery_prefix)
+            .collect::<Vec<_>>()
+    });
+    let mut missing_predecessor = None;
     let (mut reason, mut transport_clean) = 'session: loop {
         if dependency_failure
             .as_ref()
@@ -130,6 +140,22 @@ pub(super) async fn execute_with_feedback(
             _ => {}
         }
         let action = transcript.actions.get(next);
+        let event_schedule = event_order
+            .as_ref()
+            .zip(action.filter(|_| event_inputs.as_ref().is_some_and(|inputs| inputs[next])))
+            .map(|(order, action)| order.schedule(action, started, last_sent, last_offset));
+        let follows_event = matches!(
+            event_schedule,
+            Some(Schedule::Ready(_) | Schedule::Waiting { .. })
+        );
+        let event_deadline = match &event_schedule {
+            Some(Schedule::Waiting { expires, missing }) if Instant::now() >= *expires => {
+                missing_predecessor = Some(*missing);
+                break (EndReason::MissingPredecessor, false);
+            }
+            Some(Schedule::Waiting { expires, .. }) => Some(*expires),
+            _ => None,
+        };
         let namespace_ready = transcript.protocol != Protocol::SocketIo
             || action.is_none_or(|action| {
                 namespaces.permits(action, transcript.policy.max_message_bytes)
@@ -183,6 +209,7 @@ pub(super) async fn execute_with_feedback(
                 ready.max(last_sent).max(last_output) + Duration::from_millis(tail.idle_ms)
             });
         if let (Some(action), Some(timing)) = (admitted, &input_timing)
+            && event_schedule.is_none()
             && (action.compressible_gap || delivery_prefix(action))
             && !cancellation(action)
             && timing_sequence != Some(action.sequence)
@@ -203,6 +230,19 @@ pub(super) async fn execute_with_feedback(
                 last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset))
             });
         let due = admitted.and_then(|action| {
+            if let Some(schedule) = event_schedule {
+                return match schedule {
+                    Schedule::Ready(due) | Schedule::Unbound(due) => Some(due),
+                    Schedule::Waiting { .. } => None,
+                };
+            }
+            if event_order.is_some() && attachment(action) {
+                // A compressed binary header carries its attachment frames
+                // with it while retaining the recorded spacing between frames.
+                return Some(
+                    last_sent + Duration::from_millis(action.offset_ms.saturating_sub(last_offset)),
+                );
+            }
             if matches!(action.action, InputActionKind::TransportEnd { .. }) {
                 return Some(
                     started + Duration::from_millis(action.offset_ms.saturating_sub(removed_ms)),
@@ -256,7 +296,7 @@ pub(super) async fn execute_with_feedback(
         // earlier input is waiting for an ACK, namespace or dependency delivery.
         let cancel = transcript.actions.iter().skip(next + 1).find(|action| {
             transport_cancellation(action)
-                && (transcript.protocol == Protocol::SocketIo
+                && ((!follows_event && transcript.protocol == Protocol::SocketIo)
                     || matches!(action.action, InputActionKind::TransportEnd { .. }))
         });
         let cancel_due = cancel.map(|action| {
@@ -266,6 +306,7 @@ pub(super) async fn execute_with_feedback(
         let wake = due
             .into_iter()
             .chain(fast_idle_due)
+            .chain(event_deadline)
             .fold(lifecycle_deadline, Instant::min);
         let heartbeat_due = heartbeats.next_due();
         tokio::select! {
@@ -328,6 +369,9 @@ pub(super) async fn execute_with_feedback(
                         note_completed(before, &observed, &mut completed);
                         if transcript.protocol == Protocol::SocketIo {
                             for packet in server_decoder.push(&message)? {
+                                if let (Some(order), EngineIoPacket::Message(packet)) = (&mut event_order, &packet) {
+                                    order.observe(packet, Instant::now());
+                                }
                                 match packet {
                                     EngineIoPacket::Open(open) => transport.set_sid(open.sid)?,
                                     EngineIoPacket::Message(packet) if packet.kind == SocketIoKind::Connect => {
@@ -497,7 +541,7 @@ pub(super) async fn execute_with_feedback(
         )
         .await;
     }
-    let (actual_input, observation) = observed.finish(
+    let (actual_input, mut observation) = observed.finish(
         reason,
         elapsed_ms(started),
         transport_clean
@@ -512,6 +556,7 @@ pub(super) async fn execute_with_feedback(
                         ),
             ),
     )?;
+    observation.end.missing_predecessor = missing_predecessor;
     if reason == EndReason::ClientTransportEnd && next == transcript.actions.len() {
         ensure!(
             actual_input.actions.last().map(|action| action.sequence)

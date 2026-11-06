@@ -310,6 +310,8 @@ pub struct EndObservation {
     /// The observed lifecycle ended without capture/transport corruption.
     /// An observed peer close may retain pending business identities.
     pub clean: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_predecessor: Option<MissingPredecessor>,
     /// Exact unfinished framed-message bytes observed at an explicit client close.
     /// This suffix is not a completed business message or a successful EOF.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -344,6 +346,13 @@ pub struct CloseObservation {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MissingPredecessor {
+    pub input_sequence: u64,
+    pub output_sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EndReason {
     ServerEof,
@@ -353,6 +362,7 @@ pub enum EndReason {
     BusinessIdle,
     RequestTimeout,
     DependencyFailure,
+    MissingPredecessor,
     MaxDuration,
     TransportError,
     ProtocolError,
@@ -376,6 +386,7 @@ mod tests {
                 offset_ms: 0,
                 pending: vec![1],
                 clean: true,
+                missing_predecessor: None,
                 partial_message: None,
                 close: None,
             };
