@@ -382,6 +382,9 @@ pub enum DispatchDependency {
         connection_id: uuid::Uuid,
         sequence: u64,
     },
+    Http {
+        exchange_id: uuid::Uuid,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

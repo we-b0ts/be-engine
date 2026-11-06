@@ -88,7 +88,7 @@ impl Source {
             return Ok(());
         }
         match event["event_type"].as_str() {
-            Some("mysql_exchange" | "redis_exchange") => {}
+            Some("mysql_exchange" | "redis_exchange" | "http_exchange") => {}
             Some("mysql_connection" | "redis_connection") => return Ok(()),
             Some("redis_pub_sub_push") => {
                 self.tail = None;
@@ -291,7 +291,10 @@ impl Plan {
                         connection_id,
                         sequence,
                     },
-                    _ => unreachable!("ordered fast only plans Redis and MySQL requests"),
+                    RecordedReference::Http { exchange_id } => {
+                        DispatchDependency::Http { exchange_id }
+                    }
+                    _ => unreachable!("ordered fast only plans Redis, MySQL, and HTTP requests"),
                 };
                 return (false, Some(dependency));
             }

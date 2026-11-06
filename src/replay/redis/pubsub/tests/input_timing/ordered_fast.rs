@@ -312,3 +312,90 @@ async fn ordered_fast_advances_on_request_admission_and_closes_after_tail_delive
     target.await.unwrap();
     control.abort();
 }
+
+#[tokio::test]
+async fn ordered_fast_reports_unadmitted_http_in_the_case_dispatch_timeout() {
+    use crate::interaction::model::{DispatchDependency, DispatchStage, EndReason};
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut request = input(30_000);
+    let actions = request["interaction"]["actions"].as_array_mut().unwrap();
+    actions[2]["after"] = json!([]);
+    actions[2]["compressible_gap"] = false.into();
+    actions[2]["gap_start_ms"] = Value::Null;
+    actions.insert(
+        3,
+        serde_json::to_value(action(4, 30_001, r#"423["work"]"#)).unwrap(),
+    );
+    actions[4]["sequence"] = 5.into();
+    std::fs::create_dir_all(temp.path().join("case")).unwrap();
+    let path = temp.path().join("case/request.json");
+    std::fs::write(&path, request.to_string()).unwrap();
+    let exchange_id = Uuid::new_v4();
+    let http = json!({
+        "event_type": "http_exchange",
+        "id": exchange_id,
+        "scheme": "http",
+        "authority": "http.test",
+        "method": "POST",
+        "uri": "/work",
+        "request_started_at": "2020-01-01T00:00:00.080Z",
+        "timestamp": "2020-01-01T00:00:00.100Z",
+        "request_body": capture(b""),
+        "response_status": 200,
+        "response_headers": {},
+        "response_body": capture(b"ok")
+    });
+    let runtime = runtime(temp.path(), &[http], &[], true).await.unwrap();
+    enable(&runtime).await;
+    let (session, control) = serve_control(temp.path(), &runtime).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let target = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket
+            .send(Message::Text(
+                r#"0{"sid":"live","pingInterval":10000,"pingTimeout":10000}"#.into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(text(&mut socket).await, "40");
+        socket
+            .send(Message::Text(r#"40{"sid":"ns"}"#.into()))
+            .await
+            .unwrap();
+        assert_eq!(text(&mut socket).await, r#"421["work"]"#);
+        socket
+            .send(Message::Text(r#"431["ok"]"#.into()))
+            .await
+            .unwrap();
+        assert!(matches!(socket.next().await, None | Some(Err(_))));
+    });
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(7),
+        crate::recorded_request::RecordedHttpClient::new(
+            format!("http://{address}"),
+            Duration::from_secs(7),
+            1024 * 1024,
+        )
+        .with_input_registration(&session, "case")
+        .send_recorded_bytes(&serde_json::to_vec(&request).unwrap(), &path),
+    )
+    .await
+    .expect("the missing HTTP must not fall back to the 30-second input offset")
+    .unwrap();
+    let end = response.interaction.unwrap().end;
+    assert_eq!(end.reason, EndReason::DispatchTimeout);
+    assert!((5_000..7_000).contains(&end.offset_ms));
+    let timeout = end.dispatch_timeout.unwrap();
+    assert_eq!(timeout.input_sequence, 3);
+    assert_eq!(timeout.stage, DispatchStage::Prerequisites);
+    assert_eq!(
+        timeout.unadmitted_request,
+        Some(DispatchDependency::Http { exchange_id })
+    );
+    target.await.unwrap();
+    control.abort();
+}
