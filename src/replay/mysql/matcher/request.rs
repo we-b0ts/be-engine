@@ -99,7 +99,7 @@ impl ReplayState {
             Some("commit" | "rollback")
         );
         let mut baseline_semantic_target = None;
-        let mut baseline_projection = None;
+        let mut projection_candidate = None;
         let mut transaction_rejection = None;
         let actual_autocommit = sql
             .and_then(crate::mysql::autocommit::assignment)
@@ -534,24 +534,15 @@ impl ReplayState {
                             };
                             // Reject parameter/policy mismatches before copying any rows.
                             let projected = if project_columns {
-                                let mut dynamic_projection;
-                                let projection = if dynamic.is_none() {
-                                    baseline_projection
-                                        .get_or_insert_with(|| {
-                                            sql.and_then(|sql| {
-                                                projection::Query::prepare(command, sql, params)
-                                            })
-                                        })
-                                        .as_mut()
-                                } else {
-                                    dynamic_projection = sql.and_then(|sql| {
-                                        projection::Query::prepare(command, sql, params)
-                                    });
-                                    dynamic_projection.as_mut()
-                                };
-                                let Some(response) =
-                                    projection.and_then(|query| query.response(&exchange.record))
-                                else {
+                                let Some(response) = sql.and_then(|sql| {
+                                    projection::Candidate::compare(
+                                        &mut projection_candidate,
+                                        &exchange.record,
+                                        command,
+                                        sql,
+                                        params,
+                                    )
+                                }) else {
                                     continue;
                                 };
                                 Some(response)

@@ -20,6 +20,37 @@ pub(super) fn query_response(
     Query::prepare(command, sql, params)?.response(record)
 }
 
+pub(super) struct Candidate {
+    command: String,
+    sql: String,
+    params: Option<Vec<RecordedMysqlValue>>,
+    query: Option<Query>,
+}
+
+impl Candidate {
+    pub(super) fn compare(
+        cached: &mut Option<Self>,
+        record: &RecordedMysqlExchange,
+        command: &str,
+        sql: &str,
+        params: Option<&[RecordedMysqlValue]>,
+    ) -> Option<RecordedMysqlResponse> {
+        if cached.as_ref().is_none_or(|prior| {
+            prior.command != command || prior.sql != sql || prior.params.as_deref() != params
+        }) {
+            // Policy can normalize a candidate without changing the Target SQL
+            // or its bindings. Reuse the projection only for that exact input.
+            *cached = Some(Self {
+                command: command.into(),
+                sql: sql.into(),
+                params: params.map(<[_]>::to_vec),
+                query: Query::prepare(command, sql, params),
+            });
+        }
+        cached.as_mut()?.query.as_mut()?.response(record)
+    }
+}
+
 pub(super) struct Query {
     actual: DirectSelect,
     prepared: bool,

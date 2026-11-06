@@ -28,6 +28,21 @@ fn projection_reuses_the_source_shape_but_checks_each_recorded_result() {
 }
 
 #[test]
+fn projection_candidate_rebuilds_when_a_policy_changes_bound_values() {
+    let source = record("SELECT id, uid FROM tasks WHERE id=7", &["id", "uid"]);
+    let sql = "SELECT uid FROM tasks WHERE id=?";
+    let mut cache = None;
+    for (value, expected) in [(7, true), (8, false), (8, false), (7, true)] {
+        let params = [mysql_json("integer", json!(value))];
+        assert_eq!(
+            Candidate::compare(&mut cache, &source, "COM_STMT_EXECUTE", sql, Some(&params))
+                .is_some(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn distinct_requires_the_same_complete_projection_in_all_matching_paths() {
     for filter in ["", " WHERE tenant=7 AND status='approved'"] {
         let source_sql =
